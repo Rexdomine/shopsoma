@@ -2,12 +2,16 @@
 Database configuration and session management
 """
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
-from sqlalchemy.orm import declarative_base
 from app.core.config import settings
+from app.core.base import Base
 
-# Create async engine
+# Create async engine - convert postgresql:// to postgresql+asyncpg://
+database_url = settings.DATABASE_URL
+if database_url.startswith("postgresql://"):
+    database_url = database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+
 engine = create_async_engine(
-    settings.DATABASE_URL,
+    database_url,
     echo=settings.DATABASE_ECHO,
     future=True,
     pool_pre_ping=True,
@@ -23,9 +27,6 @@ AsyncSessionLocal = async_sessionmaker(
     autocommit=False,
     autoflush=False,
 )
-
-# Create declarative base
-Base = declarative_base()
 
 
 # Dependency to get database session

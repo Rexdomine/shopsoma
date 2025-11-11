@@ -5,7 +5,7 @@ from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 import uuid
 
-from app.core.database import Base
+from app.core.base import Base
 
 
 class Review(Base):

@@ -11,11 +11,14 @@ from alembic import context
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-# Import app configuration and models
+# Import app configuration
 from app.core.config import settings
-from app.core.database import Base
+
+# Import Base directly without initializing async engine
+from app.core.base import Base
 
 # Import all models to ensure they're registered with SQLAlchemy
+# This must happen AFTER Base is defined
 import app.models  # noqa
 
 # this is the Alembic Config object, which provides
