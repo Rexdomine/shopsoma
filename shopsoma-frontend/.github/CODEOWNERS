@@ -1,0 +1,29 @@
+# Shopsoma Frontend Code Owners
+# These owners will be automatically requested for review when someone opens a PR
+
+# Default owners for everything in the repo
+* @rex @Chisom
+
+# Component-specific ownership
+/src/components/** @Chisom
+/src/pages/** @Chisom
+/src/styles/** @Chisom
+
+# API and state management
+/src/api/** @rex
+/src/store/** @rex
+/src/hooks/** @rex
+
+# Vendor-specific features
+/src/pages/vendor/** @rex @MaryamSulaiman
+/src/components/vendor/** @rex @MaryamSulaiman
+
+# Configuration files
+/package.json @rex
+/tsconfig.json @rex
+/vite.config.ts @rex
+/.github/** @rex
+
+# Documentation
+/README.md @rex
+/docs/** @rex @Chisom

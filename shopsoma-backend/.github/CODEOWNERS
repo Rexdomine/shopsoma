@@ -1,0 +1,44 @@
+# Shopsoma Backend Code Owners
+# These owners will be automatically requested for review when someone opens a PR
+
+# Default owners for everything in the repo
+* @rex
+
+# API endpoints
+/app/api/** @rex
+
+# Database models and migrations
+/app/models/** @rex
+/alembic/versions/** @rex
+
+# Authentication and security
+/app/auth/** @rex
+/app/security/** @rex
+
+# Payment integrations
+/app/payments/** @rex
+
+# Vendor management
+/app/vendors/** @rex @MaryamSulaiman
+
+# Order and logistics
+/app/orders/** @rex
+/app/logistics/** @rex @MaryamSulaiman
+
+# Admin functionality
+/app/admin/** @rex
+
+# Background tasks
+/app/tasks/** @rex
+/app/celery_app.py @rex
+
+# Configuration and deployment
+/requirements.txt @rex
+/Dockerfile @rex
+/docker-compose.yml @rex
+/.github/** @rex
+/.env.example @rex
+
+# Documentation
+/README.md @rex
+/docs/** @rex
