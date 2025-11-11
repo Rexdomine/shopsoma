@@ -36,11 +36,11 @@ class User(Base):
     last_login_at = Column(DateTime(timezone=True), nullable=True)
 
     # Relationships
-    vendor = relationship("Vendor", back_populates="user", uselist=False, cascade="all, delete-orphan")
-    orders = relationship("Order", back_populates="customer", foreign_keys="Order.customer_id")
+    vendor = relationship("Vendor", back_populates="user", uselist=False, cascade="all, delete-orphan", foreign_keys="[Vendor.user_id]")
+    orders = relationship("Order", back_populates="customer", foreign_keys="[Order.customer_id]")
     addresses = relationship("Address", back_populates="user", cascade="all, delete-orphan")
-    reviews = relationship("Review", back_populates="customer", cascade="all, delete-orphan")
-    returns = relationship("Return", back_populates="customer")
+    reviews = relationship("Review", back_populates="customer", cascade="all, delete-orphan", foreign_keys="[Review.customer_id]")
+    returns = relationship("Return", back_populates="customer", foreign_keys="[Return.customer_id]")
 
     def __repr__(self):
         return f"<User {self.email}>"

@@ -6,8 +6,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
-# TODO: Import routers when created
-# from app.api.v1 import auth, products, vendors, orders, admin
+# Import routers
+from app.api.v1 import auth, products
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -54,12 +54,14 @@ async def health_check():
     """Health check endpoint for Render"""
     return {"status": "healthy"}
 
-# TODO: Include routers
-# app.include_router(auth.router, prefix="/api/v1/auth", tags=["Authentication"])
-# app.include_router(products.router, prefix="/api/v1/products", tags=["Products"])
-# app.include_router(vendors.router, prefix="/api/v1/vendor", tags=["Vendors"])
-# app.include_router(orders.router, prefix="/api/v1/orders", tags=["Orders"])
-# app.include_router(admin.router, prefix="/api/v1/admin", tags=["Admin"])
+# Include routers
+app.include_router(auth.router, prefix="/api/v1")
+app.include_router(products.router, prefix="/api/v1")
+
+# TODO: Add more routers as they're implemented
+# app.include_router(vendors.router, prefix="/api/v1")
+# app.include_router(orders.router, prefix="/api/v1")
+# app.include_router(admin.router, prefix="/api/v1")
 
 if __name__ == "__main__":
     import uvicorn

@@ -1,0 +1,3 @@
+"""
+Shopsoma Backend Tests
+"""
