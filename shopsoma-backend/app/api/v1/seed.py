@@ -15,6 +15,38 @@ from app.core.security import get_password_hash
 router = APIRouter(prefix="/seed", tags=["seed"])
 
 
+@router.get("/test-vendor")
+async def test_vendor_creation(db: AsyncSession = Depends(get_db)):
+    """Test vendor creation to debug the issue"""
+    try:
+        vendor_id = uuid.uuid4()
+        vendor_password = get_password_hash("password123")
+
+        vendor = User(
+            id=vendor_id,
+            email="test@shopsoma.com",
+            full_name="Test Vendor",
+            hashed_password=vendor_password,
+            role=UserRole.VENDOR,
+            email_verified=True,
+            is_active=True
+        )
+
+        db.add(vendor)
+        await db.commit()
+
+        return {"status": "success", "vendor_id": str(vendor_id)}
+    except Exception as e:
+        await db.rollback()
+        import traceback
+        return {
+            "status": "error",
+            "error": str(e),
+            "type": type(e).__name__,
+            "traceback": traceback.format_exc()
+        }
+
+
 @router.post("/initialize")
 async def initialize_database(db: AsyncSession = Depends(get_db)):
     """
