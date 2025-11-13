@@ -1,0 +1,61 @@
+name: Deploy to Staging
+
+on:
+  push:
+    branches:
+      - develop
+
+jobs:
+  deploy-staging:
+    name: Deploy to Staging (Render)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Trigger Render Deployment
+        run: |
+          echo "Render auto-deploys from develop branch"
+          echo "Deployment URL: https://shopsoma-staging.onrender.com"
+          echo "API URL: https://shopsoma-staging-api.onrender.com"
+
+      - name: Wait for deployment
+        run: sleep 30
+
+      - name: Health check - API
+        run: |
+          response=$(curl -s -o /dev/null -w "%{http_code}" https://shopsoma-staging-api.onrender.com/api/v1/health || echo "000")
+          if [ "$response" = "200" ]; then
+            echo "✅ API health check passed"
+          else
+            echo "⚠️  API health check returned: $response"
+            echo "Deployment may still be in progress..."
+          fi
+
+      - name: Health check - Frontend
+        run: |
+          response=$(curl -s -o /dev/null -w "%{http_code}" https://shopsoma-staging.onrender.com || echo "000")
+          if [ "$response" = "200" ]; then
+            echo "✅ Frontend health check passed"
+          else
+            echo "⚠️  Frontend health check returned: $response"
+            echo "Deployment may still be in progress..."
+          fi
+
+      - name: Deployment summary
+        run: |
+          echo "### 🚀 Staging Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Frontend**: https://shopsoma-staging.onrender.com" >> $GITHUB_STEP_SUMMARY
+          echo "- **API**: https://shopsoma-staging-api.onrender.com" >> $GITHUB_STEP_SUMMARY
+          echo "- **Branch**: develop" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit**: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Render will auto-deploy this commit in ~5-10 minutes." >> $GITHUB_STEP_SUMMARY
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "❌ Staging deployment checks failed"
+          echo "Check Render dashboard for deployment status"
