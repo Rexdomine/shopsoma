@@ -66,7 +66,7 @@ async def test_product_creation(db: AsyncSession = Depends(get_db)):
             base_price=1000,
             category="Test",
             vendor_id=vendor.id,
-            status=ProductStatus.ACTIVE,
+            status="active",  # Use string value, not enum
             featured=True
         )
 
@@ -205,7 +205,7 @@ async def initialize_database(db: AsyncSession = Depends(get_db)):
                 base_price=prod_data["price"],
                 category=prod_data["category"],
                 vendor_id=vendor_id,
-                status=ProductStatus.ACTIVE,
+                status="active",  # Use string value, not enum
                 featured=True
             )
             db.add(product)
