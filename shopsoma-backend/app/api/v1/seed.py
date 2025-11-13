@@ -10,6 +10,7 @@ import uuid
 from app.core.database import get_db
 from app.models.product import Product, ProductVariant, ProductImage, ProductStatus
 from app.models.user import User, UserRole
+from app.models.vendor import Vendor, KYCStatus
 from app.core.security import get_password_hash
 
 router = APIRouter(prefix="/seed", tags=["seed"])
@@ -19,23 +20,37 @@ router = APIRouter(prefix="/seed", tags=["seed"])
 async def test_vendor_creation(db: AsyncSession = Depends(get_db)):
     """Test vendor creation to debug the issue"""
     try:
-        vendor_id = uuid.uuid4()
-        vendor_password = get_password_hash("password123")
+        # Create User first
+        user_id = uuid.uuid4()
+        user_password = get_password_hash("password123")
 
-        vendor = User(
-            id=vendor_id,
+        user = User(
+            id=user_id,
             email="test@shopsoma.com",
             full_name="Test Vendor",
-            hashed_password=vendor_password,
+            hashed_password=user_password,
             role=UserRole.VENDOR,
             email_verified=True,
             is_active=True
         )
+        db.add(user)
+        await db.flush()
 
+        # Then create Vendor entry
+        vendor_id = uuid.uuid4()
+        vendor = Vendor(
+            id=vendor_id,
+            user_id=user_id,
+            business_name="Test Business",
+            business_description="A test vendor business",
+            kyc_status=KYCStatus.APPROVED,
+            approved=True,
+            commission_rate=12.5
+        )
         db.add(vendor)
         await db.commit()
 
-        return {"status": "success", "vendor_id": str(vendor_id)}
+        return {"status": "success", "user_id": str(user_id), "vendor_id": str(vendor_id)}
     except Exception as e:
         await db.rollback()
         import traceback
@@ -51,8 +66,8 @@ async def test_vendor_creation(db: AsyncSession = Depends(get_db)):
 async def test_product_creation(db: AsyncSession = Depends(get_db)):
     """Test product creation to debug the issue"""
     try:
-        # Get a vendor first
-        result = await db.execute(select(User).where(User.role == UserRole.VENDOR).limit(1))
+        # Get a vendor first (from vendors table, not users)
+        result = await db.execute(select(Vendor).limit(1))
         vendor = result.scalar_one_or_none()
 
         if not vendor:
@@ -65,7 +80,7 @@ async def test_product_creation(db: AsyncSession = Depends(get_db)):
             description="Test description",
             base_price=1000,
             category_id=None,  # No category for test
-            vendor_id=vendor.id,
+            vendor_id=vendor.id,  # vendor.id from vendors table
             status="active",
             is_featured=True
         )
@@ -73,7 +88,7 @@ async def test_product_creation(db: AsyncSession = Depends(get_db)):
         db.add(product)
         await db.commit()
 
-        return {"status": "success", "product_id": str(product.id)}
+        return {"status": "success", "product_id": str(product.id), "vendor_id": str(vendor.id)}
     except Exception as e:
         await db.rollback()
         import traceback
@@ -101,18 +116,32 @@ async def initialize_database(db: AsyncSession = Depends(get_db)):
                 "message": "Database already contains products. Use /seed/reset first if you want to re-seed."
             }
 
-        # Create demo vendor
-        vendor_id = uuid.uuid4()
+        # Create demo vendor user
+        user_id = uuid.uuid4()
         vendor_password = get_password_hash("password123")
 
-        vendor = User(
-            id=vendor_id,
+        user = User(
+            id=user_id,
             email="vendor@shopsoma.com",
             full_name="Demo Vendor",
             hashed_password=vendor_password,
             role=UserRole.VENDOR,
             email_verified=True,
             is_active=True
+        )
+        db.add(user)
+        await db.flush()
+
+        # Create vendor business profile
+        vendor_id = uuid.uuid4()
+        vendor = Vendor(
+            id=vendor_id,
+            user_id=user_id,
+            business_name="Shopsoma Demo Store",
+            business_description="Premier African fashion marketplace featuring authentic designs",
+            kyc_status=KYCStatus.APPROVED,
+            approved=True,
+            commission_rate=12.5
         )
         db.add(vendor)
         await db.flush()
@@ -260,14 +289,17 @@ async def initialize_database(db: AsyncSession = Depends(get_db)):
 
 @router.delete("/reset")
 async def reset_database(db: AsyncSession = Depends(get_db)):
-    """Reset all products and variants"""
+    """Reset all products, variants, and demo vendors"""
     try:
+        # Delete in correct order due to foreign keys
         await db.execute(text("DELETE FROM product_images"))
         await db.execute(text("DELETE FROM product_variants"))
         await db.execute(text("DELETE FROM products"))
+        await db.execute(text("DELETE FROM vendors WHERE business_name = 'Shopsoma Demo Store' OR business_name = 'Test Business'"))
+        await db.execute(text("DELETE FROM users WHERE email IN ('vendor@shopsoma.com', 'test@shopsoma.com')"))
         await db.commit()
 
-        return {"status": "success", "message": "Database reset complete"}
+        return {"status": "success", "message": "Database reset complete - all demo data removed"}
     except Exception as e:
         await db.rollback()
         raise HTTPException(status_code=500, detail=f"Reset failed: {str(e)}")
