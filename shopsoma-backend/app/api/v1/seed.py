@@ -9,7 +9,7 @@ import uuid
 
 from app.core.database import get_db
 from app.models.product import Product, ProductVariant, ProductImage, ProductStatus
-from app.models.user import User
+from app.models.user import User, UserRole
 from app.core.security import get_password_hash
 
 router = APIRouter(prefix="/seed", tags=["seed"])
@@ -37,7 +37,7 @@ async def initialize_database(db: AsyncSession = Depends(get_db)):
             email="vendor@shopsoma.com",
             full_name="Demo Vendor",
             hashed_password=get_password_hash("password123"),
-            role="vendor",
+            role=UserRole.VENDOR,
             email_verified=True,
             is_active=True
         )
