@@ -3,7 +3,7 @@ Simple seeding endpoint - self-contained without external imports
 """
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, text
 from datetime import datetime
 import uuid
 
@@ -35,11 +35,10 @@ async def initialize_database(db: AsyncSession = Depends(get_db)):
         vendor = User(
             id=uuid.uuid4(),
             email="vendor@shopsoma.com",
-            username="demo_vendor",
             full_name="Demo Vendor",
-            password_hash=get_password_hash("password123"),
+            hashed_password=get_password_hash("password123"),
             role="vendor",
-            is_verified=True,
+            email_verified=True,
             is_active=True
         )
         db.add(vendor)
@@ -181,9 +180,9 @@ async def initialize_database(db: AsyncSession = Depends(get_db)):
 async def reset_database(db: AsyncSession = Depends(get_db)):
     """Reset all products and variants"""
     try:
-        await db.execute("DELETE FROM product_images")
-        await db.execute("DELETE FROM product_variants")
-        await db.execute("DELETE FROM products")
+        await db.execute(text("DELETE FROM product_images"))
+        await db.execute(text("DELETE FROM product_variants"))
+        await db.execute(text("DELETE FROM products"))
         await db.commit()
 
         return {"status": "success", "message": "Database reset complete"}
