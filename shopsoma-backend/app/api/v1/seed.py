@@ -32,17 +32,23 @@ async def initialize_database(db: AsyncSession = Depends(get_db)):
             }
 
         # Create demo vendor
+        vendor_id = uuid.uuid4()
+        vendor_password = get_password_hash("password123")
+
         vendor = User(
-            id=uuid.uuid4(),
+            id=vendor_id,
             email="vendor@shopsoma.com",
             full_name="Demo Vendor",
-            hashed_password=get_password_hash("password123"),
+            hashed_password=vendor_password,
             role=UserRole.VENDOR,
             email_verified=True,
             is_active=True
         )
         db.add(vendor)
         await db.flush()
+
+        # Refresh to get the vendor with all attributes loaded
+        await db.refresh(vendor)
 
         # Demo products configuration
         products_data = [
@@ -128,7 +134,7 @@ async def initialize_database(db: AsyncSession = Depends(get_db)):
                 description=prod_data["description"],
                 base_price=prod_data["price"],
                 category=prod_data["category"],
-                vendor_id=vendor.id,
+                vendor_id=vendor_id,
                 status=ProductStatus.ACTIVE,
                 featured=True
             )
@@ -173,6 +179,12 @@ async def initialize_database(db: AsyncSession = Depends(get_db)):
 
     except Exception as e:
         await db.rollback()
+        import traceback
+        error_details = {
+            "error": str(e),
+            "type": type(e).__name__,
+            "traceback": traceback.format_exc()
+        }
         raise HTTPException(status_code=500, detail=f"Seeding failed: {str(e)}")
 
 
