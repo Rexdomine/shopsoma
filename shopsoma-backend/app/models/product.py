@@ -1,6 +1,6 @@
 """Product models"""
 from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey, Integer, Numeric, Text, Enum as SQLEnum, UniqueConstraint
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 import uuid
@@ -51,6 +51,7 @@ class Product(Base):
     # SEO
     meta_title = Column(String(255), nullable=True)
     meta_description = Column(Text, nullable=True)
+    size_guide = Column(JSONB, nullable=True)
 
     # Metrics
     views_count = Column(Integer, default=0, nullable=False)

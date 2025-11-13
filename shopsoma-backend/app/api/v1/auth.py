@@ -18,6 +18,7 @@ from app.core.security import (
 )
 from app.core.config import settings
 from app.models.user import User, UserRole
+from app.models.vendor import Vendor
 from app.schemas.auth import (
     UserCreate,
     UserLogin,
@@ -79,6 +80,17 @@ async def signup(
     db.add(new_user)
     await db.commit()
     await db.refresh(new_user)
+
+    # Create vendor profile if user is a vendor
+    if new_user.role == UserRole.VENDOR:
+        vendor_profile = Vendor(
+            user_id=new_user.id,
+            business_name=user_data.full_name,  # Use full_name as business_name initially
+            approved=True  # Auto-approve for demo
+        )
+        db.add(vendor_profile)
+        await db.commit()
+        await db.refresh(vendor_profile)
 
     # TODO: Send welcome email
     # TODO: Send email verification link

@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
 # Import routers
-from app.api.v1 import auth, products
+from app.api.v1 import auth, products, images
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -57,6 +57,7 @@ async def health_check():
 # Include routers
 app.include_router(auth.router, prefix="/api/v1")
 app.include_router(products.router, prefix="/api/v1")
+app.include_router(images.router, prefix="/api/v1")
 
 # TODO: Add more routers as they're implemented
 # app.include_router(vendors.router, prefix="/api/v1")

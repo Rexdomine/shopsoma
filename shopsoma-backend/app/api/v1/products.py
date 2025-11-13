@@ -83,6 +83,7 @@ async def create_product(
         is_featured=product_data.is_featured,
         meta_title=product_data.meta_title,
         meta_description=product_data.meta_description,
+        size_guide=product_data.size_guide.model_dump() if product_data.size_guide else None,
         moderation_status=ModerationStatus.PENDING,
     )
 
@@ -361,6 +362,8 @@ async def update_product(
     for field, value in update_data.items():
         if field == "status":
             setattr(product, field, ProductStatus(value))
+        elif field == "size_guide":
+            setattr(product, field, value.model_dump() if value is not None else None)
         else:
             setattr(product, field, value)
 

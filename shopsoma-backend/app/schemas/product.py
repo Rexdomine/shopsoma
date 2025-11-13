@@ -12,6 +12,22 @@ from pydantic import BaseModel, Field, field_validator, ConfigDict
 # Product Image Schemas
 # ============================================================================
 
+class SizeGuideRow(BaseModel):
+    """Row entry for size conversion"""
+    label: str = Field(..., min_length=1, max_length=50)
+    standard: Optional[str] = Field(None, max_length=50)
+    measurement: Optional[str] = Field(None, max_length=100)
+
+
+class SizeGuide(BaseModel):
+    """Size guide schema"""
+    title: Optional[str] = Field(None, max_length=100)
+    subtitle: Optional[str] = Field(None, max_length=255)
+    gender: Optional[str] = Field(None, max_length=50)
+    notes: Optional[str] = Field(None, max_length=500)
+    rows: List[SizeGuideRow] = Field(default_factory=list)
+
+
 class ProductImageBase(BaseModel):
     """Base product image schema"""
     image_url: str = Field(..., min_length=1, max_length=2048, description="Image URL")
@@ -124,6 +140,7 @@ class ProductBase(BaseModel):
     is_featured: bool = Field(default=False, description="Featured product")
     meta_title: Optional[str] = Field(None, max_length=255, description="SEO meta title")
     meta_description: Optional[str] = Field(None, max_length=500, description="SEO meta description")
+    size_guide: Optional[SizeGuide] = Field(default=None, description="Optional size guide information")
 
     @field_validator("base_price", "compare_at_price")
     @classmethod
@@ -181,6 +198,7 @@ class ProductUpdate(BaseModel):
     is_featured: Optional[bool] = None
     meta_title: Optional[str] = Field(None, max_length=255)
     meta_description: Optional[str] = Field(None, max_length=500)
+    size_guide: Optional[SizeGuide] = None
 
     @field_validator("base_price", "compare_at_price")
     @classmethod

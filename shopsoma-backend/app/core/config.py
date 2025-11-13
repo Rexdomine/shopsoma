@@ -50,6 +50,16 @@ class Settings(BaseSettings):
     AWS_SECRET_ACCESS_KEY: str = ""
     AWS_REGION: str = "us-east-1"
     S3_BUCKET_NAME: str = "shopsoma-uploads"
+    S3_ENDPOINT_URL: str = ""  # For CloudFlare R2 or MinIO
+    CDN_BASE_URL: str = ""  # CloudFront or CloudFlare CDN
+
+    # Image Processing
+    MAX_IMAGE_SIZE_MB: int = 10
+    ALLOWED_IMAGE_TYPES: str = "image/jpeg,image/png,image/webp,image/gif"
+    IMAGE_QUALITY: int = 85
+    THUMBNAIL_SIZE: str = "300,300"
+    MEDIUM_SIZE: str = "800,800"
+    LARGE_SIZE: str = "1600,1600"
 
     # Business Settings
     DEFAULT_COMMISSION_RATE: float = 12.5
