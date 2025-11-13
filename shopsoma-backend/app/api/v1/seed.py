@@ -67,7 +67,7 @@ async def test_product_creation(db: AsyncSession = Depends(get_db)):
             category_id=None,  # No category for test
             vendor_id=vendor.id,
             status="active",
-            featured=True
+            is_featured=True
         )
 
         db.add(product)
@@ -206,7 +206,7 @@ async def initialize_database(db: AsyncSession = Depends(get_db)):
                 category_id=None,  # No categories yet, nullable field
                 vendor_id=vendor_id,
                 status="active",
-                featured=True
+                is_featured=True
             )
             db.add(product)
             await db.flush()
