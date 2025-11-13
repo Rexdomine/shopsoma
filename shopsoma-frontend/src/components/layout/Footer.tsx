@@ -15,7 +15,11 @@ export default function Footer() {
           {/* Brand */}
           <div className="col-span-2">
             <Link to="/" className="inline-block mb-4">
-              <span className="text-xl font-bold text-gray-900">{APP_NAME}</span>
+              <img
+                src="/images/logo.svg"
+                alt={APP_NAME}
+                className="h-10 w-auto"
+              />
             </Link>
             <p className="text-sm text-gray-600 mb-4 max-w-md">
               Your premier destination for quality products and exceptional service.

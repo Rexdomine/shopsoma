@@ -13,7 +13,11 @@ export default function Header() {
           <div className="flex items-center justify-between h-12">
             {/* Logo */}
             <Link to="/" className="flex items-center">
-              <span className="text-xl font-display font-bold text-primary">SHOP SOMA</span>
+              <img
+                src="/images/logo.svg"
+                alt="Shopsoma"
+                className="h-8 w-auto"
+              />
             </Link>
 
             {/* Primary Nav */}
