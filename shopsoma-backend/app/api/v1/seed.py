@@ -164,7 +164,17 @@ async def initialize_database(db: AsyncSession = Depends(get_db)):
                     {"name": "Red Multi", "hex": "#DC143C"},
                     {"name": "Blue Multi", "hex": "#4169E1"},
                     {"name": "Green Multi", "hex": "#228B22"}
-                ]
+                ],
+                "size_guide": {
+                    "gender": "Women's",
+                    "title": "Dress Size Guide",
+                    "subtitle": "African Fashion Collection",
+                    "rows": [
+                        {"label": "L", "standard": "US 10-12", "measurement": "Bust: 36-38\" / Waist: 28-30\""},
+                        {"label": "XL", "standard": "US 14-16", "measurement": "Bust: 40-42\" / Waist: 32-34\""},
+                        {"label": "XXL", "standard": "US 18-20", "measurement": "Bust: 44-46\" / Waist: 36-38\""}
+                    ]
+                }
             },
             {
                 "title": "African Print Maxi Skirt",
@@ -178,7 +188,17 @@ async def initialize_database(db: AsyncSession = Depends(get_db)):
                     {"name": "Orange Mix", "hex": "#FF8C00"},
                     {"name": "Purple Mix", "hex": "#9370DB"},
                     {"name": "Teal Mix", "hex": "#008080"}
-                ]
+                ],
+                "size_guide": {
+                    "gender": "Women's",
+                    "title": "Skirt Size Guide",
+                    "subtitle": "African Fashion Collection",
+                    "rows": [
+                        {"label": "L", "standard": "US 10-12", "measurement": "Waist: 28-30\" / Hips: 38-40\""},
+                        {"label": "XL", "standard": "US 14-16", "measurement": "Waist: 32-34\" / Hips: 42-44\""},
+                        {"label": "XXL", "standard": "US 18-20", "measurement": "Waist: 36-38\" / Hips: 46-48\""}
+                    ]
+                }
             },
             {
                 "title": "Dashiki Shirt - Men",
@@ -192,7 +212,17 @@ async def initialize_database(db: AsyncSession = Depends(get_db)):
                     {"name": "Navy", "hex": "#000080"},
                     {"name": "Maroon", "hex": "#800000"},
                     {"name": "Forest Green", "hex": "#228B22"}
-                ]
+                ],
+                "size_guide": {
+                    "gender": "Men's",
+                    "title": "Shirt Size Guide",
+                    "subtitle": "African Fashion Collection",
+                    "rows": [
+                        {"label": "L", "standard": "US 42-44", "measurement": "Chest: 42-44\" / Shoulder: 18\""},
+                        {"label": "XL", "standard": "US 46-48", "measurement": "Chest: 46-48\" / Shoulder: 19\""},
+                        {"label": "XXL", "standard": "US 50-52", "measurement": "Chest: 50-52\" / Shoulder: 20\""}
+                    ]
+                }
             },
             {
                 "title": "Kente Cloth Wrap",
@@ -206,7 +236,17 @@ async def initialize_database(db: AsyncSession = Depends(get_db)):
                     {"name": "Gold & Black", "hex": "#FFD700"},
                     {"name": "Red & Gold", "hex": "#DC143C"},
                     {"name": "Blue & Gold", "hex": "#4169E1"}
-                ]
+                ],
+                "size_guide": {
+                    "gender": "Unisex",
+                    "title": "Wrap Size Guide",
+                    "subtitle": "African Fashion Collection",
+                    "rows": [
+                        {"label": "L", "standard": "Standard", "measurement": "72\" x 44\" (183cm x 112cm)"},
+                        {"label": "XL", "standard": "Large", "measurement": "82\" x 50\" (208cm x 127cm)"},
+                        {"label": "XXL", "standard": "Extra Large", "measurement": "92\" x 56\" (234cm x 142cm)"}
+                    ]
+                }
             },
             {
                 "title": "Buba and Sokoto Combo",
@@ -220,7 +260,17 @@ async def initialize_database(db: AsyncSession = Depends(get_db)):
                     {"name": "White & Gold", "hex": "#FFFFFF"},
                     {"name": "Cream", "hex": "#FFFDD0"},
                     {"name": "Royal Blue", "hex": "#4169E1"}
-                ]
+                ],
+                "size_guide": {
+                    "gender": "Men's",
+                    "title": "Traditional Set Size Guide",
+                    "subtitle": "African Fashion Collection",
+                    "rows": [
+                        {"label": "L", "standard": "US 42-44", "measurement": "Chest: 42-44\" / Waist: 34-36\""},
+                        {"label": "XL", "standard": "US 46-48", "measurement": "Chest: 46-48\" / Waist: 38-40\""},
+                        {"label": "XXL", "standard": "US 50-52", "measurement": "Chest: 50-52\" / Waist: 42-44\""}
+                    ]
+                }
             }
         ]
 
@@ -237,7 +287,8 @@ async def initialize_database(db: AsyncSession = Depends(get_db)):
                 vendor_id=vendor_id,
                 status="active",
                 is_featured=True,
-                moderation_status=ModerationStatus.APPROVED
+                moderation_status=ModerationStatus.APPROVED,
+                size_guide=prod_data.get("size_guide")
             )
             db.add(product)
             await db.flush()
