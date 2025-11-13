@@ -47,6 +47,44 @@ async def test_vendor_creation(db: AsyncSession = Depends(get_db)):
         }
 
 
+@router.get("/test-product")
+async def test_product_creation(db: AsyncSession = Depends(get_db)):
+    """Test product creation to debug the issue"""
+    try:
+        # Get a vendor first
+        result = await db.execute(select(User).where(User.role == UserRole.VENDOR).limit(1))
+        vendor = result.scalar_one_or_none()
+
+        if not vendor:
+            return {"status": "error", "message": "No vendor found. Run /test-vendor first."}
+
+        # Create a test product
+        product = Product(
+            id=uuid.uuid4(),
+            title="Test Product",
+            description="Test description",
+            base_price=1000,
+            category="Test",
+            vendor_id=vendor.id,
+            status=ProductStatus.ACTIVE,
+            featured=True
+        )
+
+        db.add(product)
+        await db.commit()
+
+        return {"status": "success", "product_id": str(product.id)}
+    except Exception as e:
+        await db.rollback()
+        import traceback
+        return {
+            "status": "error",
+            "error": str(e),
+            "type": type(e).__name__,
+            "traceback": traceback.format_exc()
+        }
+
+
 @router.post("/initialize")
 async def initialize_database(db: AsyncSession = Depends(get_db)):
     """
