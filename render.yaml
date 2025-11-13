@@ -41,7 +41,7 @@ services:
         value: https://shopsoma-staging.onrender.com,http://localhost:5173,http://localhost:5174
       - key: DATABASE_ECHO
         value: false
-    healthCheckPath: /healthz
+    healthCheckPath: /api/v1/health
 
   # Frontend (React + Vite)
   - type: web

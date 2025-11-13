@@ -60,6 +60,11 @@ async def health_check():
     """Health check endpoint for Render"""
     return {"status": "healthy"}
 
+@app.get("/api/v1/health")
+async def api_health_check():
+    """API v1 health check endpoint"""
+    return {"status": "healthy", "version": "1.0.0"}
+
 # Include routers
 app.include_router(auth.router, prefix="/api/v1")
 app.include_router(products.router, prefix="/api/v1")
