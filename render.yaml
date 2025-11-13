@@ -1,15 +1,15 @@
 # Render Blueprint for Shopsoma Staging Environment
 # This file defines infrastructure as code for deploying to Render
 
-services:
+databases:
   # PostgreSQL Database
-  - type: pserv
-    name: shopsoma-staging-db
-    env: docker
+  - name: shopsoma-staging-db
     plan: free
     region: oregon
     databaseName: shopsoma_staging
-    databaseUser: shopsoma_user
+    user: shopsoma_user
+
+services:
 
   # Backend API (FastAPI)
   - type: web
