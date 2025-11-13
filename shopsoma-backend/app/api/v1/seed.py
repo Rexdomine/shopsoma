@@ -8,7 +8,7 @@ from datetime import datetime
 import uuid
 
 from app.core.database import get_db
-from app.models.product import Product, ProductVariant, ProductImage, ProductStatus
+from app.models.product import Product, ProductVariant, ProductImage, ProductStatus, ModerationStatus
 from app.models.user import User, UserRole
 from app.models.vendor import Vendor, KYCStatus
 from app.core.security import get_password_hash
@@ -82,7 +82,8 @@ async def test_product_creation(db: AsyncSession = Depends(get_db)):
             category_id=None,  # No category for test
             vendor_id=vendor.id,  # vendor.id from vendors table
             status="active",
-            is_featured=True
+            is_featured=True,
+            moderation_status=ModerationStatus.APPROVED
         )
 
         db.add(product)
@@ -235,7 +236,8 @@ async def initialize_database(db: AsyncSession = Depends(get_db)):
                 category_id=None,  # No categories yet, nullable field
                 vendor_id=vendor_id,
                 status="active",
-                is_featured=True
+                is_featured=True,
+                moderation_status=ModerationStatus.APPROVED
             )
             db.add(product)
             await db.flush()
