@@ -137,9 +137,10 @@ export default function ProductList() {
 
   // Update filters when URL params change
   useEffect(() => {
-    if (categoryParam) {
-      setFilters(prev => ({ ...prev, category: categoryParam }));
-    }
+    setFilters(prev => ({
+      ...prev,
+      category: categoryParam || 'All'
+    }));
   }, [categoryParam]);
 
   const placeholderImage = IMAGE_CONFIG.PLACEHOLDER;
@@ -153,12 +154,39 @@ export default function ProductList() {
     return ['All', ...Array.from(unique)];
   }, [allProducts]);
 
+  // Get products filtered by search and category (but not color/price) for building filter options
+  const searchAndCategoryFilteredProducts = useMemo(() => {
+    let list = [...allProducts];
+
+    // Apply search query filter
+    if (searchQuery.trim()) {
+      const query = searchQuery.toLowerCase().trim();
+      list = list.filter((product) => {
+        const titleMatch = product.title?.toLowerCase().includes(query);
+        const descriptionMatch = product.description?.toLowerCase().includes(query);
+        const categoryMatch = product.category?.toLowerCase().includes(query);
+        return titleMatch || descriptionMatch || categoryMatch;
+      });
+    }
+
+    // Apply category filter
+    if (filters.category !== 'All') {
+      list = list.filter((product) => {
+        const description = product.description || '';
+        return description.startsWith(`${filters.category} - `);
+      });
+    }
+
+    return list;
+  }, [allProducts, searchQuery, filters.category]);
+
   const { colorOptions, colorMeta } = useMemo(() => {
     const metaMap = new Map<
       string,
       { label: string; hex?: string; productIds: Set<string> }
     >();
-    allProducts.forEach((product) => {
+    // Use search-filtered products instead of all products
+    searchAndCategoryFilteredProducts.forEach((product) => {
       product.variants?.forEach((variant) => {
         if (!variant.color) return;
         const normalizedKey = variant.color.toLowerCase();
@@ -196,11 +224,11 @@ export default function ProductList() {
       colorOptions: ['All', ...sortedEntries.map(([, meta]) => meta.label)],
       colorMeta,
     };
-  }, [allProducts]);
+  }, [searchAndCategoryFilteredProducts]);
 
   const priceRangeCounts = useMemo(() => {
     const counts: Record<string, number> = {
-      all: allProducts.length,
+      all: searchAndCategoryFilteredProducts.length,
     };
     priceRanges.forEach((range) => {
       if (range.value !== 'all') {
@@ -208,7 +236,7 @@ export default function ProductList() {
       }
     });
 
-    allProducts.forEach((product) => {
+    searchAndCategoryFilteredProducts.forEach((product) => {
       const price = getProductPrice(product);
       priceRanges.forEach((range) => {
         if (range.value === 'all') return;
@@ -221,7 +249,7 @@ export default function ProductList() {
     });
 
     return counts;
-  }, [allProducts]);
+  }, [searchAndCategoryFilteredProducts]);
 
   const filteredProducts = useMemo(() => {
     let list = [...allProducts];
@@ -238,7 +266,11 @@ export default function ProductList() {
     }
 
     if (filters.category !== 'All') {
-      list = list.filter((product) => product.category === filters.category);
+      list = list.filter((product) => {
+        const description = product.description || '';
+        // Check if description starts with the category prefix (e.g., "Women - ", "Men - ")
+        return description.startsWith(`${filters.category} - `);
+      });
     }
 
     if (filters.color !== 'All') {
@@ -437,6 +469,11 @@ export default function ProductList() {
                 <div className="bg-primary/5 border border-primary/20 rounded-2xl px-6 py-4">
                   <p className="text-sm text-gray-700">
                     Search results for: <span className="font-semibold text-primary">"{searchQuery}"</span>
+                    {filters.category !== 'All' && (
+                      <span className="ml-2">
+                        in <span className="font-semibold text-primary">{filters.category}</span>
+                      </span>
+                    )}
                   </p>
                   <p className="text-xs text-gray-500 mt-1">
                     Found {filteredProducts.length} {filteredProducts.length === 1 ? 'product' : 'products'}
