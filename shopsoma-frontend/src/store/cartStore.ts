@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { CartState, AddToCartParams, UpdateCartItemParams, ApplyCouponParams, Cart, CartItem } from '../types/cart';
+import type { CartState, AddToCartParams, UpdateCartItemParams, UpdateVariantParams, ApplyCouponParams, Cart, CartItem } from '../types/cart';
 import { CartService } from '../services/cartService';
 import { calculateCartSummary, calculateItemSubtotal, getVariantPrice, applyCoupon } from '../utils/pricing';
 
@@ -92,6 +92,57 @@ export const useCartStore = create<CartState>((set, get) => ({
       }
       return item;
     });
+
+    const updatedCart: Cart = {
+      ...cart,
+      items: updatedItems,
+      summary: calculateCartSummary(updatedItems, undefined, cart.summary.discount),
+    };
+
+    CartService.saveCart(updatedCart);
+    set({ cart: updatedCart, error: null });
+  },
+
+  /**
+   * Update item variant (preserves position in cart)
+   */
+  updateVariant: ({ itemId, newVariant }: UpdateVariantParams) => {
+    const { cart } = get();
+
+    const itemIndex = cart.items.findIndex(item => item.id === itemId);
+    if (itemIndex === -1) return;
+
+    const currentItem = cart.items[itemIndex];
+    const newItemId = CartService.generateCartItemId(currentItem.product_id, newVariant.id);
+
+    // Check if the new variant already exists in cart
+    const existingNewVariantIndex = cart.items.findIndex(item => item.id === newItemId);
+
+    let updatedItems: CartItem[];
+
+    if (existingNewVariantIndex > -1 && existingNewVariantIndex !== itemIndex) {
+      // Merge with existing item that has the new variant
+      updatedItems = cart.items.filter((_, index) => index !== itemIndex);
+      updatedItems[existingNewVariantIndex] = {
+        ...updatedItems[existingNewVariantIndex],
+        quantity: updatedItems[existingNewVariantIndex].quantity + currentItem.quantity,
+        subtotal: calculateItemSubtotal(
+          updatedItems[existingNewVariantIndex].price,
+          updatedItems[existingNewVariantIndex].quantity + currentItem.quantity
+        ),
+      };
+    } else {
+      // Update variant in place (preserves order)
+      const newPrice = getVariantPrice(newVariant.price, currentItem.product.base_price);
+      updatedItems = [...cart.items];
+      updatedItems[itemIndex] = {
+        ...currentItem,
+        id: newItemId,
+        variant: newVariant,
+        price: newPrice,
+        subtotal: calculateItemSubtotal(newPrice, currentItem.quantity),
+      };
+    }
 
     const updatedCart: Cart = {
       ...cart,

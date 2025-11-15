@@ -12,6 +12,7 @@ import RootLayout from '../components/layout/RootLayout';
 const Home = lazy(() => import('../pages/Home'));
 const ProductDetail = lazy(() => import('../pages/products/ProductDetail'));
 const ProductList = lazy(() => import('../pages/products/ProductList'));
+const Cart = lazy(() => import('../pages/cart/Cart'));
 const NotFound = lazy(() => import('../pages/errors/NotFound'));
 const ServerError = lazy(() => import('../pages/errors/ServerError'));
 
@@ -40,16 +41,26 @@ const router = createBrowserRouter([
           </ErrorBoundary>
         ),
       },
-      {
-        path: ROUTES.PRODUCTS,
-        element: (
-          <ErrorBoundary>
-            <Suspense fallback={<Loading fullScreen message="Loading products..." />}>
-              <ProductList />
-            </Suspense>
-          </ErrorBoundary>
-        ),
-      },
+  {
+    path: ROUTES.PRODUCTS,
+    element: (
+      <ErrorBoundary>
+        <Suspense fallback={<Loading fullScreen message="Loading products..." />}>
+          <ProductList />
+        </Suspense>
+      </ErrorBoundary>
+    ),
+  },
+  {
+    path: ROUTES.CART,
+    element: (
+      <ErrorBoundary>
+        <Suspense fallback={<Loading fullScreen message="Loading cart..." />}>
+          <Cart />
+        </Suspense>
+      </ErrorBoundary>
+    ),
+  },
       {
         path: ROUTES.NOT_FOUND,
         element: (

@@ -37,6 +37,11 @@ export interface UpdateCartItemParams {
   quantity: number;
 }
 
+export interface UpdateVariantParams {
+  itemId: string;
+  newVariant: ProductVariant;
+}
+
 export interface ApplyCouponParams {
   code: string;
 }
@@ -50,6 +55,7 @@ export interface CartState {
   addItem: (params: AddToCartParams) => void;
   removeItem: (itemId: string) => void;
   updateQuantity: (params: UpdateCartItemParams) => void;
+  updateVariant: (params: UpdateVariantParams) => void;
   clearCart: () => void;
   applyCoupon: (params: ApplyCouponParams) => Promise<void>;
 
