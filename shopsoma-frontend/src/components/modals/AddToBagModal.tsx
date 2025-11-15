@@ -104,7 +104,9 @@ export default function AddToBagModal({
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               {recommendations.slice(0, 3).map((item) => (
-                <ProductCard key={item.id} product={item} />
+                <div key={item.id} onClick={onClose}>
+                  <ProductCard product={item} />
+                </div>
               ))}
             </div>
           </div>
