@@ -1,0 +1,27 @@
+/* Custom select dropdown styling */
+select.custom-select {
+  /* Remove all default appearances */
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+
+  /* Ensure the custom arrow is visible */
+  background-image: url("data:image/svg+xml,%3Csvg width='20' height='20' viewBox='0 0 20 20' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M6 8l4 4 4-4' stroke='%23105753' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round' fill='none'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 1rem center;
+  background-size: 20px 20px;
+
+  /* Ensure consistent styling */
+  padding-right: 3rem !important;
+}
+
+/* Remove default arrow in IE10+ */
+select.custom-select::-ms-expand {
+  display: none;
+}
+
+/* Firefox specific */
+select.custom-select {
+  text-indent: 0.01px;
+  text-overflow: '';
+}
