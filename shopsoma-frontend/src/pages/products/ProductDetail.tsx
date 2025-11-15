@@ -7,6 +7,8 @@ import Loading from '../../components/common/Loading';
 import ProductCard from '../../components/products/ProductCard';
 import { IMAGE_CONFIG } from '../../config/constants';
 import Layout from '../../components/layout/Layout';
+import AddToBagModal from '../../components/modals/AddToBagModal';
+import { useCartStore } from '../../store/cartStore';
 
 type ColorOption = {
   label: string;
@@ -17,6 +19,7 @@ type ColorOption = {
 export default function ProductDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const addItem = useCartStore((state) => state.addItem);
 
   const [product, setProduct] = useState<Product | null>(null);
   const [relatedProducts, setRelatedProducts] = useState<Product[]>([]);
@@ -29,6 +32,8 @@ export default function ProductDetail() {
   const [wishlist, setWishlist] = useState(false);
   const [sizeGuideOpen, setSizeGuideOpen] = useState(false);
   const [sizeMenuOpen, setSizeMenuOpen] = useState(false);
+  const [bagModalOpen, setBagModalOpen] = useState(false);
+  const [addedVariant, setAddedVariant] = useState<ProductVariant | null>(null);
   const sizeDropdownRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -149,6 +154,20 @@ export default function ProductDetail() {
     } else {
       setQuantity((prev) => Math.max(prev - 1, 1));
     }
+  };
+
+  const handleAddToBag = () => {
+    if (missingSelection || !product || !selectedVariant) return;
+
+    // Add to cart using Zustand store
+    addItem({
+      product,
+      variant: selectedVariant,
+      quantity,
+    });
+
+    setAddedVariant(selectedVariant);
+    setBagModalOpen(true);
   };
 
   const missingSelection =
@@ -399,6 +418,7 @@ export default function ProductDetail() {
                     ? 'bg-gray-100 text-gray-400 border-gray-100 cursor-not-allowed'
                     : 'bg-primary text-white hover:bg-primary-dark border-primary'
                 }`}
+                onClick={handleAddToBag}
               >
                 Add to Bag
               </button>
@@ -562,6 +582,14 @@ export default function ProductDetail() {
           </div>
         </div>
       )}
+      <AddToBagModal
+        open={bagModalOpen}
+        product={product}
+        variant={addedVariant ?? selectedVariant}
+        quantity={quantity}
+        recommendations={relatedProducts}
+        onClose={() => setBagModalOpen(false)}
+      />
     </Layout>
   );
 }

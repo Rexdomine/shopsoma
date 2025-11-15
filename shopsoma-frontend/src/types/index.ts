@@ -40,6 +40,7 @@ export interface RegisterData {
 export interface Product {
   id: string;
   vendor_id: string;
+  vendor_name?: string;
   title: string;
   description?: string;
   size_guide?: SizeGuide | null;

@@ -2,9 +2,12 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Search, ShoppingCart, User, X } from 'lucide-react';
 import { ROUTES } from '../../config/constants';
+import { useCartStore } from '../../store/cartStore';
 
 export default function Header() {
   const [searchOpen, setSearchOpen] = useState(false);
+  const cart = useCartStore((state) => state.cart);
+  const itemCount = cart.summary.itemCount;
 
   return (
     <>
@@ -40,9 +43,14 @@ export default function Header() {
               <button className="p-2 text-gray-600 hover:text-gray-900" onClick={() => setSearchOpen(true)}>
                 <Search className="w-5 h-5" />
               </button>
-              <button className="p-2 text-gray-600 hover:text-gray-900 relative">
+              <Link to={ROUTES.CART} className="p-2 text-gray-600 hover:text-gray-900 relative">
                 <ShoppingCart className="w-5 h-5" />
-              </button>
+                {itemCount > 0 && (
+                  <span className="absolute top-0 right-0 bg-primary text-white text-xs font-semibold rounded-full h-5 w-5 flex items-center justify-center">
+                    {itemCount > 9 ? '9+' : itemCount}
+                  </span>
+                )}
+              </Link>
               <button className="p-2 text-gray-600 hover:text-gray-900">
                 <User className="w-5 h-5" />
               </button>
