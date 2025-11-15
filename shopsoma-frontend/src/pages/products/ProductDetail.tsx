@@ -298,7 +298,16 @@ export default function ProductDetail() {
                     onChange={(event) =>
                       setSelectedSize(event.target.value || null)
                     }
-                    className="w-full rounded-full border border-gray-200 px-4 py-3 pr-12 text-sm font-semibold text-gray-700 bg-white appearance-none focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition"
+                    className="w-full rounded-full border border-gray-200 px-4 py-3 pr-12 text-sm font-semibold text-gray-700 bg-white focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition"
+                    style={{
+                      appearance: 'none',
+                      WebkitAppearance: 'none',
+                      MozAppearance: 'none',
+                      backgroundImage:
+                        'url("data:image/svg+xml,%3Csvg width=\'20\' height=\'20\' viewBox=\'0 0 20 20\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cpath d=\'M6 8l4 4 4-4\' stroke=\'%23105753\' stroke-width=\'1.5\' stroke-linecap=\'round\' stroke-linejoin=\'round\' fill=\'none\'/%3E%3C/svg%3E")',
+                      backgroundRepeat: 'no-repeat',
+                      backgroundPosition: 'right 1rem center',
+                    }}
                   >
                     <option value="">Select size</option>
                     {sizeOptions.map((size) => (
@@ -307,9 +316,6 @@ export default function ProductDetail() {
                       </option>
                     ))}
                   </select>
-                  <span className="pointer-events-none absolute inset-y-0 right-4 flex items-center text-primary">
-                    ▼
-                  </span>
                 </div>
               </div>
             )}
