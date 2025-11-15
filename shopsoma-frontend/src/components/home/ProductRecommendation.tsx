@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom';
 import type { Product } from '../../types';
 import { productService } from '../../services/productService';
 import Loading from '../common/Loading';
-import { IMAGE_CONFIG } from '../../config/constants';
+import { IMAGE_CONFIG, ROUTES } from '../../config/constants';
 
 type RecommendedProduct = {
   id: string;
@@ -189,12 +189,12 @@ export default function ProductRecommendation() {
 
             {/* View All Button */}
             <div className="text-center mt-8">
-              <a
-                href="/products"
+              <Link
+                to={ROUTES.PRODUCTS}
                 className="inline-flex items-center justify-center px-6 py-2 rounded-full border border-primary text-primary text-sm font-semibold hover:bg-primary hover:text-white transition-all duration-200"
               >
                 View All Products
-              </a>
+              </Link>
             </div>
           </>
         )}

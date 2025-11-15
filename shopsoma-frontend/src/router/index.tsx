@@ -10,6 +10,7 @@ import Loading from '../components/common/Loading';
 // Lazy load pages for code splitting
 const Home = lazy(() => import('../pages/Home'));
 const ProductDetail = lazy(() => import('../pages/products/ProductDetail'));
+const ProductList = lazy(() => import('../pages/products/ProductList'));
 const NotFound = lazy(() => import('../pages/errors/NotFound'));
 const ServerError = lazy(() => import('../pages/errors/ServerError'));
 
@@ -31,6 +32,16 @@ const router = createBrowserRouter([
       <ErrorBoundary>
         <Suspense fallback={<Loading fullScreen message="Loading product..." />}>
           <ProductDetail />
+        </Suspense>
+      </ErrorBoundary>
+    ),
+  },
+  {
+    path: ROUTES.PRODUCTS,
+    element: (
+      <ErrorBoundary>
+        <Suspense fallback={<Loading fullScreen message="Loading products..." />}>
+          <ProductList />
         </Suspense>
       </ErrorBoundary>
     ),

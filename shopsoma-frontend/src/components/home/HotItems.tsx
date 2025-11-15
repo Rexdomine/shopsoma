@@ -1,9 +1,11 @@
 import { useEffect, useState, useRef } from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import type { Product } from '../../types';
 import { productService } from '../../services/productService';
 import ProductCard from '../products/ProductCard';
 import Loading from '../common/Loading';
+import { ROUTES } from '../../config/constants';
 
 export default function HotItems() {
   const [products, setProducts] = useState<Product[]>([]);
@@ -96,12 +98,12 @@ export default function HotItems() {
             >
               <ChevronRight className="w-5 h-5 text-white" />
             </button>
-            <a
-              href="/products"
+            <Link
+              to={ROUTES.PRODUCTS}
               className="ml-2 px-7 py-3 bg-primary text-white rounded-full text-sm font-body font-semibold hover:bg-primary-dark transition-all duration-200 shadow-md hover:shadow-lg"
             >
               See All Products
-            </a>
+            </Link>
           </div>
         </div>
 
@@ -126,12 +128,12 @@ export default function HotItems() {
 
         {/* Mobile See All Button */}
         <div className="md:hidden text-center mt-6">
-          <a
-            href="/products"
+          <Link
+            to={ROUTES.PRODUCTS}
             className="inline-block px-7 py-3 bg-primary text-white rounded-full text-sm font-body font-semibold hover:bg-primary-dark transition-all duration-200 shadow-md hover:shadow-lg"
           >
             See All Products
-          </a>
+          </Link>
         </div>
       </div>
     </section>
