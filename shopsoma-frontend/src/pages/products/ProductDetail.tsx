@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Heart, Minus, Plus, X } from 'lucide-react';
 import type { Product, ProductVariant } from '../../types';
@@ -28,6 +28,8 @@ export default function ProductDetail() {
   const [quantity, setQuantity] = useState(1);
   const [wishlist, setWishlist] = useState(false);
   const [sizeGuideOpen, setSizeGuideOpen] = useState(false);
+  const [sizeMenuOpen, setSizeMenuOpen] = useState(false);
+  const sizeDropdownRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!id) {
@@ -157,6 +159,21 @@ export default function ProductDetail() {
   const galleryImages = product?.images ?? [];
   const sizeGuideRows = product?.size_guide?.rows ?? [];
   const hasSizeGuide = sizeGuideRows.length > 0;
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (
+        sizeMenuOpen &&
+        sizeDropdownRef.current &&
+        !sizeDropdownRef.current.contains(event.target as Node)
+      ) {
+        setSizeMenuOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [sizeMenuOpen]);
 
   useEffect(() => {
     if (!hasSizeGuide && sizeGuideOpen) {
@@ -292,21 +309,57 @@ export default function ProductDetail() {
                 <div className="text-xs uppercase tracking-[0.3em] text-gray-400">
                   Size
                 </div>
-                <div className="relative">
-                  <select
-                    value={selectedSize ?? ''}
-                    onChange={(event) =>
-                      setSelectedSize(event.target.value || null)
-                    }
-                    className="custom-select w-full rounded-full border border-gray-200 px-4 py-3 text-sm font-semibold text-gray-700 bg-white focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition cursor-pointer"
+                <div className="relative" ref={sizeDropdownRef}>
+                  <button
+                    type="button"
+                    className={`relative w-full rounded-full px-4 py-3 pr-12 text-sm font-semibold text-left text-gray-700 bg-white transition cursor-pointer shadow-sm flex items-center justify-between focus:outline-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/10 ${
+                      sizeMenuOpen
+                        ? 'border-2 border-primary ring-2 ring-primary/10'
+                        : 'border border-gray-200 hover:border-primary/60'
+                    }`}
+                    onClick={() => setSizeMenuOpen((prev) => !prev)}
                   >
-                    <option value="">Select size</option>
-                    {sizeOptions.map((size) => (
-                      <option key={size} value={size}>
-                        {size}
-                      </option>
-                    ))}
-                  </select>
+                    <span>{selectedSize ?? 'Select size'}</span>
+                    <svg
+                      width="16"
+                      height="16"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      xmlns="http://www.w3.org/2000/svg"
+                      className={`pointer-events-none text-primary transition-transform absolute right-5 sm:right-6 top-1/2 -translate-y-1/2 ${
+                        sizeMenuOpen ? 'rotate-180' : ''
+                      }`}
+                    >
+                      <path
+                        d="M6 9l6 6 6-6"
+                        stroke="currentColor"
+                        strokeWidth="1.5"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                  </button>
+                  {sizeMenuOpen && (
+                    <div className="absolute z-20 mt-2 w-full rounded-2xl border border-gray-200 bg-white shadow-lg overflow-hidden">
+                      {sizeOptions.map((size) => (
+                        <button
+                          key={size}
+                          type="button"
+                          onClick={() => {
+                            setSelectedSize(size);
+                            setSizeMenuOpen(false);
+                          }}
+                          className={`w-full text-left px-4 py-3 text-sm font-semibold transition ${
+                            selectedSize === size
+                              ? 'bg-primary/10 text-primary'
+                              : 'text-gray-700 hover:bg-gray-50'
+                          }`}
+                        >
+                          {size}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
             )}
