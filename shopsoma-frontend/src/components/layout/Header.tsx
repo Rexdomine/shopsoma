@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { Search, ShoppingCart, User, X } from 'lucide-react';
+import { ROUTES } from '../../config/constants';
 
 export default function Header() {
   const [searchOpen, setSearchOpen] = useState(false);
@@ -88,7 +89,9 @@ type OverlayProps = {
 
 function PremiumSearchOverlay({ open, onClose }: OverlayProps) {
   const inputRef = useRef<HTMLInputElement>(null);
-  const [activeFilter, setActiveFilter] = useState<string>('Women');
+  const navigate = useNavigate();
+  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [activeFilter, setActiveFilter] = useState<string>('All');
 
   useEffect(() => {
     if (!open) return undefined;
@@ -97,13 +100,31 @@ function PremiumSearchOverlay({ open, onClose }: OverlayProps) {
       if (event.key === 'Escape') {
         onClose();
       }
+      if (event.key === 'Enter' && searchQuery.trim()) {
+        handleSearch();
+      }
     };
 
     document.addEventListener('keydown', handleKey);
     inputRef.current?.focus();
 
     return () => document.removeEventListener('keydown', handleKey);
-  }, [open, onClose]);
+  }, [open, onClose, searchQuery]);
+
+  const handleSearch = () => {
+    const params = new URLSearchParams();
+    if (searchQuery.trim()) {
+      params.set('q', searchQuery.trim());
+    }
+    if (activeFilter && activeFilter !== 'All') {
+      params.set('category', activeFilter);
+    }
+
+    navigate(`${ROUTES.PRODUCTS}?${params.toString()}`);
+    onClose();
+    setSearchQuery('');
+    setActiveFilter('All');
+  };
 
   return (
     <div
@@ -123,53 +144,66 @@ function PremiumSearchOverlay({ open, onClose }: OverlayProps) {
             open ? 'translate-y-0 opacity-100' : '-translate-y-6 opacity-0'
           }`}
         >
-          <div className="relative">
-            <Search className="absolute left-6 top-1/2 -translate-y-1/2 text-gray-400 w-5 h-5" />
-            <input
-              ref={inputRef}
-              type="text"
-              placeholder="Search for an item, a brand or a category..."
-              className="w-full h-16 pl-14 pr-14 text-base sm:text-lg text-gray-800 placeholder:text-gray-400 border-b border-gray-100 focus:outline-none"
-            />
-            <button
-              type="button"
-              aria-label="Close search"
-              className="absolute right-6 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-900 transition"
-              onClick={onClose}
-            >
-              <X className="w-5 h-5" />
-            </button>
-          </div>
+          <form onSubmit={(e) => { e.preventDefault(); handleSearch(); }}>
+            <div className="relative">
+              <Search className="absolute left-6 top-1/2 -translate-y-1/2 text-gray-400 w-5 h-5" />
+              <input
+                ref={inputRef}
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search for an item, a brand or a category..."
+                className="w-full h-16 pl-14 pr-14 text-base sm:text-lg text-gray-800 placeholder:text-gray-400 border-b border-gray-100 focus:outline-none"
+              />
+              <button
+                type="button"
+                aria-label="Close search"
+                className="absolute right-6 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-900 transition"
+                onClick={onClose}
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
 
-          <div className="px-8 py-6 text-center space-y-3">
-            <div className="flex items-center justify-center flex-wrap gap-3 text-sm font-semibold uppercase tracking-[0.25em]">
-              {['Women', 'Men', 'Girls', 'Boys', 'Home'].map((label) => {
-                const isActive = activeFilter === label;
-                return (
-                  <button
-                    key={label}
-                    type="button"
-                    onClick={() => setActiveFilter(label)}
-                    className={`px-5 py-2 rounded-full border transition focus:outline-none ${
-                      isActive
-                        ? 'border-primary text-primary bg-primary/5'
-                        : 'border-transparent text-gray-500 hover:text-primary hover:border-primary/40'
-                    }`}
-                  >
-                    {label}
-                  </button>
-                );
-              })}
+            <div className="px-8 py-6 text-center space-y-4">
+              <div className="flex items-center justify-center flex-wrap gap-3 text-sm font-semibold uppercase tracking-[0.25em]">
+                {['All', 'Women', 'Men', 'Girls', 'Boys', 'Home'].map((label) => {
+                  const isActive = activeFilter === label;
+                  return (
+                    <button
+                      key={label}
+                      type="button"
+                      onClick={() => setActiveFilter(label)}
+                      className={`px-5 py-2 rounded-full border transition focus:outline-none ${
+                        isActive
+                          ? 'border-primary text-primary bg-primary/5'
+                          : 'border-transparent text-gray-500 hover:text-primary hover:border-primary/40'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <button
+                type="submit"
+                disabled={!searchQuery.trim()}
+                className="px-8 py-3 bg-primary text-white rounded-full font-semibold hover:bg-primary-dark transition-all duration-200 shadow-md hover:shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Search
+              </button>
+
+              <div className="space-y-2">
+                <p className="text-sm font-semibold text-gray-900">
+                  Looking for something special?
+                </p>
+                <p className="text-sm text-gray-500">
+                  Search curated designer brands, lifestyle edits, and categories crafted for you.
+                </p>
+              </div>
             </div>
-            <div className="space-y-2">
-              <p className="text-sm font-semibold text-gray-900">
-                Looking for something special?
-              </p>
-              <p className="text-sm text-gray-500">
-                Search curated designer brands, lifestyle edits, and categories crafted for you.
-              </p>
-            </div>
-          </div>
+          </form>
         </div>
       </div>
     </div>

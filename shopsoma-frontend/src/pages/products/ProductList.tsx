@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { Heart, ArrowLeft, ArrowRight, ChevronDown } from 'lucide-react';
 import Layout from '../../components/layout/Layout';
 import Loading from '../../components/common/Loading';
@@ -93,6 +93,10 @@ const articles = [
 ];
 
 export default function ProductList() {
+  const [searchParams] = useSearchParams();
+  const searchQuery = searchParams.get('q') || '';
+  const categoryParam = searchParams.get('category') || '';
+
   const [allProducts, setAllProducts] = useState<Product[]>([]);
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
@@ -100,7 +104,7 @@ export default function ProductList() {
   const [favorites, setFavorites] = useState<Set<string>>(new Set());
   const [filterMenuOpen, setFilterMenuOpen] = useState(false);
   const [filters, setFilters] = useState<FilterState>({
-    category: 'All',
+    category: categoryParam || 'All',
     color: 'All',
     price: 'all',
   });
@@ -130,6 +134,13 @@ export default function ProductList() {
 
     loadProducts();
   }, []);
+
+  // Update filters when URL params change
+  useEffect(() => {
+    if (categoryParam) {
+      setFilters(prev => ({ ...prev, category: categoryParam }));
+    }
+  }, [categoryParam]);
 
   const placeholderImage = IMAGE_CONFIG.PLACEHOLDER;
   const filterMenuRef = useRef<HTMLDivElement>(null);
@@ -215,6 +226,17 @@ export default function ProductList() {
   const filteredProducts = useMemo(() => {
     let list = [...allProducts];
 
+    // Apply search query filter
+    if (searchQuery.trim()) {
+      const query = searchQuery.toLowerCase().trim();
+      list = list.filter((product) => {
+        const titleMatch = product.title?.toLowerCase().includes(query);
+        const descriptionMatch = product.description?.toLowerCase().includes(query);
+        const categoryMatch = product.category?.toLowerCase().includes(query);
+        return titleMatch || descriptionMatch || categoryMatch;
+      });
+    }
+
     if (filters.category !== 'All') {
       list = list.filter((product) => product.category === filters.category);
     }
@@ -277,7 +299,7 @@ export default function ProductList() {
     }
 
     return sorted;
-  }, [allProducts, filters, sortOption, customPriceRange]);
+  }, [allProducts, filters, sortOption, customPriceRange, searchQuery]);
 
   const totalPages = Math.max(1, Math.ceil(filteredProducts.length / PAGE_SIZE));
 
@@ -410,6 +432,17 @@ export default function ProductList() {
                 <ArrowLeft className="w-4 h-4" />
                 Home / All
               </Link>
+
+              {searchQuery && (
+                <div className="bg-primary/5 border border-primary/20 rounded-2xl px-6 py-4">
+                  <p className="text-sm text-gray-700">
+                    Search results for: <span className="font-semibold text-primary">"{searchQuery}"</span>
+                  </p>
+                  <p className="text-xs text-gray-500 mt-1">
+                    Found {filteredProducts.length} {filteredProducts.length === 1 ? 'product' : 'products'}
+                  </p>
+                </div>
+              )}
 
               <div className="space-y-6">
                 <div className="space-y-4">
