@@ -347,8 +347,6 @@ export default function ProductList() {
     setPage(1);
   };
 
-  const hasActiveFilters =
-    filters.category !== 'All' || filters.color !== 'All' || filters.price !== 'all';
   const currentSortLabel =
     sortOptions.find((option) => option.value === sortOption)?.label || 'Suggested';
 
