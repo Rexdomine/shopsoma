@@ -18,7 +18,7 @@ export default function AddToBagModal({
   open,
   product,
   variant,
-  quantity,
+  quantity: _quantity,
   recommendations = [],
   onClose,
 }: AddToBagModalProps) {

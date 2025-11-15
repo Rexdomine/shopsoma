@@ -110,7 +110,6 @@ export default function Cart() {
                 const thumbnail = item.product.images?.[0]?.image_url ?? IMAGE_CONFIG.PLACEHOLDER;
                 const brand = item.product.vendor_name ?? 'Shopsoma Collective';
                 const category = item.product.category ?? '';
-                const material = item.variant.material ?? 'N/A';
 
                 return (
                   <article key={item.id} className="border-b border-gray-200 pb-6">
@@ -157,7 +156,6 @@ export default function Cart() {
                         <div className="text-sm text-gray-600 space-y-1">
                           <p>Size: {item.variant.size}</p>
                           <p>Color: {item.variant.color}</p>
-                          <p>Material: {material}</p>
                         </div>
                         <div className="flex items-center justify-between pt-2 text-sm">
                           <button type="button" className="text-primary underline">

@@ -95,7 +95,7 @@ export class CartService {
   /**
    * Sync cart with server (placeholder for future implementation)
    */
-  static async syncWithServer(cart: Cart, userId?: string): Promise<Cart> {
+  static async syncWithServer(cart: Cart, _userId?: string): Promise<Cart> {
     // This will be implemented when we add the backend cart endpoints
     // For now, just return the local cart
     console.log('Server sync not yet implemented');

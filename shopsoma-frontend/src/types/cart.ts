@@ -1,4 +1,4 @@
-import type { Product, ProductVariant } from './product';
+import type { Product, ProductVariant } from './index';
 
 export interface CartItem {
   id: string; // Unique cart item ID (product_id + variant_id)
