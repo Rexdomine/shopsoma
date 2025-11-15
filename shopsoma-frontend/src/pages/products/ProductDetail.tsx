@@ -49,6 +49,11 @@ export default function ProductDetail() {
         setProduct(data);
         setSelectedImage(data.images?.[0]?.image_url ?? null);
 
+        // Reset selections when product changes
+        setSelectedColor(null);
+        setSelectedSize(null);
+        setQuantity(1);
+
         // Auto-select color/size if only one option
         const uniqueColors = getColorOptions(data.variants ?? []);
         if (uniqueColors.length === 1) {
@@ -302,15 +307,11 @@ export default function ProductDetail() {
                     <button
                       key={option.value}
                       type="button"
-                      onClick={() =>
-                        setSelectedColor((prev) =>
-                          prev === option.value ? null : option.value
-                        )
-                      }
+                      onClick={() => setSelectedColor(option.value)}
                       className={`w-11 h-11 rounded-full border-2 transition-all ${
                         selectedColor === option.value
-                          ? 'border-primary'
-                          : 'border-transparent'
+                          ? 'border-primary ring-2 ring-primary/20'
+                          : 'border-gray-300 hover:border-primary/60'
                       }`}
                       style={{
                         backgroundColor: option.hex ?? '#f5f5f5',
@@ -319,6 +320,9 @@ export default function ProductDetail() {
                     />
                   ))}
                 </div>
+                {selectedColor && (
+                  <p className="text-xs text-gray-600">Selected: {selectedColor}</p>
+                )}
               </div>
             )}
 
