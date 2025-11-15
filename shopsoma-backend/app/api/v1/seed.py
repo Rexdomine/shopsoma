@@ -356,3 +356,46 @@ async def reset_database(db: AsyncSession = Depends(get_db)):
     except Exception as e:
         await db.rollback()
         raise HTTPException(status_code=500, detail=f"Reset failed: {str(e)}")
+
+
+@router.post("/update-categories")
+async def update_product_categories(db: AsyncSession = Depends(get_db)):
+    """Update product descriptions to include category for search filtering"""
+    try:
+        result = await db.execute(select(Product))
+        products = result.scalars().all()
+
+        updated_count = 0
+        updates = []
+
+        for product in products:
+            size_guide = product.size_guide
+            if size_guide and isinstance(size_guide, dict):
+                gender = size_guide.get("gender", "")
+
+                # Map gender to category
+                category = None
+                if "women" in gender.lower():
+                    category = "Women"
+                elif "men" in gender.lower():
+                    category = "Men"
+                elif "unisex" in gender.lower():
+                    category = "Unisex"
+
+                if category and product.description:
+                    # Only update if category not already in description
+                    if category not in product.description:
+                        product.description = f"{category} - {product.description}"
+                        updated_count += 1
+                        updates.append(f"{product.title} → {category}")
+
+        await db.commit()
+
+        return {
+            "status": "success",
+            "message": f"Updated {updated_count} product descriptions with categories",
+            "updates": updates
+        }
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Category update failed: {str(e)}")
