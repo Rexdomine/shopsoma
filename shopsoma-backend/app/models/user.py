@@ -41,6 +41,7 @@ class User(Base):
     addresses = relationship("Address", back_populates="user", cascade="all, delete-orphan")
     reviews = relationship("Review", back_populates="customer", cascade="all, delete-orphan", foreign_keys="[Review.customer_id]")
     returns = relationship("Return", back_populates="customer", foreign_keys="[Return.customer_id]")
+    cart_items = relationship("CartItem", back_populates="user", cascade="all, delete-orphan")
 
     def __repr__(self):
         return f"<User {self.email}>"

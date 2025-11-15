@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
 # Import routers
-from app.api.v1 import auth, products, images, admin, seed
+from app.api.v1 import auth, products, images, admin, seed, cart
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -71,6 +71,7 @@ app.include_router(products.router, prefix="/api/v1")
 app.include_router(images.router, prefix="/api/v1")
 app.include_router(admin.router, prefix="/api/v1")
 app.include_router(seed.router, prefix="/api/v1")
+app.include_router(cart.router, prefix="/api/v1")
 
 # TODO: Add more routers as they're implemented
 # app.include_router(vendors.router, prefix="/api/v1")
