@@ -30,13 +30,19 @@ export default function ProductCard({
     )
   );
 
-  const colorOptions = Array.from(
-    new Set(
-      (product.variants || [])
-        .map((v) => v.color)
-        .filter((v): v is string => Boolean(v))
-    )
-  );
+  // Get unique colors with hex values
+  const colorOptions = (() => {
+    const colorMap = new Map<string, { color: string; hex: string | null }>();
+    (product.variants || []).forEach((v) => {
+      if (v.color) {
+        const key = v.color.toLowerCase();
+        if (!colorMap.has(key)) {
+          colorMap.set(key, { color: v.color, hex: v.color_hex ?? null });
+        }
+      }
+    });
+    return Array.from(colorMap.values());
+  })();
 
   const handleImageError = (event: React.SyntheticEvent<HTMLImageElement>) => {
     event.currentTarget.src = placeholderImage;
@@ -97,24 +103,46 @@ export default function ProductCard({
 
         {/* Hover Overlay with Variants */}
         {isHovered && (sizeOptions.length > 0 || colorOptions.length > 0) && (
-          <div className="absolute bottom-0 left-0 right-0 bg-white/95 backdrop-blur-sm p-4 space-y-2 transition-all duration-300">
-            {sizeOptions.length > 0 && (
-              <div>
-                <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-500 mb-1">
-                  All Sizes
-                </p>
-                <div className="flex flex-wrap gap-2">
-                  {sizeOptions.map((size) => (
-                    <span
-                      key={size}
-                      className="text-xs font-medium text-dark"
-                    >
-                      {size}
-                    </span>
-                  ))}
+          <div className="absolute bottom-0 left-0 right-0 bg-white/95 backdrop-blur-sm p-4 transition-all duration-300">
+            <div className="flex items-start gap-4">
+              {/* Color Swatches */}
+              {colorOptions.length > 0 && (
+                <div className="flex-shrink-0">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-500 mb-2">
+                    Colors
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {colorOptions.map((colorOption) => (
+                      <div
+                        key={colorOption.color}
+                        className="w-6 h-6 rounded-full border-2 border-gray-300"
+                        style={{ backgroundColor: colorOption.hex ?? '#f5f5f5' }}
+                        title={colorOption.color}
+                      />
+                    ))}
+                  </div>
                 </div>
-              </div>
-            )}
+              )}
+
+              {/* Size Options */}
+              {sizeOptions.length > 0 && (
+                <div className="flex-1">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-500 mb-2">
+                    All Sizes
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {sizeOptions.map((size) => (
+                      <span
+                        key={size}
+                        className="text-xs font-medium text-dark"
+                      >
+                        {size}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         )}
 
