@@ -13,9 +13,9 @@ export default function Header() {
     <>
     <header className="bg-white">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-5">
-        <div className="grid grid-cols-3 items-center">
+        <div className="grid grid-cols-3 items-start">
           {/* Left nav stack */}
-          <div className="flex flex-col gap-3 pt-4">
+          <div className="flex flex-col gap-2 pt-6">
             <nav className="flex items-center space-x-6 text-sm font-semibold text-primary">
               <Link to="/men" className="hover:text-primary">
                 MEN
@@ -29,7 +29,7 @@ export default function Header() {
               BEAUTY
             </Link>
             </nav>
-            <nav className="flex items-center space-x-6 text-xs font-semibold text-primary uppercase pt-1">
+            <nav className="flex items-center space-x-6 text-xs font-semibold text-primary uppercase pt-2">
               <Link to="/new" className="hover:text-primary-dark">
                 New
               </Link>
@@ -64,18 +64,8 @@ export default function Header() {
 
           {/* Right icons and search */}
           <div className="flex items-center justify-end gap-4">
-            <div className="hidden md:flex items-center bg-white border border-gray-200 px-3 py-2 text-sm text-gray-400">
-              <Search className="w-4 h-4 mr-2" />
-              <input
-                type="text"
-                placeholder="Search"
-                className="outline-none bg-transparent text-gray-700 w-40"
-                onFocus={() => setSearchOpen(true)}
-                readOnly
-              />
-            </div>
             <button className="p-2 text-gray-600 hover:text-gray-900" onClick={() => setSearchOpen(true)}>
-              <Search className="w-5 h-5 md:hidden" />
+              <Search className="w-5 h-5" />
             </button>
             <Link to={ROUTES.CART} className="p-2 text-gray-600 hover:text-gray-900 relative">
               <ShoppingCart className="w-5 h-5" />

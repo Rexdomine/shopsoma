@@ -13,6 +13,7 @@ const Home = lazy(() => import('../pages/Home'));
 const ProductDetail = lazy(() => import('../pages/products/ProductDetail'));
 const ProductList = lazy(() => import('../pages/products/ProductList'));
 const Cart = lazy(() => import('../pages/cart/Cart'));
+const Checkout = lazy(() => import('../pages/checkout/Checkout'));
 const Debug = lazy(() => import('../pages/Debug'));
 const NotFound = lazy(() => import('../pages/errors/NotFound'));
 const ServerError = lazy(() => import('../pages/errors/ServerError'));
@@ -58,6 +59,16 @@ const router = createBrowserRouter([
       <ErrorBoundary>
         <Suspense fallback={<Loading fullScreen message="Loading cart..." />}>
           <Cart />
+        </Suspense>
+      </ErrorBoundary>
+    ),
+  },
+  {
+    path: ROUTES.CHECKOUT,
+    element: (
+      <ErrorBoundary>
+        <Suspense fallback={<Loading fullScreen message="Loading checkout..." />}>
+          <Checkout />
         </Suspense>
       </ErrorBoundary>
     ),
