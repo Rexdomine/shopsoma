@@ -1,5 +1,4 @@
 import { useEffect, useState, useRef } from 'react';
-import { Link } from 'react-router-dom';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import type { Product } from '../../types';
 import { productService } from '../../services/productService';
