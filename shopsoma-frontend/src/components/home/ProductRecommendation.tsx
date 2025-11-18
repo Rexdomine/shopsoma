@@ -1,28 +1,16 @@
 import { useEffect, useState } from 'react';
-import { Heart } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import type { Product } from '../../types';
 import { productService } from '../../services/productService';
 import Loading from '../common/Loading';
-import { IMAGE_CONFIG, ROUTES } from '../../config/constants';
-
-type RecommendedProduct = {
-  id: string;
-  title: string;
-  description: string;
-  price: number;
-  comparePrice?: number | null;
-  image?: string | null;
-  isHighlighted?: boolean;
-};
+import { ROUTES } from '../../config/constants';
+import ProductCard from '../products/ProductCard';
 
 export default function ProductRecommendation() {
-  const [products, setProducts] = useState<RecommendedProduct[]>([]);
+  const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [favoriteIds, setFavoriteIds] = useState<Set<string>>(new Set());
-
-  const placeholderImage = IMAGE_CONFIG.PLACEHOLDER;
 
   useEffect(() => {
     loadProducts();
@@ -32,39 +20,15 @@ export default function ProductRecommendation() {
     try {
       setLoading(true);
       const data = await productService.getFeaturedProducts(8);
-      const formatted = formatProducts(data);
-      setProducts(formatted);
+      setProducts(data);
       setError(null);
     } catch (err) {
       console.error('Failed to load products:', err);
       setProducts([]);
-      setError('We couldn’t load curated picks. Please try again shortly.');
+      setError("We couldn't load curated picks. Please try again shortly.");
     } finally {
       setLoading(false);
     }
-  };
-
-  const formatProducts = (items: Product[]): RecommendedProduct[] => {
-    return items
-      .map((product) => {
-        const firstVariant = product.variants?.[0];
-        const price = Number(firstVariant?.price ?? product.base_price ?? 0);
-        const comparePrice =
-          firstVariant?.compare_at_price ?? product.compare_at_price ?? undefined;
-
-        return {
-          id: product.id,
-          title: product.title,
-          description:
-            product.description ??
-            'Thoughtfully crafted for the modern wardrobe.',
-          price,
-          comparePrice,
-          image: product.images?.[0]?.image_url ?? null,
-          isHighlighted: product.is_featured,
-        };
-      })
-      .slice(0, 8);
   };
 
   const toggleFavorite = (id: string) => {
@@ -115,74 +79,16 @@ export default function ProductRecommendation() {
           <>
             {/* Product Grid */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 lg:gap-6">
-              {products.map((product, index) => {
+              {products.map((product) => {
                 const isFavorite = favoriteIds.has(product.id);
-                const showCompare =
-                  product.comparePrice !== undefined &&
-                  product.comparePrice !== null &&
-                  product.comparePrice > product.price;
 
                 return (
-                  <article
+                  <ProductCard
                     key={product.id}
-                    className="group flex flex-col h-full border border-gray-200 bg-white p-4 transition-all duration-300"
-                  >
-                    <div className="relative w-full aspect-[3/4] overflow-hidden bg-white border border-gray-200">
-                      <Link to={`/products/${product.id}`}>
-                        <img
-                          src={product.image ?? placeholderImage}
-                          alt={product.title}
-                          className="w-full h-full object-contain transition-opacity duration-500"
-                          onError={(event) => {
-                            event.currentTarget.src = placeholderImage;
-                            event.currentTarget.onerror = null;
-                          }}
-                        />
-                      </Link>
-                      <button
-                        type="button"
-                        onClick={() => toggleFavorite(product.id)}
-                        className={`absolute top-3 right-3 w-9 h-9 rounded-full flex items-center justify-center shadow-md transition-colors duration-200 ${
-                          isFavorite ? 'bg-primary text-white' : 'bg-white text-gray-500'
-                        }`}
-                        aria-label="Toggle favorite"
-                      >
-                        <Heart className={`w-4 h-4 ${isFavorite ? 'fill-current' : ''}`} />
-                      </button>
-                    </div>
-
-                    <div className="mt-4 space-y-2">
-                      <p className="text-[11px] font-semibold tracking-[0.24em] text-gray-500 uppercase">
-                        curated pick #{index + 1}
-                      </p>
-                      <Link
-                        to={`/products/${product.id}`}
-                        className="block text-sm font-display font-semibold text-dark leading-snug line-clamp-2 hover:text-primary transition-colors"
-                      >
-                        {product.title}
-                      </Link>
-                      <p className="text-sm text-gray-500 line-clamp-2 min-h-[40px]">
-                        {product.description}
-                      </p>
-                      <div className="flex items-end gap-2">
-                        <span className="text-base font-semibold text-dark">
-                          ₦{product.price.toLocaleString()}
-                        </span>
-                        {showCompare && (
-                          <span className="text-xs text-gray-400 line-through">
-                            ₦{product.comparePrice?.toLocaleString()}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-
-                    <Link
-                      to={`/products/${product.id}`}
-                      className="mt-auto w-full rounded-full border px-4 py-2.5 text-sm font-semibold transition-colors duration-200 border-primary text-primary hover:bg-primary hover:text-white text-center"
-                    >
-                      Buy Now
-                    </Link>
-                  </article>
+                    product={product}
+                    onToggleFavorite={toggleFavorite}
+                    isFavorite={isFavorite}
+                  />
                 );
               })}
             </div>

@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { Heart, ArrowLeft, ArrowRight, ChevronDown } from 'lucide-react';
+import { ArrowLeft, ArrowRight, ChevronDown } from 'lucide-react';
 import Layout from '../../components/layout/Layout';
 import Loading from '../../components/common/Loading';
 import type { Product } from '../../types';
 import { productService } from '../../services/productService';
-import { IMAGE_CONFIG, ROUTES } from '../../config/constants';
+import { ROUTES } from '../../config/constants';
+import ProductCard from '../../components/products/ProductCard';
 
 const PAGE_SIZE = 12;
 
@@ -61,12 +62,6 @@ type ColorMeta = {
   hex?: string;
   count: number;
 };
-
-const getProductPrice = (product: Product) =>
-  Number(product.variants?.[0]?.price ?? product.base_price ?? 0);
-
-const getProductComparePrice = (product: Product) =>
-  Number(product.variants?.[0]?.compare_at_price ?? product.compare_at_price ?? 0);
 
 const articles = [
   {
@@ -143,7 +138,6 @@ export default function ProductList() {
     }));
   }, [categoryParam]);
 
-  const placeholderImage = IMAGE_CONFIG.PLACEHOLDER;
   const filterMenuRef = useRef<HTMLDivElement>(null);
 
   const categories = useMemo(() => {
@@ -237,7 +231,7 @@ export default function ProductList() {
     });
 
     searchAndCategoryFilteredProducts.forEach((product) => {
-      const price = getProductPrice(product);
+      const price = Number(product.variants?.[0]?.price ?? product.base_price ?? 0);
       priceRanges.forEach((range) => {
         if (range.value === 'all') return;
         const minMatch = range.min !== undefined ? price >= range.min : true;
@@ -285,7 +279,7 @@ export default function ProductList() {
 
     if (filters.price === 'custom' && customPriceRange) {
       list = list.filter((product) => {
-        const price = getProductPrice(product);
+        const price = Number(product.variants?.[0]?.price ?? product.base_price ?? 0);
         if (customPriceRange.min !== undefined && price < customPriceRange.min) {
           return false;
         }
@@ -296,7 +290,7 @@ export default function ProductList() {
       });
     } else if (filters.price !== 'all') {
       list = list.filter((product) => {
-        const price = getProductPrice(product);
+        const price = Number(product.variants?.[0]?.price ?? product.base_price ?? 0);
         switch (filters.price) {
           case '0-50000':
             return price < 50000;
@@ -321,10 +315,18 @@ export default function ProductList() {
         );
         break;
       case 'price-asc':
-        sorted.sort((a, b) => getProductPrice(a) - getProductPrice(b));
+        sorted.sort((a, b) => {
+          const priceA = Number(a.variants?.[0]?.price ?? a.base_price ?? 0);
+          const priceB = Number(b.variants?.[0]?.price ?? b.base_price ?? 0);
+          return priceA - priceB;
+        });
         break;
       case 'price-desc':
-        sorted.sort((a, b) => getProductPrice(b) - getProductPrice(a));
+        sorted.sort((a, b) => {
+          const priceA = Number(a.variants?.[0]?.price ?? a.base_price ?? 0);
+          const priceB = Number(b.variants?.[0]?.price ?? b.base_price ?? 0);
+          return priceB - priceA;
+        });
         break;
       default:
         break;
@@ -577,62 +579,14 @@ export default function ProductList() {
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8">
                     {paginatedProducts.map((product) => {
                       const isFavorite = favorites.has(product.id);
-                      const price = getProductPrice(product);
-                      const comparePrice = getProductComparePrice(product);
-                      const hasDiscount =
-                        comparePrice > 0 && comparePrice > price;
-                      const image = product.images?.[0]?.image_url ?? placeholderImage;
 
                       return (
-                        <article
+                        <ProductCard
                           key={product.id}
-                          className="group rounded-[32px] bg-white shadow-sm transition-all duration-300 hover:-translate-y-1 hover:shadow-[0_18px_40px_rgba(16,94,83,0.08)]"
-                        >
-                          <div className="relative aspect-[3/4] overflow-hidden rounded-[28px] bg-[#f5f7f8] m-3 mb-0">
-                            <Link to={`${ROUTES.PRODUCTS}/${product.id}`}>
-                              <img
-                                src={image}
-                                alt={product.title}
-                                className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105"
-                                onError={(event) => {
-                                  event.currentTarget.src = placeholderImage;
-                                  event.currentTarget.onerror = null;
-                                }}
-                              />
-                            </Link>
-                            <button
-                              type="button"
-                              onClick={() => toggleFavorite(product.id)}
-                              className={`absolute top-4 right-4 w-9 h-9 rounded-full flex items-center justify-center shadow-lg transition-colors ${
-                                isFavorite ? 'bg-primary text-white' : 'bg-white text-gray-500'
-                              }`}
-                              aria-label="Add to wishlist"
-                            >
-                              <Heart className={`w-4 h-4 ${isFavorite ? 'fill-current' : ''}`} />
-                            </button>
-                          </div>
-                          <div className="px-6 py-5 space-y-3">
-                            <p className="text-[11px] font-semibold uppercase tracking-[0.3em] text-gray-400">
-                              {product.category ?? 'Collection'}
-                            </p>
-                            <Link
-                              to={`${ROUTES.PRODUCTS}/${product.id}`}
-                              className="block text-sm font-display font-semibold text-dark leading-snug hover:text-primary transition-colors"
-                            >
-                              {product.title}
-                            </Link>
-                            <div className="flex items-end gap-2">
-                              <span className="text-base font-semibold text-dark">
-                                ₦{price.toLocaleString()}
-                              </span>
-                              {hasDiscount && (
-                                <span className="text-xs text-gray-400 line-through">
-                                  ₦{comparePrice.toLocaleString()}
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                        </article>
+                          product={product}
+                          onToggleFavorite={toggleFavorite}
+                          isFavorite={isFavorite}
+                        />
                       );
                     })}
                   </div>

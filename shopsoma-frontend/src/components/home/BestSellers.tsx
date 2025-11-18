@@ -1,17 +1,16 @@
 import { useEffect, useState, useRef } from 'react';
 import { Link } from 'react-router-dom';
-import { ChevronLeft, ChevronRight, Heart } from 'lucide-react';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
 import type { Product } from '../../types';
 import { productService } from '../../services/productService';
 import Loading from '../common/Loading';
-import { IMAGE_CONFIG } from '../../config/constants';
+import ProductCard from '../products/ProductCard';
 
 export default function BestSellers() {
   const [products, setProducts] = useState<Product[]>([]);
   const [favoriteIds, setFavoriteIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const placeholderImage = IMAGE_CONFIG.PLACEHOLDER;
 
   useEffect(() => {
     loadHotItems();
@@ -113,53 +112,14 @@ export default function BestSellers() {
             {products.map((product) => {
               const isFavorite = favoriteIds.has(product.id);
               return (
-              <Link
-                key={product.id}
-                to={`/products/${product.id}`}
-                className="group flex-none w-[280px] bg-white"
-              >
-                {/* Product Image */}
-                <div className="relative aspect-square bg-gray-100 rounded-lg mb-3 overflow-hidden">
-                  <img
-                    src={product.images?.[0]?.image_url || placeholderImage}
-                    alt={product.title}
-                    crossOrigin="anonymous"
-                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                    onError={(e) => {
-                      console.error('Image failed to load:', product.title, product.images?.[0]?.image_url);
-                      e.currentTarget.src = placeholderImage;
-                      e.currentTarget.onerror = null;
-                    }}
+                <div key={product.id} className="flex-none w-[280px]">
+                  <ProductCard
+                    product={product}
+                    onToggleFavorite={toggleFavorite}
+                    isFavorite={isFavorite}
                   />
-                  <button
-                    type="button"
-                    className={`absolute top-3 right-3 w-9 h-9 rounded-full flex items-center justify-center shadow-md transition-colors duration-200 ${
-                      isFavorite ? 'bg-primary text-white' : 'bg-white text-gray-500'
-                    }`}
-                    aria-label="Add to wishlist"
-                    onClick={(event) => {
-                      event.preventDefault();
-                      toggleFavorite(product.id);
-                    }}
-                  >
-                    <Heart className={`w-4 h-4 ${isFavorite ? 'fill-current' : ''}`} />
-                  </button>
                 </div>
-
-                {/* Product Info */}
-                <div className="text-center space-y-1">
-                  <h3 className="font-body font-medium text-base text-dark line-clamp-1">
-                    {product.title}
-                  </h3>
-                  <p className="text-sm font-body text-light">
-                    {product.description ? product.description.substring(0, 30) + '...' : 'The specification here'}
-                  </p>
-                  <p className="text-lg font-body font-semibold text-dark pt-1">
-                    ₦{(product.variants?.[0]?.price || product.base_price).toLocaleString()}
-                  </p>
-                </div>
-              </Link>
-            );
+              );
             })}
           </div>
         </div>
