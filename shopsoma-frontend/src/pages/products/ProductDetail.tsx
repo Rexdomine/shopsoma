@@ -238,7 +238,7 @@ export default function ProductDetail() {
         <div className="grid grid-cols-1 lg:grid-cols-[55%_45%] gap-12">
           {/* Gallery */}
           <div className="space-y-4">
-            <div className="rounded-[32px] overflow-hidden bg-[#f5f7f8] aspect-[5/6] shadow-xl max-w-[560px] mx-auto">
+            <div className="overflow-hidden bg-[#f5f7f8] aspect-[5/6] border border-gray-200 max-w-[560px] mx-auto">
               <img
                 src={heroImage}
                 alt={product.title}
@@ -256,10 +256,10 @@ export default function ProductDetail() {
                     key={image.id}
                     type="button"
                     onClick={() => setSelectedImage(image.image_url)}
-                    className={`overflow-hidden rounded-2xl border transition-all duration-200 ${
+                    className={`overflow-hidden border-2 transition-all duration-200 aspect-square ${
                       selectedImage === image.image_url
-                        ? 'border-primary shadow-md'
-                        : 'border-transparent'
+                        ? 'border-primary'
+                        : 'border-gray-200 hover:border-gray-400'
                     }`}
                   >
                     <img
@@ -335,7 +335,7 @@ export default function ProductDetail() {
                 <div className="relative" ref={sizeDropdownRef}>
                   <button
                     type="button"
-                    className={`relative w-full rounded-full px-4 py-3 pr-12 text-sm font-semibold text-left text-gray-700 bg-white transition cursor-pointer shadow-sm flex items-center justify-between focus:outline-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/10 ${
+                    className={`relative w-full px-4 py-3 pr-12 text-sm font-semibold text-left text-gray-700 bg-white transition cursor-pointer flex items-center justify-between focus:outline-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/10 ${
                       sizeMenuOpen
                         ? 'border-2 border-primary ring-2 ring-primary/10'
                         : 'border border-gray-200 hover:border-primary/60'
@@ -363,7 +363,7 @@ export default function ProductDetail() {
                     </svg>
                   </button>
                   {sizeMenuOpen && (
-                    <div className="absolute z-20 mt-2 w-full rounded-2xl border border-gray-200 bg-white shadow-lg overflow-hidden">
+                    <div className="absolute z-20 mt-2 w-full border border-gray-200 bg-white shadow-lg overflow-hidden">
                       {sizeOptions.map((size) => (
                         <button
                           key={size}
@@ -390,10 +390,10 @@ export default function ProductDetail() {
             {/* Quantity */}
             <div className="space-y-2">
               <p className="text-xs uppercase tracking-[0.3em] text-gray-400">Quantity</p>
-              <div className="inline-flex items-center border rounded-full">
+              <div className="inline-flex items-center border border-gray-200">
                 <button
                   type="button"
-                  className="px-4 py-2 text-gray-500 hover:text-primary"
+                  className="px-4 py-2 text-gray-500 hover:text-primary transition"
                   onClick={() => handleQuantityChange('decrement')}
                 >
                   <Minus className="w-4 h-4" />
@@ -401,7 +401,7 @@ export default function ProductDetail() {
                 <div className="px-6 py-2 font-semibold text-dark">{quantity}</div>
                 <button
                   type="button"
-                  className="px-4 py-2 text-gray-500 hover:text-primary"
+                  className="px-4 py-2 text-gray-500 hover:text-primary transition"
                   onClick={() => handleQuantityChange('increment')}
                   disabled={quantity >= maxQuantity}
                 >
@@ -417,7 +417,7 @@ export default function ProductDetail() {
               <button
                 type="button"
                 disabled={missingSelection}
-                className={`flex-1 rounded-full border px-6 py-3 text-sm font-semibold transition-colors ${
+                className={`flex-1 border px-6 py-3 text-sm font-semibold transition-colors ${
                   missingSelection
                     ? 'bg-gray-100 text-gray-400 border-gray-100 cursor-not-allowed'
                     : 'bg-primary text-white hover:bg-primary-dark border-primary'
@@ -428,7 +428,7 @@ export default function ProductDetail() {
               </button>
               <button
                 type="button"
-                className={`rounded-full border px-6 py-3 text-sm font-semibold flex items-center justify-center gap-2 transition-colors ${
+                className={`border px-6 py-3 text-sm font-semibold flex items-center justify-center gap-2 transition-colors ${
                   wishlist ? 'border-primary text-primary' : 'border-gray-200 text-gray-700 hover:border-primary hover:text-primary'
                 }`}
                 onClick={() => setWishlist((prev) => !prev)}
@@ -439,7 +439,7 @@ export default function ProductDetail() {
               {hasSizeGuide && (
                 <button
                   type="button"
-                  className="rounded-full border px-6 py-3 text-sm font-semibold text-gray-700 hover:border-primary hover:text-primary transition-colors"
+                  className="border border-gray-200 px-6 py-3 text-sm font-semibold text-gray-700 hover:border-primary hover:text-primary transition-colors"
                   onClick={() => setSizeGuideOpen(true)}
                 >
                   Size Guide
