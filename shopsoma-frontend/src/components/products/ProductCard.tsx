@@ -104,8 +104,8 @@ export default function ProductCard({
         {/* Hover Overlay with Variants */}
         {isHovered && (sizeOptions.length > 0 || colorOptions.length > 0) && (
           <div className="absolute bottom-0 left-0 right-0 bg-white/95 backdrop-blur-sm p-4 transition-all duration-300">
-            <div className="flex items-start gap-4">
-              {/* Color Swatches */}
+            <div className="flex items-start justify-between">
+              {/* Color Swatches - Left */}
               {colorOptions.length > 0 && (
                 <div className="flex-shrink-0">
                   <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-500 mb-2">
@@ -124,13 +124,13 @@ export default function ProductCard({
                 </div>
               )}
 
-              {/* Size Options */}
+              {/* Size Options - Right */}
               {sizeOptions.length > 0 && (
-                <div className="flex-1">
+                <div className="flex-shrink-0 text-right">
                   <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-500 mb-2">
                     All Sizes
                   </p>
-                  <div className="flex flex-wrap gap-2">
+                  <div className="flex flex-wrap gap-2 justify-end">
                     {sizeOptions.map((size) => (
                       <span
                         key={size}
