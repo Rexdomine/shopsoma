@@ -1,19 +1,17 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { Product } from '../../types';
-import { Heart, ShoppingCart } from 'lucide-react';
+import { Heart } from 'lucide-react';
 import { IMAGE_CONFIG } from '../../config/constants';
 
 interface ProductCardProps {
   product: Product;
-  onAddToCart?: (productId: string) => void;
   onToggleFavorite?: (productId: string) => void;
   isFavorite?: boolean;
 }
 
 export default function ProductCard({
   product,
-  onAddToCart,
   onToggleFavorite,
   isFavorite = false,
 }: ProductCardProps) {
@@ -24,6 +22,22 @@ export default function ProductCard({
   const primaryImage = product.images?.[0]?.image_url || placeholderImage;
   const secondaryImage = product.images?.[1]?.image_url || primaryImage;
 
+  const sizeOptions = Array.from(
+    new Set(
+      (product.variants || [])
+        .map((v) => v.size)
+        .filter((v): v is string => Boolean(v))
+    )
+  );
+
+  const colorOptions = Array.from(
+    new Set(
+      (product.variants || [])
+        .map((v) => v.color)
+        .filter((v): v is string => Boolean(v))
+    )
+  );
+
   const handleImageError = (event: React.SyntheticEvent<HTMLImageElement>) => {
     event.currentTarget.src = placeholderImage;
     event.currentTarget.onerror = null;
@@ -33,17 +47,21 @@ export default function ProductCard({
   const comparePrice = product.variants?.[0]?.compare_at_price;
   const hasDiscount = comparePrice && comparePrice > displayPrice;
 
-  const handleAddToCart = (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    onAddToCart?.(product.id);
-  };
-
   const handleToggleFavorite = (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
     onToggleFavorite?.(product.id);
   };
+
+  // Determine availability tag based on stock and product metadata
+  const getAvailabilityTag = () => {
+    if (product.inventory_quantity === 0) return 'Pre-order';
+    if (product.is_featured) return 'New Season';
+    // You can add more logic here based on product metadata
+    return 'Exclusive';
+  };
+
+  const availabilityTag = getAvailabilityTag();
 
   return (
     <Link
@@ -52,8 +70,9 @@ export default function ProductCard({
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
     >
-      <div className="relative overflow-hidden bg-gray-100 rounded-lg aspect-[3/4] mb-3">
-        {/* Product Images */}
+      {/* Image Container - No rounded edges, border only */}
+      <div className="relative overflow-hidden aspect-[3/4] mb-3 border border-gray-200">
+        {/* Primary Image */}
         <img
           src={primaryImage}
           alt={product.title}
@@ -63,6 +82,8 @@ export default function ProductCard({
           onLoad={() => setImageLoaded(true)}
           onError={handleImageError}
         />
+
+        {/* Secondary Image (shown on hover) */}
         {secondaryImage !== primaryImage && (
           <img
             src={secondaryImage}
@@ -74,78 +95,78 @@ export default function ProductCard({
           />
         )}
 
-        {/* Discount Badge */}
-        {hasDiscount && (
-          <div className="absolute top-3 left-3 bg-red-500 text-white px-2 py-1 text-xs font-semibold rounded">
-            {Math.round(((comparePrice - displayPrice) / comparePrice) * 100)}% OFF
+        {/* Hover Overlay with Variants */}
+        {isHovered && (sizeOptions.length > 0 || colorOptions.length > 0) && (
+          <div className="absolute bottom-0 left-0 right-0 bg-white/95 backdrop-blur-sm p-4 space-y-2 transition-all duration-300">
+            {sizeOptions.length > 0 && (
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-500 mb-1">
+                  All Sizes
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {sizeOptions.map((size) => (
+                    <span
+                      key={size}
+                      className="text-xs font-medium text-dark"
+                    >
+                      {size}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
-        {/* Out of Stock Badge */}
-        {product.inventory_quantity === 0 && (
-          <div className="absolute top-3 left-3 bg-gray-800 text-white px-2 py-1 text-xs font-semibold rounded">
-            OUT OF STOCK
-          </div>
-        )}
-
-        {/* Favorite Button */}
+        {/* Favorite Button - Top Right */}
         <button
           onClick={handleToggleFavorite}
-          className="absolute top-3 right-3 w-9 h-9 bg-white rounded-full flex items-center justify-center shadow-md opacity-0 group-hover:opacity-100 transition-opacity duration-300 hover:scale-110 transform"
+          className="absolute top-3 right-3 w-10 h-10 flex items-center justify-center transition-opacity"
           aria-label="Add to favorites"
         >
           <Heart
-            className={`w-5 h-5 ${
-              isFavorite ? 'fill-red-500 text-red-500' : 'text-gray-700'
+            className={`w-6 h-6 ${
+              isFavorite ? 'fill-dark stroke-dark' : 'stroke-dark fill-none'
             }`}
           />
         </button>
-
-        {/* Quick Add to Cart */}
-        {product.inventory_quantity > 0 && (
-          <button
-            onClick={handleAddToCart}
-            className="absolute bottom-0 left-0 right-0 bg-primary text-white py-3.5 font-body font-semibold opacity-0 group-hover:opacity-100 translate-y-full group-hover:translate-y-0 transition-all duration-300 flex items-center justify-center gap-2 hover:bg-primary-dark shadow-lg"
-          >
-            <ShoppingCart className="w-4 h-4" />
-            Add to Cart
-          </button>
-        )}
       </div>
 
-      {/* Product Info */}
+      {/* Product Info - Clean, no background */}
       <div className="space-y-1">
-        <h3 className="text-sm font-body font-medium text-dark line-clamp-2 group-hover:text-primary transition-colors">
+        {/* Brand/Vendor */}
+        <p className="text-xs uppercase tracking-wider text-gray-500">
+          {product.vendor_name || 'THE CORE'}
+        </p>
+
+        {/* Title */}
+        <h3 className="text-sm font-medium text-dark leading-tight">
           {product.title}
         </h3>
 
-        {product.category && (
-          <p className="text-xs font-body text-light uppercase tracking-wide">
-            {product.category}
-          </p>
-        )}
-
+        {/* Price */}
         <div className="flex items-center gap-2 pt-1">
-          <span className="text-base font-body font-semibold text-dark">
-            ₦{displayPrice.toLocaleString()}
+          <span className="text-base font-semibold text-dark">
+            ₦{displayPrice.toLocaleString('en-NG', { minimumFractionDigits: 2 })}
           </span>
-          {hasDiscount && (
-            <span className="text-sm font-body text-light line-through">
-              ₦{comparePrice.toLocaleString()}
+          {hasDiscount && comparePrice && (
+            <span className="text-sm text-gray-400 line-through">
+              ₦{comparePrice.toLocaleString('en-NG', { minimumFractionDigits: 2 })}
             </span>
           )}
         </div>
 
-        {/* Rating */}
-        {product.average_rating && product.average_rating > 0 && (
-          <div className="flex items-center gap-1 text-xs text-gray-600">
-            <span className="text-yellow-500">★</span>
-            <span>{product.average_rating.toFixed(1)}</span>
-            {product.review_count && product.review_count > 0 && (
-              <span className="text-gray-400">({product.review_count})</span>
-            )}
-          </div>
-        )}
+        {/* Availability Tags */}
+        <div className="flex flex-wrap gap-2 pt-2">
+          <span className="px-3 py-1 border border-gray-300 text-xs font-medium text-dark">
+            {availabilityTag}
+          </span>
+          {hasDiscount && (
+            <span className="px-3 py-1 border border-gray-300 text-xs font-medium text-dark">
+              On Sale
+            </span>
+          )}
+        </div>
       </div>
     </Link>
   );
