@@ -11,77 +11,84 @@ export default function Header() {
 
   return (
     <>
-    <header className="bg-white border-b border-gray-200">
-      {/* Top Bar - Primary Navigation */}
-      <div className="border-b border-gray-100">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between h-12">
-            {/* Logo */}
-            <Link to="/" className="flex items-center">
-              <img
-                src="/images/logo.svg"
-                alt="Shopsoma"
-                className="h-8 w-auto"
-              />
-            </Link>
-
-            {/* Primary Nav */}
-            <nav className="hidden md:flex items-center space-x-8">
-              <Link to="/men" className="text-sm font-medium text-gray-600 hover:text-gray-900">
+    <header className="bg-white">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-5">
+        <div className="grid grid-cols-3 items-center">
+          {/* Left nav stack */}
+          <div className="flex flex-col gap-3 pt-4">
+            <nav className="flex items-center space-x-6 text-sm font-semibold text-primary">
+              <Link to="/men" className="hover:text-primary">
                 MEN
               </Link>
-              <Link to="/women" className="text-sm font-medium text-gray-600 hover:text-gray-900">
+              <span className="text-gray-300">|</span>
+              <Link to="/women" className="hover:text-primary">
                 WOMEN
               </Link>
-              <Link to="/" className="text-sm font-medium text-primary">
-                HOME
+              <span className="text-gray-300">|</span>
+            <Link to="/beauty" className="hover:text-primary">
+              BEAUTY
+            </Link>
+            </nav>
+            <nav className="flex items-center space-x-6 text-xs font-semibold text-primary uppercase pt-1">
+              <Link to="/new" className="hover:text-primary-dark">
+                New
+              </Link>
+              <Link to="/designer" className="hover:text-primary-dark">
+                Designer
+              </Link>
+              <Link to="/clothing" className="hover:text-primary-dark">
+                Clothing
+              </Link>
+            <Link to="/accessories" className="hover:text-primary-dark">
+              Accessories
+            </Link>
+              <Link to="/jewelry" className="hover:text-primary-dark">
+                Jewelry
+              </Link>
+              <Link to="/sales" className="hover:text-primary-dark">
+                Sales
               </Link>
             </nav>
-
-            {/* Right Icons */}
-            <div className="flex items-center space-x-4">
-              <button className="p-2 text-gray-600 hover:text-gray-900" onClick={() => setSearchOpen(true)}>
-                <Search className="w-5 h-5" />
-              </button>
-              <Link to={ROUTES.CART} className="p-2 text-gray-600 hover:text-gray-900 relative">
-                <ShoppingCart className="w-5 h-5" />
-                {itemCount > 0 && (
-                  <span className="absolute top-0 right-0 bg-primary text-white text-xs font-semibold rounded-full h-5 w-5 flex items-center justify-center">
-                    {itemCount > 9 ? '9+' : itemCount}
-                  </span>
-                )}
-              </Link>
-              <button className="p-2 text-gray-600 hover:text-gray-900">
-                <User className="w-5 h-5" />
-              </button>
-            </div>
           </div>
-        </div>
-      </div>
 
-      {/* Secondary Navigation */}
-      <div className="bg-white">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <nav className="flex items-center justify-center space-x-8 h-12">
-            <Link to="/new" className="text-xs font-medium text-gray-600 hover:text-gray-900 uppercase">
-              NEW
+          {/* Center logo */}
+          <div className="flex items-center justify-center">
+            <Link to="/" className="flex items-center justify-center">
+              <img
+                src="/images/somalogo.svg"
+                alt="Shopsoma"
+                className="h-12 w-auto"
+              />
             </Link>
-            <Link to="/collections" className="text-xs font-medium text-gray-600 hover:text-gray-900 uppercase">
-              COLLECTIONS
+          </div>
+
+          {/* Right icons and search */}
+          <div className="flex items-center justify-end gap-4">
+            <div className="hidden md:flex items-center bg-white border border-gray-200 rounded-md px-3 py-2 text-sm text-gray-400">
+              <Search className="w-4 h-4 mr-2" />
+              <input
+                type="text"
+                placeholder="Search"
+                className="outline-none bg-transparent text-gray-700 w-40"
+                onFocus={() => setSearchOpen(true)}
+                readOnly
+              />
+            </div>
+            <button className="p-2 text-gray-600 hover:text-gray-900" onClick={() => setSearchOpen(true)}>
+              <Search className="w-5 h-5 md:hidden" />
+            </button>
+            <Link to={ROUTES.CART} className="p-2 text-gray-600 hover:text-gray-900 relative">
+              <ShoppingCart className="w-5 h-5" />
+              {itemCount > 0 && (
+                <span className="absolute -top-1 -right-1 bg-primary text-white text-[10px] font-semibold rounded-full h-4 w-4 flex items-center justify-center">
+                  {itemCount > 9 ? '9+' : itemCount}
+                </span>
+              )}
             </Link>
-            <Link to="/home-accessories" className="text-xs font-medium text-gray-600 hover:text-gray-900 uppercase">
-              HOME ACCESSORIES
-            </Link>
-            <Link to="/guides" className="text-xs font-medium text-gray-600 hover:text-gray-900 uppercase">
-              CUSTOMERS & GUIDES
-            </Link>
-            <Link to="/furniture" className="text-xs font-medium text-gray-600 hover:text-gray-900 uppercase">
-              FURNITURE
-            </Link>
-            <Link to="/deals" className="text-xs font-medium text-gray-600 hover:text-gray-900 uppercase">
-              DEALS
-            </Link>
-          </nav>
+            <button className="p-2 text-gray-600 hover:text-gray-900">
+              <User className="w-5 h-5" />
+            </button>
+          </div>
         </div>
       </div>
     </header>

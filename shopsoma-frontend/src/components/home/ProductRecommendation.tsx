@@ -125,14 +125,14 @@ export default function ProductRecommendation() {
                 return (
                   <article
                     key={product.id}
-                    className="group flex flex-col h-full rounded-2xl border border-gray-100 bg-white p-4 shadow-[0_12px_30px_rgba(16,94,83,0.06)] transition-all duration-300 hover:-translate-y-1 hover:shadow-[0_18px_40px_rgba(16,94,83,0.12)]"
+                    className="group flex flex-col h-full border border-gray-200 bg-white p-4 transition-all duration-300"
                   >
-                    <div className="relative w-full aspect-[3/4] rounded-xl overflow-hidden bg-[#f5f7f8]">
+                    <div className="relative w-full aspect-[3/4] overflow-hidden bg-white border border-gray-200">
                       <Link to={`/products/${product.id}`}>
                         <img
                           src={product.image ?? placeholderImage}
                           alt={product.title}
-                          className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+                          className="w-full h-full object-contain transition-opacity duration-500"
                           onError={(event) => {
                             event.currentTarget.src = placeholderImage;
                             event.currentTarget.onerror = null;

@@ -47,11 +47,6 @@ export default function HotItems() {
     }
   };
 
-  const handleAddToCart = (productId: string) => {
-    console.log('Add to cart:', productId);
-    // TODO: Implement cart functionality
-  };
-
   const handleToggleFavorite = (productId: string) => {
     console.log('Toggle favorite:', productId);
     // TODO: Implement favorites functionality
@@ -118,7 +113,6 @@ export default function HotItems() {
               <div key={product.id} className="flex-none w-64">
                 <ProductCard
                   product={product}
-                  onAddToCart={handleAddToCart}
                   onToggleFavorite={handleToggleFavorite}
                 />
               </div>

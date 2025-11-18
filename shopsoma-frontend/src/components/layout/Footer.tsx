@@ -16,7 +16,7 @@ export default function Footer() {
           <div className="col-span-2">
             <Link to="/" className="inline-block mb-4">
               <img
-                src="/images/logo.svg"
+                src="/images/somalogo.svg"
                 alt={APP_NAME}
                 className="h-10 w-auto"
               />
