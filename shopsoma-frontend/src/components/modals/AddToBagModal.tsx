@@ -34,18 +34,18 @@ export default function AddToBagModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-8">
-      <div className="relative w-full max-w-[700px] bg-white rounded-[24px] shadow-2xl overflow-hidden border border-gray-100">
+      <div className="relative w-full max-w-[700px] max-h-[90vh] bg-white shadow-2xl overflow-y-auto border border-gray-100">
         <button
           type="button"
-          className="absolute top-6 right-6 text-gray-400 hover:text-dark"
+          className="absolute top-4 right-4 text-gray-400 hover:text-dark z-10"
           aria-label="Close"
           onClick={onClose}
         >
           <X className="w-5 h-5" />
         </button>
-        <div className="p-6 sm:p-8 space-y-6">
-          <div className="flex items-start gap-4">
-            <div className="w-20 h-24 rounded-xl overflow-hidden bg-[#f5f7f8]">
+        <div className="p-5 sm:p-6 space-y-4">
+          <div className="flex items-start gap-3">
+            <div className="w-16 h-20 overflow-hidden bg-[#f5f7f8] border border-gray-200 flex-shrink-0">
               <img
                 src={thumbnail}
                 alt={product.title}
@@ -55,17 +55,17 @@ export default function AddToBagModal({
                 }}
               />
             </div>
-            <div className="flex-1">
-              <p className="text-xs uppercase tracking-[0.4em] text-gray-400 mb-1">
-                This item has been added to your shopping bag
+            <div className="flex-1 min-w-0 pr-8">
+              <p className="text-[10px] uppercase tracking-[0.3em] text-gray-400 mb-1">
+                Added to shopping bag
               </p>
-              <h3 className="text-2xl font-display font-semibold text-dark">
+              <h3 className="text-lg font-display font-semibold text-dark leading-tight">
                 {product.title}
               </h3>
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-4 text-sm">
+          <div className="grid grid-cols-2 gap-3 text-sm">
             <InfoRow label="Brand" value={brand} />
             <InfoRow label="Size" value={size} />
             <InfoRow label="Model" value={model} />
@@ -74,22 +74,22 @@ export default function AddToBagModal({
             <InfoRow label="Availability" value={availability} />
           </div>
 
-          <p className="text-xs text-gray-500 leading-relaxed">
+          <p className="text-[11px] text-gray-500 leading-relaxed py-2">
             Please note: Until you checkout, items in your shopping bag are not reserved and may
             still be purchased by other customers.
           </p>
 
-          <div className="flex flex-col sm:flex-row gap-3">
+          <div className="flex flex-col sm:flex-row gap-3 pt-2">
             <button
               type="button"
               onClick={onClose}
-              className="flex-1 border border-gray-300 py-3 rounded-full text-sm font-semibold text-gray-700 hover:border-primary hover:text-primary transition"
+              className="flex-1 border border-gray-300 py-2.5 text-sm font-semibold text-gray-700 hover:border-primary hover:text-primary transition"
             >
               Continue Shopping
             </button>
             <Link
               to={ROUTES.CART}
-              className="flex-1 py-3 rounded-full text-sm font-semibold text-white text-center bg-primary hover:bg-primary-dark transition"
+              className="flex-1 py-2.5 text-sm font-semibold text-white text-center bg-primary hover:bg-primary-dark transition border border-primary"
             >
               Go to Bag
             </Link>
@@ -97,12 +97,12 @@ export default function AddToBagModal({
         </div>
 
         {recommendations.length > 0 && (
-          <div className="border-t border-gray-200 p-6 space-y-4">
+          <div className="border-t border-gray-200 p-5 sm:p-6 space-y-3">
             <div className="flex items-center justify-between">
-              <p className="text-sm uppercase tracking-[0.3em] text-gray-400">Others also viewed</p>
-              <span className="text-xs text-gray-400">You may also like</span>
+              <p className="text-xs uppercase tracking-[0.3em] text-gray-400">Others also viewed</p>
+              <span className="text-[10px] text-gray-400">You may also like</span>
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               {recommendations.slice(0, 3).map((item) => (
                 <div key={item.id} onClick={onClose}>
                   <ProductCard product={item} />
@@ -124,8 +124,8 @@ interface InfoRowProps {
 
 function InfoRow({ label, value, bold = false }: InfoRowProps) {
   return (
-    <div className="flex items-center justify-between">
-      <span className="text-xs font-semibold uppercase tracking-[0.3em] text-gray-500">
+    <div className="flex items-center justify-between py-1">
+      <span className="text-[10px] font-semibold uppercase tracking-[0.25em] text-gray-500">
         {label}
       </span>
       <span className={`text-sm ${bold ? 'font-semibold text-dark' : 'text-gray-700'}`}>

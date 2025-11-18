@@ -88,7 +88,7 @@ export default function Cart() {
           </h1>
           {cart.items.length === 0 ? (
             <div className="py-24 flex flex-col items-center text-center gap-6">
-              <div className="w-16 h-16 rounded-full bg-[#f0f4f2] flex items-center justify-center text-primary text-2xl font-semibold">
+              <div className="w-16 h-16 bg-[#f0f4f2] flex items-center justify-center text-primary text-2xl font-semibold border border-gray-200">
                 !
               </div>
               <div className="space-y-2">
@@ -97,7 +97,7 @@ export default function Cart() {
               </div>
               <Link
                 to={ROUTES.PRODUCTS}
-                className="px-8 py-3 rounded-full bg-primary text-white text-sm font-semibold hover:bg-primary-dark transition"
+                className="px-8 py-3 bg-primary text-white text-sm font-semibold hover:bg-primary-dark transition border border-primary"
               >
                 Go to Shop
               </Link>
@@ -114,7 +114,7 @@ export default function Cart() {
                 return (
                   <article key={item.id} className="border-b border-gray-200 pb-6">
                     <div className="flex flex-col sm:flex-row gap-6">
-                      <div className="w-36 h-36 rounded-[24px] bg-[#f5f7f8] overflow-hidden">
+                      <div className="w-36 h-36 bg-[#f5f7f8] overflow-hidden border border-gray-200">
                         <img
                           src={thumbnail}
                           alt={item.product.title}
@@ -135,7 +135,7 @@ export default function Cart() {
                             </h2>
                             <p className="text-sm text-gray-500">{category}</p>
                           </div>
-                          <div className="inline-flex items-center border border-gray-300 rounded-full">
+                          <div className="inline-flex items-center border border-gray-300">
                             <button
                               type="button"
                               className="px-3 py-1 text-gray-500 hover:text-primary"
@@ -169,13 +169,13 @@ export default function Cart() {
                           <button
                             type="button"
                             onClick={() => handleEditVariant(item.id)}
-                            className="px-5 py-2 rounded-full border border-gray-300 text-xs font-semibold text-gray-600 hover:border-primary hover:text-primary transition"
+                            className="px-5 py-2 border border-gray-300 text-xs font-semibold text-gray-600 hover:border-primary hover:text-primary transition"
                           >
                             Edit
                           </button>
                           <button
                             type="button"
-                            className="h-9 w-9 rounded-full border border-gray-300 text-sm text-gray-500 hover:text-red-500"
+                            className="h-9 w-9 border border-gray-300 text-sm text-gray-500 hover:text-red-500"
                             aria-label="Remove item"
                             onClick={() => handleRemoveItem(item.id)}
                           >
@@ -190,7 +190,7 @@ export default function Cart() {
             </div>
 
             <aside className="space-y-6">
-              <div className="border border-gray-200 rounded-[24px] p-6 space-y-4">
+              <div className="border border-gray-200 p-6 space-y-4">
                 <h3 className="text-sm font-semibold tracking-[0.3em] text-gray-500 uppercase">
                   Order Summary
                 </h3>
@@ -210,14 +210,14 @@ export default function Cart() {
                     type="button"
                     onClick={handleCheckout}
                     disabled={cart.items.length === 0}
-                    className="w-full rounded-full bg-primary text-white py-3 text-sm font-semibold hover:bg-primary-dark transition disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="w-full bg-primary text-white py-3 text-sm font-semibold hover:bg-primary-dark transition disabled:opacity-50 disabled:cursor-not-allowed border border-primary"
                   >
                     Proceed to Checkout
                   </button>
                   <button
                     type="button"
                     onClick={handleContinueShopping}
-                    className="w-full rounded-full border border-gray-300 text-sm font-semibold py-3 text-gray-700 hover:border-primary hover:text-primary transition"
+                    className="w-full border border-gray-300 text-sm font-semibold py-3 text-gray-700 hover:border-primary hover:text-primary transition"
                   >
                     Continue Shopping
                   </button>
@@ -271,7 +271,7 @@ function SummaryRow({ label, value, bold }: { label: string; value: number; bold
 
 function Accordion({ title, content }: { title: string; content: string }) {
   return (
-    <details className="border border-gray-200 rounded-[16px] px-4 py-3">
+    <details className="border border-gray-200 px-4 py-3">
       <summary className="flex items-center justify-between text-sm font-semibold text-gray-700 cursor-pointer">
         {title}
         <span className="text-primary">+</span>

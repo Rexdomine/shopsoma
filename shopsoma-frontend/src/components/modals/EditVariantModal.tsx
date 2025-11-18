@@ -76,7 +76,7 @@ export default function EditVariantModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-8">
-      <div className="relative w-full max-w-[500px] bg-white rounded-[24px] shadow-2xl overflow-hidden border border-gray-100">
+      <div className="relative w-full max-w-[500px] bg-white shadow-2xl overflow-hidden border border-gray-100">
         <button
           type="button"
           className="absolute top-6 right-6 text-gray-400 hover:text-dark"
@@ -88,7 +88,7 @@ export default function EditVariantModal({
 
         <div className="p-6 sm:p-8 space-y-6">
           <div className="flex items-start gap-4">
-            <div className="w-20 h-24 rounded-xl overflow-hidden bg-[#f5f7f8]">
+            <div className="w-20 h-24 overflow-hidden bg-[#f5f7f8] border border-gray-200">
               <img
                 src={product.images?.[0]?.image_url ?? IMAGE_CONFIG.PLACEHOLDER}
                 alt={product.title}
@@ -120,7 +120,7 @@ export default function EditVariantModal({
                     key={size}
                     type="button"
                     onClick={() => setSelectedSize(size)}
-                    className={`px-6 py-2 rounded-full border text-sm font-medium transition ${
+                    className={`px-6 py-2 border text-sm font-medium transition ${
                       selectedSize === size
                         ? 'border-primary bg-primary text-white'
                         : 'border-gray-300 text-gray-700 hover:border-primary'
@@ -145,7 +145,7 @@ export default function EditVariantModal({
                     key={colorOption.color}
                     type="button"
                     onClick={() => setSelectedColor(colorOption.color)}
-                    className={`w-11 h-11 rounded-full border-2 transition-all ${
+                    className={`w-11 h-11 border-2 transition-all ${
                       selectedColor === colorOption.color
                         ? 'border-primary ring-2 ring-primary/20'
                         : 'border-gray-300 hover:border-primary/60'
@@ -165,7 +165,7 @@ export default function EditVariantModal({
           )}
 
           {/* Variant Info */}
-          <div className="bg-[#f5f7f8] rounded-xl p-4 space-y-2">
+          <div className="bg-[#f5f7f8] p-4 space-y-2 border border-gray-200">
             <div className="flex items-center justify-between text-sm">
               <span className="text-gray-500">Price</span>
               <span className="font-semibold text-dark">
@@ -185,7 +185,7 @@ export default function EditVariantModal({
             <button
               type="button"
               onClick={onClose}
-              className="flex-1 border border-gray-300 py-3 rounded-full text-sm font-semibold text-gray-700 hover:border-primary hover:text-primary transition"
+              className="flex-1 border border-gray-300 py-3 text-sm font-semibold text-gray-700 hover:border-primary hover:text-primary transition"
             >
               Cancel
             </button>
@@ -193,7 +193,7 @@ export default function EditVariantModal({
               type="button"
               onClick={handleSave}
               disabled={!isInStock || !hasChanged}
-              className="flex-1 py-3 rounded-full text-sm font-semibold text-white bg-primary hover:bg-primary-dark transition disabled:opacity-50 disabled:cursor-not-allowed"
+              className="flex-1 py-3 text-sm font-semibold text-white bg-primary hover:bg-primary-dark transition disabled:opacity-50 disabled:cursor-not-allowed border border-primary"
             >
               {!hasChanged ? 'No Changes' : !isInStock ? 'Out of Stock' : 'Update Variant'}
             </button>

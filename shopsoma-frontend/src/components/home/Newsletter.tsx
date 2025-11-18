@@ -66,7 +66,7 @@ export default function Newsletter() {
           <div>
             {/* Success Message */}
             {success && (
-              <div className="mb-4 inline-flex items-center gap-2 bg-white text-primary px-5 py-3 rounded-lg text-sm font-body font-medium shadow-lg">
+              <div className="mb-4 inline-flex items-center gap-2 bg-white text-primary px-5 py-3 text-sm font-body font-medium shadow-lg border border-white">
                 <CheckCircle className="w-5 h-5" />
                 Successfully subscribed!
               </div>
@@ -74,7 +74,7 @@ export default function Newsletter() {
 
             {/* Newsletter Form */}
             <form onSubmit={handleSubmit}>
-              <div className="flex gap-0 bg-white rounded-lg shadow-xl overflow-hidden">
+              <div className="flex gap-0 bg-white shadow-xl overflow-hidden border border-white">
                 <div className="flex items-center pl-5 pr-3 bg-white">
                   <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
@@ -91,7 +91,7 @@ export default function Newsletter() {
                 <button
                   type="submit"
                   disabled={loading}
-                  className="px-8 py-4 bg-primary text-white text-base font-body font-semibold hover:bg-primary-dark transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap rounded-r-lg"
+                  className="px-8 py-4 bg-primary text-white text-base font-body font-semibold hover:bg-primary-dark transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
                 >
                   {loading ? 'Subscribing...' : 'Subscribe'}
                 </button>

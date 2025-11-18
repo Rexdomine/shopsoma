@@ -46,7 +46,7 @@ export default function LatestArticles() {
 
           <a
             href="/blog"
-            className="hidden md:inline-flex items-center gap-2 px-7 py-3 border-2 border-primary text-primary bg-white rounded-full text-sm font-body font-semibold hover:bg-primary hover:text-white hover:border-primary transition-all duration-200 shadow-md hover:shadow-lg"
+            className="hidden md:inline-flex items-center gap-2 px-7 py-3 border-2 border-primary text-primary bg-white text-sm font-body font-semibold hover:bg-primary hover:text-white hover:border-primary transition-all duration-200"
           >
             Browse Articles
             <ArrowRight className="w-4 h-4" />
@@ -59,7 +59,7 @@ export default function LatestArticles() {
             <a
               key={article.id}
               href={`/blog/${article.id}`}
-              className="group bg-gray-50 rounded-lg overflow-hidden hover:shadow-md transition-shadow"
+              className="group bg-gray-50 overflow-hidden hover:shadow-md transition-shadow border border-gray-200"
             >
               {/* Article Image */}
               <div className="relative h-48 bg-gray-200 overflow-hidden">
@@ -74,7 +74,7 @@ export default function LatestArticles() {
 
                 {/* Category Badge */}
                 <div className="absolute top-3 left-3">
-                  <span className="bg-white text-gray-900 px-3 py-1 rounded-full text-xs font-medium">
+                  <span className="bg-white text-gray-900 px-3 py-1 text-xs font-medium border border-gray-200">
                     {article.category}
                   </span>
                 </div>
@@ -110,7 +110,7 @@ export default function LatestArticles() {
         <div className="md:hidden text-center mt-6">
           <a
             href="/blog"
-            className="inline-flex items-center gap-2 px-7 py-3 border-2 border-primary text-primary bg-white rounded-full text-sm font-body font-semibold hover:bg-primary hover:text-white hover:border-primary transition-all duration-200 shadow-md hover:shadow-lg"
+            className="inline-flex items-center gap-2 px-7 py-3 border-2 border-primary text-primary bg-white text-sm font-body font-semibold hover:bg-primary hover:text-white hover:border-primary transition-all duration-200"
           >
             Browse Articles
             <ArrowRight className="w-4 h-4" />

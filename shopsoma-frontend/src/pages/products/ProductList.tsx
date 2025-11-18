@@ -468,7 +468,7 @@ export default function ProductList() {
               </Link>
 
               {searchQuery && (
-                <div className="bg-primary/5 border border-primary/20 rounded-2xl px-6 py-4">
+                <div className="bg-primary/5 border border-primary/20 px-6 py-4">
                   <p className="text-sm text-gray-700">
                     Search results for: <span className="font-semibold text-primary">"{searchQuery}"</span>
                     {filters.category !== 'All' && (
@@ -493,7 +493,7 @@ export default function ProductList() {
                       <button
                         type="button"
                         onClick={() => setFilterMenuOpen((prev) => !prev)}
-                        className={`inline-flex items-center gap-3 rounded-full border px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.3em] transition ${
+                        className={`inline-flex items-center gap-3 border px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.3em] transition ${
                           filterMenuOpen
                             ? 'border-primary text-primary'
                             : 'border-gray-200 text-gray-600 hover:border-primary hover:text-primary'
@@ -507,7 +507,7 @@ export default function ProductList() {
                         />
                       </button>
                       {filterMenuOpen && (
-                        <div className="absolute right-0 mt-2 w-56 rounded-2xl border border-gray-100 bg-white shadow-xl z-10 overflow-hidden">
+                        <div className="absolute right-0 mt-2 w-56 border border-gray-100 bg-white shadow-xl z-10 overflow-hidden">
                           {sortOptions.map((option) => (
                             <button
                               key={option.value}
@@ -595,7 +595,7 @@ export default function ProductList() {
                     <button
                       type="button"
                       onClick={() => setPage((prev) => Math.max(1, prev - 1))}
-                      className="w-10 h-10 rounded-full border border-gray-200 flex items-center justify-center text-gray-500 hover:border-primary hover:text-primary transition"
+                      className="w-10 h-10 border border-gray-200 flex items-center justify-center text-gray-500 hover:border-primary hover:text-primary transition"
                       disabled={page === 1}
                     >
                       <ArrowLeft className="w-4 h-4" />
@@ -606,7 +606,7 @@ export default function ProductList() {
                           key={item}
                           type="button"
                           onClick={() => setPage(item)}
-                          className={`w-10 h-10 rounded-full border text-sm font-semibold transition ${
+                          className={`w-10 h-10 border text-sm font-semibold transition ${
                             page === item
                               ? 'border-primary bg-primary text-white'
                               : 'border-gray-200 text-gray-600 hover:border-primary hover:text-primary'
@@ -623,7 +623,7 @@ export default function ProductList() {
                     <button
                       type="button"
                       onClick={() => setPage((prev) => Math.min(totalPages, prev + 1))}
-                      className="w-10 h-10 rounded-full border border-gray-200 flex items-center justify-center text-gray-500 hover:border-primary hover:text-primary transition"
+                      className="w-10 h-10 border border-gray-200 flex items-center justify-center text-gray-500 hover:border-primary hover:text-primary transition"
                       disabled={page === totalPages}
                     >
                       <ArrowRight className="w-4 h-4" />
@@ -650,9 +650,9 @@ export default function ProductList() {
             {articles.map((article) => (
               <article
                 key={article.id}
-                className="rounded-[32px] bg-white shadow-sm hover:-translate-y-1 hover:shadow-xl transition-all duration-300 w-full"
+                className="bg-white shadow-sm hover:-translate-y-1 hover:shadow-xl transition-all duration-300 w-full border border-gray-200"
               >
-                <div className="h-48 bg-[#f5f7f8] rounded-t-[32px]" />
+                <div className="h-48 bg-[#f5f7f8]" />
                 <div className="p-6 space-y-3">
                   <p className="text-[11px] uppercase tracking-[0.3em] text-gray-400">
                     {article.category}
@@ -749,14 +749,14 @@ function FilterGroup({
                 }`}
               >
                 <span
-                  className={`w-3.5 h-3.5 rounded-full mr-3 border-2 transition ${
+                  className={`w-3.5 h-3.5 mr-3 border-2 transition ${
                     selectedColor ? 'border-primary bg-primary' : 'border-gray-300 bg-white'
                   }`}
                 />
                 <div className="flex items-center gap-3 flex-1">
                   {showColorSwatch && (
                     <span
-                      className="w-5 h-5 rounded-md border border-gray-200"
+                      className="w-5 h-5 border border-gray-200"
                       style={{ backgroundColor: swatchColor }}
                     />
                   )}
@@ -843,7 +843,7 @@ function PriceFilter({
                         onApplyCustom();
                       }
                     }}
-                    className="w-full rounded-xl border border-gray-200 py-2 pl-7 pr-3 text-sm font-semibold text-gray-700 focus:border-primary focus:ring-2 focus:ring-primary/10 transition"
+                    className="w-full border border-gray-200 py-2 pl-7 pr-3 text-sm font-semibold text-gray-700 focus:border-primary focus:ring-2 focus:ring-primary/10 transition"
                   />
                 </div>
               </div>
@@ -864,7 +864,7 @@ function PriceFilter({
                   }`}
                 >
                   <span
-                    className={`w-3.5 h-3.5 rounded-full mr-3 border-2 transition ${
+                    className={`w-3.5 h-3.5 mr-3 border-2 transition ${
                       isSelected ? 'border-primary bg-primary' : 'border-gray-300 bg-white'
                     }`}
                   />

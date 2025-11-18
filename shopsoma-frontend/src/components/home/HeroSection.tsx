@@ -29,7 +29,7 @@ function OptimizedImage({ webp, jpg, alt, index }: { webp: string; jpg: string; 
   const [isLoaded, setIsLoaded] = useState(false);
 
   return (
-    <div className="aspect-square rounded-2xl overflow-hidden bg-gray-100 shadow-lg relative">
+    <div className="aspect-square overflow-hidden bg-gray-100 shadow-lg relative border border-gray-200">
       {!isLoaded && (
         <div className="absolute inset-0 bg-gradient-to-br from-gray-200 to-gray-100 animate-pulse" />
       )}
@@ -70,7 +70,7 @@ export default function HeroSection() {
 
             <Link
               to="/products"
-              className="inline-flex items-center justify-center gap-2 px-8 py-3.5 rounded-full font-body font-semibold transition-all duration-200 shadow-lg hover:shadow-xl text-base bg-primary text-white hover:bg-primary-dark"
+              className="inline-flex items-center justify-center gap-2 px-8 py-3.5 font-body font-semibold transition-all duration-200 text-base bg-primary text-white hover:bg-primary-dark border border-primary"
             >
               Shop Now
               <ArrowRight className="w-5 h-5" />
