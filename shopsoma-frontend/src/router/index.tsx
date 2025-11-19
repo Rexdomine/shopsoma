@@ -14,6 +14,11 @@ const ProductDetail = lazy(() => import('../pages/products/ProductDetail'));
 const ProductList = lazy(() => import('../pages/products/ProductList'));
 const Cart = lazy(() => import('../pages/cart/Cart'));
 const Checkout = lazy(() => import('../pages/checkout/Checkout'));
+const Register = lazy(() => import('../pages/auth/Register'));
+const Login = lazy(() => import('../pages/auth/Login'));
+const ForgotPassword = lazy(() => import('../pages/auth/ForgotPassword'));
+const OrderSuccess = lazy(() => import('../pages/orders/OrderSuccess'));
+const OrderTracking = lazy(() => import('../pages/orders/OrderTracking'));
 const Debug = lazy(() => import('../pages/Debug'));
 const NotFound = lazy(() => import('../pages/errors/NotFound'));
 const ServerError = lazy(() => import('../pages/errors/ServerError'));
@@ -69,6 +74,66 @@ const router = createBrowserRouter([
       <ErrorBoundary>
         <Suspense fallback={<Loading fullScreen message="Loading checkout..." />}>
           <Checkout />
+        </Suspense>
+      </ErrorBoundary>
+    ),
+  },
+  {
+    path: ROUTES.ORDER_SUCCESS,
+    element: (
+      <ErrorBoundary>
+        <Suspense fallback={<Loading fullScreen message="Loading..." />}>
+          <OrderSuccess />
+        </Suspense>
+      </ErrorBoundary>
+    ),
+  },
+  {
+    path: '/orders/:orderId',
+    element: (
+      <ErrorBoundary>
+        <Suspense fallback={<Loading fullScreen message="Loading order..." />}>
+          <OrderSuccess />
+        </Suspense>
+      </ErrorBoundary>
+    ),
+  },
+  {
+    path: ROUTES.ORDER_TRACKING,
+    element: (
+      <ErrorBoundary>
+        <Suspense fallback={<Loading fullScreen message="Loading order..." />}>
+          <OrderTracking />
+        </Suspense>
+      </ErrorBoundary>
+    ),
+  },
+  {
+    path: ROUTES.REGISTER,
+    element: (
+      <ErrorBoundary>
+        <Suspense fallback={<Loading fullScreen message="Loading register..." />}>
+          <Register />
+        </Suspense>
+      </ErrorBoundary>
+    ),
+  },
+  {
+    path: ROUTES.LOGIN,
+    element: (
+      <ErrorBoundary>
+        <Suspense fallback={<Loading fullScreen message="Loading login..." />}>
+          <Login />
+        </Suspense>
+      </ErrorBoundary>
+    ),
+  },
+  {
+    path: ROUTES.FORGOT_PASSWORD,
+    element: (
+      <ErrorBoundary>
+        <Suspense fallback={<Loading fullScreen message="Loading..." />}>
+          <ForgotPassword />
         </Suspense>
       </ErrorBoundary>
     ),

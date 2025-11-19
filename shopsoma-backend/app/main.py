@@ -3,12 +3,16 @@ Shopsoma Backend API
 Main application entry point
 """
 import os
+from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
+# Load environment variables from .env file
+load_dotenv()
+
 # Import routers
-from app.api.v1 import auth, products, images, admin, seed, cart
+from app.api.v1 import auth, products, images, admin, seed, cart, addresses, shipping_rates, orders, promo_codes, payments
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -63,7 +67,13 @@ async def health_check():
 @app.get("/api/v1/health")
 async def api_health_check():
     """API v1 health check endpoint"""
-    return {"status": "healthy", "version": "1.0.0"}
+    from app.core.config import settings
+    return {
+        "status": "healthy",
+        "version": "1.0.0",
+        "paystack_configured": bool(settings.PAYSTACK_SECRET_KEY),
+        "paystack_key_preview": settings.PAYSTACK_SECRET_KEY[:15] + "..." if settings.PAYSTACK_SECRET_KEY else "NOT SET"
+    }
 
 # Include routers
 app.include_router(auth.router, prefix="/api/v1")
@@ -72,10 +82,14 @@ app.include_router(images.router, prefix="/api/v1")
 app.include_router(admin.router, prefix="/api/v1")
 app.include_router(seed.router, prefix="/api/v1")
 app.include_router(cart.router, prefix="/api/v1")
+app.include_router(addresses.router, prefix="/api/v1")
+app.include_router(shipping_rates.router, prefix="/api/v1")
+app.include_router(promo_codes.router, prefix="/api/v1")
+app.include_router(orders.router, prefix="/api/v1")
+app.include_router(payments.router, prefix="/api/v1")
 
 # TODO: Add more routers as they're implemented
 # app.include_router(vendors.router, prefix="/api/v1")
-# app.include_router(orders.router, prefix="/api/v1")
 
 if __name__ == "__main__":
     import uvicorn

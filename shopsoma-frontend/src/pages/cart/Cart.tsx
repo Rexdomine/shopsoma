@@ -75,8 +75,7 @@ export default function Cart() {
   };
 
   const handleCheckout = () => {
-    // TODO: Navigate to checkout page when implemented
-    console.log('Proceed to checkout');
+    navigate(ROUTES.CHECKOUT);
   };
 
   return (
@@ -196,14 +195,17 @@ export default function Cart() {
                 </h3>
                 <div className="text-sm space-y-2">
                   <SummaryRow label="Subtotal" value={cart.summary.subtotal} />
-                  <SummaryRow label="Shipping" value={cart.summary.shipping} />
-                  <SummaryRow label="Tax (VAT 7.5%)" value={cart.summary.tax} />
-                  {cart.summary.discount > 0 && (
-                    <SummaryRow label="Discount" value={-cart.summary.discount} />
-                  )}
+                  <div className="flex items-center justify-between text-xs text-gray-400 italic">
+                    <span>Shipping</span>
+                    <span>Calculated at checkout</span>
+                  </div>
+                  <div className="flex items-center justify-between text-xs text-gray-400 italic">
+                    <span>Tax (VAT 7.5%)</span>
+                    <span>Calculated at checkout</span>
+                  </div>
                 </div>
                 <div className="border-t border-gray-200 pt-4">
-                  <SummaryRow label="Total" value={cart.summary.total} bold />
+                  <SummaryRow label="Estimated Total" value={cart.summary.subtotal} bold />
                 </div>
                 <div className="space-y-3 pt-2">
                   <button

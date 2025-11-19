@@ -15,6 +15,7 @@ export const DEFAULT_PRICING_CONFIG: PricingConfig = {
 
 /**
  * Calculate cart summary with taxes, shipping, and discounts
+ * Note: For cart page, shipping and tax are 0 and calculated at checkout
  */
 export function calculateCartSummary(
   items: CartItem[],
@@ -24,18 +25,15 @@ export function calculateCartSummary(
   // Calculate subtotal
   const subtotal = items.reduce((sum, item) => sum + item.subtotal, 0);
 
-  // Calculate shipping
-  const shipping = subtotal >= config.freeShippingThreshold ? 0 : config.shippingFee;
+  // Don't calculate shipping and tax for cart - they're calculated at checkout
+  const shipping = 0;
+  const tax = 0;
 
   // Apply discount
   const discount = discountAmount;
 
-  // Calculate tax on (subtotal - discount)
-  const taxableAmount = Math.max(0, subtotal - discount);
-  const tax = taxableAmount * config.taxRate;
-
-  // Calculate total
-  const total = subtotal + shipping + tax - discount;
+  // Calculate total (just subtotal for cart, real total calculated at checkout)
+  const total = subtotal - discount;
 
   // Count items
   const itemCount = items.reduce((sum, item) => sum + item.quantity, 0);
@@ -43,9 +41,9 @@ export function calculateCartSummary(
   return {
     subtotal,
     shipping,
-    tax: Math.round(tax * 100) / 100, // Round to 2 decimal places
+    tax,
     discount,
-    total: Math.round(total * 100) / 100,
+    total,
     itemCount,
   };
 }
