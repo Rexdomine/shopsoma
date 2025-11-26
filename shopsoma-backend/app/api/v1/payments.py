@@ -173,6 +173,21 @@ async def _initialize_paystack_payment(
     db: AsyncSession
 ) -> PaymentInitializeResponse:
     """Initialize Paystack payment"""
+    # Validate Paystack secret key
+    if not PAYSTACK_SECRET_KEY or PAYSTACK_SECRET_KEY == "":
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Paystack is not configured. Please contact support."
+        )
+
+    # Validate key format
+    if not PAYSTACK_SECRET_KEY.startswith(("sk_test_", "sk_live_")):
+        print(f"⚠️  Invalid Paystack key format. Key should start with 'sk_test_' or 'sk_live_'")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Invalid payment gateway configuration. Please contact support."
+        )
+
     # Generate unique reference
     reference = f"SHP-{order.order_number}"
 
@@ -206,13 +221,37 @@ async def _initialize_paystack_payment(
                 headers=headers,
                 timeout=30.0
             )
-            response.raise_for_status()
-            paystack_response = response.json()
+
+            # Try to parse response regardless of status code for better error messages
+            try:
+                paystack_response = response.json()
+            except Exception:
+                paystack_response = {"message": response.text}
+
+            # Check for HTTP errors
+            if response.status_code != 200:
+                error_message = paystack_response.get("message", "Payment initialization failed")
+                print(f"❌ Paystack API Error (HTTP {response.status_code}): {error_message}")
+                print(f"   Response: {paystack_response}")
+
+                # Provide specific error messages
+                if response.status_code == 401:
+                    raise HTTPException(
+                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                        detail="Payment gateway authentication failed. Please contact support."
+                    )
+                else:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=error_message
+                    )
 
             if not paystack_response.get("status"):
+                error_message = paystack_response.get("message", "Payment initialization failed")
+                print(f"❌ Paystack returned status=false: {error_message}")
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=paystack_response.get("message", "Payment initialization failed")
+                    detail=error_message
                 )
 
             # Create payment record
@@ -240,18 +279,13 @@ async def _initialize_paystack_payment(
                 payment_gateway="paystack"
             )
 
-        except httpx.HTTPStatusError as e:
-            error_detail = e.response.text if hasattr(e, 'response') else str(e)
-            print(f"Paystack API Error: {error_detail}")
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail=f"Payment service error: {error_detail}"
-            )
+        except HTTPException:
+            raise
         except httpx.HTTPError as e:
-            print(f"HTTP Error: {str(e)}")
+            print(f"❌ HTTP Error connecting to Paystack: {str(e)}")
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail=f"Payment service error: {str(e)}"
+                detail=f"Payment service connection error: {str(e)}"
             )
 
 
