@@ -60,4 +60,4 @@ services:
       - key: VITE_PAYSTACK_PUBLIC_KEY
         value: pk_test_9547fa4bf30edfebb1f56b66784fb6a0cab1eebf
       - key: VITE_STRIPE_PUBLISHABLE_KEY
-        value: pk_test_51SUke6R5eRmaz3M8mBnU2whlHSSa9RMfjd00ZjppvBdH2NvXt9J84oiIr67CcIRcKgRlVTOJQOKAKCqlTT6TRJpd003YbmQSnX
+        value: pk_test_51SUke6R5eRmaz3M8mBnU2whLHSSa9RMfjdO0ZjppvBdH2NvXt9J84oiIr67CcIRcKgRlVTOJQOKAKCqLTT6TRJpd003YbmQSnX
