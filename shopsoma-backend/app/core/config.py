@@ -4,6 +4,7 @@ Core application configuration
 from pydantic_settings import BaseSettings
 from typing import List, Optional
 import os
+from urllib.parse import urlparse
 
 
 class Settings(BaseSettings):
@@ -17,8 +18,35 @@ class Settings(BaseSettings):
     DEBUG: bool = True
 
     # Database
+    # IMPORTANT: DATABASE_URL is the single source of truth for database connection
+    # Both Alembic (sync) and FastAPI async engine MUST point to the same database
     DATABASE_URL: str
     DATABASE_ECHO: bool = False
+
+    @property
+    def ASYNC_DATABASE_URL(self) -> str:
+        """
+        Derive async database URL from DATABASE_URL
+        Converts postgresql:// to postgresql+asyncpg:// for async engine
+        """
+        if self.DATABASE_URL.startswith("postgresql://"):
+            return self.DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
+        elif self.DATABASE_URL.startswith("postgresql+asyncpg://"):
+            return self.DATABASE_URL
+        return self.DATABASE_URL
+
+    def get_masked_db_url(self, url: str) -> str:
+        """
+        Return safe database URL for logging (password masked)
+        Example output: "host=localhost db=shopsoma_db"
+        """
+        try:
+            parsed = urlparse(url)
+            host = parsed.hostname or "unknown"
+            db_name = parsed.path.lstrip("/") or "unknown"
+            return f"host={host} db={db_name}"
+        except Exception:
+            return "host=unknown db=unknown"
 
     # Redis
     REDIS_URL: str = "redis://localhost:6379/0"

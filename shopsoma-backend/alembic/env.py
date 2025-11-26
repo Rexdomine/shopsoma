@@ -1,7 +1,13 @@
-"""Alembic environment configuration"""
+"""Alembic environment configuration
+
+IMPORTANT: Alembic uses settings.DATABASE_URL (sync PostgreSQL connection).
+The FastAPI app uses settings.ASYNC_DATABASE_URL (derived from DATABASE_URL).
+Both MUST point to the same underlying database.
+"""
 from logging.config import fileConfig
 import sys
 from pathlib import Path
+import logging
 
 from sqlalchemy import engine_from_config
 from sqlalchemy import pool
@@ -26,7 +32,13 @@ import app.models  # noqa
 config = context.config
 
 # Override sqlalchemy.url with the one from settings
+# This is the single source of truth for database connection
 config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
+
+# Log database connection (masked for security)
+logger = logging.getLogger('alembic.env')
+masked_db = settings.get_masked_db_url(settings.DATABASE_URL)
+logger.info(f"Alembic using database: {masked_db}")
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
