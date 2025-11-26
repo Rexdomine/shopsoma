@@ -57,3 +57,7 @@ services:
     envVars:
       - key: VITE_API_BASE_URL
         value: https://shopsoma-staging-api.onrender.com/api/v1
+      - key: VITE_PAYSTACK_PUBLIC_KEY
+        value: pk_test_9547fa4bf30edfebb1f56b66784fb6a0cab1eebf
+      - key: VITE_STRIPE_PUBLIC_KEY
+        sync: false
