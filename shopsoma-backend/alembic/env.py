@@ -1,13 +1,14 @@
 """Alembic environment configuration
 
-IMPORTANT: Alembic uses settings.DATABASE_URL (sync PostgreSQL connection).
-The FastAPI app uses settings.ASYNC_DATABASE_URL (derived from DATABASE_URL).
+IMPORTANT: Alembic uses DATABASE_URL environment variable (sync PostgreSQL connection).
+The FastAPI app uses the same DATABASE_URL but converts it to async format.
 Both MUST point to the same underlying database.
 """
 from logging.config import fileConfig
 import sys
 from pathlib import Path
 import logging
+import os
 
 from sqlalchemy import engine_from_config
 from sqlalchemy import pool
@@ -16,9 +17,6 @@ from alembic import context
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-# Import app configuration
-from app.core.config import settings
 
 # Import Base directly without initializing async engine
 from app.core.base import Base
@@ -31,13 +29,36 @@ import app.models  # noqa
 # access to the values within the .ini file in use.
 config = context.config
 
-# Override sqlalchemy.url with the one from settings
+# Get DATABASE_URL from environment variable
 # This is the single source of truth for database connection
-config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
+app_db_url = os.environ.get("DATABASE_URL")
+
+if app_db_url is None:
+    raise RuntimeError(
+        "DATABASE_URL environment variable is not set. "
+        "Please set it in your Render environment or .env file."
+    )
+
+# Alembic needs a sync driver, so convert async URL if necessary
+# Example: postgresql+asyncpg://... -> postgresql://...
+sync_db_url = app_db_url.replace("postgresql+asyncpg://", "postgresql://")
+
+# Override sqlalchemy.url with the sync version
+config.set_main_option("sqlalchemy.url", sync_db_url)
 
 # Log database connection (masked for security)
 logger = logging.getLogger('alembic.env')
-masked_db = settings.get_masked_db_url(settings.DATABASE_URL)
+try:
+    from urllib.parse import urlparse
+    parsed = urlparse(sync_db_url)
+    host = parsed.hostname or "unknown"
+    db_name = parsed.path.lstrip("/") or "unknown"
+    masked_db = f"host={host} db={db_name}"
+except Exception:
+    masked_db = "host=unknown db=unknown"
+
+# Print to console for immediate visibility during migrations
+print(f"Alembic using database URL: postgresql://{masked_db.replace('host=', '').replace(' db=', '@')}")
 logger.info(f"Alembic using database: {masked_db}")
 
 # Interpret the config file for Python logging.
