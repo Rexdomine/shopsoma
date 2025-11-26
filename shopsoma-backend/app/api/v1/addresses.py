@@ -192,23 +192,10 @@ async def delete_address(
             detail="Address not found"
         )
 
-    # Check if address is being used by any orders
-    from app.models.order import Order
-    order_check = await db.execute(
-        select(Order.id).where(
-            or_(
-                Order.shipping_address_id == address_id,
-                Order.billing_address_id == address_id
-            )
-        ).limit(1)
-    )
-    if order_check.scalar_one_or_none():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Cannot delete address that is associated with existing orders"
-        )
-
     # Delete address
+    # Note: Orders store a reference to the address ID, but the address data
+    # is captured at order creation time in the order's JSON fields, so
+    # deleting the address won't affect historical order data
     await db.execute(delete(Address).where(Address.id == address_id))
     await db.commit()
 
