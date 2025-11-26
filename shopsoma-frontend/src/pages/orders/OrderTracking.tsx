@@ -114,11 +114,11 @@ export default function OrderTracking() {
             S
           </Link>
           <button
-            onClick={() => navigate(ROUTES.HOME)}
+            onClick={() => navigate(-1)}
             className="text-sm text-gray-600 hover:text-primary transition flex items-center gap-1"
           >
             <span>←</span>
-            <span>Back to Home</span>
+            <span>Back</span>
           </button>
         </div>
         <span className="text-xs uppercase tracking-[0.3em] text-gray-500">Track My Order</span>

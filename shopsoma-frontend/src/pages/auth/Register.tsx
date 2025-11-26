@@ -1,8 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Eye, EyeOff } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { Eye, EyeOff, AlertCircle, CheckCircle } from 'lucide-react';
+import { Link, useNavigate } from 'react-router-dom';
+import { useAuth } from '../../context/AuthContext';
 import Layout from '../../components/layout/Layout';
 import Newsletter from '../../components/home/Newsletter';
+import { subscribeToNewsletter } from '../../services/newsletterService';
+
+// Password validation rules
+const validatePassword = (password: string) => {
+  const rules = {
+    minLength: password.length >= 8,
+    hasUppercase: /[A-Z]/.test(password),
+    hasNumber: /[0-9]/.test(password),
+  };
+  const isValid = rules.minLength && rules.hasUppercase && rules.hasNumber;
+  return { ...rules, isValid };
+};
 
 export default function Register() {
   const [form, setForm] = useState({
@@ -13,17 +26,62 @@ export default function Register() {
     newsletter: false,
   });
   const [showPassword, setShowPassword] = useState(false);
+  const [error, setError] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
 
-  const isComplete = form.fullName.trim() && form.email.trim() && form.password.trim();
+  const { register } = useAuth();
+  const navigate = useNavigate();
+
+  const passwordValidation = validatePassword(form.password);
+  const isComplete = form.fullName.trim() && form.email.trim() && form.password.trim() && passwordValidation.isValid;
 
   const handleChange = (key: keyof typeof form, value: string | boolean) => {
     setForm((prev) => ({ ...prev, [key]: value as never }));
+    if (error) setError(''); // Clear error on input change
   };
 
-  const handleSubmit = (event: React.FormEvent) => {
+  const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
-    // TODO: hook to API
-    console.log('Submit', form);
+    setError('');
+
+    // Validate password
+    if (!passwordValidation.isValid) {
+      setError('Password does not meet security requirements');
+      return;
+    }
+
+    setIsLoading(true);
+
+    try {
+      await register({
+        full_name: form.fullName,
+        email: form.email,
+        password: form.password,
+        date_of_birth: form.dob || undefined,
+        role: 'customer',
+      });
+
+      if (form.newsletter) {
+        const [firstName, ...rest] = form.fullName.trim().split(' ');
+        try {
+          await subscribeToNewsletter({
+            email: form.email.trim(),
+            firstName: firstName || undefined,
+            lastName: rest.join(' ') || undefined,
+            consent: true,
+          });
+        } catch (newsletterError) {
+          console.error('Failed to subscribe to newsletter during registration', newsletterError);
+        }
+      }
+
+      // Redirect to home after successful registration
+      navigate('/', { replace: true });
+    } catch (err: any) {
+      setError(err.message || 'Registration failed. Please try again.');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -31,6 +89,14 @@ export default function Register() {
       <section className="bg-white py-10 lg:py-16">
         <div className="max-w-xl mx-auto px-4 sm:px-6 lg:px-8 text-center space-y-8">
           <h1 className="text-2xl font-display text-dark">Register</h1>
+
+          {error && (
+            <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-sm flex items-start gap-2 text-left">
+              <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
+              <span className="text-sm">{error}</span>
+            </div>
+          )}
+
           <form onSubmit={handleSubmit} className="space-y-5 text-left">
             <div className="space-y-2">
               <label className="text-sm font-semibold text-gray-700">Full Name</label>
@@ -64,19 +130,34 @@ export default function Register() {
                   className="w-full border border-gray-300 rounded-sm px-3 py-2 text-sm focus:border-primary focus:outline-none pr-10"
                   placeholder="Enter a secured P@ssw0rd"
                   required
+                  disabled={isLoading}
                 />
                 <button
                   type="button"
                   onClick={() => setShowPassword((prev) => !prev)}
                   className="absolute inset-y-0 right-2 flex items-center text-gray-500 hover:text-gray-700"
                   aria-label="Toggle password visibility"
+                  disabled={isLoading}
                 >
                   {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                 </button>
               </div>
-              <p className="text-xs text-gray-500">
-                Your password must be eight characters or longer and include at least one uppercase letter and one number.
-              </p>
+              {form.password && (
+                <div className="space-y-1 text-xs">
+                  <div className={`flex items-center gap-1 ${passwordValidation.minLength ? 'text-green-600' : 'text-gray-500'}`}>
+                    {passwordValidation.minLength ? <CheckCircle className="w-3 h-3" /> : <span className="w-3 h-3 rounded-full border border-current" />}
+                    <span>At least 8 characters</span>
+                  </div>
+                  <div className={`flex items-center gap-1 ${passwordValidation.hasUppercase ? 'text-green-600' : 'text-gray-500'}`}>
+                    {passwordValidation.hasUppercase ? <CheckCircle className="w-3 h-3" /> : <span className="w-3 h-3 rounded-full border border-current" />}
+                    <span>One uppercase letter</span>
+                  </div>
+                  <div className={`flex items-center gap-1 ${passwordValidation.hasNumber ? 'text-green-600' : 'text-gray-500'}`}>
+                    {passwordValidation.hasNumber ? <CheckCircle className="w-3 h-3" /> : <span className="w-3 h-3 rounded-full border border-current" />}
+                    <span>One number</span>
+                  </div>
+                </div>
+              )}
             </div>
             <div className="space-y-2">
               <label className="text-sm font-semibold text-gray-700">Date of birth</label>
@@ -99,14 +180,21 @@ export default function Register() {
             </p>
             <button
               type="submit"
-              disabled={!isComplete}
+              disabled={!isComplete || isLoading}
               className={`w-full py-3 rounded-sm text-sm font-semibold transition ${
-                isComplete
+                isComplete && !isLoading
                   ? 'bg-primary text-white hover:bg-primary-dark'
                   : 'bg-gray-200 text-gray-500 cursor-not-allowed'
               }`}
             >
-              Create Account
+              {isLoading ? (
+                <span className="flex items-center justify-center gap-2">
+                  <div className="h-4 w-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                  Creating account...
+                </span>
+              ) : (
+                'Create Account'
+              )}
             </button>
             <div className="text-center text-sm text-gray-600 space-y-2">
               <p>Account already exists?</p>

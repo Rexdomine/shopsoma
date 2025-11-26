@@ -65,6 +65,7 @@ class OrderCreate(BaseModel):
     guest_address: Optional[GuestAddressData] = Field(None, description="Guest checkout address data")
     customer_email: Optional[str] = Field(None, description="Customer email for guest checkout")
     customer_notes: Optional[str] = Field(None, max_length=1000, description="Customer notes")
+    shipping_rate_id: Optional[UUID] = Field(None, description="Selected shipping rate ID")
     promo_code: Optional[str] = Field(None, description="Promo code to apply")
 
 
@@ -84,6 +85,7 @@ class OrderReviewRequest(BaseModel):
     items: list[OrderItemCreate] = Field(..., min_length=1)
     shipping_address_id: Optional[UUID] = None
     guest_address: Optional[GuestAddressData] = None
+    shipping_rate_id: Optional[UUID] = None
     promo_code: Optional[str] = None
 
 

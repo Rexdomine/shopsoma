@@ -74,6 +74,13 @@ class Product(Base):
     order_items = relationship("OrderItem", back_populates="product")
     reviews = relationship("Review", back_populates="product", cascade="all, delete-orphan")
 
+    @property
+    def vendor_name(self):
+        """Expose the vendor's business name for API responses."""
+        if self.vendor:
+            return self.vendor.business_name
+        return None
+
     def __repr__(self):
         return f"<Product {self.title}>"
 

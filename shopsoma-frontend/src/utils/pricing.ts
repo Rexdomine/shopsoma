@@ -19,7 +19,6 @@ export const DEFAULT_PRICING_CONFIG: PricingConfig = {
  */
 export function calculateCartSummary(
   items: CartItem[],
-  config: PricingConfig = DEFAULT_PRICING_CONFIG,
   discountAmount: number = 0
 ): CartSummary {
   // Calculate subtotal
@@ -80,6 +79,65 @@ export function formatCurrency(amount: number): string {
 export function calculateDiscountPercentage(originalPrice: number, discountedPrice: number): number {
   if (originalPrice <= 0) return 0;
   return Math.round(((originalPrice - discountedPrice) / originalPrice) * 100);
+}
+
+/**
+ * Currency conversion rates
+ * In production, these should be fetched from a real-time API
+ */
+export const EXCHANGE_RATES = {
+  NGN_TO_USD: 1 / 1600, // 1 NGN = 0.000625 USD (approx 1 USD = 1600 NGN)
+  USD_TO_NGN: 1600,     // 1 USD = 1600 NGN
+};
+
+export type Currency = 'NGN' | 'USD';
+
+/**
+ * Convert amount from NGN to USD
+ */
+export function convertNGNToUSD(amountInNGN: number): number {
+  return Math.round((amountInNGN * EXCHANGE_RATES.NGN_TO_USD) * 100) / 100;
+}
+
+/**
+ * Convert amount from USD to NGN
+ */
+export function convertUSDToNGN(amountInUSD: number): number {
+  return Math.round(amountInUSD * EXCHANGE_RATES.USD_TO_NGN);
+}
+
+/**
+ * Convert amount between currencies
+ */
+export function convertCurrency(amount: number, fromCurrency: Currency, toCurrency: Currency): number {
+  if (fromCurrency === toCurrency) return amount;
+
+  if (fromCurrency === 'NGN' && toCurrency === 'USD') {
+    return convertNGNToUSD(amount);
+  } else {
+    return convertUSDToNGN(amount);
+  }
+}
+
+/**
+ * Format amount in specified currency
+ */
+export function formatAmount(amount: number, currency: Currency): string {
+  const symbol = currency === 'NGN' ? '₦' : '$';
+  return `${symbol}${amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+export function formatPriceWithCurrency(amountInNGN: number, currency: Currency): string {
+  const converted = currency === 'USD' ? convertNGNToUSD(amountInNGN) : amountInNGN;
+  const locale = currency === 'USD' ? 'en-US' : 'en-NG';
+  const minimumFractionDigits = currency === 'USD' ? 2 : 0;
+  const maximumFractionDigits = currency === 'USD' ? 2 : 0;
+  return new Intl.NumberFormat(locale, {
+    style: 'currency',
+    currency,
+    minimumFractionDigits,
+    maximumFractionDigits,
+  }).format(converted);
 }
 
 /**

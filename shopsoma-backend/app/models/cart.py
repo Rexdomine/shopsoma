@@ -9,11 +9,11 @@ from app.core.database import Base
 class CartItem(Base):
     __tablename__ = "cart_items"
 
-    id = Column(String, primary_key=True, index=True)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     session_id = Column(String, nullable=True, index=True)  # For guest users
     product_id = Column(UUID(as_uuid=True), ForeignKey("products.id"), nullable=False)
-    variant_id = Column(String, nullable=False)  # Store variant ID as JSON key
+    variant_id = Column(UUID(as_uuid=True), nullable=False)
     quantity = Column(Integer, nullable=False, default=1)
     price = Column(Float, nullable=False)  # Price at time of adding
     created_at = Column(DateTime, default=datetime.utcnow)

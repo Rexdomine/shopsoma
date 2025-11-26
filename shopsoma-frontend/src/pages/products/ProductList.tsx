@@ -7,6 +7,8 @@ import type { Product } from '../../types';
 import { productService } from '../../services/productService';
 import { ROUTES } from '../../config/constants';
 import ProductCard from '../../components/products/ProductCard';
+import { useWishlistActions } from '../../hooks/useWishlistActions';
+import { usePreferenceStore } from '../../store/preferenceStore';
 
 const PAGE_SIZE = 12;
 
@@ -96,16 +98,23 @@ export default function ProductList() {
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [favorites, setFavorites] = useState<Set<string>>(new Set());
   const [filterMenuOpen, setFilterMenuOpen] = useState(false);
   const [filters, setFilters] = useState<FilterState>({
     category: categoryParam || 'All',
     color: 'All',
     price: 'all',
   });
+  const preferredInterest = usePreferenceStore((state) => state.interest);
+  const [curatedFilterApplied, setCuratedFilterApplied] = useState(false);
+  const [showInterestBanner, setShowInterestBanner] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return true;
+    const stored = window.localStorage.getItem('shopsoma_pref_interest_banner');
+    return stored !== 'hidden';
+  });
   const [sortOption, setSortOption] = useState('suggested');
   const [customPriceInputs, setCustomPriceInputs] = useState({ min: '', max: '' });
   const [customPriceRange, setCustomPriceRange] = useState<{ min?: number; max?: number } | null>(null);
+  const { favorites, toggleFavorite } = useWishlistActions();
 
   useEffect(() => {
     const loadProducts = async () => {
@@ -131,14 +140,19 @@ export default function ProductList() {
   }, []);
 
   // Update filters when URL params change
-  useEffect(() => {
-    setFilters(prev => ({
-      ...prev,
-      category: categoryParam || 'All'
-    }));
-  }, [categoryParam]);
+useEffect(() => {
+  setFilters(prev => ({
+    ...prev,
+    category: categoryParam || 'All'
+  }));
+  if (!categoryParam || categoryParam === 'All') {
+    setCuratedFilterApplied(false);
+  }
+}, [categoryParam]);
 
-  const filterMenuRef = useRef<HTMLDivElement>(null);
+const filterMenuRef = useRef<HTMLDivElement>(null);
+
+const interestCategory = preferredInterest === 'menswear' ? 'Men' : 'Women';
 
   const categories = useMemo(() => {
     const unique = new Set<string>();
@@ -346,26 +360,17 @@ export default function ProductList() {
     return filteredProducts.slice(start, start + PAGE_SIZE);
   }, [filteredProducts, page]);
 
-  const toggleFavorite = (productId: string) => {
-    setFavorites((prev) => {
-      const next = new Set(prev);
-      if (next.has(productId)) {
-        next.delete(productId);
-      } else {
-        next.add(productId);
-      }
-      return next;
-    });
-  };
-
-  const handleFilterChange = (key: keyof FilterState, value: string) => {
-    if (key === 'price' && value !== 'custom') {
-      setCustomPriceInputs({ min: '', max: '' });
-      setCustomPriceRange(null);
-    }
-    setFilters((prev) => ({ ...prev, [key]: value }));
-    setPage(1);
-  };
+const handleFilterChange = (key: keyof FilterState, value: string) => {
+  if (key === 'price' && value !== 'custom') {
+    setCustomPriceInputs({ min: '', max: '' });
+    setCustomPriceRange(null);
+  }
+  if (key === 'category' && value !== interestCategory) {
+    setCuratedFilterApplied(false);
+  }
+  setFilters((prev) => ({ ...prev, [key]: value }));
+  setPage(1);
+};
 
   const parsePriceInput = (value: string): number | undefined => {
     if (!value) return undefined;
@@ -559,6 +564,72 @@ export default function ProductList() {
             </aside>
 
             <div className="space-y-8">
+              {preferredInterest && !showInterestBanner && (
+                <div className="text-right">
+                  <button
+                    type="button"
+                    className="text-xs text-gray-500 hover:text-primary underline"
+                    onClick={() => {
+                      setShowInterestBanner(true);
+                      if (typeof window !== 'undefined') {
+                        window.localStorage.removeItem('shopsoma_pref_interest_banner');
+                      }
+                    }}
+                  >
+                    Show curated picks reminder
+                  </button>
+                </div>
+              )}
+
+              {preferredInterest && showInterestBanner && (
+                <div className="border border-gray-200 rounded-sm p-4 text-sm text-gray-700 bg-gray-50">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <p>
+                        You're interested in{' '}
+                        <span className="font-semibold">
+                          {preferredInterest === 'menswear' ? 'Menswear' : 'Womenswear'}
+                        </span>{' '}
+                        looks.
+                      </p>
+                      <button
+                        type="button"
+                        className="mt-2 text-xs text-gray-500 hover:text-primary underline"
+                        onClick={() => {
+                          setShowInterestBanner(false);
+                          if (typeof window !== 'undefined') {
+                            window.localStorage.setItem('shopsoma_pref_interest_banner', 'hidden');
+                          }
+                        }}
+                      >
+                        Hide this reminder
+                      </button>
+                    </div>
+                    <button
+                      type="button"
+                      className={`px-4 py-2 text-xs font-semibold uppercase tracking-[0.3em] rounded-sm transition border ${
+                        curatedFilterApplied
+                          ? 'border-gray-300 text-gray-600 hover:bg-gray-100'
+                          : 'border-primary text-primary hover:bg-primary hover:text-white'
+                      }`}
+                      onClick={() => {
+                        if (curatedFilterApplied) {
+                          handleFilterChange('category', 'All');
+                          setCuratedFilterApplied(false);
+                        } else {
+                          setFilters((prev) => ({
+                            ...prev,
+                            category: interestCategory,
+                          }));
+                          setCuratedFilterApplied(true);
+                        }
+                      }}
+                    >
+                      {curatedFilterApplied ? 'View all products' : 'View curated picks'}
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {loading ? (
                 <div className="py-20">

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams, useParams } from 'react-router-dom';
 import { ROUTES } from '../../config/constants';
 import { checkoutService } from '../../services/checkoutService';
+import { useCartStore } from '../../store/cartStore';
 
 interface Order {
   id: string;
@@ -15,6 +16,7 @@ interface Order {
 
 export default function OrderSuccess() {
   const navigate = useNavigate();
+  const clearCart = useCartStore((state) => state.clearCart);
   const { orderId: paramOrderId } = useParams<{ orderId: string }>();
   const [searchParams] = useSearchParams();
   const queryOrderId = searchParams.get('orderId');
@@ -27,13 +29,18 @@ export default function OrderSuccess() {
   const [error, setError] = useState('');
 
   useEffect(() => {
+    // Clear cart on successful payment
+    if (paymentStatus === 'success') {
+      clearCart();
+    }
+
     if (orderId) {
       loadOrder();
     } else {
       setError('No order ID provided');
       setLoading(false);
     }
-  }, [orderId]);
+  }, [orderId, paymentStatus]);
 
   const loadOrder = async () => {
     try {

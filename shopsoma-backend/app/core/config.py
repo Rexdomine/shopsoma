@@ -2,7 +2,7 @@
 Core application configuration
 """
 from pydantic_settings import BaseSettings
-from typing import List
+from typing import List, Optional
 import os
 
 
@@ -44,6 +44,14 @@ class Settings(BaseSettings):
     # Email
     SENDGRID_API_KEY: str = ""
     FROM_EMAIL: str = "noreply@shopsoma.com"
+
+    # Brevo Email Service
+    BREVO_API_KEY: str = ""
+    BREVO_SENDER_EMAIL: str = "noreply@shopsoma.com"
+    BREVO_SENDER_NAME: str = "Shopsoma"
+    BRAND_LOGO_URL: str = "https://shopsoma.com/assets/email/logo-mark.png"
+    FRONTEND_BASE_URL: str = "https://shopsoma.com"
+    BREVO_NEWSLETTER_LIST_ID: Optional[int] = None
 
     # S3/Object Storage
     AWS_ACCESS_KEY_ID: str = ""

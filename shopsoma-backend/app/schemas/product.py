@@ -217,6 +217,7 @@ class ProductResponse(ProductBase):
     """Schema for product response"""
     id: UUID
     vendor_id: UUID
+    vendor_name: Optional[str] = None
     moderation_status: str
     moderation_notes: Optional[str] = None
     views_count: int

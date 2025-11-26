@@ -5,43 +5,117 @@ import { productService } from '../../services/productService';
 import Loading from '../common/Loading';
 import { ROUTES } from '../../config/constants';
 import ProductCard from '../products/ProductCard';
+import { useWishlistActions } from '../../hooks/useWishlistActions';
+import { useAuth } from '../../context/AuthContext';
+import { getPreferences, type PreferenceData } from '../../services/preferenceService';
+import { personalizeProducts } from '../../utils/preferenceHelpers';
+import { usePreferenceStore } from '../../store/preferenceStore';
 
 export default function ProductRecommendation() {
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [favoriteIds, setFavoriteIds] = useState<Set<string>>(new Set());
+  const [preferenceMeta, setPreferenceMeta] = useState<{ designersActive: boolean; designerNames: string[] }>({
+    designersActive: false,
+    designerNames: [],
+  });
+  const [preference, setPreference] = useState<PreferenceData | null>(null);
+  const [preferencesReady, setPreferencesReady] = useState(false);
+  const { favorites, toggleFavorite } = useWishlistActions();
+  const { isAuthenticated } = useAuth();
+  const setStoredInterest = usePreferenceStore((state) => state.setInterest);
+  const setStoredCurrency = usePreferenceStore((state) => state.setCurrency);
+  const setStoredDesigners = usePreferenceStore((state) => state.setDesigners);
+  const setStoredCategories = usePreferenceStore((state) => state.setCategories);
 
   useEffect(() => {
-    loadProducts();
-  }, []);
+    let cancelled = false;
 
-  const loadProducts = async () => {
-    try {
-      setLoading(true);
-      const data = await productService.getFeaturedProducts(8);
-      setProducts(data);
-      setError(null);
-    } catch (err) {
-      console.error('Failed to load products:', err);
-      setProducts([]);
-      setError("We couldn't load curated picks. Please try again shortly.");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const toggleFavorite = (id: string) => {
-    setFavoriteIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
+    const hydratePreferences = async () => {
+      setPreferencesReady(false);
+      if (!isAuthenticated) {
+        if (!cancelled) {
+          setPreference(null);
+          setPreferenceMeta({ designersActive: false, designerNames: [] });
+          setPreferencesReady(true);
+        }
+        return;
       }
-      return next;
-    });
-  };
+
+      try {
+        const pref = await getPreferences();
+        if (cancelled) return;
+        const resolvedInterest = pref.interest === 'menswear' ? 'menswear' : 'womenswear';
+        const resolvedCurrency = pref.preferredCurrency?.toUpperCase() === 'USD' ? 'USD' : 'NGN';
+        const resolvedDesigners = pref.favoriteDesigners ?? [];
+        const resolvedCategories = pref.favoriteCategories ?? [];
+
+        setStoredInterest(resolvedInterest);
+        setStoredCurrency(resolvedCurrency);
+        setStoredDesigners(resolvedDesigners);
+        setStoredCategories(resolvedCategories);
+
+        setPreference({
+          interest: resolvedInterest,
+          preferredLanguage: pref.preferredLanguage,
+          preferredCurrency: resolvedCurrency,
+          favoriteDesigners: resolvedDesigners,
+          favoriteCategories: resolvedCategories,
+        });
+
+        setPreferenceMeta({
+          designersActive: resolvedDesigners.length > 0,
+          designerNames: resolvedDesigners,
+        });
+      } catch (prefError) {
+        console.error('Failed to load preferences for recommendations:', prefError);
+        if (!cancelled) {
+          setPreference(null);
+          setPreferenceMeta({ designersActive: false, designerNames: [] });
+        }
+      } finally {
+        if (!cancelled) {
+          setPreferencesReady(true);
+        }
+      }
+    };
+
+    hydratePreferences();
+    return () => {
+      cancelled = true;
+    };
+  }, [isAuthenticated, setStoredInterest, setStoredCurrency, setStoredDesigners, setStoredCategories]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadProducts = async () => {
+      if (!preferencesReady) return;
+      try {
+        setLoading(true);
+        const data = await productService.getFeaturedProducts(8);
+        const personalized = preference ? personalizeProducts(data, preference) : data;
+        if (!cancelled) {
+          setProducts(personalized);
+          setError(null);
+        }
+      } catch (err) {
+        console.error('Failed to load products:', err);
+        if (!cancelled) {
+          setProducts([]);
+          setError("We couldn't load curated picks. Please try again shortly.");
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    };
+
+    loadProducts();
+    return () => {
+      cancelled = true;
+    };
+  }, [preference, preferencesReady]);
 
   if (loading) {
     return (
@@ -56,7 +130,6 @@ export default function ProductRecommendation() {
   return (
     <section className="py-12 bg-gray-50">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        {/* Section Header */}
         <div className="text-center mb-10">
           <h2 className="text-2xl lg:text-3xl font-display font-bold text-dark mb-2 tracking-wide">
             Product Recommendation
@@ -73,27 +146,33 @@ export default function ProductRecommendation() {
 
         {products.length === 0 ? (
           <div className="text-center py-16 text-gray-500">
-            No recommendations yet. Check back after vendors upload more looks.
+            {preferenceMeta.designersActive ? (
+              <>
+                <p className="text-base font-semibold text-dark">
+                  We&apos;re curating looks from your favourite designers.
+                </p>
+                <p className="mt-2 text-sm text-gray-500">
+                  {preferenceMeta.designerNames.join(', ')} have no collections live at the moment. Check back soon for
+                  fresh arrivals tailored to you.
+                </p>
+              </>
+            ) : (
+              'No recommendations yet. Check back after vendors upload more looks.'
+            )}
           </div>
         ) : (
           <>
-            {/* Product Grid */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 lg:gap-6">
-              {products.map((product) => {
-                const isFavorite = favoriteIds.has(product.id);
-
-                return (
-                  <ProductCard
-                    key={product.id}
-                    product={product}
-                    onToggleFavorite={toggleFavorite}
-                    isFavorite={isFavorite}
-                  />
-                );
-              })}
+              {products.map((product) => (
+                <ProductCard
+                  key={product.id}
+                  product={product}
+                  onToggleFavorite={toggleFavorite}
+                  isFavorite={favorites.has(product.id)}
+                />
+              ))}
             </div>
 
-            {/* View All Button */}
             <div className="text-center mt-8">
               <Link
                 to={ROUTES.PRODUCTS}

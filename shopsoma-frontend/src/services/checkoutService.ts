@@ -3,7 +3,7 @@
  * Handles all checkout-related API calls
  */
 import axios from 'axios';
-import { API_BASE_URL } from '../config/constants';
+import { API_BASE_URL, STORAGE_KEYS } from '../config/constants';
 
 const api = axios.create({
   baseURL: API_BASE_URL,
@@ -11,7 +11,7 @@ const api = axios.create({
 
 // Add auth token to requests
 api.interceptors.request.use((config) => {
-  const token = localStorage.getItem('access_token');
+  const token = localStorage.getItem(STORAGE_KEYS.ACCESS_TOKEN);
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
@@ -91,8 +91,10 @@ export interface OrderItem {
 
 export interface OrderReviewRequest {
   items: OrderItem[];
-  shipping_address_id: string;
+  shipping_address_id?: string;
+  guest_address?: CreateAddressData;
   promo_code?: string;
+  shipping_rate_id?: string;
 }
 
 export interface OrderSummary {
@@ -134,10 +136,13 @@ export interface OrderReview {
 
 export interface CreateOrderData {
   items: OrderItem[];
-  shipping_address_id: string;
+  shipping_address_id?: string;
   billing_address_id?: string;
+  guest_address?: CreateAddressData;
+  customer_email?: string;
   customer_notes?: string;
   promo_code?: string;
+  shipping_rate_id?: string;
 }
 
 export interface Order {

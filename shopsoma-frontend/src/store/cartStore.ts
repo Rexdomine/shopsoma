@@ -46,11 +46,16 @@ export const useCartStore = create<CartState>((set, get) => ({
     const updatedCart: Cart = {
       ...cart,
       items: updatedItems,
-      summary: calculateCartSummary(updatedItems, undefined, cart.summary.discount),
+      summary: calculateCartSummary(updatedItems, cart.summary.discount),
     };
 
     CartService.saveCart(updatedCart);
     set({ cart: updatedCart, error: null });
+
+    // Always sync to server for both authenticated users AND guests
+    CartService.addItemToServer(product.id, variant.id, quantity).catch((error) => {
+      console.error('[CartStore] addItem: failed to sync with server', error);
+    });
   },
 
   /**
@@ -63,11 +68,16 @@ export const useCartStore = create<CartState>((set, get) => ({
     const updatedCart: Cart = {
       ...cart,
       items: updatedItems,
-      summary: calculateCartSummary(updatedItems, undefined, cart.summary.discount),
+      summary: calculateCartSummary(updatedItems, cart.summary.discount),
     };
 
     CartService.saveCart(updatedCart);
     set({ cart: updatedCart, error: null });
+
+    // Always sync to server for both authenticated users AND guests
+    CartService.removeItemFromServer(itemId).catch((error) => {
+      console.error('[CartStore] removeItem: failed to sync removal', error);
+    });
   },
 
   /**
@@ -96,11 +106,16 @@ export const useCartStore = create<CartState>((set, get) => ({
     const updatedCart: Cart = {
       ...cart,
       items: updatedItems,
-      summary: calculateCartSummary(updatedItems, undefined, cart.summary.discount),
+      summary: calculateCartSummary(updatedItems, cart.summary.discount),
     };
 
     CartService.saveCart(updatedCart);
     set({ cart: updatedCart, error: null });
+
+    // Always sync to server for both authenticated users AND guests
+    CartService.updateItemOnServer(itemId, quantity).catch((error) => {
+      console.error('[CartStore] updateQuantity: failed to sync quantity', error);
+    });
   },
 
   /**
@@ -113,6 +128,9 @@ export const useCartStore = create<CartState>((set, get) => ({
     if (itemIndex === -1) return;
 
     const currentItem = cart.items[itemIndex];
+    const previousItemId = currentItem.id;
+    const previousProductId = currentItem.product_id;
+    const previousQuantity = currentItem.quantity;
     const newItemId = CartService.generateCartItemId(currentItem.product_id, newVariant.id);
 
     // Check if the new variant already exists in cart
@@ -147,11 +165,22 @@ export const useCartStore = create<CartState>((set, get) => ({
     const updatedCart: Cart = {
       ...cart,
       items: updatedItems,
-      summary: calculateCartSummary(updatedItems, undefined, cart.summary.discount),
+      summary: calculateCartSummary(updatedItems, cart.summary.discount),
     };
 
     CartService.saveCart(updatedCart);
     set({ cart: updatedCart, error: null });
+
+    // Always sync to server for both authenticated users AND guests
+    CartService.removeItemFromServer(previousItemId)
+      .catch((error) => {
+        console.error('[CartStore] updateVariant: failed to remove old variant', error);
+      })
+      .finally(() => {
+        CartService.addItemToServer(previousProductId, newVariant.id, previousQuantity).catch((error) => {
+          console.error('[CartStore] updateVariant: failed to add updated variant', error);
+        });
+      });
   },
 
   /**
@@ -161,6 +190,11 @@ export const useCartStore = create<CartState>((set, get) => ({
     const emptyCart = CartService.createEmptyCart();
     CartService.clearCart();
     set({ cart: emptyCart, error: null });
+
+    // Always sync to server for both authenticated users AND guests
+    CartService.clearServerCart().catch((error) => {
+      console.error('[CartStore] clearCart: failed to clear server cart', error);
+    });
   },
 
   /**
@@ -181,7 +215,7 @@ export const useCartStore = create<CartState>((set, get) => ({
 
       const updatedCart: Cart = {
         ...cart,
-        summary: calculateCartSummary(cart.items, undefined, couponResult.discountAmount),
+        summary: calculateCartSummary(cart.items, couponResult.discountAmount),
       };
 
       CartService.saveCart(updatedCart);
@@ -208,6 +242,7 @@ export const useCartStore = create<CartState>((set, get) => ({
       CartService.saveCart(syncedCart);
       set({ cart: syncedCart, isLoading: false, error: null });
     } catch (error) {
+      console.error('[CartStore] syncWithServer failed:', error);
       set({
         error: error instanceof Error ? error.message : 'Failed to sync cart',
         isLoading: false,
@@ -221,6 +256,17 @@ export const useCartStore = create<CartState>((set, get) => ({
   loadFromLocalStorage: () => {
     const cart = CartService.getCart();
     set({ cart, error: null });
+
+    if (CartService.isAuthenticated()) {
+      CartService.fetchServerCart()
+        .then((serverCart) => {
+          CartService.saveCart(serverCart);
+          set({ cart: serverCart });
+        })
+        .catch((error) => {
+          console.error('Failed to hydrate cart from server:', error);
+        });
+    }
   },
 
   /**
@@ -231,7 +277,7 @@ export const useCartStore = create<CartState>((set, get) => ({
 
     const updatedCart: Cart = {
       ...cart,
-      summary: calculateCartSummary(cart.items, undefined, cart.summary.discount),
+      summary: calculateCartSummary(cart.items, cart.summary.discount),
     };
 
     CartService.saveCart(updatedCart);

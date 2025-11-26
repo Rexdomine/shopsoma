@@ -12,6 +12,8 @@ from app.models.returns import Return
 from app.models.audit_log import AuditLog
 from app.models.shipping_rate import ShippingRate
 from app.models.promo_code import PromoCode
+from app.models.wishlist import Wishlist
+from app.models.manage_preference import ManagePreference
 
 __all__ = [
     "User",
@@ -32,4 +34,6 @@ __all__ = [
     "AuditLog",
     "ShippingRate",
     "PromoCode",
+    "Wishlist",
+    "ManagePreference",
 ]

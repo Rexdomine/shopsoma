@@ -38,12 +38,13 @@ def upgrade() -> None:
     sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
-    op.drop_index('ix_cart_items_id', table_name='cart_items')
-    op.drop_index('ix_cart_items_session_id', table_name='cart_items')
-    op.drop_table('cart_items')
-    op.drop_index('ix_coupons_code', table_name='coupons')
-    op.drop_index('ix_coupons_id', table_name='coupons')
-    op.drop_table('coupons')
+    # Commented out - cart_items table already exists and should not be dropped
+    # op.drop_index('ix_cart_items_id', table_name='cart_items')
+    # op.drop_index('ix_cart_items_session_id', table_name='cart_items')
+    # op.drop_table('cart_items')
+    # op.drop_index('ix_coupons_code', table_name='coupons')
+    # op.drop_index('ix_coupons_id', table_name='coupons')
+    # op.drop_table('coupons')
     # ### end Alembic commands ###
 
 

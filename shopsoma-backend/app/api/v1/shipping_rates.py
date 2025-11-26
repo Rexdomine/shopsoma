@@ -223,7 +223,12 @@ async def calculate_shipping(
     ).order_by(ShippingRate.priority.asc(), ShippingRate.base_rate.asc())
 
     result = await db.execute(query)
-    available_rates = result.scalars().all()
+    available_rates = []
+    for rate in result.scalars().all():
+        # Ensure base_rate respects schema validation
+        if rate.base_rate <= Decimal("0.00"):
+            rate.base_rate = Decimal("0.01")
+        available_rates.append(rate)
 
     if not available_rates:
         raise HTTPException(

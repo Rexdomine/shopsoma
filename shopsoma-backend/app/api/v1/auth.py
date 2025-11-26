@@ -2,6 +2,7 @@
 Authentication endpoints
 """
 from datetime import datetime, timedelta
+from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -15,6 +16,9 @@ from app.core.security import (
     create_refresh_token,
     create_magic_link_token,
     verify_magic_link_token,
+    create_email_verification_token,
+    verify_email_verification_token,
+    verify_account_claim_token,
 )
 from app.core.config import settings
 from app.models.user import User, UserRole
@@ -27,8 +31,14 @@ from app.schemas.auth import (
     MagicLinkRequest,
     MagicLinkVerify,
     GuestCheckoutCreate,
+    ClaimAccountRequest,
+    EmailStatusRequest,
+    EmailStatusResponse,
+    ClaimAccountEmailRequest,
 )
-from app.api.dependencies import get_current_user, get_current_active_user
+from app.api.dependencies import get_current_user, get_current_active_user, get_optional_user
+from app.services.email_service import email_service
+from app.services.account_claim import queue_account_claim_email
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -72,6 +82,8 @@ async def signup(
         hashed_password=hashed_password,
         full_name=user_data.full_name,
         phone_number=user_data.phone_number,
+        date_of_birth=user_data.date_of_birth,
+        gender=user_data.gender,
         role=UserRole(user_data.role),
         email_verified=False,  # TODO: Send verification email
         is_active=True,
@@ -92,8 +104,28 @@ async def signup(
         await db.commit()
         await db.refresh(vendor_profile)
 
-    # TODO: Send welcome email
-    # TODO: Send email verification link
+    # Send verification email
+    try:
+        verification_token = create_email_verification_token(new_user.email)
+        verification_link = f"{settings.FRONTEND_BASE_URL}/verify-email?token={verification_token}"
+        await email_service.send_verification_email(
+            email=new_user.email,
+            name=new_user.full_name,
+            verification_link=verification_link
+        )
+    except Exception as e:
+        # Log error but don't fail registration if email fails
+        print(f"Failed to send verification email to {new_user.email}: {e}")
+
+    # Send welcome email
+    try:
+        await email_service.send_welcome_email(
+            email=new_user.email,
+            name=new_user.full_name
+        )
+    except Exception as e:
+        # Log error but don't fail registration if email fails
+        print(f"Failed to send welcome email to {new_user.email}: {e}")
 
     return new_user
 
@@ -279,6 +311,7 @@ async def guest_checkout(
         role=UserRole.CUSTOMER,
         email_verified=False,
         is_active=True,
+        is_guest_created=True,
     )
 
     db.add(guest_user)
@@ -286,6 +319,36 @@ async def guest_checkout(
     await db.refresh(guest_user)
 
     return guest_user
+
+
+@router.post("/email-status", response_model=EmailStatusResponse)
+async def check_email_status(
+    payload: EmailStatusRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Check whether an email is tied to an existing account.
+
+    Used by checkout to decide whether to prompt for login.
+    """
+    result = await db.execute(select(User).where(User.email == payload.email))
+    user = result.scalar_one_or_none()
+
+    if not user:
+        return EmailStatusResponse(
+            email=payload.email,
+            exists=False,
+        )
+
+    has_password = bool(user.hashed_password)
+    return EmailStatusResponse(
+        email=user.email,
+        exists=True,
+        has_password=has_password,
+        is_guest_created=user.is_guest_created,
+        is_active=user.is_active,
+        can_claim=not has_password
+    )
 
 
 @router.post("/refresh", response_model=Token)
@@ -341,15 +404,155 @@ async def refresh_access_token(
 
 @router.post("/logout")
 async def logout(
-    current_user: User = Depends(get_current_active_user)
+    current_user: Optional[User] = Depends(get_optional_user)
 ):
     """
     Logout current user
 
-    Note: Since we're using JWT, actual logout happens client-side by discarding the token.
-    This endpoint can be used for logging purposes or token blacklisting in the future.
+    Works for authenticated users but also returns 200 for guests (no token). Since we
+    rely on JWTs, the client is responsible for discarding tokens — this endpoint is a
+    best-effort hook for future logging/blacklisting.
     """
-    # TODO: Implement token blacklist/revocation if needed
-    # For now, client-side will discard the token
+
+    if not current_user:
+        # No authenticated user/token, but the client is clearing session locally.
+        return {"message": "No active session. Client tokens cleared."}
 
     return {"message": "Successfully logged out"}
+
+
+@router.post("/claim-account/request")
+async def request_claim_account_email(
+    request_data: ClaimAccountEmailRequest,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Send (or resend) a password claim link to a guest-created account.
+    """
+    result = await db.execute(select(User).where(User.email == request_data.email))
+    user = result.scalar_one_or_none()
+
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
+
+    if user.hashed_password:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Account already claimed")
+
+    queue_account_claim_email(user, background_tasks)
+    return {"message": "Account claim email sent"}
+
+
+@router.post("/claim-account", response_model=Token)
+async def claim_account(
+    claim_data: ClaimAccountRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Allow a guest-created account to set a password and become a full account.
+    """
+    result = await db.execute(select(User).where(User.email == claim_data.email))
+    user = result.scalar_one_or_none()
+
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
+
+    token_email = verify_account_claim_token(claim_data.token)
+    if not token_email or token_email.lower() != claim_data.email.lower():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired claim token"
+        )
+
+    if user.hashed_password:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Account already claimed")
+
+    user.hashed_password = get_password_hash(claim_data.password)
+    user.is_guest_created = False
+    if claim_data.full_name and not user.full_name:
+        user.full_name = claim_data.full_name
+
+    await db.commit()
+    await db.refresh(user)
+
+    access_token = create_access_token(
+        data={"sub": str(user.id), "email": user.email, "role": user.role.value}
+    )
+    refresh_token = create_refresh_token(
+        data={"sub": str(user.id), "email": user.email, "role": user.role.value}
+    )
+
+    return {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "token_type": "bearer",
+        "expires_in": settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
+    }
+
+
+@router.post("/verify-email")
+async def verify_email(
+    token: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Verify user email address using verification token
+    """
+    # Verify token and extract email
+    email = verify_email_verification_token(token)
+
+    if not email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired verification token"
+        )
+
+    # Find user
+    result = await db.execute(select(User).where(User.email == email))
+    user = result.scalar_one_or_none()
+
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+
+    if user.email_verified:
+        return {"message": "Email already verified"}
+
+    # Mark email as verified
+    user.email_verified = True
+    await db.commit()
+
+    return {"message": "Email verified successfully"}
+
+
+@router.post("/resend-verification")
+async def resend_verification_email(
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    Resend email verification link to current user
+    """
+    if current_user.email_verified:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email is already verified"
+        )
+
+    # Send verification email
+    try:
+        verification_token = create_email_verification_token(current_user.email)
+        verification_link = f"{settings.FRONTEND_BASE_URL}/verify-email?token={verification_token}"
+        await email_service.send_verification_email(
+            email=current_user.email,
+            name=current_user.full_name,
+            verification_link=verification_link
+        )
+        return {"message": "Verification email sent successfully"}
+    except Exception as e:
+        print(f"Failed to send verification email to {current_user.email}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to send verification email. Please try again later."
+        )

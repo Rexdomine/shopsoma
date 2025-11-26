@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_
 from uuid import UUID
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 
 from app.core.database import get_db
@@ -63,7 +63,7 @@ async def validate_promo_code(
         )
 
     # Check validity period
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     if now < promo.valid_from:
         return PromoCodeValidateResponse(
             valid=False,

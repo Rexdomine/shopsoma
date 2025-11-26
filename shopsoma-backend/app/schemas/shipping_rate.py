@@ -1,5 +1,5 @@
 """Shipping rate schemas"""
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_serializer
 from typing import Optional
 from uuid import UUID
 from datetime import datetime
@@ -10,7 +10,7 @@ class ShippingRateBase(BaseModel):
     """Base shipping rate schema"""
     name: str = Field(..., min_length=1, max_length=100, description="Rate name")
     description: Optional[str] = Field(None, max_length=500, description="Rate description")
-    base_rate: Decimal = Field(..., gt=0, description="Base shipping cost")
+    base_rate: Decimal = Field(..., ge=0, description="Base shipping cost")
     country: str = Field(default="Nigeria", max_length=100)
     state: Optional[str] = Field(None, max_length=100, description="Specific state (null = all states)")
     min_order_value: Optional[Decimal] = Field(default=Decimal("0.00"), ge=0, description="Minimum order value")
@@ -20,6 +20,11 @@ class ShippingRateBase(BaseModel):
     is_active: bool = Field(default=True, description="Active status")
     is_default: bool = Field(default=False, description="Default rate")
     priority: int = Field(default=0, description="Priority (lower = higher priority)")
+
+    @field_serializer('base_rate', 'min_order_value', 'max_order_value')
+    def serialize_decimal(self, value: Optional[Decimal]) -> Optional[float]:
+        """Serialize Decimal fields as float for JSON"""
+        return float(value) if value is not None else None
 
 
 class ShippingRateCreate(ShippingRateBase):
@@ -31,7 +36,7 @@ class ShippingRateUpdate(BaseModel):
     """Schema for updating a shipping rate"""
     name: Optional[str] = Field(None, min_length=1, max_length=100)
     description: Optional[str] = Field(None, max_length=500)
-    base_rate: Optional[Decimal] = Field(None, gt=0)
+    base_rate: Optional[Decimal] = Field(None, ge=0)
     country: Optional[str] = Field(None, max_length=100)
     state: Optional[str] = Field(None, max_length=100)
     min_order_value: Optional[Decimal] = Field(None, ge=0)

@@ -7,7 +7,10 @@ import type { Product, ProductVariant } from '../../types';
 import { IMAGE_CONFIG, ROUTES } from '../../config/constants';
 import ProductCard from '../../components/products/ProductCard';
 import { useCartStore } from '../../store/cartStore';
+import { useWishlistActions } from '../../hooks/useWishlistActions';
 import EditVariantModal from '../../components/modals/EditVariantModal';
+import { usePreferenceStore } from '../../store/preferenceStore';
+import { formatPriceWithCurrency, type Currency } from '../../utils/pricing';
 
 export default function Cart() {
   const navigate = useNavigate();
@@ -15,6 +18,10 @@ export default function Cart() {
   const updateQuantity = useCartStore((state) => state.updateQuantity);
   const updateVariant = useCartStore((state) => state.updateVariant);
   const removeItem = useCartStore((state) => state.removeItem);
+  const preferredCurrency = usePreferenceStore((state) => state.currency);
+  const { favorites, toggleFavorite } = useWishlistActions();
+  const [toastMessage, setToastMessage] = useState('');
+  const [toastVisible, setToastVisible] = useState(false);
 
   const [recommended, setRecommended] = useState<Product[]>([]);
   const [editingItem, setEditingItem] = useState<{
@@ -74,12 +81,40 @@ export default function Cart() {
     navigate(ROUTES.PRODUCTS);
   };
 
+  const showToast = (message: string) => {
+    setToastMessage(message);
+    setToastVisible(true);
+    setTimeout(() => setToastVisible(false), 3500);
+  };
+
   const handleCheckout = () => {
+    if (cart.summary.subtotal < 60000) {
+      showToast('Minimum order is ₦60,000 (~$40). Please add more items before checkout.');
+      return;
+    }
     navigate(ROUTES.CHECKOUT);
   };
 
   return (
     <Layout>
+      {toastVisible && (
+        <div className="fixed inset-x-0 top-0 z-40">
+          <div className="mx-auto max-w-[1200px] bg-primary text-white px-8 py-4 border-b border-primary-dark flex items-center justify-between">
+            <div>
+              <p className="text-[10px] uppercase tracking-[0.4em] text-white/70">Shopping Bag</p>
+              <p className="text-sm font-semibold tracking-wide">{toastMessage}</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setToastVisible(false)}
+              className="text-[10px] uppercase tracking-[0.4em] text-white/70 hover:text-white"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      )}
+
       <section className="bg-white py-12 lg:py-16">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <h1 className="text-2xl font-display font-semibold text-center text-dark tracking-wide mb-12">
@@ -110,6 +145,7 @@ export default function Cart() {
                 const brand = item.product.vendor_name ?? 'Shopsoma Collective';
                 const category = item.product.category ?? '';
 
+                const showMoveToWishlist = !favorites.has(item.product_id);
                 return (
                   <article key={item.id} className="border-b border-gray-200 pb-6">
                     <div className="flex flex-col sm:flex-row gap-6">
@@ -157,11 +193,21 @@ export default function Cart() {
                           <p>Color: {item.variant.color}</p>
                         </div>
                         <div className="flex items-center justify-between pt-2 text-sm">
-                          <button type="button" className="text-primary underline">
-                            Move to Wishlist
-                          </button>
+                          {showMoveToWishlist ? (
+                            <button
+                              type="button"
+                              className="text-primary underline"
+                              onClick={() => toggleFavorite(item.product_id)}
+                            >
+                              Move to Wishlist
+                            </button>
+                          ) : (
+                            <span className="text-xs uppercase tracking-[0.2em] text-gray-400">
+                              Already in Wishlist
+                            </span>
+                          )}
                           <span className="text-base font-semibold text-dark">
-                            ₦{item.subtotal.toLocaleString()}
+                            {formatPriceWithCurrency(item.subtotal, preferredCurrency)}
                           </span>
                         </div>
                         <div className="flex items-center justify-end gap-3 pt-2">
@@ -194,7 +240,7 @@ export default function Cart() {
                   Order Summary
                 </h3>
                 <div className="text-sm space-y-2">
-                  <SummaryRow label="Subtotal" value={cart.summary.subtotal} />
+                  <SummaryRow label="Subtotal" value={cart.summary.subtotal} currency={preferredCurrency} />
                   <div className="flex items-center justify-between text-xs text-gray-400 italic">
                     <span>Shipping</span>
                     <span>Calculated at checkout</span>
@@ -205,7 +251,7 @@ export default function Cart() {
                   </div>
                 </div>
                 <div className="border-t border-gray-200 pt-4">
-                  <SummaryRow label="Estimated Total" value={cart.summary.subtotal} bold />
+                  <SummaryRow label="Estimated Total" value={cart.summary.subtotal} bold currency={preferredCurrency} />
                 </div>
                 <div className="space-y-3 pt-2">
                   <button
@@ -260,12 +306,22 @@ export default function Cart() {
   );
 }
 
-function SummaryRow({ label, value, bold }: { label: string; value: number; bold?: boolean }) {
+function SummaryRow({
+  label,
+  value,
+  bold,
+  currency,
+}: {
+  label: string;
+  value: number;
+  bold?: boolean;
+  currency: Currency;
+}) {
   return (
     <div className="flex items-center justify-between">
       <span className="text-sm text-gray-500">{label}</span>
       <span className={`text-sm ${bold ? 'font-semibold text-dark' : 'text-gray-700'}`}>
-        ₦{value.toLocaleString()}
+        {formatPriceWithCurrency(value, currency)}
       </span>
     </div>
   );

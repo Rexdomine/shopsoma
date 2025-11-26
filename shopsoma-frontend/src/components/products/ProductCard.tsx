@@ -3,6 +3,8 @@ import { Link } from 'react-router-dom';
 import type { Product } from '../../types';
 import { Heart } from 'lucide-react';
 import { IMAGE_CONFIG } from '../../config/constants';
+import { usePreferenceStore } from '../../store/preferenceStore';
+import { formatPriceWithCurrency } from '../../utils/pricing';
 
 interface ProductCardProps {
   product: Product;
@@ -51,6 +53,7 @@ export default function ProductCard({
 
   const displayPrice = product.variants?.[0]?.price || product.base_price;
   const comparePrice = product.variants?.[0]?.compare_at_price;
+  const preferredCurrency = usePreferenceStore((state) => state.currency);
   const hasDiscount = comparePrice && comparePrice > displayPrice;
 
   const handleToggleFavorite = (e: React.MouseEvent) => {
@@ -154,7 +157,7 @@ export default function ProductCard({
         >
           <Heart
             className={`w-6 h-6 ${
-              isFavorite ? 'fill-dark stroke-dark' : 'stroke-dark fill-none'
+              isFavorite ? 'fill-primary stroke-primary' : 'stroke-dark fill-none'
             }`}
           />
         </button>
@@ -175,11 +178,11 @@ export default function ProductCard({
         {/* Price */}
         <div className="flex items-center gap-2 pt-1">
           <span className="text-base font-semibold text-dark">
-            ₦{displayPrice.toLocaleString('en-NG', { minimumFractionDigits: 2 })}
+            {formatPriceWithCurrency(displayPrice, preferredCurrency)}
           </span>
           {hasDiscount && comparePrice && (
             <span className="text-sm text-gray-400 line-through">
-              ₦{comparePrice.toLocaleString('en-NG', { minimumFractionDigits: 2 })}
+              {formatPriceWithCurrency(comparePrice, preferredCurrency)}
             </span>
           )}
         </div>

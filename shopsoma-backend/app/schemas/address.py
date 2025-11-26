@@ -22,12 +22,11 @@ class AddressBase(BaseModel):
     @classmethod
     def validate_phone(cls, v: str) -> str:
         """Validate phone number format"""
-        # Remove common separators
-        cleaned = v.replace('-', '').replace(' ', '').replace('(', '').replace(')', '')
-        if not cleaned.isdigit():
-            raise ValueError('Phone number must contain only digits and separators')
+        # Remove all non-digit characters
+        import re
+        cleaned = re.sub(r'\D', '', v)
         if len(cleaned) < 10:
-            raise ValueError('Phone number must be at least 10 digits')
+            raise ValueError('Phone number must contain at least 10 digits')
         return v
 
 
@@ -55,11 +54,11 @@ class AddressUpdate(BaseModel):
         """Validate phone number format"""
         if v is None:
             return v
-        cleaned = v.replace('-', '').replace(' ', '').replace('(', '').replace(')', '')
-        if not cleaned.isdigit():
-            raise ValueError('Phone number must contain only digits and separators')
+        # Remove all non-digit characters
+        import re
+        cleaned = re.sub(r'\D', '', v)
         if len(cleaned) < 10:
-            raise ValueError('Phone number must be at least 10 digits')
+            raise ValueError('Phone number must contain at least 10 digits')
         return v
 
 

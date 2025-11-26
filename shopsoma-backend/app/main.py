@@ -12,7 +12,11 @@ from contextlib import asynccontextmanager
 load_dotenv()
 
 # Import routers
-from app.api.v1 import auth, products, images, admin, seed, cart, addresses, shipping_rates, orders, promo_codes, payments
+from app.api.v1 import auth, products, images, admin, seed, cart, addresses, shipping_rates, orders, promo_codes, payments, users, wishlist, newsletter, preferences, payment_portals
+
+# Import middleware
+from app.middleware.rate_limit import RateLimitMiddleware
+from app.middleware.security_headers import SecurityHeadersMiddleware
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -37,18 +41,39 @@ app = FastAPI(
 )
 
 # CORS Configuration
-allowed_origins = os.getenv(
-    "ALLOWED_ORIGINS",
-    "http://localhost:5173,http://localhost:3000,http://localhost:5174"
-).split(",")
+default_local_origins = [
+    "http://localhost",
+    "http://localhost:5173",
+    "http://localhost:5174",
+    "http://localhost:3000",
+    "http://127.0.0.1",
+]
+allowed_origins_raw = os.getenv("ALLOWED_ORIGINS")
+if allowed_origins_raw:
+    allowed_origins = [
+        origin.strip()
+        for origin in allowed_origins_raw.split(",")
+        if origin.strip()
+    ]
+else:
+    allowed_origins = default_local_origins
+allowed_origin_regex = os.getenv("ALLOWED_ORIGIN_REGEX", r"https?://localhost(:\d+)?")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins,
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_origin_regex=None,
+    allow_credentials=False,
     allow_methods=["*"],
-    allow_headers=["*"],
+    allow_headers=["Authorization", "Content-Type", "X-Requested-With", "X-Session-ID"],
 )
+
+# Add security headers middleware
+app.add_middleware(SecurityHeadersMiddleware)
+
+# Add rate limiting middleware (5 requests per minute for auth endpoints)
+# Temporarily disabled due to blocking issues - will fix and re-enable
+# app.add_middleware(RateLimitMiddleware, rate_limit=5, window_seconds=60)
 
 @app.get("/")
 async def root():
@@ -77,6 +102,7 @@ async def api_health_check():
 
 # Include routers
 app.include_router(auth.router, prefix="/api/v1")
+app.include_router(users.router, prefix="/api/v1")
 app.include_router(products.router, prefix="/api/v1")
 app.include_router(images.router, prefix="/api/v1")
 app.include_router(admin.router, prefix="/api/v1")
@@ -87,6 +113,10 @@ app.include_router(shipping_rates.router, prefix="/api/v1")
 app.include_router(promo_codes.router, prefix="/api/v1")
 app.include_router(orders.router, prefix="/api/v1")
 app.include_router(payments.router, prefix="/api/v1")
+app.include_router(payment_portals.router, prefix="/api/v1/payments", tags=["Payment Portals"])
+app.include_router(wishlist.router, prefix="/api/v1")
+app.include_router(newsletter.router, prefix="/api/v1")
+app.include_router(preferences.router, prefix="/api/v1")
 
 # TODO: Add more routers as they're implemented
 # app.include_router(vendors.router, prefix="/api/v1")

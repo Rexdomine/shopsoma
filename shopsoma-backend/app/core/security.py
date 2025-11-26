@@ -129,3 +129,72 @@ def verify_magic_link_token(token: str) -> Optional[str]:
         return email
     except JWTError:
         return None
+
+
+def create_email_verification_token(email: str) -> str:
+    """
+    Create an email verification token
+
+    Args:
+        email: User email address
+
+    Returns:
+        Encoded JWT token for email verification
+    """
+    data = {
+        "email": email,
+        "type": "email_verification",
+        "exp": datetime.utcnow() + timedelta(hours=24)  # Verification links expire in 24 hours
+    }
+    return jwt.encode(data, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+
+
+def verify_email_verification_token(token: str) -> Optional[str]:
+    """
+    Verify email verification token and extract email
+
+    Args:
+        token: Email verification JWT token
+
+    Returns:
+        Email address if valid, None otherwise
+    """
+    try:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+
+        if payload.get("type") != "email_verification":
+            return None
+
+        email: str = payload.get("email")
+        return email
+    except JWTError:
+        return None
+
+
+def create_account_claim_token(email: str, expires_days: int = 7) -> str:
+    """
+    Create a token that allows guest users to claim their account.
+
+    Args:
+        email: Email address tied to the claim.
+        expires_days: Validity window in days.
+    """
+    data = {
+        "email": email,
+        "type": "account_claim",
+        "exp": datetime.utcnow() + timedelta(days=expires_days)
+    }
+    return jwt.encode(data, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+
+
+def verify_account_claim_token(token: str) -> Optional[str]:
+    """
+    Verify an account claim token and return the encoded email address.
+    """
+    try:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        if payload.get("type") != "account_claim":
+            return None
+        return payload.get("email")
+    except JWTError:
+        return None

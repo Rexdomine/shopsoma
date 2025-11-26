@@ -30,6 +30,11 @@ from app.schemas.product import (
 
 router = APIRouter(prefix="/products", tags=["products"])
 
+PRODUCT_RELATIONSHIPS = (
+    selectinload(Product.variants),
+    selectinload(Product.images),
+    selectinload(Product.vendor),
+)
 
 # ============================================================================
 # Product CRUD Endpoints
@@ -124,7 +129,7 @@ async def create_product(
     # Fetch with relationships
     result = await db.execute(
         select(Product)
-        .options(selectinload(Product.variants), selectinload(Product.images))
+        .options(*PRODUCT_RELATIONSHIPS)
         .where(Product.id == product.id)
     )
     product = result.scalar_one()
@@ -157,10 +162,7 @@ async def list_products(
     - Admins can see all products
     """
     # Build query
-    query = select(Product).options(
-        selectinload(Product.variants),
-        selectinload(Product.images)
-    )
+    query = select(Product).options(*PRODUCT_RELATIONSHIPS)
 
     # Apply filters
     filters = []
@@ -262,10 +264,7 @@ async def get_product(
     - Vendors can view their own products
     - Admins can view all products
     """
-    query = select(Product).options(
-        selectinload(Product.variants),
-        selectinload(Product.images)
-    ).where(Product.id == product_id)
+    query = select(Product).options(*PRODUCT_RELATIONSHIPS).where(Product.id == product_id)
 
     result = await db.execute(query)
     product = result.scalar_one_or_none()
@@ -303,7 +302,7 @@ async def get_product(
     # Reload with relationships to avoid lazy loading issues
     result = await db.execute(
         select(Product)
-        .options(selectinload(Product.variants), selectinload(Product.images))
+        .options(*PRODUCT_RELATIONSHIPS)
         .where(Product.id == product_id)
     )
     product = result.scalar_one()
@@ -339,7 +338,7 @@ async def update_product(
     # Get product
     result = await db.execute(
         select(Product)
-        .options(selectinload(Product.variants), selectinload(Product.images))
+        .options(*PRODUCT_RELATIONSHIPS)
         .where(Product.id == product_id)
     )
     product = result.scalar_one_or_none()
@@ -376,7 +375,7 @@ async def update_product(
     # Reload with relationships to avoid lazy loading issues
     result = await db.execute(
         select(Product)
-        .options(selectinload(Product.variants), selectinload(Product.images))
+        .options(*PRODUCT_RELATIONSHIPS)
         .where(Product.id == product_id)
     )
     product = result.scalar_one()
@@ -670,7 +669,7 @@ async def moderate_product(
     """
     result = await db.execute(
         select(Product)
-        .options(selectinload(Product.variants), selectinload(Product.images))
+        .options(*PRODUCT_RELATIONSHIPS)
         .where(Product.id == product_id)
     )
     product = result.scalar_one_or_none()
@@ -692,7 +691,7 @@ async def moderate_product(
     # Reload with relationships to avoid lazy loading issues
     result = await db.execute(
         select(Product)
-        .options(selectinload(Product.variants), selectinload(Product.images))
+        .options(*PRODUCT_RELATIONSHIPS)
         .where(Product.id == product_id)
     )
     product = result.scalar_one()

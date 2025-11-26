@@ -3,11 +3,44 @@ import { Link, useNavigate } from 'react-router-dom';
 import { Search, ShoppingCart, User, X } from 'lucide-react';
 import { ROUTES } from '../../config/constants';
 import { useCartStore } from '../../store/cartStore';
+import { useAuth } from '../../context/AuthContext';
 
 export default function Header() {
   const [searchOpen, setSearchOpen] = useState(false);
+  const navigate = useNavigate();
   const cart = useCartStore((state) => state.cart);
   const itemCount = cart.summary.itemCount;
+  const { isAuthenticated, user } = useAuth();
+
+  const handleProfileClick = () => {
+    // Check localStorage directly - it's the source of truth
+    // Don't rely on context state as it may not have re-rendered yet
+    const token = localStorage.getItem('shopsoma_access_token');
+    const userStr = localStorage.getItem('shopsoma_user');
+
+    console.log('Profile Click Debug:', {
+      isAuthenticated,
+      hasToken: !!token,
+      hasUser: !!user,
+      hasUserInStorage: !!userStr
+    });
+
+    // Only check localStorage, not context state
+    if (token && userStr) {
+      navigate(ROUTES.PROFILE);
+    } else {
+      navigate(ROUTES.LOGIN);
+    }
+  };
+
+  // Get user initials from full name
+  const getUserInitials = (fullName: string): string => {
+    const names = fullName.trim().split(' ');
+    if (names.length === 1) {
+      return names[0].charAt(0).toUpperCase();
+    }
+    return (names[0].charAt(0) + names[names.length - 1].charAt(0)).toUpperCase();
+  };
 
   return (
     <>
@@ -75,8 +108,14 @@ export default function Header() {
                 </span>
               )}
             </Link>
-            <button className="p-2 text-gray-600 hover:text-gray-900">
-              <User className="w-5 h-5" />
+            <button onClick={handleProfileClick} className="p-2 text-gray-600 hover:text-gray-900">
+              {isAuthenticated && user ? (
+                <div className="w-8 h-8 rounded-full bg-primary text-white flex items-center justify-center text-xs font-semibold">
+                  {getUserInitials(user.full_name)}
+                </div>
+              ) : (
+                <User className="w-5 h-5" />
+              )}
             </button>
           </div>
         </div>

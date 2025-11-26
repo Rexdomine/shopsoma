@@ -9,8 +9,12 @@ export interface User {
   full_name: string;
   role: 'customer' | 'vendor' | 'admin';
   phone_number?: string;
+  date_of_birth?: string;
+  gender?: string;
   email_verified: boolean;
   is_active: boolean;
+  profile_image_url?: string;
+  is_guest_created?: boolean;
   last_login_at?: string;
   created_at: string;
 }
@@ -40,7 +44,7 @@ export interface RegisterData {
 export interface Product {
   id: string;
   vendor_id: string;
-  vendor_name?: string;
+  vendor_name?: string | null;
   title: string;
   description?: string;
   size_guide?: SizeGuide | null;

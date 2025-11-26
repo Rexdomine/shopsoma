@@ -1,3 +1,4 @@
+import { AuthProvider } from './context/AuthContext';
 import AppRouter from './router';
 import ErrorBoundary from './components/error/ErrorBoundary';
 import './App.css';
@@ -5,7 +6,9 @@ import './App.css';
 function App() {
   return (
     <ErrorBoundary>
-      <AppRouter />
+      <AuthProvider>
+        <AppRouter />
+      </AuthProvider>
     </ErrorBoundary>
   );
 }

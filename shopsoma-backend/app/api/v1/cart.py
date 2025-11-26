@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Header
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
+from sqlalchemy.orm import selectinload
 from typing import Optional
 from datetime import datetime
 import uuid
@@ -17,6 +18,7 @@ from app.schemas.cart import (
     ApplyCouponRequest,
     ApplyCouponResponse,
 )
+from app.schemas.product import ProductResponse, ProductVariantResponse
 from app.api.dependencies import get_optional_user
 from app.models.user import User
 
@@ -26,6 +28,51 @@ router = APIRouter(prefix="/cart", tags=["cart"])
 TAX_RATE = 0.075  # 7.5% VAT
 SHIPPING_FEE = 2000  # ₦2,000
 FREE_SHIPPING_THRESHOLD = 50000  # ₦50,000
+
+CART_ITEM_LOAD_OPTIONS = [
+    selectinload(CartItem.product).selectinload(Product.images),
+    selectinload(CartItem.product).selectinload(Product.variants),
+    selectinload(CartItem.product).selectinload(Product.vendor),
+    selectinload(CartItem.product).selectinload(Product.category),
+]
+
+
+def cast_uuid(value: Optional[str]) -> Optional[uuid.UUID]:
+    if not value:
+        return None
+    try:
+        return uuid.UUID(str(value))
+    except (ValueError, TypeError):
+        return None
+
+
+def serialize_cart_item(cart_item: CartItem) -> CartItemResponse:
+    product = cart_item.product
+    variant_obj = None
+
+    if product and product.variants:
+        for variant in product.variants:
+            if str(variant.id) == str(cart_item.variant_id):
+                variant_obj = variant
+                break
+
+    product_response = ProductResponse.model_validate(product) if product else None
+    variant_response = ProductVariantResponse.model_validate(variant_obj) if variant_obj else None
+
+    return CartItemResponse(
+        id=str(cart_item.id),
+        product_id=str(cart_item.product_id),
+        variant_id=str(cart_item.variant_id),
+        quantity=cart_item.quantity,
+        user_id=str(cart_item.user_id) if cart_item.user_id else None,
+        session_id=cart_item.session_id,
+        price=cart_item.price,
+        subtotal=cart_item.price * cart_item.quantity,
+        created_at=cart_item.created_at,
+        updated_at=cart_item.updated_at,
+        product=product_response,
+        variant=variant_response
+    )
 
 
 def calculate_cart_summary(items: list[CartItem], discount: float = 0) -> CartSummary:
@@ -62,11 +109,26 @@ async def get_user_or_session_id(
     """Get user_id or session_id for cart identification"""
     user_id = str(current_user.id) if current_user else None
 
+    print(f"[Cart API] get_user_or_session_id: user_id={user_id}, received session_id={session_id}")
+
     if not user_id and not session_id:
         # Generate new session ID for guest users
         session_id = str(uuid.uuid4())
+        print(f"[Cart API] get_user_or_session_id: WARNING - No session_id provided, generated new one: {session_id}")
 
     return user_id, session_id
+
+
+async def fetch_cart_item_with_relations(
+    db: AsyncSession,
+    item_id: str,
+) -> Optional[CartItem]:
+    item_uuid = cast_uuid(item_id)
+    if not item_uuid:
+        return None
+    query = select(CartItem).options(*CART_ITEM_LOAD_OPTIONS).where(CartItem.id == item_uuid)
+    result = await db.execute(query)
+    return result.scalar_one_or_none()
 
 
 @router.get("", response_model=CartResponse)
@@ -77,21 +139,23 @@ async def get_cart(
 ):
     """Get user's cart"""
     user_id, sess_id = await get_user_or_session_id(current_user, session_id)
+    user_uuid = cast_uuid(user_id)
 
     # Query cart items
-    query = select(CartItem)
-    if user_id:
-        query = query.where(CartItem.user_id == user_id)
+    query = select(CartItem).options(*CART_ITEM_LOAD_OPTIONS)
+    if user_uuid:
+        query = query.where(CartItem.user_id == user_uuid)
     else:
         query = query.where(CartItem.session_id == sess_id)
 
     result = await db.execute(query)
     items = result.scalars().all()
+    print(f"[Cart API] get_cart user={user_uuid} session={sess_id} items={len(items)}")
 
     summary = calculate_cart_summary(items)
 
     return CartResponse(
-        items=[CartItemResponse(**item.to_dict()) for item in items],
+        items=[serialize_cart_item(item) for item in items],
         summary=summary,
         last_updated=datetime.utcnow()
     )
@@ -105,64 +169,89 @@ async def add_to_cart(
     db: AsyncSession = Depends(get_db)
 ):
     """Add item to cart"""
-    user_id, sess_id = await get_user_or_session_id(current_user, session_id)
+    try:
+        user_id, sess_id = await get_user_or_session_id(current_user, session_id)
+        user_uuid = cast_uuid(user_id)
+        print(f"[Cart API] add_to_cart: Using user_id={user_uuid}, session_id={sess_id}")
 
-    # Verify product exists
-    product_result = await db.execute(
-        select(Product).where(Product.id == item_data.product_id)
-    )
-    product = product_result.scalar_one_or_none()
+        # Verify product exists
+        product_result = await db.execute(
+            select(Product)
+            .options(selectinload(Product.variants))
+            .where(Product.id == item_data.product_id)
+        )
+        product = product_result.scalar_one_or_none()
 
-    if not product:
-        raise HTTPException(status_code=404, detail="Product not found")
+        if not product:
+            raise HTTPException(status_code=404, detail="Product not found")
 
-    # Get variant price
-    variant = next(
-        (v for v in product.variants if v.get("id") == item_data.variant_id),
-        None
-    )
+        # Get variant price
+        variant = next(
+            (v for v in product.variants if str(v.id) == str(item_data.variant_id)),
+            None
+        )
 
-    if not variant:
-        raise HTTPException(status_code=404, detail="Product variant not found")
+        if not variant:
+            raise HTTPException(status_code=404, detail="Product variant not found")
 
-    price = variant.get("price", product.base_price)
+        price = float(getattr(variant, "price", product.base_price))
 
-    # Check if item already exists
-    cart_item_id = f"{item_data.product_id}_{item_data.variant_id}"
-    existing_query = select(CartItem).where(CartItem.id == cart_item_id)
+        # Check if item already exists (by product_id + variant_id + user/session)
+        existing_query = select(CartItem).where(
+            CartItem.product_id == item_data.product_id,
+            CartItem.variant_id == item_data.variant_id
+        )
 
-    if user_id:
-        existing_query = existing_query.where(CartItem.user_id == user_id)
-    else:
-        existing_query = existing_query.where(CartItem.session_id == sess_id)
+        if user_uuid:
+            existing_query = existing_query.where(CartItem.user_id == user_uuid)
+        else:
+            existing_query = existing_query.where(CartItem.session_id == sess_id)
 
-    result = await db.execute(existing_query)
-    existing_item = result.scalar_one_or_none()
+        result = await db.execute(existing_query)
+        existing_item = result.scalar_one_or_none()
 
-    if existing_item:
-        # Update quantity
-        existing_item.quantity += item_data.quantity
-        existing_item.updated_at = datetime.utcnow()
+        if existing_item:
+            # Update quantity
+            existing_item.quantity += item_data.quantity
+            existing_item.updated_at = datetime.utcnow()
+            await db.commit()
+            refreshed_item = await fetch_cart_item_with_relations(db, str(existing_item.id))
+            print(f"[Cart API] add_to_cart existing id={existing_item.id} qty={existing_item.quantity} user={user_uuid}")
+            return serialize_cart_item(refreshed_item or existing_item)
+
+        # Create new cart item with auto-generated UUID
+        cart_item = CartItem(
+            user_id=user_uuid,
+            session_id=sess_id if not user_uuid else None,
+            product_id=item_data.product_id,
+            variant_id=item_data.variant_id,
+            quantity=item_data.quantity,
+            price=price
+        )
+
+        db.add(cart_item)
         await db.commit()
-        await db.refresh(existing_item)
-        return CartItemResponse(**existing_item.to_dict())
+        await db.refresh(cart_item)
 
-    # Create new cart item
-    cart_item = CartItem(
-        id=cart_item_id,
-        user_id=user_id,
-        session_id=sess_id if not user_id else None,
-        product_id=item_data.product_id,
-        variant_id=item_data.variant_id,
-        quantity=item_data.quantity,
-        price=price
-    )
+        cart_with_relations = await fetch_cart_item_with_relations(db, str(cart_item.id))
+        print(f"[Cart API] add_to_cart created id={cart_item.id} qty={cart_item.quantity} user={user_uuid} session={cart_item.session_id}")
 
-    db.add(cart_item)
-    await db.commit()
-    await db.refresh(cart_item)
+        return serialize_cart_item(cart_with_relations or cart_item)
 
-    return CartItemResponse(**cart_item.to_dict())
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[Cart API] add_to_cart error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "success": False,
+                "code": "CART_DB_ERROR",
+                "message": "We could not update your cart. Please refresh and try again."
+            }
+        )
 
 
 @router.patch("/items/{item_id}", response_model=CartItemResponse)
@@ -174,28 +263,49 @@ async def update_cart_item(
     db: AsyncSession = Depends(get_db)
 ):
     """Update cart item quantity"""
-    user_id, sess_id = await get_user_or_session_id(current_user, session_id)
+    try:
+        user_id, sess_id = await get_user_or_session_id(current_user, session_id)
+        user_uuid = cast_uuid(user_id)
+        item_uuid = cast_uuid(item_id)
 
-    # Find cart item
-    query = select(CartItem).where(CartItem.id == item_id)
-    if user_id:
-        query = query.where(CartItem.user_id == user_id)
-    else:
-        query = query.where(CartItem.session_id == sess_id)
+        if not item_uuid:
+            raise HTTPException(status_code=400, detail="Invalid cart item ID")
 
-    result = await db.execute(query)
-    cart_item = result.scalar_one_or_none()
+        # Find cart item
+        query = select(CartItem).where(CartItem.id == item_uuid)
+        if user_uuid:
+            query = query.where(CartItem.user_id == user_uuid)
+        else:
+            query = query.where(CartItem.session_id == sess_id)
 
-    if not cart_item:
-        raise HTTPException(status_code=404, detail="Cart item not found")
+        result = await db.execute(query)
+        cart_item = result.scalar_one_or_none()
 
-    cart_item.quantity = update_data.quantity
-    cart_item.updated_at = datetime.utcnow()
+        if not cart_item:
+            raise HTTPException(status_code=404, detail="Cart item not found")
 
-    await db.commit()
-    await db.refresh(cart_item)
+        cart_item.quantity = update_data.quantity
+        cart_item.updated_at = datetime.utcnow()
 
-    return CartItemResponse(**cart_item.to_dict())
+        await db.commit()
+
+        updated_item = await fetch_cart_item_with_relations(db, str(cart_item.id))
+        print(f"[Cart API] update_cart_item id={cart_item.id} qty={cart_item.quantity} user={user_uuid}")
+
+        return serialize_cart_item(updated_item or cart_item)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[Cart API] update_cart_item error: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "success": False,
+                "code": "CART_UPDATE_ERROR",
+                "message": "We could not update your cart. Please refresh and try again."
+            }
+        )
 
 
 @router.delete("/items/{item_id}")
@@ -206,22 +316,41 @@ async def remove_from_cart(
     db: AsyncSession = Depends(get_db)
 ):
     """Remove item from cart"""
-    user_id, sess_id = await get_user_or_session_id(current_user, session_id)
+    try:
+        user_id, sess_id = await get_user_or_session_id(current_user, session_id)
+        user_uuid = cast_uuid(user_id)
+        item_uuid = cast_uuid(item_id)
 
-    # Delete cart item
-    query = delete(CartItem).where(CartItem.id == item_id)
-    if user_id:
-        query = query.where(CartItem.user_id == user_id)
-    else:
-        query = query.where(CartItem.session_id == sess_id)
+        if not item_uuid:
+            raise HTTPException(status_code=400, detail="Invalid cart item ID")
 
-    result = await db.execute(query)
-    await db.commit()
+        # Delete cart item
+        query = delete(CartItem).where(CartItem.id == item_uuid)
+        if user_uuid:
+            query = query.where(CartItem.user_id == user_uuid)
+        else:
+            query = query.where(CartItem.session_id == sess_id)
 
-    if result.rowcount == 0:
-        raise HTTPException(status_code=404, detail="Cart item not found")
+        result = await db.execute(query)
+        await db.commit()
 
-    return {"status": "success", "message": "Item removed from cart"}
+        if result.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Cart item not found")
+
+        return {"status": "success", "message": "Item removed from cart"}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[Cart API] remove_from_cart error: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "success": False,
+                "code": "CART_DELETE_ERROR",
+                "message": "We could not remove the item from your cart. Please refresh and try again."
+            }
+        )
 
 
 @router.delete("")
@@ -232,10 +361,11 @@ async def clear_cart(
 ):
     """Clear all items from cart"""
     user_id, sess_id = await get_user_or_session_id(current_user, session_id)
+    user_uuid = cast_uuid(user_id)
 
     query = delete(CartItem)
-    if user_id:
-        query = query.where(CartItem.user_id == user_id)
+    if user_uuid:
+        query = query.where(CartItem.user_id == user_uuid)
     else:
         query = query.where(CartItem.session_id == sess_id)
 
@@ -243,6 +373,100 @@ async def clear_cart(
     await db.commit()
 
     return {"status": "success", "message": "Cart cleared"}
+
+
+@router.post("/merge-guest-cart", response_model=CartResponse)
+async def merge_guest_cart(
+    current_user: Optional[User] = Depends(get_optional_user),
+    session_id: Optional[str] = Header(None, alias="X-Session-ID"),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Merge guest cart into authenticated user cart.
+    Called after login to transfer guest session cart items to the user.
+    """
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    user_uuid = cast_uuid(str(current_user.id))
+    print(f"[Cart API] merge_guest_cart: user_id={user_uuid}, session_id={session_id}")
+
+    if not session_id:
+        # No guest session to merge, just return user's cart
+        print(f"[Cart API] merge_guest_cart: No session_id provided, returning user cart")
+        return await get_cart(current_user, session_id, db)
+
+    # Fetch guest cart items (by session_id, user_id must be NULL)
+    guest_query = select(CartItem).options(*CART_ITEM_LOAD_OPTIONS).where(
+        CartItem.session_id == session_id,
+        CartItem.user_id.is_(None)
+    )
+    guest_result = await db.execute(guest_query)
+    guest_items = guest_result.scalars().all()
+
+    print(f"[Cart API] merge_guest_cart: Found {len(guest_items)} guest items for session {session_id}")
+
+    if not guest_items:
+        # No guest cart to merge, return user's existing cart
+        print(f"[Cart API] merge_guest_cart: No guest items found, fetching user's existing cart")
+        user_cart = await get_cart(current_user, session_id, db)
+        print(f"[Cart API] merge_guest_cart: Returning user cart with {len(user_cart.items)} items")
+        return user_cart
+
+    # Fetch user's existing cart items
+    user_query = select(CartItem).where(CartItem.user_id == user_uuid)
+    user_result = await db.execute(user_query)
+    user_items = user_result.scalars().all()
+
+    # Create a map of user's cart: (product_id, variant_id) -> CartItem
+    user_cart_map = {
+        (str(item.product_id), str(item.variant_id)): item
+        for item in user_items
+    }
+
+    # Process each guest cart item
+    merged_count = 0
+    transferred_count = 0
+    guest_item_ids_to_delete = []
+
+    for guest_item in guest_items:
+        product_variant_key = (str(guest_item.product_id), str(guest_item.variant_id))
+
+        if product_variant_key in user_cart_map:
+            # User already has this item - merge quantities into existing user item
+            user_item = user_cart_map[product_variant_key]
+            user_item.quantity += guest_item.quantity
+            user_item.updated_at = datetime.utcnow()
+            merged_count += 1
+            # Mark guest item for deletion since we merged its quantity into existing item
+            guest_item_ids_to_delete.append(guest_item.id)
+            print(f"[Cart API] merge_guest_cart: Merged {guest_item.quantity} into existing item {user_item.id}, new qty={user_item.quantity}")
+        else:
+            # User doesn't have this item - transfer ownership to user
+            guest_item.user_id = user_uuid
+            guest_item.session_id = None
+            guest_item.updated_at = datetime.utcnow()
+            transferred_count += 1
+            print(f"[Cart API] merge_guest_cart: Transferred guest item {guest_item.id} to user")
+
+    # Delete only the guest items that were merged (not the ones transferred)
+    if guest_item_ids_to_delete:
+        await db.execute(
+            delete(CartItem).where(CartItem.id.in_(guest_item_ids_to_delete))
+        )
+
+    await db.commit()
+
+    print(f"[Cart API] merge_guest_cart: Merged {merged_count} items, transferred {transferred_count} items")
+
+    # Verify the transfer worked
+    verify_query = select(CartItem).where(CartItem.user_id == user_uuid)
+    verify_result = await db.execute(verify_query)
+    final_user_items = verify_result.scalars().all()
+    print(f"[Cart API] merge_guest_cart: After commit, user cart has {len(final_user_items)} items")
+
+    # Return the updated user cart
+    return await get_cart(current_user, session_id, db)
 
 
 @router.post("/apply-coupon", response_model=ApplyCouponResponse)
@@ -255,10 +479,11 @@ async def apply_coupon(
     """Apply coupon code to cart"""
     # Get cart
     user_id, sess_id = await get_user_or_session_id(current_user, session_id)
+    user_uuid = cast_uuid(user_id)
 
-    query = select(CartItem)
-    if user_id:
-        query = query.where(CartItem.user_id == user_id)
+    query = select(CartItem).options(*CART_ITEM_LOAD_OPTIONS)
+    if user_uuid:
+        query = query.where(CartItem.user_id == user_uuid)
     else:
         query = query.where(CartItem.session_id == sess_id)
 
@@ -336,7 +561,7 @@ async def apply_coupon(
         discount_type=coupon.discount_type,
         message=f"Coupon applied: {coupon.discount_type == 'percentage' and f'{coupon.discount_value}% off' or f'₦{coupon.discount_value:,.0f} off'}",
         cart=CartResponse(
-            items=[CartItemResponse(**item.to_dict()) for item in items],
+            items=[serialize_cart_item(item) for item in items],
             summary=summary,
             last_updated=datetime.utcnow()
         )

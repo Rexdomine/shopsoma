@@ -3,7 +3,7 @@
  * Restricts access based on authentication and user roles
  */
 import { Navigate, useLocation } from 'react-router-dom';
-import { useAuthStore } from '../../store/authStore';
+import { useAuth } from '../../context/AuthContext';
 import { ROUTES } from '../../config/constants';
 import Loading from './Loading';
 
@@ -18,7 +18,7 @@ export default function ProtectedRoute({
   roles,
   requireAuth = true,
 }: ProtectedRouteProps) {
-  const { isAuthenticated, user, isLoading } = useAuthStore();
+  const { isAuthenticated, user, isLoading } = useAuth();
   const location = useLocation();
 
   // Show loading while checking auth status

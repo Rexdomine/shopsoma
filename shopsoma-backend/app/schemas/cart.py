@@ -1,6 +1,7 @@
 from pydantic import BaseModel, Field
 from typing import Optional, List
 from datetime import datetime
+from app.schemas.product import ProductResponse, ProductVariantResponse
 
 
 class CartItemBase(BaseModel):
@@ -25,6 +26,8 @@ class CartItemResponse(CartItemBase):
     subtotal: float
     created_at: datetime
     updated_at: datetime
+    product: Optional[ProductResponse] = None
+    variant: Optional[ProductVariantResponse] = None
 
     class Config:
         from_attributes = True

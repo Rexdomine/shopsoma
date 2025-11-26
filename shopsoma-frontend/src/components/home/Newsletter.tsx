@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { CheckCircle } from 'lucide-react';
+import { subscribeToNewsletter } from '../../services/newsletterService';
 
 export default function Newsletter() {
   const [email, setEmail] = useState('');
@@ -24,9 +25,7 @@ export default function Newsletter() {
     setError('');
 
     try {
-      // TODO: Implement newsletter API call
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-
+      await subscribeToNewsletter({ email: email.trim(), consent: true });
       setSuccess(true);
       setEmail('');
 
@@ -34,8 +33,8 @@ export default function Newsletter() {
       setTimeout(() => {
         setSuccess(false);
       }, 3000);
-    } catch (err) {
-      setError('Failed to subscribe. Please try again.');
+    } catch (err: any) {
+      setError(err?.response?.data?.detail || 'Failed to subscribe. Please try again.');
     } finally {
       setLoading(false);
     }

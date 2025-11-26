@@ -1,14 +1,29 @@
 import { useEffect, useMemo, useState, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Heart, Minus, Plus, X } from 'lucide-react';
-import type { Product, ProductVariant } from '../../types';
+import type { Product, ProductVariant, SizeGuide } from '../../types';
 import { productService } from '../../services/productService';
+import { wishlistService } from '../../services/wishlistService';
 import Loading from '../../components/common/Loading';
 import ProductCard from '../../components/products/ProductCard';
-import { IMAGE_CONFIG } from '../../config/constants';
+import { IMAGE_CONFIG, STORAGE_KEYS } from '../../config/constants';
 import Layout from '../../components/layout/Layout';
 import AddToBagModal from '../../components/modals/AddToBagModal';
 import { useCartStore } from '../../store/cartStore';
+import { usePreferenceStore } from '../../store/preferenceStore';
+import { formatPriceWithCurrency } from '../../utils/pricing';
+
+const FALLBACK_SIZE_GUIDE: SizeGuide = {
+  gender: 'General Fit',
+  title: 'Size Guidance',
+  subtitle: 'Signature silhouettes',
+  rows: [
+    { label: 'XS', standard: 'US 2', measurement: 'Bust 32" / Waist 24" / Hips 35"' },
+    { label: 'S', standard: 'US 4-6', measurement: 'Bust 34" / Waist 26" / Hips 37"' },
+    { label: 'M', standard: 'US 8-10', measurement: 'Bust 36" / Waist 28" / Hips 39"' },
+    { label: 'L', standard: 'US 12-14', measurement: 'Bust 39" / Waist 31" / Hips 42"' },
+  ],
+};
 
 type ColorOption = {
   label: string;
@@ -20,6 +35,7 @@ export default function ProductDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
   const addItem = useCartStore((state) => state.addItem);
+  const preferredCurrency = usePreferenceStore((state) => state.currency);
 
   const [product, setProduct] = useState<Product | null>(null);
   const [relatedProducts, setRelatedProducts] = useState<Product[]>([]);
@@ -29,7 +45,8 @@ export default function ProductDetail() {
   const [selectedColor, setSelectedColor] = useState<string | null>(null);
   const [selectedSize, setSelectedSize] = useState<string | null>(null);
   const [quantity, setQuantity] = useState(1);
-  const [wishlist, setWishlist] = useState(false);
+  const [isInWishlist, setIsInWishlist] = useState(false);
+  const [wishlistLoading, setWishlistLoading] = useState(false);
   const [sizeGuideOpen, setSizeGuideOpen] = useState(false);
   const [sizeMenuOpen, setSizeMenuOpen] = useState(false);
   const [bagModalOpen, setBagModalOpen] = useState(false);
@@ -65,6 +82,12 @@ export default function ProductDetail() {
         }
 
         loadRelatedProducts(data.vendor_id, data.id);
+
+        // Check if product is in wishlist (only if user is logged in)
+        const token = localStorage.getItem(STORAGE_KEYS.ACCESS_TOKEN);
+        if (token) {
+          checkWishlistStatus(data.id);
+        }
       } catch (err) {
         console.error(err);
         setError('Product not found.');
@@ -76,6 +99,16 @@ export default function ProductDetail() {
     fetchProduct();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
+
+  const checkWishlistStatus = async (productId: string) => {
+    try {
+      const result = await wishlistService.checkInWishlist(productId);
+      setIsInWishlist(result.in_wishlist);
+    } catch (err) {
+      // If error (e.g., not authenticated), just keep wishlist as false
+      console.error('Error checking wishlist status:', err);
+    }
+  };
 
   const loadRelatedProducts = async (vendorId: string, currentProductId: string) => {
     try {
@@ -146,14 +179,34 @@ export default function ProductDetail() {
     return variants[0] ?? null;
   }, [product?.variants, colorOptions.length, sizeOptions.length, selectedColor, selectedSize]);
 
-  const currentPrice =
-    selectedVariant?.price ?? product?.base_price ?? 0;
-  const comparePrice =
-    selectedVariant?.compare_at_price ?? product?.compare_at_price ?? null;
+  const currentPrice = selectedVariant?.price ?? product?.base_price ?? 0;
+  const comparePrice = selectedVariant?.compare_at_price ?? product?.compare_at_price ?? null;
 
-  const maxQuantity = selectedVariant?.stock ?? product?.total_stock ?? 99;
+  const baseStock = product?.total_stock ?? 0;
+  const variantStock = selectedVariant?.stock ?? null;
+  const maxQuantity = variantStock !== null ? variantStock : baseStock;
+  const isOutOfStock = maxQuantity <= 0;
+  const displayQuantity = quantity > 0 ? quantity : 1;
+  const totalPrice = Number(currentPrice) * displayQuantity;
+
+  useEffect(() => {
+    if (!selectedVariant) {
+      setQuantity(1);
+      return;
+    }
+    const stock = selectedVariant.stock ?? 0;
+    if (stock <= 0) {
+      setQuantity(0);
+    } else {
+      setQuantity((prev) => {
+        if (prev <= 0) return 1;
+        return Math.min(prev, stock);
+      });
+    }
+  }, [selectedVariant?.id, selectedVariant?.stock]);
 
   const handleQuantityChange = (direction: 'increment' | 'decrement') => {
+    if (isOutOfStock) return;
     if (direction === 'increment') {
       setQuantity((prev) => Math.min(prev + 1, maxQuantity));
     } else {
@@ -162,7 +215,11 @@ export default function ProductDetail() {
   };
 
   const handleAddToBag = () => {
-    if (missingSelection || !product || !selectedVariant) return;
+    if (missingSelection || !product || !selectedVariant || isOutOfStock || quantity < 1) return;
+    if (quantity > maxQuantity) {
+      setQuantity(maxQuantity);
+      return;
+    }
 
     // Add to cart using Zustand store
     addItem({
@@ -175,13 +232,55 @@ export default function ProductDetail() {
     setBagModalOpen(true);
   };
 
+  const handleWishlistToggle = async () => {
+    if (!product) return;
+
+    // Check if user is logged in
+    const token = localStorage.getItem(STORAGE_KEYS.ACCESS_TOKEN);
+    console.log('Token exists:', !!token);
+
+    if (!token) {
+      // Redirect to login page
+      console.log('No token, redirecting to login');
+      navigate('/auth/login');
+      return;
+    }
+
+    console.log('Toggling wishlist for product:', product.id, 'Current state:', isInWishlist);
+    setWishlistLoading(true);
+    try {
+      if (isInWishlist) {
+        // Remove from wishlist
+        console.log('Removing from wishlist');
+        await wishlistService.removeFromWishlist(product.id);
+        setIsInWishlist(false);
+        console.log('Removed successfully');
+      } else {
+        // Add to wishlist
+        console.log('Adding to wishlist');
+        const result = await wishlistService.addToWishlist(product.id);
+        console.log('Added successfully:', result);
+        setIsInWishlist(true);
+      }
+    } catch (err: any) {
+      console.error('Error toggling wishlist:', err);
+      console.error('Error response:', err?.response?.data);
+      console.error('Error status:', err?.response?.status);
+      // TODO: Show error toast notification
+      alert(`Failed to update wishlist: ${err?.response?.data?.detail || err.message}`);
+    } finally {
+      setWishlistLoading(false);
+    }
+  };
+
   const missingSelection =
     (colorOptions.length > 0 && !selectedColor) ||
     (sizeOptions.length > 0 && !selectedSize);
 
   const placeholderImage = IMAGE_CONFIG.PLACEHOLDER;
   const galleryImages = product?.images ?? [];
-  const sizeGuideRows = product?.size_guide?.rows ?? [];
+  const sizeGuideData = product?.size_guide && (product.size_guide.rows?.length ?? 0) > 0 ? product.size_guide : FALLBACK_SIZE_GUIDE;
+  const sizeGuideRows = sizeGuideData.rows ?? [];
   const hasSizeGuide = sizeGuideRows.length > 0;
 
   useEffect(() => {
@@ -283,16 +382,37 @@ export default function ProductDetail() {
               <p className="text-xs uppercase tracking-[0.3em] text-gray-400">Golden Editions</p>
               <h1 className="text-3xl font-display font-bold text-dark">{product.title}</h1>
               <p className="text-sm text-gray-500">{product.category ?? 'Collection'}</p>
+              {product.vendor_name && (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-3 text-[11px] uppercase tracking-[0.5em] text-gray-400">
+                    <span className="inline-flex h-px w-10 bg-gray-200" />
+                    Designer
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span className="inline-flex h-9 w-9 items-center justify-center rounded-sm bg-primary/10 text-sm font-semibold text-primary">
+                      {product.vendor_name.slice(0, 1).toUpperCase()}
+                    </span>
+                    <div>
+                      <p className="text-base font-semibold text-dark tracking-wide">
+                        {product.vendor_name}
+                      </p>
+                      <p className="text-xs uppercase tracking-[0.3em] text-gray-400">
+                        Exclusive Artisan
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
 
             <div>
               <div className="flex items-end gap-3">
                 <span className="text-2xl font-semibold text-dark">
-                  ₦{Number(currentPrice).toLocaleString()}
+                  {formatPriceWithCurrency(Number(totalPrice), preferredCurrency)}
                 </span>
                 {comparePrice && comparePrice > currentPrice && (
                   <span className="text-base text-gray-400 line-through">
-                    ₦{Number(comparePrice).toLocaleString()}
+                    {formatPriceWithCurrency(Number(comparePrice), preferredCurrency)}
                   </span>
                 )}
               </div>
@@ -395,6 +515,7 @@ export default function ProductDetail() {
                   type="button"
                   className="px-4 py-2 text-gray-500 hover:text-primary transition"
                   onClick={() => handleQuantityChange('decrement')}
+                  disabled={isOutOfStock || quantity <= 1}
                 >
                   <Minus className="w-4 h-4" />
                 </button>
@@ -403,22 +524,26 @@ export default function ProductDetail() {
                   type="button"
                   className="px-4 py-2 text-gray-500 hover:text-primary transition"
                   onClick={() => handleQuantityChange('increment')}
-                  disabled={quantity >= maxQuantity}
+                  disabled={isOutOfStock || quantity >= maxQuantity}
                 >
                   <Plus className="w-4 h-4" />
                 </button>
               </div>
               <p className="text-xs text-gray-400">
-                {maxQuantity} pieces available
+                {missingSelection && product.variants?.length
+                  ? 'Select color/size to view availability'
+                  : isOutOfStock
+                    ? 'Out of stock'
+                    : `${maxQuantity} piece${maxQuantity === 1 ? '' : 's'} available`}
               </p>
             </div>
 
             <div className="flex flex-col lg:flex-row flex-wrap gap-3">
               <button
                 type="button"
-                disabled={missingSelection}
+                disabled={missingSelection || isOutOfStock || quantity < 1}
                 className={`flex-1 border px-6 py-3 text-sm font-semibold transition-colors ${
-                  missingSelection
+                  missingSelection || isOutOfStock || quantity < 1
                     ? 'bg-gray-100 text-gray-400 border-gray-100 cursor-not-allowed'
                     : 'bg-primary text-white hover:bg-primary-dark border-primary'
                 }`}
@@ -428,13 +553,14 @@ export default function ProductDetail() {
               </button>
               <button
                 type="button"
+                disabled={wishlistLoading}
                 className={`border px-6 py-3 text-sm font-semibold flex items-center justify-center gap-2 transition-colors ${
-                  wishlist ? 'border-primary text-primary' : 'border-gray-200 text-gray-700 hover:border-primary hover:text-primary'
-                }`}
-                onClick={() => setWishlist((prev) => !prev)}
+                  isInWishlist ? 'border-primary text-primary' : 'border-gray-200 text-gray-700 hover:border-primary hover:text-primary'
+                } ${wishlistLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
+                onClick={handleWishlistToggle}
               >
-                Wishlist
-                <Heart className={`w-4 h-4 ${wishlist ? 'fill-current text-primary' : ''}`} />
+                {wishlistLoading ? 'Loading...' : isInWishlist ? 'In Wishlist' : 'Wishlist'}
+                <Heart className={`w-4 h-4 ${isInWishlist ? 'fill-current text-primary' : ''}`} />
               </button>
               {hasSizeGuide && (
                 <button
@@ -482,7 +608,7 @@ export default function ProductDetail() {
                   </span>
                 </summary>
                 <p className="mt-3 text-sm text-gray-600 leading-relaxed">
-                  Complimentary delivery on orders over ₦30,000. Free returns within 7 days of
+                  Complimentary delivery on orders over {formatPriceWithCurrency(30000, preferredCurrency)}. Free returns within 7 days of
                   delivery for unused items.
                 </p>
               </details>
@@ -539,13 +665,13 @@ export default function ProductDetail() {
               </div>
               <div className="space-y-1">
                 <p className="text-xs uppercase tracking-[0.3em] text-gray-400">
-                  {product.size_guide?.gender || 'Size Guide'}
+                {sizeGuideData?.gender || 'Size Guide'}
                 </p>
                 <h3 className="text-2xl font-display font-bold text-dark">
-                  {product.size_guide?.title || product.title}
+                {sizeGuideData?.title || product.title}
                 </h3>
                 <p className="text-sm text-gray-500">
-                  {product.size_guide?.subtitle || product.category || 'Collection'}
+                {sizeGuideData?.subtitle || product.category || 'Collection'}
                 </p>
               </div>
             </div>

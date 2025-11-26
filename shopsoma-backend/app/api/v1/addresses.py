@@ -1,7 +1,7 @@
 """Address management endpoints"""
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update, delete, and_
+from sqlalchemy import select, update, delete, and_, or_
 from uuid import UUID
 
 from app.core.database import get_db
@@ -190,6 +190,22 @@ async def delete_address(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Address not found"
+        )
+
+    # Check if address is being used by any orders
+    from app.models.order import Order
+    order_check = await db.execute(
+        select(Order.id).where(
+            or_(
+                Order.shipping_address_id == address_id,
+                Order.billing_address_id == address_id
+            )
+        ).limit(1)
+    )
+    if order_check.scalar_one_or_none():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot delete address that is associated with existing orders"
         )
 
     # Delete address

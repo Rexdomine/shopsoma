@@ -1,11 +1,18 @@
 import { useState, useEffect } from 'react';
+import type { PaymentGateway } from '../../services/paymentService';
 import { Link, useNavigate } from 'react-router-dom';
 import Layout from '../../components/layout/Layout';
 import { ROUTES } from '../../config/constants';
 import { checkoutService, type Address, type ShippingRate, type OrderReview, type CreateAddressData } from '../../services/checkoutService';
 import { CartService } from '../../services/cartService';
 import { paymentService } from '../../services/paymentService';
-import type { Cart } from '../../types/cart';
+import { useAuth } from '../../context/AuthContext';
+import { usePreferenceStore } from '../../store/preferenceStore';
+import { useCartStore } from '../../store/cartStore';
+import { formatPriceWithCurrency, type Currency } from '../../utils/pricing';
+import { loadStripe } from '@stripe/stripe-js';
+import { Elements } from '@stripe/react-stripe-js';
+import StripePaymentForm from '../../components/payment/StripePaymentForm';
 
 // Declare Paystack type
 declare global {
@@ -29,19 +36,26 @@ interface NewAddress {
   is_default: boolean;
 }
 
-const mockPaymentOptions = [
-  { id: 'paystack', name: 'Paystack', icon: '/images/paystack.svg' },
-  { id: 'stripe', name: 'Stripe', icon: '/images/stripe.svg' },
+const ALL_PAYMENT_OPTIONS: { id: PaymentGateway; name: string; icon: string; supportedCurrencies: Currency[] }[] = [
+  { id: 'paystack', name: 'Paystack', icon: '/images/paystack.svg', supportedCurrencies: ['NGN'] },
+  { id: 'stripe', name: 'Stripe', icon: '/images/stripe.svg', supportedCurrencies: ['NGN', 'USD'] },
 ];
+
+const stripePromise = loadStripe(import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY || '');
 
 export default function Checkout() {
   const navigate = useNavigate();
+  const { user, isAuthenticated } = useAuth();
+  const { currency, setCurrency } = usePreferenceStore();
+
   const [step, setStep] = useState<Step>('email');
   const [email, setEmail] = useState('');
   const [isEmailConfirmed, setIsEmailConfirmed] = useState(false);
   const [isEditingEmail, setIsEditingEmail] = useState(false);
   const [isGuestCheckout, setIsGuestCheckout] = useState(false);
-  const [cart, setCart] = useState<Cart>(CartService.getCart());
+
+  // Use cart from store so it updates when synced after login
+  const cart = useCartStore((state) => state.cart);
 
   // Address state
   const [addresses, setAddresses] = useState<Address[]>([]);
@@ -78,7 +92,24 @@ export default function Checkout() {
   const [orderReview, setOrderReview] = useState<OrderReview | null>(null);
 
   // Payment state
-  const [paymentMethod, setPaymentMethod] = useState(mockPaymentOptions[0].id);
+  const [paymentMethod, setPaymentMethod] = useState<PaymentGateway>('paystack');
+  const [stripeClientSecret, setStripeClientSecret] = useState<string>('');
+  const [stripePaymentIntentId, setStripePaymentIntentId] = useState<string>('');
+  const [showStripePaymentModal, setShowStripePaymentModal] = useState(false);
+  const [currentOrderId, setCurrentOrderId] = useState<string>('');
+
+  // Filter payment options based on currency
+  const paymentOptions = ALL_PAYMENT_OPTIONS.filter(option =>
+    option.supportedCurrencies.includes(currency)
+  );
+
+  // Auto-select first available payment method when currency changes
+  useEffect(() => {
+    const currentMethodSupported = paymentOptions.some(option => option.id === paymentMethod);
+    if (!currentMethodSupported && paymentOptions.length > 0) {
+      setPaymentMethod(paymentOptions[0].id);
+    }
+  }, [currency, paymentMethod, paymentOptions]);
 
   // Loading states
   const [isLoadingAddresses, setIsLoadingAddresses] = useState(false);
@@ -89,17 +120,21 @@ export default function Checkout() {
   // Email validation state
   const [emailError, setEmailError] = useState('');
 
-  // Check authentication and load addresses on mount
+  // Prefill user data on mount if authenticated
   useEffect(() => {
-    const token = localStorage.getItem('access_token');
-    if (token) {
-      // User is logged in, load their saved addresses
+    if (isAuthenticated && user) {
+      // Prefill email
+      setEmail(user.email);
+      setIsEmailConfirmed(true);
+      setStep('address');
+
+      // Load saved addresses
       loadAddresses();
     } else {
-      // User not logged in, enable guest checkout
+      // Guest checkout
       setIsGuestCheckout(true);
     }
-  }, []);
+  }, [isAuthenticated, user]);
 
   const loadAddresses = async () => {
     setIsLoadingAddresses(true);
@@ -111,6 +146,22 @@ export default function Checkout() {
       const defaultAddr = data.addresses.find(addr => addr.is_default && addr.address_type === 'shipping');
       if (defaultAddr) {
         setSelectedAddressId(defaultAddr.id);
+
+        // Prefill new address form with user's name and phone from default address
+        if (user) {
+          setNewAddress(prev => ({
+            ...prev,
+            full_name: defaultAddr.full_name,
+            phone_number: defaultAddr.phone_number,
+          }));
+        }
+      } else if (user) {
+        // If no default address, prefill form with user's basic info
+        setNewAddress(prev => ({
+          ...prev,
+          full_name: user.full_name || '',
+          phone_number: user.phone_number || '',
+        }));
       }
     } catch (error) {
       console.error('Error loading addresses:', error);
@@ -167,8 +218,8 @@ export default function Checkout() {
 
       // Reset form
       setNewAddress({
-        full_name: '',
-        phone_number: '',
+        full_name: user?.full_name || '',
+        phone_number: user?.phone_number || '',
         address_line1: '',
         address_line2: '',
         city: '',
@@ -296,7 +347,6 @@ export default function Checkout() {
   const handlePurchase = async () => {
     if (!selectedAddressId || !orderReview) return;
 
-    const buildTrackingPath = (id: string) => ROUTES.ORDER_TRACKING.replace(':orderId', id);
     setIsCreatingOrder(true);
     try {
       const items = cart.items.map(item => ({
@@ -336,53 +386,110 @@ export default function Checkout() {
       // Create order first
       const order = await checkoutService.createOrder(orderRequest);
 
-      // Initialize payment with Paystack
+      // Initialize payment with selected gateway
       const paymentData = await paymentService.initializePayment({
         order_id: order.id,
         email: email || 'guest@shopsoma.com',
+        payment_gateway: paymentMethod,
+        currency,
         callback_url: `${window.location.origin}/payment/verify`,
       });
 
-      // Open Paystack popup
-      const paystackPublicKey = import.meta.env.VITE_PAYSTACK_PUBLIC_KEY;
-      const handler = window.PaystackPop.setup({
-        key: paystackPublicKey,
-        email: email || 'guest@shopsoma.com',
-        amount: Math.round(orderReview.summary.total_amount * 100), // Amount in kobo
-        currency: 'NGN',
-        ref: paymentData.reference,
-        callback: (response: any) => {
-          // Payment successful - handle async operations
-          console.log('Payment successful:', response);
+      // Initialize payment based on selected gateway
+      if (paymentMethod === 'paystack') {
+        // Open Paystack popup
+        const paystackPublicKey = import.meta.env.VITE_PAYSTACK_PUBLIC_KEY;
+        const handler = window.PaystackPop.setup({
+          key: paystackPublicKey,
+          email: email || 'guest@shopsoma.com',
+          amount: Math.round(orderReview.summary.total_amount * 100), // Amount in kobo
+          currency,
+          ref: paymentData.reference,
+          callback: (response: any) => {
+            // Payment successful - handle async operations
+            console.log('Payment successful:', response);
 
-          // Verify payment and navigate (fire and forget)
-          paymentService.verifyPayment({
-            reference: response.reference,
-          }).then(() => {
-            // Clear cart
-            CartService.clearCart();
+            // Verify payment and navigate (fire and forget)
+            paymentService.verifyPayment({
+              reference: response.reference,
+              payment_gateway: 'paystack',
+            }).then(() => {
+              // Clear cart
+              CartService.clearCart();
 
-            // Navigate to order confirmation with success status
-            navigate(`${ROUTES.ORDER_SUCCESS}?orderId=${order.id}&payment=success`);
-          }).catch((error) => {
-            console.error('Payment verification error:', error);
-            navigate(`${ROUTES.ORDER_SUCCESS}?orderId=${order.id}&payment=verification_failed`);
-          });
-        },
-        onClose: () => {
-          console.log('Payment popup closed');
-          setIsCreatingOrder(false);
-          alert('Payment cancelled. You can retry payment from your orders page.');
-          navigate(`${ROUTES.ORDER_SUCCESS}?orderId=${order.id}&payment=cancelled`);
-        },
-      });
+              // Navigate to order confirmation with success status
+              navigate(`${ROUTES.ORDER_SUCCESS}?orderId=${order.id}&payment=success`);
+            }).catch((error) => {
+              console.error('Payment verification error:', error);
+              navigate(`${ROUTES.ORDER_SUCCESS}?orderId=${order.id}&payment=verification_failed`);
+            });
+          },
+          onClose: () => {
+            console.log('Payment popup closed');
+            setIsCreatingOrder(false);
+            alert('Payment cancelled. You can retry payment from your orders page.');
+            navigate(`${ROUTES.ORDER_SUCCESS}?orderId=${order.id}&payment=cancelled`);
+          },
+        });
 
-      handler.openIframe();
+        handler.openIframe();
+      } else if (paymentMethod === 'stripe') {
+        // Store client secret and show Stripe payment modal
+        setStripeClientSecret(paymentData.client_secret || '');
+        setStripePaymentIntentId(paymentData.payment_intent_id || '');
+        setCurrentOrderId(order.id);
+        setShowStripePaymentModal(true);
+        setIsCreatingOrder(false);
+      } else {
+        throw new Error(`Unsupported payment gateway: ${paymentMethod}`);
+      }
     } catch (error: any) {
       console.error('Error creating order:', error);
-      alert(error.response?.data?.detail || 'Failed to create order. Please try again.');
+
+      // Extract detailed error message
+      let errorMessage = 'Failed to create order. Please try again.';
+
+      if (error.response?.data?.detail) {
+        errorMessage = error.response.data.detail;
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+
+      // Log full error for debugging
+      console.error('Full error details:', {
+        message: error.message,
+        response: error.response?.data,
+        status: error.response?.status,
+      });
+
+      alert(errorMessage);
       setIsCreatingOrder(false);
     }
+  };
+
+  const handleStripePaymentSuccess = async () => {
+    try {
+      // Verify payment with backend
+      await paymentService.verifyPayment({
+        payment_intent_id: stripePaymentIntentId,
+        payment_gateway: 'stripe',
+      });
+
+      // Clear cart and navigate to success
+      CartService.clearCart();
+      setShowStripePaymentModal(false);
+      navigate(`${ROUTES.ORDER_SUCCESS}?orderId=${currentOrderId}&payment=success`);
+    } catch (error) {
+      console.error('Payment verification error:', error);
+      setShowStripePaymentModal(false);
+      navigate(`${ROUTES.ORDER_SUCCESS}?orderId=${currentOrderId}&payment=verification_failed`);
+    }
+  };
+
+  const handleStripePaymentError = (error: string) => {
+    console.error('Stripe payment error:', error);
+    alert(`Payment failed: ${error}`);
+    setIsCreatingOrder(false);
   };
 
   // Email validation regex
@@ -397,6 +504,25 @@ export default function Checkout() {
   const canPurchase = step === 'payment' && hasEmail && hasSelectedAddress && hasSelectedShipping && orderReview;
 
   const selectedShippingRate = shippingRates.find(rate => rate.id === selectedShippingRateId);
+
+  // Calculate tax and total for checkout display (before order review is available)
+  const TAX_RATE = 0.075; // 7.5% VAT
+  const calculateCheckoutTax = () => {
+    if (orderReview) return orderReview.summary.tax_amount;
+    // Calculate tax on subtotal (before order review is created)
+    const subtotal = cart.summary.subtotal;
+    return Math.round(subtotal * TAX_RATE * 100) / 100;
+  };
+
+  const calculateCheckoutTotal = () => {
+    if (orderReview) return orderReview.summary.total_amount;
+    // Calculate total (before order review is created)
+    const subtotal = Number(cart.summary.subtotal);
+    const shipping = Number(selectedShippingRate?.base_rate || 0);
+    const tax = calculateCheckoutTax();
+    const discount = Number(appliedPromo?.discount_amount || 0);
+    return subtotal + shipping + tax - discount;
+  };
 
   const goBackToBag = () => navigate(ROUTES.CART);
 
@@ -441,6 +567,11 @@ export default function Checkout() {
     </p>
   );
 
+  // Helper function to format price in selected currency
+  const formatPrice = (amountInNGN: number) => {
+    return formatPriceWithCurrency(amountInNGN, currency);
+  };
+
   return (
     <Layout showHeader={false}>
       <header className="bg-white border-b border-gray-100">
@@ -456,12 +587,32 @@ export default function Checkout() {
               <img src="/images/somalogo.svg" alt="Shopsoma" className="h-10 w-auto" />
             </Link>
           </div>
-          <div className="flex items-center justify-end gap-3 text-sm">
-            <span className="text-gray-700">Secure Checkout</span>
-            <span className="text-gray-400">
-              Need help?{' '}
-              <button className="text-primary font-semibold">Contact Us</button>
-            </span>
+          <div className="flex items-center justify-end gap-4">
+            {/* Currency Switcher */}
+            <div className="flex items-center gap-2 border border-gray-300 rounded-sm px-3 py-1.5">
+              <button
+                onClick={() => setCurrency('NGN')}
+                className={`text-xs font-semibold transition ${
+                  currency === 'NGN'
+                    ? 'text-primary'
+                    : 'text-gray-400 hover:text-gray-600'
+                }`}
+              >
+                NGN
+              </button>
+              <span className="text-gray-300">|</span>
+              <button
+                onClick={() => setCurrency('USD')}
+                className={`text-xs font-semibold transition ${
+                  currency === 'USD'
+                    ? 'text-primary'
+                    : 'text-gray-400 hover:text-gray-600'
+                }`}
+              >
+                USD
+              </button>
+            </div>
+            <span className="text-sm text-gray-700">Secure Checkout</span>
           </div>
         </div>
       </header>
@@ -536,7 +687,11 @@ export default function Checkout() {
                           <div className="pt-3 flex items-center justify-between text-xs">
                             <span className="text-gray-600">
                               Already have an account?{' '}
-                              <Link to="/login" className="text-primary font-semibold hover:underline">
+                              <Link
+                                to="/login"
+                                state={{ from: { pathname: '/checkout' } }}
+                                className="text-primary font-semibold hover:underline"
+                              >
                                 Sign in
                               </Link>
                             </span>
@@ -717,7 +872,7 @@ export default function Checkout() {
                               {rate.description} ({rate.min_delivery_days} - {rate.max_delivery_days} business days)
                             </p>
                           </div>
-                          <p className="text-sm font-semibold text-gray-800">₦{rate.base_rate.toLocaleString()}</p>
+                          <p className="text-sm font-semibold text-gray-800">{formatPrice(rate.base_rate)}</p>
                         </button>
                       ))}
                       <button
@@ -739,28 +894,47 @@ export default function Checkout() {
                   {renderStepTitle('Payment Method', step === 'payment')}
                   {step === 'payment' ? (
                     <div className="space-y-3">
-                      {mockPaymentOptions.map((option) => (
-                        <label
-                          key={option.id}
-                          className={`flex items-center justify-between border border-gray-200 px-4 py-3 cursor-pointer ${
-                            paymentMethod === option.id ? 'bg-gray-50 border-primary' : ''
-                          }`}
-                        >
-                          <span className="flex items-center gap-3 text-sm text-gray-800">
-                            <input
-                              type="radio"
-                              name="payment"
-                              checked={paymentMethod === option.id}
-                              onChange={() => setPaymentMethod(option.id)}
-                              className="text-primary"
-                            />
-                            {option.name}
-                          </span>
-                          {option.icon && (
-                            <img src={option.icon} alt={option.name} className="h-6" />
-                          )}
-                        </label>
-                      ))}
+                      {ALL_PAYMENT_OPTIONS.map((option) => {
+                        const isSupported = option.supportedCurrencies.includes(currency);
+                        return (
+                          <label
+                            key={option.id}
+                            className={`flex items-center justify-between border px-4 py-3 ${
+                              isSupported
+                                ? `cursor-pointer border-gray-200 ${
+                                    paymentMethod === option.id ? 'bg-gray-50 border-primary' : ''
+                                  }`
+                                : 'cursor-not-allowed border-gray-100 bg-gray-50 opacity-50'
+                            }`}
+                          >
+                            <span className="flex items-center gap-3 text-sm">
+                              <input
+                                type="radio"
+                                name="payment"
+                                checked={paymentMethod === option.id}
+                                onChange={() => isSupported && setPaymentMethod(option.id)}
+                                disabled={!isSupported}
+                                className="text-primary disabled:cursor-not-allowed disabled:opacity-50"
+                              />
+                              <span className={isSupported ? 'text-gray-800' : 'text-gray-400'}>
+                                {option.name}
+                                {!isSupported && (
+                                  <span className="ml-2 text-xs text-gray-400">
+                                    (Not available for {currency})
+                                  </span>
+                                )}
+                              </span>
+                            </span>
+                            {option.icon && (
+                              <img
+                                src={option.icon}
+                                alt={option.name}
+                                className={`h-6 ${!isSupported ? 'grayscale' : ''}`}
+                              />
+                            )}
+                          </label>
+                        );
+                      })}
                       <button
                         type="button"
                         onClick={handlePurchase}
@@ -781,24 +955,25 @@ export default function Checkout() {
             <aside className="border border-gray-200 rounded-sm p-5 space-y-4 sticky top-6 h-fit">
               <div className="flex items-center justify-between text-sm font-semibold text-gray-800">
                 <span>Order</span>
+                <span className="text-xs text-gray-500">Currency: {currency}</span>
               </div>
               <div className="text-sm text-gray-700 space-y-2">
                 <div className="flex items-center justify-between">
                   <span>Subtotal</span>
-                  <span>₦{(orderReview?.summary.subtotal ?? cart.summary.subtotal).toLocaleString()}</span>
+                  <span>{formatPrice(orderReview?.summary.subtotal ?? cart.summary.subtotal)}</span>
                 </div>
                 <div className="flex items-center justify-between">
                   <span>Shipping cost</span>
-                  <span>₦{(orderReview?.summary.shipping_cost ?? (selectedShippingRate?.base_rate || 0)).toLocaleString()}</span>
+                  <span>{formatPrice(orderReview?.summary.shipping_cost ?? Number(selectedShippingRate?.base_rate || 0))}</span>
                 </div>
                 <div className="flex items-center justify-between">
                   <span>Tax (VAT 7.5%)</span>
-                  <span>₦{Number(orderReview?.summary.tax_amount ?? 0).toLocaleString('en-NG', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                  <span>{formatPrice(calculateCheckoutTax())}</span>
                 </div>
                 {(appliedPromo || (orderReview?.summary.discount_amount ?? 0) > 0) && (
                   <div className="flex items-center justify-between text-primary">
                     <span>Promo {appliedPromo && `(${appliedPromo.code})`}</span>
-                    <span>-₦{(orderReview?.summary.discount_amount ?? appliedPromo?.discount_amount ?? 0).toLocaleString()}</span>
+                    <span>-{formatPrice(orderReview?.summary.discount_amount ?? appliedPromo?.discount_amount ?? 0)}</span>
                   </div>
                 )}
                 <div className="flex items-center gap-2 pt-2">
@@ -825,13 +1000,13 @@ export default function Checkout() {
                   <p className="text-xs text-green-600">
                     Promo applied! {appliedPromo.discount_type === 'percentage'
                       ? `${appliedPromo.discount_value}% off`
-                      : `₦${appliedPromo.discount_value.toLocaleString()} off`}
+                      : `${formatPrice(appliedPromo.discount_value)} off`}
                   </p>
                 )}
               </div>
               <div className="flex items-center justify-between text-sm font-semibold text-gray-800 border-t border-gray-200 pt-3">
                 <span>Total</span>
-                <span>₦{Number(orderReview?.summary.total_amount ?? cart.summary.total).toLocaleString('en-NG', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                <span>{formatPrice(calculateCheckoutTotal())}</span>
               </div>
               <button
                 className={`w-full py-3 rounded-sm text-sm font-semibold ${
@@ -846,6 +1021,34 @@ export default function Checkout() {
           </div>
         </div>
       </section>
+
+      {/* Stripe Payment Modal */}
+      {showStripePaymentModal && stripeClientSecret && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-sm p-6 max-w-md w-full mx-4">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-semibold">Complete Payment</h2>
+              <button
+                onClick={() => {
+                  setShowStripePaymentModal(false);
+                  setIsCreatingOrder(false);
+                }}
+                className="text-gray-400 hover:text-gray-600"
+              >
+                ✕
+              </button>
+            </div>
+            <Elements stripe={stripePromise} options={{ clientSecret: stripeClientSecret }}>
+              <StripePaymentForm
+                onSuccess={handleStripePaymentSuccess}
+                onError={handleStripePaymentError}
+                isProcessing={isCreatingOrder}
+                setIsProcessing={setIsCreatingOrder}
+              />
+            </Elements>
+          </div>
+        </div>
+      )}
     </Layout>
   );
 }
