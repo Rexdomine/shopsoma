@@ -8,11 +8,23 @@ from datetime import datetime
 from urllib.parse import urljoin
 from pathlib import Path
 import base64
-import brevo_python
-from brevo_python.rest import ApiException
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
+
+# Safe import of Brevo SDK - allows app to start even if not installed
+try:
+    import brevo_python
+    from brevo_python.rest import ApiException
+    BREVO_AVAILABLE = True
+except ImportError:
+    brevo_python = None
+    ApiException = Exception  # Fallback to base Exception
+    BREVO_AVAILABLE = False
+    logger.warning(
+        "Brevo SDK (brevo_python) is not installed. Email sending is disabled. "
+        "Install with: pip install brevo-python"
+    )
 
 BRAND_PRIMARY = "#105E53"
 BRAND_DARK = "#454444"
@@ -42,13 +54,28 @@ class EmailService:
 
     def __init__(self):
         """Initialize Brevo API client"""
-        configuration = brevo_python.Configuration()
-        configuration.api_key['api-key'] = settings.BREVO_API_KEY
-        self.api_instance = brevo_python.TransactionalEmailsApi(brevo_python.ApiClient(configuration))
-        self.sender = {
-            "name": settings.BREVO_SENDER_NAME,
-            "email": settings.BREVO_SENDER_EMAIL
-        }
+        self.enabled = BREVO_AVAILABLE
+
+        if not BREVO_AVAILABLE:
+            logger.warning("EmailService initialized but Brevo SDK is not available - emails will not be sent")
+            self.api_instance = None
+            self.sender = None
+        else:
+            try:
+                configuration = brevo_python.Configuration()
+                configuration.api_key['api-key'] = settings.BREVO_API_KEY
+                self.api_instance = brevo_python.TransactionalEmailsApi(brevo_python.ApiClient(configuration))
+                self.sender = {
+                    "name": settings.BREVO_SENDER_NAME,
+                    "email": settings.BREVO_SENDER_EMAIL
+                }
+                logger.info("EmailService initialized successfully with Brevo SDK")
+            except Exception as e:
+                logger.error(f"Failed to initialize Brevo API client: {e}")
+                self.enabled = False
+                self.api_instance = None
+                self.sender = None
+
         self.asset_base = getattr(settings, "CDN_BASE_URL", "") or getattr(settings, "FRONTEND_BASE_URL", "")
         self.logo_url = self._resolve_image_url(getattr(settings, "BRAND_LOGO_URL", ""), LOGO_FALLBACK)
         self.product_placeholder = PRODUCT_PLACEHOLDER
@@ -147,6 +174,14 @@ class EmailService:
         html_content: str,
         template_params: Optional[Dict[str, Any]] = None
     ) -> bool:
+        # Check if email service is enabled
+        if not self.enabled or self.api_instance is None:
+            logger.warning(
+                f"Email send skipped (to: {to_email}, subject: {subject}): "
+                "Brevo SDK not available or not configured"
+            )
+            return False
+
         try:
             send_smtp_email = brevo_python.SendSmtpEmail(
                 to=[{"email": to_email, "name": to_name}],
