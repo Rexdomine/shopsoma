@@ -233,7 +233,16 @@ async def calculate_shipping(
     if not available_rates:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"No shipping rates available for {calc_data.state}, {calc_data.country}"
+            detail={
+                "message": f"No shipping rates configured for {calc_data.state}, {calc_data.country}",
+                "error_code": "NO_SHIPPING_RATES",
+                "suggestion": "Please contact support or try a different delivery location",
+                "debug_info": {
+                    "country": calc_data.country,
+                    "state": calc_data.state,
+                    "order_value": float(calc_data.order_value)
+                }
+            }
         )
 
     # The recommended rate is the default one, or the first (highest priority)
