@@ -82,9 +82,10 @@ export default function StripePaymentForm({
       ) : (
         <PaymentElement
           onReady={() => console.log('PaymentElement ready')}
-          onLoadError={(error) => {
-            console.error('PaymentElement load error:', error);
-            setErrorMessage(error.message);
+          onLoadError={(event) => {
+            console.error('PaymentElement load error:', event);
+            const errorMessage = event.error?.message || 'Failed to load payment form';
+            setErrorMessage(errorMessage);
           }}
         />
       )}
