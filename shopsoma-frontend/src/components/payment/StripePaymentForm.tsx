@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   PaymentElement,
   useStripe,
@@ -21,6 +21,16 @@ export default function StripePaymentForm({
   const stripe = useStripe();
   const elements = useElements();
   const [errorMessage, setErrorMessage] = useState<string>('');
+  const [isLoading, setIsLoading] = useState(true);
+
+  // Debug: Log when Stripe and Elements are ready
+  useEffect(() => {
+    console.log('Stripe ready:', !!stripe);
+    console.log('Elements ready:', !!elements);
+    if (stripe && elements) {
+      setIsLoading(false);
+    }
+  }, [stripe, elements]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -65,7 +75,19 @@ export default function StripePaymentForm({
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
-      <PaymentElement />
+      {isLoading ? (
+        <div className="flex items-center justify-center py-8">
+          <div className="text-sm text-gray-500">Loading payment form...</div>
+        </div>
+      ) : (
+        <PaymentElement
+          onReady={() => console.log('PaymentElement ready')}
+          onLoadError={(error) => {
+            console.error('PaymentElement load error:', error);
+            setErrorMessage(error.message);
+          }}
+        />
+      )}
 
       {errorMessage && (
         <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-sm p-3">
@@ -75,14 +97,14 @@ export default function StripePaymentForm({
 
       <button
         type="submit"
-        disabled={!stripe || isProcessing}
+        disabled={!stripe || isProcessing || isLoading}
         className={`w-full py-3 rounded-sm text-sm font-semibold ${
-          !stripe || isProcessing
+          !stripe || isProcessing || isLoading
             ? 'bg-gray-200 text-gray-500 cursor-not-allowed'
             : 'bg-primary text-white hover:bg-primary-dark transition'
         }`}
       >
-        {isProcessing ? 'Processing...' : 'Pay Now'}
+        {isProcessing ? 'Processing...' : isLoading ? 'Loading...' : 'Pay Now'}
       </button>
     </form>
   );
