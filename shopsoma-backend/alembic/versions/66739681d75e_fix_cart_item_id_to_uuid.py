@@ -19,9 +19,31 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    # Check if cart_items table exists before attempting migration
+    # If it doesn't exist, this migration is a no-op (table will be created by a later migration)
+    conn = op.get_bind()
+    inspector = sa.inspect(conn)
+
+    if 'cart_items' not in inspector.get_table_names():
+        # Table doesn't exist yet, skip this migration
+        return
+
     # Since cart_items is transient data (shopping carts), we can safely truncate
     # existing data to avoid complex data migration
-    op.execute('TRUNCATE TABLE cart_items CASCADE')
+    op.execute("""
+    DO $$
+    BEGIN
+        IF EXISTS (
+            SELECT 1
+            FROM information_schema.tables
+            WHERE table_schema = 'public'
+            AND table_name = 'cart_items'
+        ) THEN
+            TRUNCATE TABLE cart_items CASCADE;
+        END IF;
+    END
+    $$;
+    """)
 
     # Drop the old String id column and create new UUID id column
     op.drop_column('cart_items', 'id')
