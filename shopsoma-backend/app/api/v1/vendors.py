@@ -323,16 +323,18 @@ async def delete_vendor_asset(
 
 @router.get("/orders", response_model=dict)
 async def list_vendor_orders(
-    status_filter: Optional[str] = Query(None, alias="status", description="Filter by fulfillment status"),
-    search: Optional[str] = Query(None, description="Search orders by order number or customer name"),
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(20, ge=1, le=100, description="Items per page"),
+    status_filter: Optional[str] = Query(None, alias="status", description="Filter by fulfillment status"),
+    search: Optional[str] = Query(None, description="Search orders by order number or customer name"),
     vendor: Vendor = Depends(get_approved_vendor),
     db: AsyncSession = Depends(get_db)
 ):
     """
     List orders containing vendor's products
     """
+    print(f"[list_vendor_orders] ENDPOINT REACHED - Vendor: {vendor.business_name}, Page: {page}, Search: '{search}'")
+
     # Base query - get distinct orders that have vendor's items
     query = select(Order).join(OrderItem).where(
         OrderItem.vendor_id == vendor.id
