@@ -324,6 +324,7 @@ async def delete_vendor_asset(
 @router.get("/orders", response_model=dict)
 async def list_vendor_orders(
     status_filter: Optional[str] = Query(None, alias="status", description="Filter by fulfillment status"),
+    search: Optional[str] = Query(None, description="Search orders by order number or customer name"),
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(20, ge=1, le=100, description="Items per page"),
     vendor: Vendor = Depends(get_approved_vendor),
@@ -340,6 +341,16 @@ async def list_vendor_orders(
     # Filter by status
     if status_filter:
         query = query.where(Order.fulfillment_status == status_filter)
+
+    # Search by order number or customer name
+    if search:
+        query = query.join(Order.customer).where(
+            or_(
+                Order.order_number.ilike(f"%{search}%"),
+                User.full_name.ilike(f"%{search}%"),
+                User.email.ilike(f"%{search}%")
+            )
+        )
 
     # Get total count
     count_query = select(func.count()).select_from(
