@@ -305,7 +305,7 @@ export default function Checkout() {
     try {
       const items = cart.items.map(item => ({
         product_id: item.product_id,
-        variant_id: item.variant.id,
+        variant_id: item.variant?.id?.startsWith('default-') ? null : item.variant?.id,
         quantity: item.quantity,
       }));
 
@@ -315,6 +315,7 @@ export default function Checkout() {
       // Prepare request based on guest vs authenticated user
       const reviewRequest: any = {
         items,
+        shipping_rate_id: selectedShippingRateId || undefined,
         promo_code: appliedPromo?.code,
       };
 
@@ -351,7 +352,7 @@ export default function Checkout() {
     try {
       const items = cart.items.map(item => ({
         product_id: item.product_id,
-        variant_id: item.variant.id,
+        variant_id: item.variant?.id?.startsWith('default-') ? null : item.variant?.id,
         quantity: item.quantity,
       }));
 
@@ -361,6 +362,7 @@ export default function Checkout() {
       // Prepare order request based on guest vs authenticated user
       const orderRequest: any = {
         items,
+        shipping_rate_id: selectedShippingRateId || undefined,
         promo_code: appliedPromo?.code,
       };
 
