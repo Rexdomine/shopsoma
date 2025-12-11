@@ -596,7 +596,7 @@ async def create_order(
     for order_item in created_order_items:
         # Get vendor info
         vendor_result = await db.execute(
-            select(Vendor).where(Vendor.id == order_item.vendor_id)
+            select(Vendor).options(selectinload(Vendor.user)).where(Vendor.id == order_item.vendor_id)
         )
         vendor = vendor_result.scalar_one_or_none()
 
