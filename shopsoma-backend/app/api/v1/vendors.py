@@ -434,11 +434,11 @@ async def get_vendor_order(
     vendor: Vendor = Depends(get_approved_vendor),
     db: AsyncSession = Depends(get_db)
 ):
-    """Get specific order details (only vendor's items)"""
+    """Get specific order details (only vendor's items) with pickup/shipping information"""
     # Get order
     result = await db.execute(
         select(Order).where(Order.id == order_id).options(
-            selectinload(Order.items),
+            selectinload(Order.items).selectinload(OrderItem.pickup),
             selectinload(Order.customer),
             selectinload(Order.shipping_address)
         )
@@ -460,9 +460,29 @@ async def get_vendor_order(
             detail="You don't have access to this order"
         )
 
-    # Serialize order items to dictionaries
+    # Serialize order items to dictionaries with pickup information
     serialized_items = []
     for item in vendor_items:
+        # Serialize pickup information if available
+        pickup_data = None
+        if item.pickup:
+            pickup_data = {
+                "id": str(item.pickup.id),
+                "order_type": item.pickup.order_type.value,
+                "scheduled_pickup_date": item.pickup.scheduled_pickup_date.isoformat() if item.pickup.scheduled_pickup_date else None,
+                "actual_pickup_date": item.pickup.actual_pickup_date.isoformat() if item.pickup.actual_pickup_date else None,
+                "pickup_address": item.pickup.pickup_address,
+                "logistics_partner": item.pickup.logistics_partner,
+                "tracking_number": item.pickup.tracking_number,
+                "status": item.pickup.status.value,
+                "qc_center_arrival_date": item.pickup.qc_center_arrival_date.isoformat() if item.pickup.qc_center_arrival_date else None,
+                "qc_approved_date": item.pickup.qc_approved_date.isoformat() if item.pickup.qc_approved_date else None,
+                "qc_notes": item.pickup.qc_notes,
+                "vendor_notes": item.pickup.vendor_notes,
+                "created_at": item.pickup.created_at.isoformat() if item.pickup.created_at else None,
+                "completed_at": item.pickup.completed_at.isoformat() if item.pickup.completed_at else None,
+            }
+
         serialized_items.append({
             "id": str(item.id),
             "order_id": str(item.order_id),
@@ -477,6 +497,7 @@ async def get_vendor_order(
             "vendor_payout": float(item.vendor_payout),
             "fulfillment_status": item.fulfillment_status.value,
             "created_at": item.created_at.isoformat() if item.created_at else None,
+            "pickup": pickup_data,
         })
 
     return {
@@ -501,54 +522,8 @@ async def get_vendor_order(
     }
 
 
-@router.patch("/orders/{order_id}/items/{item_id}", response_model=dict)
-async def update_vendor_order_item(
-    order_id: UUID,
-    item_id: UUID,
-    update_data: VendorOrderItemUpdate,
-    vendor: Vendor = Depends(get_approved_vendor),
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Update fulfillment status of an order item (vendor can only update their own items)
-    """
-    from app.models.order import FulfillmentStatus
-
-    # Get the order item
-    result = await db.execute(
-        select(OrderItem).where(
-            and_(
-                OrderItem.id == item_id,
-                OrderItem.order_id == order_id,
-                OrderItem.vendor_id == vendor.id
-            )
-        )
-    )
-    item = result.scalar_one_or_none()
-
-    if not item:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Order item not found or you don't have access to it"
-        )
-
-    # Update fulfillment status
-    try:
-        item.fulfillment_status = FulfillmentStatus(update_data.fulfillment_status)
-        await db.commit()
-        await db.refresh(item)
-
-        return {
-            "id": item.id,
-            "order_id": item.order_id,
-            "fulfillment_status": item.fulfillment_status.value,
-            "message": "Order item status updated successfully"
-        }
-    except ValueError:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid fulfillment status"
-        )
+# NOTE: Vendors cannot update fulfillment status - only admin can do this
+# Fulfillment status is managed by Shopsoma logistics team through admin panel
 
 
 # ==================== VENDOR PICKUPS ====================

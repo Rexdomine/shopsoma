@@ -62,6 +62,33 @@ export const buildMockTracking = (orderId: string): OrderTracking => {
 // Vendor Order Management Types
 export type VendorOrderStatus = 'pending' | 'confirmed' | 'processing' | 'shipped' | 'delivered' | 'cancelled' | 'returned';
 
+export type PickupStatus =
+  | 'scheduled'
+  | 'in_transit'
+  | 'delivered_to_qc'
+  | 'qc_approved'
+  | 'qc_rejected'
+  | 'shipped_to_customer'
+  | 'completed'
+  | 'cancelled';
+
+export interface VendorPickup {
+  id: string;
+  order_type: 'rtw' | 'made_to_order' | 'custom';
+  scheduled_pickup_date: string | null;
+  actual_pickup_date: string | null;
+  pickup_address: string | null;
+  logistics_partner: string | null;
+  tracking_number: string | null;
+  status: PickupStatus;
+  qc_center_arrival_date: string | null;
+  qc_approved_date: string | null;
+  qc_notes: string | null;
+  vendor_notes: string | null;
+  created_at: string | null;
+  completed_at: string | null;
+}
+
 export interface VendorOrderItem {
   id: string;
   order_id: string;
@@ -77,6 +104,7 @@ export interface VendorOrderItem {
   fulfillment_status: string;
   created_at: string;
   product_image_url?: string;
+  pickup: VendorPickup | null;
 }
 
 export interface VendorOrder {
@@ -278,16 +306,9 @@ export const getVendorOrder = async (orderId: string): Promise<VendorOrder> => {
 /**
  * Update order item fulfillment status
  */
-export const updateVendorOrderItem = async (
-  orderId: string,
-  itemId: string,
-  fulfillmentStatus: string
-): Promise<{ id: string; order_id: string; fulfillment_status: string; message: string }> => {
-  const response = await api.patch(`/vendor/orders/${orderId}/items/${itemId}`, {
-    fulfillment_status: fulfillmentStatus,
-  });
-  return response.data;
-};
+// NOTE: Vendors cannot update fulfillment status
+// Fulfillment is managed by Shopsoma logistics team through admin panel
+// This function has been removed
 
 /**
  * Export orders to CSV

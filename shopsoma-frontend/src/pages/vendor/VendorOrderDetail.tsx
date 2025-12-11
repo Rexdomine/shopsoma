@@ -5,133 +5,20 @@ import {
   MapPin,
   Package,
   CheckCircle2,
-  Pencil,
-  X,
   Loader2,
   ChevronDown,
+  Truck,
+  ClipboardCheck,
+  Home,
 } from 'lucide-react';
 import VendorSidebar from '../../components/vendor/VendorSidebar';
 import { ROUTES } from '../../config/constants';
-import { getVendorOrder, updateVendorOrderItem, type VendorOrder, type VendorOrderItem } from '../../services/orderService';
+import { getVendorOrder, type VendorOrder, type VendorOrderItem, type VendorPickup, type PickupStatus } from '../../services/orderService';
 import { useToast } from '../../hooks/useToast';
 import ToastContainer from '../../components/ui/ToastContainer';
 
-type TimelineEntry = {
-  date: string;
-  time: string;
-  title: string;
-  description: string;
-  state?: 'active' | 'muted';
-};
-
-type OrderItem = {
-  name: string;
-  variant: string;
-  price: number;
-  quantity: number;
-  status: 'low' | 'ok' | 'delayed';
-  image: string;
-  stock?: number;
-  size?: string;
-  color?: string;
-};
-
-const mockDetail = {
-  id: 'BZV6VD',
-  orderedOn: '8th Sept 2025',
-  status: 'Low Stock',
-  statusTone: 'warning',
-  estimatedDelivery: '19th July 2025',
-  totalAmount: 13450.32,
-  shippingProgress: 82,
-  origin: 'Shopsoma Warehouse',
-  destination: 'Delivered',
-  timeline: [
-    {
-      date: '8th Sept',
-      time: '6:00AM',
-      title: 'The order has been shipped',
-      description: 'Distribution Center, Lagos',
-    },
-    {
-      date: '6th Sept',
-      time: '4:37PM',
-      title: 'Item stock low. Please ship new stock',
-      description: 'Shopsoma Warehouse, Lagos.',
-      state: 'muted',
-    },
-    {
-      date: '3rd Sept',
-      time: '9:00AM',
-      title: 'Order undergoing inspection',
-      description: 'Shopsoma Warehouse, Lagos.',
-      state: 'muted',
-    },
-    {
-      date: '1st Sept',
-      time: '8:34PM',
-      title: 'Order placed',
-      description: '',
-      state: 'muted',
-    },
-  ] as TimelineEntry[],
-  items: [
-    {
-      name: 'Goth raclette irony pbr&b it.',
-      variant: 'XL, Red',
-      price: 837,
-      quantity: 1,
-      status: 'low',
-      image: '/images/demo-image-2.svg',
-      stock: 12,
-      size: 'XL',
-      color: 'Maroon',
-    },
-    {
-      name: 'Goth raclette irony pbr&b it.',
-      variant: 'XL, Red',
-      price: 837,
-      quantity: 1,
-      status: 'delayed',
-      image: '/images/demo-image-3.svg',
-      stock: 6,
-      size: 'L',
-      color: 'Cedar',
-    },
-    {
-      name: 'Goth raclette irony pbr&b it.',
-      variant: 'XL, Red',
-      price: 837,
-      quantity: 1,
-      status: 'ok',
-      image: '/images/demo-image-4.svg',
-      stock: 18,
-      size: 'M',
-      color: 'Emerald',
-    },
-  ] as OrderItem[],
-};
-
 function formatCurrency(amount: number, currency = 'USD') {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(amount);
-}
-
-function StockBadge({ status }: { status: OrderItem['status'] }) {
-  const styles =
-    status === 'low'
-      ? 'bg-[#FEF3E2] text-[#D97706]'
-      : status === 'delayed'
-      ? 'bg-rose-100 text-rose-700'
-      : 'bg-emerald-100 text-emerald-700';
-
-  const label =
-    status === 'low' ? 'Low Stock' : status === 'delayed' ? 'Delayed' : 'In Stock';
-
-  return (
-    <span className={`px-3 py-1 rounded-full text-xs font-semibold ${styles}`}>
-      {label}
-    </span>
-  );
 }
 
 function StatusPill({ label, tone = 'neutral' }: { label: string; tone?: 'success' | 'warning' | 'neutral' }) {
@@ -141,16 +28,199 @@ function StatusPill({ label, tone = 'neutral' }: { label: string; tone?: 'succes
   return <span className={`${base} bg-gray-100 text-gray-700`}>{label}</span>;
 }
 
+// Shipping Status Card Component
+function ShippingStatusCard({ pickup }: { pickup: VendorPickup | null }) {
+  if (!pickup) {
+    return (
+      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="h-11 w-11 rounded-xl bg-gray-100 flex items-center justify-center">
+            <Truck className="w-5 h-5 text-gray-400" />
+          </div>
+          <div>
+            <p className="text-sm font-semibold text-gray-900">Shipping Status</p>
+            <p className="text-xs text-gray-500">No pickup scheduled yet</p>
+          </div>
+        </div>
+        <div className="text-sm text-gray-600">
+          <p>Shopsoma will schedule a pickup once your order preparation is confirmed.</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Map pickup status to progress percentage and display
+  const getPickupProgress = (status: PickupStatus): number => {
+    const progressMap: Record<PickupStatus, number> = {
+      scheduled: 10,
+      in_transit: 30,
+      delivered_to_qc: 50,
+      qc_approved: 70,
+      qc_rejected: 50,
+      shipped_to_customer: 85,
+      completed: 100,
+      cancelled: 0,
+    };
+    return progressMap[status] || 0;
+  };
+
+  const getStatusLabel = (status: PickupStatus): string => {
+    const labelMap: Record<PickupStatus, string> = {
+      scheduled: 'Pickup Scheduled',
+      in_transit: 'In Transit to QC',
+      delivered_to_qc: 'Delivered to QC Center',
+      qc_approved: 'QC Approved',
+      qc_rejected: 'QC Rejected',
+      shipped_to_customer: 'Shipped to Customer',
+      completed: 'Delivered',
+      cancelled: 'Cancelled',
+    };
+    return labelMap[status] || status;
+  };
+
+  const getOriginLabel = (): string => {
+    if (pickup.pickup_address) {
+      return pickup.pickup_address.substring(0, 30) + (pickup.pickup_address.length > 30 ? '...' : '');
+    }
+    return 'Vendor Location';
+  };
+
+  const getDestinationLabel = (status: PickupStatus): string => {
+    if (status === 'completed') return 'Delivered';
+    if (status === 'shipped_to_customer') return 'En Route to Customer';
+    if (['qc_approved', 'qc_rejected', 'delivered_to_qc'].includes(status)) return 'QC Center';
+    if (status === 'in_transit') return 'In Transit';
+    return 'Pending Pickup';
+  };
+
+  const progress = getPickupProgress(pickup.status);
+  const isRejected = pickup.status === 'qc_rejected';
+  const isCancelled = pickup.status === 'cancelled';
+
+  return (
+    <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6">
+      {/* Header */}
+      <div className="flex items-center gap-3 mb-6">
+        <div className={`h-11 w-11 rounded-xl flex items-center justify-center ${
+          isCancelled ? 'bg-gray-100' : isRejected ? 'bg-rose-100' : 'bg-[#0B1D2C]'
+        }`}>
+          <Truck className={`w-5 h-5 ${isCancelled ? 'text-gray-400' : isRejected ? 'text-rose-600' : 'text-white'}`} />
+        </div>
+        <div>
+          <p className="text-sm font-semibold text-gray-900">Shipping Status</p>
+          <p className="text-xs text-gray-500">{getStatusLabel(pickup.status)}</p>
+        </div>
+      </div>
+
+      {/* Progress Visualization */}
+      <div className="mb-6">
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-2">
+            <Home className="w-4 h-4 text-gray-500" />
+            <span className="text-sm text-gray-700">{getOriginLabel()}</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <MapPin className="w-4 h-4 text-gray-500" />
+            <span className="text-sm text-gray-700">{getDestinationLabel(pickup.status)}</span>
+          </div>
+        </div>
+
+        {/* Progress Bar */}
+        <div className="relative h-2 bg-gray-100 rounded-full overflow-hidden">
+          <div
+            className={`absolute top-0 left-0 h-full rounded-full transition-all duration-500 ${
+              isCancelled ? 'bg-gray-400' : isRejected ? 'bg-rose-500' : 'bg-[#105E53]'
+            }`}
+            style={{ width: `${progress}%` }}
+          />
+        </div>
+        <p className="text-xs text-gray-500 mt-2 text-center">{progress}% Complete</p>
+      </div>
+
+      {/* Details Grid */}
+      <div className="grid grid-cols-2 gap-4 text-sm">
+        {pickup.tracking_number && (
+          <div>
+            <p className="text-xs text-gray-500 mb-1">Tracking Number</p>
+            <p className="font-medium text-gray-900">{pickup.tracking_number}</p>
+          </div>
+        )}
+        {pickup.logistics_partner && (
+          <div>
+            <p className="text-xs text-gray-500 mb-1">Logistics Partner</p>
+            <p className="font-medium text-gray-900">{pickup.logistics_partner}</p>
+          </div>
+        )}
+        {pickup.scheduled_pickup_date && (
+          <div>
+            <p className="text-xs text-gray-500 mb-1">Scheduled Pickup</p>
+            <p className="font-medium text-gray-900">
+              {new Date(pickup.scheduled_pickup_date).toLocaleDateString()}
+            </p>
+          </div>
+        )}
+        {pickup.actual_pickup_date && (
+          <div>
+            <p className="text-xs text-gray-500 mb-1">Actual Pickup</p>
+            <p className="font-medium text-gray-900">
+              {new Date(pickup.actual_pickup_date).toLocaleDateString()}
+            </p>
+          </div>
+        )}
+        {pickup.qc_center_arrival_date && (
+          <div>
+            <p className="text-xs text-gray-500 mb-1">QC Center Arrival</p>
+            <p className="font-medium text-gray-900">
+              {new Date(pickup.qc_center_arrival_date).toLocaleDateString()}
+            </p>
+          </div>
+        )}
+        {pickup.qc_approved_date && (
+          <div>
+            <p className="text-xs text-gray-500 mb-1">QC Approved</p>
+            <p className="font-medium text-gray-900">
+              {new Date(pickup.qc_approved_date).toLocaleDateString()}
+            </p>
+          </div>
+        )}
+      </div>
+
+      {/* QC Notes */}
+      {pickup.qc_notes && (
+        <div className="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+          <div className="flex items-start gap-2">
+            <ClipboardCheck className="w-4 h-4 text-amber-600 mt-0.5 flex-shrink-0" />
+            <div>
+              <p className="text-xs font-semibold text-amber-900 mb-1">QC Notes</p>
+              <p className="text-sm text-amber-800">{pickup.qc_notes}</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Vendor Notes */}
+      {pickup.vendor_notes && (
+        <div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+          <div className="flex items-start gap-2">
+            <Package className="w-4 h-4 text-blue-600 mt-0.5 flex-shrink-0" />
+            <div>
+              <p className="text-xs font-semibold text-blue-900 mb-1">Your Notes</p>
+              <p className="text-sm text-blue-800">{pickup.vendor_notes}</p>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function VendorOrderDetail() {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
-  const { toasts, hideToast, error, success } = useToast();
+  const { toasts, hideToast, error } = useToast();
 
   const [order, setOrder] = useState<VendorOrder | null>(null);
   const [loading, setLoading] = useState(true);
-  const [selectedItem, setSelectedItem] = useState<VendorOrderItem | null>(null);
-  const [statusSelection, setStatusSelection] = useState<string>('pending');
-  const [updating, setUpdating] = useState(false);
 
   useEffect(() => {
     const fetchOrder = async () => {
@@ -179,46 +249,6 @@ export default function VendorOrderDetail() {
     fetchOrder();
   }, [id, navigate, error]);
 
-  const handleEditItem = (item: VendorOrderItem) => {
-    setSelectedItem(item);
-    setStatusSelection(item.fulfillment_status);
-  };
-
-  const closeModal = () => setSelectedItem(null);
-
-  const handleSaveStatus = async () => {
-    if (!selectedItem || !order) return;
-
-    try {
-      setUpdating(true);
-      await updateVendorOrderItem(order.id, selectedItem.id, statusSelection);
-
-      // Update local state
-      setOrder(prev => {
-        if (!prev) return prev;
-        return {
-          ...prev,
-          items: prev.items.map(item =>
-            item.id === selectedItem.id
-              ? { ...item, fulfillment_status: statusSelection }
-              : item
-          ),
-        };
-      });
-
-      success('Order item status updated successfully', 'Updated');
-      closeModal();
-    } catch (err: any) {
-      console.error('Failed to update order item', err);
-      error(
-        err.response?.data?.detail || 'Failed to update order item',
-        'Update Failed'
-      );
-    } finally {
-      setUpdating(false);
-    }
-  };
-
   if (loading) {
     return (
       <div className="flex min-h-screen bg-gray-50">
@@ -234,6 +264,9 @@ export default function VendorOrderDetail() {
   }
 
   if (!order) return null;
+
+  // Get the first item's pickup for the shipping status card
+  const primaryPickup = order.items[0]?.pickup || null;
 
   return (
     <div className="flex min-h-screen bg-gray-50">
@@ -303,6 +336,9 @@ export default function VendorOrderDetail() {
             </div>
           </div>
 
+          {/* Shipping Status Card */}
+          <ShippingStatusCard pickup={primaryPickup} />
+
           {/* Details grid */}
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
             {/* Customer & Shipping Info */}
@@ -352,14 +388,6 @@ export default function VendorOrderDetail() {
                       <p className="text-xs text-gray-500 mt-1">Payout: ₦{item.vendor_payout.toFixed(2)}</p>
                     </div>
                     <div className="flex items-center gap-3">
-                      <button
-                        type="button"
-                        className="inline-flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 border border-gray-200 rounded-lg hover:bg-gray-50 transition"
-                        onClick={() => handleEditItem(item)}
-                      >
-                        <Pencil className="w-4 h-4" />
-                        Update
-                      </button>
                       <span className={`px-3 py-1 rounded-full text-xs font-semibold ${
                         item.fulfillment_status === 'delivered' ? 'bg-[#E8F7EF] text-[#19984B]' :
                         item.fulfillment_status === 'shipped' ? 'bg-blue-100 text-blue-700' :
@@ -372,114 +400,23 @@ export default function VendorOrderDetail() {
                   </div>
                 ))}
               </div>
+
+              {/* Info Message */}
+              <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                <div className="flex items-start gap-3">
+                  <Package className="w-5 h-5 text-blue-600 mt-0.5 flex-shrink-0" />
+                  <div>
+                    <p className="text-sm font-semibold text-blue-900 mb-1">Vendor Responsibility</p>
+                    <p className="text-sm text-blue-800">
+                      Your role is to prepare orders for Shopsoma pickup. Fulfillment status updates are managed by the Shopsoma logistics team through the admin panel.
+                    </p>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </div>
       </div>
-
-      {selectedItem && (
-        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 px-4 py-8">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-3xl w-full overflow-hidden">
-            <div className="p-6 space-y-4">
-              <div className="flex items-start justify-between gap-3">
-                <div className="space-y-1">
-                  <p className="text-sm text-gray-500">₦{selectedItem.unit_price.toFixed(2)}</p>
-                  <h3 className="text-lg font-semibold text-gray-900 leading-tight">{selectedItem.product_title}</h3>
-                </div>
-                <button
-                  type="button"
-                  onClick={closeModal}
-                  className="text-gray-500 hover:text-gray-700"
-                  aria-label="Close edit modal"
-                  disabled={updating}
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3 text-sm text-gray-800">
-                <div className="flex justify-between py-2 border-b border-gray-100">
-                  <span className="text-gray-500">Quantity</span>
-                  <span className="font-semibold">{selectedItem.quantity}</span>
-                </div>
-                <div className="flex justify-between py-2 border-b border-gray-100">
-                  <span className="text-gray-500">Subtotal</span>
-                  <span className="font-semibold">₦{selectedItem.subtotal.toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between py-2 border-b border-gray-100">
-                  <span className="text-gray-500">Your Payout</span>
-                  <span className="font-semibold">₦{selectedItem.vendor_payout.toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between py-2 border-b border-gray-100">
-                  <span className="text-gray-500">Current Status</span>
-                  <span className="font-semibold capitalize">{selectedItem.fulfillment_status.replace('_', ' ')}</span>
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <p className="text-xs text-gray-500 uppercase tracking-[0.2em]">Update Fulfillment Status</p>
-                <div className="flex flex-wrap gap-2">
-                  {(['pending', 'processing', 'shipped', 'delivered', 'cancelled']).map((status) => {
-                    const isActive = statusSelection === status;
-                    const colors =
-                      status === 'pending'
-                        ? 'bg-amber-50 text-amber-700 border-amber-100'
-                        : status === 'processing'
-                        ? 'bg-blue-50 text-blue-700 border-blue-100'
-                        : status === 'shipped'
-                        ? 'bg-purple-50 text-purple-700 border-purple-100'
-                        : status === 'delivered'
-                        ? 'bg-emerald-50 text-emerald-700 border-emerald-100'
-                        : 'bg-emerald-50 text-emerald-700 border-emerald-100';
-                    return (
-                      <button
-                        key={status}
-                        type="button"
-                        onClick={() => setStatusSelection(status)}
-                        disabled={updating}
-                        className={`px-3 py-1.5 rounded-full text-xs font-semibold border transition disabled:opacity-50 ${
-                          isActive ? colors + ' ring-2 ring-offset-1 ring-gray-100' : 'bg-gray-100 text-gray-700 border-gray-200'
-                        }`}
-                      >
-                        {status.charAt(0).toUpperCase() + status.slice(1)}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <div className="flex items-center gap-3 pt-4">
-                <button
-                  type="button"
-                  className="flex-1 px-4 py-3 border border-gray-300 text-gray-700 font-semibold rounded-lg hover:bg-gray-50 transition disabled:opacity-50"
-                  onClick={closeModal}
-                  disabled={updating}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  className="flex-1 bg-[#105E53] text-white font-semibold rounded-lg py-3 hover:bg-[#0c4c45] transition disabled:opacity-50 inline-flex items-center justify-center gap-2"
-                  onClick={handleSaveStatus}
-                  disabled={updating}
-                >
-                  {updating ? (
-                    <>
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                      Updating...
-                    </>
-                  ) : (
-                    <>
-                      <CheckCircle2 className="h-4 w-4" />
-                      Update Status
-                    </>
-                  )}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
 
       <ToastContainer toasts={toasts} onDismiss={hideToast} />
     </div>
