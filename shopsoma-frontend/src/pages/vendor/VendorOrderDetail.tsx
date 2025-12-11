@@ -309,8 +309,9 @@ export default function VendorOrderDetail() {
             </div>
           </div>
 
-          {/* Top overview */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {/* Top overview - 3 column grid */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {/* Total Payout */}
             <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-5 flex items-center gap-3">
               <div className="h-11 w-11 rounded-xl bg-[#0B1D2C] text-white flex items-center justify-center shadow-md flex-shrink-0">
                 <Package className="w-5 h-5" />
@@ -323,6 +324,7 @@ export default function VendorOrderDetail() {
               </div>
             </div>
 
+            {/* Items Count */}
             <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-5 flex items-center gap-3">
               <div className="h-11 w-11 rounded-xl bg-[#0B1D2C] text-white flex items-center justify-center shadow-md flex-shrink-0">
                 <Package className="w-5 h-5" />
@@ -334,10 +336,71 @@ export default function VendorOrderDetail() {
                 </p>
               </div>
             </div>
+
+            {/* Shipping Status - Compact Card Version */}
+            <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-5">
+              <div className="flex items-center gap-3 mb-3">
+                <div className={`h-11 w-11 rounded-xl flex items-center justify-center flex-shrink-0 ${
+                  primaryPickup
+                    ? primaryPickup.status === 'cancelled' ? 'bg-gray-100'
+                      : primaryPickup.status === 'qc_rejected' ? 'bg-rose-100'
+                      : 'bg-[#0B1D2C]'
+                    : 'bg-gray-100'
+                }`}>
+                  <Truck className={`w-5 h-5 ${
+                    primaryPickup
+                      ? primaryPickup.status === 'cancelled' ? 'text-gray-400'
+                        : primaryPickup.status === 'qc_rejected' ? 'text-rose-600'
+                        : 'text-white'
+                      : 'text-gray-400'
+                  }`} />
+                </div>
+                <div className="min-w-0 overflow-hidden">
+                  <p className="text-[11px] uppercase tracking-[0.2em] text-gray-400">Shipping</p>
+                  <p className="text-sm font-semibold text-gray-900 mt-1 truncate">
+                    {primaryPickup
+                      ? primaryPickup.status === 'scheduled' ? 'Pickup Scheduled'
+                        : primaryPickup.status === 'in_transit' ? 'In Transit'
+                        : primaryPickup.status === 'delivered_to_qc' ? 'At QC Center'
+                        : primaryPickup.status === 'qc_approved' ? 'QC Approved'
+                        : primaryPickup.status === 'shipped_to_customer' ? 'Shipped'
+                        : primaryPickup.status === 'completed' ? 'Delivered'
+                        : primaryPickup.status
+                      : 'Not Scheduled'
+                    }
+                  </p>
+                </div>
+              </div>
+              {primaryPickup && (
+                <div className="relative h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                  <div
+                    className={`absolute top-0 left-0 h-full rounded-full transition-all duration-500 ${
+                      primaryPickup.status === 'cancelled' ? 'bg-gray-400'
+                        : primaryPickup.status === 'qc_rejected' ? 'bg-rose-500'
+                        : 'bg-[#105E53]'
+                    }`}
+                    style={{
+                      width: `${
+                        primaryPickup.status === 'scheduled' ? 10
+                          : primaryPickup.status === 'in_transit' ? 30
+                          : primaryPickup.status === 'delivered_to_qc' ? 50
+                          : primaryPickup.status === 'qc_approved' ? 70
+                          : primaryPickup.status === 'qc_rejected' ? 50
+                          : primaryPickup.status === 'shipped_to_customer' ? 85
+                          : primaryPickup.status === 'completed' ? 100
+                          : 0
+                      }%`
+                    }}
+                  />
+                </div>
+              )}
+            </div>
           </div>
 
-          {/* Shipping Status Card */}
-          <ShippingStatusCard pickup={primaryPickup} />
+          {/* Detailed Shipping Status Card (Expanded View) */}
+          {primaryPickup && (
+            <ShippingStatusCard pickup={primaryPickup} />
+          )}
 
           {/* Details grid */}
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
@@ -379,8 +442,30 @@ export default function VendorOrderDetail() {
               <div className="divide-y divide-gray-200">
                 {order.items.map((item) => (
                   <div key={item.id} className="py-4 flex items-center gap-4">
-                    <div className="h-16 w-16 rounded-xl bg-gray-100 flex items-center justify-center border border-gray-200">
-                      <Package className="h-6 w-6 text-gray-400" />
+                    {/* Product Image or Placeholder */}
+                    <div className="h-16 w-16 rounded-xl bg-gray-100 border border-gray-200 overflow-hidden flex-shrink-0">
+                      {item.product_image_url ? (
+                        <img
+                          src={item.product_image_url}
+                          alt={item.product_title}
+                          className="h-full w-full object-cover"
+                          onError={(e) => {
+                            // Fallback to placeholder on error
+                            e.currentTarget.style.display = 'none';
+                            const parent = e.currentTarget.parentElement;
+                            if (parent) {
+                              parent.classList.add('flex', 'items-center', 'justify-center');
+                              const icon = document.createElement('div');
+                              icon.innerHTML = '<svg class="h-6 w-6 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"></path></svg>';
+                              parent.appendChild(icon);
+                            }
+                          }}
+                        />
+                      ) : (
+                        <div className="h-full w-full flex items-center justify-center">
+                          <Package className="h-6 w-6 text-gray-400" />
+                        </div>
+                      )}
                     </div>
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-semibold text-gray-900 line-clamp-1">{item.product_title}</p>

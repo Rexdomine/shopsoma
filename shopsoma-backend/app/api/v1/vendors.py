@@ -435,10 +435,11 @@ async def get_vendor_order(
     db: AsyncSession = Depends(get_db)
 ):
     """Get specific order details (only vendor's items) with pickup/shipping information"""
-    # Get order
+    # Get order with product images
     result = await db.execute(
         select(Order).where(Order.id == order_id).options(
             selectinload(Order.items).selectinload(OrderItem.pickup),
+            selectinload(Order.items).selectinload(OrderItem.product).selectinload(Product.images),
             selectinload(Order.customer),
             selectinload(Order.shipping_address)
         )
@@ -483,6 +484,18 @@ async def get_vendor_order(
                 "completed_at": item.pickup.completed_at.isoformat() if item.pickup.completed_at else None,
             }
 
+        # Get product image (prefer thumbnail, fallback to primary image)
+        product_image_url = None
+        if item.product and item.product.images:
+            # Try to find primary image first
+            primary_image = next((img for img in item.product.images if img.is_primary), None)
+            if primary_image:
+                product_image_url = primary_image.thumbnail_url or primary_image.image_url
+            # If no primary, use first image
+            elif item.product.images:
+                first_image = item.product.images[0]
+                product_image_url = first_image.thumbnail_url or first_image.image_url
+
         serialized_items.append({
             "id": str(item.id),
             "order_id": str(item.order_id),
@@ -498,6 +511,7 @@ async def get_vendor_order(
             "fulfillment_status": item.fulfillment_status.value,
             "created_at": item.created_at.isoformat() if item.created_at else None,
             "pickup": pickup_data,
+            "product_image_url": product_image_url,
         })
 
     return {
