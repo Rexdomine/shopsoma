@@ -37,11 +37,19 @@ export default function VendorOrders() {
         page_size: 20,
         search,
       });
-      setOrders(response.orders);
-      setTotal(response.total);
-      setTotalPages(response.total_pages);
-    } catch (err) {
+      console.log('Vendor orders response:', response); // Debug logging
+      setOrders(response.orders || []);
+      setTotal(response.total || 0);
+      setTotalPages(response.total_pages || 1);
+    } catch (err: any) {
       console.error('Error fetching orders:', err);
+      console.error('Error details:', err.response?.data || err.message);
+      // Show user-friendly error message
+      const errorMessage = err.response?.data?.detail || 'Failed to load orders. Please try again.';
+      console.error(errorMessage);
+      setOrders([]);
+      setTotal(0);
+      setTotalPages(1);
     } finally {
       setLoading(false);
     }

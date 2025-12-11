@@ -15,6 +15,7 @@ import {
   LayoutDashboard,
   PanelLeftClose,
   PanelLeftOpen,
+  LogOut,
 } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
@@ -41,9 +42,18 @@ export default function VendorSidebar({
 }: SidebarProps) {
   const navigate = useNavigate();
   const location = useLocation();
-  const { user } = useAuth();
+  const { user, logout } = useAuth();
   const { isOnboarding } = useVendor();
   const [isCollapsed, setIsCollapsed] = useState(false);
+
+  const handleLogout = async () => {
+    try {
+      await logout();
+      navigate('/vendor/login');
+    } catch (error) {
+      console.error('Logout error:', error);
+    }
+  };
 
   // Override disableMain if vendor is in onboarding mode
   const shouldDisableMain = disableMain || isOnboarding;
@@ -234,6 +244,17 @@ export default function VendorSidebar({
         >
           {renderIcon('help', false)}
           {!isCollapsed && <span>Help & Support</span>}
+        </button>
+
+        {/* Logout Button */}
+        <button
+          type="button"
+          onClick={handleLogout}
+          className={`w-full flex items-center ${isCollapsed ? 'justify-center' : 'gap-3'} px-3 py-2 rounded-lg text-sm font-ui text-red-600 hover:bg-red-50 transition border-t border-gray-200 mt-2 pt-4`}
+          title={isCollapsed ? 'Logout' : ''}
+        >
+          <LogOut className="w-5 h-5" />
+          {!isCollapsed && <span>Logout</span>}
         </button>
       </div>
     </aside>
