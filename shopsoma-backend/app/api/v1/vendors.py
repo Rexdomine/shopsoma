@@ -460,10 +460,29 @@ async def get_vendor_order(
             detail="You don't have access to this order"
         )
 
+    # Serialize order items to dictionaries
+    serialized_items = []
+    for item in vendor_items:
+        serialized_items.append({
+            "id": str(item.id),
+            "order_id": str(item.order_id),
+            "product_id": str(item.product_id),
+            "product_title": item.product_title,
+            "variant_details": item.variant_details,
+            "unit_price": float(item.unit_price),
+            "quantity": item.quantity,
+            "subtotal": float(item.subtotal),
+            "commission_rate": float(item.commission_rate),
+            "commission_amount": float(item.commission_amount),
+            "vendor_payout": float(item.vendor_payout),
+            "fulfillment_status": item.fulfillment_status.value,
+            "created_at": item.created_at.isoformat() if item.created_at else None,
+        })
+
     return {
-        "id": order.id,
+        "id": str(order.id),
         "order_number": order.order_number,
-        "items": vendor_items,
+        "items": serialized_items,
         "customer_name": order.customer.full_name if order.customer else "Unknown",
         "customer_email": order.customer.email if order.customer else "Unknown",
         "shipping_address": {
@@ -476,8 +495,8 @@ async def get_vendor_order(
         } if order.shipping_address else None,
         "payment_status": order.payment_status.value,
         "fulfillment_status": order.fulfillment_status.value,
-        "created_at": order.created_at,
-        "confirmed_at": order.confirmed_at,
+        "created_at": order.created_at.isoformat() if order.created_at else None,
+        "confirmed_at": order.confirmed_at.isoformat() if order.confirmed_at else None,
         "customer_notes": order.customer_notes
     }
 
