@@ -245,19 +245,19 @@ export default function VendorOrders() {
             </div>
           ) : (
             <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-              <table className="w-full table-fixed">
+              <table className="w-full">
                 <thead className="bg-gray-50 border-b border-gray-200">
                   <tr>
-                    <th className="w-[180px] px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                    <th className="px-8 py-5 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
                       Order Number
                     </th>
-                    <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                    <th className="px-8 py-5 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
                       Order Items
                     </th>
-                    <th className="w-[140px] px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                    <th className="px-8 py-5 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider">
                       Your Payout
                     </th>
-                    <th className="w-[160px] px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                    <th className="px-8 py-5 text-center text-xs font-semibold text-gray-600 uppercase tracking-wider">
                       Status
                     </th>
                   </tr>
@@ -269,30 +269,30 @@ export default function VendorOrders() {
                       className="hover:bg-gray-50 transition cursor-pointer"
                       onClick={() => handleRowClick(order)}
                     >
-                      <td className="w-[180px] px-6 py-4">
-                        <div className="text-sm font-medium text-gray-900 whitespace-nowrap">Order {order.order_number}</div>
+                      <td className="px-8 py-6 whitespace-nowrap">
+                        <div className="text-sm font-semibold text-gray-900">Order {order.order_number}</div>
                       </td>
-                      <td className="px-6 py-4">
-                        <div className="text-sm text-gray-600 line-clamp-2">{getItemsSummary(order)}</div>
+                      <td className="px-8 py-6">
+                        <div className="text-sm text-gray-600">{getItemsSummary(order)}</div>
                       </td>
-                      <td className="w-[140px] px-6 py-4">
-                        <div className="text-sm font-medium text-gray-900 whitespace-nowrap">₦{calculateVendorPayout(order).toFixed(2)}</div>
+                      <td className="px-8 py-6 whitespace-nowrap text-right">
+                        <div className="text-sm font-semibold text-gray-900">₦{calculateVendorPayout(order).toLocaleString('en-NG', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
                       </td>
-                      <td className="w-[160px] px-6 py-4">{getStatusBadge(order.fulfillment_status)}</td>
+                      <td className="px-8 py-6 text-center">{getStatusBadge(order.fulfillment_status)}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
 
               {/* Pagination Footer */}
-              <div className="flex items-center justify-between px-6 py-4 border-t border-gray-200 bg-white">
+              <div className="flex items-center justify-between px-8 py-5 border-t border-gray-200 bg-white">
                 {/* Pagination Controls */}
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-3">
                   <button
                     type="button"
                     onClick={goToFirstPage}
                     disabled={currentPage === 1}
-                    className="p-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="p-2.5 border border-gray-300 rounded-lg hover:bg-gray-50 transition disabled:opacity-50 disabled:cursor-not-allowed"
                     aria-label="First page"
                   >
                     <ChevronsLeft className="h-4 w-4 text-gray-600" />
@@ -301,19 +301,19 @@ export default function VendorOrders() {
                     type="button"
                     onClick={goToPrevPage}
                     disabled={currentPage === 1}
-                    className="p-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="p-2.5 border border-gray-300 rounded-lg hover:bg-gray-50 transition disabled:opacity-50 disabled:cursor-not-allowed"
                     aria-label="Previous page"
                   >
                     <ChevronLeft className="h-4 w-4 text-gray-600" />
                   </button>
-                  <span className="px-4 py-2 text-sm font-medium text-gray-700">
+                  <span className="px-5 py-2.5 text-sm font-medium text-gray-700 bg-gray-50 rounded-lg border border-gray-200">
                     {String(currentPage).padStart(2, '0')}
                   </span>
                   <button
                     type="button"
                     onClick={goToNextPage}
                     disabled={currentPage === totalPages}
-                    className="p-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="p-2.5 border border-gray-300 rounded-lg hover:bg-gray-50 transition disabled:opacity-50 disabled:cursor-not-allowed"
                     aria-label="Next page"
                   >
                     <ChevronRight className="h-4 w-4 text-gray-600" />
@@ -322,7 +322,7 @@ export default function VendorOrders() {
                     type="button"
                     onClick={goToLastPage}
                     disabled={currentPage === totalPages}
-                    className="p-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="p-2.5 border border-gray-300 rounded-lg hover:bg-gray-50 transition disabled:opacity-50 disabled:cursor-not-allowed"
                     aria-label="Last page"
                   >
                     <ChevronsRight className="h-4 w-4 text-gray-600" />
@@ -333,7 +333,7 @@ export default function VendorOrders() {
                 <button
                   type="button"
                   onClick={handleExportCSV}
-                  className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50 transition"
+                  className="flex items-center gap-2.5 px-5 py-2.5 text-sm font-medium text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50 transition"
                 >
                   <Download className="h-4 w-4" />
                   Download CSV
