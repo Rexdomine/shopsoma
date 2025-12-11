@@ -10,6 +10,7 @@ import {
   Truck,
   ClipboardCheck,
   Home,
+  X,
 } from 'lucide-react';
 import VendorSidebar from '../../components/vendor/VendorSidebar';
 import { ROUTES } from '../../config/constants';
@@ -221,6 +222,7 @@ export default function VendorOrderDetail() {
 
   const [order, setOrder] = useState<VendorOrder | null>(null);
   const [loading, setLoading] = useState(true);
+  const [isShippingModalOpen, setIsShippingModalOpen] = useState(false);
 
   useEffect(() => {
     const fetchOrder = async () => {
@@ -248,6 +250,18 @@ export default function VendorOrderDetail() {
 
     fetchOrder();
   }, [id, navigate, error]);
+
+  // Handle escape key to close modal
+  useEffect(() => {
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && isShippingModalOpen) {
+        setIsShippingModalOpen(false);
+      }
+    };
+
+    document.addEventListener('keydown', handleEscape);
+    return () => document.removeEventListener('keydown', handleEscape);
+  }, [isShippingModalOpen]);
 
   if (loading) {
     return (
@@ -372,35 +386,40 @@ export default function VendorOrderDetail() {
                 </div>
               </div>
               {primaryPickup && (
-                <div className="relative h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                  <div
-                    className={`absolute top-0 left-0 h-full rounded-full transition-all duration-500 ${
-                      primaryPickup.status === 'cancelled' ? 'bg-gray-400'
-                        : primaryPickup.status === 'qc_rejected' ? 'bg-rose-500'
-                        : 'bg-[#105E53]'
-                    }`}
-                    style={{
-                      width: `${
-                        primaryPickup.status === 'scheduled' ? 10
-                          : primaryPickup.status === 'in_transit' ? 30
-                          : primaryPickup.status === 'delivered_to_qc' ? 50
-                          : primaryPickup.status === 'qc_approved' ? 70
-                          : primaryPickup.status === 'qc_rejected' ? 50
-                          : primaryPickup.status === 'shipped_to_customer' ? 85
-                          : primaryPickup.status === 'completed' ? 100
-                          : 0
-                      }%`
-                    }}
-                  />
-                </div>
+                <>
+                  <div className="relative h-1.5 bg-gray-100 rounded-full overflow-hidden mb-3">
+                    <div
+                      className={`absolute top-0 left-0 h-full rounded-full transition-all duration-500 ${
+                        primaryPickup.status === 'cancelled' ? 'bg-gray-400'
+                          : primaryPickup.status === 'qc_rejected' ? 'bg-rose-500'
+                          : 'bg-[#105E53]'
+                      }`}
+                      style={{
+                        width: `${
+                          primaryPickup.status === 'scheduled' ? 10
+                            : primaryPickup.status === 'in_transit' ? 30
+                            : primaryPickup.status === 'delivered_to_qc' ? 50
+                            : primaryPickup.status === 'qc_approved' ? 70
+                            : primaryPickup.status === 'qc_rejected' ? 50
+                            : primaryPickup.status === 'shipped_to_customer' ? 85
+                            : primaryPickup.status === 'completed' ? 100
+                            : 0
+                        }%`
+                      }}
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setIsShippingModalOpen(true)}
+                    className="text-xs text-gray-500 hover:text-gray-700 transition-colors flex items-center gap-1"
+                  >
+                    View More
+                    <ChevronDown className="w-3 h-3" />
+                  </button>
+                </>
               )}
             </div>
           </div>
-
-          {/* Detailed Shipping Status Card (Expanded View) */}
-          {primaryPickup && (
-            <ShippingStatusCard pickup={primaryPickup} />
-          )}
 
           {/* Details grid */}
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
@@ -502,6 +521,37 @@ export default function VendorOrderDetail() {
           </div>
         </div>
       </div>
+
+      {/* Shipping Details Modal */}
+      {isShippingModalOpen && primaryPickup && (
+        <div
+          className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+          onClick={() => setIsShippingModalOpen(false)}
+        >
+          <div
+            className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Header */}
+            <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between rounded-t-2xl">
+              <h2 className="text-lg font-semibold text-gray-900">Shipping Details</h2>
+              <button
+                type="button"
+                onClick={() => setIsShippingModalOpen(false)}
+                className="text-gray-400 hover:text-gray-600 transition-colors p-1 rounded-lg hover:bg-gray-100"
+                aria-label="Close modal"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Content - Reuse ShippingStatusCard content */}
+            <div className="p-6">
+              <ShippingStatusCard pickup={primaryPickup} />
+            </div>
+          </div>
+        </div>
+      )}
 
       <ToastContainer toasts={toasts} onDismiss={hideToast} />
     </div>
