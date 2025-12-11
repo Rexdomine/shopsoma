@@ -107,6 +107,9 @@ class Settings(BaseSettings):
     # Business Settings
     DEFAULT_COMMISSION_RATE: float = 12.5
 
+    # Admin Settings
+    ADMIN_EMAIL: str = "admin@shopsoma.com"
+
     # Celery
     CELERY_BROKER_URL: str = "redis://localhost:6379/1"
     CELERY_RESULT_BACKEND: str = "redis://localhost:6379/2"

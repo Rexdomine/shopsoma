@@ -337,6 +337,119 @@ class EmailService:
         html_content = self._wrap_email("Order Confirmation", body_html, "Your Shopsoma order has been received.")
         return await self.send_email(email, name, subject, html_content)
 
+    async def send_admin_order_notification(
+        self,
+        order_number: str,
+        customer_name: str,
+        customer_email: str,
+        order_date: datetime,
+        items: list,
+        subtotal: float,
+        shipping: float,
+        tax: float,
+        total: float,
+        payment_status: str,
+        shipping_address: Dict[str, str]
+    ) -> bool:
+        """
+        Send new order notification to admin
+
+        Args:
+            order_number: Order number
+            customer_name: Customer's full name
+            customer_email: Customer's email
+            order_date: When order was placed
+            items: List of order items
+            subtotal: Order subtotal
+            shipping: Shipping cost
+            tax: Tax amount
+            total: Total amount
+            payment_status: Payment status (paid, pending, etc.)
+            shipping_address: Shipping address dict
+
+        Returns:
+            bool: True if email sent successfully
+        """
+        from app.core.config import settings
+
+        subject = f"New Order Alert · {order_number}"
+        items_table = self._build_items_table(items)
+
+        def _addr(key: str):
+            return shipping_address.get(key) or shipping_address.get(key.replace('_', ''))
+
+        address_lines = "<br/>".join(
+            filter(
+                None,
+                [
+                    shipping_address.get('full_name'),
+                    _addr('address_line_1'),
+                    _addr('address_line_2'),
+                    f"{shipping_address.get('city', '')}, {shipping_address.get('state', '')} {shipping_address.get('postal_code', '')}",
+                    shipping_address.get('country', 'Nigeria'),
+                    f"Phone: {shipping_address.get('phone_number', '')}",
+                ],
+            )
+        )
+
+        # Payment status badge
+        payment_badge_colors = {
+            'paid': '#19984B',
+            'pending': '#D97706',
+            'failed': '#DC2626',
+        }
+        payment_color = payment_badge_colors.get(payment_status.lower(), '#6B7280')
+
+        body_html = f"""
+        <p style="font-size:16px;">New order received on Shopsoma.</p>
+        <div style="margin:24px 0;padding:20px;border:1px solid {BRAND_BORDER};border-radius:10px;background:{BRAND_LIGHT};">
+            <p style="margin:0;"><strong>Order Number:</strong> {order_number}</p>
+            <p style="margin:4px 0;"><strong>Order Date:</strong> {order_date.strftime('%d %B %Y · %I:%M %p')}</p>
+            <p style="margin:4px 0;"><strong>Payment Status:</strong> <span style="color:{payment_color};font-weight:600;">{payment_status.upper()}</span></p>
+        </div>
+        <div style="border:1px solid {BRAND_BORDER};border-radius:10px;padding:20px;margin-bottom:24px;">
+            <p style="margin:0 0 8px;font-weight:600;">Customer Information</p>
+            <p style="margin:0;color:#6B7280;"><strong>Name:</strong> {customer_name}</p>
+            <p style="margin:4px 0;color:#6B7280;"><strong>Email:</strong> {customer_email}</p>
+        </div>
+        <table style="width:100%;border-collapse:collapse;margin-bottom:24px;">
+            <thead>
+                <tr style="background:{BRAND_LIGHT};text-transform:uppercase;font-size:12px;letter-spacing:0.15em;color:#6B7280;">
+                    <th style="padding:12px;text-align:left;">Item</th>
+                    <th style="padding:12px;text-align:center;">Qty</th>
+                    <th style="padding:12px;text-align:right;">Price</th>
+                    <th style="padding:12px;text-align:right;">Subtotal</th>
+                </tr>
+            </thead>
+            <tbody>
+                {items_table}
+            </tbody>
+        </table>
+        <div style="border:1px solid {BRAND_BORDER};border-radius:10px;padding:20px;margin-bottom:24px;">
+            <table style="width:100%;font-size:14px;">
+                <tr><td>Subtotal</td><td style="text-align:right;">{self._format_amount(subtotal)}</td></tr>
+                <tr><td>Shipping</td><td style="text-align:right;">{self._format_amount(shipping)}</td></tr>
+                <tr><td>Tax (7.5%)</td><td style="text-align:right;">{self._format_amount(tax)}</td></tr>
+                <tr style="font-size:16px;font-weight:600;border-top:1px solid {BRAND_BORDER};">
+                    <td style="padding-top:8px;">Total</td>
+                    <td style="text-align:right;padding-top:8px;">{self._format_amount(total)}</td>
+                </tr>
+            </table>
+        </div>
+        <div style="border:1px solid {BRAND_BORDER};border-radius:10px;padding:20px;">
+            <p style="margin:0 0 8px;font-weight:600;">Shipping Address</p>
+            <p style="margin:0;color:#6B7280;">{address_lines}</p>
+        </div>
+        <p style="text-align:center;margin-top:32px;">
+            <a href="{settings.FRONTEND_BASE_URL}/admin/orders" style="display:inline-block;padding:12px 24px;background:{BRAND_PRIMARY};color:#fff;text-decoration:none;border-radius:999px;font-weight:600;">
+                View in Admin Dashboard
+            </a>
+        </p>
+        """
+
+        html_content = self._wrap_email("New Order", body_html, f"New order {order_number} from {customer_name}")
+        return await self.send_email(settings.ADMIN_EMAIL, "Admin", subject, html_content)
+
     async def send_order_status_update_email(
         self,
         email: str,

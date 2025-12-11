@@ -716,6 +716,21 @@ async def create_order(
             total=float(loaded_order.total_amount),
             shipping_address=shipping_addr_dict
         )
+
+        # Send admin notification email
+        await email_service.send_admin_order_notification(
+            order_number=loaded_order.order_number,
+            customer_name=loaded_order.customer.full_name,
+            customer_email=loaded_order.customer.email,
+            order_date=loaded_order.created_at,
+            items=email_items,
+            subtotal=float(loaded_order.subtotal),
+            shipping=float(loaded_order.shipping_cost),
+            tax=float(loaded_order.tax_amount),
+            total=float(loaded_order.total_amount),
+            payment_status=loaded_order.payment_status.value,
+            shipping_address=shipping_addr_dict
+        )
     except Exception as e:
         # Log error but don't fail order creation if email fails
         print(f"Failed to send order confirmation email for order {loaded_order.order_number}: {e}")
