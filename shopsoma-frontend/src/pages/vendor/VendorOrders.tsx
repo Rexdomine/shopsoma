@@ -20,6 +20,7 @@ export default function VendorOrders() {
   const [currentPage, setCurrentPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [total, setTotal] = useState(0);
+  const [error, setError] = useState<string | null>(null);
 
   // Calculate order stats
   const pendingCount = orders.filter((o) => o.status === 'pending' || o.status === 'processing').length;
@@ -32,21 +33,59 @@ export default function VendorOrders() {
   const fetchOrders = async () => {
     try {
       setLoading(true);
+      setError(null); // Clear previous errors
       const response = await getVendorOrders({
         page: currentPage,
         page_size: 20,
         search,
       });
-      console.log('Vendor orders response:', response); // Debug logging
+      console.log('✅ Vendor orders response:', response);
       setOrders(response.orders || []);
       setTotal(response.total || 0);
       setTotalPages(response.total_pages || 1);
     } catch (err: any) {
-      console.error('Error fetching orders:', err);
-      console.error('Error details:', err.response?.data || err.message);
-      // Show user-friendly error message
-      const errorMessage = err.response?.data?.detail || 'Failed to load orders. Please try again.';
-      console.error(errorMessage);
+      console.error('❌ Error fetching orders:', err);
+      console.error('📋 Error status:', err.response?.status);
+      console.error('📋 Error data:', err.response?.data);
+      console.error('📋 Full error:', err);
+
+      // Extract detailed error message
+      let userMessage = 'Failed to load orders. Please try again.';
+      let technicalDetails = '';
+
+      if (err.response?.data?.detail) {
+        const detail = err.response.data.detail;
+
+        // Handle structured error response
+        if (typeof detail === 'object') {
+          userMessage = detail.message || userMessage;
+          technicalDetails = JSON.stringify(detail, null, 2);
+
+          // Special handling for specific error codes
+          if (detail.error_code === 'VENDOR_PROFILE_NOT_FOUND') {
+            userMessage = 'No vendor profile found. Please complete vendor registration.';
+          } else if (detail.error_code === 'VENDOR_NOT_APPROVED') {
+            userMessage = 'Your vendor account is pending approval. Please wait for admin approval.';
+          } else if (detail.error_code === 'INVALID_ROLE') {
+            userMessage = 'Access denied. Please log in with a vendor account.';
+          }
+        } else {
+          // Handle string error response
+          userMessage = detail;
+          technicalDetails = detail;
+        }
+      } else if (err.response?.status === 401) {
+        userMessage = 'Authentication expired. Please log in again.';
+      } else if (err.response?.status === 403) {
+        userMessage = 'Access denied. Please check your account status.';
+      } else if (err.response?.status === 404) {
+        userMessage = 'Vendor profile not found. Please complete registration.';
+      }
+
+      console.error('🔍 User message:', userMessage);
+      console.error('🔍 Technical details:', technicalDetails);
+
+      setError(userMessage);
       setOrders([]);
       setTotal(0);
       setTotalPages(1);
@@ -178,6 +217,24 @@ export default function VendorOrders() {
               <div className="flex items-center justify-center py-20 text-gray-600 gap-3">
                 <Loader2 className="h-6 w-6 animate-spin" />
                 <span className="text-sm">Loading orders...</span>
+              </div>
+            </div>
+          ) : error ? (
+            <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+              <div className="px-6 py-20 text-center">
+                <div className="mb-4">
+                  <svg className="mx-auto h-12 w-12 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                  </svg>
+                </div>
+                <p className="text-red-600 font-medium text-base mb-2">Unable to Load Orders</p>
+                <p className="text-gray-600 text-sm mb-4">{error}</p>
+                <button
+                  onClick={() => fetchOrders()}
+                  className="inline-flex items-center px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#105E53]"
+                >
+                  Try Again
+                </button>
               </div>
             </div>
           ) : orders.length === 0 ? (

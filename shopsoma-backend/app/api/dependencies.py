@@ -103,11 +103,21 @@ async def get_current_vendor(
     current_user: User = Depends(get_current_active_user)
 ) -> User:
     """Require vendor role"""
+    print(f"[get_current_vendor] User ID: {current_user.id}, Email: {current_user.email}, Role: {current_user.role}")
+
     if current_user.role != UserRole.VENDOR:
+        print(f"[get_current_vendor] ERROR: User role is {current_user.role}, not VENDOR")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Vendor access required"
+            detail={
+                "message": "Vendor access required",
+                "error_code": "INVALID_ROLE",
+                "user_role": current_user.role.value,
+                "required_role": "vendor"
+            }
         )
+
+    print(f"[get_current_vendor] SUCCESS: User has VENDOR role")
     return current_user
 
 
@@ -210,17 +220,28 @@ async def get_vendor_profile(
     Raises:
         HTTPException: If vendor profile not found
     """
+    # Enhanced logging for debugging
+    print(f"[get_vendor_profile] Looking for vendor with user_id: {current_user.id}")
+    print(f"[get_vendor_profile] User email: {current_user.email}, Role: {current_user.role}")
+
     result = await db.execute(
         select(Vendor).where(Vendor.user_id == current_user.id)
     )
     vendor = result.scalar_one_or_none()
 
     if vendor is None:
+        print(f"[get_vendor_profile] ERROR: No vendor found for user_id {current_user.id}")
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Vendor profile not found. Please complete vendor registration."
+            detail={
+                "message": "Vendor profile not found. Please complete vendor registration.",
+                "error_code": "VENDOR_PROFILE_NOT_FOUND",
+                "user_id": str(current_user.id),
+                "user_email": current_user.email
+            }
         )
 
+    print(f"[get_vendor_profile] SUCCESS: Found vendor {vendor.business_name} (id: {vendor.id})")
     return vendor
 
 
@@ -239,12 +260,22 @@ async def get_approved_vendor(
     Raises:
         HTTPException: If vendor not approved
     """
+    print(f"[get_approved_vendor] Checking approval for vendor: {vendor.business_name}")
+    print(f"[get_approved_vendor] Vendor ID: {vendor.id}, Approved: {vendor.approved}")
+
     if not vendor.approved:
+        print(f"[get_approved_vendor] ERROR: Vendor not approved")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Vendor account pending approval. Please wait for admin approval."
+            detail={
+                "message": "Vendor account pending approval. Please wait for admin approval.",
+                "error_code": "VENDOR_NOT_APPROVED",
+                "vendor_id": str(vendor.id),
+                "business_name": vendor.business_name
+            }
         )
 
+    print(f"[get_approved_vendor] SUCCESS: Vendor is approved")
     return vendor
 
 
