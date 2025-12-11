@@ -1,7 +1,7 @@
 """create manage_preferences table
 
 Revision ID: 7k8l9m0n1o2p
-Revises: 6f7g8h9i0j1k
+Revises: 5a1b2c3d4e5f
 Create Date: 2025-11-26 16:15:00.000000
 
 """
@@ -13,7 +13,7 @@ from sqlalchemy.dialects.postgresql import UUID, JSONB
 
 # revision identifiers, used by Alembic.
 revision: str = '7k8l9m0n1o2p'
-down_revision: Union[str, None] = '6f7g8h9i0j1k'
+down_revision: Union[str, None] = '5a1b2c3d4e5f'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

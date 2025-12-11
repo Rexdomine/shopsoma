@@ -22,8 +22,23 @@ export const STORAGE_KEYS = {
 export const ROUTES = {
   HOME: '/',
   LOGIN: '/login',
+  VENDOR_LOGIN: '/vendor/login',
+  VENDOR_SIGNUP: '/vendor/signup',
+  VENDOR_SIGNUP_BUSINESS: '/vendor/signup/business-info',
+  VENDOR_SIGNUP_THANK_YOU: '/vendor/signup/thank-you',
+  VENDOR_OTP: '/vendor/otp',
+  VENDOR_SET_PASSWORD: '/vendor/set-password',
+  VENDOR_SETTINGS: '/vendor/settings',
+  VENDOR_EARNINGS: '/vendor/earnings',
+  VENDOR_EXPENSES: '/vendor/earnings/expenses',
+  VENDOR_WITHDRAWALS: '/vendor/earnings/withdrawals',
+  VENDOR_BRAND_INFO: '/vendor/settings/brand-info',
+  VENDOR_PAYOUT_INFO: '/vendor/settings/payout-information',
+  VENDOR_SECURITY: '/vendor/settings/security',
   FORGOT_PASSWORD: '/forgot-password',
   REGISTER: '/register',
+  MEN: '/men',
+  WOMEN: '/women',
   VERIFY_EMAIL: '/verify-email',
   CLAIM_ACCOUNT: '/claim-account',
   PRODUCTS: '/products',
@@ -35,10 +50,14 @@ export const ROUTES = {
   VENDOR_DASHBOARD: '/vendor/dashboard',
   VENDOR_PRODUCTS: '/vendor/products',
   VENDOR_ORDERS: '/vendor/orders',
+  VENDOR_ORDER_DETAIL: '/vendor/orders/:id',
   ADMIN_DASHBOARD: '/admin/dashboard',
-  ADMIN_USERS: '/admin/users',
+  ADMIN_VENDOR_APPLICATIONS: '/admin/vendor-applications',
   ADMIN_VENDORS: '/admin/vendors',
+  ADMIN_USERS: '/admin/users',
   ADMIN_PRODUCTS: '/admin/products',
+  ADMIN_PRODUCT_DETAIL: '/admin/products/:id',
+  ADMIN_PRODUCT_EDIT: '/admin/products/:id/edit',
   PROFILE: '/profile',
   PROFILE_EDIT: '/profile/edit',
   PROFILE_PASSWORD: '/profile/password',
@@ -67,6 +86,11 @@ export const IMAGE_CONFIG = {
   ALLOWED_TYPES: ['image/jpeg', 'image/png', 'image/webp', 'image/gif'],
   PLACEHOLDER: '/images/placeholder-product.svg',
 } as const;
+
+// Storefront hero assets
+export const MEN_HERO_IMAGE_URL = '/images/hero/men-hero-placeholder.jpg';
+export const WOMEN_HERO_IMAGE_URL = '/images/hero/women-hero-placeholder.jpg';
+export const VENDOR_LOGIN_IMAGE_URL = '/images/profilebanner.jpg';
 
 // Toast Configuration
 export const TOAST_DURATION = 3000;

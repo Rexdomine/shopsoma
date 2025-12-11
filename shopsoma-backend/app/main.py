@@ -3,16 +3,18 @@ Shopsoma Backend API
 Main application entry point
 """
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 
 # Load environment variables from .env file
 load_dotenv()
 
 # Import routers
-from app.api.v1 import auth, products, images, admin, seed, cart, addresses, shipping_rates, orders, promo_codes, payments, users, wishlist, newsletter, preferences, payment_portals
+from app.api.v1 import auth, products, images, admin, seed, cart, addresses, shipping_rates, orders, promo_codes, payments, users, wishlist, newsletter, preferences, payment_portals, vendors, vendor_activation, vendor_applications, vendor_payment_methods, categories, collections
 
 # Import middleware
 from app.middleware.rate_limit import RateLimitMiddleware
@@ -105,6 +107,8 @@ app.include_router(auth.router, prefix="/api/v1")
 app.include_router(users.router, prefix="/api/v1")
 app.include_router(products.router, prefix="/api/v1")
 app.include_router(images.router, prefix="/api/v1")
+app.include_router(categories.router, prefix="/api/v1")
+app.include_router(collections.router, prefix="/api/v1")
 app.include_router(admin.router, prefix="/api/v1")
 app.include_router(seed.router, prefix="/api/v1")
 app.include_router(cart.router, prefix="/api/v1")
@@ -117,9 +121,18 @@ app.include_router(payment_portals.router, prefix="/api/v1/payments", tags=["Pay
 app.include_router(wishlist.router, prefix="/api/v1")
 app.include_router(newsletter.router, prefix="/api/v1")
 app.include_router(preferences.router, prefix="/api/v1")
+app.include_router(vendors.router, prefix="/api/v1")
+app.include_router(vendor_activation.router, prefix="/api/v1")
+app.include_router(vendor_applications.router, prefix="/api/v1/vendor-applications", tags=["Vendor Applications"])
+app.include_router(vendor_payment_methods.router, prefix="/api/v1")
 
-# TODO: Add more routers as they're implemented
-# app.include_router(vendors.router, prefix="/api/v1")
+# Mount static files for local image uploads (development only)
+from app.core.config import settings
+if settings.USE_LOCAL_STORAGE:
+    uploads_dir = Path(settings.LOCAL_UPLOAD_DIR)
+    uploads_dir.mkdir(parents=True, exist_ok=True)
+    app.mount("/uploads", StaticFiles(directory=str(uploads_dir)), name="uploads")
+    print(f"📁 Serving uploaded files from: {uploads_dir.absolute()}")
 
 if __name__ == "__main__":
     import uvicorn

@@ -41,22 +41,22 @@ export default function Newsletter() {
   };
 
   return (
-    <section className="py-20 lg:py-24 bg-gradient-to-br from-primary to-primary-dark relative overflow-hidden">
+    <section className="py-20 lg:py-24 bg-gradient-to-br from-cta to-cta-dark relative overflow-hidden text-[var(--color-text-on-dark)]">
       {/* Decorative wave patterns */}
-      <div className="absolute inset-0 opacity-[0.07]">
-        <div className="absolute -top-20 -right-20 w-96 h-96 rounded-full border-[40px] border-white/20"></div>
+      <div className="absolute inset-0 opacity-[0.08]">
+        <div className="absolute -top-20 -right-20 w-96 h-96 rounded-full border-[40px] border-white/25"></div>
         <div className="absolute top-1/2 -left-32 w-80 h-80 rounded-full border-[30px] border-white/20"></div>
-        <div className="absolute -bottom-10 right-1/4 w-64 h-64 rounded-full border-[20px] border-white/20"></div>
+        <div className="absolute -bottom-10 right-1/4 w-64 h-64 rounded-full border-[20px] border-white/18"></div>
       </div>
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative z-10">
         <div className="grid lg:grid-cols-2 gap-12 items-center">
           {/* Left Content */}
           <div className="text-left">
-            <h2 className="text-4xl lg:text-5xl font-display font-bold text-white mb-4 leading-tight">
+            <h2 className="text-4xl lg:text-5xl font-display font-bold text-[var(--color-text-on-dark)] mb-4 leading-tight">
               Join Our Newsletter
             </h2>
-            <p className="text-lg font-body text-white/95 leading-relaxed">
+            <p className="text-lg font-serif text-[var(--color-text-on-dark)]/90 leading-relaxed">
               Simply enter your email address in the field below to receive the latest fashion and style updates from us.
             </p>
           </div>
@@ -65,7 +65,7 @@ export default function Newsletter() {
           <div>
             {/* Success Message */}
             {success && (
-              <div className="mb-4 inline-flex items-center gap-2 bg-white text-primary px-5 py-3 text-sm font-body font-medium shadow-lg border border-white">
+              <div className="mb-4 inline-flex items-center gap-2 bg-white text-primary px-5 py-3 text-sm font-ui font-medium shadow-lg border border-white">
                 <CheckCircle className="w-5 h-5" />
                 Successfully subscribed!
               </div>
@@ -84,13 +84,13 @@ export default function Newsletter() {
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder="Your Emaill"
-                  className="flex-1 px-2 py-4 bg-white font-body text-gray-700 placeholder-gray-400 focus:outline-none text-base"
+                  className="flex-1 px-2 py-4 bg-white font-ui text-gray-700 placeholder-gray-400 focus:outline-none text-base"
                   disabled={loading}
                 />
                 <button
                   type="submit"
                   disabled={loading}
-                  className="px-8 py-4 bg-primary text-white text-base font-body font-semibold hover:bg-primary-dark transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+                  className="px-8 py-4 bg-cta text-[var(--color-cta-text)] text-base font-ui font-semibold hover:bg-cta-dark transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
                 >
                   {loading ? 'Subscribing...' : 'Subscribe'}
                 </button>
@@ -98,7 +98,7 @@ export default function Newsletter() {
 
               {/* Error Message */}
               {error && (
-                <p className="mt-3 text-white/90 text-sm">{error}</p>
+                <p className="mt-3 text-[var(--color-text-on-dark)]/90 text-sm">{error}</p>
               )}
             </form>
           </div>

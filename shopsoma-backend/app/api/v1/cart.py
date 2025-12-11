@@ -8,7 +8,7 @@ import uuid
 
 from app.core.database import get_db
 from app.models.cart import CartItem, Coupon
-from app.models.product import Product
+from app.models.product import Product, Variation, SizeStock
 from app.schemas.cart import (
     CartItemCreate,
     CartItemUpdate,
@@ -32,6 +32,7 @@ FREE_SHIPPING_THRESHOLD = 50000  # ₦50,000
 CART_ITEM_LOAD_OPTIONS = [
     selectinload(CartItem.product).selectinload(Product.images),
     selectinload(CartItem.product).selectinload(Product.variants),
+    selectinload(CartItem.product).selectinload(Product.variations).selectinload(Variation.size_stocks),
     selectinload(CartItem.product).selectinload(Product.vendor),
     selectinload(CartItem.product).selectinload(Product.category),
 ]
@@ -186,15 +187,31 @@ async def add_to_cart(
             raise HTTPException(status_code=404, detail="Product not found")
 
         # Get variant price
-        variant = next(
-            (v for v in product.variants if str(v.id) == str(item_data.variant_id)),
-            None
-        )
+        # Handle products without variants (variant_id format: "default-{product_id}")
+        variant_id_str = str(item_data.variant_id)
+        print(f"[Cart API] add_to_cart: variant_id_str={variant_id_str}, product.variants count={len(product.variants) if product.variants else 0}")
 
-        if not variant:
-            raise HTTPException(status_code=404, detail="Product variant not found")
+        if variant_id_str.startswith("default-"):
+            # Product has no variants, use base price
+            if not product.variants or len(product.variants) == 0:
+                variant = None
+                price = float(product.base_price)
+                # For products without variants, set variant_id to None in DB
+                item_data.variant_id = None
+                print(f"[Cart API] add_to_cart: Using default variant, price={price}")
+            else:
+                raise HTTPException(status_code=404, detail="Product variant not found")
+        else:
+            # Product has variants, find the specific variant
+            variant = next(
+                (v for v in product.variants if str(v.id) == str(item_data.variant_id)),
+                None
+            )
 
-        price = float(getattr(variant, "price", product.base_price))
+            if not variant:
+                raise HTTPException(status_code=404, detail="Product variant not found")
+
+            price = float(getattr(variant, "price", product.base_price))
 
         # Check if item already exists (by product_id + variant_id + user/session)
         existing_query = select(CartItem).where(

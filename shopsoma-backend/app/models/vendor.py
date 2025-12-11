@@ -1,6 +1,6 @@
 """Vendor model"""
 from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey, Integer, Numeric, Text, Enum as SQLEnum
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import UUID, ARRAY, JSONB
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 import uuid
@@ -29,6 +29,12 @@ class Vendor(Base):
     business_description = Column(Text, nullable=True)
     business_address = Column(Text, nullable=True)
     business_phone = Column(String(20), nullable=True)
+    logo_url = Column(Text, nullable=True)
+    returning_address = Column(Text, nullable=True)
+    open_days = Column(ARRAY(String(3)), nullable=True)  # ["MON", "TUE", "WED", ...]
+    open_hour = Column(String(5), nullable=True)  # "09:00"
+    close_hour = Column(String(5), nullable=True)  # "17:00"
+    secondary_contacts = Column(JSONB, nullable=True)  # [{"phone": "...", "email": "..."}]
 
     # KYC Information
     kyc_status = Column(SQLEnum(KYCStatus), default=KYCStatus.PENDING, nullable=False, index=True)
@@ -50,6 +56,17 @@ class Vendor(Base):
     approved_at = Column(DateTime(timezone=True), nullable=True)
     approved_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
 
+    # Store Status
+    store_active = Column(Boolean, default=True, nullable=False, index=True)
+    store_paused_at = Column(DateTime(timezone=True), nullable=True)
+    store_deleted_at = Column(DateTime(timezone=True), nullable=True)
+
+    # Onboarding State
+    is_onboarding = Column(Boolean, default=True, nullable=False)
+    brand_info_completed = Column(Boolean, default=False, nullable=False)
+    payout_info_completed = Column(Boolean, default=False, nullable=False)
+    onboarding_completed_at = Column(DateTime(timezone=True), nullable=True)
+
     # Metrics
     total_products = Column(Integer, default=0, nullable=False)
     total_orders = Column(Integer, default=0, nullable=False)
@@ -61,8 +78,14 @@ class Vendor(Base):
     # Relationships
     user = relationship("User", back_populates="vendor", foreign_keys=[user_id])
     products = relationship("Product", back_populates="vendor", cascade="all, delete-orphan")
+    collections = relationship("Collection", back_populates="vendor", cascade="all, delete-orphan")
     order_items = relationship("OrderItem", back_populates="vendor")
     payouts = relationship("Payout", back_populates="vendor")
+    assets = relationship("VendorAsset", back_populates="vendor", cascade="all, delete-orphan")
+    pickups = relationship("VendorPickup", back_populates="vendor", cascade="all, delete-orphan")
+    notifications = relationship("VendorNotification", back_populates="vendor", cascade="all, delete-orphan")
+    otps = relationship("VendorOTP", back_populates="vendor", cascade="all, delete-orphan")
+    payment_methods = relationship("VendorPaymentMethod", back_populates="vendor", cascade="all, delete-orphan")
 
     def __repr__(self):
         return f"<Vendor {self.business_name}>"

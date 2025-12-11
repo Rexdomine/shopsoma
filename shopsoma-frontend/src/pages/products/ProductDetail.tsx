@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState, useRef } from 'react';
+import { useEffect, useMemo, useState, useRef, type SVGProps } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Heart, Minus, Plus, X } from 'lucide-react';
+import { Bookmark, Minus, Plus, X } from 'lucide-react';
 import type { Product, ProductVariant, SizeGuide } from '../../types';
 import { productService } from '../../services/productService';
 import { wishlistService } from '../../services/wishlistService';
@@ -30,6 +30,23 @@ type ColorOption = {
   value: string;
   hex?: string | null;
 };
+
+const ShareOutlineIcon = (props: SVGProps<SVGSVGElement>) => (
+  <svg
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={1.75}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+    {...props}
+  >
+    <path d="M12 4v7" />
+    <path d="M9 8l3-3 3 3" />
+    <path d="M6 10v7a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2v-7" />
+  </svg>
+);
 
 export default function ProductDetail() {
   const { id } = useParams();
@@ -114,10 +131,10 @@ export default function ProductDetail() {
     try {
       const response = await productService.getProducts({
         vendor_id: vendorId,
-        page_size: 4,
+        page_size: 12,
       });
       const filtered = response.products.filter((item) => item.id !== currentProductId);
-      setRelatedProducts(filtered.slice(0, 4));
+      setRelatedProducts(filtered.slice(0, 8));
     } catch (err) {
       console.error('Failed to load related products', err);
     }
@@ -160,7 +177,19 @@ export default function ProductDetail() {
   );
 
   const selectedVariant = useMemo(() => {
-    if (!product?.variants?.length) return null;
+    if (!product?.variants?.length) {
+      // For products without variants, create a default variant
+      if (!product) return null;
+
+      return {
+        id: `default-${product.id}`,
+        product_id: product.id,
+        price: product.base_price,
+        compare_at_price: product.compare_at_price,
+        stock: product.total_stock,
+        is_available: product.total_stock > 0,
+      } as ProductVariant;
+    }
 
     let variants = product.variants;
 
@@ -177,7 +206,7 @@ export default function ProductDetail() {
     }
 
     return variants[0] ?? null;
-  }, [product?.variants, colorOptions.length, sizeOptions.length, selectedColor, selectedSize]);
+  }, [product, colorOptions.length, sizeOptions.length, selectedColor, selectedSize]);
 
   const currentPrice = selectedVariant?.price ?? product?.base_price ?? 0;
   const comparePrice = selectedVariant?.compare_at_price ?? product?.compare_at_price ?? null;
@@ -273,6 +302,30 @@ export default function ProductDetail() {
     }
   };
 
+  const handleShare = async () => {
+    if (!product) return;
+
+    const shareUrl = window.location.href;
+    const shareData = {
+      title: product.title,
+      text: product.description ?? product.title,
+      url: shareUrl,
+    };
+
+    try {
+      if (navigator.share) {
+        await navigator.share(shareData);
+      } else if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(shareUrl);
+        alert('Product link copied to clipboard');
+      } else {
+        alert('Sharing is not supported in this browser.');
+      }
+    } catch (err) {
+      console.error('Error sharing product:', err);
+    }
+  };
+
   const missingSelection =
     (colorOptions.length > 0 && !selectedColor) ||
     (sizeOptions.length > 0 && !selectedSize);
@@ -324,20 +377,19 @@ export default function ProductDetail() {
 
   const heroImage = selectedImage ?? galleryImages[0]?.image_url ?? placeholderImage;
 
+  // Calculate savings percentage
+  const savingsPercent = comparePrice && comparePrice > currentPrice
+    ? Math.round(((comparePrice - currentPrice) / comparePrice) * 100)
+    : 0;
+
   return (
     <Layout>
-    <section className="bg-white py-12 lg:py-20">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        {/* Breadcrumb */}
-        <nav className="text-xs uppercase tracking-[0.3em] text-gray-400 mb-10">
-          Home / Collection /{' '}
-          <span className="text-gray-700">{product.category ?? 'Lifestyle'}</span>
-        </nav>
-
-        <div className="grid grid-cols-1 lg:grid-cols-[55%_45%] gap-12">
-          {/* Gallery */}
-          <div className="space-y-4">
-            <div className="overflow-hidden bg-[#f5f7f8] aspect-[5/6] border border-gray-200 max-w-[560px] mx-auto">
+    <section className="bg-[var(--color-page-bg)]">
+      <div className="grid grid-cols-1 lg:grid-cols-[auto_minmax(0,520px)] lg:gap-16 mb-16">
+        {/* LEFT COLUMN - IMAGES (Full bleed to left edge) */}
+        <div className="relative -mt-32 pt-32">
+          {/* Main Image - extends up into header area and flush to left */}
+          <div className="relative overflow-hidden bg-[#f5f7f8] aspect-[3/4] w-full lg:w-[calc(50vw+200px)] lg:max-w-[800px]">
               <img
                 src={heroImage}
                 alt={product.title}
@@ -347,91 +399,217 @@ export default function ProductDetail() {
                   event.currentTarget.onerror = null;
                 }}
               />
+
+              {/* Thumbnail Gallery - overlaid at bottom of main image */}
+              {galleryImages.length > 1 && (
+                <div className="absolute bottom-6 left-6 flex gap-2">
+                  {galleryImages.slice(0, 3).map((image) => (
+                    <button
+                      key={image.id}
+                      type="button"
+                      onClick={() => setSelectedImage(image.image_url)}
+                      className={`overflow-hidden border-2 transition-all duration-200 w-16 h-20 flex-shrink-0 ${
+                        selectedImage === image.image_url
+                          ? 'border-white shadow-lg ring-1 ring-white/30'
+                          : 'border-white/50 hover:border-white shadow-md'
+                      }`}
+                    >
+                      <img
+                        src={image.image_url}
+                        alt={image.alt_text ?? product.title}
+                        className="w-full h-full object-cover"
+                        onError={(event) => {
+                          event.currentTarget.src = placeholderImage;
+                          event.currentTarget.onerror = null;
+                        }}
+                      />
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
-            {galleryImages.length > 1 && (
-              <div className="grid grid-cols-4 gap-3">
-                {galleryImages.slice(0, 8).map((image) => (
-                  <button
-                    key={image.id}
-                    type="button"
-                    onClick={() => setSelectedImage(image.image_url)}
-                    className={`overflow-hidden border-2 transition-all duration-200 aspect-square ${
-                      selectedImage === image.image_url
-                        ? 'border-primary'
-                        : 'border-gray-200 hover:border-gray-400'
-                    }`}
-                  >
-                    <img
-                      src={image.image_url}
-                      alt={image.alt_text ?? product.title}
-                      className="w-full h-full object-cover"
-                      onError={(event) => {
-                        event.currentTarget.src = placeholderImage;
-                        event.currentTarget.onerror = null;
-                      }}
-                    />
-                  </button>
-                ))}
-              </div>
-            )}
           </div>
 
-          {/* Product Info */}
-          <div className="space-y-6">
-            <div className="space-y-2">
-              <p className="text-xs uppercase tracking-[0.3em] text-gray-400">Golden Editions</p>
-              <h1 className="text-3xl font-display font-bold text-dark">{product.title}</h1>
-              <p className="text-sm text-gray-500">{product.category ?? 'Collection'}</p>
-              {product.vendor_name && (
-                <div className="space-y-2">
-                  <div className="flex items-center gap-3 text-[11px] uppercase tracking-[0.5em] text-gray-400">
-                    <span className="inline-flex h-px w-10 bg-gray-200" />
-                    Designer
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <span className="inline-flex h-9 w-9 items-center justify-center rounded-sm bg-primary/10 text-sm font-semibold text-primary">
-                      {product.vendor_name.slice(0, 1).toUpperCase()}
-                    </span>
-                    <div>
-                      <p className="text-base font-semibold text-dark tracking-wide">
-                        {product.vendor_name}
-                      </p>
-                      <p className="text-xs uppercase tracking-[0.3em] text-gray-400">
-                        Exclusive Artisan
-                      </p>
-                    </div>
-                  </div>
+          {/* RIGHT COLUMN - PRODUCT SUMMARY */}
+          <div className="space-y-8 lg:pt-12 px-4 sm:px-6 lg:px-0 lg:pr-12 lg:max-w-[520px] lg:ml-auto">
+            <div className="flex items-start justify-between gap-4">
+              <div className="space-y-2 flex-1 min-w-0">
+                {/* Brand/Vendor Name */}
+                {product.vendor_name && (
+                  <p className="text-xs font-ui uppercase tracking-[0.25em] text-primary">
+                    {product.vendor_name}
+                  </p>
+                )}
+
+                {/* Product Title */}
+                <h1 className="text-4xl lg:text-5xl font-display text-primary leading-tight -mt-2">
+                  {product.title}
+                </h1>
+              </div>
+
+              <div className="flex items-center gap-2 text-primary">
+                <button
+                  type="button"
+                  onClick={handleWishlistToggle}
+                  disabled={wishlistLoading}
+                  className={`h-12 w-12 flex items-center justify-center text-primary transition ${
+                    wishlistLoading ? 'opacity-50 cursor-not-allowed' : 'hover:text-primary-dark'
+                  }`}
+                  aria-label={isInWishlist ? 'Remove from wishlist' : 'Add to wishlist'}
+                >
+                  <Bookmark
+                    className="w-5 h-5"
+                    strokeWidth={1.75}
+                    fill={isInWishlist ? 'currentColor' : 'none'}
+                  />
+                </button>
+                <button
+                  type="button"
+                  onClick={handleShare}
+                  className="h-12 w-12 flex items-center justify-center text-primary hover:text-primary-dark transition"
+                  aria-label="Share product"
+                >
+                  <ShareOutlineIcon className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Pricing Block */}
+            <div className="space-y-3 text-primary">
+              <div className="flex items-baseline gap-3">
+                {comparePrice && comparePrice > currentPrice && (
+                  <span className="text-xl font-ui text-primary/60 line-through">
+                    {formatPriceWithCurrency(Number(comparePrice), preferredCurrency)}
+                  </span>
+                )}
+                <span className="text-2xl font-ui font-semibold text-primary">
+                  {formatPriceWithCurrency(Number(currentPrice), preferredCurrency)}
+                </span>
+              </div>
+              {savingsPercent > 0 && (
+                <div className="inline-block bg-primary px-3 py-1">
+                  <span className="text-xs font-ui uppercase tracking-[0.15em] text-white font-semibold">
+                    {savingsPercent}% OFF
+                  </span>
                 </div>
               )}
             </div>
 
-            <div>
-              <div className="flex items-end gap-3">
-                <span className="text-2xl font-semibold text-dark">
-                  {formatPriceWithCurrency(Number(totalPrice), preferredCurrency)}
-                </span>
-                {comparePrice && comparePrice > currentPrice && (
-                  <span className="text-base text-gray-400 line-through">
-                    {formatPriceWithCurrency(Number(comparePrice), preferredCurrency)}
-                  </span>
-                )}
-              </div>
-            </div>
+            {/* Short Description */}
+            {product.description && (
+              <p className="text-base font-serif text-primary leading-relaxed">
+                {product.description}
+              </p>
+            )}
 
-            {/* Color Selection */}
+            {/* Made to Order / Info Line */}
+            {product.is_featured && (
+              <div className="flex items-center gap-2">
+                <svg className="w-4 h-4 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <circle cx="12" cy="12" r="10" strokeWidth="2"/>
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 16v-4m0-4h.01"/>
+                </svg>
+                <span className="text-xs font-ui uppercase tracking-[0.2em] text-primary">
+                  Made to Order
+                </span>
+              </div>
+            )}
+
+            {/* Size Selector and Quantity Row */}
+            {sizeOptions.length > 0 && (
+              <div className="space-y-4 border-t border-primary/20 pt-8">
+                {/* Select Size Dropdown + Quantity Controls on same row */}
+                <div className="flex items-center justify-between gap-8">
+                  {/* Size Dropdown */}
+                  <div className="flex-1 relative" ref={sizeDropdownRef}>
+                    <button
+                      type="button"
+                      className="w-full text-left text-base font-ui text-primary flex items-center justify-between pb-2 border-b border-primary/30 hover:border-primary transition"
+                      onClick={() => setSizeMenuOpen((prev) => !prev)}
+                    >
+                      <span>{selectedSize || 'Select Size'}</span>
+                      <svg
+                        className={`w-4 h-4 text-primary/70 transition-transform ${sizeMenuOpen ? 'rotate-180' : ''}`}
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
+                      </svg>
+                    </button>
+                    {sizeMenuOpen && (
+                      <div className="absolute z-20 mt-1 w-full bg-white border border-primary/20 shadow-lg max-h-48 overflow-y-auto">
+                        {sizeOptions.map((size) => (
+                          <button
+                            key={size}
+                            type="button"
+                            onClick={() => {
+                              setSelectedSize(size);
+                              setSizeMenuOpen(false);
+                            }}
+                            className={`w-full text-left px-4 py-2.5 text-sm font-ui transition ${
+                              selectedSize === size
+                                ? 'bg-primary/5 text-primary font-semibold'
+                                : 'text-primary hover:bg-primary/5'
+                            }`}
+                          >
+                            {size}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Quantity Controls - clean, no border */}
+                  <div className="flex items-center gap-4">
+                    <button
+                      type="button"
+                      className="text-primary/70 hover:text-primary transition disabled:opacity-30"
+                      onClick={() => handleQuantityChange('decrement')}
+                      disabled={isOutOfStock || quantity <= 1}
+                    >
+                      <Minus className="w-5 h-5" />
+                    </button>
+                    <span className="text-lg font-ui text-primary min-w-[24px] text-center">{quantity}</span>
+                    <button
+                      type="button"
+                      className="text-primary/70 hover:text-primary transition disabled:opacity-30"
+                      onClick={() => handleQuantityChange('increment')}
+                      disabled={isOutOfStock || quantity >= maxQuantity}
+                    >
+                      <Plus className="w-5 h-5" />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Find Your Size label */}
+                <p className="text-xs font-ui uppercase tracking-[0.2em] text-primary/70">
+                  Find your size
+                </p>
+              </div>
+            )}
+
+            {/* Color Selector */}
             {colorOptions.length > 0 && (
-              <div className="space-y-2">
-                <p className="text-xs uppercase tracking-[0.3em] text-gray-400">Color</p>
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <p className="text-base font-ui text-primary">Colors:</p>
+                  {selectedColor && (
+                    <p className="text-sm font-ui uppercase tracking-[0.2em] text-primary font-semibold">
+                      {selectedColor}
+                    </p>
+                  )}
+                </div>
                 <div className="flex gap-3 flex-wrap">
                   {colorOptions.map((option) => (
                     <button
                       key={option.value}
                       type="button"
                       onClick={() => setSelectedColor(option.value)}
-                      className={`w-11 h-11 rounded-full border-2 transition-all ${
+                      className={`w-11 h-11 border-2 transition-all ${
                         selectedColor === option.value
-                          ? 'border-primary ring-2 ring-primary/20'
-                          : 'border-gray-300 hover:border-primary/60'
+                          ? 'border-primary ring-2 ring-primary/25'
+                          : 'border-primary/30 hover:border-primary/60'
                       }`}
                       style={{
                         backgroundColor: option.hex ?? '#f5f5f5',
@@ -440,198 +618,98 @@ export default function ProductDetail() {
                     />
                   ))}
                 </div>
-                {selectedColor && (
-                  <p className="text-xs text-gray-600">Selected: {selectedColor}</p>
-                )}
               </div>
             )}
 
-            {/* Size Selection */}
-            {sizeOptions.length > 0 && (
-              <div className="space-y-2">
-                <div className="text-xs uppercase tracking-[0.3em] text-gray-400">
-                  Size
-                </div>
-                <div className="relative" ref={sizeDropdownRef}>
-                  <button
-                    type="button"
-                    className={`relative w-full px-4 py-3 pr-12 text-sm font-semibold text-left text-gray-700 bg-white transition cursor-pointer flex items-center justify-between focus:outline-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/10 ${
-                      sizeMenuOpen
-                        ? 'border-2 border-primary ring-2 ring-primary/10'
-                        : 'border border-gray-200 hover:border-primary/60'
-                    }`}
-                    onClick={() => setSizeMenuOpen((prev) => !prev)}
-                  >
-                    <span>{selectedSize ?? 'Select size'}</span>
-                    <svg
-                      width="16"
-                      height="16"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      xmlns="http://www.w3.org/2000/svg"
-                      className={`pointer-events-none text-primary transition-transform absolute right-5 sm:right-6 top-1/2 -translate-y-1/2 ${
-                        sizeMenuOpen ? 'rotate-180' : ''
-                      }`}
-                    >
-                      <path
-                        d="M6 9l6 6 6-6"
-                        stroke="currentColor"
-                        strokeWidth="1.5"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    </svg>
-                  </button>
-                  {sizeMenuOpen && (
-                    <div className="absolute z-20 mt-2 w-full border border-gray-200 bg-white shadow-lg overflow-hidden">
-                      {sizeOptions.map((size) => (
-                        <button
-                          key={size}
-                          type="button"
-                          onClick={() => {
-                            setSelectedSize(size);
-                            setSizeMenuOpen(false);
-                          }}
-                          className={`w-full text-left px-4 py-3 text-sm font-semibold transition ${
-                            selectedSize === size
-                              ? 'bg-primary/10 text-primary'
-                              : 'text-gray-700 hover:bg-gray-50'
-                          }`}
-                        >
-                          {size}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
+            {/* Inventory Note */}
+            {!isOutOfStock && maxQuantity > 0 && maxQuantity <= 10 && (
+              <p className="text-xs font-ui uppercase tracking-[0.2em] text-primary">
+                Only {maxQuantity} left in stock
+              </p>
             )}
 
-            {/* Quantity */}
+            {/* Add to Bag Button */}
+            <button
+              type="button"
+              disabled={missingSelection || isOutOfStock || quantity < 1}
+              className={`w-full py-4 text-sm font-ui uppercase tracking-[0.2em] transition-colors ${
+                missingSelection || isOutOfStock || quantity < 1
+                  ? 'bg-gray-300 text-primary/60 cursor-not-allowed'
+                  : 'bg-primary text-white hover:bg-primary-dark'
+              }`}
+              onClick={handleAddToBag}
+            >
+              Add to Bag
+            </button>
+          </div>
+        </div>
+
+      {/* Content sections with max-width container */}
+      <div className="max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-8 text-primary">
+        {/* PRODUCT INFORMATION SECTION */}
+        <div className="mt-16 mb-16 pb-12 border-b border-primary/20">
+          <h2 className="text-2xl font-display text-primary mb-8">Product information</h2>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8">
+            {/* Sustainability */}
             <div className="space-y-2">
-              <p className="text-xs uppercase tracking-[0.3em] text-gray-400">Quantity</p>
-              <div className="inline-flex items-center border border-gray-200">
-                <button
-                  type="button"
-                  className="px-4 py-2 text-gray-500 hover:text-primary transition"
-                  onClick={() => handleQuantityChange('decrement')}
-                  disabled={isOutOfStock || quantity <= 1}
-                >
-                  <Minus className="w-4 h-4" />
-                </button>
-                <div className="px-6 py-2 font-semibold text-dark">{quantity}</div>
-                <button
-                  type="button"
-                  className="px-4 py-2 text-gray-500 hover:text-primary transition"
-                  onClick={() => handleQuantityChange('increment')}
-                  disabled={isOutOfStock || quantity >= maxQuantity}
-                >
-                  <Plus className="w-4 h-4" />
-                </button>
-              </div>
-              <p className="text-xs text-gray-400">
-                {missingSelection && product.variants?.length
-                  ? 'Select color/size to view availability'
-                  : isOutOfStock
-                    ? 'Out of stock'
-                    : `${maxQuantity} piece${maxQuantity === 1 ? '' : 's'} available`}
+              <h3 className="text-xs font-ui uppercase tracking-[0.2em] text-primary">
+                Sustainability
+              </h3>
+              <p className="text-sm font-serif text-primary/80 leading-relaxed">
+                Crafted from sustainably sourced materials. Our artisans follow eco-friendly practices, ensuring minimal environmental impact while creating timeless pieces.
               </p>
             </div>
 
-            <div className="flex flex-col lg:flex-row flex-wrap gap-3">
-              <button
-                type="button"
-                disabled={missingSelection || isOutOfStock || quantity < 1}
-                className={`flex-1 border px-6 py-3 text-sm font-semibold transition-colors ${
-                  missingSelection || isOutOfStock || quantity < 1
-                    ? 'bg-gray-100 text-gray-400 border-gray-100 cursor-not-allowed'
-                    : 'bg-primary text-white hover:bg-primary-dark border-primary'
-                }`}
-                onClick={handleAddToBag}
-              >
-                Add to Bag
-              </button>
-              <button
-                type="button"
-                disabled={wishlistLoading}
-                className={`border px-6 py-3 text-sm font-semibold flex items-center justify-center gap-2 transition-colors ${
-                  isInWishlist ? 'border-primary text-primary' : 'border-gray-200 text-gray-700 hover:border-primary hover:text-primary'
-                } ${wishlistLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
-                onClick={handleWishlistToggle}
-              >
-                {wishlistLoading ? 'Loading...' : isInWishlist ? 'In Wishlist' : 'Wishlist'}
-                <Heart className={`w-4 h-4 ${isInWishlist ? 'fill-current text-primary' : ''}`} />
-              </button>
-              {hasSizeGuide && (
-                <button
-                  type="button"
-                  className="border border-gray-200 px-6 py-3 text-sm font-semibold text-gray-700 hover:border-primary hover:text-primary transition-colors"
-                  onClick={() => setSizeGuideOpen(true)}
-                >
-                  Size Guide
-                </button>
-              )}
+            {/* Product Care */}
+            <div className="space-y-2">
+              <h3 className="text-xs font-ui uppercase tracking-[0.2em] text-primary">
+                Product Care
+              </h3>
+              <p className="text-sm font-serif text-primary/80 leading-relaxed">
+                Dry clean only. Store in a cool, dry place. Avoid prolonged exposure to direct sunlight to maintain color vibrancy.
+              </p>
             </div>
 
-            {/* Details */}
-            <div className="border-t border-gray-200 pt-6 space-y-4">
-              <details className="group">
-                <summary className="flex items-center justify-between cursor-pointer text-sm font-semibold text-dark">
-                  Editor&apos;s Notes
-                  <span className="text-primary group-open:rotate-45 transition-transform text-lg leading-none">
-                    +
-                  </span>
-                </summary>
-                <p className="mt-3 text-sm text-gray-600 leading-relaxed">
-                  {product.description ??
-                    'Thoughtfully designed piece crafted with premium materials to elevate every wardrobe.'}
-                </p>
-              </details>
+            {/* Delivery and Shipping */}
+            <div className="space-y-2">
+              <h3 className="text-xs font-ui uppercase tracking-[0.2em] text-primary">
+                Delivery and Shipping
+              </h3>
+              <p className="text-sm font-serif text-primary/80 leading-relaxed">
+                Free delivery on orders over {formatPriceWithCurrency(30000, preferredCurrency)}. Standard delivery within 5-7 business days. Express options available at checkout.
+              </p>
+            </div>
 
-              <details className="group">
-                <summary className="flex items-center justify-between cursor-pointer text-sm font-semibold text-dark">
-                  Size &amp; Fit
-                  <span className="text-primary group-open:rotate-45 transition-transform text-lg leading-none">
-                    +
-                  </span>
-                </summary>
-                <p className="mt-3 text-sm text-gray-600 leading-relaxed">
-                  True to size. We recommend selecting your usual size. Model wears size M.
-                </p>
-              </details>
-
-              <details className="group">
-                <summary className="flex items-center justify-between cursor-pointer text-sm font-semibold text-dark">
-                  Shipping &amp; Returns
-                  <span className="text-primary group-open:rotate-45 transition-transform text-lg leading-none">
-                    +
-                  </span>
-                </summary>
-                <p className="mt-3 text-sm text-gray-600 leading-relaxed">
-                  Complimentary delivery on orders over {formatPriceWithCurrency(30000, preferredCurrency)}. Free returns within 7 days of
-                  delivery for unused items.
-                </p>
-              </details>
+            {/* Gifting */}
+            <div className="space-y-2">
+              <h3 className="text-xs font-ui uppercase tracking-[0.2em] text-primary">
+                Gifting
+              </h3>
+              <p className="text-sm font-serif text-primary/80 leading-relaxed">
+                Complimentary gift wrapping available. Add a personalized note at checkout to make your gift extra special.
+              </p>
             </div>
           </div>
         </div>
 
-        {/* Related */}
+        {/* SHOP THE LOOK SECTION */}
         {relatedProducts.length > 0 && (
-          <div className="mt-20">
-            <div className="flex items-center justify-between mb-6">
-              <h2 className="text-xl font-display font-semibold text-dark tracking-wide">
-                Shop the Style
-              </h2>
-              <a
-                href="/products"
-                className="text-sm text-primary font-semibold hover:underline"
-              >
-                View all products
-              </a>
+          <div className="mb-16">
+            <h2 className="text-2xl font-display text-primary mb-6">Shop The Look</h2>
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4 lg:gap-6">
+              {relatedProducts.slice(0, 4).map((related) => (
+                <ProductCard product={related} key={related.id} />
+              ))}
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-              {relatedProducts.map((related) => (
+          </div>
+        )}
+
+        {/* YOU MAY ALSO LIKE SECTION */}
+        {relatedProducts.length > 4 && (
+          <div className="mb-8">
+            <h2 className="text-2xl font-display text-primary mb-6">You May Also Like</h2>
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4 lg:gap-6">
+              {relatedProducts.slice(4, 8).map((related) => (
                 <ProductCard product={related} key={related.id} />
               ))}
             </div>
@@ -646,7 +724,7 @@ export default function ProductDetail() {
             <button
               type="button"
               onClick={() => setSizeGuideOpen(false)}
-              className="absolute top-6 right-6 text-gray-500 hover:text-dark"
+              className="absolute top-6 right-6 text-primary/70 hover:text-primary"
               aria-label="Close size guide"
             >
               <X className="w-5 h-5" />
@@ -664,26 +742,26 @@ export default function ProductDetail() {
                 />
               </div>
               <div className="space-y-1">
-                <p className="text-xs uppercase tracking-[0.3em] text-gray-400">
+                <p className="text-xs uppercase tracking-[0.3em] text-primary/70">
                 {sizeGuideData?.gender || 'Size Guide'}
                 </p>
-                <h3 className="text-2xl font-display font-bold text-dark">
+                <h3 className="text-2xl font-display font-bold text-primary">
                 {sizeGuideData?.title || product.title}
                 </h3>
-                <p className="text-sm text-gray-500">
+                <p className="text-sm text-primary/80">
                 {sizeGuideData?.subtitle || product.category || 'Collection'}
                 </p>
               </div>
             </div>
             <div className="space-y-4">
-              <div className="flex items-center justify-between text-sm font-semibold text-gray-600 border-b pb-2">
+              <div className="flex items-center justify-between text-sm font-semibold text-primary border-b border-primary/20 pb-2">
                 <span>Conversion Chart</span>
                 <span>Inches / CM</span>
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-sm">
                   <thead>
-                    <tr className="uppercase text-xs tracking-[0.3em] text-gray-400">
+                    <tr className="uppercase text-xs tracking-[0.3em] text-primary/70">
                       <th className="py-3">Size</th>
                       <th className="py-3">Standard</th>
                       <th className="py-3">Measurement</th>
@@ -692,14 +770,14 @@ export default function ProductDetail() {
                   <tbody>
                     {sizeGuideRows.length
                       ? sizeGuideRows.map((row) => (
-                          <tr key={row.label} className="border-t text-gray-700">
+                          <tr key={row.label} className="border-t border-primary/15 text-primary">
                             <td className="py-3 font-semibold">{row.label}</td>
                             <td className="py-3 uppercase">{row.standard ?? '—'}</td>
                             <td className="py-3">{row.measurement ?? '—'}</td>
                           </tr>
                         ))
                       : (
-                        <tr className="border-t text-gray-500">
+                        <tr className="border-t border-primary/15 text-primary/70">
                           <td className="py-6" colSpan={3}>
                             No size guide available for this product yet.
                           </td>

@@ -14,6 +14,31 @@ interface Order {
   items: any[];
 }
 
+const mockOrder: Order = {
+  id: 'demo-order-id',
+  order_number: 'SS-102938',
+  total_amount: 45200,
+  payment_status: 'paid',
+  fulfillment_status: 'processing',
+  created_at: new Date().toISOString(),
+  items: [
+    {
+      product_name: 'Adire Midi Dress',
+      quantity: 1,
+      unit_price: 32000,
+      subtotal: 32000,
+      product_image: '/images/demo-image-2.svg',
+    },
+    {
+      product_name: 'Handwoven Tote',
+      quantity: 1,
+      unit_price: 13200,
+      subtotal: 13200,
+      product_image: '/images/demo-image-3.svg',
+    },
+  ],
+};
+
 export default function OrderSuccess() {
   const navigate = useNavigate();
   const clearCart = useCartStore((state) => state.clearCart);
@@ -21,6 +46,7 @@ export default function OrderSuccess() {
   const [searchParams] = useSearchParams();
   const queryOrderId = searchParams.get('orderId');
   const paymentStatus = searchParams.get('payment');
+  const isMock = searchParams.get('mock') === '1';
 
   const orderId = paramOrderId || queryOrderId;
 
@@ -29,6 +55,12 @@ export default function OrderSuccess() {
   const [error, setError] = useState('');
 
   useEffect(() => {
+    if (isMock) {
+      setOrder(mockOrder);
+      setLoading(false);
+      return;
+    }
+
     // Clear cart on successful payment
     if (paymentStatus === 'success') {
       clearCart();
@@ -55,8 +87,8 @@ export default function OrderSuccess() {
   };
 
   const handleTrackOrder = () => {
-    if (orderId) {
-      navigate(ROUTES.ORDER_TRACKING.replace(':orderId', orderId));
+    if (orderId || isMock) {
+      navigate(ROUTES.ORDER_TRACKING.replace(':orderId', orderId || mockOrder.id));
     } else {
       navigate(ROUTES.HOME);
     }

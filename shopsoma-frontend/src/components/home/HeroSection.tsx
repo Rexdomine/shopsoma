@@ -52,7 +52,7 @@ function OptimizedImage({ webp, jpg, alt, index }: { webp: string; jpg: string; 
 
 export default function HeroSection() {
   return (
-    <section className="bg-white">
+    <section className="bg-[var(--color-page-bg)]">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16 lg:py-24">
         <div className="grid lg:grid-cols-2 gap-12 items-center">
           {/* Left Content */}
@@ -63,14 +63,14 @@ export default function HeroSection() {
                 <br />
                 Collection
               </h1>
-              <p className="text-base font-body text-gray-600">
+              <p className="text-base font-body text-gray-700">
                 Enhance the appearance of your space.
               </p>
             </div>
 
             <Link
               to="/products"
-              className="inline-flex items-center justify-center gap-2 px-8 py-3.5 font-body font-semibold transition-all duration-200 text-base bg-primary text-white hover:bg-primary-dark border border-primary"
+              className="inline-flex items-center justify-center gap-2 px-8 py-3.5 font-ui font-semibold transition-all duration-200 text-base bg-cta text-[var(--color-cta-text)] hover:bg-cta-dark border border-cta"
             >
               Shop Now
               <ArrowRight className="w-5 h-5" />

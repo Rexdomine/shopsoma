@@ -61,6 +61,121 @@ class ProductImageResponse(ProductImageBase):
 
 
 # ============================================================================
+# Size Stock Schemas
+# ============================================================================
+
+class SizeStockBase(BaseModel):
+    """Base size stock schema
+
+    Supports three sizing systems:
+    - US Sizing: Letter sizes (XXS, XS, S, M, L, XL, XXL, XXXL)
+    - UK Sizing: Numeric sizes (4, 6, 8, 10, 12, 14, 16, 18, 20, 22)
+    - EU Sizing: Numeric sizes (32, 34, 36, 38, 40, 42, 44, 46, 48, 50)
+    """
+    size: str = Field(
+        ...,
+        pattern="^(XXS|XS|S|M|L|XL|XXL|XXXL|4|6|8|10|12|14|16|18|20|22|32|34|36|38|40|42|44|46|48|50)$",
+        description="Size (US/UK/EU sizing)"
+    )
+    stock: int = Field(default=0, ge=0, description="Stock quantity")
+
+
+class SizeStockCreate(SizeStockBase):
+    """Schema for creating size stock"""
+    pass
+
+
+class SizeStockUpdate(BaseModel):
+    """Schema for updating size stock"""
+    stock: Optional[int] = Field(None, ge=0)
+
+
+class SizeStockResponse(SizeStockBase):
+    """Schema for size stock response"""
+    id: UUID
+    variation_id: UUID
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# ============================================================================
+# Variation Schemas
+# ============================================================================
+
+class VariationBase(BaseModel):
+    """Base variation schema"""
+    title: str = Field(..., min_length=1, max_length=100, description="Variation title (e.g., 'Black', 'Red Print')")
+    type: str = Field(default="color", max_length=50, description="Variation type (e.g., 'color')")
+    color_hex: Optional[str] = Field(None, pattern=r"^#[0-9A-Fa-f]{6}$", description="Color hex code")
+    price: Optional[Decimal] = Field(None, gt=0, decimal_places=2, description="Price override (if null, uses product base_price)")
+    sale_price: Optional[Decimal] = Field(None, gt=0, decimal_places=2, description="Sale price override")
+    images: List[str] = Field(default_factory=list, description="Image URLs for this variation")
+    is_active: bool = Field(default=True, description="Variation active status")
+
+    @field_validator("price", "sale_price")
+    @classmethod
+    def validate_price(cls, v):
+        """Validate price"""
+        if v is not None:
+            if v <= 0:
+                raise ValueError("Price must be greater than 0")
+            if v > 999999.99:
+                raise ValueError("Price cannot exceed 999,999.99")
+            return round(v, 2)
+        return v
+
+
+class VariationCreate(VariationBase):
+    """Schema for creating variation"""
+    sizes: List[SizeStockCreate] = Field(..., min_length=1, description="Size stock array (at least 1 size required)")
+
+
+class VariationUpdate(BaseModel):
+    """Schema for updating variation"""
+    title: Optional[str] = Field(None, min_length=1, max_length=100)
+    type: Optional[str] = Field(None, max_length=50)
+    color_hex: Optional[str] = Field(None, pattern=r"^#[0-9A-Fa-f]{6}$")
+    price: Optional[Decimal] = Field(None, gt=0, decimal_places=2)
+    sale_price: Optional[Decimal] = Field(None, gt=0, decimal_places=2)
+    images: Optional[List[str]] = None
+    is_active: Optional[bool] = None
+    sizes: Optional[List[SizeStockCreate]] = None  # For sync operations
+
+    @field_validator("price", "sale_price")
+    @classmethod
+    def validate_price(cls, v):
+        """Validate price"""
+        if v is not None:
+            if v <= 0:
+                raise ValueError("Price must be greater than 0")
+            if v > 999999.99:
+                raise ValueError("Price cannot exceed 999,999.99")
+            return round(v, 2)
+        return v
+
+
+class VariationResponse(VariationBase):
+    """Schema for variation response"""
+    id: UUID
+    product_id: UUID
+    created_at: datetime
+    updated_at: datetime
+    size_stocks: List[SizeStockResponse] = []
+
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    @field_validator("size_stocks", mode="before")
+    @classmethod
+    def ensure_list(cls, v):
+        """Ensure size_stocks is always a list"""
+        if v is None:
+            return []
+        return v
+
+
+# ============================================================================
 # Product Variant Schemas
 # ============================================================================
 
@@ -132,6 +247,7 @@ class ProductBase(BaseModel):
     title: str = Field(..., min_length=3, max_length=255, description="Product title")
     description: Optional[str] = Field(None, max_length=5000, description="Product description")
     category_id: Optional[UUID] = Field(None, description="Category UUID")
+    collection_id: Optional[UUID] = Field(None, description="Collection UUID")
     sku: Optional[str] = Field(None, max_length=100, description="Stock Keeping Unit")
     base_price: Decimal = Field(..., gt=0, decimal_places=2, description="Base price")
     compare_at_price: Optional[Decimal] = Field(None, gt=0, decimal_places=2, description="Compare at price (original price)")
@@ -157,18 +273,28 @@ class ProductBase(BaseModel):
     @field_validator("compare_at_price")
     @classmethod
     def validate_compare_price(cls, v, info):
-        """Validate compare_at_price is greater than base_price"""
+        """Validate compare_at_price (original price) is greater than or equal to base_price (sale price)
+
+        E-commerce standard:
+        - base_price: Current selling price (what customer pays)
+        - compare_at_price: Original/MSRP price for comparison (shown crossed out)
+        - compare_at_price should be >= base_price to show savings
+        """
         if v is not None and "base_price" in info.data:
             base_price = info.data["base_price"]
-            if v <= base_price:
-                raise ValueError("Compare at price must be greater than base price")
+            if v < base_price:
+                raise ValueError(
+                    f"Compare at price (${v}) must be greater than or equal to base price (${base_price}). "
+                    "Compare at price is the original price shown for comparison."
+                )
         return v
 
 
 class ProductCreate(ProductBase):
     """Schema for creating product"""
     # Nested creation
-    variants: Optional[List[ProductVariantCreate]] = Field(default=None, description="Product variants")
+    variants: Optional[List[ProductVariantCreate]] = Field(default=None, description="Product variants (legacy)")
+    variations: Optional[List[VariationCreate]] = Field(default=None, description="Product variations (color/style variations with sizes)")
     images: Optional[List[ProductImageCreate]] = Field(default=None, max_length=10, description="Product images (max 10)")
 
     @field_validator("images")
@@ -199,6 +325,7 @@ class ProductUpdate(BaseModel):
     meta_title: Optional[str] = Field(None, max_length=255)
     meta_description: Optional[str] = Field(None, max_length=500)
     size_guide: Optional[SizeGuide] = None
+    variations: Optional[List[VariationCreate]] = None  # For sync operations
 
     @field_validator("base_price", "compare_at_price")
     @classmethod
@@ -218,6 +345,8 @@ class ProductResponse(ProductBase):
     id: UUID
     vendor_id: UUID
     vendor_name: Optional[str] = None
+    category_name: Optional[str] = None
+    collection_name: Optional[str] = None
     moderation_status: str
     moderation_notes: Optional[str] = None
     views_count: int
@@ -227,6 +356,7 @@ class ProductResponse(ProductBase):
 
     # Nested relationships
     variants: List[ProductVariantResponse] = []
+    variations: List[VariationResponse] = []
     images: List[ProductImageResponse] = []
 
     model_config = ConfigDict(from_attributes=True)
@@ -265,3 +395,14 @@ class ProductModerationUpdate(BaseModel):
     """Schema for admin product moderation"""
     moderation_status: str = Field(..., pattern="^(pending|approved|rejected)$")
     moderation_notes: Optional[str] = Field(None, max_length=1000)
+
+
+class ProductApprovalRequest(BaseModel):
+    """Schema for approving a product"""
+    notes: Optional[str] = Field(None, max_length=500, description="Optional approval notes")
+
+
+class ProductRejectionRequest(BaseModel):
+    """Schema for rejecting a product"""
+    reason: str = Field(..., min_length=10, max_length=1000, description="Rejection reason (required)")
+    notes: Optional[str] = Field(None, max_length=500, description="Additional notes")

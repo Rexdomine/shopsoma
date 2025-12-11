@@ -11,7 +11,7 @@ from sqlalchemy.orm import selectinload
 from app.core.database import get_db
 from app.api.dependencies import get_current_user, get_current_vendor, get_current_admin, get_optional_user
 from app.models.user import User
-from app.models.product import Product, ProductVariant, ProductImage, ProductStatus, ModerationStatus
+from app.models.product import Product, ProductVariant, ProductImage, ProductStatus, ModerationStatus, Variation, SizeStock, SizeEnum
 from app.models.vendor import Vendor
 from app.schemas.product import (
     ProductCreate,
@@ -26,14 +26,22 @@ from app.schemas.product import (
     ProductImageUpdate,
     ProductImageResponse,
     ProductModerationUpdate,
+    VariationCreate,
+    VariationUpdate,
+    VariationResponse,
+    SizeStockCreate,
+    SizeStockResponse,
 )
 
 router = APIRouter(prefix="/products", tags=["products"])
 
 PRODUCT_RELATIONSHIPS = (
     selectinload(Product.variants),
+    selectinload(Product.variations).selectinload(Variation.size_stocks),
     selectinload(Product.images),
     selectinload(Product.vendor),
+    selectinload(Product.category),
+    selectinload(Product.collection),
 )
 
 # ============================================================================
@@ -80,6 +88,7 @@ async def create_product(
         title=product_data.title,
         description=product_data.description,
         category_id=product_data.category_id,
+        collection_id=product_data.collection_id,
         sku=product_data.sku,
         base_price=product_data.base_price,
         compare_at_price=product_data.compare_at_price,
@@ -95,7 +104,32 @@ async def create_product(
     db.add(product)
     await db.flush()  # Get product ID
 
-    # Add variants if provided
+    # Add variations if provided (new system)
+    if product_data.variations:
+        for variation_data in product_data.variations:
+            variation = Variation(
+                product_id=product.id,
+                title=variation_data.title,
+                type=variation_data.type,
+                color_hex=variation_data.color_hex,
+                price=variation_data.price,
+                sale_price=variation_data.sale_price,
+                images=variation_data.images,
+                is_active=variation_data.is_active,
+            )
+            db.add(variation)
+            await db.flush()  # Get variation ID
+
+            # Add size stocks for this variation
+            for size_data in variation_data.sizes:
+                size_stock = SizeStock(
+                    variation_id=variation.id,
+                    size=SizeEnum(size_data.size),
+                    stock=size_data.stock,
+                )
+                db.add(size_stock)
+
+    # Add variants if provided (legacy system - backward compatibility)
     if product_data.variants:
         for variant_data in product_data.variants:
             variant = ProductVariant(
@@ -172,13 +206,15 @@ async def list_products(
         filters.append(Product.status == ProductStatus.ACTIVE)
         filters.append(Product.moderation_status == ModerationStatus.APPROVED)
     elif current_user.role == "vendor":
-        # Vendors see only their own products
+        # Vendors see only their own products (excluding archived/deleted)
         result = await db.execute(
             select(Vendor.id).where(Vendor.user_id == current_user.id)
         )
         vendor_id_result = result.scalar_one_or_none()
         if vendor_id_result:
             filters.append(Product.vendor_id == vendor_id_result)
+            # Exclude archived products (soft-deleted)
+            filters.append(Product.status != ProductStatus.ARCHIVED)
 
     # Search
     if search:
@@ -358,6 +394,10 @@ async def update_product(
 
     # Update fields
     update_data = product_data.model_dump(exclude_unset=True)
+
+    # Handle variations separately for sync logic
+    variations_data = update_data.pop("variations", None)
+
     for field, value in update_data.items():
         if field == "status":
             setattr(product, field, ProductStatus(value))
@@ -365,6 +405,40 @@ async def update_product(
             setattr(product, field, value.model_dump() if value is not None else None)
         else:
             setattr(product, field, value)
+
+    # Sync variations if provided
+    if variations_data is not None:
+        # Delete all existing variations (cascade will delete size_stocks)
+        await db.execute(
+            select(Variation).where(Variation.product_id == product_id)
+        )
+        for existing_variation in product.variations:
+            await db.delete(existing_variation)
+
+        # Create new variations
+        for variation_data in variations_data:
+            variation = Variation(
+                product_id=product.id,
+                title=variation_data["title"],
+                type=variation_data.get("type", "color"),
+                color_hex=variation_data.get("color_hex"),
+                price=variation_data.get("price"),
+                sale_price=variation_data.get("sale_price"),
+                images=variation_data.get("images", []),
+                is_active=variation_data.get("is_active", True),
+            )
+            db.add(variation)
+            await db.flush()  # Get variation ID
+
+            # Add size stocks for this variation
+            if "sizes" in variation_data:
+                for size_data in variation_data["sizes"]:
+                    size_stock = SizeStock(
+                        variation_id=variation.id,
+                        size=SizeEnum(size_data["size"]),
+                        stock=size_data.get("stock", 0),
+                    )
+                    db.add(size_stock)
 
     # Reset moderation if content changed
     if any(field in update_data for field in ["title", "description"]):

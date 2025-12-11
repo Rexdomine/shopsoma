@@ -41,6 +41,11 @@ export interface ClaimAccountPayload {
   full_name?: string;
 }
 
+export interface VerifyOtpPayload {
+  email: string;
+  code: string;
+}
+
 export const authService = {
   // Login user
   async login(credentials: LoginCredentials): Promise<LoginResponse> {
@@ -179,6 +184,14 @@ export const authService = {
     } catch (error: any) {
       throw new Error(error?.response?.data?.detail || 'Unable to verify email.');
     }
+  },
+
+  async verifyOtp(payload: VerifyOtpPayload): Promise<void> {
+    await api.post('/auth/otp/verify', payload);
+  },
+
+  async resendOtp(email: string): Promise<void> {
+    await api.post('/auth/otp/resend', { email });
   },
 
   async requestAccountClaimEmail(email: string): Promise<void> {

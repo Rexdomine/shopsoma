@@ -28,6 +28,7 @@ from app.schemas.order import (
 )
 from app.api.dependencies import get_current_active_user, get_optional_user
 from app.services.email_service import email_service
+from app.services.vendor_notification_service import VendorNotificationService
 from app.services.account_claim import queue_account_claim_email
 
 router = APIRouter(prefix="/orders", tags=["Orders"])
@@ -75,6 +76,32 @@ def generate_order_number() -> str:
     timestamp = datetime.now().strftime("%Y%m%d")
     random_part = secrets.token_hex(4).upper()
     return f"SHP-{timestamp}-{random_part}"
+
+
+async def send_vendor_order_notification(
+    vendor_id: str,
+    order_number: str,
+    product_title: str,
+    quantity: int,
+    vendor_payout: float,
+    scheduled_pickup_date: datetime
+):
+    """
+    Background task to send vendor order notification email
+    """
+    from app.core.database import get_db_context
+
+    async with get_db_context() as db:
+        vendor_notification_service = VendorNotificationService(email_service)
+        await vendor_notification_service.send_order_notification(
+            db=db,
+            vendor_id=vendor_id,
+            order_number=order_number,
+            product_title=product_title,
+            quantity=quantity,
+            vendor_payout=vendor_payout,
+            scheduled_pickup_date=scheduled_pickup_date
+        )
 
 
 async def calculate_order_totals(
@@ -550,12 +577,78 @@ async def create_order(
     await db.flush()  # Get order ID
 
     # Create order items
+    created_order_items = []
     for item_dict in order_items:
         order_item = OrderItem(
             order_id=new_order.id,
             **item_dict
         )
         db.add(order_item)
+        created_order_items.append(order_item)
+
+    await db.flush()  # Get order item IDs
+
+    # Create vendor pickups and notifications for each order item
+    from app.models import VendorPickup, VendorNotification, Vendor
+    from app.models.vendor_pickup import OrderType, PickupStatus
+    from datetime import datetime, timedelta
+
+    for order_item in created_order_items:
+        # Get vendor info
+        vendor_result = await db.execute(
+            select(Vendor).where(Vendor.id == order_item.vendor_id)
+        )
+        vendor = vendor_result.scalar_one_or_none()
+
+        if vendor:
+            # Determine order type (default to RTW)
+            order_type = OrderType.RTW
+            estimated_days = None
+
+            # Calculate scheduled pickup date (48 hours for RTW)
+            scheduled_date = datetime.utcnow() + timedelta(hours=48)
+
+            # Create vendor pickup
+            pickup = VendorPickup(
+                vendor_id=vendor.id,
+                order_id=new_order.id,
+                order_item_id=order_item.id,
+                order_type=order_type,
+                estimated_production_days=estimated_days,
+                scheduled_pickup_date=scheduled_date,
+                pickup_address=vendor.business_address,
+                pickup_contact_name=vendor.user.full_name if vendor.user else None,
+                pickup_contact_phone=vendor.business_phone,
+                status=PickupStatus.SCHEDULED
+            )
+            db.add(pickup)
+
+            # Create vendor notification
+            notification = VendorNotification(
+                vendor_id=vendor.id,
+                notification_type="order_placed",
+                title=f"New Order #{new_order.order_number}",
+                message=f"You have received a new order for {order_item.product_title}. Pickup scheduled for {scheduled_date.strftime('%B %d, %Y at %I:%M %p')}.",
+                order_id=new_order.id,
+                data={
+                    "order_number": new_order.order_number,
+                    "product_title": order_item.product_title,
+                    "quantity": order_item.quantity,
+                    "vendor_payout": float(order_item.vendor_payout)
+                }
+            )
+            db.add(notification)
+
+            # Queue background task to send vendor notification email
+            background_tasks.add_task(
+                send_vendor_order_notification,
+                str(vendor.id),
+                new_order.order_number,
+                order_item.product_title,
+                order_item.quantity,
+                float(order_item.vendor_payout),
+                scheduled_date
+            )
 
     # Update stock
     for item_data, item_dict in zip(order_data.items, order_items):

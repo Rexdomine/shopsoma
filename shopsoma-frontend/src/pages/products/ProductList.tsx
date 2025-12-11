@@ -1,16 +1,25 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, ArrowRight, ChevronDown } from 'lucide-react';
+import { ArrowLeft, ArrowRight, ChevronDown, Search, X } from 'lucide-react';
 import Layout from '../../components/layout/Layout';
 import Loading from '../../components/common/Loading';
 import type { Product } from '../../types';
-import { productService } from '../../services/productService';
-import { ROUTES } from '../../config/constants';
+import { productService, type ProductListParams } from '../../services/productService';
+import { MEN_HERO_IMAGE_URL, WOMEN_HERO_IMAGE_URL, ROUTES } from '../../config/constants';
 import ProductCard from '../../components/products/ProductCard';
+import VendorShowcaseCard from '../../components/products/VendorShowcaseCard';
 import { useWishlistActions } from '../../hooks/useWishlistActions';
 import { usePreferenceStore } from '../../store/preferenceStore';
 
 const PAGE_SIZE = 12;
+
+// Spotlight vendor configuration
+const SPOTLIGHT_VENDOR = {
+  id: '1', // Replace with actual vendor ID
+  name: 'Shopsoma Fashion Store',
+  imageUrl: '/images/hero/demo-image-2.png', // Replace with actual vendor image
+  productCount: 24, // This can be dynamic if needed
+};
 
 type FilterState = {
   category: string;
@@ -65,31 +74,48 @@ type ColorMeta = {
   count: number;
 };
 
-const articles = [
-  {
-    id: 1,
-    category: 'Culture | Sep 12, 2022',
-    title: 'Why African Fashion is Necessary',
-    description:
-      'Discover timeless silhouettes and the artisans elevating pan-African style through thoughtful craftsmanship.',
-  },
-  {
-    id: 2,
-    category: 'Culture | Sep 12, 2022',
-    title: 'The New Luxury Playbook',
-    description:
-      'From bold Ankara prints to tailored classics — explore the seasonal direction curated by our editors.',
-  },
-  {
-    id: 3,
-    category: 'Culture | Sep 12, 2022',
-    title: 'Designers to Know Right Now',
-    description:
-      'Meet the ateliers reshaping modern African fashion with premium textiles and architectural lines.',
-  },
-];
+type HeroContent = {
+  title: string;
+  body: string;
+  imageUrl: string;
+  ctaLabel?: string;
+};
 
-export default function ProductList() {
+type ProductListProps = {
+  presetCategory?: string;
+  initialParams?: ProductListParams;
+  heroOverride?: HeroContent;
+};
+
+const DEFAULT_HERO: HeroContent = {
+  title: 'Lisa Folawiyo',
+  body: 'Kooky Recipes Bad Raw Viral. Mukbang Pitchfork Party Church-key Viral Bicycle Rights Photo Chicharrones Cray. Heirloom Cray Blue Bottle Shaman Health Art Party Tumeric Salvia',
+  imageUrl: '/images/hero/demo-image-2.png',
+  ctaLabel: 'Learn More',
+};
+
+const MEN_HERO: HeroContent = {
+  title: 'Menswear: Elevated Everyday Style',
+  body: 'Discover tailored pieces, bold silhouettes and everyday staples, curated for the modern man.',
+  imageUrl: MEN_HERO_IMAGE_URL,
+  ctaLabel: 'Shop all menswear',
+};
+
+const WOMEN_HERO: HeroContent = {
+  title: 'Womenswear: Effortless Elegance',
+  body: 'Explore statement pieces, refined tailoring and everyday essentials crafted for modern women.',
+  imageUrl: WOMEN_HERO_IMAGE_URL,
+  ctaLabel: 'Shop all womenswear',
+};
+
+const MEN_CATEGORY_KEYS = ['men', 'menswear', "men's fashion", 'mens fashion', "men's wear", 'mens wear'];
+const WOMEN_CATEGORY_KEYS = ['women', 'womenswear', "women's fashion", 'womens fashion', "women's wear", 'womens wear'];
+
+export default function ProductList({
+  presetCategory,
+  initialParams,
+  heroOverride,
+}: ProductListProps = {}) {
   const [searchParams] = useSearchParams();
   const searchQuery = searchParams.get('q') || '';
   const categoryParam = searchParams.get('category') || '';
@@ -100,7 +126,7 @@ export default function ProductList() {
   const [error, setError] = useState<string | null>(null);
   const [filterMenuOpen, setFilterMenuOpen] = useState(false);
   const [filters, setFilters] = useState<FilterState>({
-    category: categoryParam || 'All',
+    category: presetCategory || categoryParam || 'All',
     color: 'All',
     price: 'all',
   });
@@ -115,6 +141,27 @@ export default function ProductList() {
   const [customPriceInputs, setCustomPriceInputs] = useState({ min: '', max: '' });
   const [customPriceRange, setCustomPriceRange] = useState<{ min?: number; max?: number } | null>(null);
   const { favorites, toggleFavorite } = useWishlistActions();
+  const activeCategory = presetCategory || filters.category;
+
+  const normalize = (value: string) =>
+    value.toLowerCase().replace(/’/g, "'").trim();
+
+  const categoryMatchesPreset = (categoryValue: string, preset: string) => {
+    const normalized = normalize(categoryValue);
+    if (preset === 'Men') return MEN_CATEGORY_KEYS.some((key) => normalized === key);
+    if (preset === 'Women') return WOMEN_CATEGORY_KEYS.some((key) => normalized === key);
+    return normalized === normalize(preset);
+  };
+
+  const matchesCategory = (product: Product, category: string) => {
+    if (!category || category === 'All') return true;
+    const productCategory = product.category ? normalize(product.category) : '';
+    if (productCategory) {
+      return categoryMatchesPreset(productCategory, category);
+    }
+    const description = normalize(product.description || '');
+    return description.startsWith(`${normalize(category)} -`);
+  };
 
   useEffect(() => {
     const loadProducts = async () => {
@@ -125,6 +172,7 @@ export default function ProductList() {
           page_size: 60,
           sort_by: 'created_at',
           sort_order: 'desc',
+          ...initialParams,
         });
         setAllProducts(response.products || []);
         setError(null);
@@ -139,20 +187,46 @@ export default function ProductList() {
     loadProducts();
   }, []);
 
+  // Derive interest category from preference
+  const interestCategory = preferredInterest === 'menswear' ? 'Men' : preferredInterest === 'womenswear' ? 'Women' : null;
+
   // Update filters when URL params change
-useEffect(() => {
-  setFilters(prev => ({
-    ...prev,
-    category: categoryParam || 'All'
-  }));
-  if (!categoryParam || categoryParam === 'All') {
-    setCuratedFilterApplied(false);
-  }
-}, [categoryParam]);
+  useEffect(() => {
+    if (presetCategory) {
+      setFilters((prev) => ({ ...prev, category: presetCategory }));
+    } else {
+      setFilters(prev => ({
+        ...prev,
+        category: categoryParam || 'All'
+      }));
+      if (!categoryParam || categoryParam === 'All') {
+        setCuratedFilterApplied(false);
+      }
+    }
+  }, [categoryParam, presetCategory]);
 
-const filterMenuRef = useRef<HTMLDivElement>(null);
+  // Sync filters.category when preference changes while curated filter is active
+  useEffect(() => {
+    if (presetCategory) return;
+    if (curatedFilterApplied) {
+      if (interestCategory) {
+        // Update to the new preference category
+        setFilters(prev => ({
+          ...prev,
+          category: interestCategory,
+        }));
+      } else {
+        // If preference is set to "neither", turn off curated filter
+        setFilters(prev => ({
+          ...prev,
+          category: 'All',
+        }));
+        setCuratedFilterApplied(false);
+      }
+    }
+  }, [preferredInterest, interestCategory, curatedFilterApplied, presetCategory]);
 
-const interestCategory = preferredInterest === 'menswear' ? 'Men' : 'Women';
+  const filterMenuRef = useRef<HTMLDivElement>(null);
 
   const categories = useMemo(() => {
     const unique = new Set<string>();
@@ -178,15 +252,12 @@ const interestCategory = preferredInterest === 'menswear' ? 'Men' : 'Women';
     }
 
     // Apply category filter
-    if (filters.category !== 'All') {
-      list = list.filter((product) => {
-        const description = product.description || '';
-        return description.startsWith(`${filters.category} - `);
-      });
+    if (activeCategory !== 'All') {
+      list = list.filter((product) => matchesCategory(product, activeCategory));
     }
 
     return list;
-  }, [allProducts, searchQuery, filters.category]);
+  }, [allProducts, searchQuery, activeCategory]);
 
   const { colorOptions, colorMeta } = useMemo(() => {
     const metaMap = new Map<
@@ -273,12 +344,8 @@ const interestCategory = preferredInterest === 'menswear' ? 'Men' : 'Women';
       });
     }
 
-    if (filters.category !== 'All') {
-      list = list.filter((product) => {
-        const description = product.description || '';
-        // Check if description starts with the category prefix (e.g., "Women - ", "Men - ")
-        return description.startsWith(`${filters.category} - `);
-      });
+    if (activeCategory !== 'All') {
+      list = list.filter((product) => matchesCategory(product, activeCategory));
     }
 
     if (filters.color !== 'All') {
@@ -347,7 +414,7 @@ const interestCategory = preferredInterest === 'menswear' ? 'Men' : 'Women';
     }
 
     return sorted;
-  }, [allProducts, filters, sortOption, customPriceRange, searchQuery]);
+  }, [allProducts, filters, sortOption, customPriceRange, searchQuery, activeCategory]);
 
   const totalPages = Math.max(1, Math.ceil(filteredProducts.length / PAGE_SIZE));
 
@@ -359,6 +426,13 @@ const interestCategory = preferredInterest === 'menswear' ? 'Men' : 'Women';
     const start = (page - 1) * PAGE_SIZE;
     return filteredProducts.slice(start, start + PAGE_SIZE);
   }, [filteredProducts, page]);
+
+  const emptyStateMessage =
+    presetCategory === 'Men'
+      ? 'No menswear products available yet. Please check back soon.'
+      : presetCategory === 'Women'
+        ? 'No womenswear products available yet. Please check back soon.'
+        : 'No products found for the selected filters.';
 
 const handleFilterChange = (key: keyof FilterState, value: string) => {
   if (key === 'price' && value !== 'custom') {
@@ -454,23 +528,115 @@ const handleFilterChange = (key: keyof FilterState, value: string) => {
     };
   }, [filterMenuOpen]);
 
+  const heroContent =
+    heroOverride ||
+    (presetCategory === 'Men'
+      ? MEN_HERO
+      : presetCategory === 'Women'
+        ? WOMEN_HERO
+        : DEFAULT_HERO);
+
   return (
     <Layout>
-      <section className="bg-white py-12 lg:py-20">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="text-xs uppercase tracking-[0.3em] text-gray-400 mb-8">
-            Home / Collections / <span className="text-gray-700">All</span>
-          </div>
+      {/* Store Hero Section */}
+      <section
+        className="relative w-full min-h-[50vh] bg-cover bg-center flex items-end"
+        style={{
+          backgroundImage: `url('${heroContent.imageUrl}')`,
+        }}
+      >
+        {/* Dark overlay for text legibility */}
+        <div className="absolute inset-0 bg-black/20" />
 
-          <div className="grid grid-cols-1 lg:grid-cols-[260px_auto] gap-12">
-            <aside className="space-y-8">
-              <Link
-                to={ROUTES.HOME}
-                className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.3em] text-gray-500 hover:text-primary transition"
+        {/* Overlay content - Left positioned */}
+        <div className="relative z-10 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 w-full pb-12 lg:pb-16">
+          <div className="max-w-md">
+            <h1
+              className="text-3xl lg:text-4xl font-display text-white mb-4"
+              style={{ textShadow: '0 2px 8px rgba(0,0,0,0.4)' }}
+            >
+              {heroContent.title}
+            </h1>
+            <p
+              className="text-sm font-serif text-white/95 leading-relaxed mb-6"
+              style={{ textShadow: '0 1px 4px rgba(0,0,0,0.3)' }}
+            >
+              {heroContent.body}
+            </p>
+            <button
+              className="inline-block px-6 py-2.5 bg-white/10 backdrop-blur-sm border border-white text-white text-xs font-ui uppercase tracking-[0.2em] hover:bg-white hover:text-dark transition-all"
+            >
+              {heroContent.ctaLabel || 'Learn More'}
+            </button>
+          </div>
+        </div>
+      </section>
+
+      {/* Filter Bar + Search Row */}
+      <section className="bg-[var(--color-page-bg)] border-b border-gray-200">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+          <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4">
+            {/* Left side: Tabs */}
+            <div className="flex items-center gap-6">
+              <button
+                type="button"
+                className="text-sm font-ui tracking-wide text-dark border-b-2 border-primary pb-1"
               >
-                <ArrowLeft className="w-4 h-4" />
-                Home / All
-              </Link>
+                All Items ({filteredProducts.length})
+              </button>
+              <button
+                type="button"
+                className="text-sm font-ui tracking-wide text-gray-500 hover:text-dark pb-1"
+              >
+                Collections
+              </button>
+            </div>
+
+            {/* Right side: Search + Refine */}
+            <div className="flex items-center gap-4 w-full lg:w-auto">
+              <div className="relative flex-1 lg:flex-initial lg:w-64">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                <input
+                  type="text"
+                  placeholder="Search"
+                  className="w-full pl-10 pr-4 py-2 border border-gray-300 text-sm font-ui focus:outline-none focus:border-primary transition"
+                  defaultValue={searchQuery}
+                />
+              </div>
+              <button
+                type="button"
+                onClick={() => setFilterMenuOpen(true)}
+                className="px-6 py-2 border border-gray-300 text-xs font-ui uppercase tracking-[0.2em] text-dark hover:border-primary hover:text-primary transition whitespace-nowrap"
+              >
+                REFINE
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Filter Modal */}
+      {filterMenuOpen && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div
+            ref={filterMenuRef}
+            className="bg-white w-full max-w-2xl max-h-[80vh] overflow-y-auto shadow-2xl"
+          >
+            {/* Modal Header */}
+            <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between">
+              <h2 className="text-lg font-ui uppercase tracking-[0.2em] text-dark">Filter Products</h2>
+              <button
+                type="button"
+                onClick={() => setFilterMenuOpen(false)}
+                className="p-2 hover:bg-gray-100 transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-6">
+              <aside className="space-y-8">
 
               {searchQuery && (
                 <div className="bg-primary/5 border border-primary/20 px-6 py-4">
@@ -492,46 +658,20 @@ const handleFilterChange = (key: keyof FilterState, value: string) => {
                 <div className="space-y-4">
                   <div className="flex items-center justify-between border-b border-gray-100 pb-3">
                     <span className="text-[11px] uppercase tracking-[0.4em] text-gray-400">
-                      Filter by
+                      Sort by
                     </span>
-                    <div className="relative" ref={filterMenuRef}>
-                      <button
-                        type="button"
-                        onClick={() => setFilterMenuOpen((prev) => !prev)}
-                        className={`inline-flex items-center gap-3 border px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.3em] transition ${
-                          filterMenuOpen
-                            ? 'border-primary text-primary'
-                            : 'border-gray-200 text-gray-600 hover:border-primary hover:text-primary'
-                        }`}
+                    <div className="relative">
+                      <select
+                        value={sortOption}
+                        onChange={(e) => setSortOption(e.target.value)}
+                        className="border border-gray-200 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.3em] text-gray-600 hover:border-primary focus:border-primary focus:outline-none transition"
                       >
-                        {currentSortLabel}
-                        <ChevronDown
-                          className={`w-3.5 h-3.5 transition-transform ${
-                            filterMenuOpen ? 'rotate-180' : ''
-                          }`}
-                        />
-                      </button>
-                      {filterMenuOpen && (
-                        <div className="absolute right-0 mt-2 w-56 border border-gray-100 bg-white shadow-xl z-10 overflow-hidden">
-                          {sortOptions.map((option) => (
-                            <button
-                              key={option.value}
-                              type="button"
-                              onClick={() => {
-                                setSortOption(option.value);
-                                setFilterMenuOpen(false);
-                              }}
-                              className={`w-full text-left px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] transition ${
-                                sortOption === option.value
-                                  ? 'text-primary bg-primary/5'
-                                  : 'text-gray-600 hover:text-primary hover:bg-gray-50'
-                              }`}
-                            >
-                              {option.label}
-                            </button>
-                          ))}
-                        </div>
-                      )}
+                        {sortOptions.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
                     </div>
                   </div>
                   <FilterGroup
@@ -561,9 +701,38 @@ const handleFilterChange = (key: keyof FilterState, value: string) => {
                   />
                 </div>
               </div>
-            </aside>
+              </aside>
+            </div>
 
-            <div className="space-y-8">
+            {/* Modal Footer */}
+            <div className="sticky bottom-0 bg-white border-t border-gray-200 px-6 py-4 flex items-center justify-between">
+              <button
+                type="button"
+                onClick={() => {
+                  setFilters({ category: 'All', color: 'All', price: 'all' });
+                  setCustomPriceInputs({ min: '', max: '' });
+                  setCustomPriceRange(null);
+                }}
+                className="text-sm font-ui text-gray-600 hover:text-primary underline"
+              >
+                Clear All
+              </button>
+              <button
+                type="button"
+                onClick={() => setFilterMenuOpen(false)}
+                className="px-8 py-2.5 bg-primary text-white text-xs font-ui uppercase tracking-[0.2em] hover:bg-primary-dark transition"
+              >
+                Apply Filters
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Product Grid Section */}
+      <section className="bg-[var(--color-page-bg)] py-12">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="space-y-8">
               {preferredInterest && !showInterestBanner && (
                 <div className="text-right">
                   <button
@@ -640,27 +809,125 @@ const handleFilterChange = (key: keyof FilterState, value: string) => {
                   <p className="text-sm text-red-500">{error}</p>
                 </div>
               ) : paginatedProducts.length === 0 ? (
-                <div className="py-16 text-center">
-                  <p className="text-sm text-gray-500">
-                    No products found for the selected filters.
-                  </p>
+              <div className="py-16 text-center">
+                  <p className="text-sm text-gray-500">{emptyStateMessage}</p>
                 </div>
               ) : (
                 <>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8">
-                    {paginatedProducts.map((product) => {
-                      const isFavorite = favorites.has(product.id);
+                  {/* Page 1: 4 rows with vendor showcases */}
+                  {page === 1 ? (
+                    <>
+                      {/* Row 1: Vendor Showcase (2 cols) + 1 Product - 3 column grid */}
+                      {paginatedProducts.length >= 1 && (
+                        <div className="grid grid-cols-1 lg:grid-cols-3 gap-x-6 gap-y-10 mb-10">
+                          <div className="lg:col-span-2">
+                            <VendorShowcaseCard
+                              vendorId={SPOTLIGHT_VENDOR.id}
+                              vendorName={SPOTLIGHT_VENDOR.name}
+                              imageUrl={SPOTLIGHT_VENDOR.imageUrl}
+                              productCount={SPOTLIGHT_VENDOR.productCount}
+                            />
+                          </div>
+                          {paginatedProducts.slice(0, 1).map((product) => {
+                            const isFavorite = favorites.has(product.id);
+                            return (
+                              <ProductCard
+                                key={product.id}
+                                product={product}
+                                onToggleFavorite={toggleFavorite}
+                                isFavorite={isFavorite}
+                              />
+                            );
+                          })}
+                        </div>
+                      )}
 
-                      return (
-                        <ProductCard
-                          key={product.id}
-                          product={product}
-                          onToggleFavorite={toggleFavorite}
-                          isFavorite={isFavorite}
-                        />
-                      );
-                    })}
-                  </div>
+                      {/* Row 2: 4 Products - 4 column grid */}
+                      {paginatedProducts.length >= 2 && (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-x-6 gap-y-10 mb-10">
+                          {paginatedProducts.slice(1, 5).map((product) => {
+                            const isFavorite = favorites.has(product.id);
+                            return (
+                              <ProductCard
+                                key={product.id}
+                                product={product}
+                                onToggleFavorite={toggleFavorite}
+                                isFavorite={isFavorite}
+                              />
+                            );
+                          })}
+                        </div>
+                      )}
+
+                      {/* Row 3: 4 Products - 4 column grid */}
+                      {paginatedProducts.length >= 6 && (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-x-6 gap-y-10 mb-10">
+                          {paginatedProducts.slice(5, 9).map((product) => {
+                            const isFavorite = favorites.has(product.id);
+                            return (
+                              <ProductCard
+                                key={product.id}
+                                product={product}
+                                onToggleFavorite={toggleFavorite}
+                                isFavorite={isFavorite}
+                              />
+                            );
+                          })}
+                        </div>
+                      )}
+
+                      {/* Row 4: 1 Product + Vendor Showcase (2 cols) + 1 Product - 4 column grid */}
+                      {paginatedProducts.length >= 10 && (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-x-6 gap-y-10">
+                          {paginatedProducts.slice(9, 10).map((product) => {
+                            const isFavorite = favorites.has(product.id);
+                            return (
+                              <ProductCard
+                                key={product.id}
+                                product={product}
+                                onToggleFavorite={toggleFavorite}
+                                isFavorite={isFavorite}
+                              />
+                            );
+                          })}
+                          <div className="lg:col-span-2">
+                            <VendorShowcaseCard
+                              vendorId={SPOTLIGHT_VENDOR.id}
+                              vendorName="Featured Designer"
+                              imageUrl={SPOTLIGHT_VENDOR.imageUrl}
+                              productCount={SPOTLIGHT_VENDOR.productCount}
+                            />
+                          </div>
+                          {paginatedProducts.slice(10, 11).map((product) => {
+                            const isFavorite = favorites.has(product.id);
+                            return (
+                              <ProductCard
+                                key={product.id}
+                                product={product}
+                                onToggleFavorite={toggleFavorite}
+                                isFavorite={isFavorite}
+                              />
+                            );
+                          })}
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    /* Other pages: Regular 4-column grid, 4 rows = 12 products */
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-x-6 gap-y-10">
+                      {paginatedProducts.map((product) => {
+                        const isFavorite = favorites.has(product.id);
+                        return (
+                          <ProductCard
+                            key={product.id}
+                            product={product}
+                            onToggleFavorite={toggleFavorite}
+                            isFavorite={isFavorite}
+                          />
+                        );
+                      })}
+                    </div>
+                  )}
 
                   <div className="flex items-center justify-center gap-3 pt-10">
                     <button
@@ -703,46 +970,6 @@ const handleFilterChange = (key: keyof FilterState, value: string) => {
                 </>
               )}
 
-            </div>
-          </div>
-        </div>
-      </section>
-      <section className="w-full py-16 bg-white">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="text-center mb-12">
-            <p className="text-xs uppercase tracking-[0.3em] text-gray-400">
-              Showcased Articles
-            </p>
-            <h2 className="text-2xl font-display font-semibold text-dark">
-              Stories behind the silhouettes
-            </h2>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-            {articles.map((article) => (
-              <article
-                key={article.id}
-                className="bg-white shadow-sm hover:-translate-y-1 hover:shadow-xl transition-all duration-300 w-full border border-gray-200"
-              >
-                <div className="h-48 bg-[#f5f7f8]" />
-                <div className="p-6 space-y-3">
-                  <p className="text-[11px] uppercase tracking-[0.3em] text-gray-400">
-                    {article.category}
-                  </p>
-                  <h3 className="text-lg font-display font-semibold text-dark leading-snug">
-                    {article.title}
-                  </h3>
-                  <p className="text-sm text-gray-500">
-                    {article.description}
-                  </p>
-                  <button
-                    type="button"
-                    className="text-sm font-semibold text-primary hover:underline"
-                  >
-                    Read More
-                  </button>
-                </div>
-              </article>
-            ))}
           </div>
         </div>
       </section>

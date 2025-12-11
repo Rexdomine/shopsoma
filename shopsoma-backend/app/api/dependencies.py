@@ -11,6 +11,7 @@ from uuid import UUID
 from app.core.database import get_db
 from app.core.security import decode_token
 from app.models.user import User, UserRole
+from app.models.vendor import Vendor
 from app.schemas.auth import TokenData
 
 # HTTP Bearer token security
@@ -188,3 +189,86 @@ def require_roles(*allowed_roles: UserRole):
         return current_user
 
     return role_checker
+
+
+# ==================== VENDOR-SPECIFIC DEPENDENCIES ====================
+
+async def get_vendor_profile(
+    current_user: User = Depends(get_current_vendor),
+    db: AsyncSession = Depends(get_db)
+) -> Vendor:
+    """
+    Get vendor profile for current authenticated vendor user
+
+    Args:
+        current_user: Current authenticated user with vendor role
+        db: Database session
+
+    Returns:
+        Vendor profile
+
+    Raises:
+        HTTPException: If vendor profile not found
+    """
+    result = await db.execute(
+        select(Vendor).where(Vendor.user_id == current_user.id)
+    )
+    vendor = result.scalar_one_or_none()
+
+    if vendor is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Vendor profile not found. Please complete vendor registration."
+        )
+
+    return vendor
+
+
+async def get_approved_vendor(
+    vendor: Vendor = Depends(get_vendor_profile)
+) -> Vendor:
+    """
+    Ensure vendor is approved for operations
+
+    Args:
+        vendor: Vendor profile
+
+    Returns:
+        Approved vendor profile
+
+    Raises:
+        HTTPException: If vendor not approved
+    """
+    if not vendor.approved:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Vendor account pending approval. Please wait for admin approval."
+        )
+
+    return vendor
+
+
+async def get_kyc_submitted_vendor(
+    vendor: Vendor = Depends(get_vendor_profile)
+) -> Vendor:
+    """
+    Ensure vendor has submitted KYC documents
+
+    Args:
+        vendor: Vendor profile
+
+    Returns:
+        Vendor with KYC submitted
+
+    Raises:
+        HTTPException: If KYC not submitted
+    """
+    from app.models.vendor import KYCStatus
+
+    if vendor.kyc_status == KYCStatus.PENDING:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Please submit KYC documents to continue"
+        )
+
+    return vendor

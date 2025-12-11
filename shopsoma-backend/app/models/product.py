@@ -31,6 +31,7 @@ class Product(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     vendor_id = Column(UUID(as_uuid=True), ForeignKey("vendors.id", ondelete="CASCADE"), nullable=False, index=True)
     category_id = Column(UUID(as_uuid=True), ForeignKey("categories.id", ondelete="SET NULL"), nullable=True, index=True)
+    collection_id = Column(UUID(as_uuid=True), ForeignKey("collections.id", ondelete="SET NULL"), nullable=True, index=True)
 
     # Product Information
     title = Column(String(255), nullable=False)
@@ -69,7 +70,9 @@ class Product(Base):
     # Relationships
     vendor = relationship("Vendor", back_populates="products")
     category = relationship("Category", back_populates="products")
+    collection = relationship("Collection", back_populates="products")
     variants = relationship("ProductVariant", back_populates="product", cascade="all, delete-orphan")
+    variations = relationship("Variation", back_populates="product", cascade="all, delete-orphan")
     images = relationship("ProductImage", back_populates="product", cascade="all, delete-orphan", order_by="ProductImage.display_order")
     order_items = relationship("OrderItem", back_populates="product")
     reviews = relationship("Review", back_populates="product", cascade="all, delete-orphan")
@@ -79,6 +82,20 @@ class Product(Base):
         """Expose the vendor's business name for API responses."""
         if self.vendor:
             return self.vendor.business_name
+        return None
+
+    @property
+    def category_name(self):
+        """Expose the category name for API responses."""
+        if self.category:
+            return self.category.name
+        return None
+
+    @property
+    def collection_name(self):
+        """Expose the collection name for API responses."""
+        if self.collection:
+            return self.collection.name
         return None
 
     def __repr__(self):
@@ -139,3 +156,72 @@ class ProductImage(Base):
 
     def __repr__(self):
         return f"<ProductImage {self.product_id}>"
+
+
+class SizeEnum(str, enum.Enum):
+    """Size enum"""
+    XXS = "XXS"
+    XS = "XS"
+    S = "S"
+    M = "M"
+    L = "L"
+    XL = "XL"
+    XXL = "XXL"
+    XXXL = "XXXL"
+
+
+class Variation(Base):
+    """Product variation model (e.g., different colors)"""
+    __tablename__ = "variations"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    product_id = Column(UUID(as_uuid=True), ForeignKey("products.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    # Variation details
+    title = Column(String(100), nullable=False)  # e.g., "Black", "Red Print"
+    type = Column(String(50), default="color", nullable=False)  # e.g., "color"
+    color_hex = Column(String(7), nullable=True)  # e.g., "#000000"
+
+    # Pricing (optional override of product base price)
+    price = Column(Numeric(10, 2), nullable=True)  # if null → use product.base_price
+    sale_price = Column(Numeric(10, 2), nullable=True)  # if null → use product.base_sale_price
+
+    # Images for this variation (stored as JSON array)
+    images = Column(JSONB, nullable=True, default=list)  # ["url1", "url2", ...]
+
+    # Status
+    is_active = Column(Boolean, default=True, nullable=False)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    # Relationships
+    product = relationship("Product", back_populates="variations")
+    size_stocks = relationship("SizeStock", back_populates="variation", cascade="all, delete-orphan")
+
+    def __repr__(self):
+        return f"<Variation {self.title}>"
+
+
+class SizeStock(Base):
+    """Size stock for a specific variation"""
+    __tablename__ = "size_stocks"
+    __table_args__ = (
+        UniqueConstraint('variation_id', 'size', name='uq_variation_size'),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    variation_id = Column(UUID(as_uuid=True), ForeignKey("variations.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    # Size and stock
+    size = Column(SQLEnum(SizeEnum), nullable=False)
+    stock = Column(Integer, default=0, nullable=False)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    # Relationships
+    variation = relationship("Variation", back_populates="size_stocks")
+
+    def __repr__(self):
+        return f"<SizeStock {self.size} - {self.stock}>"

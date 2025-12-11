@@ -133,7 +133,7 @@ export default function HotItems() {
 
   if (loading) {
     return (
-      <section className="py-12 bg-white">
+      <section className="py-12 bg-[var(--color-card-bg)]">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <Loading size="lg" message="Loading hot items..." />
         </div>
@@ -144,7 +144,7 @@ export default function HotItems() {
   if (products.length === 0) {
     if (preferenceMeta.designersActive) {
       return (
-        <section className="py-12 bg-white">
+        <section className="py-12 bg-[var(--color-section-alt-bg)]">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
             <h2 className="text-2xl lg:text-3xl font-bold text-gray-900 mb-3">HOT ITEM</h2>
             <p className="text-sm text-gray-600 max-w-2xl mx-auto">
@@ -159,12 +159,12 @@ export default function HotItems() {
   }
 
   return (
-    <section className="py-12 bg-white">
+    <section className="py-12 bg-[var(--color-card-bg)]">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between mb-6">
           <div>
-            <h2 className="text-2xl lg:text-3xl font-bold text-gray-900 mb-1">HOT ITEM</h2>
-            <p className="text-sm text-gray-600">Trending products right now</p>
+            <h2 className="text-2xl lg:text-3xl font-display font-bold text-dark mb-1">HOT ITEM</h2>
+            <p className="text-sm font-ui text-gray-700">Trending products right now</p>
           </div>
 
           <div className="hidden md:flex items-center gap-2">
@@ -177,14 +177,14 @@ export default function HotItems() {
             </button>
             <button
               onClick={() => scroll('right')}
-              className="w-10 h-10 rounded-full bg-primary flex items-center justify-center hover:bg-primary-dark transition-all duration-200 shadow-md hover:shadow-lg"
+              className="w-10 h-10 rounded-full bg-cta flex items-center justify-center hover:bg-cta-dark transition-all duration-200 shadow-md hover:shadow-lg"
               aria-label="Scroll right"
             >
               <ChevronRight className="w-5 h-5 text-white" />
             </button>
             <Link
               to={ROUTES.PRODUCTS}
-              className="ml-2 px-7 py-3 bg-primary text-white rounded-full text-sm font-body font-semibold hover:bg-primary-dark transition-all duration-200 shadow-md hover:shadow-lg"
+              className="ml-2 px-7 py-3 bg-cta text-[var(--color-cta-text)] rounded-full text-sm font-ui font-semibold hover:bg-cta-dark transition-all duration-200 shadow-md hover:shadow-lg border border-cta"
             >
               See All Products
             </Link>
@@ -212,7 +212,7 @@ export default function HotItems() {
         <div className="md:hidden text-center mt-6">
           <Link
             to={ROUTES.PRODUCTS}
-            className="inline-block px-7 py-3 bg-primary text-white rounded-full text-sm font-body font-semibold hover:bg-primary-dark transition-all duration-200 shadow-md hover:shadow-lg"
+            className="inline-block px-7 py-3 bg-cta text-[var(--color-cta-text)] rounded-full text-sm font-ui font-semibold hover:bg-cta-dark transition-all duration-200 shadow-md hover:shadow-lg border border-cta"
           >
             See All Products
           </Link>

@@ -9,7 +9,7 @@ import { usePreferenceStore } from '../../store/preferenceStore';
 
 export default function ProfileManagePreference() {
   const navigate = useNavigate();
-  const [interest, setInterest] = useState<'womenswear' | 'menswear'>('womenswear');
+  const [interest, setInterest] = useState<'womenswear' | 'menswear' | 'neither' | null>(null);
   const [currency, setCurrency] = useState<Currency>('NGN');
   const [language, setLanguage] = useState('English');
   const [designerSearch, setDesignerSearch] = useState('');
@@ -87,14 +87,28 @@ export default function ProfileManagePreference() {
 
         if (prefsResult.status === 'fulfilled') {
           const data = prefsResult.value;
-          const resolvedInterest = data.interest === 'menswear' ? 'menswear' : 'womenswear';
+          // Map backend interest to UI state: menswear, womenswear, or "neither" for no preference
+          let resolvedInterest: 'womenswear' | 'menswear' | 'neither' | null;
+          if (data.interest === 'menswear') {
+            resolvedInterest = 'menswear';
+          } else if (data.interest === 'womenswear') {
+            resolvedInterest = 'womenswear';
+          } else {
+            // If no preference is set in backend, show "neither" as selected
+            resolvedInterest = 'neither';
+          }
+
           const resolvedCurrency = data.preferredCurrency?.toUpperCase() === 'USD' ? 'USD' : 'NGN';
           setInterest(resolvedInterest);
           setCurrency(resolvedCurrency);
           setLanguage(data.preferredLanguage ?? 'English');
           setDesigners(data.favoriteDesigners ?? []);
           setCategories(data.favoriteCategories ?? []);
-          setGlobalInterest(resolvedInterest);
+
+          // Only update global store if womenswear or menswear
+          if (resolvedInterest === 'womenswear' || resolvedInterest === 'menswear') {
+            setGlobalInterest(resolvedInterest);
+          }
           setGlobalCurrency(resolvedCurrency);
           setGlobalDesigners(data.favoriteDesigners ?? []);
           setGlobalCategories(data.favoriteCategories ?? []);
@@ -140,17 +154,33 @@ export default function ProfileManagePreference() {
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+
+    // Validate that interest is selected
+    if (!interest) {
+      setError('Please select your interest preference');
+      return;
+    }
+
     setError('');
     setSubmitting(true);
     try {
+      // Only send womenswear or menswear to backend, treat "neither" as not setting a preference
+      const interestToSave = interest === 'neither' ? null : interest;
+
       await updatePreferences({
-        interest,
+        interest: interestToSave as any,
         preferredLanguage: language,
         preferredCurrency: currency,
         favoriteDesigners: designers,
         favoriteCategories: categories,
       });
-      setGlobalInterest(interest);
+
+      // Update global store: set to null if "neither", otherwise set to the selected interest
+      if (interest === 'womenswear' || interest === 'menswear') {
+        setGlobalInterest(interest);
+      } else if (interest === 'neither') {
+        setGlobalInterest(null);
+      }
       setGlobalCurrency(currency);
       setGlobalDesigners(designers);
       setGlobalCategories(categories);
@@ -189,51 +219,72 @@ export default function ProfileManagePreference() {
               <div className="py-12 text-sm text-gray-500">Loading preferences...</div>
             ) : (
               <form onSubmit={handleSubmit} className="space-y-8">
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                <div className="space-y-4 lg:col-span-1">
-                  <p className="text-xs uppercase tracking-[0.3em] text-gray-400">I’m most interested in</p>
-                  <div className="flex gap-6">
-                    <label className="flex items-center gap-2 text-sm text-gray-700">
+              <div className="space-y-6">
+                <div className="space-y-4">
+                  <p className="text-xs uppercase tracking-[0.3em] text-gray-400">
+                    I'm most interested in {!interest && <span className="text-red-500">*</span>}
+                  </p>
+                  <div className="flex flex-wrap gap-6">
+                    <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
                       <input
                         type="radio"
                         name="interest"
                         value="womenswear"
                         checked={interest === 'womenswear'}
                         onChange={() => setInterest('womenswear')}
+                        className="w-4 h-4"
                       />
                       Womenswear
                     </label>
-                    <label className="flex items-center gap-2 text-sm text-gray-700">
+                    <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
                       <input
                         type="radio"
                         name="interest"
                         value="menswear"
                         checked={interest === 'menswear'}
                         onChange={() => setInterest('menswear')}
+                        className="w-4 h-4"
                       />
                       Menswear
                     </label>
+                    <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="interest"
+                        value="neither"
+                        checked={interest === 'neither'}
+                        onChange={() => setInterest('neither')}
+                        className="w-4 h-4"
+                      />
+                      Neither / No Preference
+                    </label>
                   </div>
+                  {!interest && (
+                    <p className="text-xs text-gray-500 italic">Please select your preference to continue</p>
+                  )}
                 </div>
-                <DropdownField
-                  label="Preferred Language"
-                  value={language}
-                  onChange={setLanguage}
-                  options={[
-                    { label: 'English', value: 'English' },
-                    { label: 'French', value: 'French' },
-                    { label: 'Spanish', value: 'Spanish' },
-                  ]}
-                />
-                <DropdownField
-                  label="Preferred Currency"
-                  value={currency}
-                  onChange={handleCurrencyChange}
-                  options={[
-                    { label: 'NGN - Nigerian Naira', value: 'NGN' },
-                    { label: 'USD - United States Dollar', value: 'USD' },
-                  ]}
-                />
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <DropdownField
+                    label="Preferred Language"
+                    value={language}
+                    onChange={setLanguage}
+                    options={[
+                      { label: 'English', value: 'English' },
+                      { label: 'French', value: 'French' },
+                      { label: 'Spanish', value: 'Spanish' },
+                    ]}
+                  />
+                  <DropdownField
+                    label="Preferred Currency"
+                    value={currency}
+                    onChange={handleCurrencyChange}
+                    options={[
+                      { label: 'NGN - Nigerian Naira', value: 'NGN' },
+                      { label: 'USD - United States Dollar', value: 'USD' },
+                    ]}
+                  />
+                </div>
               </div>
 
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">

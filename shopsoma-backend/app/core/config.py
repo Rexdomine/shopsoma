@@ -81,7 +81,14 @@ class Settings(BaseSettings):
     FRONTEND_BASE_URL: str = "https://shopsoma.com"
     BREVO_NEWSLETTER_LIST_ID: Optional[int] = None
 
+    @property
+    def FRONTEND_URL(self) -> str:
+        """Alias for FRONTEND_BASE_URL for backward compatibility"""
+        return self.FRONTEND_BASE_URL
+
     # S3/Object Storage
+    USE_LOCAL_STORAGE: bool = True  # Use local file storage for development
+    LOCAL_UPLOAD_DIR: str = "uploads"  # Directory for local uploads
     AWS_ACCESS_KEY_ID: str = ""
     AWS_SECRET_ACCESS_KEY: str = ""
     AWS_REGION: str = "us-east-1"

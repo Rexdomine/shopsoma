@@ -1,0 +1,27 @@
+<svg width="800" height="600" viewBox="0 0 800 600" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background -->
+  <rect width="800" height="600" fill="#E8E4DD"/>
+
+  <!-- Torso/Upper Body - Peach/Orange tones -->
+  <ellipse cx="400" cy="200" rx="120" ry="140" fill="#F4C7A6"/>
+
+  <!-- Arms -->
+  <ellipse cx="280" cy="220" rx="35" ry="120" fill="#E8B088" transform="rotate(-25 280 220)"/>
+  <ellipse cx="520" cy="220" rx="35" ry="120" fill="#E8B088" transform="rotate(25 520 220)"/>
+
+  <!-- Skirt - Yellow/Beige -->
+  <path d="M 280 280 Q 400 320 520 280 L 550 480 Q 400 500 250 480 Z" fill="#E8D67A"/>
+
+  <!-- Skirt Bow/Tie detail -->
+  <ellipse cx="400" cy="285" rx="25" ry="15" fill="#D4C168"/>
+  <path d="M 375 285 L 350 270 L 370 280 Z" fill="#C9B557"/>
+  <path d="M 425 285 L 450 270 L 430 280 Z" fill="#C9B557"/>
+
+  <!-- Shadow/depth on skirt -->
+  <path d="M 280 280 Q 400 320 520 280 L 520 300 Q 400 340 280 300 Z" fill="#D4C168" opacity="0.3"/>
+
+  <!-- Fabric folds -->
+  <line x1="350" y1="320" x2="345" y2="470" stroke="#C9B557" stroke-width="2" opacity="0.4"/>
+  <line x1="400" y1="330" x2="400" y2="490" stroke="#C9B557" stroke-width="2" opacity="0.4"/>
+  <line x1="450" y1="320" x2="455" y2="470" stroke="#C9B557" stroke-width="2" opacity="0.4"/>
+</svg>

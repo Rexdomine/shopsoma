@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import type { Currency } from '../utils/pricing';
 
-type InterestValue = 'womenswear' | 'menswear';
+type InterestValue = 'womenswear' | 'menswear' | null;
 
 const CURRENCY_KEY = 'shopsoma_pref_currency';
 const INTEREST_KEY = 'shopsoma_pref_interest';
@@ -17,9 +17,11 @@ const readStoredCurrency = (): Currency => {
 };
 
 const readStoredInterest = (): InterestValue => {
-  if (!isBrowser) return 'womenswear';
+  if (!isBrowser) return null;
   const value = window.localStorage.getItem(INTEREST_KEY);
-  return value === 'menswear' ? 'menswear' : 'womenswear';
+  if (value === 'menswear') return 'menswear';
+  if (value === 'womenswear') return 'womenswear';
+  return null;
 };
 
 const readStoredList = (key: string): string[] => {
@@ -67,7 +69,11 @@ export const usePreferenceStore = create<PreferenceState>((set) => ({
   },
   setInterest: (interest) => {
     if (isBrowser) {
-      window.localStorage.setItem(INTEREST_KEY, interest);
+      if (interest === null) {
+        window.localStorage.removeItem(INTEREST_KEY);
+      } else {
+        window.localStorage.setItem(INTEREST_KEY, interest);
+      }
     }
     set({ interest });
   },
@@ -88,7 +94,7 @@ export const usePreferenceStore = create<PreferenceState>((set) => ({
     }
     set({
       currency: 'NGN',
-      interest: 'womenswear',
+      interest: null,
       designers: [],
       categories: [],
     });

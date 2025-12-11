@@ -1,16 +1,21 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Search, ShoppingCart, User, X } from 'lucide-react';
+import { Bookmark, Search, ShoppingBag, User, X } from 'lucide-react';
 import { ROUTES } from '../../config/constants';
 import { useCartStore } from '../../store/cartStore';
 import { useAuth } from '../../context/AuthContext';
+import { useCurrencyStore } from '../../store/currencyStore';
+import type { Currency } from '../../store/currencyStore';
 
 export default function Header() {
   const [searchOpen, setSearchOpen] = useState(false);
+  const [currencyDropdownOpen, setCurrencyDropdownOpen] = useState(false);
   const navigate = useNavigate();
   const cart = useCartStore((state) => state.cart);
   const itemCount = cart.summary.itemCount;
   const { isAuthenticated, user } = useAuth();
+  const { currentCurrency, setCurrency } = useCurrencyStore();
+  const currencyDropdownRef = useRef<HTMLDivElement>(null);
 
   const handleProfileClick = () => {
     // Check localStorage directly - it's the source of truth
@@ -42,73 +47,101 @@ export default function Header() {
     return (names[0].charAt(0) + names[names.length - 1].charAt(0)).toUpperCase();
   };
 
+  // Close currency dropdown when clicking outside
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (currencyDropdownRef.current && !currencyDropdownRef.current.contains(event.target as Node)) {
+        setCurrencyDropdownOpen(false);
+      }
+    }
+
+    if (currencyDropdownOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [currencyDropdownOpen]);
+
+  // Handle currency selection
+  const handleCurrencyChange = (currency: Currency) => {
+    setCurrency(currency);
+    setCurrencyDropdownOpen(false);
+  };
+
+  // Get currency display info
+  const getCurrencyDisplay = (currency: Currency) => {
+    return currency === 'NGN'
+      ? { symbol: '₦', code: 'NGN' }
+      : { symbol: '$', code: 'USD' };
+  };
+
+  const currentCurrencyDisplay = getCurrencyDisplay(currentCurrency);
+
   return (
     <>
-    <header className="bg-white">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-5">
-        <div className="grid grid-cols-3 items-start">
-          {/* Left nav stack */}
-          <div className="flex flex-col gap-2 pt-6">
-            <nav className="flex items-center space-x-6 text-sm font-semibold text-primary">
-              <Link to="/men" className="hover:text-primary">
-                MEN
-              </Link>
-              <span className="text-gray-300">|</span>
-              <Link to="/women" className="hover:text-primary">
-                WOMEN
-              </Link>
-              <span className="text-gray-300">|</span>
-            <Link to="/beauty" className="hover:text-primary">
-              BEAUTY
-            </Link>
-            </nav>
-            <nav className="flex items-center space-x-6 text-xs font-semibold text-primary uppercase pt-2">
-              <Link to="/new" className="hover:text-primary-dark">
-                New
-              </Link>
-              <Link to="/designer" className="hover:text-primary-dark">
-                Designer
-              </Link>
-              <Link to="/clothing" className="hover:text-primary-dark">
-                Clothing
-              </Link>
-            <Link to="/accessories" className="hover:text-primary-dark">
-              Accessories
-            </Link>
-              <Link to="/jewelry" className="hover:text-primary-dark">
-                Jewelry
-              </Link>
-              <Link to="/sales" className="hover:text-primary-dark">
-                Sales
-              </Link>
-            </nav>
+      <header className="bg-[var(--color-page-bg)] text-primary border-b border-primary relative z-30">
+        <div className="max-w-6xl mx-auto px-8 py-3 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 flex-1">
+            <button
+              onClick={() => setSearchOpen(true)}
+              className="flex items-center gap-2 header-nav-text text-primary hover:text-primary-dark transition-colors"
+              aria-label="Open search"
+            >
+              <Search className="w-5 h-5" />
+              <span>Search</span>
+            </button>
           </div>
 
-          {/* Center logo */}
-          <div className="flex items-center justify-center">
-            <Link to="/" className="flex items-center justify-center">
+          <div className="flex items-center justify-center flex-shrink-0">
+            <Link to={ROUTES.HOME} className="flex items-center justify-center">
               <img
                 src="/images/somalogo.svg"
                 alt="Shopsoma"
-                className="h-12 w-auto"
+                className="h-8 w-auto"
               />
             </Link>
           </div>
 
-          {/* Right icons and search */}
-          <div className="flex items-center justify-end gap-4">
-            <button className="p-2 text-gray-600 hover:text-gray-900" onClick={() => setSearchOpen(true)}>
-              <Search className="w-5 h-5" />
-            </button>
-            <Link to={ROUTES.CART} className="p-2 text-gray-600 hover:text-gray-900 relative">
-              <ShoppingCart className="w-5 h-5" />
-              {itemCount > 0 && (
-                <span className="absolute -top-1 -right-1 bg-primary text-white text-[10px] font-semibold rounded-full h-4 w-4 flex items-center justify-center">
-                  {itemCount > 9 ? '9+' : itemCount}
-                </span>
+          <div className="flex items-center justify-end gap-4 text-sm font-ui flex-1">
+            {/* Currency Switcher */}
+            <div className="hidden sm:block relative" ref={currencyDropdownRef}>
+              <button
+                onClick={() => setCurrencyDropdownOpen(!currencyDropdownOpen)}
+                className="inline-flex items-center gap-1 text-primary hover:text-primary-dark transition-colors"
+                aria-label="Change currency"
+              >
+                ({currentCurrencyDisplay.symbol}) {currentCurrencyDisplay.code}{' '}
+                <span className="text-[10px]">▼</span>
+              </button>
+
+              {/* Currency Dropdown */}
+              {currencyDropdownOpen && (
+                <div className="absolute top-full right-0 mt-2 w-32 bg-white border border-primary shadow-lg z-50">
+                  <button
+                    onClick={() => handleCurrencyChange('NGN')}
+                    className={`w-full px-4 py-2 text-left text-sm hover:bg-gray-50 transition-colors ${
+                      currentCurrency === 'NGN' ? 'bg-gray-100 font-semibold' : ''
+                    }`}
+                    style={{ color: '#1E5053' }}
+                  >
+                    (₦) NGN
+                  </button>
+                  <button
+                    onClick={() => handleCurrencyChange('USD')}
+                    className={`w-full px-4 py-2 text-left text-sm hover:bg-gray-50 transition-colors ${
+                      currentCurrency === 'USD' ? 'bg-gray-100 font-semibold' : ''
+                    }`}
+                    style={{ color: '#1E5053' }}
+                  >
+                    ($) USD
+                  </button>
+                </div>
               )}
+            </div>
+
+            <Link to={ROUTES.PROFILE_WISHLIST || ROUTES.PROFILE} className="p-1.5 hover:text-primary-dark" aria-label="Wishlist">
+              <Bookmark className="w-5 h-5" />
             </Link>
-            <button onClick={handleProfileClick} className="p-2 text-gray-600 hover:text-gray-900">
+            <button onClick={handleProfileClick} className="p-1.5 hover:text-primary-dark" aria-label="Account">
               {isAuthenticated && user ? (
                 <div className="w-8 h-8 rounded-full bg-primary text-white flex items-center justify-center text-xs font-semibold">
                   {getUserInitials(user.full_name)}
@@ -117,11 +150,38 @@ export default function Header() {
                 <User className="w-5 h-5" />
               )}
             </button>
+            <Link to={ROUTES.CART} className="relative hover:text-primary-dark flex items-center gap-1" aria-label="Shopping bag">
+              <svg
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/>
+                <line x1="3" y1="6" x2="21" y2="6"/>
+                <path d="M16 10a4 4 0 0 1-8 0"/>
+              </svg>
+              <span className="text-sm font-ui">({itemCount})</span>
+            </Link>
           </div>
         </div>
-      </div>
-    </header>
-    <PremiumSearchOverlay open={searchOpen} onClose={() => setSearchOpen(false)} />
+
+        <nav className="border-t border-primary">
+          <div className="main-nav header-nav-text w-full mx-auto px-8 py-2 flex items-center justify-center gap-8 text-primary">
+            <Link to="/designers" className="hover:text-primary-dark">Designers</Link>
+            <Link to="/new" className="hover:text-primary-dark">New</Link>
+            <Link to={ROUTES.MEN} className="hover:text-primary-dark">Men</Link>
+            <Link to={ROUTES.WOMEN} className="hover:text-primary-dark">Women</Link>
+            <Link to="/perfumes" className="hover:text-primary-dark">Perfumes</Link>
+            <Link to="/bags-wallets" className="hover:text-primary-dark">Bags &amp; Wallets</Link>
+          </div>
+        </nav>
+      </header>
+      <PremiumSearchOverlay open={searchOpen} onClose={() => setSearchOpen(false)} />
     </>
   );
 }

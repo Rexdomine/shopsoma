@@ -50,7 +50,9 @@ export interface Product {
   size_guide?: SizeGuide | null;
   base_price: number;
   compare_at_price?: number;
-  category?: string;
+  category_name?: string | null;
+  collection_id?: string | null;
+  collection_name?: string | null;
   inventory_quantity: number;
   total_stock: number;
   status: 'draft' | 'active' | 'inactive' | 'archived';
@@ -64,6 +66,7 @@ export interface Product {
   created_at: string;
   updated_at: string;
   variants?: ProductVariant[];
+  variations?: Variation[];
   images?: ProductImage[];
 }
 
@@ -88,6 +91,47 @@ export interface ProductImage {
   alt_text?: string;
   display_order: number;
   is_primary: boolean;
+}
+
+// Image upload types
+export interface ImageUploadResponse {
+  original: string;
+  thumbnail?: string;
+  medium?: string;
+  large?: string;
+  s3_key: string;
+  uploaded_at: string;
+}
+
+export interface ImageBatchUploadResponse {
+  images: ImageUploadResponse[];
+  total: number;
+  success: number;
+  failed: number;
+}
+
+export interface SizeStock {
+  id?: string;
+  variation_id?: string;
+  size: 'XXS' | 'XS' | 'S' | 'M' | 'L' | 'XL' | 'XXL' | 'XXXL';
+  stock: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface Variation {
+  id?: string;
+  product_id?: string;
+  title: string;
+  type?: string;
+  color_hex?: string;
+  price?: number;
+  sale_price?: number;
+  images: string[];
+  is_active?: boolean;
+  size_stocks: SizeStock[];
+  created_at?: string;
+  updated_at?: string;
 }
 
 export interface SizeGuide {
@@ -135,4 +179,58 @@ export interface LayoutProps {
 export interface ErrorBoundaryProps {
   children: React.ReactNode;
   fallback?: React.ReactNode;
+}
+
+// Category types
+export interface Category {
+  id: string;
+  name: string;
+  slug: string;
+  description?: string;
+  parent_id?: string | null;
+  image_url?: string | null;
+  display_order: number;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+// Collection types
+export interface Collection {
+  id: string;
+  vendor_id: string;
+  name: string;
+  slug: string;
+  description?: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CollectionCreate {
+  name: string;
+  description?: string;
+}
+
+// Order types
+export type OrderStatus = 'pending' | 'confirmed' | 'processing' | 'shipped' | 'delivered' | 'cancelled' | 'returned';
+
+export interface Order {
+  id: string;
+  order_number: string;
+  customer_id: string;
+  vendor_id: string;
+  total_amount: number;
+  status: OrderStatus;
+  order_content: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface OrderListResponse {
+  orders: Order[];
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
 }

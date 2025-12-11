@@ -1,12 +1,16 @@
 """
 Image storage and processing service
 Handles S3 uploads, compression, resizing, and signed URLs
+Supports both local file storage (development) and S3 (production)
 """
 import io
+import os
 import uuid
 import hashlib
+import unicodedata
 from typing import Optional, Tuple, List
 from datetime import datetime, timedelta
+from pathlib import Path
 from PIL import Image
 import boto3
 from botocore.exceptions import ClientError
@@ -31,7 +35,7 @@ class ImageService:
     """Service for handling image storage and processing"""
 
     def __init__(self):
-        """Initialize S3 client"""
+        """Initialize image service (S3 or local storage)"""
         # Parse size configurations
         self.thumbnail_size = tuple(map(int, settings.THUMBNAIL_SIZE.split(',')))
         self.medium_size = tuple(map(int, settings.MEDIUM_SIZE.split(',')))
@@ -41,24 +45,34 @@ class ImageService:
         self.allowed_types = settings.ALLOWED_IMAGE_TYPES.split(',')
         self.max_size_bytes = settings.MAX_IMAGE_SIZE_MB * 1024 * 1024
 
-        # Initialize S3 client
-        s3_config = BotoConfig(
-            signature_version='s3v4',
-            region_name=settings.AWS_REGION
-        )
+        # Check if using local storage
+        self.use_local_storage = settings.USE_LOCAL_STORAGE
 
-        s3_kwargs = {
-            'aws_access_key_id': settings.AWS_ACCESS_KEY_ID,
-            'aws_secret_access_key': settings.AWS_SECRET_ACCESS_KEY,
-            'config': s3_config
-        }
+        if self.use_local_storage:
+            # Set up local storage directory
+            self.upload_dir = Path(settings.LOCAL_UPLOAD_DIR)
+            self.upload_dir.mkdir(parents=True, exist_ok=True)
+            logger.info(f"Using local file storage: {self.upload_dir.absolute()}")
+        else:
+            # Initialize S3 client
+            s3_config = BotoConfig(
+                signature_version='s3v4',
+                region_name=settings.AWS_REGION
+            )
 
-        # Add endpoint URL if using CloudFlare R2 or MinIO
-        if settings.S3_ENDPOINT_URL:
-            s3_kwargs['endpoint_url'] = settings.S3_ENDPOINT_URL
+            s3_kwargs = {
+                'aws_access_key_id': settings.AWS_ACCESS_KEY_ID,
+                'aws_secret_access_key': settings.AWS_SECRET_ACCESS_KEY,
+                'config': s3_config
+            }
 
-        self.s3_client = boto3.client('s3', **s3_kwargs)
-        self.bucket_name = settings.S3_BUCKET_NAME
+            # Add endpoint URL if using CloudFlare R2 or MinIO
+            if settings.S3_ENDPOINT_URL:
+                s3_kwargs['endpoint_url'] = settings.S3_ENDPOINT_URL
+
+            self.s3_client = boto3.client('s3', **s3_kwargs)
+            self.bucket_name = settings.S3_BUCKET_NAME
+            logger.info(f"Using S3 storage: {self.bucket_name}")
 
     def validate_image(self, file: UploadFile) -> None:
         """
@@ -87,6 +101,28 @@ class ImageService:
                 status_code=400,
                 detail=f"Image too large. Maximum size: {settings.MAX_IMAGE_SIZE_MB}MB"
             )
+
+    def _sanitize_filename(self, filename: str) -> str:
+        """
+        Sanitize filename to only include ASCII characters
+
+        Args:
+            filename: Original filename
+
+        Returns:
+            ASCII-only filename safe for S3 metadata
+        """
+        # Normalize unicode characters to ASCII equivalents
+        ascii_filename = unicodedata.normalize('NFKD', filename)
+        ascii_filename = ascii_filename.encode('ascii', 'ignore').decode('ascii')
+
+        # Replace any remaining non-alphanumeric characters (except . - _) with underscore
+        ascii_filename = ''.join(c if c.isalnum() or c in '.-_ ' else '_' for c in ascii_filename)
+
+        # Replace spaces with underscores
+        ascii_filename = ascii_filename.replace(' ', '_')
+
+        return ascii_filename
 
     def _generate_unique_filename(self, original_filename: str, size: str = "original") -> str:
         """
@@ -181,11 +217,11 @@ class ImageService:
         generate_variants: bool = True
     ) -> dict:
         """
-        Upload image to S3 with multiple size variants
+        Upload image to storage (S3 or local) with multiple size variants
 
         Args:
             file: Uploaded file
-            folder: S3 folder (products, avatars, etc.)
+            folder: Folder (products, avatars, etc.)
             generate_variants: Whether to generate thumbnail/medium/large variants
 
         Returns:
@@ -199,8 +235,108 @@ class ImageService:
 
         # Generate unique filename
         original_filename = file.filename or "image.jpg"
+        sanitized_filename = self._sanitize_filename(original_filename)
         base_filename = self._generate_unique_filename(original_filename)
 
+        results = {}
+
+        try:
+            if self.use_local_storage:
+                # Upload to local filesystem
+                return await self._upload_local(
+                    image_data=image_data,
+                    original_filename=original_filename,
+                    base_filename=base_filename,
+                    folder=folder,
+                    generate_variants=generate_variants
+                )
+            else:
+                # Upload to S3
+                return await self._upload_s3(
+                    image_data=image_data,
+                    original_filename=original_filename,
+                    sanitized_filename=sanitized_filename,
+                    base_filename=base_filename,
+                    folder=folder,
+                    generate_variants=generate_variants
+                )
+
+        except Exception as e:
+            logger.error(f"Image upload error: {str(e)}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to upload image: {str(e)}"
+            )
+
+    async def _upload_local(
+        self,
+        image_data: bytes,
+        original_filename: str,
+        base_filename: str,
+        folder: str,
+        generate_variants: bool
+    ) -> dict:
+        """Upload image to local filesystem"""
+        results = {}
+
+        # Create folder structure
+        year_month = datetime.utcnow().strftime('%Y/%m')
+        folder_path = self.upload_dir / folder / year_month
+        folder_path.mkdir(parents=True, exist_ok=True)
+
+        # Upload original
+        original_path = folder_path / base_filename
+        compressed_data, format_type = self._compress_and_resize(
+            image_data,
+            target_size=None,
+            quality=settings.IMAGE_QUALITY
+        )
+
+        with open(original_path, 'wb') as f:
+            f.write(compressed_data)
+
+        # Generate URL path (relative to uploads directory)
+        original_key = f"{folder}/{year_month}/{base_filename}"
+        results['original'] = f"/uploads/{original_key}"
+        results['s3_key'] = original_key
+
+        # Generate and save variants
+        if generate_variants:
+            variants = [
+                (ImageSize.THUMBNAIL, self.thumbnail_size),
+                (ImageSize.MEDIUM, self.medium_size),
+                (ImageSize.LARGE, self.large_size)
+            ]
+
+            for size_name, size_tuple in variants:
+                variant_filename = self._generate_unique_filename(original_filename, size_name)
+                variant_path = folder_path / variant_filename
+
+                variant_data, variant_format = self._compress_and_resize(
+                    image_data,
+                    target_size=size_tuple,
+                    quality=settings.IMAGE_QUALITY
+                )
+
+                with open(variant_path, 'wb') as f:
+                    f.write(variant_data)
+
+                variant_key = f"{folder}/{year_month}/{variant_filename}"
+                results[size_name] = f"/uploads/{variant_key}"
+
+        logger.info(f"Successfully uploaded image to local storage: {original_key}")
+        return results
+
+    async def _upload_s3(
+        self,
+        image_data: bytes,
+        original_filename: str,
+        sanitized_filename: str,
+        base_filename: str,
+        folder: str,
+        generate_variants: bool
+    ) -> dict:
+        """Upload image to S3"""
         results = {}
 
         try:
@@ -219,7 +355,7 @@ class ImageService:
                 ContentType=f"image/{format_type}",
                 CacheControl="max-age=31536000",  # 1 year
                 Metadata={
-                    'original-filename': original_filename,
+                    'original-filename': sanitized_filename,
                     'uploaded-at': datetime.utcnow().isoformat()
                 }
             )
@@ -259,20 +395,14 @@ class ImageService:
 
                     results[size_name] = self._get_public_url(variant_key)
 
-            logger.info(f"Successfully uploaded image: {original_key}")
+            logger.info(f"Successfully uploaded image to S3: {original_key}")
             return results
 
         except ClientError as e:
             logger.error(f"S3 upload error: {str(e)}")
             raise HTTPException(
                 status_code=500,
-                detail="Failed to upload image to storage"
-            )
-        except Exception as e:
-            logger.error(f"Image processing error: {str(e)}")
-            raise HTTPException(
-                status_code=500,
-                detail=f"Failed to process image: {str(e)}"
+                detail="Failed to upload image to S3"
             )
 
     def _get_public_url(self, s3_key: str) -> str:

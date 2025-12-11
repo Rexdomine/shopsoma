@@ -56,7 +56,7 @@ Post-launch, **Phase 2** will extend into **Beauty & Makeup vertical**, introduc
 - Manual approval by Admin
 - Vendor Dashboard (P1):
   - Upload CSV (SKU, Price, Quantity, Images)
-  - Edit/Delete products
+  - Add, Edit/Delete products
   - View orders and 7/30-day sales summary
 
 ### 3.3 Product & Catalog
@@ -179,6 +179,6 @@ CREATE TABLE orders (
 
 ---
 
-**Author:** RexTech Engineering  
+**Author:** RexTexh Engineering  
 **Version:** v1.0 Launch (Phase 1)  
 **Last Updated:** November 8, 2025

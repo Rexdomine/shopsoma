@@ -73,6 +73,7 @@ class Order(Base):
     items = relationship("OrderItem", back_populates="order", cascade="all, delete-orphan")
     payments = relationship("Payment", back_populates="order")
     returns = relationship("Return", back_populates="order")
+    pickups = relationship("VendorPickup", back_populates="order")
 
     def __repr__(self):
         return f"<Order {self.order_number}>"
@@ -112,6 +113,7 @@ class OrderItem(Base):
     product = relationship("Product", back_populates="order_items")
     variant = relationship("ProductVariant", back_populates="order_items")
     vendor = relationship("Vendor", back_populates="order_items")
+    pickup = relationship("VendorPickup", back_populates="order_item", uselist=False)
 
     def __repr__(self):
         return f"<OrderItem {self.product_title} x{self.quantity}>"

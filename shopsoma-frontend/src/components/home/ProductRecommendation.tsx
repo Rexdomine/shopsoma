@@ -119,7 +119,7 @@ export default function ProductRecommendation() {
 
   if (loading) {
     return (
-      <section className="py-12 bg-gray-50">
+      <section className="py-12 bg-[var(--color-card-bg)]">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <Loading size="lg" message="Loading recommendations..." />
         </div>
@@ -128,13 +128,13 @@ export default function ProductRecommendation() {
   }
 
   return (
-    <section className="py-12 bg-gray-50">
+    <section className="py-12 bg-[var(--color-section-alt-bg)]">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="text-center mb-10">
           <h2 className="text-2xl lg:text-3xl font-display font-bold text-dark mb-2 tracking-wide">
             Product Recommendation
           </h2>
-          <p className="text-sm text-gray-600">
+          <p className="text-sm text-gray-700 font-ui">
             Discover what our curators are loving from the live catalog.
           </p>
           {error && (
@@ -176,7 +176,7 @@ export default function ProductRecommendation() {
             <div className="text-center mt-8">
               <Link
                 to={ROUTES.PRODUCTS}
-                className="inline-flex items-center justify-center px-6 py-2 rounded-full border border-primary text-primary text-sm font-semibold hover:bg-primary hover:text-white transition-all duration-200"
+                className="inline-flex items-center justify-center px-6 py-2 rounded-full border border-cta text-cta text-sm font-ui font-semibold hover:bg-cta hover:text-[var(--color-cta-text)] transition-all duration-200"
               >
                 View All Products
               </Link>
