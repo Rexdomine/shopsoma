@@ -8,6 +8,7 @@ import {
   Pencil,
   X,
   Loader2,
+  ChevronDown,
 } from 'lucide-react';
 import VendorSidebar from '../../components/vendor/VendorSidebar';
 import { ROUTES } from '../../config/constants';
