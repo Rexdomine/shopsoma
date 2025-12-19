@@ -1,0 +1,63 @@
+# Render Blueprint for Shopsoma Staging Environment
+# This file defines infrastructure as code for deploying to Render
+
+databases:
+  # PostgreSQL Database
+  - name: shopsoma-staging-db
+    plan: free
+    region: oregon
+    databaseName: shopsoma_staging
+    user: shopsoma_user
+
+services:
+
+  # Backend API (FastAPI)
+  - type: web
+    name: shopsoma-staging-api
+    env: python
+    region: oregon
+    plan: free
+    branch: develop
+    buildCommand: "cd shopsoma-backend && pip install -r requirements.txt"
+    startCommand: "cd shopsoma-backend && alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.9.18
+      - key: DATABASE_URL
+        fromDatabase:
+          name: shopsoma-staging-db
+          property: connectionString
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ALGORITHM
+        value: HS256
+      - key: ACCESS_TOKEN_EXPIRE_MINUTES
+        value: 30
+      - key: REFRESH_TOKEN_EXPIRE_DAYS
+        value: 7
+      - key: ENVIRONMENT
+        value: staging
+      - key: ALLOWED_ORIGINS
+        value: https://shopsoma-staging.onrender.com,http://localhost:5173,http://localhost:5174
+      - key: DATABASE_ECHO
+        value: false
+    healthCheckPath: /api/v1/health
+
+  # Frontend (React + Vite)
+  - type: web
+    name: shopsoma-staging
+    env: static
+    branch: develop
+    buildCommand: "cd shopsoma-frontend && npm install && npm run build"
+    staticPublishPath: shopsoma-frontend/dist
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      - key: VITE_API_BASE_URL
+        value: https://shopsoma-staging-api.onrender.com/api/v1
+      - key: VITE_PAYSTACK_PUBLIC_KEY
+        value: pk_test_9547fa4bf30edfebb1f56b66784fb6a0cab1eebf
+      - key: VITE_STRIPE_PUBLISHABLE_KEY
+        value: pk_test_51SUke6R5eRmaz3M8mBnU2whLHSSa9RMfjdO0ZjppvBdH2NvXt9J84oiIr67CcIRcKgRlVTOJQOKAKCqLTT6TRJpd003YbmQSnX

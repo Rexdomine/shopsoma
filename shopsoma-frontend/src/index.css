@@ -1,68 +1,117 @@
-:root {
-  font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
-  line-height: 1.5;
-  font-weight: 400;
+@import "tailwindcss";
+@import "./styles/select.css";
 
-  color-scheme: light dark;
-  color: rgba(255, 255, 255, 0.87);
-  background-color: #242424;
-
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-}
-
-a {
-  font-weight: 500;
-  color: #646cff;
-  text-decoration: inherit;
-}
-a:hover {
-  color: #535bf2;
+/* Shopsoma Brand Tokens */
+@theme {
+  --color-primary: #105E53;
+  --color-primary-dark: #0b4a45;
+  --color-primary-light: #1a756a;
+  --color-cta: #F15A26;
+  --color-eerie: #222424;
+  --color-bone: #E3DCCE;
+  --color-dun: #D2BFA7;
+  --color-ecru: #AFA059;
+  --color-coyote: #886B4A;
 }
 
-body {
-  margin: 0;
-  display: flex;
-  place-items: center;
-  min-width: 320px;
-  min-height: 100vh;
-}
-
-h1 {
-  font-size: 3.2em;
-  line-height: 1.1;
-}
-
-button {
-  border-radius: 8px;
-  border: 1px solid transparent;
-  padding: 0.6em 1.2em;
-  font-size: 1em;
-  font-weight: 500;
-  font-family: inherit;
-  background-color: #1a1a1a;
-  cursor: pointer;
-  transition: border-color 0.25s;
-}
-button:hover {
-  border-color: #646cff;
-}
-button:focus,
-button:focus-visible {
-  outline: 4px auto -webkit-focus-ring-color;
-}
-
-@media (prefers-color-scheme: light) {
+@layer base {
   :root {
-    color: #213547;
-    background-color: #ffffff;
+    --font-display: "Coconat", "Times New Roman", serif;
+    --font-serif: "Newsreader 6pt", "Georgia", serif;
+    --font-ui: "Lexend Tera", system-ui, -apple-system, "Segoe UI", sans-serif;
+
+    /* Brand palette */
+    --shopsoma-bone: #F0F5F4;
+    --shopsoma-dun: #D2BFA7;
+    --shopsoma-ecru: #AFA059;
+    --shopsoma-brunswick: #105E53;
+    --shopsoma-giants: #F15A26;
+    --shopsoma-coyote: #886B4A;
+    --shopsoma-eerie-black: #222424;
+
+    /* Semantic roles */
+    --color-page-bg: #ffffff;
+    --color-section-alt-bg: var(--shopsoma-dun);
+    --color-card-bg: var(--shopsoma-ecru);
+    --color-text-main: var(--shopsoma-eerie-black);
+    --color-text-muted: rgba(34, 36, 36, 0.72);
+    --color-text-on-dark: var(--shopsoma-bone);
+    --color-brand: var(--shopsoma-brunswick);
+    --color-brand-soft-bg: var(--shopsoma-ecru);
+    --color-cta-bg: var(--shopsoma-giants);
+    --color-cta-text: var(--shopsoma-bone);
+    --color-accent-warm: var(--shopsoma-coyote);
   }
-  a:hover {
-    color: #747bff;
+
+  /* Base body font */
+  html {
+    background-color: var(--color-page-bg);
+    color: var(--color-text-main);
   }
-  button {
-    background-color: #f9f9f9;
+
+  body {
+    font-family: var(--font-serif);
+    font-size: 1rem;
+    line-height: 1.5;
+    letter-spacing: 0.01em;
+    color: var(--color-text-main);
+    background-color: var(--color-page-bg);
+    font-optical-sizing: auto;
+    font-variation-settings: "opsz" 6;
   }
+
+  /* Heading hierarchy with Lao MN */
+  h1, h2 {
+    font-family: var(--font-display);
+    letter-spacing: 0.02em;
+  }
+
+  h3, h4, h5, h6 {
+    font-family: var(--font-serif);
+    letter-spacing: 0.015em;
+  }
+
+  h1 {
+    font-size: 2.5rem;
+    line-height: 1.2;
+  }
+
+  h2 {
+    font-size: 1.8rem;
+    line-height: 1.3;
+  }
+
+  h3 {
+    font-size: 1.5rem;
+    line-height: 1.4;
+  }
+
+  p, li, blockquote {
+    font-family: var(--font-serif);
+  }
+
+  button,
+  input,
+  select,
+  textarea,
+  label,
+  small {
+    font-family: var(--font-ui);
+    letter-spacing: 0.01em;
+  }
+}
+
+/* Utility for centered main nav */
+.main-nav {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  max-width: 100%;
+  margin: 0 auto;
+}
+
+.header-nav-text {
+  font-family: var(--font-serif);
+  font-size: 13px;
+  line-height: 1.4;
 }
