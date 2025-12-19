@@ -62,16 +62,6 @@ export default function ProductCard({
     onToggleFavorite?.(product.id);
   };
 
-  // Determine availability tag based on stock and product metadata
-  const getAvailabilityTag = () => {
-    if (product.inventory_quantity === 0) return 'Pre-order';
-    if (product.is_featured) return 'New Season';
-    // You can add more logic here based on product metadata
-    return 'Exclusive';
-  };
-
-  const availabilityTag = getAvailabilityTag();
-
   return (
     <Link
       to={`/products/${product.id}`}

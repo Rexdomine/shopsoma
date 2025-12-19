@@ -2,7 +2,7 @@
  * Bulk Order Actions Component
  * Bulk actions for selected orders
  */
-import React, { useState } from 'react';
+import { useState } from 'react';
 import type { FulfillmentStatus } from '../../services/adminOrderService';
 
 interface BulkOrderActionsProps {
@@ -71,10 +71,15 @@ export default function BulkOrderActions({
             className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#105E53] focus:border-transparent"
           >
             <option value="">Select status...</option>
-            <option value="pending">Pending</option>
-            <option value="processing">Processing</option>
-            <option value="shipped">Shipped</option>
+            <option value="order_received">Order Received</option>
+            <option value="preparing_for_pickup">Preparing for Pickup</option>
+            <option value="pickup_scheduled">Pickup Scheduled</option>
+            <option value="picked_up">Picked Up</option>
+            <option value="in_transit">In Transit</option>
+            <option value="out_for_delivery">Out for Delivery</option>
             <option value="delivered">Delivered</option>
+            <option value="delivery_failed">Delivery Failed</option>
+            <option value="returned">Returned</option>
             <option value="cancelled">Cancelled</option>
           </select>
         </div>

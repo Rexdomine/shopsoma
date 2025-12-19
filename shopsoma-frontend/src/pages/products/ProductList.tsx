@@ -155,7 +155,7 @@ export default function ProductList({
 
   const matchesCategory = (product: Product, category: string) => {
     if (!category || category === 'All') return true;
-    const productCategory = normalize(product.category_name || product.collection_name);
+    const productCategory = normalize(product.category_name || product.collection_name || '');
     if (productCategory) {
       return categoryMatchesPreset(productCategory, category);
     }

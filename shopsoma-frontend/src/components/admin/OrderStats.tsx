@@ -2,7 +2,6 @@
  * Order Statistics Component
  * Display order metrics for admin dashboard
  */
-import React from 'react';
 import type { OrderStats as OrderStatsType } from '../../services/adminOrderService';
 import { useCurrency } from '../../hooks/useCurrency';
 

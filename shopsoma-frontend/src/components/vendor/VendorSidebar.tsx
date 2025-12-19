@@ -35,7 +35,6 @@ type SidebarProps = {
 export default function VendorSidebar({
   disableMain = false,
   activePrimary,
-  activeSettings,
   pendingOrders = 0,
   completedOrders = 0,
   onViewStore,

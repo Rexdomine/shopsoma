@@ -4,13 +4,10 @@ import Layout from '../components/layout/Layout';
 import type { Product } from '../types';
 import { productService } from '../services/productService';
 import { IMAGE_CONFIG } from '../config/constants';
-import { usePreferenceStore } from '../store/preferenceStore';
 import { useWishlistActions } from '../hooks/useWishlistActions';
 import { useCurrency } from '../hooks/useCurrency';
-import { Heart } from 'lucide-react';
 
 const HERO_IMAGE = '/images/hero/demo-image-2.png';
-const EDITORIAL_IMAGE = '/images/hero/portrait-cool-man-with-sunglasses-dancing.jpg';
 const SECONDARY_IMAGE = '/images/hero/happy-man-party-wearing-sunglasses.jpg';
 
 type HomeProductCardProps = {
@@ -230,7 +227,7 @@ function FeaturedCollab({ imageUrl }: FeaturedCollabProps) {
           {/* Right Side - Image */}
           <div className="relative h-[400px] lg:h-auto">
             <img
-              src="/images/profilebanner.jpg"
+              src={imageUrl || '/images/profilebanner.jpg'}
               alt="Featured collaboration"
               className="w-full h-full object-cover"
             />
@@ -338,7 +335,6 @@ function EditorialSection() {
 export default function Home() {
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
-  const preferredCurrency = usePreferenceStore((state) => state.currency);
   const { favorites, toggleFavorite } = useWishlistActions();
 
   useEffect(() => {

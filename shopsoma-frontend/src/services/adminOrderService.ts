@@ -168,6 +168,10 @@ export interface OrderFilterParams {
 export interface OrderStatusUpdate {
   fulfillment_status: FulfillmentStatus;
   admin_notes?: string;
+  pickup_window_start?: string;
+  pickup_window_end?: string;
+  courier_name?: string;
+  rider_id?: string;
 }
 
 export interface ShippingInfoUpdate {

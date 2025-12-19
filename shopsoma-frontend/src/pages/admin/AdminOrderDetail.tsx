@@ -2,7 +2,7 @@
  * Admin Order Detail Page
  * Complete order management and details for admins
  */
-import React, { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import AdminSidebar from '../../components/admin/AdminSidebar';
 import { useToast } from '../../hooks/useToast';
@@ -18,7 +18,7 @@ import type {
   OrderDetail,
   FulfillmentStatus,
 } from '../../services/adminOrderService';
-import { getStatusBadgeConfig, getAdminStatusLabel } from '../../utils/orderStatusMessages';
+import { getStatusBadgeConfig } from '../../utils/orderStatusMessages';
 
 export default function AdminOrderDetail() {
   const { orderId } = useParams<{ orderId: string }>();

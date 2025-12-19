@@ -2,7 +2,7 @@
  * Admin Orders Page
  * Main order management page for admin dashboard
  */
-import React, { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import AdminSidebar from '../../components/admin/AdminSidebar';
 import OrderStats from '../../components/admin/OrderStats';

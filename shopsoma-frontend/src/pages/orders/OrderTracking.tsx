@@ -24,6 +24,7 @@ const TERMINAL_STATES: Record<OrderStatus, { label: string; color: string }> = {
   'cancelled': { label: 'Cancelled', color: 'gray' },
   // Include normal states for type safety
   'order_placed': { label: 'Order Placed', color: 'yellow' },
+  'pending_confirmation': { label: 'Pending Confirmation', color: 'yellow' },
   'in_transit': { label: 'In Transit', color: 'blue' },
   'out_for_delivery': { label: 'Out for Delivery', color: 'blue' },
   'delivered': { label: 'Delivered', color: 'green' },
