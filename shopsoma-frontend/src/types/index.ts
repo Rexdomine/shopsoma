@@ -51,6 +51,7 @@ export interface Product {
   base_price: number;
   compare_at_price?: number;
   currency: 'NGN' | 'USD';
+  category_id?: string | null;
   category_name?: string | null;
   collection_id?: string | null;
   collection_name?: string | null;

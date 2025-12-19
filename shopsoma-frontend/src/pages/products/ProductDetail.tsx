@@ -245,8 +245,6 @@ export default function ProductDetail() {
   const variantStock = selectedVariant?.stock ?? null;
   const maxQuantity = variantStock !== null ? variantStock : baseStock;
   const isOutOfStock = maxQuantity <= 0;
-  const displayQuantity = quantity > 0 ? quantity : 1;
-  const totalPrice = Number(currentPrice) * displayQuantity;
 
   useEffect(() => {
     if (!selectedVariant) {
@@ -831,7 +829,7 @@ export default function ProductDetail() {
                 {sizeGuideData?.title || product.title}
                 </h3>
                 <p className="text-sm text-primary/80">
-                {sizeGuideData?.subtitle || product.category || 'Collection'}
+                {sizeGuideData?.subtitle || product.category_name || product.collection_name || 'Collection'}
                 </p>
               </div>
             </div>

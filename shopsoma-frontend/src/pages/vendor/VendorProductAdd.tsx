@@ -5,9 +5,7 @@ import VendorSidebar from '../../components/vendor/VendorSidebar';
 import CollectionModal from '../../components/vendor/CollectionModal';
 import ToastContainer from '../../components/ui/ToastContainer';
 import { ROUTES } from '../../config/constants';
-import { useVendor } from '../../context/VendorContext';
 import { useToast } from '../../hooks/useToast';
-import { useCurrency } from '../../hooks/useCurrency';
 import { productService } from '../../services/productService';
 import { categoryService } from '../../services/categoryService';
 import { collectionService } from '../../services/collectionService';
@@ -49,9 +47,7 @@ interface DetailedVariation {
 
 export default function VendorProductAdd() {
   const navigate = useNavigate();
-  const { vendorProfile } = useVendor();
   const { toasts, hideToast, success, error, warning } = useToast();
-  const { getCurrencySymbol } = useCurrency();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Currency state (for product pricing)
@@ -60,7 +56,6 @@ export default function VendorProductAdd() {
 
   // Product details
   const [productName, setProductName] = useState('');
-  const [productCategory, setProductCategory] = useState('');
   const [primaryCategoryId, setPrimaryCategoryId] = useState('');
   const [subcategoryId, setSubcategoryId] = useState('');
   const [productPrice, setProductPrice] = useState('');
@@ -88,10 +83,9 @@ export default function VendorProductAdd() {
   // Other Details
   const [productType, setProductType] = useState<'single' | 'variable'>('single');
   const [madeToOrder, setMadeToOrder] = useState(false);
-  const [hasProductVariations, setHasProductVariations] = useState(false);
   const [isSustainable, setIsSustainable] = useState(false);
   const [estimatedProductionTime, setEstimatedProductionTime] = useState('');
-  const [estimatedReviewTime, setEstimatedReviewTime] = useState('3 days');
+  const [estimatedReviewTime] = useState('3 days');
 
   // Image management
   const [variations, setVariations] = useState<ProductVariation[]>([
@@ -167,7 +161,7 @@ export default function VendorProductAdd() {
   }, []);
 
   // Fetch subcategories when primary category changes
-  const handlePrimaryCategoryChange = async (categoryId: string, categoryName: string) => {
+  const handlePrimaryCategoryChange = async (categoryId: string) => {
     setPrimaryCategoryId(categoryId);
     setSubcategoryId(''); // Reset subcategory
     setSubcategories([]); // Clear subcategories
@@ -184,9 +178,8 @@ export default function VendorProductAdd() {
     }
   };
 
-  const handleSubcategoryChange = (categoryId: string, categoryName: string) => {
+  const handleSubcategoryChange = (categoryId: string) => {
     setSubcategoryId(categoryId);
-    setProductCategory(categoryName); // Keep for backward compatibility
     setShowSubcategoryDropdown(false);
   };
 
@@ -338,12 +331,6 @@ export default function VendorProductAdd() {
         ? { ...v, images: v.images.filter(img => img.id !== imageId) }
         : v
     ));
-  };
-
-  const addNewVariation = () => {
-    const newId = (variations.length + 1).toString();
-    setVariations([...variations, { id: newId, images: [] }]);
-    setCurrentVariation(newId);
   };
 
   const deleteCurrentVariation = () => {
@@ -1158,7 +1145,7 @@ export default function VendorProductAdd() {
                               <button
                                 key={cat.id}
                                 type="button"
-                                onClick={() => handlePrimaryCategoryChange(cat.id, cat.name)}
+                                onClick={() => handlePrimaryCategoryChange(cat.id)}
                                 className={`w-full px-4 py-2.5 text-left text-sm transition ${
                                   cat.id === primaryCategoryId
                                     ? 'bg-[#105E53]/10 text-[#105E53] font-medium'
@@ -1203,7 +1190,7 @@ export default function VendorProductAdd() {
                                 <button
                                   key={cat.id}
                                   type="button"
-                                  onClick={() => handleSubcategoryChange(cat.id, cat.name)}
+                                  onClick={() => handleSubcategoryChange(cat.id)}
                                   className={`w-full px-4 py-2.5 text-left text-sm transition ${
                                     cat.id === subcategoryId
                                       ? 'bg-[#105E53]/10 text-[#105E53] font-medium'

@@ -25,7 +25,7 @@ import { ROUTES } from '../../config/constants';
 
 type SidebarProps = {
   disableMain?: boolean;
-  activePrimary?: 'settings' | 'products';
+  activePrimary?: 'dashboard' | 'orders' | 'products' | 'collections' | 'marketing' | 'analytics' | 'earnings' | 'settings';
   activeSettings?: 'brand-info' | 'payout' | 'security';
   pendingOrders?: number;
   completedOrders?: number;

@@ -303,11 +303,10 @@ export default function AdminVendorApplicationDetail() {
             <div>
               <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Business Registration</label>
               <p className="mt-1 text-gray-900 font-ui">
-                {application.is_business_registered &&
-                 application.is_business_registered.toUpperCase() !== 'NO' ? (
+                {application.is_business_registered ? (
                   <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm bg-green-100 text-green-800">
                     <Check className="w-4 h-4" />
-                    Registered: {application.is_business_registered}
+                    Registered
                   </span>
                 ) : (
                   <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm bg-gray-100 text-gray-800">

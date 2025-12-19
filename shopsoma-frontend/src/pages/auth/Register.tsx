@@ -3,7 +3,6 @@ import { Eye, EyeOff, AlertCircle } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import Layout from '../../components/layout/Layout';
-import Newsletter from '../../components/home/Newsletter';
 import { subscribeToNewsletter } from '../../services/newsletterService';
 
 // Password validation rules

@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { useSearchParams } from 'react-router-dom';
 import { ArrowLeft, ArrowRight, ChevronDown, Search, X } from 'lucide-react';
 import Layout from '../../components/layout/Layout';
 import Loading from '../../components/common/Loading';
 import type { Product } from '../../types';
 import { productService, type ProductListParams } from '../../services/productService';
-import { MEN_HERO_IMAGE_URL, WOMEN_HERO_IMAGE_URL, ROUTES } from '../../config/constants';
+import { MEN_HERO_IMAGE_URL, WOMEN_HERO_IMAGE_URL } from '../../config/constants';
 import ProductCard from '../../components/products/ProductCard';
 import VendorShowcaseCard from '../../components/products/VendorShowcaseCard';
 import { useWishlistActions } from '../../hooks/useWishlistActions';
@@ -155,7 +155,7 @@ export default function ProductList({
 
   const matchesCategory = (product: Product, category: string) => {
     if (!category || category === 'All') return true;
-    const productCategory = product.category ? normalize(product.category) : '';
+    const productCategory = normalize(product.category_name || product.collection_name);
     if (productCategory) {
       return categoryMatchesPreset(productCategory, category);
     }
@@ -231,7 +231,7 @@ export default function ProductList({
   const categories = useMemo(() => {
     const unique = new Set<string>();
     allProducts.forEach((product) => {
-      if (product.category) unique.add(product.category);
+      if (product.category_name) unique.add(product.category_name);
     });
     return ['All', ...Array.from(unique)];
   }, [allProducts]);
@@ -246,7 +246,7 @@ export default function ProductList({
       list = list.filter((product) => {
         const titleMatch = product.title?.toLowerCase().includes(query);
         const descriptionMatch = product.description?.toLowerCase().includes(query);
-        const categoryMatch = product.category?.toLowerCase().includes(query);
+        const categoryMatch = product.category_name?.toLowerCase().includes(query);
         return titleMatch || descriptionMatch || categoryMatch;
       });
     }
@@ -339,7 +339,7 @@ export default function ProductList({
       list = list.filter((product) => {
         const titleMatch = product.title?.toLowerCase().includes(query);
         const descriptionMatch = product.description?.toLowerCase().includes(query);
-        const categoryMatch = product.category?.toLowerCase().includes(query);
+        const categoryMatch = product.category_name?.toLowerCase().includes(query);
         return titleMatch || descriptionMatch || categoryMatch;
       });
     }
@@ -481,9 +481,6 @@ const handleFilterChange = (key: keyof FilterState, value: string) => {
     setFilters((prev) => ({ ...prev, price: 'custom' }));
     setPage(1);
   };
-
-  const currentSortLabel =
-    sortOptions.find((option) => option.value === sortOption)?.label || 'Suggested';
 
   const paginationItems = useMemo(() => {
     if (totalPages <= 5) {
@@ -788,7 +785,7 @@ const handleFilterChange = (key: keyof FilterState, value: string) => {
                         } else {
                           setFilters((prev) => ({
                             ...prev,
-                            category: interestCategory,
+                            category: interestCategory ?? 'All',
                           }));
                           setCuratedFilterApplied(true);
                         }

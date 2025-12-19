@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { vendorActivationService } from '../../services/vendorActivationService';
-import { ROUTES, STORAGE_KEYS } from '../../config/constants';
+import { ROUTES } from '../../config/constants';
 
 const DEFAULT_LENGTH = 6;
 
@@ -209,7 +209,9 @@ export default function VendorOtp() {
                   {values.map((val, idx) => (
                     <input
                       key={idx}
-                      ref={(el) => (inputsRef.current[idx] = el)}
+                      ref={(el) => {
+                        inputsRef.current[idx] = el;
+                      }}
                       type="text"
                       inputMode="numeric"
                       maxLength={1}

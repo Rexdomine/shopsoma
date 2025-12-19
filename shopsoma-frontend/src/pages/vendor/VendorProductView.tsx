@@ -389,13 +389,13 @@ export default function VendorProductView() {
                   </div>
 
                   {/* Category */}
-                  {product.category && (
+                  {product.category_name && (
                     <div className="flex items-center justify-between pt-4 border-t border-gray-200">
                       <span className="text-sm font-medium text-gray-700 flex items-center gap-2">
                         <Tag className="h-4 w-4" />
                         Category
                       </span>
-                      <span className="text-sm text-gray-900">{product.category}</span>
+                      <span className="text-sm text-gray-900">{product.category_name}</span>
                     </div>
                   )}
 

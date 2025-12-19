@@ -10,7 +10,7 @@ export default function AdminVendors() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [approvedFilter, setApprovedFilter] = useState<string>('all');
-  const [kycFilter, setKycFilter] = useState<string>('all');
+  const [kycFilter] = useState<string>('all');
   const [onboardingFilter, setOnboardingFilter] = useState<string>('all');
   const [storeStatusFilter, setStoreStatusFilter] = useState<string>('all');
   const [page, setPage] = useState(1);

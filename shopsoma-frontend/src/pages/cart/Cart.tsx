@@ -143,7 +143,7 @@ export default function Cart() {
               {cart.items.map((item) => {
                 const thumbnail = item.product.images?.[0]?.image_url ?? IMAGE_CONFIG.PLACEHOLDER;
                 const brand = item.product.vendor_name ?? 'Shopsoma Collective';
-                const category = item.product.category ?? '';
+                const category = item.product.category_name ?? '';
 
                 const showMoveToWishlist = !favorites.has(item.product_id);
                 return (

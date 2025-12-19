@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ROUTES } from '../../config/constants';
 import VendorSidebar from '../../components/vendor/VendorSidebar';
-import { Check, Image as ImageIcon, Info, Plus, ChevronDown, PauseCircle, Trash2 } from 'lucide-react';
+import { Check, Image as ImageIcon, ChevronDown, PauseCircle, Trash2 } from 'lucide-react';
 import { vendorService, type BrandInfoData, type PayoutInfoData } from '../../services/vendorService';
 import { vendorPaymentMethodsService, type PaymentMethod, type PaymentMethodCreate } from '../../services/vendorPaymentMethodsService';
 import { useVendor } from '../../context/VendorContext';
@@ -72,7 +72,7 @@ function CustomSelect({
 
 export default function BrandInfoSettings() {
   const navigate = useNavigate();
-  const { vendorProfile, updateProfile, isOnboarding, brandInfoCompleted, payoutInfoCompleted, isLoading } = useVendor();
+  const { vendorProfile, updateProfile, isOnboarding, brandInfoCompleted } = useVendor();
   const { user } = useAuth();
   const initialized = useRef(false);
 
@@ -102,7 +102,6 @@ export default function BrandInfoSettings() {
   const [bankName, setBankName] = useState('');
   const [accountNumber, setAccountNumber] = useState('');
   const [accountHolder, setAccountHolder] = useState('');
-  const [savedPaymentMethods, setSavedPaymentMethods] = useState<SelectOption[]>([]);
   const [paymentMethodsList, setPaymentMethodsList] = useState<PaymentMethod[]>([]);
   const [loadingPaymentMethods, setLoadingPaymentMethods] = useState(false);
   const countryOptions = useMemo<SelectOption[]>(() => [{ label: 'Nigeria', value: 'Nigeria' }], []);

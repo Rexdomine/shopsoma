@@ -1,7 +1,6 @@
 import {
   Calendar,
   ChevronDown,
-  ChevronRight,
   Eye,
   Filter,
   Search,
@@ -35,22 +34,6 @@ const mockRows: EarningsRow[] = Array.from({ length: 9 }).map((_, idx) => ({
   date: '12/09/25',
   status: 'complete',
 }));
-
-function StatBadge({ label, value, delta, positive = true }: { label: string; value: string; delta?: string; positive?: boolean }) {
-  return (
-    <div className="space-y-1">
-      <p className="text-xs text-gray-400">{label}</p>
-      <div className="flex items-center gap-3">
-        <p className="text-2xl font-semibold text-gray-900 tracking-tight">{value}</p>
-        {delta && (
-          <span className={`text-xs font-semibold ${positive ? 'text-emerald-600' : 'text-rose-600'}`}>
-            {delta}
-          </span>
-        )}
-      </div>
-    </div>
-  );
-}
 
 function StatusPill({ status }: { status: EarningsRow['status'] }) {
   if (status === 'complete') {

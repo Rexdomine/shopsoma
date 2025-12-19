@@ -7,10 +7,6 @@ import { getVendorOrders, exportOrdersToCSV, type VendorOrder } from '../../serv
 import { ROUTES } from '../../config/constants';
 import { Search, Loader2, Filter, ArrowUpDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Download } from 'lucide-react';
 
-function formatPrice(price: number) {
-  return `$${price.toLocaleString()}`;
-}
-
 export default function VendorOrders() {
   const { toasts, hideToast } = useToast();
   const navigate = useNavigate();
@@ -19,12 +15,15 @@ export default function VendorOrders() {
   const [search, setSearch] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
-  const [total, setTotal] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
   // Calculate order stats
-  const pendingCount = orders.filter((o) => o.status === 'pending' || o.status === 'processing').length;
-  const completedCount = orders.filter((o) => o.status === 'delivered').length;
+  const pendingCount = orders.filter((o) =>
+    ['order_received', 'preparing_for_pickup', 'pickup_scheduled', 'picked_up', 'in_transit', 'out_for_delivery'].includes(o.fulfillment_status)
+  ).length;
+  const completedCount = orders.filter((o) =>
+    ['delivered', 'returned', 'cancelled'].includes(o.fulfillment_status)
+  ).length;
 
   useEffect(() => {
     fetchOrders();
@@ -41,7 +40,6 @@ export default function VendorOrders() {
       });
       console.log('✅ Vendor orders response:', response);
       setOrders(response.orders || []);
-      setTotal(response.total || 0);
       setTotalPages(response.total_pages || 1);
     } catch (err: any) {
       console.error('❌ Error fetching orders:', err);
@@ -87,7 +85,6 @@ export default function VendorOrders() {
 
       setError(userMessage);
       setOrders([]);
-      setTotal(0);
       setTotalPages(1);
     } finally {
       setLoading(false);
@@ -105,6 +102,14 @@ export default function VendorOrders() {
 
   const getStatusBadge = (status: string) => {
     const statusConfig: Record<string, { label: string; className: string }> = {
+      order_received: {
+        label: 'Order Received',
+        className: 'bg-amber-100 text-amber-700',
+      },
+      preparing_for_pickup: {
+        label: 'Preparing for Pickup',
+        className: 'bg-[#FEF3E2] text-[#D97706]',
+      },
       pending: {
         label: 'Pending',
         className: 'bg-amber-100 text-amber-700',
@@ -371,7 +376,7 @@ export default function VendorOrders() {
         </div>
       </div>
 
-      <ToastContainer toasts={toasts} onDismiss={hideToast} />
+      <ToastContainer toasts={toasts} onClose={hideToast} />
     </div>
   );
 }

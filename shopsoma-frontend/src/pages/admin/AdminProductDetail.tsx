@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Edit2, Loader2, Package, DollarSign, Tag, Calendar, Eye, Trash2 } from 'lucide-react';
+import { ArrowLeft, Edit2, Loader2, Package, Tag, Trash2 } from 'lucide-react';
 import { ROUTES } from '../../config/constants';
 import { productService } from '../../services/productService';
 import { adminService } from '../../services/adminService';
@@ -416,12 +416,12 @@ export default function AdminProductDetail() {
                   </div>
                 )}
 
-                {product.gender && (
+                {product.size_guide?.gender && (
                   <div>
                     <span className="text-xs text-gray-500 uppercase tracking-wide">Gender</span>
                     <div className="flex items-center gap-2 mt-1">
                       <Package className="h-4 w-4 text-gray-400" />
-                      <span className="text-sm font-medium text-gray-900 capitalize">{product.gender}</span>
+                      <span className="text-sm font-medium text-gray-900 capitalize">{product.size_guide.gender}</span>
                     </div>
                   </div>
                 )}
@@ -501,7 +501,7 @@ export default function AdminProductDetail() {
         </div>
       )}
 
-      <ToastContainer toasts={toasts} onDismiss={hideToast} />
+      <ToastContainer toasts={toasts} onClose={hideToast} />
     </div>
   );
 }

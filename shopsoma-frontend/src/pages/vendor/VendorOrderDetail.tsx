@@ -14,14 +14,10 @@ import {
 } from 'lucide-react';
 import VendorSidebar from '../../components/vendor/VendorSidebar';
 import { ROUTES } from '../../config/constants';
-import { getVendorOrder, type VendorOrder, type VendorOrderItem, type VendorPickup, type PickupStatus } from '../../services/orderService';
+import { getVendorOrder, type VendorOrder, type VendorPickup } from '../../services/orderService';
 import { useToast } from '../../hooks/useToast';
 import ToastContainer from '../../components/ui/ToastContainer';
 import { useCurrency } from '../../hooks/useCurrency';
-
-function formatCurrency(amount: number, currency = 'USD') {
-  return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(amount);
-}
 
 function StatusPill({ label, tone = 'neutral' }: { label: string; tone?: 'success' | 'warning' | 'neutral' }) {
   const base = 'px-3 py-1 rounded-full text-xs font-semibold inline-flex items-center gap-2';
@@ -644,7 +640,7 @@ export default function VendorOrderDetail() {
         </div>
       )}
 
-      <ToastContainer toasts={toasts} onDismiss={hideToast} />
+      <ToastContainer toasts={toasts} onClose={hideToast} />
     </div>
   );
 }

@@ -7,7 +7,6 @@ import {
   getShippingProviderSettings,
   updateShippingProviderSettings,
   type ExchangeRate,
-  type ShippingProviderSettings
 } from '../../services/settingsService';
 import { useToast } from '../../hooks/useToast';
 import ToastContainer from '../../components/ui/ToastContainer';
@@ -375,7 +374,7 @@ export default function AdminSettings() {
         </div>
       </div>
 
-      <ToastContainer toasts={toasts} onDismiss={hideToast} />
+      <ToastContainer toasts={toasts} onClose={hideToast} />
     </div>
   );
 }
