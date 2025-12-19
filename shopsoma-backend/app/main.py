@@ -14,7 +14,7 @@ from contextlib import asynccontextmanager
 load_dotenv()
 
 # Import routers
-from app.api.v1 import auth, products, images, admin, seed, cart, addresses, shipping_rates, orders, promo_codes, payments, users, wishlist, newsletter, preferences, payment_portals, vendors, vendor_activation, vendor_applications, vendor_payment_methods, categories, collections
+from app.api.v1 import auth, products, images, admin, seed, cart, addresses, shipping_rates, orders, promo_codes, payments, users, wishlist, newsletter, preferences, payment_portals, vendors, vendor_activation, vendor_applications, vendor_payment_methods, categories, collections, settings, admin_orders, websocket
 
 # Import middleware
 from app.middleware.rate_limit import RateLimitMiddleware
@@ -125,6 +125,9 @@ app.include_router(vendors.router, prefix="/api/v1")
 app.include_router(vendor_activation.router, prefix="/api/v1")
 app.include_router(vendor_applications.router, prefix="/api/v1/vendor-applications", tags=["Vendor Applications"])
 app.include_router(vendor_payment_methods.router, prefix="/api/v1")
+app.include_router(settings.router, prefix="/api/v1")
+app.include_router(admin_orders.router, prefix="/api/v1")
+app.include_router(websocket.router, prefix="/api/v1")
 
 # Mount static files for local image uploads (development only)
 from app.core.config import settings

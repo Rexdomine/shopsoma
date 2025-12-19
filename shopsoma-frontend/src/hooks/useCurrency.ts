@@ -14,6 +14,8 @@ export function useCurrency() {
     convertPrice,
     formatPrice,
     exchangeRates,
+    fetchExchangeRate,
+    isLoadingRates,
   } = useCurrencyStore();
 
   /**
@@ -57,5 +59,7 @@ export function useCurrency() {
     getCurrencySymbol,
     getCurrencyCode,
     exchangeRates,
+    fetchExchangeRate,
+    isLoadingRates,
   };
 }

@@ -224,6 +224,39 @@ export default function VendorProductView() {
                     </p>
                   </div>
 
+                  {/* Fabric & Materials */}
+                  {product.fabric_composition && (
+                    <div>
+                      <h3 className="text-sm font-semibold text-gray-700 mb-2">Fabric & Materials</h3>
+                      <p className="text-sm text-gray-600 whitespace-pre-wrap">
+                        {product.fabric_composition}
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Care Instructions */}
+                  {product.care_instructions && (
+                    <div>
+                      <h3 className="text-sm font-semibold text-gray-700 mb-2">Care Instructions</h3>
+                      <p className="text-sm text-gray-600 whitespace-pre-wrap">
+                        {product.care_instructions}
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Made to Order */}
+                  {product.made_to_order && (
+                    <div>
+                      <span className="inline-flex items-center gap-2 px-3 py-1 bg-blue-100 text-blue-800 text-xs font-semibold rounded-full">
+                        <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                          <path d="M10 2a8 8 0 100 16 8 8 0 000-16zm1 11H9v-2h2v2zm0-4H9V5h2v4z"/>
+                        </svg>
+                        MADE TO ORDER
+                        {product.made_to_order_timeline && ` • ${product.made_to_order_timeline}`}
+                      </span>
+                    </div>
+                  )}
+
                   {/* Size Guide */}
                   {product.size_guide && (
                     <div>

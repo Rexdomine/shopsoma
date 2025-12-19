@@ -472,7 +472,11 @@ async def get_vendor_order(
                 "order_type": item.pickup.order_type.value,
                 "scheduled_pickup_date": item.pickup.scheduled_pickup_date.isoformat() if item.pickup.scheduled_pickup_date else None,
                 "actual_pickup_date": item.pickup.actual_pickup_date.isoformat() if item.pickup.actual_pickup_date else None,
+                "pickup_window_start": item.pickup.pickup_window_start.isoformat() if item.pickup.pickup_window_start else None,
+                "pickup_window_end": item.pickup.pickup_window_end.isoformat() if item.pickup.pickup_window_end else None,
                 "pickup_address": item.pickup.pickup_address,
+                "courier_name": item.pickup.courier_name,
+                "rider_id": item.pickup.rider_id,
                 "logistics_partner": item.pickup.logistics_partner,
                 "tracking_number": item.pickup.tracking_number,
                 "status": item.pickup.status.value,
@@ -518,6 +522,7 @@ async def get_vendor_order(
         "id": str(order.id),
         "order_number": order.order_number,
         "items": serialized_items,
+        "vendor_business_name": vendor.business_name,
         "customer_name": order.customer.full_name if order.customer else "Unknown",
         "customer_email": order.customer.email if order.customer else "Unknown",
         "shipping_address": {
@@ -881,7 +886,7 @@ async def get_dashboard_metrics(
         select(func.count(func.distinct(OrderItem.order_id))).join(Order).where(
             and_(
                 OrderItem.vendor_id == vendor.id,
-                Order.fulfillment_status == FulfillmentStatus.PENDING
+                Order.fulfillment_status == FulfillmentStatus.ORDER_RECEIVED
             )
         )
     )
@@ -891,7 +896,7 @@ async def get_dashboard_metrics(
         select(func.count(func.distinct(OrderItem.order_id))).join(Order).where(
             and_(
                 OrderItem.vendor_id == vendor.id,
-                Order.fulfillment_status == FulfillmentStatus.PROCESSING
+                Order.fulfillment_status == FulfillmentStatus.PREPARING_FOR_PICKUP
             )
         )
     )

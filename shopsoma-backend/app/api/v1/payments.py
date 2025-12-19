@@ -339,7 +339,7 @@ async def _verify_stripe_payment(
                 .where(Order.id == payment.order_id)
                 .values(
                     payment_status=PaymentStatus.PAID,
-                    fulfillment_status=FulfillmentStatus.PROCESSING
+                    fulfillment_status=FulfillmentStatus.PREPARING_FOR_PICKUP
                 )
             )
 
@@ -448,7 +448,7 @@ async def _verify_paystack_payment(
                     .where(Order.id == payment.order_id)
                     .values(
                         payment_status=PaymentStatus.PAID,
-                        fulfillment_status=FulfillmentStatus.PROCESSING
+                        fulfillment_status=FulfillmentStatus.PREPARING_FOR_PICKUP
                     )
                 )
 
@@ -563,7 +563,7 @@ async def paystack_webhook(
                 .where(Order.id == payment.order_id)
                 .values(
                     payment_status=PaymentStatus.PAID,
-                    fulfillment_status=FulfillmentStatus.PROCESSING
+                    fulfillment_status=FulfillmentStatus.PREPARING_FOR_PICKUP
                 )
             )
 
@@ -615,7 +615,7 @@ async def stripe_webhook(
                     .where(Order.id == payment.order_id)
                     .values(
                         payment_status=PaymentStatus.PAID,
-                        fulfillment_status=FulfillmentStatus.PROCESSING
+                        fulfillment_status=FulfillmentStatus.PREPARING_FOR_PICKUP
                     )
                 )
 

@@ -17,6 +17,7 @@ import { ROUTES } from '../../config/constants';
 import { getVendorOrder, type VendorOrder, type VendorOrderItem, type VendorPickup, type PickupStatus } from '../../services/orderService';
 import { useToast } from '../../hooks/useToast';
 import ToastContainer from '../../components/ui/ToastContainer';
+import { useCurrency } from '../../hooks/useCurrency';
 
 function formatCurrency(amount: number, currency = 'USD') {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(amount);
@@ -30,73 +31,69 @@ function StatusPill({ label, tone = 'neutral' }: { label: string; tone?: 'succes
 }
 
 // Shipping Status Card Component
-function ShippingStatusCard({ pickup }: { pickup: VendorPickup | null }) {
-  if (!pickup) {
-    return (
-      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6">
-        <div className="flex items-center gap-3 mb-4">
-          <div className="h-11 w-11 rounded-xl bg-gray-100 flex items-center justify-center">
-            <Truck className="w-5 h-5 text-gray-400" />
-          </div>
-          <div>
-            <p className="text-sm font-semibold text-gray-900">Shipping Status</p>
-            <p className="text-xs text-gray-500">No pickup scheduled yet</p>
-          </div>
-        </div>
-        <div className="text-sm text-gray-600">
-          <p>Shopsoma will schedule a pickup once your order preparation is confirmed.</p>
-        </div>
-      </div>
-    );
-  }
-
-  // Map pickup status to progress percentage and display
-  const getPickupProgress = (status: PickupStatus): number => {
-    const progressMap: Record<PickupStatus, number> = {
-      scheduled: 10,
-      in_transit: 30,
-      delivered_to_qc: 50,
-      qc_approved: 70,
-      qc_rejected: 50,
-      shipped_to_customer: 85,
-      completed: 100,
-      cancelled: 0,
+function ShippingStatusCard({ order, pickup }: { order: VendorOrder; pickup: VendorPickup | null }) {
+  // Map order fulfillment status to progress percentage and display
+  const getOrderProgress = (status: string): number => {
+    const progressMap: Record<string, number> = {
+      'order_received': 5,
+      'preparing_for_pickup': 15,
+      'pickup_scheduled': 25,
+      'picked_up': 40,
+      'in_transit': 60,
+      'out_for_delivery': 80,
+      'delivered': 100,
+      'delivery_failed': 80,
+      'returned': 50,
+      'cancelled': 0,
     };
     return progressMap[status] || 0;
   };
 
-  const getStatusLabel = (status: PickupStatus): string => {
-    const labelMap: Record<PickupStatus, string> = {
-      scheduled: 'Pickup Scheduled',
-      in_transit: 'In Transit to QC',
-      delivered_to_qc: 'Delivered to QC Center',
-      qc_approved: 'QC Approved',
-      qc_rejected: 'QC Rejected',
-      shipped_to_customer: 'Shipped to Customer',
-      completed: 'Delivered',
-      cancelled: 'Cancelled',
+  const getStatusLabel = (status: string): string => {
+    const labelMap: Record<string, string> = {
+      'order_received': 'New Order - Start Preparing',
+      'preparing_for_pickup': 'Pack Order - Awaiting Rider',
+      'pickup_scheduled': 'Pickup Scheduled',
+      'picked_up': 'Items Picked Up Successfully',
+      'in_transit': 'Order In Transit to Customer',
+      'out_for_delivery': 'Out for Delivery',
+      'delivered': 'Delivered Successfully',
+      'delivery_failed': 'Delivery Failed - Action Required',
+      'returned': 'Order Returned',
+      'cancelled': 'Order Cancelled',
     };
-    return labelMap[status] || status;
+    return labelMap[status] || status.replace('_', ' ').toUpperCase();
   };
 
   const getOriginLabel = (): string => {
-    if (pickup.pickup_address) {
-      return pickup.pickup_address.substring(0, 30) + (pickup.pickup_address.length > 30 ? '...' : '');
+    // Display vendor business name with fallback and error handling
+    console.log('[VendorOrderDetail] order.vendor_business_name:', order.vendor_business_name);
+    console.log('[VendorOrderDetail] Full order object:', order);
+
+    if (!order.vendor_business_name) {
+      console.warn('[VendorOrderDetail] vendor_business_name is missing from order data');
+      // Fallback to pickup address if vendor name not available
+      if (pickup && pickup.pickup_address) {
+        console.log('[VendorOrderDetail] Falling back to pickup_address:', pickup.pickup_address);
+        return pickup.pickup_address.substring(0, 30) + (pickup.pickup_address.length > 30 ? '...' : '');
+      }
+      return 'Vendor Location';
     }
-    return 'Vendor Location';
+
+    return order.vendor_business_name;
   };
 
-  const getDestinationLabel = (status: PickupStatus): string => {
-    if (status === 'completed') return 'Delivered';
-    if (status === 'shipped_to_customer') return 'En Route to Customer';
-    if (['qc_approved', 'qc_rejected', 'delivered_to_qc'].includes(status)) return 'QC Center';
-    if (status === 'in_transit') return 'In Transit';
-    return 'Pending Pickup';
+  const getDestinationLabel = (status: string): string => {
+    if (status === 'delivered') return 'Delivered';
+    if (status === 'out_for_delivery') return 'En Route to Customer';
+    if (['in_transit', 'picked_up'].includes(status)) return 'In Transit';
+    if (status === 'pickup_scheduled') return 'Awaiting Pickup';
+    return 'Processing';
   };
 
-  const progress = getPickupProgress(pickup.status);
-  const isRejected = pickup.status === 'qc_rejected';
-  const isCancelled = pickup.status === 'cancelled';
+  const progress = getOrderProgress(order.fulfillment_status);
+  const isRejected = order.fulfillment_status === 'returned';
+  const isCancelled = order.fulfillment_status === 'cancelled';
 
   return (
     <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6">
@@ -108,8 +105,8 @@ function ShippingStatusCard({ pickup }: { pickup: VendorPickup | null }) {
           <Truck className={`w-5 h-5 ${isCancelled ? 'text-gray-400' : isRejected ? 'text-rose-600' : 'text-white'}`} />
         </div>
         <div>
-          <p className="text-sm font-semibold text-gray-900">Shipping Status</p>
-          <p className="text-xs text-gray-500">{getStatusLabel(pickup.status)}</p>
+          <p className="text-sm font-semibold text-gray-900">Order Status</p>
+          <p className="text-xs text-gray-500">{getStatusLabel(order.fulfillment_status)}</p>
         </div>
       </div>
 
@@ -122,7 +119,7 @@ function ShippingStatusCard({ pickup }: { pickup: VendorPickup | null }) {
           </div>
           <div className="flex items-center gap-2">
             <MapPin className="w-4 h-4 text-gray-500" />
-            <span className="text-sm text-gray-700">{getDestinationLabel(pickup.status)}</span>
+            <span className="text-sm text-gray-700">{getDestinationLabel(order.fulfillment_status)}</span>
           </div>
         </div>
 
@@ -140,35 +137,61 @@ function ShippingStatusCard({ pickup }: { pickup: VendorPickup | null }) {
 
       {/* Details Grid */}
       <div className="grid grid-cols-2 gap-4 text-sm">
-        {pickup.tracking_number && (
+        {/* Pickup Window - Show when scheduled */}
+        {(() => {
+          console.log('[ShippingStatusCard] Checking pickup window conditions:');
+          console.log('[ShippingStatusCard] pickup exists:', !!pickup);
+          console.log('[ShippingStatusCard] pickup.pickup_window_start:', pickup?.pickup_window_start);
+          console.log('[ShippingStatusCard] pickup.pickup_window_end:', pickup?.pickup_window_end);
+          console.log('[ShippingStatusCard] Will show pickup window?', !!(pickup && pickup.pickup_window_start && pickup.pickup_window_end));
+          return null;
+        })()}
+        {pickup && pickup.pickup_window_start && pickup.pickup_window_end && (
+          <div className="col-span-2">
+            <p className="text-xs text-gray-500 mb-1">Pickup Window</p>
+            <p className="font-medium text-gray-900">
+              {new Date(pickup.pickup_window_start).toLocaleString('en-US', {
+                month: 'short',
+                day: 'numeric',
+                year: 'numeric',
+                hour: 'numeric',
+                minute: '2-digit',
+                hour12: true
+              })}
+              {' - '}
+              {new Date(pickup.pickup_window_end).toLocaleString('en-US', {
+                hour: 'numeric',
+                minute: '2-digit',
+                hour12: true
+              })}
+            </p>
+          </div>
+        )}
+        {pickup && pickup.courier_name && (
+          <div>
+            <p className="text-xs text-gray-500 mb-1">Courier</p>
+            <p className="font-medium text-gray-900">{pickup.courier_name}</p>
+          </div>
+        )}
+        {pickup && pickup.rider_id && (
+          <div>
+            <p className="text-xs text-gray-500 mb-1">Rider ID</p>
+            <p className="font-medium text-gray-900">{pickup.rider_id}</p>
+          </div>
+        )}
+        {pickup && pickup.tracking_number && (
           <div>
             <p className="text-xs text-gray-500 mb-1">Tracking Number</p>
             <p className="font-medium text-gray-900">{pickup.tracking_number}</p>
           </div>
         )}
-        {pickup.logistics_partner && (
+        {pickup && pickup.logistics_partner && (
           <div>
             <p className="text-xs text-gray-500 mb-1">Logistics Partner</p>
             <p className="font-medium text-gray-900">{pickup.logistics_partner}</p>
           </div>
         )}
-        {pickup.scheduled_pickup_date && (
-          <div>
-            <p className="text-xs text-gray-500 mb-1">Scheduled Pickup</p>
-            <p className="font-medium text-gray-900">
-              {new Date(pickup.scheduled_pickup_date).toLocaleDateString()}
-            </p>
-          </div>
-        )}
-        {pickup.actual_pickup_date && (
-          <div>
-            <p className="text-xs text-gray-500 mb-1">Actual Pickup</p>
-            <p className="font-medium text-gray-900">
-              {new Date(pickup.actual_pickup_date).toLocaleDateString()}
-            </p>
-          </div>
-        )}
-        {pickup.qc_center_arrival_date && (
+        {pickup && pickup.qc_center_arrival_date && (
           <div>
             <p className="text-xs text-gray-500 mb-1">QC Center Arrival</p>
             <p className="font-medium text-gray-900">
@@ -176,7 +199,7 @@ function ShippingStatusCard({ pickup }: { pickup: VendorPickup | null }) {
             </p>
           </div>
         )}
-        {pickup.qc_approved_date && (
+        {pickup && pickup.qc_approved_date && (
           <div>
             <p className="text-xs text-gray-500 mb-1">QC Approved</p>
             <p className="font-medium text-gray-900">
@@ -187,7 +210,7 @@ function ShippingStatusCard({ pickup }: { pickup: VendorPickup | null }) {
       </div>
 
       {/* QC Notes */}
-      {pickup.qc_notes && (
+      {pickup && pickup.qc_notes && (
         <div className="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-lg">
           <div className="flex items-start gap-2">
             <ClipboardCheck className="w-4 h-4 text-amber-600 mt-0.5 flex-shrink-0" />
@@ -200,7 +223,7 @@ function ShippingStatusCard({ pickup }: { pickup: VendorPickup | null }) {
       )}
 
       {/* Vendor Notes */}
-      {pickup.vendor_notes && (
+      {pickup && pickup.vendor_notes && (
         <div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
           <div className="flex items-start gap-2">
             <Package className="w-4 h-4 text-blue-600 mt-0.5 flex-shrink-0" />
@@ -219,10 +242,12 @@ export default function VendorOrderDetail() {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
   const { toasts, hideToast, error } = useToast();
+  const { currentCurrency, setCurrency, formatBasePrice, getCurrencySymbol } = useCurrency();
 
   const [order, setOrder] = useState<VendorOrder | null>(null);
   const [loading, setLoading] = useState(true);
   const [isShippingModalOpen, setIsShippingModalOpen] = useState(false);
+  const [isCurrencyDropdownOpen, setIsCurrencyDropdownOpen] = useState(false);
 
   useEffect(() => {
     const fetchOrder = async () => {
@@ -235,9 +260,28 @@ export default function VendorOrderDetail() {
       try {
         setLoading(true);
         const data = await getVendorOrder(id);
+        console.log('[VendorOrderDetail] Fetched order data:', data);
+        console.log('[VendorOrderDetail] vendor_business_name in response:', data.vendor_business_name);
+
+        // Debug pickup window data
+        console.log('[VendorOrderDetail] Number of items:', data.items?.length);
+        if (data.items && data.items.length > 0) {
+          const firstItem = data.items[0];
+          console.log('[VendorOrderDetail] First item pickup data:', firstItem.pickup);
+          if (firstItem.pickup) {
+            console.log('[VendorOrderDetail] pickup_window_start:', firstItem.pickup.pickup_window_start);
+            console.log('[VendorOrderDetail] pickup_window_end:', firstItem.pickup.pickup_window_end);
+            console.log('[VendorOrderDetail] scheduled_pickup_date:', firstItem.pickup.scheduled_pickup_date);
+            console.log('[VendorOrderDetail] actual_pickup_date:', firstItem.pickup.actual_pickup_date);
+          } else {
+            console.warn('[VendorOrderDetail] ⚠️ First item has no pickup data');
+          }
+        }
+
         setOrder(data);
       } catch (err: any) {
         console.error('Failed to load order', err);
+        console.error('[VendorOrderDetail] Error details:', err.response?.data);
         error(
           err.response?.data?.detail || 'Failed to load order',
           'Error'
@@ -251,17 +295,34 @@ export default function VendorOrderDetail() {
     fetchOrder();
   }, [id, navigate, error]);
 
-  // Handle escape key to close modal
+  // Handle escape key to close modal and dropdown
   useEffect(() => {
     const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && isShippingModalOpen) {
-        setIsShippingModalOpen(false);
+      if (e.key === 'Escape') {
+        if (isShippingModalOpen) setIsShippingModalOpen(false);
+        if (isCurrencyDropdownOpen) setIsCurrencyDropdownOpen(false);
       }
     };
 
     document.addEventListener('keydown', handleEscape);
     return () => document.removeEventListener('keydown', handleEscape);
-  }, [isShippingModalOpen]);
+  }, [isShippingModalOpen, isCurrencyDropdownOpen]);
+
+  // Handle click outside to close currency dropdown
+  useEffect(() => {
+    if (!isCurrencyDropdownOpen) return;
+
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      // Check if click is outside the currency dropdown
+      if (!target.closest('.currency-dropdown-container')) {
+        setIsCurrencyDropdownOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [isCurrencyDropdownOpen]);
 
   if (loading) {
     return (
@@ -312,14 +373,47 @@ export default function VendorOrderDetail() {
               </div>
             </div>
 
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-3 relative currency-dropdown-container">
               <button
                 type="button"
-                className="flex items-center gap-2 px-3 py-2 bg-white border border-gray-200 rounded-full shadow-sm text-sm font-semibold text-gray-700"
+                onClick={() => setIsCurrencyDropdownOpen(!isCurrencyDropdownOpen)}
+                className="flex items-center gap-2 px-3 py-2 bg-white border border-gray-200 rounded-full shadow-sm text-sm font-semibold text-gray-700 hover:bg-gray-50 transition-colors"
               >
-                <span>$ USD</span>
-                <ChevronDown className="w-4 h-4" />
+                <span>{getCurrencySymbol()} {currentCurrency}</span>
+                <ChevronDown className={`w-4 h-4 transition-transform ${isCurrencyDropdownOpen ? 'rotate-180' : ''}`} />
               </button>
+
+              {/* Currency Dropdown */}
+              {isCurrencyDropdownOpen && (
+                <div className="absolute top-full right-0 mt-2 bg-white border border-gray-200 rounded-xl shadow-lg py-1 min-w-[120px] z-50">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCurrency('NGN');
+                      setIsCurrencyDropdownOpen(false);
+                    }}
+                    className={`w-full px-4 py-2 text-left text-sm hover:bg-gray-50 transition-colors flex items-center gap-2 ${
+                      currentCurrency === 'NGN' ? 'bg-gray-100 font-semibold' : ''
+                    }`}
+                  >
+                    <span>₦ NGN</span>
+                    {currentCurrency === 'NGN' && <CheckCircle2 className="w-4 h-4 text-[#105E53] ml-auto" />}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCurrency('USD');
+                      setIsCurrencyDropdownOpen(false);
+                    }}
+                    className={`w-full px-4 py-2 text-left text-sm hover:bg-gray-50 transition-colors flex items-center gap-2 ${
+                      currentCurrency === 'USD' ? 'bg-gray-100 font-semibold' : ''
+                    }`}
+                  >
+                    <span>$ USD</span>
+                    {currentCurrency === 'USD' && <CheckCircle2 className="w-4 h-4 text-[#105E53] ml-auto" />}
+                  </button>
+                </div>
+              )}
             </div>
           </div>
 
@@ -333,7 +427,7 @@ export default function VendorOrderDetail() {
               <div className="min-w-0 overflow-hidden">
                 <p className="text-[11px] uppercase tracking-[0.2em] text-gray-400">Total Payout</p>
                 <p className="text-2xl font-semibold text-[#0B1D2C] mt-2 leading-tight truncate">
-                  ₦{order.items.reduce((sum, item) => sum + item.vendor_payout, 0).toFixed(2)}
+                  {formatBasePrice(order.items.reduce((sum, item) => sum + item.vendor_payout, 0))}
                 </p>
               </div>
             </div>
@@ -351,73 +445,70 @@ export default function VendorOrderDetail() {
               </div>
             </div>
 
-            {/* Shipping Status - Compact Card Version */}
+            {/* Order Status - Compact Card Version */}
             <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-5">
               <div className="flex items-center gap-3 mb-3">
                 <div className={`h-11 w-11 rounded-xl flex items-center justify-center flex-shrink-0 ${
-                  primaryPickup
-                    ? primaryPickup.status === 'cancelled' ? 'bg-gray-100'
-                      : primaryPickup.status === 'qc_rejected' ? 'bg-rose-100'
-                      : 'bg-[#0B1D2C]'
-                    : 'bg-gray-100'
+                  order.fulfillment_status === 'cancelled' ? 'bg-gray-100'
+                    : order.fulfillment_status === 'returned' ? 'bg-rose-100'
+                    : 'bg-[#0B1D2C]'
                 }`}>
                   <Truck className={`w-5 h-5 ${
-                    primaryPickup
-                      ? primaryPickup.status === 'cancelled' ? 'text-gray-400'
-                        : primaryPickup.status === 'qc_rejected' ? 'text-rose-600'
-                        : 'text-white'
-                      : 'text-gray-400'
+                    order.fulfillment_status === 'cancelled' ? 'text-gray-400'
+                      : order.fulfillment_status === 'returned' ? 'text-rose-600'
+                      : 'text-white'
                   }`} />
                 </div>
                 <div className="min-w-0 overflow-hidden">
-                  <p className="text-[11px] uppercase tracking-[0.2em] text-gray-400">Shipping</p>
+                  <p className="text-[11px] uppercase tracking-[0.2em] text-gray-400">ORDER STATUS</p>
                   <p className="text-sm font-semibold text-gray-900 mt-1 truncate">
-                    {primaryPickup
-                      ? primaryPickup.status === 'scheduled' ? 'Pickup Scheduled'
-                        : primaryPickup.status === 'in_transit' ? 'In Transit'
-                        : primaryPickup.status === 'delivered_to_qc' ? 'At QC Center'
-                        : primaryPickup.status === 'qc_approved' ? 'QC Approved'
-                        : primaryPickup.status === 'shipped_to_customer' ? 'Shipped'
-                        : primaryPickup.status === 'completed' ? 'Delivered'
-                        : primaryPickup.status
-                      : 'Not Scheduled'
+                    {order.fulfillment_status === 'order_received' ? 'New Order - Start Preparing'
+                      : order.fulfillment_status === 'preparing_for_pickup' ? 'Pack Order - Awaiting Rider'
+                      : order.fulfillment_status === 'pickup_scheduled' ? 'Pickup Scheduled'
+                      : order.fulfillment_status === 'picked_up' ? 'Items Picked Up Successfully'
+                      : order.fulfillment_status === 'in_transit' ? 'Order In Transit to Customer'
+                      : order.fulfillment_status === 'out_for_delivery' ? 'Out for Delivery'
+                      : order.fulfillment_status === 'delivered' ? 'Delivered Successfully'
+                      : order.fulfillment_status === 'delivery_failed' ? 'Delivery Failed - Action Required'
+                      : order.fulfillment_status === 'returned' ? 'Order Returned'
+                      : order.fulfillment_status === 'cancelled' ? 'Order Cancelled'
+                      : order.fulfillment_status.replace('_', ' ').toUpperCase()
                     }
                   </p>
                 </div>
               </div>
-              {primaryPickup && (
-                <>
-                  <div className="relative h-1.5 bg-gray-100 rounded-full overflow-hidden mb-3">
-                    <div
-                      className={`absolute top-0 left-0 h-full rounded-full transition-all duration-500 ${
-                        primaryPickup.status === 'cancelled' ? 'bg-gray-400'
-                          : primaryPickup.status === 'qc_rejected' ? 'bg-rose-500'
-                          : 'bg-[#105E53]'
-                      }`}
-                      style={{
-                        width: `${
-                          primaryPickup.status === 'scheduled' ? 10
-                            : primaryPickup.status === 'in_transit' ? 30
-                            : primaryPickup.status === 'delivered_to_qc' ? 50
-                            : primaryPickup.status === 'qc_approved' ? 70
-                            : primaryPickup.status === 'qc_rejected' ? 50
-                            : primaryPickup.status === 'shipped_to_customer' ? 85
-                            : primaryPickup.status === 'completed' ? 100
-                            : 0
-                        }%`
-                      }}
-                    />
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setIsShippingModalOpen(true)}
-                    className="text-xs text-gray-500 hover:text-gray-700 transition-colors flex items-center gap-1"
-                  >
-                    View More
-                    <ChevronDown className="w-3 h-3" />
-                  </button>
-                </>
-              )}
+              <div className="relative h-1.5 bg-gray-100 rounded-full overflow-hidden mb-3">
+                <div
+                  className={`absolute top-0 left-0 h-full rounded-full transition-all duration-500 ${
+                    order.fulfillment_status === 'cancelled' ? 'bg-gray-400'
+                      : order.fulfillment_status === 'returned' ? 'bg-rose-500'
+                      : 'bg-[#105E53]'
+                  }`}
+                  style={{
+                    width: `${
+                      order.fulfillment_status === 'order_received' ? 5
+                        : order.fulfillment_status === 'preparing_for_pickup' ? 15
+                        : order.fulfillment_status === 'pickup_scheduled' ? 25
+                        : order.fulfillment_status === 'picked_up' ? 40
+                        : order.fulfillment_status === 'in_transit' ? 60
+                        : order.fulfillment_status === 'out_for_delivery' ? 80
+                        : order.fulfillment_status === 'delivered' ? 100
+                        : order.fulfillment_status === 'delivery_failed' ? 80
+                        : order.fulfillment_status === 'returned' ? 50
+                        : order.fulfillment_status === 'cancelled' ? 0
+                        : 0
+                    }%`
+                  }}
+                />
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsShippingModalOpen(true)}
+                className="text-xs text-gray-500 hover:text-gray-700 transition-colors flex items-center gap-1"
+              >
+                View More
+                <ChevronDown className="w-3 h-3" />
+              </button>
             </div>
           </div>
 
@@ -488,8 +579,8 @@ export default function VendorOrderDetail() {
                     </div>
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-semibold text-gray-900 line-clamp-1">{item.product_title}</p>
-                      <p className="text-sm text-gray-700 mt-1">₦{item.unit_price.toFixed(2)} · Qty: {item.quantity}</p>
-                      <p className="text-xs text-gray-500 mt-1">Payout: ₦{item.vendor_payout.toFixed(2)}</p>
+                      <p className="text-sm text-gray-700 mt-1">{formatBasePrice(item.unit_price)} · Qty: {item.quantity}</p>
+                      <p className="text-xs text-gray-500 mt-1">Payout: {formatBasePrice(item.vendor_payout)}</p>
                     </div>
                     <div className="flex items-center gap-3">
                       <span className={`px-3 py-1 rounded-full text-xs font-semibold ${
@@ -522,7 +613,7 @@ export default function VendorOrderDetail() {
         </div>
       </div>
 
-      {/* Shipping Details Modal */}
+      {/* Order Status Details Modal */}
       {isShippingModalOpen && primaryPickup && (
         <div
           className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4"
@@ -534,7 +625,7 @@ export default function VendorOrderDetail() {
           >
             {/* Modal Header */}
             <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between rounded-t-2xl">
-              <h2 className="text-lg font-semibold text-gray-900">Shipping Details</h2>
+              <h2 className="text-lg font-semibold text-gray-900">Order Status Details</h2>
               <button
                 type="button"
                 onClick={() => setIsShippingModalOpen(false)}
@@ -547,7 +638,7 @@ export default function VendorOrderDetail() {
 
             {/* Modal Content - Reuse ShippingStatusCard content */}
             <div className="p-6">
-              <ShippingStatusCard pickup={primaryPickup} />
+              <ShippingStatusCard order={order} pickup={primaryPickup} />
             </div>
           </div>
         </div>

@@ -60,6 +60,9 @@ const AdminVendorApplications = lazy(() => import('../pages/admin/AdminVendorApp
 const AdminVendorApplicationDetail = lazy(() => import('../pages/admin/AdminVendorApplicationDetail'));
 const AdminVendors = lazy(() => import('../pages/admin/AdminVendors'));
 const AdminVendorDetail = lazy(() => import('../pages/admin/AdminVendorDetail'));
+const AdminSettings = lazy(() => import('../pages/admin/AdminSettings'));
+const AdminOrders = lazy(() => import('../pages/admin/AdminOrders'));
+const AdminOrderDetail = lazy(() => import('../pages/admin/AdminOrderDetail'));
 const Debug = lazy(() => import('../pages/Debug'));
 const NotFound = lazy(() => import('../pages/errors/NotFound'));
 const ServerError = lazy(() => import('../pages/errors/ServerError'));
@@ -604,6 +607,42 @@ const router = createBrowserRouter([
         <Suspense fallback={<Loading fullScreen message="Loading vendor details..." />}>
           <ProtectedRoute roles={['admin']}>
             <AdminVendorDetail />
+          </ProtectedRoute>
+        </Suspense>
+      </ErrorBoundary>
+    ),
+  },
+  {
+    path: '/admin/settings',
+    element: (
+      <ErrorBoundary>
+        <Suspense fallback={<Loading fullScreen message="Loading settings..." />}>
+          <ProtectedRoute roles={['admin']}>
+            <AdminSettings />
+          </ProtectedRoute>
+        </Suspense>
+      </ErrorBoundary>
+    ),
+  },
+  {
+    path: '/admin/orders',
+    element: (
+      <ErrorBoundary>
+        <Suspense fallback={<Loading fullScreen message="Loading orders..." />}>
+          <ProtectedRoute roles={['admin']}>
+            <AdminOrders />
+          </ProtectedRoute>
+        </Suspense>
+      </ErrorBoundary>
+    ),
+  },
+  {
+    path: '/admin/orders/:orderId',
+    element: (
+      <ErrorBoundary>
+        <Suspense fallback={<Loading fullScreen message="Loading order details..." />}>
+          <ProtectedRoute roles={['admin']}>
+            <AdminOrderDetail />
           </ProtectedRoute>
         </Suspense>
       </ErrorBoundary>

@@ -81,6 +81,11 @@ class Settings(BaseSettings):
     FRONTEND_BASE_URL: str = "https://shopsoma.com"
     BREVO_NEWSLETTER_LIST_ID: Optional[int] = None
 
+    # ShipBubble Shipping Service
+    # Docs: https://docs.shipbubble.com
+    SHIPBUBBLE_API_KEY: str = ""
+    SHIPBUBBLE_WEBHOOK_SECRET: str = ""  # For webhook signature verification
+
     @property
     def FRONTEND_URL(self) -> str:
         """Alias for FRONTEND_BASE_URL for backward compatibility"""

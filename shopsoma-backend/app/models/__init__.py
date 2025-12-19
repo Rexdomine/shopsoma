@@ -20,6 +20,7 @@ from app.models.vendor_pickup import VendorPickup, VendorNotification, PickupSta
 from app.models.vendor_otp import VendorOTP
 from app.models.vendor_application import VendorApplication
 from app.models.vendor_payment_method import VendorPaymentMethod
+from app.models.setting import Setting
 
 __all__ = [
     "User",
@@ -51,4 +52,5 @@ __all__ = [
     "VendorPaymentMethod",
     "PickupStatus",
     "OrderType",
+    "Setting",
 ]

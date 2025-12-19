@@ -24,6 +24,12 @@ class ModerationStatus(str, enum.Enum):
     REJECTED = "rejected"
 
 
+class ProductType(str, enum.Enum):
+    """Product type enum"""
+    SINGLE = "single"  # Single product with base color/size
+    VARIABLE = "variable"  # Variable product with variations
+
+
 class Product(Base):
     """Product model"""
     __tablename__ = "products"
@@ -41,6 +47,7 @@ class Product(Base):
     # Pricing
     base_price = Column(Numeric(10, 2), nullable=False)
     compare_at_price = Column(Numeric(10, 2), nullable=True)
+    currency = Column(String(3), default='NGN', nullable=False)  # NGN or USD
 
     # Inventory (for products without variants)
     total_stock = Column(Integer, default=0, nullable=False)
@@ -48,6 +55,15 @@ class Product(Base):
     # Status
     status = Column(SQLEnum(ProductStatus), default=ProductStatus.DRAFT, nullable=False, index=True)
     is_featured = Column(Boolean, default=False, nullable=False)
+    product_type = Column(SQLEnum(ProductType), default=ProductType.SINGLE, nullable=False, index=True)
+
+    # Made to Order
+    made_to_order = Column(Boolean, default=False, nullable=False)
+    made_to_order_timeline = Column(String(255), nullable=True)  # e.g., "Ships in 2-3 weeks"
+
+    # Product Details
+    care_instructions = Column(Text, nullable=True)
+    fabric_composition = Column(Text, nullable=True)
 
     # SEO
     meta_title = Column(String(255), nullable=True)

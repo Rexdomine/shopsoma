@@ -4,6 +4,7 @@
  */
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { getExchangeRate } from '../services/settingsService';
 
 export type Currency = 'NGN' | 'USD';
 
@@ -16,11 +17,13 @@ interface ExchangeRates {
 interface CurrencyState {
   currentCurrency: Currency;
   exchangeRates: ExchangeRates;
+  isLoadingRates: boolean;
 
   // Actions
   setCurrency: (currency: Currency) => void;
   toggleCurrency: () => void;
   updateExchangeRates: (rates: Partial<ExchangeRates>) => void;
+  fetchExchangeRate: () => Promise<void>;
 
   // Utility functions
   convertPrice: (price: number, from: Currency, to: Currency) => number;
@@ -39,6 +42,7 @@ export const useCurrencyStore = create<CurrencyState>()(
     (set, get) => ({
       currentCurrency: 'NGN',
       exchangeRates: DEFAULT_EXCHANGE_RATES,
+      isLoadingRates: false,
 
       setCurrency: (currency: Currency) => {
         set({ currentCurrency: currency });
@@ -58,6 +62,28 @@ export const useCurrencyStore = create<CurrencyState>()(
             lastUpdated: new Date().toISOString(),
           },
         }));
+      },
+
+      fetchExchangeRate: async () => {
+        set({ isLoadingRates: true });
+        try {
+          const response = await getExchangeRate();
+          const usdToNgn = response.rate;
+          const ngnToUsd = 1 / usdToNgn;
+
+          set({
+            exchangeRates: {
+              USD_TO_NGN: usdToNgn,
+              NGN_TO_USD: ngnToUsd,
+              lastUpdated: response.updated_at || new Date().toISOString(),
+            },
+            isLoadingRates: false,
+          });
+        } catch (error) {
+          console.error('Failed to fetch exchange rate:', error);
+          // Keep using cached/default rates on error
+          set({ isLoadingRates: false });
+        }
       },
 
       convertPrice: (price: number, from: Currency, to: Currency): number => {

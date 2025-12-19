@@ -4,10 +4,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, delete, and_, or_
 from uuid import UUID
 from decimal import Decimal
+from datetime import datetime, timedelta
+import logging
 
 from app.core.database import get_db
 from app.models.user import User, UserRole
 from app.models.shipping_rate import ShippingRate
+from app.models.app_setting import AppSetting
+from app.models.address import Address
 from app.schemas.shipping_rate import (
     ShippingRateCreate,
     ShippingRateUpdate,
@@ -17,6 +21,9 @@ from app.schemas.shipping_rate import (
     ShippingCalculationResponse,
 )
 from app.api.dependencies import get_current_active_user
+from app.services.shipbubble_service import get_shipbubble_service, ShipBubbleError
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/shipping-rates", tags=["Shipping Rates"])
 
@@ -197,11 +204,164 @@ async def calculate_shipping(
     Calculate available shipping rates for an order
 
     Returns all matching rates sorted by priority, with a recommended rate.
+    Uses ShipBubble API if enabled, otherwise falls back to local rates.
 
     - **country**: Delivery country
     - **state**: Delivery state
     - **order_value**: Order subtotal
+    - **address_id**: (Optional) Delivery address ID for ShipBubble integration
     """
+    # Check if ShipBubble is enabled
+    use_shipbubble = False
+    setting_query = select(AppSetting).where(AppSetting.key == "shipping_use_shipbubble")
+    setting_result = await db.execute(setting_query)
+    setting = setting_result.scalar_one_or_none()
+    if setting:
+        use_shipbubble = setting.value.lower() == "true"
+
+    logger.info(f"[Shipping] Calculating rates with ShipBubble={use_shipbubble}")
+
+    # Try ShipBubble if enabled
+    if use_shipbubble:
+        try:
+            shipbubble_rates = await _get_shipbubble_rates(calc_data, db)
+            if shipbubble_rates:
+                logger.info(f"[Shipping] Using {len(shipbubble_rates)} ShipBubble rates")
+                return shipbubble_rates
+            else:
+                logger.warning("[Shipping] ShipBubble returned no rates, falling back to local")
+        except Exception as e:
+            logger.error(f"[Shipping] ShipBubble error: {str(e)}, falling back to local rates")
+
+    # Fall back to local rates
+    logger.info("[Shipping] Using local database rates")
+    return await _get_local_rates(calc_data, db)
+
+
+async def _get_shipbubble_rates(
+    calc_data: ShippingCalculationRequest,
+    db: AsyncSession
+) -> ShippingCalculationResponse:
+    """Get shipping rates from ShipBubble API"""
+    service = get_shipbubble_service()
+
+    # Get address if provided
+    address = None
+    if hasattr(calc_data, 'address_id') and calc_data.address_id:
+        addr_query = select(Address).where(Address.id == calc_data.address_id)
+        addr_result = await db.execute(addr_query)
+        address = addr_result.scalar_one_or_none()
+
+    # For ShipBubble, we need to create addresses first
+    # Use default vendor address (first address in system) for sender
+    vendor_address_query = select(Address).limit(1)
+    vendor_result = await db.execute(vendor_address_query)
+    vendor_address = vendor_result.scalar_one_or_none()
+
+    if not vendor_address and not address:
+        logger.warning("[ShipBubble] No addresses found, cannot fetch rates")
+        return None
+
+    # Create sender address in ShipBubble
+    sender_address_str = (
+        f"{vendor_address.address_line1}, {vendor_address.address_line2 or ''}"
+        if vendor_address
+        else "123 Store St"
+    ).strip().rstrip(',')
+
+    sender_code = await service.create_address(
+        name="Shopsoma Store",
+        phone="+2348000000000",  # Default phone
+        email="store@shopsoma.com",
+        address=sender_address_str,
+        city=vendor_address.city if vendor_address else "Lagos",
+        state=vendor_address.state if vendor_address else "Lagos",
+        country="Nigeria",
+        postal_code=vendor_address.postal_code if vendor_address else "100001"
+    )
+
+    # Create receiver address in ShipBubble
+    receiver_address_str = (
+        f"{address.address_line1}, {address.address_line2 or ''}"
+        if address
+        else "456 Customer Ave"
+    ).strip().rstrip(',')
+
+    receiver_code = await service.create_address(
+        name=address.full_name if address else "Customer",
+        phone=address.phone_number if address else "+2348000000001",
+        email="customer@example.com",
+        address=receiver_address_str,
+        city=address.city if address else calc_data.state,
+        state=address.state if address else calc_data.state,
+        country=calc_data.country,
+        postal_code=address.postal_code if address else "100002"
+    )
+
+    # Calculate pickup date (tomorrow)
+    pickup_date = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+
+    # Get rates from ShipBubble
+    rates = await service.get_shipping_rates(
+        sender_address_code=sender_code,
+        receiver_address_code=receiver_code,
+        pickup_date=pickup_date,
+        category_id=1,  # Fashion/Clothing
+        package_items=[
+            {
+                "name": "Order Items",
+                "description": "Clothing items",
+                "unit_weight": 0.5,  # 0.5 kg default weight
+                "unit_amount": float(calc_data.order_value),
+                "quantity": 1
+            }
+        ],
+        package_dimension={
+            "length": 30,   # cm
+            "width": 25,    # cm
+            "height": 10    # cm
+        },
+        service_type="pickup"
+    )
+
+    if not rates:
+        return None
+
+    # Convert ShipBubble rates to our ShippingRate format
+    available_rates = []
+    for rate in rates:
+        # Create temporary ShippingRate object
+        shipping_rate = ShippingRate(
+            name=f"{rate['courier']} - {rate.get('description', 'Delivery')}",
+            description=f"Estimated delivery: {rate['estimated_days']} days",
+            base_rate=Decimal(str(rate['price'])),
+            country=calc_data.country,
+            state=calc_data.state,
+            min_delivery_days=rate['estimated_days'],
+            max_delivery_days=rate['estimated_days'],
+            is_active=True,
+            is_default=False,
+            priority=len(available_rates) + 1
+        )
+        available_rates.append(shipping_rate)
+
+    if not available_rates:
+        return None
+
+    # First rate is recommended (lowest price)
+    available_rates[0].is_default = True
+
+    return ShippingCalculationResponse(
+        available_rates=available_rates,
+        recommended_rate=available_rates[0]
+    )
+
+
+async def _get_local_rates(
+    calc_data: ShippingCalculationRequest,
+    db: AsyncSession
+) -> ShippingCalculationResponse:
+    """Get shipping rates from local database"""
     # Build query to find matching rates
     query = select(ShippingRate).where(
         and_(

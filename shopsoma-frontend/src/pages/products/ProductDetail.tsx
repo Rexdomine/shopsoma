@@ -10,8 +10,8 @@ import { IMAGE_CONFIG, STORAGE_KEYS } from '../../config/constants';
 import Layout from '../../components/layout/Layout';
 import AddToBagModal from '../../components/modals/AddToBagModal';
 import { useCartStore } from '../../store/cartStore';
-import { usePreferenceStore } from '../../store/preferenceStore';
-import { formatPriceWithCurrency } from '../../utils/pricing';
+import { formatPriceWithConversion, formatPriceWithCurrency } from '../../utils/pricing';
+import { useCurrencyStore } from '../../store/currencyStore';
 
 const FALLBACK_SIZE_GUIDE: SizeGuide = {
   gender: 'General Fit',
@@ -52,7 +52,7 @@ export default function ProductDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
   const addItem = useCartStore((state) => state.addItem);
-  const preferredCurrency = usePreferenceStore((state) => state.currency);
+  const { currentCurrency: preferredCurrency, exchangeRates, fetchExchangeRate } = useCurrencyStore();
 
   const [product, setProduct] = useState<Product | null>(null);
   const [relatedProducts, setRelatedProducts] = useState<Product[]>([]);
@@ -75,6 +75,9 @@ export default function ProductDetail() {
       navigate('/');
       return;
     }
+
+    // Fetch exchange rates on mount
+    fetchExchangeRate();
 
     const fetchProduct = async () => {
       try {
@@ -116,6 +119,33 @@ export default function ProductDetail() {
     fetchProduct();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
+
+  // Effect to switch images when color variation is selected
+  useEffect(() => {
+    if (!product || !selectedColor) {
+      // If no color selected, use default product images
+      if (product?.images?.[0]?.image_url) {
+        setSelectedImage(product.images[0].image_url);
+      }
+      return;
+    }
+
+    // Find the variation matching the selected color
+    // Note: Variation titles are formatted as "Product Name (Color)", so we check if title contains the color
+    const selectedVariation = product.variations?.find(
+      (variation) => variation.title.toLowerCase().includes(selectedColor.toLowerCase())
+    );
+
+    if (selectedVariation && selectedVariation.images.length > 0) {
+      // Switch to variation's first image
+      setSelectedImage(selectedVariation.images[0]);
+    } else {
+      // Fallback to product's default images if variation has no images
+      if (product.images?.[0]?.image_url) {
+        setSelectedImage(product.images[0].image_url);
+      }
+    }
+  }, [selectedColor, product]);
 
   const checkWishlistStatus = async (productId: string) => {
     try {
@@ -331,7 +361,43 @@ export default function ProductDetail() {
     (sizeOptions.length > 0 && !selectedSize);
 
   const placeholderImage = IMAGE_CONFIG.PLACEHOLDER;
-  const galleryImages = product?.images ?? [];
+
+  // Get ALL images: product images + all variation images
+  const getDisplayImages = () => {
+    if (!product) return [];
+
+    const allImages = [];
+
+    // Add product default images first
+    if (product.images && product.images.length > 0) {
+      allImages.push(...product.images);
+    }
+
+    // Add images from ALL variations
+    if (product.variations && product.variations.length > 0) {
+      product.variations.forEach((variation) => {
+        if (variation.images && variation.images.length > 0) {
+          // Map variation image URLs to ProductImage format for consistency
+          const variationImages = variation.images.map((url, index) => ({
+            id: `variation-${variation.id}-${index}`,
+            product_id: product.id,
+            image_url: url,
+            display_order: allImages.length + index,
+            is_primary: false,
+          }));
+          allImages.push(...variationImages);
+        }
+      });
+    }
+
+    return allImages;
+  };
+
+  const galleryImages = getDisplayImages();
+
+  // Show gallery if product has multiple images (regardless of variations)
+  const shouldShowGallery = galleryImages.length > 1;
+
   const sizeGuideData = product?.size_guide && (product.size_guide.rows?.length ?? 0) > 0 ? product.size_guide : FALLBACK_SIZE_GUIDE;
   const sizeGuideRows = sizeGuideData.rows ?? [];
   const hasSizeGuide = sizeGuideRows.length > 0;
@@ -401,30 +467,32 @@ export default function ProductDetail() {
               />
 
               {/* Thumbnail Gallery - overlaid at bottom of main image */}
-              {galleryImages.length > 1 && (
-                <div className="absolute bottom-6 left-6 flex gap-2">
-                  {galleryImages.slice(0, 3).map((image) => (
-                    <button
-                      key={image.id}
-                      type="button"
-                      onClick={() => setSelectedImage(image.image_url)}
-                      className={`overflow-hidden border-2 transition-all duration-200 w-16 h-20 flex-shrink-0 ${
-                        selectedImage === image.image_url
-                          ? 'border-white shadow-lg ring-1 ring-white/30'
-                          : 'border-white/50 hover:border-white shadow-md'
-                      }`}
-                    >
-                      <img
-                        src={image.image_url}
-                        alt={image.alt_text ?? product.title}
-                        className="w-full h-full object-cover"
-                        onError={(event) => {
-                          event.currentTarget.src = placeholderImage;
-                          event.currentTarget.onerror = null;
-                        }}
-                      />
-                    </button>
-                  ))}
+              {shouldShowGallery && (
+                <div className="absolute bottom-6 left-6 right-6 overflow-x-auto overflow-y-hidden scrollbar-hide">
+                  <div className="flex gap-2 min-w-max pr-6">
+                    {galleryImages.map((image) => (
+                      <button
+                        key={image.id}
+                        type="button"
+                        onClick={() => setSelectedImage(image.image_url)}
+                        className={`overflow-hidden border-2 transition-all duration-200 w-16 h-20 flex-shrink-0 ${
+                          selectedImage === image.image_url
+                            ? 'border-white shadow-lg ring-1 ring-white/30'
+                            : 'border-white/50 hover:border-white shadow-md'
+                        }`}
+                      >
+                        <img
+                          src={image.image_url}
+                          alt={image.alt_text ?? product.title}
+                          className="w-full h-full object-cover"
+                          onError={(event) => {
+                            event.currentTarget.src = placeholderImage;
+                            event.currentTarget.onerror = null;
+                          }}
+                        />
+                      </button>
+                    ))}
+                  </div>
                 </div>
               )}
             </div>
@@ -479,11 +547,11 @@ export default function ProductDetail() {
               <div className="flex items-baseline gap-3">
                 {comparePrice && comparePrice > currentPrice && (
                   <span className="text-xl font-ui text-primary/60 line-through">
-                    {formatPriceWithCurrency(Number(comparePrice), preferredCurrency)}
+                    {formatPriceWithConversion(Number(comparePrice), product.currency, preferredCurrency, exchangeRates)}
                   </span>
                 )}
                 <span className="text-2xl font-ui font-semibold text-primary">
-                  {formatPriceWithCurrency(Number(currentPrice), preferredCurrency)}
+                  {formatPriceWithConversion(Number(currentPrice), product.currency, preferredCurrency, exchangeRates)}
                 </span>
               </div>
               {savingsPercent > 0 && (
@@ -503,14 +571,14 @@ export default function ProductDetail() {
             )}
 
             {/* Made to Order / Info Line */}
-            {product.is_featured && (
+            {product.made_to_order && (
               <div className="flex items-center gap-2">
                 <svg className="w-4 h-4 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <circle cx="12" cy="12" r="10" strokeWidth="2"/>
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 16v-4m0-4h.01"/>
                 </svg>
                 <span className="text-xs font-ui uppercase tracking-[0.2em] text-primary">
-                  Made to Order
+                  Made to Order{product.made_to_order_timeline && ` • ${product.made_to_order_timeline}`}
                 </span>
               </div>
             )}
@@ -661,14 +729,28 @@ export default function ProductDetail() {
             </div>
 
             {/* Product Care */}
-            <div className="space-y-2">
-              <h3 className="text-xs font-ui uppercase tracking-[0.2em] text-primary">
-                Product Care
-              </h3>
-              <p className="text-sm font-serif text-primary/80 leading-relaxed">
-                Dry clean only. Store in a cool, dry place. Avoid prolonged exposure to direct sunlight to maintain color vibrancy.
-              </p>
-            </div>
+            {product?.care_instructions && (
+              <div className="space-y-2">
+                <h3 className="text-xs font-ui uppercase tracking-[0.2em] text-primary">
+                  Product Care
+                </h3>
+                <p className="text-sm font-serif text-primary/80 leading-relaxed">
+                  {product.care_instructions}
+                </p>
+              </div>
+            )}
+
+            {/* Fabric Composition */}
+            {product?.fabric_composition && (
+              <div className="space-y-2">
+                <h3 className="text-xs font-ui uppercase tracking-[0.2em] text-primary">
+                  Fabric & Materials
+                </h3>
+                <p className="text-sm font-serif text-primary/80 leading-relaxed">
+                  {product.fabric_composition}
+                </p>
+              </div>
+            )}
 
             {/* Delivery and Shipping */}
             <div className="space-y-2">

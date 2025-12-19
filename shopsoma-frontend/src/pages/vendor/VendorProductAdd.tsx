@@ -7,10 +7,12 @@ import ToastContainer from '../../components/ui/ToastContainer';
 import { ROUTES } from '../../config/constants';
 import { useVendor } from '../../context/VendorContext';
 import { useToast } from '../../hooks/useToast';
+import { useCurrency } from '../../hooks/useCurrency';
 import { productService } from '../../services/productService';
 import { categoryService } from '../../services/categoryService';
 import { collectionService } from '../../services/collectionService';
 import type { Variation, Category, Collection } from '../../types';
+import type { Currency } from '../../store/currencyStore';
 
 // US Sizing: Letter sizes (XXS-XXXL)
 // UK Sizing: Numeric sizes (4-22)
@@ -49,7 +51,12 @@ export default function VendorProductAdd() {
   const navigate = useNavigate();
   const { vendorProfile } = useVendor();
   const { toasts, hideToast, success, error, warning } = useToast();
+  const { getCurrencySymbol } = useCurrency();
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Currency state (for product pricing)
+  const [productCurrency, setProductCurrency] = useState<Currency>('NGN');
+  const currencySymbol = productCurrency === 'NGN' ? '₦' : '$';
 
   // Product details
   const [productName, setProductName] = useState('');
@@ -61,7 +68,8 @@ export default function VendorProductAdd() {
   const [productDescription, setProductDescription] = useState('');
   const [materials, setMaterials] = useState('');
   const [collectionId, setCollectionId] = useState('');
-  const [color, setColor] = useState('');
+  const [color, setColor] = useState('#000000'); // Now stores hex value
+  const [colorHex, setColorHex] = useState('#000000'); // Hex input field
   const [selectedSizes, setSelectedSizes] = useState<SizeOption[]>([]);
   const [sizingSystem, setSizingSystem] = useState<SizingSystem>('US Sizing');
   const [productCare, setProductCare] = useState('');
@@ -78,6 +86,7 @@ export default function VendorProductAdd() {
   const [showCollectionModal, setShowCollectionModal] = useState(false);
 
   // Other Details
+  const [productType, setProductType] = useState<'single' | 'variable'>('single');
   const [madeToOrder, setMadeToOrder] = useState(false);
   const [hasProductVariations, setHasProductVariations] = useState(false);
   const [isSustainable, setIsSustainable] = useState(false);
@@ -115,12 +124,10 @@ export default function VendorProductAdd() {
   const [showSubcategoryDropdown, setShowSubcategoryDropdown] = useState(false);
   const [showMaterialsDropdown, setShowMaterialsDropdown] = useState(false);
   const [showCollectionDropdown, setShowCollectionDropdown] = useState(false);
-  const [showColorDropdown, setShowColorDropdown] = useState(false);
   const [showSizingDropdown, setShowSizingDropdown] = useState(false);
   const [showVariationDropdown, setShowVariationDropdown] = useState(false);
 
   const materialOptions = ['Leather', 'Cotton', 'Wire', 'Silk', 'Wool', 'Polyester', 'Denim'];
-  const colors = ['Black', 'White', 'Red', 'Blue', 'Green', 'Yellow', 'Pink', 'Purple'];
 
   // E-commerce standard size mappings
   const SIZE_MAPPINGS: Record<SizingSystem, SizeOption[]> = {
@@ -370,6 +377,23 @@ export default function VendorProductAdd() {
     });
   };
 
+  // Main product color handlers
+  const handleMainColorPickerChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const colorValue = e.target.value;
+    setColor(colorValue);
+    setColorHex(colorValue);
+  };
+
+  const handleMainColorHexChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const hex = e.target.value;
+    setColorHex(hex);
+    // Only update color picker if it's a valid hex
+    if (/^#[0-9A-Fa-f]{6}$/.test(hex)) {
+      setColor(hex);
+    }
+  };
+
+  // Variation color handlers
   const handleColorPickerChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const color = e.target.value;
     setVariationColor(color);
@@ -580,11 +604,11 @@ export default function VendorProductAdd() {
     e.preventDefault();
 
     try {
-      // Prepare variations data if product has variations
+      // Prepare variations data
       let variationsData: Variation[] | undefined;
 
-      if (hasProductVariations && detailedVariations.length > 0) {
-        // Validate that all images are uploaded
+      if (productType === 'variable' && detailedVariations.length > 0) {
+        // VARIABLE PRODUCTS: Use detailed variations from modal
         const hasUnuploadedImages = detailedVariations.some(v =>
           v.images.some(img => !img.uploaded || !img.imageUrl)
         );
@@ -600,13 +624,102 @@ export default function VendorProductAdd() {
           color_hex: v.color,
           price: v.hasDifferentPricing && v.price ? parseFloat(v.price) : undefined,
           sale_price: v.hasDifferentPricing && v.salesPrice ? parseFloat(v.salesPrice) : undefined,
-          images: v.images.map(img => img.imageUrl!), // Use uploaded URLs
+          images: v.images.map(img => img.imageUrl!),
           is_active: true,
           sizes: v.selectedSizes.map(size => ({
             size,
             stock: parseInt(v.sizeStock[size] || '0')
           }))
-        })) as any; // Cast to any since API input uses 'sizes' but response uses 'size_stocks'
+        })) as any;
+      } else if (productType === 'single' && (selectedSizes.length > 0 || color)) {
+        // SINGLE PRODUCTS: Create one variation from selected color/sizes
+        const getColorName = (hex: string): string => {
+          const colorMap: Record<string, string> = {
+            '#000000': 'Black', '#0D0D0D': 'Black', '#1A1A1A': 'Black',
+            '#FFFFFF': 'White', '#FAFAFA': 'White', '#F5F5F5': 'White',
+            '#FF0000': 'Red', '#DC143C': 'Crimson', '#8B0000': 'Dark Red',
+            '#00FF00': 'Green', '#008000': 'Green', '#228B22': 'Forest Green',
+            '#0000FF': 'Blue', '#4169E1': 'Royal Blue', '#000080': 'Navy',
+            '#FFFF00': 'Yellow', '#FFD700': 'Gold',
+            '#FFA500': 'Orange', '#FF8C00': 'Dark Orange',
+            '#800080': 'Purple', '#9370DB': 'Medium Purple',
+            '#FFC0CB': 'Pink', '#FF1493': 'Deep Pink',
+            '#A52A2A': 'Brown', '#8B4513': 'Saddle Brown',
+            '#808080': 'Gray', '#A9A9A9': 'Dark Gray', '#D3D3D3': 'Light Gray',
+            '#00FFFF': 'Cyan', '#008B8B': 'Dark Cyan',
+            '#FF00FF': 'Magenta', '#8B008B': 'Dark Magenta',
+            '#F0E68C': 'Khaki', '#BDB76B': 'Dark Khaki',
+            '#E6E6FA': 'Lavender', '#DDA0DD': 'Plum',
+            '#F5DEB3': 'Wheat', '#D2B48C': 'Tan',
+            '#FA8072': 'Salmon', '#E9967A': 'Dark Salmon',
+            '#87CEEB': 'Sky Blue', '#4682B4': 'Steel Blue',
+            '#98FB98': 'Pale Green', '#90EE90': 'Light Green',
+            '#FFB6C1': 'Light Pink', '#FF69B4': 'Hot Pink',
+            '#F08080': 'Light Coral', '#CD5C5C': 'Indian Red',
+            '#FFDAB9': 'Peach Puff', '#FFE4B5': 'Moccasin',
+            '#E0FFFF': 'Light Cyan', '#B0E0E6': 'Powder Blue',
+            '#C0C0C0': 'Silver', '#708090': 'Slate Gray',
+            '#FFE4E1': 'Misty Rose', '#FAEBD7': 'Antique White',
+            '#F5F5DC': 'Beige', '#FFFAF0': 'Floral White',
+          };
+
+          // Try exact match first
+          const upperHex = hex.toUpperCase();
+          if (colorMap[upperHex]) return colorMap[upperHex];
+
+          // Try to find closest color by comparing RGB values
+          const hexToRGB = (h: string) => {
+            const r = parseInt(h.slice(1, 3), 16);
+            const g = parseInt(h.slice(3, 5), 16);
+            const b = parseInt(h.slice(5, 7), 16);
+            return { r, g, b };
+          };
+
+          const targetRGB = hexToRGB(hex);
+          let closestColor = 'Custom Color';
+          let minDistance = Infinity;
+
+          for (const [knownHex, colorName] of Object.entries(colorMap)) {
+            const knownRGB = hexToRGB(knownHex);
+            const distance = Math.sqrt(
+              Math.pow(targetRGB.r - knownRGB.r, 2) +
+              Math.pow(targetRGB.g - knownRGB.g, 2) +
+              Math.pow(targetRGB.b - knownRGB.b, 2)
+            );
+
+            if (distance < minDistance) {
+              minDistance = distance;
+              closestColor = colorName;
+            }
+          }
+
+          // If very close (within 50 units), use that name, otherwise "Custom Color"
+          return minDistance < 50 ? closestColor : 'Custom Color';
+        };
+
+        const colorName = getColorName(colorHex);
+
+        // Create variation with product title and color
+        const variation: Variation = {
+          title: `${productName} (${colorName})`,
+          type: 'color',
+          color_hex: colorHex,
+          price: undefined, // Use product base price
+          sale_price: undefined,
+          images: [], // Single products use product-level images
+          is_active: true,
+          sizes: selectedSizes.length > 0
+            ? selectedSizes.map(size => ({
+                size,
+                stock: parseInt(stockAmount || '0')
+              }))
+            : [{
+                size: 'One Size' as any,
+                stock: parseInt(stockAmount || '0')
+              }]
+        } as any;
+
+        variationsData = [variation];
       }
 
       // Validate required fields
@@ -648,6 +761,12 @@ export default function VendorProductAdd() {
         collection_id: collectionId || undefined,
         status: 'draft' as const,
         is_featured: false,
+        currency: productCurrency,
+        product_type: productType,
+        made_to_order: madeToOrder,
+        made_to_order_timeline: madeToOrder ? estimatedProductionTime : undefined,
+        care_instructions: productCare || undefined,
+        fabric_composition: materials || undefined,
         variations: variationsData,
         images: productImages.length > 0 ? productImages : undefined,
       };
@@ -729,6 +848,32 @@ export default function VendorProductAdd() {
               </div>
             </div>
             <div className="flex items-center gap-3">
+              {/* Currency Switcher */}
+              <div className="flex items-center border border-gray-200 rounded-lg overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => setProductCurrency('USD')}
+                  className={`px-4 py-2.5 text-sm font-medium transition ${
+                    productCurrency === 'USD'
+                      ? 'bg-[#105E53] text-white'
+                      : 'bg-white text-gray-700 hover:bg-gray-50'
+                  }`}
+                >
+                  USD ($)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setProductCurrency('NGN')}
+                  className={`px-4 py-2.5 text-sm font-medium transition ${
+                    productCurrency === 'NGN'
+                      ? 'bg-[#105E53] text-white'
+                      : 'bg-white text-gray-700 hover:bg-gray-50'
+                  }`}
+                >
+                  NGN (₦)
+                </button>
+              </div>
+
               <button
                 type="button"
                 onClick={() => navigate(ROUTES.VENDOR_PRODUCTS)}
@@ -906,6 +1051,69 @@ export default function VendorProductAdd() {
 
             {/* Right Column - Product Details */}
             <div className="space-y-6">
+              {/* Product Type Selector */}
+              <div className="bg-white rounded-xl border border-gray-200 p-6">
+                <h3 className="text-base font-semibold text-gray-900 mb-4">Product Type</h3>
+
+                <div className="space-y-4">
+                  {/* Radio Options */}
+                  <div className="flex gap-6">
+                    {/* Single Product Option */}
+                    <label className="flex items-start gap-3 cursor-pointer flex-1 p-4 border-2 rounded-lg transition hover:border-[#105E53]/30" style={{ borderColor: productType === 'single' ? '#105E53' : '#E5E7EB' }}>
+                      <input
+                        type="radio"
+                        name="productType"
+                        value="single"
+                        checked={productType === 'single'}
+                        onChange={(e) => setProductType(e.target.value as 'single' | 'variable')}
+                        className="mt-1 text-[#105E53] focus:ring-[#105E53]"
+                      />
+                      <div className="flex-1">
+                        <div className="font-semibold text-gray-900 mb-1">Single Product</div>
+                        <div className="text-sm text-gray-600">
+                          Standard product with base color and size
+                        </div>
+                      </div>
+                    </label>
+
+                    {/* Variable Product Option */}
+                    <label className="flex items-start gap-3 cursor-pointer flex-1 p-4 border-2 rounded-lg transition hover:border-[#105E53]/30" style={{ borderColor: productType === 'variable' ? '#105E53' : '#E5E7EB' }}>
+                      <input
+                        type="radio"
+                        name="productType"
+                        value="variable"
+                        checked={productType === 'variable'}
+                        onChange={(e) => setProductType(e.target.value as 'single' | 'variable')}
+                        className="mt-1 text-[#105E53] focus:ring-[#105E53]"
+                      />
+                      <div className="flex-1">
+                        <div className="font-semibold text-gray-900 mb-1">Variable Product</div>
+                        <div className="text-sm text-gray-600">
+                          Product with multiple color/size variations
+                        </div>
+                      </div>
+                    </label>
+                  </div>
+
+                  {/* Helper Text */}
+                  {productType === 'single' ? (
+                    <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-800 flex items-start gap-2">
+                      <svg className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+                        <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+                      </svg>
+                      <span>Single product: Use the fields below to set base color and size. Variations section will be disabled.</span>
+                    </div>
+                  ) : (
+                    <div className="p-3 bg-purple-50 border border-purple-200 rounded-lg text-sm text-purple-800 flex items-start gap-2">
+                      <svg className="w-5 h-5 text-purple-600 flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+                        <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+                      </svg>
+                      <span>Variable product: Base color/size fields will be disabled. Use the Variations section below to set colors and sizes.</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+
               <div className="bg-white rounded-xl border border-gray-200 p-6">
                 <h3 className="text-base font-semibold text-gray-900 mb-6">Product Details</h3>
 
@@ -1020,7 +1228,7 @@ export default function VendorProductAdd() {
                       </label>
                       <div className="relative">
                         <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 text-sm">
-                          $
+                          {currencySymbol}
                         </span>
                         <input
                           type="text"
@@ -1037,7 +1245,7 @@ export default function VendorProductAdd() {
                       </label>
                       <div className="relative">
                         <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 text-sm">
-                          $
+                          {currencySymbol}
                         </span>
                         <input
                           type="text"
@@ -1196,99 +1404,94 @@ export default function VendorProductAdd() {
                     </div>
                   </div>
 
-                  {/* Color */}
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Color
-                    </label>
-                    <div className="relative">
-                      <button
-                        type="button"
-                        onClick={() => setShowColorDropdown(!showColorDropdown)}
-                        className="w-full rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-left flex items-center justify-between"
-                      >
-                        <span className={color ? 'text-gray-900' : 'text-gray-400'}>
-                          {color || 'Select an Option'}
-                        </span>
-                        <ChevronDown className="h-4 w-4 text-gray-400" />
-                      </button>
-                      {showColorDropdown && (
-                        <div className="absolute z-10 w-full mt-2 bg-white border border-gray-200 rounded-lg shadow-lg max-h-60 overflow-auto">
-                          {colors.map((col) => (
-                            <button
-                              key={col}
-                              type="button"
-                              onClick={() => {
-                                setColor(col);
-                                setShowColorDropdown(false);
-                              }}
-                              className="w-full px-4 py-2.5 text-left text-sm hover:bg-gray-50 transition"
-                            >
-                              {col}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Sizing */}
-                  <div>
-                    <div className="flex items-center justify-between mb-3">
-                      <label className="block text-sm font-medium text-gray-700">
-                        Sizing
+                  {/* Color - Only for Single Products */}
+                  {productType === 'single' && (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Color
                       </label>
-                      <div className="relative">
-                        <button
-                          type="button"
-                          onClick={() => setShowSizingDropdown(!showSizingDropdown)}
-                          className="flex items-center gap-1 text-sm text-gray-600 hover:text-gray-900"
-                        >
-                          {sizingSystem}
-                          <ChevronDown className="h-4 w-4" />
-                        </button>
-                        {showSizingDropdown && (
-                          <div className="absolute right-0 z-10 mt-2 bg-white border border-gray-200 rounded-lg shadow-lg min-w-[140px]">
-                            {sizingSystems.map((sys) => (
-                              <button
-                                key={sys}
-                                type="button"
-                                onClick={() => {
-                                  setSizingSystem(sys);
-                                  setAvailableSizes(SIZE_MAPPINGS[sys]);
-                                  setSelectedSizes([]); // Clear selections when changing sizing system
-                                  setShowSizingDropdown(false);
-                                }}
-                                className={`w-full px-4 py-2.5 text-left text-sm transition ${
-                                  sizingSystem === sys
-                                    ? 'bg-[#105E53]/10 text-[#105E53] font-medium'
-                                    : 'hover:bg-gray-50'
-                                }`}
-                              >
-                                {sys}
-                              </button>
-                            ))}
-                          </div>
-                        )}
+                      <div className="flex items-center gap-3">
+                        <input
+                          type="color"
+                          value={color}
+                          onChange={handleMainColorPickerChange}
+                          className="w-12 h-12 rounded-lg border border-gray-200 cursor-pointer"
+                          title="Select product color"
+                        />
+                        <input
+                          type="text"
+                          value={colorHex}
+                          onChange={handleMainColorHexChange}
+                          placeholder="#000000"
+                          maxLength={7}
+                          className="flex-1 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm font-mono focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
+                        />
+                      </div>
+                      <p className="mt-1.5 text-xs text-gray-500">
+                        Click the color box to pick a color, or enter a hex code (e.g., #FF5733)
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Sizing - Only for Single Products */}
+                  {productType === 'single' && (
+                    <div>
+                      <div className="flex items-center justify-between mb-3">
+                        <label className="block text-sm font-medium text-gray-700">
+                          Sizing
+                        </label>
+                        <div className="relative">
+                          <button
+                            type="button"
+                            onClick={() => setShowSizingDropdown(!showSizingDropdown)}
+                            className="flex items-center gap-1 text-sm text-gray-600 hover:text-gray-900"
+                          >
+                            {sizingSystem}
+                            <ChevronDown className="h-4 w-4" />
+                          </button>
+                          {showSizingDropdown && (
+                            <div className="absolute right-0 z-10 mt-2 bg-white border border-gray-200 rounded-lg shadow-lg min-w-[140px]">
+                              {sizingSystems.map((sys) => (
+                                <button
+                                  key={sys}
+                                  type="button"
+                                  onClick={() => {
+                                    setSizingSystem(sys);
+                                    setAvailableSizes(SIZE_MAPPINGS[sys]);
+                                    setSelectedSizes([]); // Clear selections when changing sizing system
+                                    setShowSizingDropdown(false);
+                                  }}
+                                  className={`w-full px-4 py-2.5 text-left text-sm transition ${
+                                    sizingSystem === sys
+                                      ? 'bg-[#105E53]/10 text-[#105E53] font-medium'
+                                      : 'hover:bg-gray-50'
+                                  }`}
+                                >
+                                  {sys}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        {availableSizes.map((size) => (
+                          <button
+                            key={size}
+                            type="button"
+                            onClick={() => toggleSize(size)}
+                            className={`px-4 py-2 rounded-lg text-sm font-medium transition ${
+                              selectedSizes.includes(size)
+                                ? 'bg-[#3B3B3B] text-white'
+                                : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                            }`}
+                          >
+                            {size}
+                          </button>
+                        ))}
                       </div>
                     </div>
-                    <div className="flex items-center gap-2 flex-wrap">
-                      {availableSizes.map((size) => (
-                        <button
-                          key={size}
-                          type="button"
-                          onClick={() => toggleSize(size)}
-                          className={`px-4 py-2 rounded-lg text-sm font-medium transition ${
-                            selectedSizes.includes(size)
-                              ? 'bg-[#3B3B3B] text-white'
-                              : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                          }`}
-                        >
-                          {size}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
+                  )}
 
                   {/* Product Care */}
                   <div>
@@ -1345,23 +1548,6 @@ export default function VendorProductAdd() {
                       </button>
                     </div>
 
-                    {/* Product Variations */}
-                    <div className="flex items-center justify-between">
-                      <label className="text-sm font-medium text-gray-700">Product Variations</label>
-                      <button
-                        type="button"
-                        onClick={() => setHasProductVariations(!hasProductVariations)}
-                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                          hasProductVariations ? 'bg-[#105E53]' : 'bg-gray-200'
-                        }`}
-                      >
-                        <span
-                          className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                            hasProductVariations ? 'translate-x-6' : 'translate-x-1'
-                          }`}
-                        />
-                      </button>
-                    </div>
 
                     {/* Sustainable */}
                     <div className="flex items-center justify-between">
@@ -1402,8 +1588,8 @@ export default function VendorProductAdd() {
                   </div>
                 </div>
 
-                {/* Variations Section - Only show when Product Variations is enabled */}
-                {hasProductVariations && (
+                {/* Variations Section - Only show when Variable Product is selected */}
+                {productType === 'variable' ? (
                   <div className="bg-white rounded-lg border border-gray-200 p-6 mt-6">
                     <div className="flex items-center justify-between mb-4">
                       <h2 className="text-lg font-semibold text-gray-900">Variations</h2>
@@ -1471,6 +1657,20 @@ export default function VendorProductAdd() {
                         <p className="text-sm">No variations added yet. Click "Add Variation" to create one.</p>
                       </div>
                     )}
+                  </div>
+                ) : (
+                  <div className="bg-gray-50 rounded-lg border-2 border-dashed border-gray-300 p-8 mt-6">
+                    <div className="text-center">
+                      <div className="inline-flex items-center justify-center w-12 h-12 bg-gray-200 rounded-full mb-3">
+                        <svg className="w-6 h-6 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                        </svg>
+                      </div>
+                      <p className="font-semibold text-gray-700 mb-2">Variations Disabled</p>
+                      <p className="text-sm text-gray-600 max-w-md mx-auto">
+                        Variations are only available for Variable Products. Switch to "Variable Product" above to enable this section.
+                      </p>
+                    </div>
                   </div>
                 )}
 
@@ -1547,27 +1747,37 @@ export default function VendorProductAdd() {
                             <label className="block text-sm font-medium text-gray-700 mb-2">
                               Variation Price
                             </label>
-                            <input
-                              type="text"
-                              value={variationPrice}
-                              onChange={(e) => setVariationPrice(e.target.value)}
-                              placeholder="₦0.00"
-                              disabled={!variationHasDifferentPricing}
-                              className="w-full rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20 disabled:opacity-50 disabled:cursor-not-allowed"
-                            />
+                            <div className="relative">
+                              <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 text-sm">
+                                {currencySymbol}
+                              </span>
+                              <input
+                                type="text"
+                                value={variationPrice}
+                                onChange={(e) => setVariationPrice(e.target.value)}
+                                placeholder="0.00"
+                                disabled={!variationHasDifferentPricing}
+                                className="w-full rounded-lg border border-gray-200 bg-gray-50 pl-8 pr-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                              />
+                            </div>
                           </div>
                           <div>
                             <label className="block text-sm font-medium text-gray-700 mb-2">
                               Sales Price
                             </label>
-                            <input
-                              type="text"
-                              value={variationSalesPrice}
-                              onChange={(e) => setVariationSalesPrice(e.target.value)}
-                              placeholder="₦0.00"
-                              disabled={!variationHasDifferentPricing}
-                              className="w-full rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20 disabled:opacity-50 disabled:cursor-not-allowed"
-                            />
+                            <div className="relative">
+                              <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 text-sm">
+                                {currencySymbol}
+                              </span>
+                              <input
+                                type="text"
+                                value={variationSalesPrice}
+                                onChange={(e) => setVariationSalesPrice(e.target.value)}
+                                placeholder="0.00"
+                                disabled={!variationHasDifferentPricing}
+                                className="w-full rounded-lg border border-gray-200 bg-gray-50 pl-8 pr-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                              />
+                            </div>
                           </div>
                         </div>
 

@@ -209,10 +209,128 @@ export default function AdminProductDetail() {
             </div>
 
             {/* Additional Details */}
-            {product.materials && (
+            {product.fabric_composition && (
+              <div className="bg-white rounded-xl shadow-sm p-6 mb-6">
+                <h2 className="text-lg font-semibold text-gray-900 mb-3">Fabric & Materials</h2>
+                <p className="text-gray-600 whitespace-pre-wrap">{product.fabric_composition}</p>
+              </div>
+            )}
+
+            {product.care_instructions && (
+              <div className="bg-white rounded-xl shadow-sm p-6 mb-6">
+                <h2 className="text-lg font-semibold text-gray-900 mb-3">Care Instructions</h2>
+                <p className="text-gray-600 whitespace-pre-wrap">{product.care_instructions}</p>
+              </div>
+            )}
+
+            {product.made_to_order && (
+              <div className="bg-white rounded-xl shadow-sm p-6 mb-6">
+                <h2 className="text-lg font-semibold text-gray-900 mb-3">Production</h2>
+                <div className="flex items-center gap-2">
+                  <span className="px-3 py-1 bg-blue-100 text-blue-800 text-xs font-semibold rounded-full">
+                    MADE TO ORDER
+                  </span>
+                  {product.made_to_order_timeline && (
+                    <span className="text-sm text-gray-600">{product.made_to_order_timeline}</span>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Variations - Colors & Sizes */}
+            {product.variations && product.variations.length > 0 && (
               <div className="bg-white rounded-xl shadow-sm p-6">
-                <h2 className="text-lg font-semibold text-gray-900 mb-3">Materials</h2>
-                <p className="text-gray-600">{product.materials}</p>
+                <h2 className="text-lg font-semibold text-gray-900 mb-4">Variations</h2>
+                <div className="space-y-4">
+                  {product.variations.map((variation: any, index: number) => (
+                    <div key={variation.id || index} className="border border-gray-200 rounded-lg p-4">
+                      {/* Variation Title */}
+                      <div className="flex items-center justify-between mb-3">
+                        <h3 className="font-medium text-gray-900">{variation.title}</h3>
+                        <span className={`px-2 py-1 rounded text-xs font-medium ${
+                          variation.is_active
+                            ? 'bg-green-100 text-green-800'
+                            : 'bg-gray-100 text-gray-800'
+                        }`}>
+                          {variation.is_active ? 'Active' : 'Inactive'}
+                        </span>
+                      </div>
+
+                      {/* Color Swatch */}
+                      {variation.color_hex && (
+                        <div className="flex items-center gap-2 mb-3">
+                          <span className="text-sm text-gray-500">Color:</span>
+                          <div className="flex items-center gap-2">
+                            <div
+                              className="w-6 h-6 rounded border border-gray-300"
+                              style={{ backgroundColor: variation.color_hex }}
+                              title={variation.color_hex}
+                            />
+                            <span className="text-sm font-medium text-gray-700">{variation.color_hex}</span>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Size Stocks Table */}
+                      {variation.size_stocks && variation.size_stocks.length > 0 && (
+                        <div>
+                          <p className="text-sm text-gray-500 mb-2">Available Sizes:</p>
+                          <div className="overflow-x-auto">
+                            <table className="min-w-full divide-y divide-gray-200">
+                              <thead className="bg-gray-50">
+                                <tr>
+                                  <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Size</th>
+                                  <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Stock</th>
+                                  <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+                                </tr>
+                              </thead>
+                              <tbody className="bg-white divide-y divide-gray-200">
+                                {variation.size_stocks.map((sizeStock: any) => (
+                                  <tr key={sizeStock.id}>
+                                    <td className="px-3 py-2 whitespace-nowrap text-sm font-medium text-gray-900">
+                                      {sizeStock.size}
+                                    </td>
+                                    <td className="px-3 py-2 whitespace-nowrap text-sm text-gray-700">
+                                      {sizeStock.stock} units
+                                    </td>
+                                    <td className="px-3 py-2 whitespace-nowrap">
+                                      <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                                        sizeStock.stock > 0
+                                          ? 'bg-green-100 text-green-800'
+                                          : 'bg-red-100 text-red-800'
+                                      }`}>
+                                        {sizeStock.stock > 0 ? 'In Stock' : 'Out of Stock'}
+                                      </span>
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Pricing Override (if set) */}
+                      {(variation.price || variation.sale_price) && (
+                        <div className="mt-3 pt-3 border-t border-gray-200">
+                          <p className="text-sm text-gray-500 mb-1">Variation Pricing:</p>
+                          <div className="flex items-center gap-3">
+                            {variation.price && (
+                              <span className="text-sm font-medium text-gray-900">
+                                Price: {formatPrice(variation.price)}
+                              </span>
+                            )}
+                            {variation.sale_price && (
+                              <span className="text-sm font-medium text-green-600">
+                                Sale: {formatPrice(variation.sale_price)}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
           </div>

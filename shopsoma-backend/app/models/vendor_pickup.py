@@ -44,12 +44,16 @@ class VendorPickup(Base):
     # Pickup Details
     scheduled_pickup_date = Column(DateTime(timezone=True), nullable=True)
     actual_pickup_date = Column(DateTime(timezone=True), nullable=True)
+    pickup_window_start = Column(DateTime(timezone=True), nullable=True)  # Start of pickup window
+    pickup_window_end = Column(DateTime(timezone=True), nullable=True)  # End of pickup window
     pickup_address = Column(Text, nullable=True)
     pickup_contact_name = Column(String(255), nullable=True)
     pickup_contact_phone = Column(String(20), nullable=True)
 
     # Logistics
     logistics_partner = Column(String(100), nullable=True)
+    courier_name = Column(String(100), nullable=True)  # Specific courier company name
+    rider_id = Column(String(100), nullable=True)  # Rider/driver identifier
     tracking_number = Column(String(100), nullable=True, index=True)
     driver_name = Column(String(255), nullable=True)
     driver_phone = Column(String(20), nullable=True)

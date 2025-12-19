@@ -8,15 +8,26 @@ import {
   buildMockTracking,
 } from '../../services/orderService';
 import { checkoutService } from '../../services/checkoutService';
+import websocketService, { type OrderUpdateData } from '../../services/websocketService';
 
 const STATUS_STEPS: Array<{ key: OrderStatus; label: string }> = [
   { key: 'order_placed', label: 'Order Placed' },
-  { key: 'pending_confirmation', label: 'Pending Confirmation' },
-  { key: 'waiting_to_ship', label: 'Waiting to be Shipped' },
-  { key: 'shipped', label: 'Shipped' },
+  { key: 'in_transit', label: 'In Transit' },
   { key: 'out_for_delivery', label: 'Out for Delivery' },
   { key: 'delivered', label: 'Delivered' },
 ];
+
+// Terminal states (not shown in progress bar)
+const TERMINAL_STATES: Record<OrderStatus, { label: string; color: string }> = {
+  'delivery_failed': { label: 'Delivery Failed', color: 'red' },
+  'returned': { label: 'Returned', color: 'orange' },
+  'cancelled': { label: 'Cancelled', color: 'gray' },
+  // Include normal states for type safety
+  'order_placed': { label: 'Order Placed', color: 'yellow' },
+  'in_transit': { label: 'In Transit', color: 'blue' },
+  'out_for_delivery': { label: 'Out for Delivery', color: 'blue' },
+  'delivered': { label: 'Delivered', color: 'green' },
+};
 
 const formatDisplayDate = (value: string) => {
   const date = new Date(value);
@@ -37,7 +48,10 @@ export default function OrderTracking() {
   const [showOrderModal, setShowOrderModal] = useState(false);
   const [orderDetails, setOrderDetails] = useState<any>(null);
   const [loadingOrder, setLoadingOrder] = useState(false);
+  const [isConnectedToWebSocket, setIsConnectedToWebSocket] = useState(false);
+  const [wsError, setWsError] = useState<string | null>(null);
 
+  // Initial load of tracking data
   useEffect(() => {
     if (!orderId) {
       setError('Order ID is missing');
@@ -71,10 +85,128 @@ export default function OrderTracking() {
     };
   }, [orderId]);
 
+  // WebSocket connection for real-time updates
+  useEffect(() => {
+    if (!orderId) return;
+
+    // Get JWT token from localStorage (optional for guest users)
+    const token = localStorage.getItem('token');
+
+    if (token) {
+      console.log('[OrderTracking] Connecting to WebSocket with authentication for order:', orderId);
+    } else {
+      console.log('[OrderTracking] Connecting to WebSocket in guest mode for order:', orderId);
+    }
+
+    setIsConnectedToWebSocket(true);
+
+    // Handle real-time order updates
+    const handleOrderUpdate = (data: OrderUpdateData) => {
+      console.log('[OrderTracking] ===== WEBSOCKET UPDATE RECEIVED =====');
+      console.log('[OrderTracking] Raw data:', JSON.stringify(data, null, 2));
+      console.log('[OrderTracking] Fulfillment status:', data.fulfillment_status);
+
+      setTracking((prevTracking) => {
+        if (!prevTracking) {
+          console.warn('[OrderTracking] No previous tracking data, cannot update');
+          return prevTracking;
+        }
+
+        console.log('[OrderTracking] Previous status:', prevTracking.current_status);
+
+        // Map fulfillment_status to current_status for the UI
+        let currentStatus: OrderStatus = prevTracking.current_status;
+
+        // Map backend fulfillment statuses to frontend OrderStatus
+        const fulfillmentStatus = data.fulfillment_status?.toLowerCase();
+
+        // Handle order lifecycle statuses
+        if (fulfillmentStatus === 'order_received') {
+          currentStatus = 'order_placed';
+        } else if (
+          fulfillmentStatus === 'preparing_for_pickup' ||
+          fulfillmentStatus === 'pickup_scheduled' ||
+          fulfillmentStatus === 'picked_up' ||
+          fulfillmentStatus === 'in_transit'
+        ) {
+          currentStatus = 'in_transit';
+        } else if (fulfillmentStatus === 'out_for_delivery') {
+          currentStatus = 'out_for_delivery';
+        } else if (fulfillmentStatus === 'delivered') {
+          currentStatus = 'delivered';
+        }
+        // Handle terminal/failure states
+        else if (fulfillmentStatus === 'delivery_failed') {
+          currentStatus = 'delivery_failed';
+        } else if (fulfillmentStatus === 'returned') {
+          currentStatus = 'returned';
+        } else if (fulfillmentStatus === 'cancelled') {
+          currentStatus = 'cancelled';
+        } else {
+          console.warn('[OrderTracking] Unknown fulfillment status:', data.fulfillment_status);
+        }
+
+        console.log('[OrderTracking] Mapped status:', fulfillmentStatus, '→', currentStatus);
+
+        const updatedTracking = {
+          ...prevTracking,
+          current_status: currentStatus,
+          tracking_id: data.tracking_number || prevTracking.tracking_id,
+          updated_at: data.updated_at,
+          delivery_provider: data.delivery_provider,
+        };
+
+        console.log('[OrderTracking] Updated tracking:', JSON.stringify(updatedTracking, null, 2));
+        console.log('[OrderTracking] ===== UPDATE COMPLETE =====');
+
+        return updatedTracking;
+      });
+    };
+
+    // Connect to WebSocket
+    try {
+      websocketService.connect(orderId, token, handleOrderUpdate);
+      setWsError(null);
+      console.log('[OrderTracking] WebSocket connection initiated');
+    } catch (error) {
+      console.error('[OrderTracking] WebSocket connection error:', error);
+      setWsError('WebSocket connection failed');
+      setIsConnectedToWebSocket(false);
+    }
+
+    // Fallback: Poll for updates every 10 seconds if WebSocket isn't connected
+    const pollInterval = setInterval(async () => {
+      if (!websocketService.isConnected()) {
+        console.log('[OrderTracking] WebSocket not connected, polling for updates...');
+        try {
+          const data = await orderService.getOrderTracking(orderId);
+          console.log('[OrderTracking] Polling update received:', data);
+          setTracking(data);
+        } catch (err) {
+          console.error('[OrderTracking] Polling error:', err);
+        }
+      }
+    }, 10000); // Poll every 10 seconds
+
+    // Cleanup on unmount
+    return () => {
+      console.log('[OrderTracking] Disconnecting WebSocket and clearing poll interval');
+      websocketService.disconnect();
+      clearInterval(pollInterval);
+      setIsConnectedToWebSocket(false);
+    };
+  }, [orderId]);
+
   const activeIndex = useMemo(() => {
     if (!tracking) return 0;
     const index = STATUS_STEPS.findIndex((step) => step.key === tracking.current_status);
     return index >= 0 ? index : 0;
+  }, [tracking]);
+
+  // Check if order is in a terminal state (failed/returned/cancelled)
+  const isTerminalState = useMemo(() => {
+    if (!tracking) return false;
+    return ['delivery_failed', 'returned', 'cancelled'].includes(tracking.current_status);
   }, [tracking]);
 
   const handleViewOrderDetails = async () => {
@@ -133,12 +265,31 @@ export default function OrderTracking() {
           )}
 
           <div className="rounded-sm border border-gray-100 bg-gray-50 px-6 py-5">
-            <p className="text-sm font-semibold text-gray-800">
-              Tracking ID{' '}
-              <span className="text-primary">
-                {tracking?.tracking_id || 'Loading...'}
-              </span>
-            </p>
+            <div className="flex items-center justify-between">
+              <p className="text-sm font-semibold text-gray-800">
+                Tracking ID{' '}
+                <span className="text-primary">
+                  {tracking?.tracking_id || 'Loading...'}
+                </span>
+              </p>
+              {isConnectedToWebSocket && !wsError && (
+                <div className="flex items-center gap-2 text-xs text-emerald-600">
+                  <span className="relative flex h-2 w-2">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                  </span>
+                  <span>Live Updates Active</span>
+                </div>
+              )}
+              {wsError && (
+                <div className="flex items-center gap-2 text-xs text-amber-600">
+                  <span className="relative flex h-2 w-2">
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
+                  </span>
+                  <span>Polling for Updates</span>
+                </div>
+              )}
+            </div>
           </div>
 
           <div className="bg-white border border-gray-100 rounded-sm px-6 py-8 shadow-sm space-y-8">
@@ -146,6 +297,37 @@ export default function OrderTracking() {
               <div className="text-center text-sm text-gray-500">Fetching latest tracking updates...</div>
             ) : (
               <>
+                {/* Terminal State Alert Banner */}
+                {isTerminalState && tracking && (
+                  <div
+                    className={`rounded-sm px-6 py-4 border-2 ${
+                      tracking.current_status === 'cancelled'
+                        ? 'bg-gray-50 border-gray-300 text-gray-700'
+                        : tracking.current_status === 'returned'
+                        ? 'bg-orange-50 border-orange-300 text-orange-700'
+                        : 'bg-red-50 border-red-300 text-red-700'
+                    }`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <span className="text-2xl">
+                        {tracking.current_status === 'cancelled' && '❌'}
+                        {tracking.current_status === 'returned' && '↩️'}
+                        {tracking.current_status === 'delivery_failed' && '⚠️'}
+                      </span>
+                      <div>
+                        <p className="font-semibold text-sm">
+                          {TERMINAL_STATES[tracking.current_status]?.label || 'Status Update'}
+                        </p>
+                        <p className="text-xs mt-1">
+                          {tracking.current_status === 'cancelled' && 'This order has been cancelled.'}
+                          {tracking.current_status === 'returned' && 'This order has been returned.'}
+                          {tracking.current_status === 'delivery_failed' && 'Delivery attempt was unsuccessful. We will contact you shortly.'}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 <div className="space-y-6">
                   <div className="flex flex-col gap-6">
                     <div className="flex items-center justify-between">
@@ -235,7 +417,13 @@ export default function OrderTracking() {
                           <td className="py-3 px-4">
                             <span
                               className={`inline-flex px-3 py-1 rounded-full text-xs font-semibold ${
-                                activeIndex >= STATUS_STEPS.length - 1
+                                isTerminalState
+                                  ? tracking?.current_status === 'cancelled'
+                                    ? 'bg-gray-100 text-gray-700'
+                                    : tracking?.current_status === 'returned'
+                                    ? 'bg-orange-50 text-orange-700'
+                                    : 'bg-red-50 text-red-700'
+                                  : activeIndex >= STATUS_STEPS.length - 1
                                   ? 'bg-emerald-50 text-emerald-700'
                                   : activeIndex > 1
                                   ? 'bg-primary/10 text-primary'
@@ -243,7 +431,9 @@ export default function OrderTracking() {
                               }`}
                             >
                               {tracking
-                                ? STATUS_STEPS.find((step) => step.key === tracking.current_status)?.label || 'Processing'
+                                ? TERMINAL_STATES[tracking.current_status]?.label ||
+                                  STATUS_STEPS.find((step) => step.key === tracking.current_status)?.label ||
+                                  'Processing'
                                 : 'Processing'}
                             </span>
                           </td>

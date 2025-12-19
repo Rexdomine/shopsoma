@@ -18,6 +18,61 @@ from app.schemas.auth import TokenData
 security = HTTPBearer()
 
 
+async def get_current_user_from_token(
+    token: str,
+    db: AsyncSession
+) -> User:
+    """
+    Get current authenticated user from JWT token string (for WebSocket)
+
+    Args:
+        token: JWT token string
+        db: Database session
+
+    Returns:
+        Current user object
+
+    Raises:
+        HTTPException: If token is invalid or user not found
+    """
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+    payload = decode_token(token)
+
+    if payload is None:
+        raise credentials_exception
+
+    user_id: str = payload.get("sub")
+    email: str = payload.get("email")
+
+    if user_id is None or email is None:
+        raise credentials_exception
+
+    try:
+        user_uuid = UUID(user_id)
+    except ValueError:
+        raise credentials_exception
+
+    # Fetch user from database
+    result = await db.execute(select(User).where(User.id == user_uuid))
+    user = result.scalar_one_or_none()
+
+    if user is None:
+        raise credentials_exception
+
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Inactive user account"
+        )
+
+    return user
+
+
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security),
     db: AsyncSession = Depends(get_db)
@@ -131,6 +186,10 @@ async def get_current_admin(
             detail="Admin access required"
         )
     return current_user
+
+
+# Alias for consistency with naming conventions
+require_admin = get_current_admin
 
 
 async def get_optional_user(

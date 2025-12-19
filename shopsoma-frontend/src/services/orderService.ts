@@ -2,11 +2,12 @@ import api from './api';
 
 export type OrderStatus =
   | 'order_placed'
-  | 'pending_confirmation'
-  | 'waiting_to_ship'
-  | 'shipped'
+  | 'in_transit'
   | 'out_for_delivery'
-  | 'delivered';
+  | 'delivered'
+  | 'delivery_failed'
+  | 'returned'
+  | 'cancelled';
 
 export interface TrackingHistory {
   status: OrderStatus;
@@ -77,6 +78,10 @@ export interface VendorPickup {
   order_type: 'rtw' | 'made_to_order' | 'custom';
   scheduled_pickup_date: string | null;
   actual_pickup_date: string | null;
+  pickup_window_start: string | null;
+  pickup_window_end: string | null;
+  courier_name: string | null;
+  rider_id: string | null;
   pickup_address: string | null;
   logistics_partner: string | null;
   tracking_number: string | null;
@@ -111,6 +116,7 @@ export interface VendorOrder {
   id: string;
   order_number: string;
   items: VendorOrderItem[];
+  vendor_business_name: string;
   customer_name: string;
   customer_email: string;
   shipping_address: {

@@ -570,7 +570,7 @@ async def create_order(
         total_amount=total_amount,
         customer_notes=order_data.customer_notes,
         payment_status=PaymentStatus.PENDING,
-        fulfillment_status=FulfillmentStatus.PENDING
+        fulfillment_status=FulfillmentStatus.ORDER_RECEIVED
     )
 
     db.add(new_order)
@@ -858,18 +858,24 @@ async def get_order_tracking(
     # Generate tracking ID based on order number
     tracking_id = f"GB{order.order_number.replace('-', '')[-8:]}"
 
-    # Map fulfillment status to tracking status
+    # Map fulfillment status to tracking status (new 7-status system)
+    # Matches frontend OrderStatus type in orderService.ts
     status_map = {
-        FulfillmentStatus.PENDING: "pending_confirmation",
-        FulfillmentStatus.PROCESSING: "pending_confirmation",
-        FulfillmentStatus.SHIPPED: "shipped",
+        FulfillmentStatus.ORDER_RECEIVED: "order_placed",
+        FulfillmentStatus.PREPARING_FOR_PICKUP: "in_transit",
+        FulfillmentStatus.PICKUP_SCHEDULED: "in_transit",
+        FulfillmentStatus.PICKED_UP: "in_transit",
+        FulfillmentStatus.IN_TRANSIT: "in_transit",
+        FulfillmentStatus.OUT_FOR_DELIVERY: "out_for_delivery",
         FulfillmentStatus.DELIVERED: "delivered",
-        FulfillmentStatus.CANCELLED: "order_placed",
+        FulfillmentStatus.DELIVERY_FAILED: "delivery_failed",
+        FulfillmentStatus.RETURNED: "returned",
+        FulfillmentStatus.CANCELLED: "cancelled",
     }
 
-    current_status = status_map.get(order.fulfillment_status, "pending_confirmation")
+    current_status = status_map.get(order.fulfillment_status, "order_placed")
 
-    # Build history based on order status
+    # Build history based on order status (new 7-status system)
     history = []
 
     # Order placed
@@ -880,19 +886,24 @@ async def get_order_tracking(
             "occurred_at": order.created_at.isoformat()
         })
 
-    # Pending confirmation
-    if order.fulfillment_status in [FulfillmentStatus.PENDING, FulfillmentStatus.PROCESSING]:
+    # In Transit (consolidates preparing/scheduled/picked_up/in_transit)
+    if order.fulfillment_status in [
+        FulfillmentStatus.PREPARING_FOR_PICKUP,
+        FulfillmentStatus.PICKUP_SCHEDULED,
+        FulfillmentStatus.PICKED_UP,
+        FulfillmentStatus.IN_TRANSIT
+    ]:
         history.append({
-            "status": "pending_confirmation",
-            "description": "Processing and awaiting vendor confirmation",
+            "status": "in_transit",
+            "description": "Order is in transit to you",
             "occurred_at": order.updated_at.isoformat()
         })
 
-    # Shipped
-    if order.fulfillment_status == FulfillmentStatus.SHIPPED:
+    # Out for Delivery
+    if order.fulfillment_status == FulfillmentStatus.OUT_FOR_DELIVERY:
         history.append({
-            "status": "shipped",
-            "description": "Package shipped and in transit",
+            "status": "out_for_delivery",
+            "description": "Out for delivery to your address",
             "occurred_at": order.updated_at.isoformat()
         })
 
@@ -902,6 +913,28 @@ async def get_order_tracking(
             "status": "delivered",
             "description": "Package delivered successfully",
             "occurred_at": order.delivered_at.isoformat()
+        })
+
+    # Terminal states
+    if order.fulfillment_status == FulfillmentStatus.DELIVERY_FAILED:
+        history.append({
+            "status": "delivery_failed",
+            "description": "Delivery attempt failed",
+            "occurred_at": order.updated_at.isoformat()
+        })
+
+    if order.fulfillment_status == FulfillmentStatus.RETURNED:
+        history.append({
+            "status": "returned",
+            "description": "Order has been returned",
+            "occurred_at": order.updated_at.isoformat()
+        })
+
+    if order.fulfillment_status == FulfillmentStatus.CANCELLED:
+        history.append({
+            "status": "cancelled",
+            "description": "Order has been cancelled",
+            "occurred_at": order.cancelled_at.isoformat() if order.cancelled_at else order.updated_at.isoformat()
         })
 
     return {
@@ -944,7 +977,7 @@ async def cancel_order(
         )
 
     # Check if order can be cancelled
-    if order.fulfillment_status in [FulfillmentStatus.SHIPPED, FulfillmentStatus.DELIVERED]:
+    if order.fulfillment_status in [FulfillmentStatus.PICKED_UP, FulfillmentStatus.IN_TRANSIT, FulfillmentStatus.OUT_FOR_DELIVERY, FulfillmentStatus.DELIVERED]:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Cannot cancel order that has been shipped or delivered"

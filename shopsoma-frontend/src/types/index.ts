@@ -50,6 +50,7 @@ export interface Product {
   size_guide?: SizeGuide | null;
   base_price: number;
   compare_at_price?: number;
+  currency: 'NGN' | 'USD';
   category_name?: string | null;
   collection_id?: string | null;
   collection_name?: string | null;
@@ -57,6 +58,11 @@ export interface Product {
   total_stock: number;
   status: 'draft' | 'active' | 'inactive' | 'archived';
   is_featured: boolean;
+  product_type: 'single' | 'variable';
+  made_to_order: boolean;
+  made_to_order_timeline?: string;
+  care_instructions?: string;
+  fabric_composition?: string;
   moderation_status: 'pending' | 'approved' | 'rejected';
   moderation_notes?: string;
   views_count: number;

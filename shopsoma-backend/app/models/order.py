@@ -11,18 +11,23 @@ from app.core.base import Base
 
 class PaymentStatus(str, enum.Enum):
     """Payment status enum"""
-    PENDING = "pending"
-    PAID = "paid"
-    FAILED = "failed"
-    REFUNDED = "refunded"
+    PENDING = "PENDING"
+    PAID = "PAID"
+    FAILED = "FAILED"
+    REFUNDED = "REFUNDED"
 
 
 class FulfillmentStatus(str, enum.Enum):
-    """Fulfillment status enum"""
-    PENDING = "pending"
-    PROCESSING = "processing"
-    SHIPPED = "shipped"
+    """Fulfillment status enum - unified order lifecycle"""
+    ORDER_RECEIVED = "order_received"
+    PREPARING_FOR_PICKUP = "preparing_for_pickup"
+    PICKUP_SCHEDULED = "pickup_scheduled"
+    PICKED_UP = "picked_up"
+    IN_TRANSIT = "in_transit"
+    OUT_FOR_DELIVERY = "out_for_delivery"
     DELIVERED = "delivered"
+    DELIVERY_FAILED = "delivery_failed"
+    RETURNED = "returned"
     CANCELLED = "cancelled"
 
 
@@ -46,8 +51,8 @@ class Order(Base):
     total_amount = Column(Numeric(10, 2), nullable=False)
 
     # Status
-    payment_status = Column(SQLEnum(PaymentStatus), default=PaymentStatus.PENDING, nullable=False, index=True)
-    fulfillment_status = Column(SQLEnum(FulfillmentStatus), default=FulfillmentStatus.PENDING, nullable=False, index=True)
+    payment_status = Column(SQLEnum(PaymentStatus, values_callable=lambda obj: [e.value for e in obj]), default=PaymentStatus.PENDING, nullable=False, index=True)
+    fulfillment_status = Column(SQLEnum(FulfillmentStatus, values_callable=lambda obj: [e.value for e in obj]), default=FulfillmentStatus.ORDER_RECEIVED, nullable=False, index=True)
 
     # Delivery
     delivery_provider = Column(String(50), nullable=True)
@@ -104,7 +109,7 @@ class OrderItem(Base):
     vendor_payout = Column(Numeric(10, 2), nullable=False)
 
     # Fulfillment
-    fulfillment_status = Column(SQLEnum(FulfillmentStatus), default=FulfillmentStatus.PENDING, nullable=False)
+    fulfillment_status = Column(SQLEnum(FulfillmentStatus, values_callable=lambda obj: [e.value for e in obj]), default=FulfillmentStatus.ORDER_RECEIVED, nullable=False)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 

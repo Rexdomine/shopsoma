@@ -11,7 +11,7 @@ from sqlalchemy.orm import selectinload
 from app.core.database import get_db
 from app.api.dependencies import get_current_user, get_current_vendor, get_current_admin, get_optional_user
 from app.models.user import User
-from app.models.product import Product, ProductVariant, ProductImage, ProductStatus, ModerationStatus, Variation, SizeStock, SizeEnum
+from app.models.product import Product, ProductVariant, ProductImage, ProductStatus, ProductType, ModerationStatus, Variation, SizeStock, SizeEnum
 from app.models.vendor import Vendor
 from app.schemas.product import (
     ProductCreate,
@@ -92,9 +92,15 @@ async def create_product(
         sku=product_data.sku,
         base_price=product_data.base_price,
         compare_at_price=product_data.compare_at_price,
+        currency=product_data.currency,
         total_stock=product_data.total_stock,
         status=ProductStatus(product_data.status),
         is_featured=product_data.is_featured,
+        product_type=ProductType(product_data.product_type),
+        made_to_order=product_data.made_to_order,
+        made_to_order_timeline=product_data.made_to_order_timeline,
+        care_instructions=product_data.care_instructions,
+        fabric_composition=product_data.fabric_composition,
         meta_title=product_data.meta_title,
         meta_description=product_data.meta_description,
         size_guide=product_data.size_guide.model_dump() if product_data.size_guide else None,

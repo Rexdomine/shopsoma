@@ -5,7 +5,7 @@ from typing import Optional, List
 from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
-from pydantic import BaseModel, Field, field_validator, ConfigDict
+from pydantic import BaseModel, Field, field_validator, model_validator, ConfigDict
 
 
 # ============================================================================
@@ -251,9 +251,15 @@ class ProductBase(BaseModel):
     sku: Optional[str] = Field(None, max_length=100, description="Stock Keeping Unit")
     base_price: Decimal = Field(..., gt=0, decimal_places=2, description="Base price")
     compare_at_price: Optional[Decimal] = Field(None, gt=0, decimal_places=2, description="Compare at price (original price)")
+    currency: str = Field(default="NGN", pattern="^(NGN|USD)$", description="Currency code: NGN or USD")
     total_stock: int = Field(default=0, ge=0, description="Total stock (for products without variants)")
     status: str = Field(default="draft", pattern="^(draft|active|inactive|archived)$", description="Product status")
     is_featured: bool = Field(default=False, description="Featured product")
+    product_type: str = Field(default="single", pattern="^(single|variable)$", description="Product type: single or variable")
+    made_to_order: bool = Field(default=False, description="Product is made to order")
+    made_to_order_timeline: Optional[str] = Field(None, max_length=255, description="Made to order timeline (e.g., 'Ships in 2-3 weeks')")
+    care_instructions: Optional[str] = Field(None, max_length=5000, description="Product care instructions")
+    fabric_composition: Optional[str] = Field(None, max_length=5000, description="Fabric/material composition")
     meta_title: Optional[str] = Field(None, max_length=255, description="SEO meta title")
     meta_description: Optional[str] = Field(None, max_length=500, description="SEO meta description")
     size_guide: Optional[SizeGuide] = Field(default=None, description="Optional size guide information")
@@ -319,9 +325,15 @@ class ProductUpdate(BaseModel):
     sku: Optional[str] = Field(None, max_length=100)
     base_price: Optional[Decimal] = Field(None, gt=0, decimal_places=2)
     compare_at_price: Optional[Decimal] = Field(None, gt=0, decimal_places=2)
+    currency: Optional[str] = Field(None, pattern="^(NGN|USD)$")
     total_stock: Optional[int] = Field(None, ge=0)
     status: Optional[str] = Field(None, pattern="^(draft|active|inactive|archived)$")
     is_featured: Optional[bool] = None
+    product_type: Optional[str] = Field(None, pattern="^(single|variable)$")
+    made_to_order: Optional[bool] = None
+    made_to_order_timeline: Optional[str] = Field(None, max_length=255)
+    care_instructions: Optional[str] = Field(None, max_length=5000)
+    fabric_composition: Optional[str] = Field(None, max_length=5000)
     meta_title: Optional[str] = Field(None, max_length=255)
     meta_description: Optional[str] = Field(None, max_length=500)
     size_guide: Optional[SizeGuide] = None
@@ -360,6 +372,67 @@ class ProductResponse(ProductBase):
     images: List[ProductImageResponse] = []
 
     model_config = ConfigDict(from_attributes=True)
+
+    @model_validator(mode="after")
+    def generate_variants_from_variations(self) -> "ProductResponse":
+        """
+        Auto-generate variants from variations for consistent frontend consumption.
+
+        If product has variations (vendor-uploaded products), explode them into variants.
+        This allows frontend to use a single data structure (variants) regardless of
+        whether product was created via admin (variants) or vendor (variations).
+        """
+        # If product already has variants (admin-created), don't override
+        if self.variants:
+            return self
+
+        # If product has variations (vendor-created), generate variants
+        if self.variations:
+            generated_variants = []
+
+            for variation in self.variations:
+                # Determine price: use variation price if set, otherwise base price
+                variant_price = variation.price if variation.price else self.base_price
+
+                # If variation has no size_stocks, create one variant with no size
+                if not variation.size_stocks:
+                    # Build variant dict with only the fields that exist in ProductVariantResponse
+                    variant_dict = {
+                        "id": variation.id,
+                        "product_id": self.id,
+                        "size": None,
+                        "color": variation.title,  # Use 'title' field which contains the color name
+                        "color_hex": variation.color_hex,
+                        "price": variant_price,
+                        "stock": 0,
+                        "sku": None,
+                        "is_available": bool(variation.is_active),
+                        "created_at": variation.created_at,
+                        "updated_at": variation.updated_at,
+                    }
+                    generated_variants.append(ProductVariantResponse.model_validate(variant_dict))
+                else:
+                    # Create one variant per size in size_stocks
+                    for size_stock in variation.size_stocks:
+                        variant_dict = {
+                            "id": size_stock.id,
+                            "product_id": self.id,
+                            "size": size_stock.size,
+                            "color": variation.title,  # Use 'title' field which contains the color name
+                            "color_hex": variation.color_hex,
+                            "price": variant_price,
+                            "stock": size_stock.stock,
+                            "sku": None,
+                            "is_available": bool(variation.is_active) and size_stock.stock > 0,
+                            "created_at": variation.created_at,
+                            "updated_at": variation.updated_at,
+                        }
+                        generated_variants.append(ProductVariantResponse.model_validate(variant_dict))
+
+            # Replace empty variants list with generated ones
+            self.variants = generated_variants
+
+        return self
 
 
 class ProductListResponse(BaseModel):

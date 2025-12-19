@@ -190,8 +190,12 @@ class VendorPickupResponse(VendorPickupBase):
 
     scheduled_pickup_date: Optional[datetime]
     actual_pickup_date: Optional[datetime]
+    pickup_window_start: Optional[datetime]
+    pickup_window_end: Optional[datetime]
 
     logistics_partner: Optional[str]
+    courier_name: Optional[str]
+    rider_id: Optional[str]
     tracking_number: Optional[str]
     driver_name: Optional[str]
     driver_phone: Optional[str]
@@ -276,6 +280,9 @@ class VendorOrderResponse(BaseModel):
 
     # Only vendor's items from this order
     items: List[VendorOrderItemResponse]
+
+    # Vendor info
+    vendor_business_name: str
 
     # Customer info (limited)
     customer_name: str

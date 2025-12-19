@@ -105,21 +105,45 @@ export default function VendorOrders() {
 
   const getStatusBadge = (status: string) => {
     const statusConfig: Record<string, { label: string; className: string }> = {
-      delivered: {
-        label: 'Delivered',
-        className: 'bg-[#E8F7EF] text-[#19984B]',
+      pending: {
+        label: 'Pending',
+        className: 'bg-amber-100 text-amber-700',
+      },
+      confirmed: {
+        label: 'Confirmed',
+        className: 'bg-blue-100 text-blue-700',
       },
       processing: {
         label: 'Processing',
         className: 'bg-[#FEF3E2] text-[#D97706]',
       },
-      shipped: {
-        label: 'Shipped',
+      pickup_scheduled: {
+        label: 'Pickup Scheduled',
+        className: 'bg-purple-100 text-purple-700',
+      },
+      picked_up: {
+        label: 'Picked Up',
+        className: 'bg-indigo-100 text-indigo-700',
+      },
+      in_transit: {
+        label: 'In Transit',
         className: 'bg-blue-100 text-blue-700',
       },
-      pending: {
-        label: 'Pending',
-        className: 'bg-amber-100 text-amber-700',
+      out_for_delivery: {
+        label: 'Out for Delivery',
+        className: 'bg-cyan-100 text-cyan-700',
+      },
+      delivered: {
+        label: 'Delivered',
+        className: 'bg-[#E8F7EF] text-[#19984B]',
+      },
+      delivery_failed: {
+        label: 'Delivery Failed',
+        className: 'bg-orange-100 text-orange-700',
+      },
+      returned: {
+        label: 'Returned',
+        className: 'bg-yellow-100 text-yellow-700',
       },
       cancelled: {
         label: 'Cancelled',
@@ -127,7 +151,10 @@ export default function VendorOrders() {
       },
     };
 
-    const config = statusConfig[status.toLowerCase()] || statusConfig.pending;
+    const config = statusConfig[status.toLowerCase()] || {
+      label: status.charAt(0).toUpperCase() + status.slice(1).replace(/_/g, ' '),
+      className: 'bg-gray-100 text-gray-700',
+    };
 
     return (
       <span className={`px-3 py-1 rounded-full text-xs font-semibold ${config.className}`}>

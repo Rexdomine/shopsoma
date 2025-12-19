@@ -24,9 +24,10 @@ import { ROUTES } from '../../config/constants';
 
 type AdminSidebarProps = {
   activeSection?: string;
+  activePrimary?: string;
 };
 
-export default function AdminSidebar({ activeSection }: AdminSidebarProps) {
+export default function AdminSidebar({ activeSection, activePrimary }: AdminSidebarProps) {
   const navigate = useNavigate();
   const location = useLocation();
   const { user, logout } = useAuth();
@@ -191,13 +192,13 @@ export default function AdminSidebar({ activeSection }: AdminSidebarProps) {
           type="button"
           onClick={() => navigate('/admin/settings')}
           className={`w-full flex items-center ${isCollapsed ? 'justify-center' : 'gap-3'} px-3 py-2 rounded-lg text-sm font-ui transition ${
-            location.pathname.startsWith('/admin/settings')
+            activePrimary === 'settings' || location.pathname.startsWith('/admin/settings')
               ? 'text-[#105E53] bg-white border border-gray-100'
               : 'text-gray-700 hover:bg-gray-100'
           }`}
           title={isCollapsed ? 'Settings' : ''}
         >
-          {renderIcon('settings', location.pathname.startsWith('/admin/settings'))}
+          {renderIcon('settings', activePrimary === 'settings' || location.pathname.startsWith('/admin/settings'))}
           {!isCollapsed && <span>Settings</span>}
         </button>
         <button
