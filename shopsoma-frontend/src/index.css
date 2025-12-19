@@ -30,7 +30,7 @@
     --shopsoma-eerie-black: #222424;
 
     /* Semantic roles */
-    --color-page-bg: var(--shopsoma-bone);
+    --color-page-bg: #ffffff;
     --color-section-alt-bg: var(--shopsoma-dun);
     --color-card-bg: var(--shopsoma-ecru);
     --color-text-main: var(--shopsoma-eerie-black);
