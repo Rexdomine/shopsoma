@@ -7,11 +7,9 @@ import { adminService } from '../../services/adminService';
 import type { Product } from '../../types';
 import { useToast } from '../../hooks/useToast';
 import ToastContainer from '../../components/ui/ToastContainer';
-
-function formatPrice(price: number | undefined | null) {
-  if (price === undefined || price === null) return '$0';
-  return `$${price.toLocaleString()}`;
-}
+import CurrencySwitcher from '../../components/common/CurrencySwitcher';
+import { useCurrencyStore } from '../../store/currencyStore';
+import { formatPriceWithConversion } from '../../utils/pricing';
 
 function formatDate(dateStr: string) {
   const d = new Date(dateStr);
@@ -25,6 +23,7 @@ export default function AdminProductDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { toasts, hideToast, error, success } = useToast();
+  const { currentCurrency, setCurrency, exchangeRates } = useCurrencyStore();
   const [product, setProduct] = useState<Product | null>(null);
   const [loading, setLoading] = useState(true);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
@@ -119,6 +118,16 @@ export default function AdminProductDetail() {
     );
   }
 
+  const formatDisplayPrice = (amount?: number | null) => {
+    const safeAmount = amount ?? 0;
+    return formatPriceWithConversion(
+      safeAmount,
+      product.currency || 'NGN',
+      currentCurrency,
+      exchangeRates
+    );
+  };
+
   return (
     <div className="min-h-screen bg-[var(--color-page-bg)]">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -141,6 +150,7 @@ export default function AdminProductDetail() {
             </div>
 
             <div className="flex items-center gap-3">
+              <CurrencySwitcher value={currentCurrency} onChange={setCurrency} />
               <button
                 onClick={() => navigate(ROUTES.ADMIN_PRODUCT_EDIT.replace(':id', product.id))}
                 className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
@@ -317,12 +327,12 @@ export default function AdminProductDetail() {
                           <div className="flex items-center gap-3">
                             {variation.price && (
                               <span className="text-sm font-medium text-gray-900">
-                                Price: {formatPrice(variation.price)}
+                                Price: {formatDisplayPrice(variation.price)}
                               </span>
                             )}
                             {variation.sale_price && (
                               <span className="text-sm font-medium text-green-600">
-                                Sale: {formatPrice(variation.sale_price)}
+                                Sale: {formatDisplayPrice(variation.sale_price)}
                               </span>
                             )}
                           </div>
@@ -366,12 +376,12 @@ export default function AdminProductDetail() {
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
                   <span className="text-sm text-gray-500">Base Price</span>
-                  <span className="text-lg font-bold text-gray-900">{formatPrice(product.base_price)}</span>
+                  <span className="text-lg font-bold text-gray-900">{formatDisplayPrice(product.base_price)}</span>
                 </div>
                 {product.compare_at_price && (
                   <div className="flex items-center justify-between">
                     <span className="text-sm text-gray-500">Compare At</span>
-                    <span className="text-sm text-gray-500 line-through">{formatPrice(product.compare_at_price)}</span>
+                    <span className="text-sm text-gray-500 line-through">{formatDisplayPrice(product.compare_at_price)}</span>
                   </div>
                 )}
               </div>

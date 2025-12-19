@@ -8,10 +8,9 @@ import { productService } from '../../services/productService';
 import type { Product } from '../../types';
 import { useToast } from '../../hooks/useToast';
 import ToastContainer from '../../components/ui/ToastContainer';
-
-function formatPrice(price: number) {
-  return `$${price.toLocaleString()}`;
-}
+import CurrencySwitcher from '../../components/common/CurrencySwitcher';
+import { useCurrencyStore } from '../../store/currencyStore';
+import { formatPriceWithConversion } from '../../utils/pricing';
 
 function formatDate(dateStr: string) {
   const d = new Date(dateStr);
@@ -25,6 +24,7 @@ export default function VendorProductView() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { toasts, hideToast, error, success } = useToast();
+  const { currentCurrency, setCurrency, exchangeRates } = useCurrencyStore();
   const [product, setProduct] = useState<Product | null>(null);
   const [loading, setLoading] = useState(true);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
@@ -140,6 +140,15 @@ export default function VendorProductView() {
     return null;
   }
 
+  const formatDisplayPrice = (amount: number) => {
+    return formatPriceWithConversion(
+      amount,
+      product.currency || 'NGN',
+      currentCurrency,
+      exchangeRates
+    );
+  };
+
   return (
     <div className="min-h-screen bg-[var(--color-page-bg)]">
       <ToastContainer toasts={toasts} onClose={hideToast} />
@@ -170,14 +179,17 @@ export default function VendorProductView() {
                 <p className="text-sm text-gray-600 mt-1">View product details</p>
               </div>
             </div>
-            <button
-              type="button"
-              onClick={() => navigate(`${ROUTES.VENDOR_PRODUCTS}/${product.id}/edit`)}
-              className="inline-flex items-center justify-center gap-2 rounded-lg bg-[#105E53] text-white px-5 py-2.5 text-sm font-medium hover:bg-[#0c4c45] transition"
-            >
-              <Edit2 className="h-4 w-4" />
-              Edit Product
-            </button>
+            <div className="flex items-center gap-3">
+              <CurrencySwitcher value={currentCurrency} onChange={setCurrency} />
+              <button
+                type="button"
+                onClick={() => navigate(`${ROUTES.VENDOR_PRODUCTS}/${product.id}/edit`)}
+                className="inline-flex items-center justify-center gap-2 rounded-lg bg-[#105E53] text-white px-5 py-2.5 text-sm font-medium hover:bg-[#0c4c45] transition"
+              >
+                <Edit2 className="h-4 w-4" />
+                Edit Product
+              </button>
+            </div>
           </div>
 
           {/* Content */}
@@ -291,11 +303,11 @@ export default function VendorProductView() {
                             {variation.price && (
                               <div className="text-right">
                                 <div className="text-lg font-semibold text-gray-900">
-                                  {formatPrice(variation.price)}
+                                  {formatDisplayPrice(variation.price)}
                                 </div>
                                 {variation.sale_price && variation.sale_price < variation.price && (
                                   <div className="text-sm text-gray-500 line-through">
-                                    {formatPrice(variation.sale_price)}
+                                    {formatDisplayPrice(variation.sale_price)}
                                   </div>
                                 )}
                               </div>
@@ -363,7 +375,7 @@ export default function VendorProductView() {
                       Base Price
                     </span>
                     <span className="text-lg font-semibold text-gray-900">
-                      {formatPrice(product.base_price)}
+                      {formatDisplayPrice(product.base_price)}
                     </span>
                   </div>
 
@@ -372,7 +384,7 @@ export default function VendorProductView() {
                     <div className="flex items-center justify-between">
                       <span className="text-sm font-medium text-gray-700">Compare At</span>
                       <span className="text-sm text-gray-500 line-through">
-                        {formatPrice(product.compare_at_price)}
+                        {formatDisplayPrice(product.compare_at_price)}
                       </span>
                     </div>
                   )}

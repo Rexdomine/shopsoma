@@ -4,17 +4,16 @@ import { ROUTES } from '../../config/constants';
 import VendorSidebar from '../../components/vendor/VendorSidebar';
 import DeleteProductModal from '../../components/vendor/DeleteProductModal';
 import ToastContainer from '../../components/ui/ToastContainer';
+import CurrencySwitcher from '../../components/common/CurrencySwitcher';
 import { useVendor } from '../../context/VendorContext';
 import { useToast } from '../../hooks/useToast';
 import { productService } from '../../services/productService';
 import type { Product } from '../../types';
+import { useCurrencyStore } from '../../store/currencyStore';
+import { formatPriceWithConversion } from '../../utils/pricing';
 import { Eye, PencilLine, Shirt, Search, Loader2, ArrowUpDown, Filter, Trash2, Copy } from 'lucide-react';
 
 type GroupBy = 'all' | 'collections';
-
-function formatPrice(price: number) {
-  return `$${price.toLocaleString()}`;
-}
 
 function formatDate(dateStr: string) {
   const d = new Date(dateStr);
@@ -28,6 +27,7 @@ export default function VendorProducts() {
   const navigate = useNavigate();
   const { vendorProfile, isLoading: vendorLoading } = useVendor();
   const { toasts, hideToast, success, error } = useToast();
+  const { currentCurrency, setCurrency, exchangeRates } = useCurrencyStore();
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
@@ -184,6 +184,15 @@ export default function VendorProducts() {
     }
   };
 
+  const formatDisplayPrice = (amount: number, currency?: Product['currency']) => {
+    return formatPriceWithConversion(
+      amount,
+      currency || 'NGN',
+      currentCurrency,
+      exchangeRates
+    );
+  };
+
   return (
     <div className="min-h-screen bg-[var(--color-page-bg)]">
       <ToastContainer toasts={toasts} onClose={hideToast} />
@@ -203,6 +212,7 @@ export default function VendorProducts() {
             <div className="flex items-center justify-between mb-4">
               <h1 className="text-3xl font-semibold text-gray-900">Product Management</h1>
               <div className="flex items-center gap-3">
+                <CurrencySwitcher value={currentCurrency} onChange={setCurrency} />
                 <div className="relative">
                   <Search className="h-5 w-5 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
                   <input
@@ -343,7 +353,9 @@ export default function VendorProducts() {
                               {renderStatusBadge(product)}
                             </td>
                             <td className="px-6 py-4 text-center">
-                              <div className="text-sm font-medium text-gray-900">{formatPrice(product.base_price)}</div>
+                              <div className="text-sm font-medium text-gray-900">
+                                {formatDisplayPrice(product.base_price, product.currency)}
+                              </div>
                             </td>
                             <td className="px-6 py-4 text-center">
                               <div className="text-sm text-gray-600">{formatDate(product.created_at)}</div>
@@ -456,7 +468,9 @@ export default function VendorProducts() {
                           {renderStatusBadge(product)}
                         </td>
                         <td className="px-6 py-4">
-                          <div className="text-sm font-medium text-gray-900">{formatPrice(product.base_price)}</div>
+                          <div className="text-sm font-medium text-gray-900">
+                            {formatDisplayPrice(product.base_price, product.currency)}
+                          </div>
                         </td>
                         <td className="px-6 py-4">
                           <div className="text-sm font-medium text-[#19984B]">{stockLabel}</div>

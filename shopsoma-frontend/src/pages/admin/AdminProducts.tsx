@@ -4,6 +4,9 @@ import { Search, CheckCircle, XCircle, Eye, Package, AlertCircle, Edit2, Trash2 
 import AdminSidebar from '../../components/admin/AdminSidebar';
 import { adminService } from '../../services/adminService';
 import { ROUTES } from '../../config/constants';
+import CurrencySwitcher from '../../components/common/CurrencySwitcher';
+import { useCurrencyStore } from '../../store/currencyStore';
+import { formatPriceWithConversion } from '../../utils/pricing';
 
 interface Product {
   id: string;
@@ -12,6 +15,7 @@ interface Product {
   sku: string;
   base_price: number;
   compare_at_price: number | null;
+  currency?: 'NGN' | 'USD';
   total_stock: number;
   status: 'draft' | 'active' | 'inactive' | 'archived';
   is_featured: boolean;
@@ -30,6 +34,7 @@ interface Product {
 
 export default function AdminProducts() {
   const navigate = useNavigate();
+  const { currentCurrency, setCurrency, exchangeRates } = useCurrencyStore();
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -158,11 +163,13 @@ export default function AdminProducts() {
     });
   };
 
-  const formatPrice = (price: number) => {
-    return new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: 'USD',
-    }).format(price);
+  const formatDisplayPrice = (amount: number, currency?: Product['currency']) => {
+    return formatPriceWithConversion(
+      amount,
+      currency || 'NGN',
+      currentCurrency,
+      exchangeRates
+    );
   };
 
   const getModerationBadge = (status: string) => {
@@ -226,9 +233,12 @@ export default function AdminProducts() {
 
       <main className="flex-1 p-8 space-y-6">
         {/* Header */}
-        <div>
-          <h1 className="text-3xl font-display text-gray-900 mb-2">Product Management</h1>
-          <p className="text-gray-600 font-ui">Review and moderate vendor products</p>
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h1 className="text-3xl font-display text-gray-900 mb-2">Product Management</h1>
+            <p className="text-gray-600 font-ui">Review and moderate vendor products</p>
+          </div>
+          <CurrencySwitcher value={currentCurrency} onChange={setCurrency} />
         </div>
 
         {/* Message */}
@@ -375,10 +385,12 @@ export default function AdminProducts() {
                         <p className="text-sm text-gray-900">{product.vendor.business_name}</p>
                       </td>
                       <td className="px-6 py-4">
-                        <p className="text-sm text-gray-900">{formatPrice(product.base_price)}</p>
+                        <p className="text-sm text-gray-900">
+                          {formatDisplayPrice(product.base_price, product.currency)}
+                        </p>
                         {product.compare_at_price && (
                           <p className="text-xs text-gray-500 line-through">
-                            {formatPrice(product.compare_at_price)}
+                            {formatDisplayPrice(product.compare_at_price, product.currency)}
                           </p>
                         )}
                       </td>
