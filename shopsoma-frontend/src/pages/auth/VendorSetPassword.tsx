@@ -63,7 +63,7 @@ export default function VendorSetPassword() {
   );
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-[#F6F6F3] to-[#E8E8E3] flex items-center justify-center px-4 py-12">
+    <div className="min-h-screen bg-[var(--color-page-bg)] flex items-center justify-center px-4 py-12">
       <div className="w-full max-w-md">
         {/* Logo/Brand */}
         <div className="text-center mb-8">

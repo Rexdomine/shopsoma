@@ -97,7 +97,7 @@ export default function AdminSidebar({ activeSection, activePrimary }: AdminSide
   )?.section;
 
   return (
-    <aside className={`${isCollapsed ? 'w-[80px]' : 'w-[280px]'} bg-[#F6F6F3] border-r border-gray-200 px-4 py-6 flex flex-col justify-between min-h-screen sticky top-0 transition-all duration-300`}>
+    <aside className={`${isCollapsed ? 'w-[80px]' : 'w-[280px]'} bg-[var(--color-page-bg)] border-r border-gray-200 px-4 py-6 flex flex-col justify-between min-h-screen sticky top-0 transition-all duration-300`}>
       <div className="space-y-6">
         {/* Top brand row */}
         <div className="flex items-center justify-between">

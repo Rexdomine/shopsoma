@@ -48,7 +48,7 @@ export default function VendorExpenses() {
   const rows = useMemo(() => mockExpenses, []);
 
   return (
-    <div className="flex min-h-screen bg-gray-50">
+    <div className="flex min-h-screen bg-[var(--color-page-bg)]">
       <VendorSidebar activePrimary="earnings" />
 
       <div className="flex-1">

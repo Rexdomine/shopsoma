@@ -441,7 +441,7 @@ export default function BrandInfoSettings() {
   const disabledNav = isOnboarding && !brandInfoCompleted;
 
   return (
-    <div className="min-h-screen bg-[#F9FAFB] flex">
+    <div className="min-h-screen bg-[var(--color-page-bg)] flex">
       {/* Toast Notification */}
       {toastVisible && (
         <div className="fixed inset-x-0 top-0 z-50">

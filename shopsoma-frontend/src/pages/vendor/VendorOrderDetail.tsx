@@ -322,7 +322,7 @@ export default function VendorOrderDetail() {
 
   if (loading) {
     return (
-      <div className="flex min-h-screen bg-gray-50">
+      <div className="flex min-h-screen bg-[var(--color-page-bg)]">
         <VendorSidebar activePrimary="orders" />
         <div className="flex-1 flex items-center justify-center">
           <div className="flex items-center gap-3 text-gray-600">
@@ -340,7 +340,7 @@ export default function VendorOrderDetail() {
   const primaryPickup = order.items[0]?.pickup || null;
 
   return (
-    <div className="flex min-h-screen bg-gray-50">
+    <div className="flex min-h-screen bg-[var(--color-page-bg)]">
       <VendorSidebar activePrimary="orders" />
 
       <div className="flex-1">

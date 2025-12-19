@@ -137,7 +137,7 @@ export default function AdminUsers() {
   };
 
   return (
-    <div className="min-h-screen bg-[#F9FAFB] flex">
+    <div className="min-h-screen bg-[var(--color-page-bg)] flex">
       <AdminSidebar activeSection="users" />
 
       <main className="flex-1 p-8 space-y-6">

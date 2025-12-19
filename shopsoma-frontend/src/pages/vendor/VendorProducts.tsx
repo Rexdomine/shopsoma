@@ -185,7 +185,7 @@ export default function VendorProducts() {
   };
 
   return (
-    <div className="min-h-screen bg-[#F9FAFB]">
+    <div className="min-h-screen bg-[var(--color-page-bg)]">
       <ToastContainer toasts={toasts} onClose={hideToast} />
       <DeleteProductModal
         product={productToDelete!}

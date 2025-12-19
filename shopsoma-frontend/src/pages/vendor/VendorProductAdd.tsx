@@ -814,7 +814,7 @@ export default function VendorProductAdd() {
   return (
     <>
       <ToastContainer toasts={toasts} onClose={hideToast} />
-      <div className="min-h-screen bg-[#F9FAFB]">
+      <div className="min-h-screen bg-[var(--color-page-bg)]">
         <div className="flex">
           <VendorSidebar activePrimary="products" />
 

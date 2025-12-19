@@ -43,7 +43,7 @@ export default function VendorWithdrawals() {
   const [showWithdraw, setShowWithdraw] = useState(false);
 
   return (
-    <div className="flex min-h-screen bg-gray-50">
+    <div className="flex min-h-screen bg-[var(--color-page-bg)]">
       <VendorSidebar activePrimary="earnings" />
 
       <div className="flex-1">

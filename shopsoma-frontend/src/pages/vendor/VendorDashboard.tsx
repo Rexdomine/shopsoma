@@ -33,7 +33,7 @@ export default function VendorDashboard() {
   const disableNav = isOnboarding && !brandInfoCompleted;
 
   return (
-    <div className="min-h-screen bg-[#F9FAFB] flex">
+    <div className="min-h-screen bg-[var(--color-page-bg)] flex">
       <VendorSidebar
         disableMain={disableNav}
         pendingOrders={vendorProfile?.total_orders || 0}

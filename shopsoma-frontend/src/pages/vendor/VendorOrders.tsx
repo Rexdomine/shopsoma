@@ -189,7 +189,7 @@ export default function VendorOrders() {
   };
 
   return (
-    <div className="flex min-h-screen bg-gray-50">
+    <div className="flex min-h-screen bg-[var(--color-page-bg)]">
       <VendorSidebar />
 
       <div className="flex-1">

@@ -112,7 +112,7 @@ export default function AdminVendorApplications() {
   };
 
   return (
-    <div className="min-h-screen bg-[#F9FAFB] flex">
+    <div className="min-h-screen bg-[var(--color-page-bg)] flex">
       <AdminSidebar activeSection="vendor-applications" />
 
       <main className="flex-1 p-8 space-y-6">

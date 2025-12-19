@@ -6,6 +6,7 @@ import { productService } from '../services/productService';
 import { IMAGE_CONFIG } from '../config/constants';
 import { useWishlistActions } from '../hooks/useWishlistActions';
 import { useCurrency } from '../hooks/useCurrency';
+import { formatPriceWithConversion } from '../utils/pricing';
 
 const HERO_IMAGE = '/images/hero/demo-image-2.png';
 const SECONDARY_IMAGE = '/images/hero/happy-man-party-wearing-sunglasses.jpg';
@@ -22,7 +23,7 @@ function HomeProductCard({
   onToggleFavorite,
 }: HomeProductCardProps) {
   const [isHovered, setIsHovered] = useState(false);
-  const { formatBasePrice } = useCurrency();
+  const { currentCurrency, exchangeRates } = useCurrency();
   const primaryImage = product.images?.[0]?.image_url || IMAGE_CONFIG.PLACEHOLDER;
   const secondaryImage = product.images?.[1]?.image_url || primaryImage;
   const vendor = product.vendor_name || 'Shopsoma';
@@ -143,7 +144,7 @@ function HomeProductCard({
           {product.title}
         </h3>
         <p className="text-sm font-ui" style={{ color: '#1E5053' }}>
-          {formatBasePrice(price)}
+          {formatPriceWithConversion(price, product.currency, currentCurrency, exchangeRates)}
         </p>
       </Link>
     </div>

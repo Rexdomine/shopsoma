@@ -123,7 +123,7 @@ export default function AdminSettings() {
 
   if (loading) {
     return (
-      <div className="flex min-h-screen bg-gray-50">
+      <div className="flex min-h-screen bg-[var(--color-page-bg)]">
         <AdminSidebar activePrimary="settings" />
         <div className="flex-1 flex items-center justify-center">
           <div className="flex items-center gap-3 text-gray-600">
@@ -136,7 +136,7 @@ export default function AdminSettings() {
   }
 
   return (
-    <div className="flex min-h-screen bg-gray-50">
+    <div className="flex min-h-screen bg-[var(--color-page-bg)]">
       <AdminSidebar activePrimary="settings" />
 
       <div className="flex-1 overflow-auto">
