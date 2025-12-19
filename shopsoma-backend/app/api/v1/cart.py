@@ -38,6 +38,62 @@ CART_ITEM_LOAD_OPTIONS = [
 ]
 
 
+def resolve_variant_response(
+    product: Optional[Product],
+    variant_id: Optional[str],
+) -> Optional[ProductVariantResponse]:
+    """Return a ProductVariantResponse from either variants or variations.
+
+    Vendors create products using variations/size_stocks instead of legacy variants.
+    This helper normalizes both shapes so cart responses always have a populated
+    variant when a valid ID is provided.
+    """
+    if not product or not variant_id:
+        return None
+
+    # First, look for a legacy variant match
+    for variant in product.variants or []:
+        if str(variant.id) == str(variant_id):
+            return ProductVariantResponse.model_validate(variant)
+
+    # Fallback to vendor variations/size stocks
+    for variation in product.variations or []:
+        base_price = variation.price if variation.price is not None else product.base_price
+
+        if str(variation.id) == str(variant_id):
+            return ProductVariantResponse.model_validate({
+                "id": variation.id,
+                "product_id": product.id,
+                "size": None,
+                "color": variation.title,
+                "color_hex": variation.color_hex,
+                "price": base_price,
+                "stock": 0,
+                "sku": None,
+                "is_available": bool(variation.is_active),
+                "created_at": variation.created_at,
+                "updated_at": variation.updated_at,
+            })
+
+        for size_stock in variation.size_stocks or []:
+            if str(size_stock.id) == str(variant_id):
+                return ProductVariantResponse.model_validate({
+                    "id": size_stock.id,
+                    "product_id": product.id,
+                    "size": getattr(size_stock.size, "value", str(size_stock.size)),
+                    "color": variation.title,
+                    "color_hex": variation.color_hex,
+                    "price": base_price,
+                    "stock": size_stock.stock,
+                    "sku": None,
+                    "is_available": bool(variation.is_active) and size_stock.stock > 0,
+                    "created_at": variation.created_at,
+                    "updated_at": variation.updated_at,
+                })
+
+    return None
+
+
 def cast_uuid(value: Optional[str]) -> Optional[uuid.UUID]:
     if not value:
         return None
@@ -49,16 +105,8 @@ def cast_uuid(value: Optional[str]) -> Optional[uuid.UUID]:
 
 def serialize_cart_item(cart_item: CartItem) -> CartItemResponse:
     product = cart_item.product
-    variant_obj = None
-
-    if product and product.variants:
-        for variant in product.variants:
-            if str(variant.id) == str(cart_item.variant_id):
-                variant_obj = variant
-                break
-
+    variant_response = resolve_variant_response(product, str(cart_item.variant_id))
     product_response = ProductResponse.model_validate(product) if product else None
-    variant_response = ProductVariantResponse.model_validate(variant_obj) if variant_obj else None
 
     return CartItemResponse(
         id=str(cart_item.id),
@@ -178,7 +226,10 @@ async def add_to_cart(
         # Verify product exists
         product_result = await db.execute(
             select(Product)
-            .options(selectinload(Product.variants))
+            .options(
+                selectinload(Product.variants),
+                selectinload(Product.variations).selectinload(Variation.size_stocks),
+            )
             .where(Product.id == item_data.product_id)
         )
         product = product_result.scalar_one_or_none()
@@ -188,8 +239,11 @@ async def add_to_cart(
 
         # Get variant price
         # Handle products without variants (variant_id format: "default-{product_id}")
-        variant_id_str = str(item_data.variant_id)
-        print(f"[Cart API] add_to_cart: variant_id_str={variant_id_str}, product.variants count={len(product.variants) if product.variants else 0}")
+        variant_id_str = str(item_data.variant_id or "")
+        print(
+            f"[Cart API] add_to_cart: variant_id_str={variant_id_str}, product.variants count={len(product.variants) if product.variants else 0}, "
+            f"variations count={len(product.variations) if product.variations else 0}"
+        )
 
         if variant_id_str.startswith("default-"):
             # Product has no variants, use base price
@@ -202,16 +256,12 @@ async def add_to_cart(
             else:
                 raise HTTPException(status_code=404, detail="Product variant not found")
         else:
-            # Product has variants, find the specific variant
-            variant = next(
-                (v for v in product.variants if str(v.id) == str(item_data.variant_id)),
-                None
-            )
+            variant_response = resolve_variant_response(product, item_data.variant_id)
 
-            if not variant:
+            if not variant_response:
                 raise HTTPException(status_code=404, detail="Product variant not found")
 
-            price = float(getattr(variant, "price", product.base_price))
+            price = float(getattr(variant_response, "price", product.base_price))
 
         # Check if item already exists (by product_id + variant_id + user/session)
         existing_query = select(CartItem).where(
