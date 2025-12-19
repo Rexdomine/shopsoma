@@ -76,8 +76,8 @@ function HomeProductCard({
             width="20"
             height="20"
             viewBox="0 0 24 24"
-            fill={isFavorite ? "#2C3E2E" : "none"}
-            stroke="#2C3E2E"
+            fill={isFavorite ? "#ffffff" : "none"}
+            stroke="#ffffff"
             strokeWidth="1.5"
             className="transition-all"
           >
