@@ -3,8 +3,11 @@ Pytest configuration and fixtures for testing
 """
 import pytest
 import asyncio
+import os
 from typing import AsyncGenerator, Generator
 from httpx import AsyncClient, ASGITransport
+from sqlalchemy import create_engine, text
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy.pool import NullPool
 
@@ -13,10 +16,56 @@ from app.core.database import get_db
 from app.core.base import Base
 from app.core.config import settings
 
+def _build_test_database_name(base_name: str) -> str:
+    if base_name.endswith("_db"):
+        return base_name.replace("_db", "_test_db")
+    return f"{base_name}_test_db"
+
+
+def _resolve_db_url() -> "URL":
+    base_url = make_url(settings.DATABASE_URL)
+    password_override = os.getenv("POSTGRES_PASSWORD")
+    if password_override:
+        return base_url.set(password=password_override)
+    if base_url.password:
+        return base_url
+    return base_url.set(password="shopsoma_dev_password")
+
+
+def ensure_test_database_exists(base_url: "URL") -> str:
+    """Create the test database if it does not exist yet."""
+    base_db_name = base_url.database or "postgres"
+    test_db_name = _build_test_database_name(base_db_name)
+
+    drivername = "postgresql"
+    if base_url.drivername and "+" in base_url.drivername:
+        drivername = base_url.drivername.split("+", 1)[0]
+    admin_url = base_url.set(drivername=drivername, database="postgres")
+    engine = create_engine(admin_url)
+    try:
+        with engine.connect() as connection:
+            connection.execution_options(isolation_level="AUTOCOMMIT")
+            exists = connection.execute(
+                text("SELECT 1 FROM pg_database WHERE datname = :name"),
+                {"name": test_db_name},
+            ).scalar()
+            if not exists:
+                connection.execute(text(f'CREATE DATABASE "{test_db_name}"'))
+    finally:
+        engine.dispose()
+
+    return test_db_name
+
+
 # Test database URL
-TEST_DATABASE_URL = settings.DATABASE_URL.replace("shopsoma_db", "shopsoma_test_db")
-if TEST_DATABASE_URL.startswith("postgresql://"):
-    TEST_DATABASE_URL = TEST_DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
+RESOLVED_DB_URL = _resolve_db_url()
+TEST_DATABASE_NAME = ensure_test_database_exists(RESOLVED_DB_URL)
+ASYNC_DRIVER = "postgresql+asyncpg"
+TEST_DATABASE_URL = RESOLVED_DB_URL.set(
+    drivername=ASYNC_DRIVER,
+    database=TEST_DATABASE_NAME
+)
+TEST_DATABASE_URL = TEST_DATABASE_URL.render_as_string(hide_password=False)
 
 # Create test engine
 test_engine = create_async_engine(

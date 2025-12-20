@@ -8,8 +8,9 @@ import { CartService } from '../../services/cartService';
 import { paymentService } from '../../services/paymentService';
 import { useAuth } from '../../context/AuthContext';
 import { usePreferenceStore } from '../../store/preferenceStore';
+import { useCurrencyStore } from '../../store/currencyStore';
 import { useCartStore } from '../../store/cartStore';
-import { formatPriceWithCurrency, type Currency } from '../../utils/pricing';
+import { formatPriceWithConversion, type Currency } from '../../utils/pricing';
 import { loadStripe } from '@stripe/stripe-js';
 import { Elements } from '@stripe/react-stripe-js';
 import StripePaymentForm from '../../components/payment/StripePaymentForm';
@@ -47,6 +48,7 @@ export default function Checkout() {
   const navigate = useNavigate();
   const { user, isAuthenticated } = useAuth();
   const { currency, setCurrency } = usePreferenceStore();
+  const exchangeRates = useCurrencyStore((state) => state.exchangeRates);
 
   const [step, setStep] = useState<Step>('email');
   const [email, setEmail] = useState('');
@@ -571,7 +573,7 @@ export default function Checkout() {
 
   // Helper function to format price in selected currency
   const formatPrice = (amountInNGN: number) => {
-    return formatPriceWithCurrency(amountInNGN, currency);
+    return formatPriceWithConversion(amountInNGN, 'NGN', currency, exchangeRates);
   };
 
   return (

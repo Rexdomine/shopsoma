@@ -13,7 +13,7 @@ class CartItem(Base):
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     session_id = Column(String, nullable=True, index=True)  # For guest users
     product_id = Column(UUID(as_uuid=True), ForeignKey("products.id"), nullable=False)
-    variant_id = Column(UUID(as_uuid=True), nullable=False)
+    variant_id = Column(UUID(as_uuid=True), nullable=True)
     quantity = Column(Integer, nullable=False, default=1)
     price = Column(Float, nullable=False)  # Price at time of adding
     created_at = Column(DateTime, default=datetime.utcnow)

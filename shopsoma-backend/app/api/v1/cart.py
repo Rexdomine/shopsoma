@@ -35,6 +35,7 @@ CART_ITEM_LOAD_OPTIONS = [
     selectinload(CartItem.product).selectinload(Product.variations).selectinload(Variation.size_stocks),
     selectinload(CartItem.product).selectinload(Product.vendor),
     selectinload(CartItem.product).selectinload(Product.category),
+    selectinload(CartItem.product).selectinload(Product.collection),
 ]
 
 
@@ -105,13 +106,14 @@ def cast_uuid(value: Optional[str]) -> Optional[uuid.UUID]:
 
 def serialize_cart_item(cart_item: CartItem) -> CartItemResponse:
     product = cart_item.product
-    variant_response = resolve_variant_response(product, str(cart_item.variant_id))
+    variant_id = str(cart_item.variant_id) if cart_item.variant_id else None
+    variant_response = resolve_variant_response(product, variant_id) if variant_id else None
     product_response = ProductResponse.model_validate(product) if product else None
 
     return CartItemResponse(
         id=str(cart_item.id),
         product_id=str(cart_item.product_id),
-        variant_id=str(cart_item.variant_id),
+        variant_id=variant_id,
         quantity=cart_item.quantity,
         user_id=str(cart_item.user_id) if cart_item.user_id else None,
         session_id=cart_item.session_id,
@@ -387,12 +389,35 @@ async def remove_from_cart(
         user_id, sess_id = await get_user_or_session_id(current_user, session_id)
         user_uuid = cast_uuid(user_id)
         item_uuid = cast_uuid(item_id)
+        composite_product_id: Optional[uuid.UUID] = None
+        composite_variant_id: Optional[uuid.UUID] = None
 
         if not item_uuid:
-            raise HTTPException(status_code=400, detail="Invalid cart item ID")
+            if "_" not in item_id:
+                raise HTTPException(status_code=400, detail="Invalid cart item ID")
+
+            product_part, variant_part = item_id.split("_", 1)
+            composite_product_id = cast_uuid(product_part)
+            if not composite_product_id:
+                raise HTTPException(status_code=400, detail="Invalid cart item ID")
+
+            if variant_part.startswith("default-"):
+                composite_variant_id = None
+            else:
+                composite_variant_id = cast_uuid(variant_part)
+                if not composite_variant_id:
+                    raise HTTPException(status_code=400, detail="Invalid cart item ID")
 
         # Delete cart item
-        query = delete(CartItem).where(CartItem.id == item_uuid)
+        if item_uuid:
+            query = delete(CartItem).where(CartItem.id == item_uuid)
+        else:
+            query = delete(CartItem).where(CartItem.product_id == composite_product_id)
+            if composite_variant_id is None:
+                query = query.where(CartItem.variant_id.is_(None))
+            else:
+                query = query.where(CartItem.variant_id == composite_variant_id)
+
         if user_uuid:
             query = query.where(CartItem.user_id == user_uuid)
         else:

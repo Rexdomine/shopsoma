@@ -6,6 +6,7 @@ import { useCartStore } from '../../store/cartStore';
 import { useAuth } from '../../context/AuthContext';
 import { useCurrencyStore } from '../../store/currencyStore';
 import type { Currency } from '../../store/currencyStore';
+import { usePreferenceStore } from '../../store/preferenceStore';
 
 export default function Header() {
   const [searchOpen, setSearchOpen] = useState(false);
@@ -15,6 +16,7 @@ export default function Header() {
   const itemCount = cart.summary.itemCount;
   const { isAuthenticated, user } = useAuth();
   const { currentCurrency, setCurrency } = useCurrencyStore();
+  const setPreferredCurrency = usePreferenceStore((state) => state.setCurrency);
   const currencyDropdownRef = useRef<HTMLDivElement>(null);
 
   const handleProfileClick = () => {
@@ -64,6 +66,7 @@ export default function Header() {
   // Handle currency selection
   const handleCurrencyChange = (currency: Currency) => {
     setCurrency(currency);
+    setPreferredCurrency(currency);
     setCurrencyDropdownOpen(false);
   };
 
