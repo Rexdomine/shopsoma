@@ -274,6 +274,13 @@ export default function ProductDetail() {
     return variants[0] ?? null;
   }, [product, colorOptions.length, sizeOptions.length, selectedColor, selectedSize]);
 
+  const hasInvalidSelection = useMemo(() => {
+    if (!product?.variants?.length) return false;
+    if (!selectedColor && !selectedSize) return false;
+
+    return !selectedVariant;
+  }, [product?.variants?.length, selectedColor, selectedSize, selectedVariant]);
+
   const currentPrice = selectedVariant?.price ?? product?.base_price ?? 0;
   const comparePrice = selectedVariant?.compare_at_price ?? product?.compare_at_price ?? null;
 
@@ -328,6 +335,16 @@ export default function ProductDetail() {
         selectedSize,
       });
       setAddToBagError('Select a color and size to add this item to your bag.');
+      return;
+    }
+
+    if (hasInvalidSelection) {
+      console.warn('[ProductDetail] Add to bag blocked: invalid selection', {
+        productId: product?.id,
+        selectedColor,
+        selectedSize,
+      });
+      setAddToBagError('This color and size combination is unavailable. Please choose another option.');
       return;
     }
 
