@@ -85,7 +85,7 @@ If you prefer to set up services individually:
      ```
    - **Start Command**:
      ```bash
-     alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+     alembic upgrade heads && uvicorn app.main:app --host 0.0.0.0 --port $PORT
      ```
    - **Plan**: Free
 
