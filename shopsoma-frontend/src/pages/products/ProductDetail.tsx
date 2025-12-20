@@ -124,7 +124,9 @@ export default function ProductDetail() {
 
   // Effect to switch images when color variation is selected
   useEffect(() => {
-    if (!product || !selectedColor) {
+    const normalizedColor = normalizeValue(selectedColor);
+
+    if (!product || !normalizedColor) {
       // If no color selected, use default product images
       if (product?.images?.[0]?.image_url) {
         setSelectedImage(product.images[0].image_url);
@@ -134,8 +136,8 @@ export default function ProductDetail() {
 
     // Find the variation matching the selected color
     // Note: Variation titles are formatted as "Product Name (Color)", so we check if title contains the color
-    const selectedVariation = product.variations?.find(
-      (variation) => variation.title.toLowerCase().includes(selectedColor.toLowerCase())
+    const selectedVariation = product.variations?.find((variation) =>
+      normalizeValue(variation.title).includes(normalizedColor)
     );
 
     if (selectedVariation && selectedVariation.images.length > 0) {
@@ -172,11 +174,13 @@ export default function ProductDetail() {
     }
   };
 
+  const normalizeValue = (value?: string | null) => value?.trim().toLowerCase() ?? '';
+
   const getColorOptions = (variants: ProductVariant[]): ColorOption[] => {
     const uniqueMap = new Map<string, ColorOption>();
     variants.forEach((variant) => {
       if (variant.color) {
-        const key = variant.color.toLowerCase();
+        const key = normalizeValue(variant.color);
         if (!uniqueMap.has(key)) {
           uniqueMap.set(key, {
             label: variant.color,
@@ -209,6 +213,11 @@ export default function ProductDetail() {
   );
 
   const selectedVariant = useMemo(() => {
+    const normalizeSelection = {
+      color: normalizeValue(selectedColor),
+      size: normalizeValue(selectedSize),
+    };
+
     if (!product?.variants?.length) {
       // For products without variants, create a default variant
       if (!product) return null;
@@ -223,21 +232,36 @@ export default function ProductDetail() {
       } as ProductVariant;
     }
 
-    let variants = product.variants;
+    const variants = product.variants;
 
-    if (colorOptions.length && selectedColor) {
-      variants = variants.filter(
-        (variant) => variant.color?.toLowerCase() === selectedColor.toLowerCase()
-      );
+    // Find the best matching variant in order of strictness: color & size -> color -> size -> first available
+    const byColorAndSize = variants.find((variant) => {
+      const variantColor = normalizeValue(variant.color);
+      const variantSize = normalizeValue(variant.size);
+
+      const colorMatches = !normalizeSelection.color || variantColor === normalizeSelection.color;
+      const sizeMatches = !normalizeSelection.size || variantSize === normalizeSelection.size;
+
+      return colorMatches && sizeMatches;
+    });
+
+    if (byColorAndSize) {
+      return byColorAndSize;
     }
 
-    if (sizeOptions.length && selectedSize) {
-      variants = variants.filter(
-        (variant) => variant.size?.toLowerCase() === selectedSize.toLowerCase()
-      );
+    const byColorOnly = normalizeSelection.color
+      ? variants.find((variant) => normalizeValue(variant.color) === normalizeSelection.color)
+      : null;
+
+    if (byColorOnly) {
+      return byColorOnly;
     }
 
-    return variants[0] ?? null;
+    const bySizeOnly = normalizeSelection.size
+      ? variants.find((variant) => normalizeValue(variant.size) === normalizeSelection.size)
+      : null;
+
+    return bySizeOnly ?? variants[0] ?? null;
   }, [product, colorOptions.length, sizeOptions.length, selectedColor, selectedSize]);
 
   const currentPrice = selectedVariant?.price ?? product?.base_price ?? 0;
