@@ -176,41 +176,75 @@ export default function ProductDetail() {
 
   const normalizeValue = (value?: string | null) => value?.trim().toLowerCase() ?? '';
 
-  const getColorOptions = (variants: ProductVariant[]): ColorOption[] => {
+  const getColorOptions = (
+    variants: ProductVariant[],
+    sizeFilter?: string | null
+  ): ColorOption[] => {
     const uniqueMap = new Map<string, ColorOption>();
+    const normalizedSize = normalizeValue(sizeFilter);
+
     variants.forEach((variant) => {
-      if (variant.color) {
-        const key = normalizeValue(variant.color);
-        if (!uniqueMap.has(key)) {
-          uniqueMap.set(key, {
-            label: variant.color,
-            value: variant.color,
-            hex: variant.color_hex ?? null,
-          });
-        }
+      if (!variant.color) return;
+      if (normalizedSize && normalizeValue(variant.size) !== normalizedSize) return;
+
+      const key = normalizeValue(variant.color);
+      if (!uniqueMap.has(key)) {
+        uniqueMap.set(key, {
+          label: variant.color,
+          value: variant.color,
+          hex: variant.color_hex ?? null,
+        });
       }
     });
     return Array.from(uniqueMap.values());
   };
 
-  const getSizeOptions = (variants: ProductVariant[]): string[] => {
+  const getSizeOptions = (
+    variants: ProductVariant[],
+    colorFilter?: string | null
+  ): string[] => {
     const set = new Set<string>();
+    const normalizedColor = normalizeValue(colorFilter);
+
     variants.forEach((variant) => {
-      if (variant.size) {
-        set.add(variant.size);
-      }
+      if (!variant.size) return;
+      if (normalizedColor && normalizeValue(variant.color) !== normalizedColor) return;
+
+      set.add(variant.size);
     });
     return Array.from(set);
   };
 
   const colorOptions = useMemo(
-    () => getColorOptions(product?.variants ?? []),
-    [product?.variants]
+    () => getColorOptions(product?.variants ?? [], selectedSize),
+    [product?.variants, selectedSize]
   );
   const sizeOptions = useMemo(
-    () => getSizeOptions(product?.variants ?? []),
-    [product?.variants]
+    () => getSizeOptions(product?.variants ?? [], selectedColor),
+    [product?.variants, selectedColor]
   );
+
+  useEffect(() => {
+    if (!selectedColor || colorOptions.length === 0) return;
+    const normalizedSelected = normalizeValue(selectedColor);
+    const isValid = colorOptions.some(
+      (option) => normalizeValue(option.value) === normalizedSelected
+    );
+    if (!isValid) {
+      setSelectedColor(null);
+    }
+  }, [selectedColor, colorOptions]);
+
+  useEffect(() => {
+    if (!selectedSize || sizeOptions.length === 0) return;
+    const normalizedSelected = normalizeValue(selectedSize);
+    const isValid = sizeOptions.some(
+      (option) => normalizeValue(option) === normalizedSelected
+    );
+    if (!isValid) {
+      setSelectedSize(null);
+    }
+  }, [selectedSize, sizeOptions]);
 
   const selectedVariant = useMemo(() => {
     const normalizeSelection = {
