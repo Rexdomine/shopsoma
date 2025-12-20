@@ -174,17 +174,19 @@ export default function ProductDetail() {
     }
   };
 
-  const normalizeValue = (value?: string | null) => value?.trim().toLowerCase() ?? '';
+  const normalizeValue = (value?: string | null) =>
+    value?.replace(/\s+/g, ' ').trim().toLowerCase() ?? '';
 
   const getColorOptions = (variants: ProductVariant[]): ColorOption[] => {
     const uniqueMap = new Map<string, ColorOption>();
     variants.forEach((variant) => {
-      if (variant.color) {
-        const key = normalizeValue(variant.color);
+      const colorLabel = variant.color?.trim();
+      if (colorLabel) {
+        const key = normalizeValue(colorLabel);
         if (!uniqueMap.has(key)) {
           uniqueMap.set(key, {
-            label: variant.color,
-            value: variant.color,
+            label: colorLabel,
+            value: colorLabel,
             hex: variant.color_hex ?? null,
           });
         }
@@ -196,8 +198,9 @@ export default function ProductDetail() {
   const getSizeOptions = (variants: ProductVariant[]): string[] => {
     const set = new Set<string>();
     variants.forEach((variant) => {
-      if (variant.size) {
-        set.add(variant.size);
+      const trimmedSize = variant.size?.trim();
+      if (trimmedSize) {
+        set.add(trimmedSize);
       }
     });
     return Array.from(set);
