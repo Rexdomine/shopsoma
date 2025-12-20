@@ -52,6 +52,7 @@ export default function ProductDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
   const addItem = useCartStore((state) => state.addItem);
+  const cartError = useCartStore((state) => state.error);
   const { currentCurrency: preferredCurrency, exchangeRates, fetchExchangeRate } = useCurrencyStore();
 
   const [product, setProduct] = useState<Product | null>(null);
@@ -67,6 +68,7 @@ export default function ProductDetail() {
   const [sizeGuideOpen, setSizeGuideOpen] = useState(false);
   const [sizeMenuOpen, setSizeMenuOpen] = useState(false);
   const [bagModalOpen, setBagModalOpen] = useState(false);
+  const [addToBagError, setAddToBagError] = useState<string | null>(null);
   const [addedVariant, setAddedVariant] = useState<ProductVariant | null>(null);
   const sizeDropdownRef = useRef<HTMLDivElement>(null);
 
@@ -262,6 +264,17 @@ export default function ProductDetail() {
     }
   }, [selectedVariant?.id, selectedVariant?.stock]);
 
+  useEffect(() => {
+    if (cartError) {
+      console.error('[ProductDetail] Cart synchronization error', {
+        productId: product?.id,
+        variantId: selectedVariant?.id,
+        cartError,
+      });
+      setAddToBagError(cartError);
+    }
+  }, [cartError, product?.id, selectedVariant?.id]);
+
   const handleQuantityChange = (direction: 'increment' | 'decrement') => {
     if (isOutOfStock) return;
     if (direction === 'increment') {
@@ -272,21 +285,70 @@ export default function ProductDetail() {
   };
 
   const handleAddToBag = () => {
-    if (missingSelection || !product || !selectedVariant || isOutOfStock || quantity < 1) return;
-    if (quantity > maxQuantity) {
-      setQuantity(maxQuantity);
+    setAddToBagError(null);
+
+    if (missingSelection) {
+      console.warn('[ProductDetail] Add to bag blocked: missing selection', {
+        productId: product?.id,
+        selectedColor,
+        selectedSize,
+      });
+      setAddToBagError('Select a color and size to add this item to your bag.');
       return;
     }
 
-    // Add to cart using Zustand store
-    addItem({
-      product,
-      variant: selectedVariant,
-      quantity,
-    });
+    if (!product || !selectedVariant) {
+      console.error('[ProductDetail] Add to bag failed: missing product or variant', {
+        productId: product?.id,
+        variantId: selectedVariant?.id,
+        availableVariants: product?.variants?.length,
+        availableVariations: product?.variations?.length,
+      });
+      setAddToBagError('We could not find the selected variation. Please refresh and try again.');
+      return;
+    }
 
-    setAddedVariant(selectedVariant);
-    setBagModalOpen(true);
+    if (isOutOfStock || quantity < 1) {
+      console.warn('[ProductDetail] Add to bag blocked: item out of stock or invalid quantity', {
+        productId: product.id,
+        variantId: selectedVariant.id,
+        quantity,
+        maxQuantity,
+      });
+      setAddToBagError('This variation is currently unavailable.');
+      return;
+    }
+
+    if (quantity > maxQuantity) {
+      console.warn('[ProductDetail] Quantity adjusted to available stock', {
+        productId: product.id,
+        variantId: selectedVariant.id,
+        requested: quantity,
+        maxQuantity,
+      });
+      setQuantity(maxQuantity);
+      setAddToBagError('Quantity adjusted to available stock.');
+      return;
+    }
+
+    try {
+      // Add to cart using Zustand store
+      addItem({
+        product,
+        variant: selectedVariant,
+        quantity,
+      });
+
+      setAddedVariant(selectedVariant);
+      setBagModalOpen(true);
+    } catch (err) {
+      console.error('[ProductDetail] Unexpected error while adding to bag', {
+        productId: product.id,
+        variantId: selectedVariant.id,
+        err,
+      });
+      setAddToBagError('Unable to add to bag. Check console logs for details.');
+    }
   };
 
   const handleWishlistToggle = async () => {
@@ -707,6 +769,11 @@ export default function ProductDetail() {
             >
               Add to Bag
             </button>
+            {addToBagError && (
+              <p className="mt-3 text-sm text-red-600" role="alert">
+                {addToBagError}
+              </p>
+            )}
           </div>
         </div>
 
