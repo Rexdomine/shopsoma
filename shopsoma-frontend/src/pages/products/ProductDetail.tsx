@@ -234,34 +234,44 @@ export default function ProductDetail() {
 
     const variants = product.variants;
 
-    // Find the best matching variant in order of strictness: color & size -> color -> size -> first available
-    const byColorAndSize = variants.find((variant) => {
+    const hasColorSelection = Boolean(normalizeSelection.color);
+    const hasSizeSelection = Boolean(normalizeSelection.size);
+
+    const strictMatch = variants.find((variant) => {
       const variantColor = normalizeValue(variant.color);
       const variantSize = normalizeValue(variant.size);
 
-      const colorMatches = !normalizeSelection.color || variantColor === normalizeSelection.color;
-      const sizeMatches = !normalizeSelection.size || variantSize === normalizeSelection.size;
+      const colorMatches = !hasColorSelection || variantColor === normalizeSelection.color;
+      const sizeMatches = !hasSizeSelection || variantSize === normalizeSelection.size;
 
       return colorMatches && sizeMatches;
     });
 
-    if (byColorAndSize) {
-      return byColorAndSize;
+    if (strictMatch) {
+      return strictMatch;
     }
 
-    const byColorOnly = normalizeSelection.color
-      ? variants.find((variant) => normalizeValue(variant.color) === normalizeSelection.color)
-      : null;
-
-    if (byColorOnly) {
-      return byColorOnly;
+    if (hasColorSelection && hasSizeSelection) {
+      return null;
     }
 
-    const bySizeOnly = normalizeSelection.size
-      ? variants.find((variant) => normalizeValue(variant.size) === normalizeSelection.size)
-      : null;
+    if (hasColorSelection) {
+      return (
+        variants.find(
+          (variant) => normalizeValue(variant.color) === normalizeSelection.color
+        ) ?? null
+      );
+    }
 
-    return bySizeOnly ?? variants[0] ?? null;
+    if (hasSizeSelection) {
+      return (
+        variants.find(
+          (variant) => normalizeValue(variant.size) === normalizeSelection.size
+        ) ?? null
+      );
+    }
+
+    return variants[0] ?? null;
   }, [product, colorOptions.length, sizeOptions.length, selectedColor, selectedSize]);
 
   const currentPrice = selectedVariant?.price ?? product?.base_price ?? 0;
