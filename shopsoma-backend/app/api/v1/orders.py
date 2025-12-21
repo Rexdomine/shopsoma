@@ -71,6 +71,14 @@ def calculate_promo_discount(promo_code: Optional[str], subtotal: Decimal):
 TAX_RATE = Decimal("0.075")
 
 
+def _as_decimal(value) -> Decimal:
+    if isinstance(value, Decimal):
+        return value
+    if value is None:
+        return Decimal("0.00")
+    return Decimal(str(value))
+
+
 async def resolve_order_variant(
     db: AsyncSession,
     product: Product,
@@ -194,14 +202,16 @@ async def calculate_order_totals(
 ) -> dict:
     """Calculate order totals"""
     subtotal = sum(Decimal(str(item.get('subtotal', 0))) for item in items_data)
-    tax_amount = (subtotal + shipping_cost) * TAX_RATE
-    total_amount = subtotal + shipping_cost + tax_amount - discount_amount
+    shipping_cost_decimal = _as_decimal(shipping_cost)
+    discount_decimal = _as_decimal(discount_amount)
+    tax_amount = (subtotal + shipping_cost_decimal) * TAX_RATE
+    total_amount = subtotal + shipping_cost_decimal + tax_amount - discount_decimal
 
     return {
         "subtotal": subtotal,
-        "shipping_cost": shipping_cost,
+        "shipping_cost": shipping_cost_decimal,
         "tax_amount": tax_amount,
-        "discount_amount": discount_amount,
+        "discount_amount": discount_decimal,
         "total_amount": total_amount
     }
 
@@ -302,7 +312,8 @@ async def review_order(
                 detail=f"Insufficient stock for '{product.title}'. Available: {stock}"
             )
 
-        item_subtotal = unit_price * item.quantity
+        unit_price_decimal = _as_decimal(unit_price)
+        item_subtotal = unit_price_decimal * Decimal(item.quantity)
         subtotal += item_subtotal
 
         items_details.append({
@@ -310,7 +321,7 @@ async def review_order(
             "product_title": product.title,
             "variant_id": str(variant_id_for_response) if variant_id_for_response else None,
             "variant_details": variant_details,
-            "unit_price": float(unit_price),
+            "unit_price": float(unit_price_decimal),
             "quantity": item.quantity,
             "subtotal": float(item_subtotal),
             "vendor_name": product.vendor.business_name if product.vendor else "Shopsoma"
@@ -365,7 +376,7 @@ async def review_order(
     if review_data.shipping_rate_id:
         selected_rate = next((r for r in shipping_rates if r.id == review_data.shipping_rate_id), None) or selected_rate
 
-    shipping_cost = selected_rate.base_rate
+    shipping_cost = _as_decimal(selected_rate.base_rate)
 
     # Calculate discount (if promo code provided)
     discount_amount, applied_promo = calculate_promo_discount(review_data.promo_code, subtotal)
@@ -540,7 +551,8 @@ async def create_order(
                 detail=f"Insufficient stock for '{product.title}'"
             )
 
-        item_subtotal = unit_price * item_data.quantity
+        unit_price_decimal = _as_decimal(unit_price)
+        item_subtotal = unit_price_decimal * Decimal(item_data.quantity)
         subtotal += item_subtotal
 
         # Calculate vendor commission (e.g., 15%)
@@ -554,7 +566,7 @@ async def create_order(
             "vendor_id": product.vendor_id,
             "product_title": product.title,
             "variant_details": variant_details,
-            "unit_price": unit_price,
+            "unit_price": unit_price_decimal,
             "quantity": item_data.quantity,
             "subtotal": item_subtotal,
             "commission_rate": commission_rate,
@@ -611,7 +623,7 @@ async def create_order(
     if order_data.shipping_rate_id:
         selected_rate = next((r for r in shipping_rates if r.id == order_data.shipping_rate_id), None) or selected_rate
 
-    shipping_cost = selected_rate.base_rate
+    shipping_cost = _as_decimal(selected_rate.base_rate)
 
     # Calculate discount
     discount_amount, _ = calculate_promo_discount(order_data.promo_code, subtotal)
