@@ -3,11 +3,14 @@ import { Link, useNavigate, useSearchParams, useParams } from 'react-router-dom'
 import { ROUTES } from '../../config/constants';
 import { checkoutService } from '../../services/checkoutService';
 import { useCartStore } from '../../store/cartStore';
+import { useCurrencyStore } from '../../store/currencyStore';
+import { formatPriceWithConversion, type Currency } from '../../utils/pricing';
 
 interface Order {
   id: string;
   order_number: string;
   total_amount: number;
+  currency?: Currency;
   payment_status: string;
   fulfillment_status: string;
   created_at: string;
@@ -18,6 +21,7 @@ const mockOrder: Order = {
   id: 'demo-order-id',
   order_number: 'SS-102938',
   total_amount: 45200,
+  currency: 'NGN',
   payment_status: 'paid',
   fulfillment_status: 'processing',
   created_at: new Date().toISOString(),
@@ -42,6 +46,7 @@ const mockOrder: Order = {
 export default function OrderSuccess() {
   const navigate = useNavigate();
   const clearCart = useCartStore((state) => state.clearCart);
+  const exchangeRates = useCurrencyStore((state) => state.exchangeRates);
   const { orderId: paramOrderId } = useParams<{ orderId: string }>();
   const [searchParams] = useSearchParams();
   const queryOrderId = searchParams.get('orderId');
@@ -171,6 +176,13 @@ export default function OrderSuccess() {
   }
 
   const status = getStatusConfig();
+  const orderCurrency = (order.currency || 'NGN') as Currency;
+  const formattedTotal = formatPriceWithConversion(
+    order.total_amount,
+    'NGN',
+    orderCurrency,
+    exchangeRates
+  );
 
   return (
     <div className="min-h-screen bg-white flex flex-col">
@@ -223,7 +235,7 @@ export default function OrderSuccess() {
               <div className="flex justify-between">
                 <span className="text-gray-600">Total Amount:</span>
                 <span className="font-bold text-dark text-lg">
-                  ₦{order.total_amount.toLocaleString()}
+                  {formattedTotal}
                 </span>
               </div>
               <div className="flex justify-between">
