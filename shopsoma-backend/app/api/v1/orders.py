@@ -12,7 +12,7 @@ import secrets
 from app.core.database import get_db
 from app.models.user import User, UserRole
 from app.models.order import Order, OrderItem, PaymentStatus, FulfillmentStatus
-from app.models.product import Product, ProductVariant, ProductStatus
+from app.models.product import Product, ProductVariant, ProductStatus, Variation, SizeStock
 from app.models.address import Address
 from app.models.shipping_rate import ShippingRate
 from app.models.vendor import Vendor
@@ -69,6 +69,89 @@ def calculate_promo_discount(promo_code: Optional[str], subtotal: Decimal):
 
 # Tax rate (VAT 7.5% in Nigeria)
 TAX_RATE = Decimal("0.075")
+
+
+async def resolve_order_variant(
+    db: AsyncSession,
+    product: Product,
+    variant_id: str
+) -> dict:
+    """Resolve variant data across legacy variants and vendor variations."""
+    variant_result = await db.execute(
+        select(ProductVariant).where(ProductVariant.id == variant_id)
+    )
+    variant = variant_result.scalar_one_or_none()
+
+    if variant and variant.product_id == product.id:
+        return {
+            "variant_id": variant.id,
+            "unit_price": variant.price,
+            "stock": variant.stock,
+            "variant_details": {
+                "size": variant.size,
+                "color": variant.color,
+                "color_hex": variant.color_hex,
+            },
+            "stock_source": "product_variant",
+            "stock_id": variant.id,
+        }
+
+    size_stock_result = await db.execute(
+        select(SizeStock, Variation)
+        .join(Variation, SizeStock.variation_id == Variation.id)
+        .where(
+            SizeStock.id == variant_id,
+            Variation.product_id == product.id
+        )
+    )
+    size_stock_row = size_stock_result.first()
+
+    if size_stock_row:
+        size_stock, variation = size_stock_row
+        unit_price = variation.price if variation.price is not None else product.base_price
+        return {
+            "variant_id": None,
+            "unit_price": unit_price,
+            "stock": size_stock.stock,
+            "variant_details": {
+                "size": getattr(size_stock.size, "value", str(size_stock.size)),
+                "color": variation.title,
+                "color_hex": variation.color_hex,
+                "size_stock_id": str(size_stock.id),
+                "variation_id": str(variation.id),
+            },
+            "stock_source": "size_stock",
+            "stock_id": size_stock.id,
+        }
+
+    variation_result = await db.execute(
+        select(Variation).where(
+            Variation.id == variant_id,
+            Variation.product_id == product.id
+        )
+    )
+    variation = variation_result.scalar_one_or_none()
+
+    if variation:
+        unit_price = variation.price if variation.price is not None else product.base_price
+        return {
+            "variant_id": None,
+            "unit_price": unit_price,
+            "stock": product.total_stock,
+            "variant_details": {
+                "size": None,
+                "color": variation.title,
+                "color_hex": variation.color_hex,
+                "variation_id": str(variation.id),
+            },
+            "stock_source": "product",
+            "stock_id": product.id,
+        }
+
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail=f"Variant {variant_id} not found"
+    )
 
 
 def generate_order_number() -> str:
@@ -200,29 +283,17 @@ async def review_order(
             )
 
         # Get variant if specified
-        variant = None
+        variant_id_for_response = None
         unit_price = product.base_price
         stock = product.total_stock
         variant_details = None
 
         if item.variant_id:
-            variant_query = select(ProductVariant).where(ProductVariant.id == item.variant_id)
-            variant_result = await db.execute(variant_query)
-            variant = variant_result.scalar_one_or_none()
-
-            if not variant or variant.product_id != product.id:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Variant {item.variant_id} not found"
-                )
-
-            unit_price = variant.price
-            stock = variant.stock
-            variant_details = {
-                "size": variant.size,
-                "color": variant.color,
-                "color_hex": variant.color_hex
-            }
+            resolved_variant = await resolve_order_variant(db, product, str(item.variant_id))
+            variant_id_for_response = item.variant_id
+            unit_price = resolved_variant["unit_price"]
+            stock = resolved_variant["stock"]
+            variant_details = resolved_variant["variant_details"]
 
         # Check stock
         if stock < item.quantity:
@@ -237,7 +308,7 @@ async def review_order(
         items_details.append({
             "product_id": str(product.id),
             "product_title": product.title,
-            "variant_id": str(variant.id) if variant else None,
+            "variant_id": str(variant_id_for_response) if variant_id_for_response else None,
             "variant_details": variant_details,
             "unit_price": float(unit_price),
             "quantity": item.quantity,
@@ -427,6 +498,7 @@ async def create_order(
 
     # Process and validate items
     order_items = []
+    stock_updates = []
     subtotal = Decimal("0.00")
 
     for item_data in order_data.items:
@@ -445,29 +517,21 @@ async def create_order(
             )
 
         # Get variant if specified
-        variant = None
+        order_variant_id = None
         unit_price = product.base_price
         stock = product.total_stock
         variant_details = None
+        stock_source = "product"
+        stock_id = product.id
 
         if item_data.variant_id:
-            variant_query = select(ProductVariant).where(ProductVariant.id == item_data.variant_id)
-            variant_result = await db.execute(variant_query)
-            variant = variant_result.scalar_one_or_none()
-
-            if not variant:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Variant {item_data.variant_id} not found"
-                )
-
-            unit_price = variant.price
-            stock = variant.stock
-            variant_details = {
-                "size": variant.size,
-                "color": variant.color,
-                "color_hex": variant.color_hex
-            }
+            resolved_variant = await resolve_order_variant(db, product, str(item_data.variant_id))
+            order_variant_id = resolved_variant["variant_id"]
+            unit_price = resolved_variant["unit_price"]
+            stock = resolved_variant["stock"]
+            variant_details = resolved_variant["variant_details"]
+            stock_source = resolved_variant["stock_source"]
+            stock_id = resolved_variant["stock_id"]
 
         # Check stock
         if stock < item_data.quantity:
@@ -486,7 +550,7 @@ async def create_order(
 
         order_items.append({
             "product_id": product.id,
-            "variant_id": variant.id if variant else None,
+            "variant_id": order_variant_id,
             "vendor_id": product.vendor_id,
             "product_title": product.title,
             "variant_details": variant_details,
@@ -496,6 +560,12 @@ async def create_order(
             "commission_rate": commission_rate,
             "commission_amount": commission_amount,
             "vendor_payout": vendor_payout
+        })
+
+        stock_updates.append({
+            "source": stock_source,
+            "id": stock_id,
+            "quantity": item_data.quantity
         })
 
     if subtotal < MIN_ORDER_AMOUNT_NGN:
@@ -651,18 +721,24 @@ async def create_order(
             )
 
     # Update stock
-    for item_data, item_dict in zip(order_data.items, order_items):
-        if item_data.variant_id:
+    for update_entry in stock_updates:
+        if update_entry["source"] == "product_variant":
             await db.execute(
                 update(ProductVariant)
-                .where(ProductVariant.id == item_data.variant_id)
-                .values(stock=ProductVariant.stock - item_data.quantity)
+                .where(ProductVariant.id == update_entry["id"])
+                .values(stock=ProductVariant.stock - update_entry["quantity"])
+            )
+        elif update_entry["source"] == "size_stock":
+            await db.execute(
+                update(SizeStock)
+                .where(SizeStock.id == update_entry["id"])
+                .values(stock=SizeStock.stock - update_entry["quantity"])
             )
         else:
             await db.execute(
                 update(Product)
-                .where(Product.id == item_data.product_id)
-                .values(total_stock=Product.total_stock - item_data.quantity)
+                .where(Product.id == update_entry["id"])
+                .values(total_stock=Product.total_stock - update_entry["quantity"])
             )
 
     await db.commit()
@@ -1001,6 +1077,18 @@ async def cancel_order(
                 update(ProductVariant)
                 .where(ProductVariant.id == item.variant_id)
                 .values(stock=ProductVariant.stock + item.quantity)
+            )
+            continue
+
+        size_stock_id = None
+        if item.variant_details:
+            size_stock_id = item.variant_details.get("size_stock_id")
+
+        if size_stock_id:
+            await db.execute(
+                update(SizeStock)
+                .where(SizeStock.id == size_stock_id)
+                .values(stock=SizeStock.stock + item.quantity)
             )
         else:
             await db.execute(
