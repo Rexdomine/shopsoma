@@ -19,7 +19,7 @@ interface StatCard {
 }
 
 function OrderStatsComponent({ stats, loading }: OrderStatsProps) {
-  const { formatPrice } = useCurrency();
+  const { formatBasePrice } = useCurrency();
 
   if (loading) {
     return (
@@ -42,21 +42,21 @@ function OrderStatsComponent({ stats, loading }: OrderStatsProps) {
   const statCards: StatCard[] = [
     {
       label: 'Total Revenue',
-      value: formatPrice(stats.total_revenue),
+      value: formatBasePrice(stats.total_revenue),
       subtext: `${stats.total_orders} orders`,
       color: 'text-green-600',
       icon: '💰',
     },
     {
       label: 'Average Order',
-      value: formatPrice(stats.average_order_value),
+      value: formatBasePrice(stats.average_order_value),
       subtext: 'Per order',
       color: 'text-blue-600',
       icon: '📊',
     },
     {
       label: 'Today',
-      value: formatPrice(stats.revenue_today),
+      value: formatBasePrice(stats.revenue_today),
       subtext: `${stats.orders_today} orders`,
       color: 'text-purple-600',
       icon: '📅',
