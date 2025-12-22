@@ -1,5 +1,5 @@
 """Order management endpoints"""
-from typing import Optional
+from typing import Optional, List, Dict
 from fastapi import APIRouter, Depends, HTTPException, status, Query, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, and_, or_, func
@@ -31,6 +31,7 @@ from app.api.dependencies import get_current_active_user, get_optional_user
 from app.services.email_service import email_service
 from app.services.vendor_notification_service import VendorNotificationService
 from app.services.account_claim import queue_account_claim_email
+from app.core.config import settings
 
 router = APIRouter(prefix="/orders", tags=["Orders"])
 MIN_ORDER_AMOUNT_NGN = Decimal("60000.00")
@@ -78,6 +79,19 @@ def _as_decimal(value) -> Decimal:
     if value is None:
         return Decimal("0.00")
     return Decimal(str(value))
+
+
+def _build_admin_recipients(admin_users: List[User]) -> List[Dict[str, str]]:
+    recipients = [
+        {"email": user.email, "name": user.full_name or "Admin"}
+        for user in admin_users
+        if user.email
+    ]
+    if settings.ADMIN_EMAIL and all(
+        recipient["email"] != settings.ADMIN_EMAIL for recipient in recipients
+    ):
+        recipients.append({"email": settings.ADMIN_EMAIL, "name": "Admin"})
+    return recipients
 
 
 def _resolve_order_currency(order: Order) -> str:
@@ -769,7 +783,7 @@ async def create_order(
             str(vendor_id),
             str(new_order.id),
             new_order.order_number,
-            new_order.created_at,
+            new_order.created_at or datetime.utcnow(),
             items,
             total_payout,
             scheduled_date
@@ -856,10 +870,7 @@ async def create_order(
             )
         )
         admin_users = [user for user in admin_result.scalars().all() if user.email]
-        admin_recipients = [
-            {"email": user.email, "name": user.full_name or "Admin"}
-            for user in admin_users
-        ]
+        admin_recipients = _build_admin_recipients(admin_users)
 
         await email_service.send_admin_order_notification(
             order_number=loaded_order.order_number,
