@@ -96,6 +96,22 @@ def _build_admin_recipients(admin_users: List[User]) -> List[Dict[str, str]]:
     return recipients
 
 
+def _resolve_product_image_url(product: Product, variant_details: Optional[Dict[str, str]]) -> Optional[str]:
+    if variant_details and product.variations:
+        variation_id = variant_details.get("variation_id")
+        if variation_id:
+            for variation in product.variations:
+                if str(variation.id) == str(variation_id) and variation.images:
+                    return variation.images[0]
+
+    if product.images:
+        primary = next((image for image in product.images if image.is_primary), None)
+        selected = primary or product.images[0]
+        return selected.thumbnail_url or selected.image_url
+
+    return None
+
+
 def _resolve_order_currency(order: Order) -> str:
     if not getattr(order, "payments", None):
         return "NGN"
@@ -558,7 +574,9 @@ async def create_order(
     for item_data in order_data.items:
         # Get product with vendor
         product_query = select(Product).options(
-            selectinload(Product.vendor)
+            selectinload(Product.vendor),
+            selectinload(Product.images),
+            selectinload(Product.variations)
         ).where(Product.id == item_data.product_id)
 
         product_result = await db.execute(product_query)
@@ -609,6 +627,7 @@ async def create_order(
             "vendor_id": product.vendor_id,
             "product_title": product.title,
             "variant_details": variant_details,
+            "image_url": _resolve_product_image_url(product, variant_details),
             "unit_price": unit_price_decimal,
             "quantity": item_data.quantity,
             "subtotal": item_subtotal,
@@ -777,6 +796,14 @@ async def create_order(
                     "quantity": order_item.quantity,
                     "vendor_payout": float(order_item.vendor_payout),
                     "variant_details": order_item.variant_details,
+                    "image_url": next(
+                        (
+                            item.get("image_url")
+                            for item in order_items
+                            if item["product_id"] == order_item.product_id
+                        ),
+                        None
+                    ),
                 }
             )
             vendor_entry["total_payout"] += order_item.vendor_payout

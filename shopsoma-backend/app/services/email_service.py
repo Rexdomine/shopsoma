@@ -273,17 +273,42 @@ class EmailService:
             variant_details = ""
             details_dict = item.get("variant_details")
             if isinstance(details_dict, dict):
-                variant_details = " · ".join(
-                    f"{key}: {value}" for key, value in details_dict.items() if value
-                )
+                detail_parts = []
+                size_value = details_dict.get("size")
+                color_value = details_dict.get("color")
+                if size_value:
+                    detail_parts.append(f"size: {size_value}")
+                if color_value:
+                    detail_parts.append(f"color: {color_value}")
+                variant_details = " · ".join(detail_parts)
             elif isinstance(details_dict, str):
                 variant_details = details_dict
+
+            image_url = item.get("image_url") or item.get("image") or item.get("thumbnail")
+            resolved_image = self._resolve_image_url(image_url, self.product_placeholder)
+            if resolved_image and resolved_image.startswith("http"):
+                image_cell = f'<img src="{resolved_image}" alt="{name}" style="width:56px;height:56px;border-radius:6px;object-fit:cover;display:block;" />'
+            else:
+                image_cell = f'<div style="width:56px;height:56px;border-radius:6px;background:{BRAND_LIGHT};display:flex;align-items:center;justify-content:center;border:1px solid {BRAND_BORDER};"><span style="color:{BRAND_PRIMARY};font-size:20px;font-weight:600;">📦</span></div>'
+
+            item_cell = f"""
+            <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
+                <tr>
+                    <td style="width:72px;padding-right:12px;vertical-align:top;">
+                        {image_cell}
+                    </td>
+                    <td style="vertical-align:top;">
+                        <strong>{name}</strong><br/>
+                        {"<span style='color:#6B7280;font-size:12px;'>" + variant_details + "</span>" if variant_details else ""}
+                    </td>
+                </tr>
+            </table>
+            """
 
             rows += f"""
             <tr>
                 <td style="padding:12px;border-bottom:1px solid {BRAND_BORDER};">
-                    <strong>{name}</strong><br/>
-                    {"<span style='color:#6B7280;font-size:12px;'>" + variant_details + "</span>" if variant_details else ""}
+                    {item_cell}
                 </td>
                 <td style="padding:12px;border-bottom:1px solid {BRAND_BORDER};text-align:center;">{quantity}</td>
                 <td style="padding:12px;border-bottom:1px solid {BRAND_BORDER};text-align:right;">{payout}</td>
