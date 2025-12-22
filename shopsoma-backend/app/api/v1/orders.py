@@ -817,22 +817,11 @@ async def create_order(
         )
         db.add(notification)
 
-        # Queue background task to send vendor notification email
         logger.info(
-            "[Order Email] Queue vendor email vendor_id=%s order=%s items=%s",
+            "[Order Email] Prepared vendor notification vendor_id=%s order=%s items=%s",
             vendor_id,
             new_order.order_number,
             len(items)
-        )
-        background_tasks.add_task(
-            send_vendor_order_notification,
-            str(vendor_id),
-            str(new_order.id),
-            new_order.order_number,
-            new_order.created_at or datetime.utcnow(),
-            items,
-            total_payout,
-            scheduled_date
         )
 
     # Update stock
@@ -857,6 +846,37 @@ async def create_order(
             )
 
     await db.commit()
+
+    vendor_notification_service = VendorNotificationService(email_service)
+    for vendor_id, vendor_entry in vendor_notifications.items():
+        scheduled_date = vendor_entry["scheduled_date"] or datetime.utcnow()
+        items = vendor_entry["items"]
+        total_payout = float(vendor_entry["total_payout"])
+
+        try:
+            await vendor_notification_service.send_order_notification(
+                db=db,
+                vendor_id=str(vendor_id),
+                order_id=str(new_order.id),
+                order_number=new_order.order_number,
+                order_date=new_order.created_at or datetime.utcnow(),
+                items=items,
+                total_payout=total_payout,
+                scheduled_pickup_date=scheduled_date
+            )
+            logger.info(
+                "[Order Email] Vendor email sent vendor_id=%s order=%s items=%s",
+                vendor_id,
+                new_order.order_number,
+                len(items)
+            )
+        except Exception as exc:
+            logger.exception(
+                "[Order Email] Vendor email failed vendor_id=%s order=%s: %s",
+                vendor_id,
+                new_order.order_number,
+                exc
+            )
 
     # Load order with all relationships
     order_query = select(Order).options(
