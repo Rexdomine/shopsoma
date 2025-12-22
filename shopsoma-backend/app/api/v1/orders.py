@@ -13,6 +13,7 @@ from app.core.database import get_db
 from app.models.user import User, UserRole
 from app.models.order import Order, OrderItem, PaymentStatus, FulfillmentStatus
 from app.models.product import Product, ProductVariant, ProductStatus, Variation, SizeStock
+from app.models.payment import Payment
 from app.models.address import Address
 from app.models.shipping_rate import ShippingRate
 from app.models.vendor import Vendor
@@ -77,6 +78,16 @@ def _as_decimal(value) -> Decimal:
     if value is None:
         return Decimal("0.00")
     return Decimal(str(value))
+
+
+def _resolve_order_currency(order: Order) -> str:
+    if not getattr(order, "payments", None):
+        return "NGN"
+    latest_payment = max(
+        order.payments,
+        key=lambda payment: payment.created_at or datetime.min
+    )
+    return latest_payment.currency or "NGN"
 
 
 async def resolve_order_variant(
@@ -849,10 +860,13 @@ async def list_orders(
 
     # Get paginated results
     query = query.order_by(Order.created_at.desc()).offset((page - 1) * page_size).limit(page_size)
-    query = query.options(selectinload(Order.items))
+    query = query.options(selectinload(Order.items), selectinload(Order.payments))
 
     result = await db.execute(query)
     orders = result.scalars().all()
+
+    for order in orders:
+        order.currency = _resolve_order_currency(order)
 
     return OrderListResponse(
         orders=orders,
@@ -879,7 +893,8 @@ async def get_order(
     query = select(Order).options(
         selectinload(Order.items).selectinload(OrderItem.product).selectinload(Product.images),
         selectinload(Order.shipping_address),
-        selectinload(Order.billing_address)
+        selectinload(Order.billing_address),
+        selectinload(Order.payments),
     ).where(Order.id == order_id)
 
     result = await db.execute(query)
@@ -909,6 +924,8 @@ async def get_order(
             item.product_image_url = primary_image.image_url if primary_image else None
         else:
             item.product_image_url = None
+
+    order.currency = _resolve_order_currency(order)
 
     return order
 
@@ -1025,12 +1042,20 @@ async def get_order_tracking(
             "occurred_at": order.cancelled_at.isoformat() if order.cancelled_at else order.updated_at.isoformat()
         })
 
+    currency_result = await db.execute(
+        select(Payment.currency)
+        .where(Payment.order_id == order.id)
+        .order_by(Payment.created_at.desc())
+        .limit(1)
+    )
+    currency = currency_result.scalar_one_or_none() or "NGN"
+
     return {
         "order_id": str(order.id),
         "order_number": order.order_number,
         "tracking_id": tracking_id,
         "amount": float(order.total_amount),
-        "currency": "NGN",
+        "currency": currency,
         "updated_at": order.updated_at.isoformat(),
         "current_status": current_status,
         "history": history

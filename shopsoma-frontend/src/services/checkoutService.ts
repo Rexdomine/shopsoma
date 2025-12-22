@@ -149,6 +149,7 @@ export interface Order {
   id: string;
   order_number: string;
   customer_id: string;
+  currency?: 'NGN' | 'USD';
   shipping_address_id?: string;
   billing_address_id?: string;
   subtotal: number;

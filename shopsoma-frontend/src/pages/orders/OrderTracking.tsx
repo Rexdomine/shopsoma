@@ -9,6 +9,8 @@ import {
 } from '../../services/orderService';
 import { checkoutService } from '../../services/checkoutService';
 import websocketService, { type OrderUpdateData } from '../../services/websocketService';
+import { useCurrencyStore } from '../../store/currencyStore';
+import { formatPriceWithConversion, type Currency } from '../../utils/pricing';
 
 const STATUS_STEPS: Array<{ key: OrderStatus; label: string }> = [
   { key: 'order_placed', label: 'Order Placed' },
@@ -51,6 +53,10 @@ export default function OrderTracking() {
   const [loadingOrder, setLoadingOrder] = useState(false);
   const [isConnectedToWebSocket, setIsConnectedToWebSocket] = useState(false);
   const [wsError, setWsError] = useState<string | null>(null);
+  const exchangeRates = useCurrencyStore((state) => state.exchangeRates);
+  const orderCurrency = (orderDetails?.currency || 'NGN') as Currency;
+  const formatOrderPrice = (amount: number) =>
+    formatPriceWithConversion(amount, 'NGN', orderCurrency, exchangeRates);
 
   // Initial load of tracking data
   useEffect(() => {
@@ -527,8 +533,8 @@ export default function OrderTracking() {
 
                       {/* Price */}
                       <div className="text-right flex-shrink-0">
-                        <p className="font-semibold text-sm">₦{item.subtotal.toLocaleString()}</p>
-                        <p className="text-xs text-gray-500">₦{item.unit_price.toLocaleString()} each</p>
+                        <p className="font-semibold text-sm">{formatOrderPrice(item.subtotal)}</p>
+                        <p className="text-xs text-gray-500">{formatOrderPrice(item.unit_price)} each</p>
                       </div>
                     </div>
                   ))}
@@ -539,25 +545,25 @@ export default function OrderTracking() {
               <div className="border-t border-gray-200 pt-4 space-y-2">
                 <div className="flex justify-between text-sm">
                   <span className="text-gray-600">Subtotal:</span>
-                  <span>₦{orderDetails.subtotal.toLocaleString()}</span>
+                  <span>{formatOrderPrice(orderDetails.subtotal)}</span>
                 </div>
                 <div className="flex justify-between text-sm">
                   <span className="text-gray-600">Shipping:</span>
-                  <span>₦{orderDetails.shipping_cost.toLocaleString()}</span>
+                  <span>{formatOrderPrice(orderDetails.shipping_cost)}</span>
                 </div>
                 <div className="flex justify-between text-sm">
                   <span className="text-gray-600">Tax:</span>
-                  <span>₦{orderDetails.tax_amount.toLocaleString()}</span>
+                  <span>{formatOrderPrice(orderDetails.tax_amount)}</span>
                 </div>
                 {orderDetails.discount_amount > 0 && (
                   <div className="flex justify-between text-sm text-green-600">
                     <span>Discount:</span>
-                    <span>-₦{orderDetails.discount_amount.toLocaleString()}</span>
+                    <span>-{formatOrderPrice(orderDetails.discount_amount)}</span>
                   </div>
                 )}
                 <div className="flex justify-between text-base font-bold border-t border-gray-200 pt-2 mt-2">
                   <span>Total:</span>
-                  <span>₦{orderDetails.total_amount.toLocaleString()}</span>
+                  <span>{formatOrderPrice(orderDetails.total_amount)}</span>
                 </div>
               </div>
 

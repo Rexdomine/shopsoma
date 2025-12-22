@@ -382,9 +382,9 @@ export default function AdminOrderDetail() {
                     {/* Product Details */}
                     <div className="flex-1">
                       <h3 className="font-medium text-gray-900">{item.product_title}</h3>
-                      {item.variant_details && (
+                      {formatVariantDetails(item.variant_details) && (
                         <p className="text-sm text-gray-500">
-                          {Object.entries(item.variant_details).map(([key, value]) => `${key}: ${value}`).join(', ')}
+                          {formatVariantDetails(item.variant_details)}
                         </p>
                       )}
                       <p className="text-sm text-gray-600 mt-1">
@@ -840,3 +840,11 @@ export default function AdminOrderDetail() {
     </div>
   );
 }
+  const formatVariantDetails = (variantDetails?: Record<string, any>) => {
+    if (!variantDetails) return null;
+    const parts: string[] = [];
+    if (variantDetails.size) parts.push(`Size: ${variantDetails.size}`);
+    if (variantDetails.color) parts.push(`Color: ${variantDetails.color}`);
+    if (parts.length === 0) return null;
+    return parts.join(' • ');
+  };
