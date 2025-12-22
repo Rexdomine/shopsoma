@@ -1,6 +1,7 @@
 """Vendor notification email service"""
 from datetime import datetime
 from typing import List, Dict, Any
+import logging
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
@@ -8,6 +9,7 @@ from sqlalchemy.orm import selectinload
 from app.models import Vendor, VendorNotification
 from app.services.email_service import EmailService
 
+logger = logging.getLogger(__name__)
 
 class VendorNotificationService:
     """Service for sending vendor notifications via email"""
@@ -46,7 +48,10 @@ class VendorNotificationService:
         vendor = result.scalar_one_or_none()
 
         if not vendor or not vendor.user:
-            print(f"Vendor {vendor_id} not found or has no user account")
+            logger.warning("[Vendor Email] Vendor not found or missing user for vendor_id=%s", vendor_id)
+            return
+        if not vendor.user.email:
+            logger.warning("[Vendor Email] Vendor missing email for vendor_id=%s", vendor_id)
             return
 
         try:
@@ -75,10 +80,19 @@ class VendorNotificationService:
                 notification.email_sent_at = datetime.utcnow()
                 await db.commit()
 
-            print(f"✅ Order notification email sent to vendor {vendor.business_name}")
+            logger.info(
+                "[Vendor Email] New order email sent to vendor_id=%s order=%s",
+                vendor_id,
+                order_number
+            )
 
         except Exception as e:
-            print(f"❌ Failed to send order notification email to vendor {vendor.business_name}: {e}")
+            logger.exception(
+                "[Vendor Email] Failed to send vendor email for vendor_id=%s order=%s: %s",
+                vendor_id,
+                order_number,
+                e
+            )
 
     async def send_pickup_reminder(
         self,
@@ -158,9 +172,18 @@ class VendorNotificationService:
                 subject=subject,
                 html_content=html_content
             )
-            print(f"✅ Pickup reminder sent to vendor {vendor.business_name}")
+            logger.info(
+                "[Vendor Email] Pickup reminder sent to vendor_id=%s order=%s",
+                vendor_id,
+                order_number
+            )
         except Exception as e:
-            print(f"❌ Failed to send pickup reminder: {e}")
+            logger.exception(
+                "[Vendor Email] Failed to send pickup reminder for vendor_id=%s order=%s: %s",
+                vendor_id,
+                order_number,
+                e
+            )
 
     async def send_payout_notification(
         self,
@@ -270,6 +293,10 @@ class VendorNotificationService:
             db.add(notification)
             await db.commit()
 
-            print(f"✅ Payout notification sent to vendor {vendor.business_name}")
+            logger.info("[Vendor Email] Payout notification sent to vendor_id=%s", vendor_id)
         except Exception as e:
-            print(f"❌ Failed to send payout notification: {e}")
+            logger.exception(
+                "[Vendor Email] Failed to send payout notification for vendor_id=%s: %s",
+                vendor_id,
+                e
+            )

@@ -8,6 +8,7 @@ from uuid import UUID
 from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
 import secrets
+import logging
 
 from app.core.database import get_db
 from app.models.user import User, UserRole
@@ -35,6 +36,7 @@ from app.core.config import settings
 
 router = APIRouter(prefix="/orders", tags=["Orders"])
 MIN_ORDER_AMOUNT_NGN = Decimal("60000.00")
+logger = logging.getLogger(__name__)
 
 # Simple promo code configuration (should eventually move to dedicated table/service)
 PROMO_CODES = {
@@ -210,16 +212,30 @@ async def send_vendor_order_notification(
 
     async with get_db_context() as db:
         vendor_notification_service = VendorNotificationService(email_service)
-        await vendor_notification_service.send_order_notification(
-            db=db,
-            vendor_id=vendor_id,
-            order_id=order_id,
-            order_number=order_number,
-            order_date=order_date,
-            items=items,
-            total_payout=total_payout,
-            scheduled_pickup_date=scheduled_pickup_date
-        )
+        try:
+            await vendor_notification_service.send_order_notification(
+                db=db,
+                vendor_id=vendor_id,
+                order_id=order_id,
+                order_number=order_number,
+                order_date=order_date,
+                items=items,
+                total_payout=total_payout,
+                scheduled_pickup_date=scheduled_pickup_date
+            )
+            logger.info(
+                "[Order Email] Vendor email queued for vendor_id=%s order=%s items=%s",
+                vendor_id,
+                order_number,
+                len(items)
+            )
+        except Exception as exc:
+            logger.exception(
+                "[Order Email] Vendor email failed for vendor_id=%s order=%s: %s",
+                vendor_id,
+                order_number,
+                exc
+            )
 
 
 async def calculate_order_totals(
@@ -872,7 +888,7 @@ async def create_order(
         admin_users = [user for user in admin_result.scalars().all() if user.email]
         admin_recipients = _build_admin_recipients(admin_users)
 
-        await email_service.send_admin_order_notification(
+        admin_sent = await email_service.send_admin_order_notification(
             order_number=loaded_order.order_number,
             customer_name=loaded_order.customer.full_name,
             customer_email=loaded_order.customer.email,
@@ -885,6 +901,12 @@ async def create_order(
             payment_status=loaded_order.payment_status.value,
             shipping_address=shipping_addr_dict,
             recipients=admin_recipients or None
+        )
+        logger.info(
+            "[Order Email] Admin email sent=%s recipients=%s order=%s",
+            admin_sent,
+            [recipient.get("email") for recipient in admin_recipients],
+            loaded_order.order_number
         )
     except Exception as e:
         # Log error but don't fail order creation if email fails
