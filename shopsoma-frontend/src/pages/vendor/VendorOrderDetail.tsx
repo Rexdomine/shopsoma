@@ -238,12 +238,16 @@ export default function VendorOrderDetail() {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
   const { toasts, hideToast, error } = useToast();
-  const { currentCurrency, setCurrency, formatBasePrice, getCurrencySymbol } = useCurrency();
+  const { currentCurrency, setCurrency, formatBasePrice, getCurrencySymbol, fetchExchangeRate } = useCurrency();
 
   const [order, setOrder] = useState<VendorOrder | null>(null);
   const [loading, setLoading] = useState(true);
   const [isShippingModalOpen, setIsShippingModalOpen] = useState(false);
   const [isCurrencyDropdownOpen, setIsCurrencyDropdownOpen] = useState(false);
+
+  useEffect(() => {
+    fetchExchangeRate();
+  }, [fetchExchangeRate]);
 
   useEffect(() => {
     const fetchOrder = async () => {

@@ -6,7 +6,8 @@ import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import AdminSidebar from '../../components/admin/AdminSidebar';
 import { useToast } from '../../hooks/useToast';
-import { useCurrency } from '../../hooks/useCurrency';
+import CurrencySwitcher from '../../components/common/CurrencySwitcher';
+import { useCurrencyStore } from '../../store/currencyStore';
 import {
   getOrderDetail,
   updateOrderStatus,
@@ -19,12 +20,13 @@ import type {
   FulfillmentStatus,
 } from '../../services/adminOrderService';
 import { getStatusBadgeConfig } from '../../utils/orderStatusMessages';
+import { formatPriceWithConversion } from '../../utils/pricing';
 
 export default function AdminOrderDetail() {
   const { orderId } = useParams<{ orderId: string }>();
   const navigate = useNavigate();
   const { toasts, hideToast, success, error } = useToast();
-  const { formatPrice } = useCurrency();
+  const { currentCurrency, setCurrency, exchangeRates, fetchExchangeRate } = useCurrencyStore();
 
   const [order, setOrder] = useState<OrderDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -58,6 +60,10 @@ export default function AdminOrderDetail() {
     rider_id: '',
   });
 
+  const formatDisplayPrice = (amount: number) => {
+    return formatPriceWithConversion(amount, 'NGN', currentCurrency, exchangeRates);
+  };
+
   // Load order details
   const loadOrder = useCallback(async () => {
     if (!orderId) return;
@@ -79,6 +85,10 @@ export default function AdminOrderDetail() {
       setLoading(false);
     }
   }, [orderId, error]);
+
+  useEffect(() => {
+    fetchExchangeRate();
+  }, [fetchExchangeRate]);
 
   useEffect(() => {
     loadOrder();
@@ -291,7 +301,8 @@ export default function AdminOrderDetail() {
               Placed {new Date(order.created_at).toLocaleString()}
             </p>
           </div>
-          <div className="flex gap-3">
+          <div className="flex gap-3 items-center">
+            <CurrencySwitcher value={currentCurrency} onChange={setCurrency} />
             {order.fulfillment_status !== 'cancelled' && (
               <>
                 <button
@@ -325,28 +336,28 @@ export default function AdminOrderDetail() {
               <div className="space-y-3">
                 <div className="flex justify-between">
                   <span className="text-gray-600">Subtotal:</span>
-                  <span className="font-medium">{formatPrice(order.subtotal)}</span>
+                  <span className="font-medium">{formatDisplayPrice(order.subtotal)}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-gray-600">Shipping:</span>
-                  <span className="font-medium">{formatPrice(order.shipping_cost)}</span>
+                  <span className="font-medium">{formatDisplayPrice(order.shipping_cost)}</span>
                 </div>
                 {order.tax_amount > 0 && (
                   <div className="flex justify-between">
                     <span className="text-gray-600">Tax:</span>
-                    <span className="font-medium">{formatPrice(order.tax_amount)}</span>
+                    <span className="font-medium">{formatDisplayPrice(order.tax_amount)}</span>
                   </div>
                 )}
                 {order.discount_amount > 0 && (
                   <div className="flex justify-between text-green-600">
                     <span>Discount:</span>
-                    <span className="font-medium">-{formatPrice(order.discount_amount)}</span>
+                    <span className="font-medium">-{formatDisplayPrice(order.discount_amount)}</span>
                   </div>
                 )}
                 <div className="border-t pt-3 flex justify-between">
                   <span className="text-lg font-semibold">Total:</span>
                   <span className="text-lg font-bold text-[#105E53]">
-                    {formatPrice(order.total_amount)}
+                    {formatDisplayPrice(order.total_amount)}
                   </span>
                 </div>
               </div>
@@ -394,9 +405,9 @@ export default function AdminOrderDetail() {
 
                     {/* Pricing */}
                     <div className="text-right">
-                      <div className="font-medium">{formatPrice(item.unit_price)}</div>
+                      <div className="font-medium">{formatDisplayPrice(item.unit_price)}</div>
                       <div className="text-sm text-gray-500">Qty: {item.quantity}</div>
-                      <div className="text-sm font-medium mt-1">{formatPrice(item.subtotal)}</div>
+                      <div className="text-sm font-medium mt-1">{formatDisplayPrice(item.subtotal)}</div>
                     </div>
                   </div>
                 ))}
@@ -772,7 +783,7 @@ export default function AdminOrderDetail() {
                       onChange={(e) => setRefundType(e.target.value as 'full' | 'partial')}
                       className="mr-2"
                     />
-                    Full ({formatPrice(order.total_amount)})
+                    Full ({formatDisplayPrice(order.total_amount)})
                   </label>
                   <label className="flex items-center">
                     <input

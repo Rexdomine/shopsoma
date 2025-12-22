@@ -2,9 +2,12 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import VendorSidebar from '../../components/vendor/VendorSidebar';
 import ToastContainer from '../../components/ui/ToastContainer';
+import CurrencySwitcher from '../../components/common/CurrencySwitcher';
 import { useToast } from '../../hooks/useToast';
 import { getVendorOrders, exportOrdersToCSV, type VendorOrder } from '../../services/orderService';
 import { ROUTES } from '../../config/constants';
+import { useCurrencyStore } from '../../store/currencyStore';
+import { formatPriceWithConversion } from '../../utils/pricing';
 import { Search, Loader2, Filter, ArrowUpDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Download } from 'lucide-react';
 
 export default function VendorOrders() {
@@ -16,6 +19,7 @@ export default function VendorOrders() {
   const [currentPage, setCurrentPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [error, setError] = useState<string | null>(null);
+  const { currentCurrency, setCurrency, exchangeRates, fetchExchangeRate } = useCurrencyStore();
 
   // Calculate order stats
   const pendingCount = orders.filter((o) =>
@@ -24,6 +28,10 @@ export default function VendorOrders() {
   const completedCount = orders.filter((o) =>
     ['delivered', 'returned', 'cancelled'].includes(o.fulfillment_status)
   ).length;
+
+  useEffect(() => {
+    fetchExchangeRate();
+  }, [fetchExchangeRate]);
 
   useEffect(() => {
     fetchOrders();
@@ -181,6 +189,10 @@ export default function VendorOrders() {
     return order.items.reduce((sum, item) => sum + item.vendor_payout, 0);
   };
 
+  const formatDisplayPrice = (amount: number) => {
+    return formatPriceWithConversion(amount, 'NGN', currentCurrency, exchangeRates);
+  };
+
   // Get items summary for an order
   const getItemsSummary = (order: VendorOrder) => {
     const totalItems = order.items.reduce((sum, item) => sum + item.quantity, 0);
@@ -211,6 +223,7 @@ export default function VendorOrders() {
             </div>
 
             <div className="flex items-center gap-3">
+              <CurrencySwitcher value={currentCurrency} onChange={setCurrency} />
               {/* Search Bar */}
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
@@ -308,7 +321,9 @@ export default function VendorOrders() {
                         <div className="text-sm text-gray-600">{getItemsSummary(order)}</div>
                       </td>
                       <td className="px-8 py-6 whitespace-nowrap text-right">
-                        <div className="text-sm font-semibold text-gray-900">₦{calculateVendorPayout(order).toLocaleString('en-NG', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+                        <div className="text-sm font-semibold text-gray-900">
+                          {formatDisplayPrice(calculateVendorPayout(order))}
+                        </div>
                       </td>
                       <td className="px-8 py-6 text-center">{getStatusBadge(order.fulfillment_status)}</td>
                     </tr>
