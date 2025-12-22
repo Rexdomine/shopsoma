@@ -24,11 +24,15 @@ export default function VendorProductView() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { toasts, hideToast, error, success } = useToast();
-  const { currentCurrency, setCurrency, exchangeRates } = useCurrencyStore();
+  const { currentCurrency, setCurrency, exchangeRates, fetchExchangeRate } = useCurrencyStore();
   const [product, setProduct] = useState<Product | null>(null);
   const [loading, setLoading] = useState(true);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+
+  useEffect(() => {
+    fetchExchangeRate();
+  }, [fetchExchangeRate]);
 
   useEffect(() => {
     const fetchProduct = async () => {

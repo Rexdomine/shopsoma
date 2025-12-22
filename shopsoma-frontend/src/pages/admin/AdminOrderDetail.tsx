@@ -26,7 +26,7 @@ export default function AdminOrderDetail() {
   const { orderId } = useParams<{ orderId: string }>();
   const navigate = useNavigate();
   const { toasts, hideToast, success, error } = useToast();
-  const { currentCurrency, setCurrency, exchangeRates } = useCurrencyStore();
+  const { currentCurrency, setCurrency, exchangeRates, fetchExchangeRate } = useCurrencyStore();
 
   const [order, setOrder] = useState<OrderDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -85,6 +85,10 @@ export default function AdminOrderDetail() {
       setLoading(false);
     }
   }, [orderId, error]);
+
+  useEffect(() => {
+    fetchExchangeRate();
+  }, [fetchExchangeRate]);
 
   useEffect(() => {
     loadOrder();

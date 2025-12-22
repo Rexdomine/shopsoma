@@ -19,7 +19,7 @@ export default function VendorOrders() {
   const [currentPage, setCurrentPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [error, setError] = useState<string | null>(null);
-  const { currentCurrency, setCurrency, exchangeRates } = useCurrencyStore();
+  const { currentCurrency, setCurrency, exchangeRates, fetchExchangeRate } = useCurrencyStore();
 
   // Calculate order stats
   const pendingCount = orders.filter((o) =>
@@ -28,6 +28,10 @@ export default function VendorOrders() {
   const completedCount = orders.filter((o) =>
     ['delivered', 'returned', 'cancelled'].includes(o.fulfillment_status)
   ).length;
+
+  useEffect(() => {
+    fetchExchangeRate();
+  }, [fetchExchangeRate]);
 
   useEffect(() => {
     fetchOrders();
