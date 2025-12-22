@@ -6,7 +6,10 @@ import {
   updateExchangeRate,
   getShippingProviderSettings,
   updateShippingProviderSettings,
+  getPayoutHoldSettings,
+  updatePayoutHoldSettings,
   type ExchangeRate,
+  type PayoutHoldSettings,
 } from '../../services/settingsService';
 import { useToast } from '../../hooks/useToast';
 import ToastContainer from '../../components/ui/ToastContainer';
@@ -25,6 +28,10 @@ export default function AdminSettings() {
   // ShipBubble settings state
   const [useShipBubble, setUseShipBubble] = useState(false);
   const [savingShipping, setSavingShipping] = useState(false);
+  const [payoutHold, setPayoutHold] = useState<PayoutHoldSettings | null>(null);
+  const [payoutHoldInput, setPayoutHoldInput] = useState('');
+  const [savingPayoutHold, setSavingPayoutHold] = useState(false);
+  const [payoutHoldChanged, setPayoutHoldChanged] = useState(false);
 
   useEffect(() => {
     fetchSettings();
@@ -33,13 +40,16 @@ export default function AdminSettings() {
   const fetchSettings = async () => {
     try {
       setLoading(true);
-      const [rate, shipping] = await Promise.all([
+      const [rate, shipping, hold] = await Promise.all([
         getExchangeRate(),
-        getShippingProviderSettings()
+        getShippingProviderSettings(),
+        getPayoutHoldSettings()
       ]);
       setExchangeRate(rate);
       setRateInput(rate.rate.toString());
       setUseShipBubble(shipping.use_shipbubble);
+      setPayoutHold(hold);
+      setPayoutHoldInput(hold.hold_days.toString());
     } catch (err: any) {
       console.error('Failed to fetch settings:', err);
       error(err.response?.data?.detail || 'Failed to load settings', 'Error');
@@ -118,6 +128,43 @@ export default function AdminSettings() {
       setUseShipBubble(!enabled);
     } finally {
       setSavingShipping(false);
+    }
+  };
+
+  const handlePayoutHoldChange = (value: string) => {
+    setPayoutHoldInput(value);
+    const parsed = Number(value);
+    if (!Number.isNaN(parsed) && payoutHold) {
+      setPayoutHoldChanged(parsed !== payoutHold.hold_days);
+    }
+  };
+
+  const handleSavePayoutHold = async () => {
+    const parsed = Number(payoutHoldInput);
+    if (Number.isNaN(parsed) || parsed < 0 || parsed > 3650) {
+      error('Payout hold days must be between 0 and 3650', 'Invalid Input');
+      return;
+    }
+
+    try {
+      setSavingPayoutHold(true);
+      const updated = await updatePayoutHoldSettings(parsed);
+      setPayoutHold(updated);
+      setPayoutHoldInput(updated.hold_days.toString());
+      setPayoutHoldChanged(false);
+      success('Payout hold updated successfully', 'Success');
+    } catch (err: any) {
+      console.error('Failed to update payout hold:', err);
+      error(err.response?.data?.detail || 'Failed to update payout hold', 'Error');
+    } finally {
+      setSavingPayoutHold(false);
+    }
+  };
+
+  const handleResetPayoutHold = () => {
+    if (payoutHold) {
+      setPayoutHoldInput(payoutHold.hold_days.toString());
+      setPayoutHoldChanged(false);
     }
   };
 
@@ -369,6 +416,100 @@ export default function AdminSettings() {
                   </div>
                 </div>
               </div>
+            </div>
+          </div>
+
+          {/* Payout Hold Settings Card */}
+          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+            <div className="border-b border-gray-200 px-6 py-4">
+              <div className="flex items-center gap-3">
+                <div className="h-10 w-10 rounded-xl bg-[#0B1D2C] text-white flex items-center justify-center">
+                  <DollarSign className="w-5 h-5" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-semibold text-gray-900">Payout Hold</h2>
+                  <p className="text-sm text-gray-600">Set how long vendors wait before withdrawing</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="p-6 space-y-6">
+              <div>
+                <label htmlFor="payout-hold" className="block text-sm font-medium text-gray-700 mb-2">
+                  Hold period (days)
+                </label>
+                <div className="flex items-start gap-4">
+                  <div className="flex-1 max-w-md">
+                    <input
+                      id="payout-hold"
+                      type="number"
+                      min="0"
+                      max="3650"
+                      step="1"
+                      value={payoutHoldInput}
+                      onChange={(event) => handlePayoutHoldChange(event.target.value)}
+                      className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#105E53] focus:border-transparent text-gray-900"
+                      placeholder="Enter hold days"
+                    />
+                    <p className="text-xs text-gray-500 mt-2">
+                      Set to 0 for no hold. Max 3650 days.
+                    </p>
+                  </div>
+
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={handleResetPayoutHold}
+                      disabled={!payoutHoldChanged || savingPayoutHold}
+                      className="px-4 py-2.5 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Reset
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleSavePayoutHold}
+                      disabled={!payoutHoldChanged || savingPayoutHold}
+                      className="px-4 py-2.5 bg-[#105E53] text-white rounded-lg text-sm font-medium hover:bg-[#0d4a42] transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                    >
+                      {savingPayoutHold ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          Saving...
+                        </>
+                      ) : (
+                        <>
+                          <Save className="w-4 h-4" />
+                          Save Changes
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {payoutHold && (
+                <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-medium text-gray-700">Current Hold Period</p>
+                      <p className="text-2xl font-semibold text-[#0B1D2C] mt-1">
+                        {payoutHold.hold_days} day{payoutHold.hold_days === 1 ? '' : 's'}
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-xs text-gray-500">Last Updated</p>
+                      <p className="text-sm text-gray-700 mt-0.5">
+                        {payoutHold.updated_at
+                          ? new Date(payoutHold.updated_at).toLocaleString('en-US', {
+                              dateStyle: 'medium',
+                              timeStyle: 'short'
+                            })
+                          : 'Not set'}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>

@@ -446,6 +446,126 @@ class EmailService:
         html_content = self._wrap_email("New Order", body_html, f"New order {order_number} received.")
         return await self.send_email(email, name, subject, html_content)
 
+    async def send_vendor_payout_request_email(
+        self,
+        email: str,
+        name: str,
+        payout_amount: float,
+        requested_at: datetime,
+        payout_method: Optional[str] = None,
+        hold_days: Optional[int] = None,
+    ) -> bool:
+        subject = "Payout Request Received"
+        request_date = requested_at.strftime("%d %B %Y - %I:%M %p")
+        hold_note = ""
+        if hold_days is not None:
+            hold_note = f"<p style=\"margin:0;\">Hold period: {hold_days} day{'' if hold_days == 1 else 's'}</p>"
+
+        method_line = payout_method or "Your default payout account"
+
+        body_html = f"""
+        <p style="font-size:16px;">Hello {name or 'there'},</p>
+        <p>Your payout request has been received and is being reviewed.</p>
+        <div style="margin:24px 0;padding:20px;border:1px solid {BRAND_BORDER};border-radius:10px;background:{BRAND_LIGHT};">
+            <p style="margin:0;"><strong>Amount:</strong> {self._format_amount(payout_amount)}</p>
+            <p style="margin:4px 0;"><strong>Requested at:</strong> {request_date}</p>
+            <p style="margin:4px 0;"><strong>Destination:</strong> {method_line}</p>
+            {hold_note}
+        </div>
+        <p style="text-align:center;margin-top:32px;">
+            <a href="{settings.FRONTEND_BASE_URL}/vendor/earnings/withdrawals" style="display:inline-block;padding:12px 24px;background:{BRAND_PRIMARY};color:#fff;text-decoration:none;border-radius:999px;font-weight:600;">
+                View Withdrawal Status
+            </a>
+        </p>
+        <p style="margin-top:24px;color:#6B7280;font-size:13px;">
+            Need help? Reach out to our vendor support team at
+            <a href="mailto:partnerships@shopsoma.com" style="color:{BRAND_PRIMARY};">partnerships@shopsoma.com</a>.
+        </p>
+        """
+
+        html_content = self._wrap_email("Payout Request", body_html, "Your payout request has been received.")
+        return await self.send_email(email, name, subject, html_content)
+
+    async def send_vendor_payout_status_update_email(
+        self,
+        email: str,
+        name: str,
+        payout_amount: float,
+        status: str,
+        processed_at: Optional[datetime] = None,
+        payment_reference: Optional[str] = None,
+        notes: Optional[str] = None,
+    ) -> bool:
+        status_label = status.replace("_", " ").title()
+        subject = f"Payout Status Update - {status_label}"
+        processed_str = processed_at.strftime("%d %B %Y - %I:%M %p") if processed_at else "-"
+        reference_line = payment_reference or "-"
+        note_line = notes or "-"
+
+        body_html = f"""
+        <p style="font-size:16px;">Hello {name or 'there'},</p>
+        <p>Your payout request status has been updated.</p>
+        <div style="margin:24px 0;padding:20px;border:1px solid {BRAND_BORDER};border-radius:10px;background:{BRAND_LIGHT};">
+            <p style="margin:0;"><strong>Amount:</strong> {self._format_amount(payout_amount)}</p>
+            <p style="margin:4px 0;"><strong>Status:</strong> {status_label}</p>
+            <p style="margin:4px 0;"><strong>Processed at:</strong> {processed_str}</p>
+            <p style="margin:4px 0;"><strong>Reference:</strong> {reference_line}</p>
+            <p style="margin:4px 0;"><strong>Notes:</strong> {note_line}</p>
+        </div>
+        <p style="text-align:center;margin-top:32px;">
+            <a href="{settings.FRONTEND_BASE_URL}/vendor/earnings/withdrawals" style="display:inline-block;padding:12px 24px;background:{BRAND_PRIMARY};color:#fff;text-decoration:none;border-radius:999px;font-weight:600;">
+                View Withdrawal Status
+            </a>
+        </p>
+        """
+
+        html_content = self._wrap_email("Payout Update", body_html, "Your payout status has been updated.")
+        return await self.send_email(email, name, subject, html_content)
+
+    async def send_admin_payout_request_email(
+        self,
+        recipients: List[Dict[str, str]],
+        vendor_name: str,
+        vendor_email: str,
+        payout_amount: float,
+        requested_at: datetime,
+        payout_id: str,
+    ) -> bool:
+        if not recipients:
+            return False
+
+        subject = f"New Payout Request - {vendor_name}"
+        request_date = requested_at.strftime("%d %B %Y - %I:%M %p")
+
+        body_html = f"""
+        <p style="font-size:16px;">Hello Admin,</p>
+        <p>A vendor has submitted a payout request.</p>
+        <div style="margin:24px 0;padding:20px;border:1px solid {BRAND_BORDER};border-radius:10px;background:{BRAND_LIGHT};">
+            <p style="margin:0;"><strong>Vendor:</strong> {vendor_name}</p>
+            <p style="margin:4px 0;"><strong>Email:</strong> {vendor_email}</p>
+            <p style="margin:4px 0;"><strong>Amount:</strong> {self._format_amount(payout_amount)}</p>
+            <p style="margin:4px 0;"><strong>Requested at:</strong> {request_date}</p>
+            <p style="margin:4px 0;"><strong>Payout ID:</strong> {payout_id}</p>
+        </div>
+        <p style="text-align:center;margin-top:32px;">
+            <a href="{settings.FRONTEND_BASE_URL}/admin/payouts" style="display:inline-block;padding:12px 24px;background:{BRAND_PRIMARY};color:#fff;text-decoration:none;border-radius:999px;font-weight:600;">
+                Review Payouts
+            </a>
+        </p>
+        """
+
+        html_content = self._wrap_email("Payout Request", body_html, "A new payout request is waiting.")
+
+        sent_any = False
+        for recipient in recipients:
+            sent_any = await self.send_email(
+                recipient["email"],
+                recipient.get("name") or "Admin",
+                subject,
+                html_content,
+            ) or sent_any
+        return sent_any
+
     async def send_admin_order_notification(
         self,
         order_number: str,

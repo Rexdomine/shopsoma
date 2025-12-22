@@ -1,6 +1,7 @@
 """App settings schemas"""
 from pydantic import BaseModel, Field
 from typing import Optional
+from datetime import datetime
 from uuid import UUID
 
 
@@ -41,3 +42,14 @@ class ShippingProviderSettings(BaseModel):
 class ShippingProviderSettingsUpdate(BaseModel):
     """Update shipping provider settings"""
     use_shipbubble: bool
+
+
+class PayoutHoldSettings(BaseModel):
+    """Payout hold settings"""
+    hold_days: int = Field(default=14, ge=0, le=3650)
+    updated_at: Optional[datetime] = None
+
+
+class PayoutHoldSettingsUpdate(BaseModel):
+    """Update payout hold settings"""
+    hold_days: int = Field(..., ge=0, le=3650)

@@ -113,6 +113,7 @@ class Settings(BaseSettings):
 
     # Business Settings
     DEFAULT_COMMISSION_RATE: float = 12.5
+    PAYOUT_HOLD_DAYS: int = 14
 
     # Admin Settings
     ADMIN_EMAIL: str = "admin@shopsoma.com"

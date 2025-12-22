@@ -58,6 +58,7 @@ export const ROUTES = {
   ADMIN_PRODUCTS: '/admin/products',
   ADMIN_PRODUCT_DETAIL: '/admin/products/:id',
   ADMIN_PRODUCT_EDIT: '/admin/products/:id/edit',
+  ADMIN_PAYOUTS: '/admin/payouts',
   PROFILE: '/profile',
   PROFILE_EDIT: '/profile/edit',
   PROFILE_PASSWORD: '/profile/password',

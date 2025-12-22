@@ -57,6 +57,91 @@ export interface PayoutInfoData {
   account_holder: string;
 }
 
+export interface VendorEarningsSummary {
+  current_earnings: number;
+  projected_earnings: number;
+  expenses: number;
+  current_earnings_change_pct?: number | null;
+  projected_earnings_change_pct?: number | null;
+  expenses_change_pct?: number | null;
+  start_date?: string | null;
+  end_date?: string | null;
+}
+
+export interface VendorPayoutSummary {
+  pending_amount: number;
+  available_payout: number;
+  last_payout_amount: number;
+  last_payout_date: string | null;
+  total_earnings: number;
+  current_month_sales: number;
+}
+
+export interface VendorPayoutRequest {
+  amount: number;
+  payment_method_id?: string;
+}
+
+export interface VendorPayout {
+  id: string;
+  vendor_id: string;
+  payout_period_start: string;
+  payout_period_end: string;
+  total_sales: number;
+  commission_amount: number;
+  payout_amount: number;
+  status: string;
+  processed_at: string | null;
+  payment_reference: string | null;
+  notes: string | null;
+  created_at: string;
+}
+
+export interface VendorPayoutListResponse {
+  payouts: VendorPayout[];
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+}
+
+export type EarningsViewMode = 'products' | 'orders';
+
+export interface VendorEarningsProductRow {
+  id: string;
+  order_id: string;
+  product_id: string;
+  order_number: string;
+  product_title: string;
+  product_image_url?: string | null;
+  unit_price: number;
+  quantity: number;
+  commission_amount: number;
+  vendor_payout: number;
+  status: string;
+  delivered_at: string | null;
+}
+
+export interface VendorEarningsOrderRow {
+  id: string;
+  order_number: string;
+  items: string[];
+  total_quantity: number;
+  total_commission: number;
+  total_payout: number;
+  status: string;
+  delivered_at: string | null;
+}
+
+export interface VendorEarningsItemsResponse<TItem> {
+  view: EarningsViewMode;
+  items: TItem[];
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+}
+
 export const vendorService = {
   /**
    * Get current vendor profile
@@ -132,6 +217,83 @@ export const vendorService = {
       return response.data;
     } catch (error: any) {
       const message = error?.response?.data?.detail || 'Failed to delete store';
+      throw new Error(message);
+    }
+  },
+
+  async getEarningsSummary(params?: {
+    start_date?: string;
+    end_date?: string;
+  }): Promise<VendorEarningsSummary> {
+    try {
+      const response = await api.get('/vendor/earnings/summary', { params });
+      return response.data;
+    } catch (error: any) {
+      const message = error?.response?.data?.detail || 'Failed to fetch earnings summary';
+      throw new Error(message);
+    }
+  },
+
+  async getEarningsItems(params: {
+    view?: EarningsViewMode;
+    page?: number;
+    page_size?: number;
+    start_date?: string;
+    end_date?: string;
+    search?: string;
+  }): Promise<VendorEarningsItemsResponse<VendorEarningsProductRow | VendorEarningsOrderRow>> {
+    try {
+      const response = await api.get('/vendor/earnings/items', { params });
+      return response.data;
+    } catch (error: any) {
+      const message = error?.response?.data?.detail || 'Failed to fetch earnings items';
+      throw new Error(message);
+    }
+  },
+
+  async getPayoutSummary(): Promise<VendorPayoutSummary> {
+    try {
+      const response = await api.get('/vendor/payouts/summary');
+      return response.data;
+    } catch (error: any) {
+      const message = error?.response?.data?.detail || 'Failed to fetch payout summary';
+      throw new Error(message);
+    }
+  },
+
+  async requestPayout(data: VendorPayoutRequest) {
+    try {
+      const response = await api.post('/vendor/payouts/request', data);
+      return response.data;
+    } catch (error: any) {
+      const message = error?.response?.data?.detail || 'Failed to request payout';
+      throw new Error(message);
+    }
+  },
+
+  async listPayouts(params?: {
+    page?: number;
+    page_size?: number;
+    start_date?: string;
+    end_date?: string;
+    status?: string;
+    search?: string;
+  }): Promise<VendorPayoutListResponse> {
+    try {
+      const response = await api.get('/vendor/payouts', { params });
+      return response.data;
+    } catch (error: any) {
+      const message = error?.response?.data?.detail || 'Failed to fetch payouts';
+      throw new Error(message);
+    }
+  },
+
+  async getPayout(payoutId: string): Promise<VendorPayout> {
+    try {
+      const response = await api.get(`/vendor/payouts/${payoutId}`);
+      return response.data;
+    } catch (error: any) {
+      const message = error?.response?.data?.detail || 'Failed to fetch payout';
       throw new Error(message);
     }
   },
