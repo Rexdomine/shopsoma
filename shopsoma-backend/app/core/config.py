@@ -56,6 +56,8 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+    CUSTOMER_ACCESS_TOKEN_EXPIRE_DAYS: int = 3650
+    CUSTOMER_REFRESH_TOKEN_EXPIRE_DAYS: int = 3650
 
     # CORS
     CORS_ORIGINS: List[str] = ["http://localhost:5173", "http://localhost:3000"]

@@ -14,6 +14,7 @@ from app.core.security import (
     get_password_hash,
     create_access_token,
     create_refresh_token,
+    get_access_token_expires_delta,
     create_magic_link_token,
     verify_magic_link_token,
     create_email_verification_token,
@@ -41,6 +42,10 @@ from app.services.email_service import email_service
 from app.services.account_claim import queue_account_claim_email
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
+
+
+def _access_expires_in_seconds(role: UserRole) -> int:
+    return int(get_access_token_expires_delta(role.value).total_seconds())
 
 
 @router.post("/signup", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
@@ -182,7 +187,7 @@ async def login(
         "access_token": access_token,
         "refresh_token": refresh_token,
         "token_type": "bearer",
-        "expires_in": settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
+        "expires_in": _access_expires_in_seconds(user.role)
     }
 
 
@@ -267,7 +272,7 @@ async def verify_magic_link(
         "access_token": access_token,
         "refresh_token": refresh_token,
         "token_type": "bearer",
-        "expires_in": settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
+        "expires_in": _access_expires_in_seconds(user.role)
     }
 
 
@@ -398,7 +403,7 @@ async def refresh_access_token(
     return {
         "access_token": new_access_token,
         "token_type": "bearer",
-        "expires_in": settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
+        "expires_in": _access_expires_in_seconds(user.role)
     }
 
 
@@ -486,7 +491,7 @@ async def claim_account(
         "access_token": access_token,
         "refresh_token": refresh_token,
         "token_type": "bearer",
-        "expires_in": settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
+        "expires_in": _access_expires_in_seconds(user.role)
     }
 
 

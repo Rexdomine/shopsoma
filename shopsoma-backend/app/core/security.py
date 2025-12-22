@@ -32,6 +32,18 @@ def get_password_hash(password: str) -> str:
     return pwd_context.hash(password)
 
 
+def get_access_token_expires_delta(role: Optional[str]) -> timedelta:
+    if role == "customer":
+        return timedelta(days=settings.CUSTOMER_ACCESS_TOKEN_EXPIRE_DAYS)
+    return timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+
+
+def get_refresh_token_expires_delta(role: Optional[str]) -> timedelta:
+    if role == "customer":
+        return timedelta(days=settings.CUSTOMER_REFRESH_TOKEN_EXPIRE_DAYS)
+    return timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
+
+
 def create_access_token(data: Dict[str, Any], expires_delta: Optional[timedelta] = None) -> str:
     """
     Create JWT access token
@@ -48,7 +60,8 @@ def create_access_token(data: Dict[str, Any], expires_delta: Optional[timedelta]
     if expires_delta:
         expire = datetime.utcnow() + expires_delta
     else:
-        expire = datetime.utcnow() + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+        role = data.get("role")
+        expire = datetime.utcnow() + get_access_token_expires_delta(role)
 
     to_encode.update({"exp": expire, "iat": datetime.utcnow()})
 
@@ -56,7 +69,7 @@ def create_access_token(data: Dict[str, Any], expires_delta: Optional[timedelta]
     return encoded_jwt
 
 
-def create_refresh_token(data: Dict[str, Any]) -> str:
+def create_refresh_token(data: Dict[str, Any], expires_delta: Optional[timedelta] = None) -> str:
     """
     Create JWT refresh token with longer expiration
 
@@ -67,7 +80,11 @@ def create_refresh_token(data: Dict[str, Any]) -> str:
         Encoded JWT refresh token
     """
     to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
+    if expires_delta:
+        expire = datetime.utcnow() + expires_delta
+    else:
+        role = data.get("role")
+        expire = datetime.utcnow() + get_refresh_token_expires_delta(role)
     to_encode.update({"exp": expire, "iat": datetime.utcnow(), "type": "refresh"})
 
     encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
