@@ -731,6 +731,15 @@ async def create_order(
             vendor = vendor_result.scalar_one_or_none()
             vendor_cache[order_item.vendor_id] = vendor
 
+        if not vendor:
+            logger.warning(
+                "[Order Email] Vendor not found for order=%s vendor_id=%s item=%s",
+                new_order.order_number,
+                order_item.vendor_id,
+                order_item.id
+            )
+            continue
+
         if vendor:
             # Determine order type (default to RTW)
             order_type = OrderType.RTW
@@ -774,6 +783,21 @@ async def create_order(
             if vendor_entry["scheduled_date"] is None:
                 vendor_entry["scheduled_date"] = scheduled_date
 
+            logger.info(
+                "[Order Email] Prepared vendor item vendor_id=%s order=%s product=%s qty=%s",
+                vendor.id,
+                new_order.order_number,
+                order_item.product_title,
+                order_item.quantity
+            )
+
+    if not vendor_notifications:
+        logger.warning(
+            "[Order Email] No vendor notifications built for order=%s items=%s",
+            new_order.order_number,
+            len(created_order_items)
+        )
+
     for vendor_id, vendor_entry in vendor_notifications.items():
         scheduled_date = vendor_entry["scheduled_date"] or datetime.utcnow()
         items = vendor_entry["items"]
@@ -794,6 +818,12 @@ async def create_order(
         db.add(notification)
 
         # Queue background task to send vendor notification email
+        logger.info(
+            "[Order Email] Queue vendor email vendor_id=%s order=%s items=%s",
+            vendor_id,
+            new_order.order_number,
+            len(items)
+        )
         background_tasks.add_task(
             send_vendor_order_notification,
             str(vendor_id),
