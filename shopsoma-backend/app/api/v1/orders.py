@@ -182,10 +182,11 @@ def generate_order_number() -> str:
 
 async def send_vendor_order_notification(
     vendor_id: str,
+    order_id: str,
     order_number: str,
-    product_title: str,
-    quantity: int,
-    vendor_payout: float,
+    order_date: datetime,
+    items: list,
+    total_payout: float,
     scheduled_pickup_date: datetime
 ):
     """
@@ -198,10 +199,11 @@ async def send_vendor_order_notification(
         await vendor_notification_service.send_order_notification(
             db=db,
             vendor_id=vendor_id,
+            order_id=order_id,
             order_number=order_number,
-            product_title=product_title,
-            quantity=quantity,
-            vendor_payout=vendor_payout,
+            order_date=order_date,
+            items=items,
+            total_payout=total_payout,
             scheduled_pickup_date=scheduled_pickup_date
         )
 
@@ -686,12 +688,18 @@ async def create_order(
     from app.models.vendor_pickup import OrderType, PickupStatus
     from datetime import datetime, timedelta
 
+    vendor_cache = {}
+    vendor_notifications = {}
+
     for order_item in created_order_items:
         # Get vendor info
-        vendor_result = await db.execute(
-            select(Vendor).options(selectinload(Vendor.user)).where(Vendor.id == order_item.vendor_id)
-        )
-        vendor = vendor_result.scalar_one_or_none()
+        vendor = vendor_cache.get(order_item.vendor_id)
+        if vendor is None:
+            vendor_result = await db.execute(
+                select(Vendor).options(selectinload(Vendor.user)).where(Vendor.id == order_item.vendor_id)
+            )
+            vendor = vendor_result.scalar_one_or_none()
+            vendor_cache[order_item.vendor_id] = vendor
 
         if vendor:
             # Determine order type (default to RTW)
@@ -716,32 +724,56 @@ async def create_order(
             )
             db.add(pickup)
 
-            # Create vendor notification
-            notification = VendorNotification(
-                vendor_id=vendor.id,
-                notification_type="order_placed",
-                title=f"New Order #{new_order.order_number}",
-                message=f"You have received a new order for {order_item.product_title}. Pickup scheduled for {scheduled_date.strftime('%B %d, %Y at %I:%M %p')}.",
-                order_id=new_order.id,
-                data={
-                    "order_number": new_order.order_number,
-                    "product_title": order_item.product_title,
-                    "quantity": order_item.quantity,
-                    "vendor_payout": float(order_item.vendor_payout)
+            vendor_entry = vendor_notifications.setdefault(
+                vendor.id,
+                {
+                    "items": [],
+                    "total_payout": Decimal("0.00"),
+                    "scheduled_date": None,
                 }
             )
-            db.add(notification)
-
-            # Queue background task to send vendor notification email
-            background_tasks.add_task(
-                send_vendor_order_notification,
-                str(vendor.id),
-                new_order.order_number,
-                order_item.product_title,
-                order_item.quantity,
-                float(order_item.vendor_payout),
-                scheduled_date
+            vendor_entry["items"].append(
+                {
+                    "product_title": order_item.product_title,
+                    "quantity": order_item.quantity,
+                    "vendor_payout": float(order_item.vendor_payout),
+                    "variant_details": order_item.variant_details,
+                }
             )
+            vendor_entry["total_payout"] += order_item.vendor_payout
+            if vendor_entry["scheduled_date"] is None:
+                vendor_entry["scheduled_date"] = scheduled_date
+
+    for vendor_id, vendor_entry in vendor_notifications.items():
+        scheduled_date = vendor_entry["scheduled_date"] or datetime.utcnow()
+        items = vendor_entry["items"]
+        total_payout = float(vendor_entry["total_payout"])
+
+        notification = VendorNotification(
+            vendor_id=vendor_id,
+            notification_type="order_placed",
+            title=f"New Order #{new_order.order_number}",
+            message=f"You have received a new order with {len(items)} item(s). Pickup scheduled for {scheduled_date.strftime('%B %d, %Y at %I:%M %p')}.",
+            order_id=new_order.id,
+            data={
+                "order_number": new_order.order_number,
+                "items": items,
+                "total_payout": total_payout
+            }
+        )
+        db.add(notification)
+
+        # Queue background task to send vendor notification email
+        background_tasks.add_task(
+            send_vendor_order_notification,
+            str(vendor_id),
+            str(new_order.id),
+            new_order.order_number,
+            new_order.created_at,
+            items,
+            total_payout,
+            scheduled_date
+        )
 
     # Update stock
     for update_entry in stock_updates:
@@ -816,7 +848,19 @@ async def create_order(
             shipping_address=shipping_addr_dict
         )
 
-        # Send admin notification email
+        # Send admin notification email to all admins
+        admin_result = await db.execute(
+            select(User).where(
+                User.role == UserRole.ADMIN,
+                User.is_active == True
+            )
+        )
+        admin_users = [user for user in admin_result.scalars().all() if user.email]
+        admin_recipients = [
+            {"email": user.email, "name": user.full_name or "Admin"}
+            for user in admin_users
+        ]
+
         await email_service.send_admin_order_notification(
             order_number=loaded_order.order_number,
             customer_name=loaded_order.customer.full_name,
@@ -828,7 +872,8 @@ async def create_order(
             tax=float(loaded_order.tax_amount),
             total=float(loaded_order.total_amount),
             payment_status=loaded_order.payment_status.value,
-            shipping_address=shipping_addr_dict
+            shipping_address=shipping_addr_dict,
+            recipients=admin_recipients or None
         )
     except Exception as e:
         # Log error but don't fail order creation if email fails
