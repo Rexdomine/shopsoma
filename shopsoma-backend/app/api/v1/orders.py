@@ -568,6 +568,7 @@ async def create_order(
 
     # Process and validate items
     order_items = []
+    order_item_media = {}
     stock_updates = []
     subtotal = Decimal("0.00")
 
@@ -627,7 +628,6 @@ async def create_order(
             "vendor_id": product.vendor_id,
             "product_title": product.title,
             "variant_details": variant_details,
-            "image_url": _resolve_product_image_url(product, variant_details),
             "unit_price": unit_price_decimal,
             "quantity": item_data.quantity,
             "subtotal": item_subtotal,
@@ -635,6 +635,7 @@ async def create_order(
             "commission_amount": commission_amount,
             "vendor_payout": vendor_payout
         })
+        order_item_media[product.id] = _resolve_product_image_url(product, variant_details)
 
         stock_updates.append({
             "source": stock_source,
@@ -796,14 +797,7 @@ async def create_order(
                     "quantity": order_item.quantity,
                     "vendor_payout": float(order_item.vendor_payout),
                     "variant_details": order_item.variant_details,
-                    "image_url": next(
-                        (
-                            item.get("image_url")
-                            for item in order_items
-                            if item["product_id"] == order_item.product_id
-                        ),
-                        None
-                    ),
+                    "image_url": order_item_media.get(order_item.product_id),
                 }
             )
             vendor_entry["total_payout"] += order_item.vendor_payout
