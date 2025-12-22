@@ -1,12 +1,15 @@
 """Vendor notification email service"""
 from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import List, Dict, Any
+import logging
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
-from app.models import Vendor, VendorNotification, User
+from app.models import Vendor, VendorNotification
 from app.services.email_service import EmailService
 
+logger = logging.getLogger(__name__)
 
 class VendorNotificationService:
     """Service for sending vendor notifications via email"""
@@ -18,10 +21,11 @@ class VendorNotificationService:
         self,
         db: AsyncSession,
         vendor_id: str,
+        order_id: str,
         order_number: str,
-        product_title: str,
-        quantity: int,
-        vendor_payout: float,
+        order_date: datetime,
+        items: List[Dict[str, Any]],
+        total_payout: float,
         scheduled_pickup_date: datetime
     ):
         """
@@ -30,240 +34,43 @@ class VendorNotificationService:
         Args:
             db: Database session
             vendor_id: Vendor ID
+            order_id: Order ID
             order_number: Order number
-            product_title: Product title
-            quantity: Quantity ordered
-            vendor_payout: Vendor's payout amount
+            order_date: Order created datetime
+            items: List of order items for this vendor
+            total_payout: Total payout for this vendor
             scheduled_pickup_date: Scheduled pickup datetime
         """
         # Get vendor with user info
         result = await db.execute(
-            select(Vendor).where(Vendor.id == vendor_id)
+            select(Vendor).options(selectinload(Vendor.user)).where(Vendor.id == vendor_id)
         )
         vendor = result.scalar_one_or_none()
 
         if not vendor or not vendor.user:
-            print(f"Vendor {vendor_id} not found or has no user account")
+            logger.warning("[Vendor Email] Vendor not found or missing user for vendor_id=%s", vendor_id)
+            return
+        if not vendor.user.email:
+            logger.warning("[Vendor Email] Vendor missing email for vendor_id=%s", vendor_id)
             return
 
-        # Format pickup date
-        pickup_date_str = scheduled_pickup_date.strftime("%B %d, %Y at %I:%M %p")
-
-        # Email content
-        subject = f"New Order Received - #{order_number}"
-
-        html_content = f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset="utf-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>New Order Notification</title>
-            <style>
-                body {{
-                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-                    line-height: 1.6;
-                    color: #1E5053;
-                    background-color: #f8f9fa;
-                    margin: 0;
-                    padding: 0;
-                }}
-                .container {{
-                    max-width: 600px;
-                    margin: 0 auto;
-                    background-color: #ffffff;
-                    padding: 0;
-                }}
-                .header {{
-                    background-color: #1E5053;
-                    padding: 30px 40px;
-                    text-align: center;
-                }}
-                .header h1 {{
-                    color: #ffffff;
-                    margin: 0;
-                    font-size: 24px;
-                    font-weight: 600;
-                }}
-                .content {{
-                    padding: 40px;
-                }}
-                .greeting {{
-                    font-size: 18px;
-                    margin-bottom: 20px;
-                    color: #1E5053;
-                }}
-                .order-box {{
-                    background-color: #f8f9fa;
-                    border-left: 4px solid #1E5053;
-                    padding: 20px;
-                    margin: 20px 0;
-                }}
-                .order-box h2 {{
-                    color: #1E5053;
-                    font-size: 16px;
-                    margin-top: 0;
-                    margin-bottom: 15px;
-                }}
-                .order-details {{
-                    margin: 15px 0;
-                }}
-                .detail-row {{
-                    display: flex;
-                    justify-content: space-between;
-                    padding: 8px 0;
-                    border-bottom: 1px solid #e9ecef;
-                }}
-                .detail-label {{
-                    font-weight: 600;
-                    color: #1E5053;
-                }}
-                .detail-value {{
-                    color: #495057;
-                }}
-                .pickup-info {{
-                    background-color: #e7f3f4;
-                    padding: 15px;
-                    border-radius: 4px;
-                    margin: 20px 0;
-                }}
-                .pickup-info strong {{
-                    color: #1E5053;
-                }}
-                .action-button {{
-                    display: inline-block;
-                    background-color: #1E5053;
-                    color: #ffffff !important;
-                    text-decoration: none;
-                    padding: 12px 30px;
-                    border-radius: 4px;
-                    margin: 20px 0;
-                    font-weight: 600;
-                }}
-                .footer {{
-                    background-color: #f8f9fa;
-                    padding: 30px 40px;
-                    text-align: center;
-                    font-size: 12px;
-                    color: #6c757d;
-                }}
-                .footer a {{
-                    color: #1E5053;
-                    text-decoration: none;
-                }}
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <div class="header">
-                    <h1>🎉 New Order Received!</h1>
-                </div>
-
-                <div class="content">
-                    <p class="greeting">Hello {vendor.business_name},</p>
-
-                    <p>Great news! You've received a new order on SHOPSOMA.</p>
-
-                    <div class="order-box">
-                        <h2>Order Details</h2>
-                        <div class="order-details">
-                            <div class="detail-row">
-                                <span class="detail-label">Order Number:</span>
-                                <span class="detail-value">#{order_number}</span>
-                            </div>
-                            <div class="detail-row">
-                                <span class="detail-label">Product:</span>
-                                <span class="detail-value">{product_title}</span>
-                            </div>
-                            <div class="detail-row">
-                                <span class="detail-label">Quantity:</span>
-                                <span class="detail-value">{quantity}</span>
-                            </div>
-                            <div class="detail-row">
-                                <span class="detail-label">Your Payout:</span>
-                                <span class="detail-value">₦{vendor_payout:,.2f}</span>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="pickup-info">
-                        <strong>📦 Pickup Scheduled:</strong><br>
-                        Our logistics partner will pick up your order on <strong>{pickup_date_str}</strong>.
-                        <br><br>
-                        Please ensure the product is ready for pickup at the scheduled time.
-                    </div>
-
-                    <p>
-                        <a href="https://vendor.shopsoma.com/dashboard" class="action-button">
-                            View Order in Dashboard
-                        </a>
-                    </p>
-
-                    <p style="margin-top: 30px; color: #6c757d; font-size: 14px;">
-                        <strong>Next Steps:</strong><br>
-                        1. Prepare the order according to customer specifications<br>
-                        2. Package the item securely<br>
-                        3. Ensure it's ready for pickup at the scheduled time<br>
-                        4. Our logistics partner will handle the rest
-                    </p>
-
-                    <p style="margin-top: 20px; color: #6c757d; font-size: 14px;">
-                        Need help? Contact our seller support at
-                        <a href="mailto:partnerships@shopsoma.com" style="color: #1E5053;">partnerships@shopsoma.com</a>
-                    </p>
-                </div>
-
-                <div class="footer">
-                    <p>© {datetime.utcnow().year} SHOPSOMA. All rights reserved.</p>
-                    <p>
-                        <a href="https://shopsoma.com">Visit SHOPSOMA</a> |
-                        <a href="https://vendor.shopsoma.com">Vendor Dashboard</a> |
-                        <a href="mailto:partnerships@shopsoma.com">Support</a>
-                    </p>
-                </div>
-            </div>
-        </body>
-        </html>
-        """
-
-        # Plain text version
-        text_content = f"""
-        New Order Received!
-
-        Hello {vendor.business_name},
-
-        You've received a new order on SHOPSOMA:
-
-        Order Number: #{order_number}
-        Product: {product_title}
-        Quantity: {quantity}
-        Your Payout: ₦{vendor_payout:,.2f}
-
-        Pickup Scheduled: {pickup_date_str}
-
-        Our logistics partner will pick up your order at the scheduled time.
-        Please ensure the product is ready for pickup.
-
-        View your order: https://vendor.shopsoma.com/dashboard
-
-        Need help? Contact: partnerships@shopsoma.com
-
-        © {datetime.utcnow().year} SHOPSOMA
-        """
-
         try:
-            await self.email_service.send_email(
-                to_email=vendor.user.email,
-                subject=subject,
-                html_content=html_content,
-                text_content=text_content
+            await self.email_service.send_vendor_new_order_email(
+                email=vendor.user.email,
+                name=vendor.business_name,
+                order_number=order_number,
+                order_date=order_date,
+                items=items,
+                total_payout=total_payout,
+                pickup_date=scheduled_pickup_date
             )
 
             # Update notification email_sent status
             notification_result = await db.execute(
                 select(VendorNotification).where(
                     VendorNotification.vendor_id == vendor_id,
-                    VendorNotification.order_id.isnot(None)
+                    VendorNotification.order_id == order_id,
+                    VendorNotification.notification_type == "order_placed"
                 ).order_by(VendorNotification.created_at.desc()).limit(1)
             )
             notification = notification_result.scalar_one_or_none()
@@ -273,10 +80,19 @@ class VendorNotificationService:
                 notification.email_sent_at = datetime.utcnow()
                 await db.commit()
 
-            print(f"✅ Order notification email sent to vendor {vendor.business_name}")
+            logger.info(
+                "[Vendor Email] New order email sent to vendor_id=%s order=%s",
+                vendor_id,
+                order_number
+            )
 
         except Exception as e:
-            print(f"❌ Failed to send order notification email to vendor {vendor.business_name}: {e}")
+            logger.exception(
+                "[Vendor Email] Failed to send vendor email for vendor_id=%s order=%s: %s",
+                vendor_id,
+                order_number,
+                e
+            )
 
     async def send_pickup_reminder(
         self,
@@ -356,9 +172,18 @@ class VendorNotificationService:
                 subject=subject,
                 html_content=html_content
             )
-            print(f"✅ Pickup reminder sent to vendor {vendor.business_name}")
+            logger.info(
+                "[Vendor Email] Pickup reminder sent to vendor_id=%s order=%s",
+                vendor_id,
+                order_number
+            )
         except Exception as e:
-            print(f"❌ Failed to send pickup reminder: {e}")
+            logger.exception(
+                "[Vendor Email] Failed to send pickup reminder for vendor_id=%s order=%s: %s",
+                vendor_id,
+                order_number,
+                e
+            )
 
     async def send_payout_notification(
         self,
@@ -468,6 +293,10 @@ class VendorNotificationService:
             db.add(notification)
             await db.commit()
 
-            print(f"✅ Payout notification sent to vendor {vendor.business_name}")
+            logger.info("[Vendor Email] Payout notification sent to vendor_id=%s", vendor_id)
         except Exception as e:
-            print(f"❌ Failed to send payout notification: {e}")
+            logger.exception(
+                "[Vendor Email] Failed to send payout notification for vendor_id=%s: %s",
+                vendor_id,
+                e
+            )

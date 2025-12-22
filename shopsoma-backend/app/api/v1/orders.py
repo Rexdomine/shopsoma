@@ -1,5 +1,5 @@
 """Order management endpoints"""
-from typing import Optional
+from typing import Optional, List, Dict
 from fastapi import APIRouter, Depends, HTTPException, status, Query, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, and_, or_, func
@@ -8,6 +8,7 @@ from uuid import UUID
 from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
 import secrets
+import logging
 
 from app.core.database import get_db
 from app.models.user import User, UserRole
@@ -31,9 +32,11 @@ from app.api.dependencies import get_current_active_user, get_optional_user
 from app.services.email_service import email_service
 from app.services.vendor_notification_service import VendorNotificationService
 from app.services.account_claim import queue_account_claim_email
+from app.core.config import settings
 
 router = APIRouter(prefix="/orders", tags=["Orders"])
 MIN_ORDER_AMOUNT_NGN = Decimal("60000.00")
+logger = logging.getLogger(__name__)
 
 # Simple promo code configuration (should eventually move to dedicated table/service)
 PROMO_CODES = {
@@ -78,6 +81,35 @@ def _as_decimal(value) -> Decimal:
     if value is None:
         return Decimal("0.00")
     return Decimal(str(value))
+
+
+def _build_admin_recipients(admin_users: List[User]) -> List[Dict[str, str]]:
+    recipients = [
+        {"email": user.email, "name": user.full_name or "Admin"}
+        for user in admin_users
+        if user.email
+    ]
+    if settings.ADMIN_EMAIL and all(
+        recipient["email"] != settings.ADMIN_EMAIL for recipient in recipients
+    ):
+        recipients.append({"email": settings.ADMIN_EMAIL, "name": "Admin"})
+    return recipients
+
+
+def _resolve_product_image_url(product: Product, variant_details: Optional[Dict[str, str]]) -> Optional[str]:
+    if variant_details and product.variations:
+        variation_id = variant_details.get("variation_id")
+        if variation_id:
+            for variation in product.variations:
+                if str(variation.id) == str(variation_id) and variation.images:
+                    return variation.images[0]
+
+    if product.images:
+        primary = next((image for image in product.images if image.is_primary), None)
+        selected = primary or product.images[0]
+        return selected.thumbnail_url or selected.image_url
+
+    return None
 
 
 def _resolve_order_currency(order: Order) -> str:
@@ -182,10 +214,11 @@ def generate_order_number() -> str:
 
 async def send_vendor_order_notification(
     vendor_id: str,
+    order_id: str,
     order_number: str,
-    product_title: str,
-    quantity: int,
-    vendor_payout: float,
+    order_date: datetime,
+    items: list,
+    total_payout: float,
     scheduled_pickup_date: datetime
 ):
     """
@@ -195,15 +228,30 @@ async def send_vendor_order_notification(
 
     async with get_db_context() as db:
         vendor_notification_service = VendorNotificationService(email_service)
-        await vendor_notification_service.send_order_notification(
-            db=db,
-            vendor_id=vendor_id,
-            order_number=order_number,
-            product_title=product_title,
-            quantity=quantity,
-            vendor_payout=vendor_payout,
-            scheduled_pickup_date=scheduled_pickup_date
-        )
+        try:
+            await vendor_notification_service.send_order_notification(
+                db=db,
+                vendor_id=vendor_id,
+                order_id=order_id,
+                order_number=order_number,
+                order_date=order_date,
+                items=items,
+                total_payout=total_payout,
+                scheduled_pickup_date=scheduled_pickup_date
+            )
+            logger.info(
+                "[Order Email] Vendor email queued for vendor_id=%s order=%s items=%s",
+                vendor_id,
+                order_number,
+                len(items)
+            )
+        except Exception as exc:
+            logger.exception(
+                "[Order Email] Vendor email failed for vendor_id=%s order=%s: %s",
+                vendor_id,
+                order_number,
+                exc
+            )
 
 
 async def calculate_order_totals(
@@ -520,13 +568,16 @@ async def create_order(
 
     # Process and validate items
     order_items = []
+    order_item_media = {}
     stock_updates = []
     subtotal = Decimal("0.00")
 
     for item_data in order_data.items:
         # Get product with vendor
         product_query = select(Product).options(
-            selectinload(Product.vendor)
+            selectinload(Product.vendor),
+            selectinload(Product.images),
+            selectinload(Product.variations)
         ).where(Product.id == item_data.product_id)
 
         product_result = await db.execute(product_query)
@@ -584,6 +635,7 @@ async def create_order(
             "commission_amount": commission_amount,
             "vendor_payout": vendor_payout
         })
+        order_item_media[product.id] = _resolve_product_image_url(product, variant_details)
 
         stock_updates.append({
             "source": stock_source,
@@ -686,12 +738,27 @@ async def create_order(
     from app.models.vendor_pickup import OrderType, PickupStatus
     from datetime import datetime, timedelta
 
+    vendor_cache = {}
+    vendor_notifications = {}
+
     for order_item in created_order_items:
         # Get vendor info
-        vendor_result = await db.execute(
-            select(Vendor).options(selectinload(Vendor.user)).where(Vendor.id == order_item.vendor_id)
-        )
-        vendor = vendor_result.scalar_one_or_none()
+        vendor = vendor_cache.get(order_item.vendor_id)
+        if vendor is None:
+            vendor_result = await db.execute(
+                select(Vendor).options(selectinload(Vendor.user)).where(Vendor.id == order_item.vendor_id)
+            )
+            vendor = vendor_result.scalar_one_or_none()
+            vendor_cache[order_item.vendor_id] = vendor
+
+        if not vendor:
+            logger.warning(
+                "[Order Email] Vendor not found for order=%s vendor_id=%s item=%s",
+                new_order.order_number,
+                order_item.vendor_id,
+                order_item.id
+            )
+            continue
 
         if vendor:
             # Determine order type (default to RTW)
@@ -716,32 +783,67 @@ async def create_order(
             )
             db.add(pickup)
 
-            # Create vendor notification
-            notification = VendorNotification(
-                vendor_id=vendor.id,
-                notification_type="order_placed",
-                title=f"New Order #{new_order.order_number}",
-                message=f"You have received a new order for {order_item.product_title}. Pickup scheduled for {scheduled_date.strftime('%B %d, %Y at %I:%M %p')}.",
-                order_id=new_order.id,
-                data={
-                    "order_number": new_order.order_number,
-                    "product_title": order_item.product_title,
-                    "quantity": order_item.quantity,
-                    "vendor_payout": float(order_item.vendor_payout)
+            vendor_entry = vendor_notifications.setdefault(
+                vendor.id,
+                {
+                    "items": [],
+                    "total_payout": Decimal("0.00"),
+                    "scheduled_date": None,
                 }
             )
-            db.add(notification)
+            vendor_entry["items"].append(
+                {
+                    "product_title": order_item.product_title,
+                    "quantity": order_item.quantity,
+                    "vendor_payout": float(order_item.vendor_payout),
+                    "variant_details": order_item.variant_details,
+                    "image_url": order_item_media.get(order_item.product_id),
+                }
+            )
+            vendor_entry["total_payout"] += order_item.vendor_payout
+            if vendor_entry["scheduled_date"] is None:
+                vendor_entry["scheduled_date"] = scheduled_date
 
-            # Queue background task to send vendor notification email
-            background_tasks.add_task(
-                send_vendor_order_notification,
-                str(vendor.id),
+            logger.info(
+                "[Order Email] Prepared vendor item vendor_id=%s order=%s product=%s qty=%s",
+                vendor.id,
                 new_order.order_number,
                 order_item.product_title,
-                order_item.quantity,
-                float(order_item.vendor_payout),
-                scheduled_date
+                order_item.quantity
             )
+
+    if not vendor_notifications:
+        logger.warning(
+            "[Order Email] No vendor notifications built for order=%s items=%s",
+            new_order.order_number,
+            len(created_order_items)
+        )
+
+    for vendor_id, vendor_entry in vendor_notifications.items():
+        scheduled_date = vendor_entry["scheduled_date"] or datetime.utcnow()
+        items = vendor_entry["items"]
+        total_payout = float(vendor_entry["total_payout"])
+
+        notification = VendorNotification(
+            vendor_id=vendor_id,
+            notification_type="order_placed",
+            title=f"New Order #{new_order.order_number}",
+            message=f"You have received a new order with {len(items)} item(s). Pickup scheduled for {scheduled_date.strftime('%B %d, %Y at %I:%M %p')}.",
+            order_id=new_order.id,
+            data={
+                "order_number": new_order.order_number,
+                "items": items,
+                "total_payout": total_payout
+            }
+        )
+        db.add(notification)
+
+        logger.info(
+            "[Order Email] Prepared vendor notification vendor_id=%s order=%s items=%s",
+            vendor_id,
+            new_order.order_number,
+            len(items)
+        )
 
     # Update stock
     for update_entry in stock_updates:
@@ -765,6 +867,37 @@ async def create_order(
             )
 
     await db.commit()
+
+    vendor_notification_service = VendorNotificationService(email_service)
+    for vendor_id, vendor_entry in vendor_notifications.items():
+        scheduled_date = vendor_entry["scheduled_date"] or datetime.utcnow()
+        items = vendor_entry["items"]
+        total_payout = float(vendor_entry["total_payout"])
+
+        try:
+            await vendor_notification_service.send_order_notification(
+                db=db,
+                vendor_id=str(vendor_id),
+                order_id=str(new_order.id),
+                order_number=new_order.order_number,
+                order_date=new_order.created_at or datetime.utcnow(),
+                items=items,
+                total_payout=total_payout,
+                scheduled_pickup_date=scheduled_date
+            )
+            logger.info(
+                "[Order Email] Vendor email sent vendor_id=%s order=%s items=%s",
+                vendor_id,
+                new_order.order_number,
+                len(items)
+            )
+        except Exception as exc:
+            logger.exception(
+                "[Order Email] Vendor email failed vendor_id=%s order=%s: %s",
+                vendor_id,
+                new_order.order_number,
+                exc
+            )
 
     # Load order with all relationships
     order_query = select(Order).options(
@@ -816,8 +949,17 @@ async def create_order(
             shipping_address=shipping_addr_dict
         )
 
-        # Send admin notification email
-        await email_service.send_admin_order_notification(
+        # Send admin notification email to all admins
+        admin_result = await db.execute(
+            select(User).where(
+                User.role == UserRole.ADMIN,
+                User.is_active == True
+            )
+        )
+        admin_users = [user for user in admin_result.scalars().all() if user.email]
+        admin_recipients = _build_admin_recipients(admin_users)
+
+        admin_sent = await email_service.send_admin_order_notification(
             order_number=loaded_order.order_number,
             customer_name=loaded_order.customer.full_name,
             customer_email=loaded_order.customer.email,
@@ -828,7 +970,14 @@ async def create_order(
             tax=float(loaded_order.tax_amount),
             total=float(loaded_order.total_amount),
             payment_status=loaded_order.payment_status.value,
-            shipping_address=shipping_addr_dict
+            shipping_address=shipping_addr_dict,
+            recipients=admin_recipients or None
+        )
+        logger.info(
+            "[Order Email] Admin email sent=%s recipients=%s order=%s",
+            admin_sent,
+            [recipient.get("email") for recipient in admin_recipients],
+            loaded_order.order_number
         )
     except Exception as e:
         # Log error but don't fail order creation if email fails

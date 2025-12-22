@@ -264,6 +264,59 @@ class EmailService:
             """
         return rows
 
+    def _build_vendor_items_table(self, items: List[dict]) -> str:
+        rows = ""
+        for item in items:
+            name = item.get("product_title") or item.get("product_name") or "Product"
+            quantity = item.get("quantity", 1)
+            payout = self._format_amount(item.get("vendor_payout", 0))
+            variant_details = ""
+            details_dict = item.get("variant_details")
+            if isinstance(details_dict, dict):
+                detail_parts = []
+                size_value = details_dict.get("size")
+                color_value = details_dict.get("color")
+                if size_value:
+                    detail_parts.append(f"size: {size_value}")
+                if color_value:
+                    detail_parts.append(f"color: {color_value}")
+                variant_details = " · ".join(detail_parts)
+            elif isinstance(details_dict, str):
+                variant_details = details_dict
+
+            image_url = item.get("image_url") or item.get("image") or item.get("thumbnail")
+            resolved_image = self._resolve_image_url(image_url, self.product_placeholder)
+            if resolved_image and resolved_image.startswith("http"):
+                image_cell = f'<img src="{resolved_image}" alt="{name}" style="width:56px;height:56px;border-radius:6px;object-fit:cover;display:block;" />'
+            else:
+                image_cell = f'<div style="width:56px;height:56px;border-radius:6px;background:{BRAND_LIGHT};display:flex;align-items:center;justify-content:center;border:1px solid {BRAND_BORDER};"><span style="color:{BRAND_PRIMARY};font-size:20px;font-weight:600;">📦</span></div>'
+
+            item_cell = f"""
+            <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
+                <tr>
+                    <td style="width:72px;padding-right:12px;vertical-align:top;">
+                        {image_cell}
+                    </td>
+                    <td style="vertical-align:top;">
+                        <strong>{name}</strong><br/>
+                        {"<span style='color:#6B7280;font-size:12px;'>" + variant_details + "</span>" if variant_details else ""}
+                    </td>
+                </tr>
+            </table>
+            """
+
+            rows += f"""
+            <tr>
+                <td style="padding:12px;border-bottom:1px solid {BRAND_BORDER};">
+                    {item_cell}
+                </td>
+                <td style="padding:12px;border-bottom:1px solid {BRAND_BORDER};text-align:center;">{quantity}</td>
+                <td style="padding:12px;border-bottom:1px solid {BRAND_BORDER};text-align:right;">{payout}</td>
+            </tr>
+            """
+
+        return rows
+
     async def send_order_confirmation_email(
         self,
         email: str,
@@ -337,6 +390,62 @@ class EmailService:
         html_content = self._wrap_email("Order Confirmation", body_html, "Your Shopsoma order has been received.")
         return await self.send_email(email, name, subject, html_content)
 
+    async def send_vendor_new_order_email(
+        self,
+        email: str,
+        name: str,
+        order_number: str,
+        order_date: datetime,
+        items: List[dict],
+        total_payout: float,
+        pickup_date: datetime
+    ) -> bool:
+        subject = f"New Order Received · {order_number}"
+        items_table = self._build_vendor_items_table(items)
+        pickup_date_str = pickup_date.strftime("%d %B %Y · %I:%M %p")
+
+        body_html = f"""
+        <p style="font-size:16px;">Hello {name or 'there'},</p>
+        <p>You have received a new order on Shopsoma. Please prepare the items below for pickup.</p>
+        <div style="margin:24px 0;padding:20px;border:1px solid {BRAND_BORDER};border-radius:10px;background:{BRAND_LIGHT};">
+            <p style="margin:0;"><strong>Order Number:</strong> {order_number}</p>
+            <p style="margin:4px 0;"><strong>Order Date:</strong> {order_date.strftime('%d %B %Y · %I:%M %p')}</p>
+            <p style="margin:4px 0;"><strong>Pickup Scheduled:</strong> {pickup_date_str}</p>
+        </div>
+        <table style="width:100%;border-collapse:collapse;margin-bottom:24px;">
+            <thead>
+                <tr style="background:{BRAND_LIGHT};text-transform:uppercase;font-size:12px;letter-spacing:0.15em;color:#6B7280;">
+                    <th style="padding:12px;text-align:left;">Item</th>
+                    <th style="padding:12px;text-align:center;">Qty</th>
+                    <th style="padding:12px;text-align:right;">Payout</th>
+                </tr>
+            </thead>
+            <tbody>
+                {items_table}
+            </tbody>
+        </table>
+        <div style="border:1px solid {BRAND_BORDER};border-radius:10px;padding:20px;margin-bottom:24px;">
+            <table style="width:100%;font-size:14px;">
+                <tr style="font-size:16px;font-weight:600;">
+                    <td>Total Payout</td>
+                    <td style="text-align:right;">{self._format_amount(total_payout)}</td>
+                </tr>
+            </table>
+        </div>
+        <p style="text-align:center;margin-top:32px;">
+            <a href="{settings.FRONTEND_BASE_URL}/vendor/orders" style="display:inline-block;padding:12px 24px;background:{BRAND_PRIMARY};color:#fff;text-decoration:none;border-radius:999px;font-weight:600;">
+                View Order in Vendor Dashboard
+            </a>
+        </p>
+        <p style="margin-top:24px;color:#6B7280;font-size:13px;">
+            Need help? Reach out to our vendor support team at
+            <a href="mailto:partnerships@shopsoma.com" style="color:{BRAND_PRIMARY};">partnerships@shopsoma.com</a>.
+        </p>
+        """
+
+        html_content = self._wrap_email("New Order", body_html, f"New order {order_number} received.")
+        return await self.send_email(email, name, subject, html_content)
+
     async def send_admin_order_notification(
         self,
         order_number: str,
@@ -349,7 +458,8 @@ class EmailService:
         tax: float,
         total: float,
         payment_status: str,
-        shipping_address: Dict[str, str]
+        shipping_address: Dict[str, str],
+        recipients: Optional[List[Dict[str, str]]] = None
     ) -> bool:
         """
         Send new order notification to admin
@@ -366,6 +476,7 @@ class EmailService:
             total: Total amount
             payment_status: Payment status (paid, pending, etc.)
             shipping_address: Shipping address dict
+            recipients: Optional list of {"email": str, "name": str} recipients
 
         Returns:
             bool: True if email sent successfully
@@ -448,7 +559,17 @@ class EmailService:
         """
 
         html_content = self._wrap_email("New Order", body_html, f"New order {order_number} from {customer_name}")
-        return await self.send_email(settings.ADMIN_EMAIL, "Admin", subject, html_content)
+        recipient_list = recipients or [{"email": settings.ADMIN_EMAIL, "name": "Admin"}]
+        all_sent = True
+        for recipient in recipient_list:
+            sent = await self.send_email(
+                recipient.get("email", settings.ADMIN_EMAIL),
+                recipient.get("name", "Admin"),
+                subject,
+                html_content
+            )
+            all_sent = all_sent and sent
+        return all_sent
 
     async def send_order_status_update_email(
         self,

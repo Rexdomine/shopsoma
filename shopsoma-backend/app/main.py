@@ -3,6 +3,7 @@ Shopsoma Backend API
 Main application entry point
 """
 import os
+import logging
 from pathlib import Path
 from dotenv import load_dotenv
 from fastapi import FastAPI
@@ -12,6 +13,13 @@ from contextlib import asynccontextmanager
 
 # Load environment variables from .env file
 load_dotenv()
+
+# Basic logging configuration for app logs
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+logging.basicConfig(
+    level=LOG_LEVEL,
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s"
+)
 
 # Import routers
 from app.api.v1 import auth, products, images, admin, seed, cart, addresses, shipping_rates, orders, promo_codes, payments, users, wishlist, newsletter, preferences, payment_portals, vendors, vendor_activation, vendor_applications, vendor_payment_methods, categories, collections, settings, admin_orders, websocket
