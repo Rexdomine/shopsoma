@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { X, ChevronDown, Check } from 'lucide-react';
 import { useVendor } from '../../context/VendorContext';
 import { vendorService } from '../../services/vendorService';
@@ -95,27 +95,28 @@ export default function WithdrawModal({ open, onClose, onSuccess, onError }: Wit
     fetchMethods();
   }, [open]);
 
-  useEffect(() => {
-    const fetchSummary = async () => {
-      if (!open) return;
-      try {
-        setLoading(true);
-        setError(null);
-        const summary = await vendorService.getPayoutSummary();
-        const pending = Number(summary.pending_amount ?? 0);
-        const available = Number(summary.available_payout ?? 0);
-        setPendingAmount(pending);
-        setAvailablePayout(available);
-        const initial = Math.min(500000, available);
-        setAmount(initial > 0 ? initial : 0);
-      } catch (err: any) {
-        setError(err?.message || 'Failed to load payout balance.');
-      } finally {
-        setLoading(false);
-      }
-    };
-    fetchSummary();
+  const loadSummary = useCallback(async () => {
+    if (!open) return;
+    try {
+      setLoading(true);
+      setError(null);
+      const summary = await vendorService.getPayoutSummary();
+      const pending = Number(summary.pending_amount ?? 0);
+      const available = Number(summary.available_payout ?? 0);
+      setPendingAmount(pending);
+      setAvailablePayout(available);
+      const initial = Math.min(500000, available);
+      setAmount(initial > 0 ? initial : 0);
+    } catch (err: any) {
+      setError(err?.message || 'Failed to load payout balance.');
+    } finally {
+      setLoading(false);
+    }
   }, [open]);
+
+  useEffect(() => {
+    loadSummary();
+  }, [loadSummary]);
 
   if (!open) return null;
 
@@ -173,18 +174,29 @@ export default function WithdrawModal({ open, onClose, onSuccess, onError }: Wit
           <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-left">
             <p className="text-xs text-gray-500">Current Earnings</p>
             <p className="text-sm font-semibold text-gray-900">
-              {formatOptionalAmount(pendingAmount)}
+              {loading ? (
+                <span className="inline-block h-3 w-16 bg-gray-200 rounded-full animate-pulse" />
+              ) : (
+                formatOptionalAmount(pendingAmount)
+              )}
             </p>
           </div>
           <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-left">
             <p className="text-xs text-emerald-700">Available Payout</p>
             <p className="text-sm font-semibold text-emerald-900">
-              {formatOptionalAmount(availablePayout)}
+              {loading ? (
+                <span className="inline-block h-3 w-16 bg-emerald-200 rounded-full animate-pulse" />
+              ) : (
+                formatOptionalAmount(availablePayout)
+              )}
             </p>
           </div>
         </div>
         {loading && (
-          <p className="text-xs text-gray-500 text-center mb-4">Loading payout balance...</p>
+          <div className="mb-4 space-y-2">
+            <div className="h-3 w-40 bg-gray-200 rounded-full animate-pulse mx-auto" />
+            <div className="h-3 w-24 bg-gray-200 rounded-full animate-pulse mx-auto" />
+          </div>
         )}
         {!loading && (
           <p className="text-xs text-gray-500 text-center mb-4">
@@ -192,7 +204,16 @@ export default function WithdrawModal({ open, onClose, onSuccess, onError }: Wit
           </p>
         )}
         {error && (
-          <p className="text-xs text-red-600 text-center mb-4">{error}</p>
+          <div className="text-center mb-4 space-y-2">
+            <p className="text-xs text-red-600">{error}</p>
+            <button
+              type="button"
+              onClick={loadSummary}
+              className="text-xs font-semibold text-[#105E53] hover:underline"
+            >
+              Retry
+            </button>
+          </div>
         )}
 
         <div className="space-y-2">

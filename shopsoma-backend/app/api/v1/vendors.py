@@ -1211,12 +1211,16 @@ async def request_vendor_payout(
             detail="Bank payout information is incomplete."
         )
 
+    payout_expr = func.coalesce(
+        OrderItem.vendor_payout,
+        OrderItem.subtotal - func.coalesce(OrderItem.commission_amount, 0)
+    )
     pending_result = await db.execute(
-        select(func.sum(OrderItem.vendor_payout)).join(Order).where(
+        select(func.sum(payout_expr)).join(Order).where(
             and_(
                 OrderItem.vendor_id == vendor.id,
                 Order.payment_status == PaymentStatus.PAID,
-                Order.fulfillment_status == FulfillmentStatus.DELIVERED
+                Order.delivered_at.isnot(None)
             )
         )
     )
@@ -1252,11 +1256,10 @@ async def request_vendor_payout(
     hold_days = await _get_payout_hold_days(db)
     cutoff_date = datetime.utcnow() - timedelta(days=hold_days)
     available_result = await db.execute(
-        select(func.sum(OrderItem.vendor_payout)).join(Order).where(
+        select(func.sum(payout_expr)).join(Order).where(
             and_(
                 OrderItem.vendor_id == vendor.id,
                 Order.payment_status == PaymentStatus.PAID,
-                Order.fulfillment_status == FulfillmentStatus.DELIVERED,
                 Order.delivered_at.isnot(None),
                 Order.delivered_at <= cutoff_date
             )
@@ -1288,7 +1291,6 @@ async def request_vendor_payout(
             and_(
                 OrderItem.vendor_id == vendor.id,
                 Order.payment_status == PaymentStatus.PAID,
-                Order.fulfillment_status == FulfillmentStatus.DELIVERED,
                 Order.delivered_at.isnot(None)
             )
         )
@@ -1390,7 +1392,7 @@ async def get_payout_summary(
             and_(
                 OrderItem.vendor_id == vendor.id,
                 Order.payment_status == PaymentStatus.PAID,
-                Order.fulfillment_status == FulfillmentStatus.DELIVERED
+                Order.delivered_at.isnot(None)
             )
         )
     )
@@ -1416,7 +1418,6 @@ async def get_payout_summary(
             and_(
                 OrderItem.vendor_id == vendor.id,
                 Order.payment_status == PaymentStatus.PAID,
-                Order.fulfillment_status == FulfillmentStatus.DELIVERED,
                 Order.delivered_at.isnot(None),
                 Order.delivered_at <= cutoff_date
             )
