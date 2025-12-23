@@ -1,5 +1,14 @@
-import { useState, useEffect } from 'react';
-import { Save, DollarSign, Loader2, CheckCircle2, AlertCircle, Truck } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import {
+  Save,
+  DollarSign,
+  Loader2,
+  CheckCircle2,
+  AlertCircle,
+  Truck,
+  Database,
+  RefreshCw,
+} from 'lucide-react';
 import AdminSidebar from '../../components/admin/AdminSidebar';
 import {
   getExchangeRate,
@@ -8,6 +17,7 @@ import {
   updateShippingProviderSettings,
   getPayoutHoldSettings,
   updatePayoutHoldSettings,
+  syncRenderDatabase,
   type ExchangeRate,
   type PayoutHoldSettings,
 } from '../../services/settingsService';
@@ -32,9 +42,22 @@ export default function AdminSettings() {
   const [payoutHoldInput, setPayoutHoldInput] = useState('');
   const [savingPayoutHold, setSavingPayoutHold] = useState(false);
   const [payoutHoldChanged, setPayoutHoldChanged] = useState(false);
+  const [syncingDb, setSyncingDb] = useState(false);
+  const [lastDbSync, setLastDbSync] = useState<string | null>(null);
+  const [syncProgress, setSyncProgress] = useState(0);
+  const [syncStatus, setSyncStatus] = useState<'idle' | 'running' | 'success' | 'error'>('idle');
+  const syncTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     fetchSettings();
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (syncTimerRef.current !== null) {
+        window.clearInterval(syncTimerRef.current);
+      }
+    };
   }, []);
 
   const fetchSettings = async () => {
@@ -165,6 +188,54 @@ export default function AdminSettings() {
     if (payoutHold) {
       setPayoutHoldInput(payoutHold.hold_days.toString());
       setPayoutHoldChanged(false);
+    }
+  };
+
+  const handleDbSync = async () => {
+    const confirmed = window.confirm(
+      'This will replace your local database with the latest data from Render. Continue?'
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    if (syncTimerRef.current !== null) {
+      window.clearInterval(syncTimerRef.current);
+    }
+
+    try {
+      setSyncingDb(true);
+      setSyncStatus('running');
+      setSyncProgress(5);
+      syncTimerRef.current = window.setInterval(() => {
+        setSyncProgress((prev) => {
+          if (prev >= 90) {
+            return prev;
+          }
+          const step = Math.max(2, Math.floor(Math.random() * 8));
+          return Math.min(90, prev + step);
+        });
+      }, 700);
+
+      const result = await syncRenderDatabase();
+      setLastDbSync(result.message);
+      setSyncStatus('success');
+      setSyncProgress(100);
+      success(result.message, 'Database Sync Complete');
+    } catch (err: any) {
+      console.error('Failed to sync database:', err);
+      error(err.response?.data?.detail || 'Database sync failed', 'Error');
+      setSyncStatus('error');
+    } finally {
+      if (syncTimerRef.current !== null) {
+        window.clearInterval(syncTimerRef.current);
+        syncTimerRef.current = null;
+      }
+      setSyncingDb(false);
+      window.setTimeout(() => {
+        setSyncProgress(0);
+        setSyncStatus('idle');
+      }, 1500);
     }
   };
 
@@ -507,6 +578,79 @@ export default function AdminSettings() {
                           : 'Not set'}
                       </p>
                     </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Database Sync Card */}
+          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+            <div className="border-b border-gray-200 px-6 py-4">
+              <div className="flex items-center gap-3">
+                <div className="h-10 w-10 rounded-xl bg-[#105E53] text-white flex items-center justify-center">
+                  <Database className="w-5 h-5" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-semibold text-gray-900">Database Sync (Local)</h2>
+                  <p className="text-sm text-gray-600">Replace local data with Render staging data</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <div className="flex items-start gap-3">
+                <AlertCircle className="w-5 h-5 text-orange-600 mt-0.5 flex-shrink-0" />
+                <div>
+                  <p className="text-sm font-semibold text-orange-900">Destructive action</p>
+                  <p className="text-sm text-orange-800">
+                    This will overwrite your local database. Use only in local development.
+                  </p>
+                </div>
+              </div>
+
+              {lastDbSync && (
+                <div className="bg-gray-50 rounded-lg p-4 border border-gray-200 text-sm text-gray-700">
+                  {lastDbSync}
+                </div>
+              )}
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleDbSync}
+                  disabled={syncingDb}
+                  className="px-4 py-2.5 bg-[#0B1D2C] text-white rounded-lg text-sm font-medium hover:bg-[#081620] transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                >
+                  {syncingDb ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Syncing...
+                    </>
+                  ) : (
+                    <>
+                      <RefreshCw className="w-4 h-4" />
+                      Sync Render to Local
+                    </>
+                  )}
+                </button>
+              </div>
+
+              {(syncStatus === 'running' || syncProgress > 0) && (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-xs text-gray-600">
+                    <span>
+                      {syncStatus === 'running' ? 'Sync in progress' : 'Sync complete'}
+                    </span>
+                    <span>{syncProgress}%</span>
+                  </div>
+                  <div className="h-2 w-full rounded-full bg-gray-100 overflow-hidden">
+                    <div
+                      className={`h-full transition-all duration-300 ${
+                        syncStatus === 'error' ? 'bg-red-500' : 'bg-[#105E53]'
+                      }`}
+                      style={{ width: `${syncProgress}%` }}
+                    />
                   </div>
                 </div>
               )}

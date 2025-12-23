@@ -1552,6 +1552,43 @@ async def get_vendor_payout(
     return payout
 
 
+@router.post("/payouts/{payout_id}/cancel", response_model=VendorPayoutResponse)
+async def cancel_vendor_payout(
+    payout_id: UUID,
+    vendor: Vendor = Depends(get_approved_vendor),
+    db: AsyncSession = Depends(get_db),
+):
+    """Cancel a vendor payout request."""
+    result = await db.execute(
+        select(Payout).where(
+            and_(
+                Payout.id == payout_id,
+                Payout.vendor_id == vendor.id,
+            )
+        )
+    )
+    payout = result.scalar_one_or_none()
+    if not payout:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Payout not found")
+
+    if payout.status not in {PayoutStatus.PENDING, PayoutStatus.PROCESSING}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only pending or processing payouts can be cancelled.",
+        )
+
+    payout.status = PayoutStatus.FAILED
+    payout.processed_at = datetime.utcnow()
+    if payout.notes:
+        payout.notes = f"{payout.notes} | Cancelled by vendor"
+    else:
+        payout.notes = "Cancelled by vendor"
+
+    await db.commit()
+    await db.refresh(payout)
+    return payout
+
+
 # ==================== VENDOR DASHBOARD ====================
 
 @router.get("/dashboard/metrics", response_model=VendorDashboardMetrics)

@@ -1,9 +1,17 @@
 """Settings API endpoints"""
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
-from typing import List
 import logging
+import os
+import shutil
+import subprocess
+import tempfile
+import time
+from typing import List
+from urllib.parse import urlparse
+
+import anyio
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.models.setting import Setting
@@ -21,12 +29,69 @@ from app.schemas.app_setting import (
     AppSettingResponse,
     PayoutHoldSettings,
     PayoutHoldSettingsUpdate,
+    DatabaseSyncResponse,
 )
 from app.api.dependencies import get_current_user, require_admin
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/settings", tags=["settings"])
+
+LOCAL_DB_HOSTS = {"localhost", "127.0.0.1", "host.docker.internal"}
+
+
+def _normalize_sync_db_url(url: str) -> str:
+    if url.startswith("postgresql+asyncpg://"):
+        return url.replace("postgresql+asyncpg://", "postgresql://", 1)
+    return url
+
+
+def _is_local_database(url: str) -> bool:
+    parsed = urlparse(url)
+    return (parsed.hostname or "").lower() in LOCAL_DB_HOSTS
+
+
+def _run_db_sync(source_url: str, target_url: str) -> None:
+    if not shutil.which("pg_dump"):
+        raise RuntimeError("pg_dump is not available on PATH")
+    if not shutil.which("pg_restore"):
+        raise RuntimeError("pg_restore is not available on PATH")
+
+    temp_file = tempfile.NamedTemporaryFile(suffix=".dump", delete=False)
+    temp_path = temp_file.name
+    temp_file.close()
+
+    try:
+        subprocess.run(
+            [
+                "pg_dump",
+                "--format=custom",
+                "--no-owner",
+                "--no-privileges",
+                "--file",
+                temp_path,
+                source_url,
+            ],
+            check=True,
+            env=os.environ.copy(),
+        )
+        subprocess.run(
+            [
+                "pg_restore",
+                "--clean",
+                "--if-exists",
+                "--no-owner",
+                "--no-privileges",
+                "--dbname",
+                target_url,
+                temp_path,
+            ],
+            check=True,
+            env=os.environ.copy(),
+        )
+    finally:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
 
 
 @router.get("/public/exchange-rate", response_model=ExchangeRateResponse)
@@ -294,3 +359,62 @@ async def update_payout_hold_settings(
     logger.info(f"[Settings] Admin {current_user.email} updated payout hold days to {payload.hold_days}")
 
     return PayoutHoldSettings(hold_days=payload.hold_days, updated_at=updated_at)
+
+
+@router.post("/admin/db-sync", response_model=DatabaseSyncResponse)
+async def sync_render_database(
+    current_user: User = Depends(require_admin),
+):
+    """Sync Render database to local database (Admin only, development environments)."""
+    from app.core.config import settings as app_settings
+
+    environment = app_settings.ENVIRONMENT.lower()
+    if environment not in {"development", "local"}:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Database sync is only available in local development environments.",
+        )
+
+    if not app_settings.RENDER_DATABASE_URL:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="RENDER_DATABASE_URL is not configured.",
+        )
+
+    if not _is_local_database(app_settings.DATABASE_URL):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Target database must be a local database.",
+        )
+
+    source_url = _normalize_sync_db_url(app_settings.RENDER_DATABASE_URL)
+    target_url = _normalize_sync_db_url(app_settings.DATABASE_URL)
+
+    start_time = time.monotonic()
+    try:
+        await anyio.to_thread.run_sync(_run_db_sync, source_url, target_url)
+    except RuntimeError as exc:
+        logger.exception("[Settings] Database sync failed: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(exc),
+        )
+    except subprocess.CalledProcessError as exc:
+        logger.exception("[Settings] Database sync command failed: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Database sync failed. Check server logs for details.",
+        )
+
+    duration = round(time.monotonic() - start_time, 2)
+    logger.info(
+        "[Settings] Admin %s synced Render DB to local in %ss",
+        current_user.email,
+        duration,
+    )
+
+    return DatabaseSyncResponse(
+        status="success",
+        message="Render database synced to local database.",
+        duration_seconds=duration,
+    )

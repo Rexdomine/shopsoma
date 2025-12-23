@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     # Both Alembic (sync) and FastAPI async engine MUST point to the same database
     DATABASE_URL: str
     DATABASE_ECHO: bool = False
+    RENDER_DATABASE_URL: str = ""
 
     @property
     def ASYNC_DATABASE_URL(self) -> str:
