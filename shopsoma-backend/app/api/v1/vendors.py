@@ -850,7 +850,8 @@ async def get_vendor_earnings_summary(
     """Get vendor earnings summary"""
     from decimal import Decimal
     from datetime import timedelta
-    from app.models.order import PaymentStatus, FulfillmentStatus
+    from app.models.order import PaymentStatus
+    from app.models.payment import PayoutStatus
 
     start, end, start_dt, end_dt = _build_date_range(start_date, end_date)
     previous_start_dt = None
@@ -860,10 +861,13 @@ async def get_vendor_earnings_summary(
         previous_end_dt = start_dt - timedelta(days=1)
         previous_start_dt = previous_end_dt - timedelta(days=period_days - 1)
 
+    payout_expr = func.coalesce(
+        OrderItem.vendor_payout,
+        OrderItem.subtotal - func.coalesce(OrderItem.commission_amount, 0)
+    )
     delivered_filters = [
         OrderItem.vendor_id == vendor.id,
         Order.payment_status == PaymentStatus.PAID,
-        Order.fulfillment_status == FulfillmentStatus.DELIVERED,
         Order.delivered_at.isnot(None),
     ]
     if start_dt:
@@ -872,7 +876,7 @@ async def get_vendor_earnings_summary(
         delivered_filters.append(Order.delivered_at <= end_dt)
 
     current_result = await db.execute(
-        select(func.sum(OrderItem.vendor_payout)).join(Order).where(and_(*delivered_filters))
+        select(func.sum(payout_expr)).join(Order).where(and_(*delivered_filters))
     )
     current_earnings = current_result.scalar() or Decimal("0.00")
 
@@ -887,13 +891,12 @@ async def get_vendor_earnings_summary(
         prev_filters = [
             OrderItem.vendor_id == vendor.id,
             Order.payment_status == PaymentStatus.PAID,
-            Order.fulfillment_status == FulfillmentStatus.DELIVERED,
             Order.delivered_at.isnot(None),
             Order.delivered_at >= previous_start_dt,
             Order.delivered_at <= previous_end_dt,
         ]
         prev_current_result = await db.execute(
-            select(func.sum(OrderItem.vendor_payout)).join(Order).where(and_(*prev_filters))
+            select(func.sum(payout_expr)).join(Order).where(and_(*prev_filters))
         )
         current_prev = prev_current_result.scalar() or Decimal("0.00")
         prev_expenses_result = await db.execute(
@@ -912,7 +915,7 @@ async def get_vendor_earnings_summary(
         projected_filters.append(Order.created_at <= end_dt)
 
     projected_result = await db.execute(
-        select(func.sum(OrderItem.vendor_payout)).join(Order).where(and_(*projected_filters))
+        select(func.sum(payout_expr)).join(Order).where(and_(*projected_filters))
     )
     projected_earnings = projected_result.scalar() or Decimal("0.00")
 
@@ -926,7 +929,7 @@ async def get_vendor_earnings_summary(
             Order.created_at <= previous_end_dt,
         ]
         prev_projected_result = await db.execute(
-            select(func.sum(OrderItem.vendor_payout)).join(Order).where(and_(*prev_projected_filters))
+            select(func.sum(payout_expr)).join(Order).where(and_(*prev_projected_filters))
         )
         projected_prev = prev_projected_result.scalar() or Decimal("0.00")
 
@@ -960,7 +963,7 @@ async def get_vendor_earnings_items(
 ):
     """Get vendor earnings items by products or orders"""
     from decimal import Decimal
-    from app.models.order import PaymentStatus, FulfillmentStatus
+    from app.models.order import PaymentStatus
 
     if view not in {"products", "orders"}:
         raise HTTPException(
@@ -970,10 +973,13 @@ async def get_vendor_earnings_items(
 
     _, _, start_dt, end_dt = _build_date_range(start_date, end_date)
 
+    payout_expr = func.coalesce(
+        OrderItem.vendor_payout,
+        OrderItem.subtotal - func.coalesce(OrderItem.commission_amount, 0)
+    )
     delivered_filters = [
         OrderItem.vendor_id == vendor.id,
         Order.payment_status == PaymentStatus.PAID,
-        Order.fulfillment_status == FulfillmentStatus.DELIVERED,
         Order.delivered_at.isnot(None),
     ]
     if start_dt:
@@ -981,8 +987,29 @@ async def get_vendor_earnings_items(
     if end_dt:
         delivered_filters.append(Order.delivered_at <= end_dt)
 
+    completed_payouts_result = await db.execute(
+        select(func.sum(Payout.payout_amount)).where(
+            and_(
+                Payout.vendor_id == vendor.id,
+                Payout.status == PayoutStatus.COMPLETED
+            )
+        )
+    )
+    completed_payouts = completed_payouts_result.scalar() or Decimal("0.00")
+
     if view == "products":
-        query = select(OrderItem, Order.order_number, Order.delivered_at, Order.fulfillment_status).join(Order).where(
+        payout_value = payout_expr.label("payout_value")
+        cumulative_payout = func.sum(payout_expr).over(
+            order_by=[Order.delivered_at.asc(), OrderItem.id.asc()]
+        ).label("cumulative_payout")
+        query = select(
+            OrderItem,
+            Order.order_number,
+            Order.delivered_at,
+            Order.fulfillment_status,
+            payout_value,
+            cumulative_payout
+        ).join(Order).where(
             and_(*delivered_filters)
         )
 
@@ -1016,7 +1043,7 @@ async def get_vendor_earnings_items(
         rows = result.all()
 
         items = []
-        for item, order_number, delivered_at, fulfillment_status in rows:
+        for item, order_number, delivered_at, fulfillment_status, payout_amount, cumulative_amount in rows:
             product_image_url = None
             if item.product and item.product.images:
                 primary_image = next((img for img in item.product.images if img.is_primary), None)
@@ -1026,6 +1053,7 @@ async def get_vendor_earnings_items(
                     first_image = item.product.images[0]
                     product_image_url = first_image.thumbnail_url or first_image.image_url
 
+            payout_status = "paid_out" if cumulative_amount and cumulative_amount <= completed_payouts else "available"
             items.append({
                 "id": str(item.id),
                 "order_id": str(item.order_id),
@@ -1036,7 +1064,8 @@ async def get_vendor_earnings_items(
                 "unit_price": float(item.unit_price),
                 "quantity": item.quantity,
                 "commission_amount": float(item.commission_amount),
-                "vendor_payout": float(item.vendor_payout),
+                "vendor_payout": float(payout_amount or item.vendor_payout or 0),
+                "payout_status": payout_status,
                 "status": fulfillment_status.value if hasattr(fulfillment_status, "value") else str(fulfillment_status),
                 "delivered_at": delivered_at.isoformat() if delivered_at else None,
             })
@@ -1386,6 +1415,17 @@ async def get_payout_summary(
         OrderItem.subtotal - func.coalesce(OrderItem.commission_amount, 0)
     )
 
+    delivered_result = await db.execute(
+        select(func.sum(payout_expr)).join(Order).where(
+            and_(
+                OrderItem.vendor_id == vendor.id,
+                Order.payment_status == PaymentStatus.PAID,
+                Order.delivered_at.isnot(None)
+            )
+        )
+    )
+    total_delivered = delivered_result.scalar() or Decimal("0.00")
+
     # Pending amount (completed but not yet paid out)
     pending_result = await db.execute(
         select(func.sum(payout_expr)).join(Order).where(
@@ -1451,6 +1491,7 @@ async def get_payout_summary(
     current_month_sales = current_month_result.scalar() or Decimal("0.00")
 
     return VendorPayoutSummary(
+        current_earnings=total_delivered,
         pending_amount=pending_amount,
         available_payout=available_payout,
         last_payout_amount=last_payout.payout_amount if last_payout else Decimal("0.00"),

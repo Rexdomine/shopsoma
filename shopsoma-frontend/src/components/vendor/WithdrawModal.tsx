@@ -21,7 +21,7 @@ export default function WithdrawModal({ open, onClose, onSuccess, onError }: Wit
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>([]);
   const [selectedMethodId, setSelectedMethodId] = useState<string | null>(null);
   const [openAccountList, setOpenAccountList] = useState(false);
-  const [pendingAmount, setPendingAmount] = useState<number | null>(null);
+  const [currentEarnings, setCurrentEarnings] = useState<number | null>(null);
   const [availablePayout, setAvailablePayout] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -53,7 +53,7 @@ export default function WithdrawModal({ open, onClose, onSuccess, onError }: Wit
       setSelectedMethodId(accounts[0]?.id || null);
       setOpenAccountList(false);
       setError(null);
-      setPendingAmount(null);
+      setCurrentEarnings(null);
       setAvailablePayout(null);
     }
   }, [open, accounts]);
@@ -101,9 +101,9 @@ export default function WithdrawModal({ open, onClose, onSuccess, onError }: Wit
       setLoading(true);
       setError(null);
       const summary = await vendorService.getPayoutSummary();
-      const pending = Number(summary.pending_amount ?? 0);
+      const current = Number(summary.current_earnings ?? 0);
       const available = Number(summary.available_payout ?? 0);
-      setPendingAmount(pending);
+      setCurrentEarnings(current);
       setAvailablePayout(available);
       const initial = Math.min(500000, available);
       setAmount(initial > 0 ? initial : 0);
@@ -177,7 +177,7 @@ export default function WithdrawModal({ open, onClose, onSuccess, onError }: Wit
               {loading ? (
                 <span className="inline-block h-3 w-16 bg-gray-200 rounded-full animate-pulse" />
               ) : (
-                formatOptionalAmount(pendingAmount)
+                formatOptionalAmount(currentEarnings)
               )}
             </p>
           </div>

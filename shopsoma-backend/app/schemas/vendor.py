@@ -335,6 +335,7 @@ class VendorPayoutResponse(BaseModel):
 
 class VendorPayoutSummary(BaseModel):
     """Vendor payout summary"""
+    current_earnings: Decimal
     pending_amount: Decimal
     available_payout: Decimal
     last_payout_amount: Decimal
@@ -373,6 +374,7 @@ class VendorEarningsProductRow(BaseModel):
     quantity: int
     commission_amount: float
     vendor_payout: float
+    payout_status: Optional[str] = None
     status: str
     delivered_at: Optional[datetime]
 

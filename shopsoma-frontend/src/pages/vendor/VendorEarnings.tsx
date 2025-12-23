@@ -379,7 +379,22 @@ export default function VendorEarnings() {
                       <td className="px-4 py-3 font-semibold text-gray-900">{formatAmount(productRow.unit_price)}</td>
                       <td className="px-4 py-3 text-gray-800">{productRow.quantity}</td>
                       <td className="px-4 py-3 font-semibold text-gray-900">{formatAmount(productRow.commission_amount)}</td>
-                      <td className="px-4 py-3 font-semibold text-gray-900">{formatAmount(productRow.vendor_payout)}</td>
+                      <td className="px-4 py-3 font-semibold text-gray-900">
+                        <div className="flex flex-col gap-1">
+                          <span>{formatAmount(productRow.vendor_payout)}</span>
+                          {productRow.payout_status && (
+                            <span
+                              className={`text-[11px] font-medium px-2 py-0.5 rounded-full w-fit ${
+                                productRow.payout_status === 'paid_out'
+                                  ? 'bg-emerald-50 text-emerald-700'
+                                  : 'bg-amber-50 text-amber-700'
+                              }`}
+                            >
+                              {productRow.payout_status === 'paid_out' ? 'Paid out' : 'Available'}
+                            </span>
+                          )}
+                        </div>
+                      </td>
                       <td className="px-4 py-3 text-gray-700">{formatDate(productRow.delivered_at)}</td>
                       <td className="px-4 py-3 text-right">
                         <button

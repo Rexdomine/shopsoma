@@ -69,6 +69,7 @@ export interface VendorEarningsSummary {
 }
 
 export interface VendorPayoutSummary {
+  current_earnings: number;
   pending_amount: number;
   available_payout: number;
   last_payout_amount: number;
@@ -138,6 +139,7 @@ export interface VendorEarningsProductRow {
   quantity: number;
   commission_amount: number;
   vendor_payout: number;
+  payout_status?: string | null;
   status: string;
   delivered_at: string | null;
 }
