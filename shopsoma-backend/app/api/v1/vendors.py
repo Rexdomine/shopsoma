@@ -1171,27 +1171,6 @@ async def list_vendor_payouts(
     }
 
 
-@router.get("/payouts/{payout_id}", response_model=VendorPayoutResponse)
-async def get_vendor_payout(
-    payout_id: UUID,
-    vendor: Vendor = Depends(get_approved_vendor),
-    db: AsyncSession = Depends(get_db),
-):
-    """Get a vendor payout detail."""
-    result = await db.execute(
-        select(Payout).where(
-            and_(
-                Payout.id == payout_id,
-                Payout.vendor_id == vendor.id,
-            )
-        )
-    )
-    payout = result.scalar_one_or_none()
-    if not payout:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Payout not found")
-    return payout
-
-
 @router.post("/payouts/request", response_model=VendorPayoutResponse, status_code=status.HTTP_201_CREATED)
 async def request_vendor_payout(
     payout_request: VendorPayoutRequest,
@@ -1473,6 +1452,27 @@ async def get_payout_summary(
         total_earnings=completed_payouts,
         current_month_sales=current_month_sales
     )
+
+
+@router.get("/payouts/{payout_id}", response_model=VendorPayoutResponse)
+async def get_vendor_payout(
+    payout_id: UUID,
+    vendor: Vendor = Depends(get_approved_vendor),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get a vendor payout detail."""
+    result = await db.execute(
+        select(Payout).where(
+            and_(
+                Payout.id == payout_id,
+                Payout.vendor_id == vendor.id,
+            )
+        )
+    )
+    payout = result.scalar_one_or_none()
+    if not payout:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Payout not found")
+    return payout
 
 
 # ==================== VENDOR DASHBOARD ====================

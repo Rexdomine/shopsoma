@@ -105,6 +105,20 @@ export interface VendorPayoutListResponse {
   total_pages: number;
 }
 
+const extractErrorMessage = (error: any, fallback: string) => {
+  const detail = error?.response?.data?.detail;
+  if (typeof detail === 'string') {
+    return detail;
+  }
+  if (detail && typeof detail === 'object') {
+    if (typeof detail.message === 'string') {
+      return detail.message;
+    }
+    return JSON.stringify(detail);
+  }
+  return error?.message || fallback;
+};
+
 export type EarningsViewMode = 'products' | 'orders';
 
 export interface VendorEarningsProductRow {
@@ -256,7 +270,7 @@ export const vendorService = {
       const response = await api.get('/vendor/payouts/summary');
       return response.data;
     } catch (error: any) {
-      const message = error?.response?.data?.detail || 'Failed to fetch payout summary';
+      const message = extractErrorMessage(error, 'Failed to fetch payout summary');
       throw new Error(message);
     }
   },
@@ -266,7 +280,7 @@ export const vendorService = {
       const response = await api.post('/vendor/payouts/request', data);
       return response.data;
     } catch (error: any) {
-      const message = error?.response?.data?.detail || 'Failed to request payout';
+      const message = extractErrorMessage(error, 'Failed to request payout');
       throw new Error(message);
     }
   },
@@ -283,7 +297,7 @@ export const vendorService = {
       const response = await api.get('/vendor/payouts', { params });
       return response.data;
     } catch (error: any) {
-      const message = error?.response?.data?.detail || 'Failed to fetch payouts';
+      const message = extractErrorMessage(error, 'Failed to fetch payouts');
       throw new Error(message);
     }
   },
@@ -293,7 +307,7 @@ export const vendorService = {
       const response = await api.get(`/vendor/payouts/${payoutId}`);
       return response.data;
     } catch (error: any) {
-      const message = error?.response?.data?.detail || 'Failed to fetch payout';
+      const message = extractErrorMessage(error, 'Failed to fetch payout');
       throw new Error(message);
     }
   },
