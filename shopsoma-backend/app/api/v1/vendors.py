@@ -868,7 +868,10 @@ async def get_vendor_earnings_summary(
     delivered_filters = [
         OrderItem.vendor_id == vendor.id,
         Order.payment_status == PaymentStatus.PAID,
-        OrderItem.fulfillment_status == FulfillmentStatus.DELIVERED,
+        or_(
+            OrderItem.fulfillment_status == FulfillmentStatus.DELIVERED,
+            Order.fulfillment_status == FulfillmentStatus.DELIVERED,
+        ),
         Order.delivered_at.isnot(None),
     ]
     if start_dt:
@@ -892,7 +895,10 @@ async def get_vendor_earnings_summary(
         prev_filters = [
             OrderItem.vendor_id == vendor.id,
             Order.payment_status == PaymentStatus.PAID,
-            OrderItem.fulfillment_status == FulfillmentStatus.DELIVERED,
+            or_(
+                OrderItem.fulfillment_status == FulfillmentStatus.DELIVERED,
+                Order.fulfillment_status == FulfillmentStatus.DELIVERED,
+            ),
             Order.delivered_at.isnot(None),
             Order.delivered_at >= previous_start_dt,
             Order.delivered_at <= previous_end_dt,
@@ -982,7 +988,10 @@ async def get_vendor_earnings_items(
     delivered_filters = [
         OrderItem.vendor_id == vendor.id,
         Order.payment_status == PaymentStatus.PAID,
-        OrderItem.fulfillment_status == FulfillmentStatus.DELIVERED,
+        or_(
+            OrderItem.fulfillment_status == FulfillmentStatus.DELIVERED,
+            Order.fulfillment_status == FulfillmentStatus.DELIVERED,
+        ),
         Order.delivered_at.isnot(None),
     ]
     if start_dt:
@@ -1258,7 +1267,10 @@ async def request_vendor_payout(
         and_(
             OrderItem.vendor_id == vendor.id,
             Order.payment_status == PaymentStatus.PAID,
-            OrderItem.fulfillment_status == FulfillmentStatus.DELIVERED,
+            or_(
+                OrderItem.fulfillment_status == FulfillmentStatus.DELIVERED,
+                Order.fulfillment_status == FulfillmentStatus.DELIVERED,
+            ),
             Order.delivered_at.isnot(None),
         )
     )
@@ -1331,7 +1343,10 @@ async def request_vendor_payout(
             and_(
                 OrderItem.vendor_id == vendor.id,
                 Order.payment_status == PaymentStatus.PAID,
-                OrderItem.fulfillment_status == FulfillmentStatus.DELIVERED,
+                or_(
+                    OrderItem.fulfillment_status == FulfillmentStatus.DELIVERED,
+                    Order.fulfillment_status == FulfillmentStatus.DELIVERED,
+                ),
                 Order.delivered_at.isnot(None)
             )
         )
@@ -1436,7 +1451,10 @@ async def get_payout_summary(
         and_(
             OrderItem.vendor_id == vendor.id,
             Order.payment_status == PaymentStatus.PAID,
-            OrderItem.fulfillment_status == FulfillmentStatus.DELIVERED,
+            or_(
+                OrderItem.fulfillment_status == FulfillmentStatus.DELIVERED,
+                Order.fulfillment_status == FulfillmentStatus.DELIVERED,
+            ),
             Order.delivered_at.isnot(None),
         )
     )
