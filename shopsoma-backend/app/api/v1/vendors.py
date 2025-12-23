@@ -1311,7 +1311,6 @@ async def request_vendor_payout(
     hold_days = await _get_payout_hold_days(db)
     cutoff_date = datetime.utcnow() - timedelta(days=hold_days)
     cutoff_day = cutoff_date.date()
-    cutoff_day = cutoff_date.date()
     available_result = await db.execute(
         select(func.sum(base_subquery.c.payout_value)).where(
             and_(
@@ -1479,6 +1478,7 @@ async def get_payout_summary(
 
     hold_days = await _get_payout_hold_days(db)
     cutoff_date = datetime.utcnow() - timedelta(days=hold_days)
+    cutoff_day = cutoff_date.date()
     pending_result = await db.execute(
         select(func.sum(base_subquery.c.payout_value)).where(
             base_subquery.c.cumulative_payout > completed_payouts
