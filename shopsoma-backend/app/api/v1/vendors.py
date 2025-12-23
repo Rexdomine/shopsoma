@@ -868,6 +868,7 @@ async def get_vendor_earnings_summary(
     delivered_filters = [
         OrderItem.vendor_id == vendor.id,
         Order.payment_status == PaymentStatus.PAID,
+        OrderItem.fulfillment_status == FulfillmentStatus.DELIVERED,
         Order.delivered_at.isnot(None),
     ]
     if start_dt:
@@ -891,6 +892,7 @@ async def get_vendor_earnings_summary(
         prev_filters = [
             OrderItem.vendor_id == vendor.id,
             Order.payment_status == PaymentStatus.PAID,
+            OrderItem.fulfillment_status == FulfillmentStatus.DELIVERED,
             Order.delivered_at.isnot(None),
             Order.delivered_at >= previous_start_dt,
             Order.delivered_at <= previous_end_dt,
@@ -980,6 +982,7 @@ async def get_vendor_earnings_items(
     delivered_filters = [
         OrderItem.vendor_id == vendor.id,
         Order.payment_status == PaymentStatus.PAID,
+        OrderItem.fulfillment_status == FulfillmentStatus.DELIVERED,
         Order.delivered_at.isnot(None),
     ]
     if start_dt:
@@ -1209,6 +1212,7 @@ async def request_vendor_payout(
 ):
     """Request a vendor payout"""
     from decimal import Decimal
+    from app.models.order import PaymentStatus, FulfillmentStatus
 
     selected_method = None
     if payout_request.payment_method_id:
@@ -1244,16 +1248,21 @@ async def request_vendor_payout(
         OrderItem.vendor_payout,
         OrderItem.subtotal - func.coalesce(OrderItem.commission_amount, 0)
     )
-    pending_result = await db.execute(
-        select(func.sum(payout_expr)).join(Order).where(
-            and_(
-                OrderItem.vendor_id == vendor.id,
-                Order.payment_status == PaymentStatus.PAID,
-                Order.delivered_at.isnot(None)
-            )
+    base_query = select(
+        payout_expr.label("payout_value"),
+        Order.delivered_at.label("delivered_at"),
+        func.sum(payout_expr).over(
+            order_by=[Order.delivered_at.asc(), OrderItem.id.asc()]
+        ).label("cumulative_payout"),
+    ).join(Order).where(
+        and_(
+            OrderItem.vendor_id == vendor.id,
+            Order.payment_status == PaymentStatus.PAID,
+            OrderItem.fulfillment_status == FulfillmentStatus.DELIVERED,
+            Order.delivered_at.isnot(None),
         )
     )
-    pending_from_orders = pending_result.scalar() or Decimal("0.00")
+    base_subquery = base_query.subquery()
 
     completed_payouts_result = await db.execute(
         select(func.sum(Payout.payout_amount)).where(
@@ -1265,7 +1274,12 @@ async def request_vendor_payout(
     )
     completed_payouts = completed_payouts_result.scalar() or Decimal("0.00")
 
-    pending_amount = max(pending_from_orders - completed_payouts, Decimal("0.00"))
+    pending_result = await db.execute(
+        select(func.sum(base_subquery.c.payout_value)).where(
+            base_subquery.c.cumulative_payout > completed_payouts
+        )
+    )
+    pending_amount = pending_result.scalar() or Decimal("0.00")
 
     existing_result = await db.execute(
         select(Payout).where(
@@ -1285,17 +1299,14 @@ async def request_vendor_payout(
     hold_days = await _get_payout_hold_days(db)
     cutoff_date = datetime.utcnow() - timedelta(days=hold_days)
     available_result = await db.execute(
-        select(func.sum(payout_expr)).join(Order).where(
+        select(func.sum(base_subquery.c.payout_value)).where(
             and_(
-                OrderItem.vendor_id == vendor.id,
-                Order.payment_status == PaymentStatus.PAID,
-                Order.delivered_at.isnot(None),
-                Order.delivered_at <= cutoff_date
+                base_subquery.c.delivered_at <= cutoff_date,
+                base_subquery.c.cumulative_payout > completed_payouts,
             )
         )
     )
-    available_from_orders = available_result.scalar() or Decimal("0.00")
-    available_payout = max(available_from_orders - completed_payouts, Decimal("0.00"))
+    available_payout = available_result.scalar() or Decimal("0.00")
 
     request_amount = payout_request.amount
     if available_payout == 0:
@@ -1320,6 +1331,7 @@ async def request_vendor_payout(
             and_(
                 OrderItem.vendor_id == vendor.id,
                 Order.payment_status == PaymentStatus.PAID,
+                OrderItem.fulfillment_status == FulfillmentStatus.DELIVERED,
                 Order.delivered_at.isnot(None)
             )
         )
@@ -1414,29 +1426,25 @@ async def get_payout_summary(
         OrderItem.vendor_payout,
         OrderItem.subtotal - func.coalesce(OrderItem.commission_amount, 0)
     )
-
-    delivered_result = await db.execute(
-        select(func.sum(payout_expr)).join(Order).where(
-            and_(
-                OrderItem.vendor_id == vendor.id,
-                Order.payment_status == PaymentStatus.PAID,
-                Order.delivered_at.isnot(None)
-            )
+    base_query = select(
+        payout_expr.label("payout_value"),
+        Order.delivered_at.label("delivered_at"),
+        func.sum(payout_expr).over(
+            order_by=[Order.delivered_at.asc(), OrderItem.id.asc()]
+        ).label("cumulative_payout"),
+    ).join(Order).where(
+        and_(
+            OrderItem.vendor_id == vendor.id,
+            Order.payment_status == PaymentStatus.PAID,
+            OrderItem.fulfillment_status == FulfillmentStatus.DELIVERED,
+            Order.delivered_at.isnot(None),
         )
+    )
+    base_subquery = base_query.subquery()
+    delivered_result = await db.execute(
+        select(func.sum(base_subquery.c.payout_value))
     )
     total_delivered = delivered_result.scalar() or Decimal("0.00")
-
-    # Pending amount (completed but not yet paid out)
-    pending_result = await db.execute(
-        select(func.sum(payout_expr)).join(Order).where(
-            and_(
-                OrderItem.vendor_id == vendor.id,
-                Order.payment_status == PaymentStatus.PAID,
-                Order.delivered_at.isnot(None)
-            )
-        )
-    )
-    pending_from_orders = pending_result.scalar() or Decimal("0.00")
 
     # Subtract completed payouts
     completed_payouts_result = await db.execute(
@@ -1449,22 +1457,24 @@ async def get_payout_summary(
     )
     completed_payouts = completed_payouts_result.scalar() or Decimal("0.00")
 
-    pending_amount = max(pending_from_orders - completed_payouts, Decimal("0.00"))
-
     hold_days = await _get_payout_hold_days(db)
     cutoff_date = datetime.utcnow() - timedelta(days=hold_days)
+    pending_result = await db.execute(
+        select(func.sum(base_subquery.c.payout_value)).where(
+            base_subquery.c.cumulative_payout > completed_payouts
+        )
+    )
+    pending_amount = pending_result.scalar() or Decimal("0.00")
+
     available_result = await db.execute(
-        select(func.sum(payout_expr)).join(Order).where(
+        select(func.sum(base_subquery.c.payout_value)).where(
             and_(
-                OrderItem.vendor_id == vendor.id,
-                Order.payment_status == PaymentStatus.PAID,
-                Order.delivered_at.isnot(None),
-                Order.delivered_at <= cutoff_date
+                base_subquery.c.delivered_at <= cutoff_date,
+                base_subquery.c.cumulative_payout > completed_payouts,
             )
         )
     )
-    available_from_orders = available_result.scalar() or Decimal("0.00")
-    available_payout = max(available_from_orders - completed_payouts, Decimal("0.00"))
+    available_payout = available_result.scalar() or Decimal("0.00")
 
     # Last payout
     last_payout_result = await db.execute(
