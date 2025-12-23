@@ -188,3 +188,94 @@ async def test_vendor_payout_requires_14_day_wait(
 
     assert response.status_code == 400
     assert response.json()["detail"] == "No available payout balance."
+
+
+@pytest.mark.asyncio
+async def test_vendor_payout_summary_available_same_day(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    vendor_user,
+    customer_user,
+):
+    from app.models.order import Order, OrderItem, PaymentStatus, FulfillmentStatus
+    from app.models.product import Product, ProductStatus, ModerationStatus
+    from app.models.app_setting import AppSetting
+
+    vendor = vendor_user["vendor"]
+    vendor.bank_name = "Wema Bank"
+    vendor.bank_account_number = "1234567890"
+    vendor.bank_account_name = "Test Vendor"
+    db_session.add(vendor)
+
+    hold_setting = await db_session.execute(
+        select(AppSetting).where(AppSetting.key == "payout_hold_days")
+    )
+    current_setting = hold_setting.scalar_one_or_none()
+    if not current_setting:
+        db_session.add(
+            AppSetting(
+                key="payout_hold_days",
+                value="0",
+                value_type="string",
+            )
+        )
+    else:
+        current_setting.value = "0"
+        db_session.add(current_setting)
+
+    product = Product(
+        id=uuid4(),
+        vendor_id=vendor.id,
+        title="Summary Product",
+        description="Summary payout product",
+        base_price=Decimal("100.00"),
+        status=ProductStatus.ACTIVE,
+        moderation_status=ModerationStatus.APPROVED,
+    )
+    db_session.add(product)
+
+    delivered_at = datetime.utcnow()
+    order = Order(
+        id=uuid4(),
+        order_number="SHP-PAYOUT-3",
+        customer_id=customer_user["user"].id,
+        subtotal=Decimal("100.00"),
+        shipping_cost=Decimal("0.00"),
+        tax_amount=Decimal("0.00"),
+        discount_amount=Decimal("0.00"),
+        total_amount=Decimal("100.00"),
+        payment_status=PaymentStatus.PAID,
+        fulfillment_status=FulfillmentStatus.DELIVERED,
+        created_at=delivered_at,
+        delivered_at=delivered_at,
+    )
+    db_session.add(order)
+
+    order_item = OrderItem(
+        id=uuid4(),
+        order_id=order.id,
+        product_id=product.id,
+        vendor_id=vendor.id,
+        product_title=product.title,
+        variant_details=None,
+        unit_price=Decimal("100.00"),
+        quantity=1,
+        subtotal=Decimal("100.00"),
+        commission_rate=Decimal("10.00"),
+        commission_amount=Decimal("10.00"),
+        vendor_payout=Decimal("90.00"),
+        fulfillment_status=FulfillmentStatus.DELIVERED,
+    )
+    db_session.add(order_item)
+
+    await db_session.commit()
+
+    response = await client.get(
+        "/api/v1/vendor/payouts/summary",
+        headers=vendor_user["headers"],
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["current_earnings"] == 90.0
+    assert data["available_payout"] == 90.0
