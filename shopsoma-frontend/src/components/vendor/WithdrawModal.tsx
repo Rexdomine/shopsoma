@@ -21,8 +21,8 @@ export default function WithdrawModal({ open, onClose, onSuccess, onError }: Wit
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>([]);
   const [selectedMethodId, setSelectedMethodId] = useState<string | null>(null);
   const [openAccountList, setOpenAccountList] = useState(false);
-  const [pendingAmount, setPendingAmount] = useState(0);
-  const [availablePayout, setAvailablePayout] = useState(0);
+  const [pendingAmount, setPendingAmount] = useState<number | null>(null);
+  const [availablePayout, setAvailablePayout] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -53,6 +53,8 @@ export default function WithdrawModal({ open, onClose, onSuccess, onError }: Wit
       setSelectedMethodId(accounts[0]?.id || null);
       setOpenAccountList(false);
       setError(null);
+      setPendingAmount(null);
+      setAvailablePayout(null);
     }
   }, [open, accounts]);
 
@@ -100,8 +102,8 @@ export default function WithdrawModal({ open, onClose, onSuccess, onError }: Wit
         setLoading(true);
         setError(null);
         const summary = await vendorService.getPayoutSummary();
-        const pending = Number(summary.pending_amount || 0);
-        const available = Number(summary.available_payout || 0);
+        const pending = Number(summary.pending_amount ?? 0);
+        const available = Number(summary.available_payout ?? 0);
         setPendingAmount(pending);
         setAvailablePayout(available);
         const initial = Math.min(500000, available);
@@ -117,11 +119,18 @@ export default function WithdrawModal({ open, onClose, onSuccess, onError }: Wit
 
   if (!open) return null;
 
-  const handleIncrement = () => setAmount((prev) => Math.min(availablePayout, prev + step));
+  const handleIncrement = () =>
+    setAmount((prev) => Math.min(availablePayout ?? 0, prev + step));
   const handleDecrement = () => setAmount((prev) => Math.max(minAmount, prev - step));
 
-  const canWithdraw = availablePayout >= minAmount && amount >= minAmount && !!account;
+  const canWithdraw = (availablePayout ?? 0) >= minAmount && amount >= minAmount && !!account;
   const formattedAmount = formatPriceWithConversion(amount, 'NGN', currentCurrency, exchangeRates);
+  const formatOptionalAmount = (value: number | null) => {
+    if (value === null) {
+      return '—';
+    }
+    return formatPriceWithConversion(value, 'NGN', currentCurrency, exchangeRates);
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-[1px] px-4">
@@ -164,13 +173,13 @@ export default function WithdrawModal({ open, onClose, onSuccess, onError }: Wit
           <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-left">
             <p className="text-xs text-gray-500">Current Earnings</p>
             <p className="text-sm font-semibold text-gray-900">
-              {formatPriceWithConversion(pendingAmount, 'NGN', currentCurrency, exchangeRates)}
+              {formatOptionalAmount(pendingAmount)}
             </p>
           </div>
           <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-left">
             <p className="text-xs text-emerald-700">Available Payout</p>
             <p className="text-sm font-semibold text-emerald-900">
-              {formatPriceWithConversion(availablePayout, 'NGN', currentCurrency, exchangeRates)}
+              {formatOptionalAmount(availablePayout)}
             </p>
           </div>
         </div>
@@ -179,7 +188,7 @@ export default function WithdrawModal({ open, onClose, onSuccess, onError }: Wit
         )}
         {!loading && (
           <p className="text-xs text-gray-500 text-center mb-4">
-            Available to withdraw: {formatPriceWithConversion(availablePayout, 'NGN', currentCurrency, exchangeRates)}
+            Available to withdraw: {formatOptionalAmount(availablePayout)}
           </p>
         )}
         {error && (

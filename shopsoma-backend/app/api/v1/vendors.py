@@ -1379,9 +1379,14 @@ async def get_payout_summary(
     from decimal import Decimal
     from app.models.order import PaymentStatus, FulfillmentStatus
 
+    payout_expr = func.coalesce(
+        OrderItem.vendor_payout,
+        OrderItem.subtotal - func.coalesce(OrderItem.commission_amount, 0)
+    )
+
     # Pending amount (completed but not yet paid out)
     pending_result = await db.execute(
-        select(func.sum(OrderItem.vendor_payout)).join(Order).where(
+        select(func.sum(payout_expr)).join(Order).where(
             and_(
                 OrderItem.vendor_id == vendor.id,
                 Order.payment_status == PaymentStatus.PAID,
@@ -1407,7 +1412,7 @@ async def get_payout_summary(
     hold_days = await _get_payout_hold_days(db)
     cutoff_date = datetime.utcnow() - timedelta(days=hold_days)
     available_result = await db.execute(
-        select(func.sum(OrderItem.vendor_payout)).join(Order).where(
+        select(func.sum(payout_expr)).join(Order).where(
             and_(
                 OrderItem.vendor_id == vendor.id,
                 Order.payment_status == PaymentStatus.PAID,
