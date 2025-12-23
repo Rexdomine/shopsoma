@@ -25,7 +25,7 @@ import { formatPriceWithConversion } from '../../utils/pricing';
 export default function AdminOrderDetail() {
   const { orderId } = useParams<{ orderId: string }>();
   const navigate = useNavigate();
-  const { toasts, hideToast, success, error } = useToast();
+  const { toasts, hideToast, success, error, warning } = useToast();
   const { currentCurrency, setCurrency, exchangeRates, fetchExchangeRate } = useCurrencyStore();
 
   const [order, setOrder] = useState<OrderDetail | null>(null);
@@ -114,12 +114,18 @@ export default function AdminOrderDetail() {
       success('Order status updated successfully');
       setEditingStatus(false);
       setStatusNotes('');
-      await loadOrder();
     } catch (err) {
       console.error('Failed to update status:', err);
       error('Failed to update order status');
+      return;
     } finally {
       setUpdating(false);
+    }
+    try {
+      await loadOrder();
+    } catch (err) {
+      console.error('Failed to refresh order:', err);
+      warning('Updated status, but failed to refresh order');
     }
   };
 
@@ -132,12 +138,18 @@ export default function AdminOrderDetail() {
       await updateShippingInfo(order.id, shippingData);
       success('Shipping information updated successfully');
       setEditingShipping(false);
-      await loadOrder();
     } catch (err) {
       console.error('Failed to update shipping:', err);
       error('Failed to update shipping information');
+      return;
     } finally {
       setUpdating(false);
+    }
+    try {
+      await loadOrder();
+    } catch (err) {
+      console.error('Failed to refresh order:', err);
+      warning('Updated shipping, but failed to refresh order');
     }
   };
 
@@ -165,12 +177,18 @@ export default function AdminOrderDetail() {
       setShowPickupScheduleModal(false);
       setPickupWindowData({ pickup_window_start: '', pickup_window_end: '', courier_name: '', rider_id: '' });
       setStatusNotes('');
-      await loadOrder();
     } catch (err) {
       console.error('Failed to schedule pickup:', err);
       error('Failed to schedule pickup');
+      return;
     } finally {
       setUpdating(false);
+    }
+    try {
+      await loadOrder();
+    } catch (err) {
+      console.error('Failed to refresh order:', err);
+      warning('Pickup scheduled, but failed to refresh order');
     }
   };
 
@@ -190,12 +208,18 @@ export default function AdminOrderDetail() {
       success('Order cancelled successfully');
       setShowCancelModal(false);
       setCancelReason('');
-      await loadOrder();
     } catch (err) {
       console.error('Failed to cancel order:', err);
       error('Failed to cancel order');
+      return;
     } finally {
       setUpdating(false);
+    }
+    try {
+      await loadOrder();
+    } catch (err) {
+      console.error('Failed to refresh order:', err);
+      warning('Cancelled order, but failed to refresh order');
     }
   };
 

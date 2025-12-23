@@ -19,6 +19,8 @@ from app.schemas.app_setting import (
     ShippingProviderSettings,
     ShippingProviderSettingsUpdate,
     AppSettingResponse,
+    PayoutHoldSettings,
+    PayoutHoldSettingsUpdate,
 )
 from app.api.dependencies import get_current_user, require_admin
 
@@ -244,3 +246,51 @@ async def get_all_app_settings(
     settings = result.scalars().all()
 
     return settings
+
+
+@router.get("/admin/payout-hold", response_model=PayoutHoldSettings)
+async def get_payout_hold_settings(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin)
+):
+    """Get payout hold settings (Admin only)."""
+    from app.core.config import settings as app_settings
+
+    result = await db.execute(
+        select(AppSetting).where(AppSetting.key == "payout_hold_days")
+    )
+    setting = result.scalar_one_or_none()
+
+    if setting and setting.value is not None:
+        try:
+            hold_days = int(setting.value)
+        except ValueError:
+            hold_days = app_settings.PAYOUT_HOLD_DAYS
+        updated_at = setting.updated_at
+    else:
+        hold_days = app_settings.PAYOUT_HOLD_DAYS
+        updated_at = None
+
+    hold_days = max(hold_days, 0)
+
+    return PayoutHoldSettings(hold_days=hold_days, updated_at=updated_at)
+
+
+@router.put("/admin/payout-hold", response_model=PayoutHoldSettings)
+async def update_payout_hold_settings(
+    payload: PayoutHoldSettingsUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin)
+):
+    """Update payout hold settings (Admin only)."""
+    await update_app_setting_value(db, "payout_hold_days", str(payload.hold_days))
+
+    result = await db.execute(
+        select(AppSetting).where(AppSetting.key == "payout_hold_days")
+    )
+    setting = result.scalar_one_or_none()
+    updated_at = setting.updated_at if setting else None
+
+    logger.info(f"[Settings] Admin {current_user.email} updated payout hold days to {payload.hold_days}")
+
+    return PayoutHoldSettings(hold_days=payload.hold_days, updated_at=updated_at)

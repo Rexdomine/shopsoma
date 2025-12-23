@@ -44,7 +44,7 @@ export default function VendorProductView() {
 
       try {
         setLoading(true);
-        const data = await productService.getProduct(id);
+        const data = await productService.getVendorProduct(id);
         setProduct(data);
       } catch (err: any) {
         console.error('Failed to load product', err);

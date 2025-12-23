@@ -30,6 +30,15 @@ export interface ShippingProviderUpdate {
   use_shipbubble: boolean;
 }
 
+export interface PayoutHoldSettings {
+  hold_days: number;
+  updated_at?: string | null;
+}
+
+export interface PayoutHoldUpdate {
+  hold_days: number;
+}
+
 /**
  * Get current exchange rate (public endpoint)
  */
@@ -85,6 +94,27 @@ export const updateShippingProviderSettings = async (
   const response = await api.put<ShippingProviderSettings>(
     '/settings/shipping-provider',
     { use_shipbubble: useShipBubble }
+  );
+  return response.data;
+};
+
+/**
+ * Get payout hold settings (admin only)
+ */
+export const getPayoutHoldSettings = async (): Promise<PayoutHoldSettings> => {
+  const response = await api.get<PayoutHoldSettings>('/settings/admin/payout-hold');
+  return response.data;
+};
+
+/**
+ * Update payout hold settings (admin only)
+ */
+export const updatePayoutHoldSettings = async (
+  holdDays: number
+): Promise<PayoutHoldSettings> => {
+  const response = await api.put<PayoutHoldSettings>(
+    '/settings/admin/payout-hold',
+    { hold_days: holdDays }
   );
   return response.data;
 };
