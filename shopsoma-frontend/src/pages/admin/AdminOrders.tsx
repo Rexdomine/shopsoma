@@ -29,7 +29,7 @@ import { getAdminStatusLabel } from '../../utils/orderStatusMessages';
 
 export default function AdminOrders() {
   const navigate = useNavigate();
-  const { toasts, hideToast, success, error } = useToast();
+  const { toasts, hideToast, success, error, warning } = useToast();
   const { currentCurrency, setCurrency, formatBasePrice } = useCurrency();
 
   const [stats, setStats] = useState<OrderStatsType | null>(null);
@@ -111,11 +111,17 @@ export default function AdminOrders() {
 
       success(result.message);
       setSelectedOrderIds([]);
-      await loadOrders();
-      await loadStats();
     } catch (err) {
       console.error('Bulk update failed:', err);
       error('Failed to update orders');
+      return;
+    }
+    try {
+      await loadOrders();
+      await loadStats();
+    } catch (err) {
+      console.error('Failed to refresh orders:', err);
+      warning('Orders updated, but failed to refresh list');
     }
   };
 
