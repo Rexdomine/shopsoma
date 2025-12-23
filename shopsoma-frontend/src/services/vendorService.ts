@@ -106,6 +106,12 @@ export interface VendorPayoutListResponse {
 }
 
 const extractErrorMessage = (error: any, fallback: string) => {
+  if (error?.code === 'ECONNABORTED') {
+    return 'Request timed out. Please try again.';
+  }
+  if (typeof error?.message === 'string' && error.message.toLowerCase().includes('timeout')) {
+    return 'Request timed out. Please try again.';
+  }
   const detail = error?.response?.data?.detail;
   if (typeof detail === 'string') {
     return detail;
@@ -267,7 +273,7 @@ export const vendorService = {
 
   async getPayoutSummary(): Promise<VendorPayoutSummary> {
     try {
-      const response = await api.get('/vendor/payouts/summary');
+      const response = await api.get('/vendor/payouts/summary', { timeout: 30000 });
       return response.data;
     } catch (error: any) {
       const message = extractErrorMessage(error, 'Failed to fetch payout summary');
