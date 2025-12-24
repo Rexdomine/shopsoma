@@ -55,11 +55,9 @@ function StatusPill({ status }: { status: string }) {
 
 function AnalyticsChart({
   data,
-  range,
   formatAmount,
 }: {
   data: VendorAnalyticsChartPoint[];
-  range: string;
   formatAmount: (amount: number) => string;
 }) {
   const width = 760;
@@ -435,7 +433,7 @@ export default function VendorAnalytics() {
               </div>
             ) : (
               <>
-                <AnalyticsChart data={chartData} range={selectedRange} formatAmount={formatAmount} />
+                <AnalyticsChart data={chartData} formatAmount={formatAmount} />
                 <div
                   className="mt-2 grid text-xs text-gray-400"
                   style={{ gridTemplateColumns: `repeat(${Math.max(chartData.length, 1)}, minmax(0, 1fr))` }}
