@@ -39,6 +39,12 @@ export interface PayoutHoldUpdate {
   hold_days: number;
 }
 
+export interface DatabaseSyncResponse {
+  status: 'success' | 'error';
+  message: string;
+  duration_seconds?: number;
+}
+
 /**
  * Get current exchange rate (public endpoint)
  */
@@ -115,6 +121,18 @@ export const updatePayoutHoldSettings = async (
   const response = await api.put<PayoutHoldSettings>(
     '/settings/admin/payout-hold',
     { hold_days: holdDays }
+  );
+  return response.data;
+};
+
+/**
+ * Sync Render database to local database (admin only, development only).
+ */
+export const syncRenderDatabase = async (): Promise<DatabaseSyncResponse> => {
+  const response = await api.post<DatabaseSyncResponse>(
+    '/settings/admin/db-sync',
+    undefined,
+    { timeout: 0 }
   );
   return response.data;
 };

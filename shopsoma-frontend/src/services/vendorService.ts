@@ -319,4 +319,14 @@ export const vendorService = {
       throw new Error(message);
     }
   },
+
+  async cancelPayout(payoutId: string): Promise<VendorPayout> {
+    try {
+      const response = await api.post(`/vendor/payouts/${payoutId}/cancel`);
+      return response.data;
+    } catch (error: any) {
+      const message = extractErrorMessage(error, 'Failed to cancel payout');
+      throw new Error(message);
+    }
+  },
 };

@@ -279,3 +279,35 @@ async def test_vendor_payout_summary_available_same_day(
     data = response.json()
     assert data["current_earnings"] == 90.0
     assert data["available_payout"] == 90.0
+
+
+@pytest.mark.asyncio
+async def test_vendor_can_cancel_pending_payout(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    vendor_user,
+):
+    from app.models.payment import Payout, PayoutStatus
+
+    payout = Payout(
+        vendor_id=vendor_user["vendor"].id,
+        payout_period_start=datetime.utcnow().date(),
+        payout_period_end=datetime.utcnow().date(),
+        total_sales=Decimal("100.00"),
+        commission_amount=Decimal("10.00"),
+        payout_amount=Decimal("90.00"),
+        status=PayoutStatus.PENDING,
+        notes="Vendor requested payout",
+    )
+    db_session.add(payout)
+    await db_session.commit()
+    await db_session.refresh(payout)
+
+    response = await client.post(
+        f"/api/v1/vendor/payouts/{payout.id}/cancel",
+        headers=vendor_user["headers"],
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "failed"

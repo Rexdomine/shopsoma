@@ -20,8 +20,12 @@ import { useToast } from '../../hooks/useToast';
 import ToastContainer from '../../components/ui/ToastContainer';
 
 function StatusBadge({ status }: { status: string }) {
-  if (status.toLowerCase() === 'completed') {
+  const normalized = status.toLowerCase();
+  if (normalized === 'completed') {
     return <span className="px-3 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700">Delivered</span>;
+  }
+  if (normalized === 'failed') {
+    return <span className="px-3 py-1 rounded-full text-xs font-semibold bg-rose-50 text-rose-700">Cancelled</span>;
   }
   return <span className="px-3 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-700">Pending</span>;
 }
@@ -39,6 +43,7 @@ export default function VendorWithdrawals() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [detailPayout, setDetailPayout] = useState<VendorPayout | null>(null);
+  const [canceling, setCanceling] = useState(false);
   const [search, setSearch] = useState('');
   const today = useMemo(() => new Date(), []);
   const [startDate, setStartDate] = useState<Date>(
@@ -152,6 +157,26 @@ export default function VendorWithdrawals() {
     }
   };
 
+  const handleCancelWithdrawal = async () => {
+    if (!currentWithdrawal) {
+      return;
+    }
+    const confirmed = window.confirm('Cancel this withdrawal request?');
+    if (!confirmed) {
+      return;
+    }
+    try {
+      setCanceling(true);
+      await vendorService.cancelPayout(currentWithdrawal.id);
+      success('Withdrawal cancelled successfully');
+      await fetchPayouts();
+    } catch (err: any) {
+      showError(err?.message || 'Failed to cancel withdrawal');
+    } finally {
+      setCanceling(false);
+    }
+  };
+
   return (
     <>
       <div className="flex min-h-screen bg-[var(--color-page-bg)]">
@@ -230,10 +255,12 @@ export default function VendorWithdrawals() {
             <div className="flex flex-col items-end gap-3 min-w-[200px]">
               <button
                 type="button"
+                onClick={handleCancelWithdrawal}
+                disabled={!currentWithdrawal || canceling}
                 className="inline-flex items-center gap-2 px-4 py-2 rounded-full border border-rose-100 bg-rose-50 text-rose-700 text-sm font-semibold hover:bg-rose-100 transition"
               >
                 <Upload className="w-4 h-4" />
-                Cancel Withdrawal
+                {canceling ? 'Cancelling...' : 'Cancel Withdrawal'}
               </button>
             </div>
           </div>

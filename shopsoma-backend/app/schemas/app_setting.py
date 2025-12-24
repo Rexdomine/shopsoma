@@ -53,3 +53,10 @@ class PayoutHoldSettings(BaseModel):
 class PayoutHoldSettingsUpdate(BaseModel):
     """Update payout hold settings"""
     hold_days: int = Field(..., ge=0, le=3650)
+
+
+class DatabaseSyncResponse(BaseModel):
+    """Database sync response"""
+    status: str = Field(..., pattern="^(success|error)$")
+    message: str
+    duration_seconds: Optional[float] = None
