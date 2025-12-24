@@ -1,22 +1,28 @@
 """Vendor API endpoints"""
 from typing import List, Optional
+import logging
 from datetime import datetime, date, time, timedelta
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, or_, func, desc, exists
 from sqlalchemy.orm import selectinload
 from uuid import UUID
 
 from app.core.database import get_db
+from app.core.config import settings
 from app.api.dependencies import (
     get_current_user, get_vendor_profile, get_approved_vendor,
     get_kyc_submitted_vendor, get_current_admin
 )
 from app.models import (
     Vendor, User, VendorAsset, VendorPickup, VendorNotification,
-    Order, OrderItem, Product, Payout, Wishlist
+    Order, OrderItem, Product, Payout, VendorPaymentMethod, Wishlist
 )
+from app.models.app_setting import AppSetting
 from app.models.vendor import KYCStatus
+from app.models.order import PaymentStatus, FulfillmentStatus
+from app.models.payment import PayoutStatus
+from app.models.user import UserRole
 from app.schemas.vendor import (
     VendorOnboardingRequest, VendorResponse, VendorProfileUpdate,
     VendorKYCSubmission, VendorAssetCreate, VendorAssetResponse,
@@ -28,8 +34,43 @@ from app.schemas.vendor import (
     VendorEarningsSummary, VendorPayoutRequest,
     VendorAnalyticsSummary, VendorAnalyticsChartResponse, VendorAnalyticsStats
 )
+from app.schemas.product import ProductResponse
+from app.models.product import ProductStatus, Variation
+from app.services.email_service import email_service
 
 router = APIRouter(prefix="/vendor", tags=["Vendors"])
+logger = logging.getLogger(__name__)
+
+
+async def _get_payout_hold_days(db: AsyncSession) -> int:
+    result = await db.execute(
+        select(AppSetting).where(AppSetting.key == "payout_hold_days")
+    )
+    setting = result.scalar_one_or_none()
+    hold_days = settings.PAYOUT_HOLD_DAYS
+    if setting and setting.value is not None:
+        try:
+            hold_days = int(setting.value)
+        except ValueError:
+            hold_days = settings.PAYOUT_HOLD_DAYS
+    return max(hold_days, 0)
+
+
+async def _build_admin_recipients(db: AsyncSession) -> List[dict]:
+    result = await db.execute(
+        select(User).where(User.role == UserRole.ADMIN)
+    )
+    admin_users = result.scalars().all()
+    recipients = [
+        {"email": user.email, "name": user.full_name or "Admin"}
+        for user in admin_users
+        if user.email
+    ]
+    if settings.ADMIN_EMAIL and all(
+        recipient["email"] != settings.ADMIN_EMAIL for recipient in recipients
+    ):
+        recipients.append({"email": settings.ADMIN_EMAIL, "name": "Admin"})
+    return recipients
 
 
 # ==================== VENDOR ONBOARDING & PROFILE ====================
@@ -323,6 +364,42 @@ async def delete_vendor_asset(
 
 
 # ==================== VENDOR ORDERS ====================
+
+@router.get("/products/{product_id}", response_model=ProductResponse)
+async def get_vendor_product(
+    product_id: UUID,
+    vendor: Vendor = Depends(get_approved_vendor),
+    db: AsyncSession = Depends(get_db)
+):
+    """Get vendor product details"""
+    product_query = (
+        select(Product)
+        .options(
+            selectinload(Product.variants),
+            selectinload(Product.variations).selectinload(Variation.size_stocks),
+            selectinload(Product.images),
+            selectinload(Product.category),
+            selectinload(Product.collection),
+        )
+        .where(
+            and_(
+                Product.id == product_id,
+                Product.vendor_id == vendor.id,
+                Product.status != ProductStatus.ARCHIVED
+            )
+        )
+    )
+
+    result = await db.execute(product_query)
+    product = result.scalar_one_or_none()
+
+    if not product:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Product not found"
+        )
+
+    return product
 
 @router.get("/orders", response_model=dict)
 async def list_vendor_orders(
@@ -747,7 +824,6 @@ def _parse_date(value: Optional[str], label: str) -> Optional[date]:
             detail=f"Invalid {label}. Use YYYY-MM-DD."
         ) from exc
 
-
 def _build_date_range(start_date: Optional[str], end_date: Optional[str]):
     start = _parse_date(start_date, "start_date")
     end = _parse_date(end_date, "end_date")
@@ -776,8 +852,6 @@ def _resolve_date_range(
         start_dt = end_dt - timedelta(days=default_days)
         start = start_dt.date()
     return start, end, start_dt, end_dt
-
-
 @router.get("/earnings/summary", response_model=VendorEarningsSummary)
 async def get_vendor_earnings_summary(
     start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
@@ -1107,7 +1181,6 @@ async def get_vendor_earnings_items(
             order_payout_status[str(order_id)] = (
                 "paid_out" if row.paid_out_count >= row.total_count else "available"
             )
-
     items = []
     for order in orders:
         vendor_items = [item for item in order.items if item.vendor_id == vendor.id]
@@ -1144,6 +1217,7 @@ async def get_vendor_earnings_items(
         "page_size": page_size,
         "total_pages": (total + page_size - 1) // page_size
     }
+
 
 
 @router.get("/analytics/summary", response_model=VendorAnalyticsSummary)
@@ -1392,16 +1466,36 @@ async def get_vendor_analytics_stats(
 async def list_vendor_payouts(
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(20, ge=1, le=100, description="Items per page"),
+    start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
+    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
+    status_filter: Optional[str] = Query(None, alias="status", description="Filter by payout status"),
+    search: Optional[str] = Query(None, description="Search by payment reference or notes"),
     vendor: Vendor = Depends(get_approved_vendor),
     db: AsyncSession = Depends(get_db)
 ):
     """List vendor payouts"""
+    _, _, start_dt, end_dt = _build_date_range(start_date, end_date)
+
     query = select(Payout).where(Payout.vendor_id == vendor.id)
+    if status_filter:
+        query = query.where(Payout.status == status_filter)
+    if start_dt:
+        query = query.where(Payout.created_at >= start_dt)
+    if end_dt:
+        query = query.where(Payout.created_at <= end_dt)
+    if search:
+        query = query.where(
+            or_(
+                Payout.payment_reference.ilike(f"%{search}%"),
+                Payout.notes.ilike(f"%{search}%")
+            )
+        )
 
     # Get total count
-    count_result = await db.execute(
-        select(func.count()).where(Payout.vendor_id == vendor.id)
+    count_query = select(func.count()).select_from(
+        query.order_by(None).subquery()
     )
+    count_result = await db.execute(count_query)
     total = count_result.scalar() or 0
 
     # Pagination
@@ -1412,12 +1506,244 @@ async def list_vendor_payouts(
     payouts = result.scalars().all()
 
     return {
-        "payouts": payouts,
+        "payouts": [
+            {
+                "id": str(payout.id),
+                "vendor_id": str(payout.vendor_id),
+                "payout_period_start": payout.payout_period_start.isoformat(),
+                "payout_period_end": payout.payout_period_end.isoformat(),
+                "total_sales": float(payout.total_sales),
+                "commission_amount": float(payout.commission_amount),
+                "payout_amount": float(payout.payout_amount),
+                "status": payout.status.value,
+                "processed_at": payout.processed_at.isoformat() if payout.processed_at else None,
+                "payment_reference": payout.payment_reference,
+                "notes": payout.notes,
+                "created_at": payout.created_at.isoformat() if payout.created_at else None,
+            }
+            for payout in payouts
+        ],
         "total": total,
         "page": page,
         "page_size": page_size,
         "total_pages": (total + page_size - 1) // page_size
     }
+
+
+@router.post("/payouts/request", response_model=VendorPayoutResponse, status_code=status.HTTP_201_CREATED)
+async def request_vendor_payout(
+    payout_request: VendorPayoutRequest,
+    vendor: Vendor = Depends(get_approved_vendor),
+    db: AsyncSession = Depends(get_db),
+    background_tasks: BackgroundTasks = None,
+):
+    """Request a vendor payout"""
+    from decimal import Decimal
+    from app.models.order import PaymentStatus, FulfillmentStatus
+
+    selected_method = None
+    if payout_request.payment_method_id:
+        method_result = await db.execute(
+            select(VendorPaymentMethod).where(
+                and_(
+                    VendorPaymentMethod.id == payout_request.payment_method_id,
+                    VendorPaymentMethod.vendor_id == vendor.id
+                )
+            )
+        )
+        selected_method = method_result.scalar_one_or_none()
+        if not selected_method:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Selected payment method not found."
+            )
+    else:
+        methods_result = await db.execute(
+            select(VendorPaymentMethod)
+            .where(VendorPaymentMethod.vendor_id == vendor.id)
+            .order_by(VendorPaymentMethod.is_default.desc(), VendorPaymentMethod.created_at.desc())
+        )
+        selected_method = methods_result.scalars().first()
+
+    if not selected_method and (not vendor.bank_name or not vendor.bank_account_number or not vendor.bank_account_name):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Bank payout information is incomplete."
+        )
+
+    payout_expr = func.coalesce(
+        OrderItem.vendor_payout,
+        OrderItem.subtotal - func.coalesce(OrderItem.commission_amount, 0)
+    )
+    base_query = select(
+        payout_expr.label("payout_value"),
+        Order.delivered_at.label("delivered_at"),
+        func.sum(payout_expr).over(
+            order_by=[Order.delivered_at.asc(), OrderItem.id.asc()]
+        ).label("cumulative_payout"),
+    ).join(Order).where(
+        and_(
+            OrderItem.vendor_id == vendor.id,
+            Order.payment_status == PaymentStatus.PAID,
+            or_(
+                OrderItem.fulfillment_status == FulfillmentStatus.DELIVERED,
+                Order.fulfillment_status == FulfillmentStatus.DELIVERED,
+            ),
+            Order.delivered_at.isnot(None),
+        )
+    )
+    base_subquery = base_query.subquery()
+
+    completed_payouts_result = await db.execute(
+        select(func.sum(Payout.payout_amount)).where(
+            and_(
+                Payout.vendor_id == vendor.id,
+                Payout.status == PayoutStatus.COMPLETED
+            )
+        )
+    )
+    completed_payouts = completed_payouts_result.scalar() or Decimal("0.00")
+
+    pending_result = await db.execute(
+        select(func.sum(base_subquery.c.payout_value)).where(
+            base_subquery.c.cumulative_payout > completed_payouts
+        )
+    )
+    pending_amount = pending_result.scalar() or Decimal("0.00")
+
+    existing_result = await db.execute(
+        select(Payout).where(
+            and_(
+                Payout.vendor_id == vendor.id,
+                Payout.status.in_([PayoutStatus.PENDING, PayoutStatus.PROCESSING])
+            )
+        )
+    )
+    existing_payout = existing_result.scalar_one_or_none()
+    if existing_payout:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="You already have a pending withdrawal request."
+        )
+
+    hold_days = await _get_payout_hold_days(db)
+    cutoff_date = datetime.utcnow() - timedelta(days=hold_days)
+    cutoff_day = cutoff_date.date()
+    available_result = await db.execute(
+        select(func.sum(base_subquery.c.payout_value)).where(
+            and_(
+                func.date(base_subquery.c.delivered_at) <= cutoff_day,
+                base_subquery.c.cumulative_payout > completed_payouts,
+            )
+        )
+    )
+    available_payout = available_result.scalar() or Decimal("0.00")
+
+    request_amount = payout_request.amount
+    if available_payout == 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No available payout balance."
+        )
+
+    if request_amount > available_payout:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Requested amount exceeds available payout balance."
+        )
+
+    totals_result = await db.execute(
+        select(
+            func.sum(OrderItem.subtotal),
+            func.sum(OrderItem.commission_amount),
+            func.min(Order.delivered_at),
+            func.max(Order.delivered_at),
+        ).join(Order).where(
+            and_(
+                OrderItem.vendor_id == vendor.id,
+                Order.payment_status == PaymentStatus.PAID,
+                or_(
+                    OrderItem.fulfillment_status == FulfillmentStatus.DELIVERED,
+                    Order.fulfillment_status == FulfillmentStatus.DELIVERED,
+                ),
+                Order.delivered_at.isnot(None)
+            )
+        )
+    )
+    total_sales, commission_amount, earliest_delivered, latest_delivered = totals_result.one()
+    total_sales = total_sales or Decimal("0.00")
+    commission_amount = commission_amount or Decimal("0.00")
+
+    ratio = Decimal("0.00")
+    if available_payout > 0:
+        ratio = (request_amount / available_payout).quantize(Decimal("0.0001"))
+
+    payout_total_sales = (total_sales * ratio).quantize(Decimal("0.01"))
+    payout_commission = (commission_amount * ratio).quantize(Decimal("0.01"))
+
+    payout_notes = "Vendor requested payout"
+    if selected_method:
+        payout_notes = (
+            f"Vendor requested payout via {selected_method.bank_name} "
+            f"(****{selected_method.account_number[-4:]})"
+        )
+
+    payout = Payout(
+        vendor_id=vendor.id,
+        payout_period_start=earliest_delivered.date() if earliest_delivered else datetime.utcnow().date(),
+        payout_period_end=latest_delivered.date() if latest_delivered else datetime.utcnow().date(),
+        total_sales=payout_total_sales,
+        commission_amount=payout_commission,
+        payout_amount=request_amount,
+        status=PayoutStatus.PENDING,
+        notes=payout_notes,
+    )
+
+    db.add(payout)
+    await db.commit()
+    await db.refresh(payout)
+
+    try:
+        vendor_user_result = await db.execute(
+            select(User).where(User.id == vendor.user_id)
+        )
+        vendor_user = vendor_user_result.scalar_one_or_none()
+        payout_method = payout_notes.replace("Vendor requested payout via ", "")
+        admin_recipients = await _build_admin_recipients(db)
+
+        async def _send_payout_request_emails():
+            try:
+                if vendor_user and vendor_user.email:
+                    await email_service.send_vendor_payout_request_email(
+                        email=vendor_user.email,
+                        name=vendor.business_name,
+                        payout_amount=float(payout.payout_amount),
+                        requested_at=payout.created_at,
+                        payout_method=payout_method,
+                        hold_days=hold_days,
+                    )
+                await email_service.send_admin_payout_request_email(
+                    recipients=admin_recipients,
+                    vendor_name=vendor.business_name,
+                    vendor_email=vendor_user.email if vendor_user else "",
+                    payout_amount=float(payout.payout_amount),
+                    requested_at=payout.created_at,
+                    payout_id=str(payout.id),
+                )
+            except Exception:
+                logger.exception(
+                    "[Vendor Payout] Failed to send payout request emails for vendor_id=%s",
+                    vendor.id
+                )
+
+        if background_tasks is not None:
+            background_tasks.add_task(_send_payout_request_emails)
+        else:
+            await _send_payout_request_emails()
+    except Exception:
+        logger.exception("[Vendor Payout] Failed to queue payout request emails for vendor_id=%s", vendor.id)
+
+    return payout
 
 
 @router.get("/payouts/summary", response_model=VendorPayoutSummary)
@@ -1426,21 +1752,36 @@ async def get_payout_summary(
     db: AsyncSession = Depends(get_db)
 ):
     """Get vendor payout summary"""
-    from datetime import datetime
+    from datetime import datetime, timedelta
     from decimal import Decimal
     from app.models.order import PaymentStatus, FulfillmentStatus
 
-    # Pending amount (completed but not yet paid out)
-    pending_result = await db.execute(
-        select(func.sum(OrderItem.vendor_payout)).join(Order).where(
-            and_(
-                OrderItem.vendor_id == vendor.id,
-                Order.payment_status == PaymentStatus.PAID,
-                Order.fulfillment_status == FulfillmentStatus.DELIVERED
-            )
+    payout_expr = func.coalesce(
+        OrderItem.vendor_payout,
+        OrderItem.subtotal - func.coalesce(OrderItem.commission_amount, 0)
+    )
+    base_query = select(
+        payout_expr.label("payout_value"),
+        Order.delivered_at.label("delivered_at"),
+        func.sum(payout_expr).over(
+            order_by=[Order.delivered_at.asc(), OrderItem.id.asc()]
+        ).label("cumulative_payout"),
+    ).join(Order).where(
+        and_(
+            OrderItem.vendor_id == vendor.id,
+            Order.payment_status == PaymentStatus.PAID,
+            or_(
+                OrderItem.fulfillment_status == FulfillmentStatus.DELIVERED,
+                Order.fulfillment_status == FulfillmentStatus.DELIVERED,
+            ),
+            Order.delivered_at.isnot(None),
         )
     )
-    pending_from_orders = pending_result.scalar() or Decimal("0.00")
+    base_subquery = base_query.subquery()
+    delivered_result = await db.execute(
+        select(func.sum(base_subquery.c.payout_value))
+    )
+    total_delivered = delivered_result.scalar() or Decimal("0.00")
 
     # Subtract completed payouts
     completed_payouts_result = await db.execute(
@@ -1453,7 +1794,25 @@ async def get_payout_summary(
     )
     completed_payouts = completed_payouts_result.scalar() or Decimal("0.00")
 
-    pending_amount = max(pending_from_orders - completed_payouts, Decimal("0.00"))
+    hold_days = await _get_payout_hold_days(db)
+    cutoff_date = datetime.utcnow() - timedelta(days=hold_days)
+    cutoff_day = cutoff_date.date()
+    pending_result = await db.execute(
+        select(func.sum(base_subquery.c.payout_value)).where(
+            base_subquery.c.cumulative_payout > completed_payouts
+        )
+    )
+    pending_amount = pending_result.scalar() or Decimal("0.00")
+
+    available_result = await db.execute(
+        select(func.sum(base_subquery.c.payout_value)).where(
+            and_(
+                func.date(base_subquery.c.delivered_at) <= cutoff_day,
+                base_subquery.c.cumulative_payout > completed_payouts,
+            )
+        )
+    )
+    available_payout = available_result.scalar() or Decimal("0.00")
 
     # Last payout
     last_payout_result = await db.execute(
@@ -1480,12 +1839,72 @@ async def get_payout_summary(
     current_month_sales = current_month_result.scalar() or Decimal("0.00")
 
     return VendorPayoutSummary(
+        current_earnings=total_delivered,
         pending_amount=pending_amount,
+        available_payout=available_payout,
         last_payout_amount=last_payout.payout_amount if last_payout else Decimal("0.00"),
         last_payout_date=last_payout.payout_period_end if last_payout else None,
         total_earnings=completed_payouts,
         current_month_sales=current_month_sales
     )
+
+
+@router.get("/payouts/{payout_id}", response_model=VendorPayoutResponse)
+async def get_vendor_payout(
+    payout_id: UUID,
+    vendor: Vendor = Depends(get_approved_vendor),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get a vendor payout detail."""
+    result = await db.execute(
+        select(Payout).where(
+            and_(
+                Payout.id == payout_id,
+                Payout.vendor_id == vendor.id,
+            )
+        )
+    )
+    payout = result.scalar_one_or_none()
+    if not payout:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Payout not found")
+    return payout
+
+
+@router.post("/payouts/{payout_id}/cancel", response_model=VendorPayoutResponse)
+async def cancel_vendor_payout(
+    payout_id: UUID,
+    vendor: Vendor = Depends(get_approved_vendor),
+    db: AsyncSession = Depends(get_db),
+):
+    """Cancel a vendor payout request."""
+    result = await db.execute(
+        select(Payout).where(
+            and_(
+                Payout.id == payout_id,
+                Payout.vendor_id == vendor.id,
+            )
+        )
+    )
+    payout = result.scalar_one_or_none()
+    if not payout:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Payout not found")
+
+    if payout.status not in {PayoutStatus.PENDING, PayoutStatus.PROCESSING}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only pending or processing payouts can be cancelled.",
+        )
+
+    payout.status = PayoutStatus.FAILED
+    payout.processed_at = datetime.utcnow()
+    if payout.notes:
+        payout.notes = f"{payout.notes} | Cancelled by vendor"
+    else:
+        payout.notes = "Cancelled by vendor"
+
+    await db.commit()
+    await db.refresh(payout)
+    return payout
 
 
 # ==================== VENDOR DASHBOARD ====================

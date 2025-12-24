@@ -34,7 +34,7 @@ interface Product {
 
 export default function AdminProducts() {
   const navigate = useNavigate();
-  const { currentCurrency, setCurrency, exchangeRates } = useCurrencyStore();
+  const { currentCurrency, setCurrency, exchangeRates, fetchExchangeRate } = useCurrencyStore();
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -53,6 +53,10 @@ export default function AdminProducts() {
   const [deleteModal, setDeleteModal] = useState<Product | null>(null);
 
   const pageSize = 20;
+
+  useEffect(() => {
+    fetchExchangeRate();
+  }, [fetchExchangeRate]);
 
   useEffect(() => {
     loadProducts();

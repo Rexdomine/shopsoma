@@ -5,6 +5,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import AdminSidebar from '../../components/admin/AdminSidebar';
+import CurrencySwitcher from '../../components/common/CurrencySwitcher';
 import OrderStats from '../../components/admin/OrderStats';
 import OrderFilters from '../../components/admin/OrderFilters';
 import BulkOrderActions from '../../components/admin/BulkOrderActions';
@@ -28,8 +29,8 @@ import { getAdminStatusLabel } from '../../utils/orderStatusMessages';
 
 export default function AdminOrders() {
   const navigate = useNavigate();
-  const { toasts, hideToast, success, error } = useToast();
-  const { formatPrice } = useCurrency();
+  const { toasts, hideToast, success, error, warning } = useToast();
+  const { currentCurrency, setCurrency, formatBasePrice } = useCurrency();
 
   const [stats, setStats] = useState<OrderStatsType | null>(null);
   const [orders, setOrders] = useState<OrderListItem[]>([]);
@@ -46,6 +47,8 @@ export default function AdminOrders() {
 
   // Filters
   const [filters, setFilters] = useState<OrderFilterParams>({});
+
+  const formatOrderAmount = (amount: number) => formatBasePrice(amount);
 
   // Load statistics
   const loadStats = useCallback(async () => {
@@ -108,11 +111,17 @@ export default function AdminOrders() {
 
       success(result.message);
       setSelectedOrderIds([]);
-      await loadOrders();
-      await loadStats();
     } catch (err) {
       console.error('Bulk update failed:', err);
       error('Failed to update orders');
+      return;
+    }
+    try {
+      await loadOrders();
+      await loadStats();
+    } catch (err) {
+      console.error('Failed to refresh orders:', err);
+      warning('Orders updated, but failed to refresh list');
     }
   };
 
@@ -189,13 +198,16 @@ export default function AdminOrders() {
               Manage and track all orders across vendors
             </p>
           </div>
-          <button
-            onClick={handleExport}
-            disabled={exporting || loading}
-            className="px-4 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 transition-colors flex items-center gap-2"
-          >
-            📥 {exporting ? 'Exporting...' : 'Export CSV'}
-          </button>
+          <div className="flex items-center gap-3">
+            <CurrencySwitcher value={currentCurrency} onChange={setCurrency} />
+            <button
+              onClick={handleExport}
+              disabled={exporting || loading}
+              className="px-4 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 transition-colors flex items-center gap-2"
+            >
+              📥 {exporting ? 'Exporting...' : 'Export CSV'}
+            </button>
+          </div>
         </div>
 
         {/* Toast Notifications */}
@@ -310,7 +322,7 @@ export default function AdminOrders() {
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="text-sm font-medium text-gray-900">
-                          {formatPrice(order.total_amount)}
+                          {formatOrderAmount(order.total_amount)}
                         </div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">

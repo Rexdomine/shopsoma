@@ -119,6 +119,27 @@ class TestProductCreate:
 
         assert response.status_code == 422  # Validation error
 
+
+class TestVendorProductView:
+    """Test vendor product view endpoint"""
+
+    @pytest.mark.asyncio
+    async def test_vendor_can_view_own_product(
+        self,
+        client: AsyncClient,
+        vendor_user,
+        sample_product
+    ):
+        response = await client.get(
+            f"/api/v1/vendor/products/{sample_product.id}",
+            headers=vendor_user["headers"]
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["id"] == str(sample_product.id)
+        assert data["vendor_id"] == str(vendor_user["vendor"].id)
+
     @pytest.mark.asyncio
     async def test_create_product_unauthorized(self, client: AsyncClient):
         """Test product creation without authentication"""

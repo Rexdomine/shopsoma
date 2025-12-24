@@ -37,6 +37,12 @@ export const productService = {
     return response.data;
   },
 
+  // Get vendor product by ID (vendor only)
+  async getVendorProduct(productId: string): Promise<Product> {
+    const response = await api.get(`/vendor/products/${productId}`);
+    return response.data;
+  },
+
   // Get featured products
   async getFeaturedProducts(pageSize: number = 8): Promise<Product[]> {
     const response = await api.get('/products', {

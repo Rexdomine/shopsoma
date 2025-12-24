@@ -95,7 +95,6 @@ export interface VendorAnalyticsStats {
   returning_customers: number;
   new_customers: number;
 }
-
 export interface VendorPayoutSummary {
   current_earnings: number;
   pending_amount: number;
@@ -347,7 +346,6 @@ export const vendorService = {
       throw new Error(message);
     }
   },
-
   async getPayoutSummary(): Promise<VendorPayoutSummary> {
     try {
       const response = await api.get('/vendor/payouts/summary', { timeout: 30000 });

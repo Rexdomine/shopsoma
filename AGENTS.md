@@ -20,7 +20,7 @@ Backend (`shopsoma-backend/`):
 - `uvicorn app.main:app --reload` runs the API locally.
 - `pytest` or `pytest --cov=app tests/` runs tests.
 - `black app/ tests/` and `ruff check app/ tests/` format/lint.
-- `alembic upgrade head` applies migrations.
+- `alembic upgrade heads` applies migrations.
 - `celery -A app.celery_app worker --loglevel=info` runs workers.
 
 ## Coding Style & Naming Conventions

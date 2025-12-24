@@ -238,12 +238,16 @@ export default function VendorOrderDetail() {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
   const { toasts, hideToast, error } = useToast();
-  const { currentCurrency, setCurrency, formatBasePrice, getCurrencySymbol } = useCurrency();
+  const { currentCurrency, setCurrency, formatBasePrice, getCurrencySymbol, fetchExchangeRate } = useCurrency();
 
   const [order, setOrder] = useState<VendorOrder | null>(null);
   const [loading, setLoading] = useState(true);
   const [isShippingModalOpen, setIsShippingModalOpen] = useState(false);
   const [isCurrencyDropdownOpen, setIsCurrencyDropdownOpen] = useState(false);
+
+  useEffect(() => {
+    fetchExchangeRate();
+  }, [fetchExchangeRate]);
 
   useEffect(() => {
     const fetchOrder = async () => {
@@ -319,6 +323,14 @@ export default function VendorOrderDetail() {
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [isCurrencyDropdownOpen]);
+
+  const getVariantSummary = (variantDetails: VendorOrder['items'][number]['variant_details']) => {
+    if (!variantDetails) return null;
+    const parts: string[] = [];
+    if (variantDetails.size) parts.push(`Size: ${variantDetails.size}`);
+    if (variantDetails.color) parts.push(`Color: ${variantDetails.color}`);
+    return parts.length > 0 ? parts.join(' • ') : null;
+  };
 
   if (loading) {
     return (
@@ -546,8 +558,10 @@ export default function VendorOrderDetail() {
               </div>
 
               <div className="divide-y divide-gray-200">
-                {order.items.map((item) => (
-                  <div key={item.id} className="py-4 flex items-center gap-4">
+                {order.items.map((item) => {
+                  const variantSummary = getVariantSummary(item.variant_details);
+                  return (
+                    <div key={item.id} className="py-4 flex items-center gap-4">
                     {/* Product Image or Placeholder */}
                     <div className="h-16 w-16 rounded-xl bg-gray-100 border border-gray-200 overflow-hidden flex-shrink-0">
                       {item.product_image_url ? (
@@ -576,6 +590,9 @@ export default function VendorOrderDetail() {
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-semibold text-gray-900 line-clamp-1">{item.product_title}</p>
                       <p className="text-sm text-gray-700 mt-1">{formatBasePrice(item.unit_price)} · Qty: {item.quantity}</p>
+                      {variantSummary && (
+                        <p className="text-xs text-gray-500 mt-1">{variantSummary}</p>
+                      )}
                       <p className="text-xs text-gray-500 mt-1">Payout: {formatBasePrice(item.vendor_payout)}</p>
                     </div>
                     <div className="flex items-center gap-3">
@@ -588,8 +605,9 @@ export default function VendorOrderDetail() {
                         {item.fulfillment_status}
                       </span>
                     </div>
-                  </div>
-                ))}
+                    </div>
+                  );
+                })}
               </div>
 
               {/* Info Message */}

@@ -98,7 +98,6 @@ async def test_vendor_earnings_summary_and_items(
         value="0",
     )
     db_session.add(payout_hold_setting)
-
     await db_session.commit()
 
     summary_response = await client.get(

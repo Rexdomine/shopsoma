@@ -159,7 +159,7 @@ services:
     env: python
     branch: develop
     buildCommand: "cd shopsoma-backend && pip install -r requirements.txt"
-    startCommand: "cd shopsoma-backend && alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT"
+    startCommand: "cd shopsoma-backend && alembic upgrade heads && uvicorn app.main:app --host 0.0.0.0 --port $PORT"
     healthCheckPath: /api/v1/health
 
   # Frontend

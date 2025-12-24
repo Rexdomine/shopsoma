@@ -6,37 +6,27 @@ import {
   TrendingUp,
   Upload,
 } from 'lucide-react';
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import VendorSidebar from '../../components/vendor/VendorSidebar';
 import { ROUTES } from '../../config/constants';
-import { useNavigate } from 'react-router-dom';
-import { useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import WithdrawModal from '../../components/vendor/WithdrawModal';
+import CurrencySwitcher from '../../components/common/CurrencySwitcher';
+import { useCurrencyStore } from '../../store/currencyStore';
+import { formatPriceWithConversion } from '../../utils/pricing';
+import { useToast } from '../../hooks/useToast';
+import ToastContainer from '../../components/ui/ToastContainer';
+import {
+  vendorService,
+  type VendorEarningsOrderRow,
+  type VendorEarningsProductRow,
+  type VendorEarningsSummary,
+} from '../../services/vendorService';
 
-type ExpenseRow = {
-  id: string;
-  orderNumber: string;
-  itemsListed: string;
-  status: 'complete' | 'pending';
-  quantity: number;
-  cutTaken: number;
-  earnings: number;
-  date: string;
-};
+type ExpenseRow = VendorEarningsProductRow | VendorEarningsOrderRow;
 
-const mockExpenses: ExpenseRow[] = Array.from({ length: 12 }).map((_, idx) => ({
-  id: `exp-${idx + 1}`,
-  orderNumber: 'Order UYCSG2',
-  itemsListed: 'Next yolo brooklyn big viral probably +1.',
-  status: 'complete',
-  quantity: 16,
-  cutTaken: idx % 2 === 0 ? 6811 : 1822,
-  earnings: 1822,
-  date: '12/09/25',
-}));
-
-function StatusPill({ status }: { status: ExpenseRow['status'] }) {
-  if (status === 'complete') {
+function StatusPill({ status }: { status: string }) {
+  if (status.toLowerCase() === 'delivered') {
     return <span className="px-4 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700">Complete</span>;
   }
   return <span className="px-4 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-700">Pending</span>;
@@ -44,11 +34,137 @@ function StatusPill({ status }: { status: ExpenseRow['status'] }) {
 
 export default function VendorExpenses() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const { toasts, hideToast, success, error: showError } = useToast();
   const [showWithdraw, setShowWithdraw] = useState(false);
-  const rows = useMemo(() => mockExpenses, []);
+  const [viewMode, setViewMode] = useState<'products' | 'orders'>('orders');
+  const [summary, setSummary] = useState<VendorEarningsSummary | null>(null);
+  const [rows, setRows] = useState<ExpenseRow[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [search, setSearch] = useState('');
+  const today = useMemo(() => new Date(), []);
+  const [startDate, setStartDate] = useState<Date>(
+    new Date(today.getFullYear(), 0, 1)
+  );
+  const [endDate, setEndDate] = useState<Date>(today);
+  const [selectedRange, setSelectedRange] = useState('6M');
+  const { currentCurrency, exchangeRates, fetchExchangeRate, setCurrency } = useCurrencyStore();
+
+  useEffect(() => {
+    const view = searchParams.get('view');
+    if (view === 'products' || view === 'orders') {
+      setViewMode(view);
+    }
+  }, [searchParams]);
+
+  useEffect(() => {
+    fetchExchangeRate();
+  }, [fetchExchangeRate]);
+
+  const dateParams = useMemo(() => {
+    const toParam = (value: Date) => value.toISOString().split('T')[0];
+    return {
+      start_date: toParam(startDate),
+      end_date: toParam(endDate),
+    };
+  }, [startDate, endDate]);
+
+  const formattedDateRange = useMemo(() => {
+    const format = (value: Date) =>
+      value.toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' });
+    return `${format(startDate)} - ${format(endDate)}`;
+  }, [startDate, endDate]);
+  const comparisonLabel = useMemo(() => {
+    const days = Math.max(1, Math.round((endDate.getTime() - startDate.getTime()) / 86400000) + 1);
+    return `vs Previous ${days} Day${days === 1 ? '' : 's'}`;
+  }, [startDate, endDate]);
+
+  const formatAmount = (amount: number) =>
+    formatPriceWithConversion(amount, 'NGN', currentCurrency, exchangeRates);
+
+  const fetchSummary = async () => {
+    try {
+      const response = await vendorService.getEarningsSummary(dateParams);
+      setSummary(response);
+    } catch (err: any) {
+      setError(err?.message || 'Failed to load expense summary');
+    }
+  };
+
+  const fetchRows = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      const response = await vendorService.getEarningsItems({
+        view: viewMode,
+        page: 1,
+        page_size: 20,
+        search: search || undefined,
+        ...dateParams,
+      });
+      setRows(response.items || []);
+    } catch (err: any) {
+      setError(err?.message || 'Failed to load expense items');
+      setRows([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchSummary();
+    fetchRows();
+  }, [viewMode, search, dateParams]);
+
+  const handleRangeSelect = (range: string) => {
+    const end = new Date();
+    const start = new Date(end);
+    if (range === '1D') {
+      start.setDate(end.getDate() - 1);
+    } else if (range === '7D') {
+      start.setDate(end.getDate() - 7);
+    } else if (range === '1M') {
+      start.setMonth(end.getMonth() - 1);
+    } else if (range === '6M') {
+      start.setMonth(end.getMonth() - 6);
+    }
+    setSelectedRange(range);
+    setStartDate(start);
+    setEndDate(end);
+  };
+
+  const buildItemsListed = (items?: string[]) => {
+    if (!items?.length) return '—';
+    const [first, ...rest] = items;
+    return rest.length ? `${first} +${rest.length}` : first;
+  };
+
+  const formatDate = (value?: string | null) => {
+    if (!value) return '—';
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return '—';
+    return parsed.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: '2-digit' });
+  };
+
+  const tableColumns = viewMode === 'products' ? 9 : 8;
+  const renderChange = (value?: number | null) => {
+    if (value === null || value === undefined) {
+      return <span className="text-gray-400">—</span>;
+    }
+    const isPositive = value >= 0;
+    const displayValue = `${Math.abs(value).toFixed(1)}%`;
+    return (
+      <span className={`flex items-center gap-1 text-sm font-semibold ${isPositive ? 'text-emerald-600' : 'text-rose-600'}`}>
+        <TrendingUp className={`w-4 h-4 ${isPositive ? '' : 'rotate-180'}`} />
+        {displayValue}
+      </span>
+    );
+  };
 
   return (
-    <div className="flex min-h-screen bg-[var(--color-page-bg)]">
+    <>
+      <div className="flex min-h-screen bg-[var(--color-page-bg)]">
       <VendorSidebar activePrimary="earnings" />
 
       <div className="flex-1">
@@ -56,11 +172,14 @@ export default function VendorExpenses() {
           <div className="flex flex-wrap items-center justify-between gap-4">
             <h1 className="text-2xl font-semibold text-gray-900">Earnings & Payout</h1>
             <div className="flex items-center gap-3 flex-1 justify-end">
+              <CurrencySwitcher className="mr-2" value={currentCurrency} onChange={setCurrency} />
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
                 <input
                   type="text"
                   placeholder="Search"
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
                   className="pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#105E53] focus:border-transparent w-64"
                 />
               </div>
@@ -84,12 +203,11 @@ export default function VendorExpenses() {
               <div className="space-y-1">
                 <p className="text-sm text-gray-400">Current Expenses</p>
                 <div className="flex items-center gap-3">
-                  <p className="text-4xl font-semibold text-gray-900 tracking-tight">₦432,298</p>
-                  <span className="text-sm font-semibold text-emerald-600 flex items-center gap-1">
-                    <TrendingUp className="w-4 h-4" />
-                    16%
-                  </span>
-                  <span className="text-gray-500 text-sm">vs Last Week</span>
+                  <p className="text-4xl font-semibold text-gray-900 tracking-tight">
+                    {formatAmount(summary?.expenses ?? 0)}
+                  </p>
+                  {renderChange(summary?.expenses_change_pct)}
+                  <span className="text-gray-500 text-sm">{comparisonLabel}</span>
                   <span className="text-gray-400">▼</span>
                 </div>
                 <p className="text-sm text-gray-500">The current cut percentage is 12%</p>
@@ -98,11 +216,10 @@ export default function VendorExpenses() {
               <div className="space-y-1">
                 <p className="text-sm text-gray-400">Current Earnings</p>
                 <div className="flex items-center gap-3">
-                  <p className="text-2xl font-semibold text-gray-900 tracking-tight">₦2,732,983</p>
-                  <span className="text-xs font-semibold text-emerald-600 flex items-center gap-1">
-                    <TrendingUp className="w-4 h-4" />
-                    16%
-                  </span>
+                  <p className="text-2xl font-semibold text-gray-900 tracking-tight">
+                    {formatAmount(summary?.current_earnings ?? 0)}
+                  </p>
+                  <span className="text-xs">{renderChange(summary?.current_earnings_change_pct)}</span>
                 </div>
                 <button
                   type="button"
@@ -117,7 +234,7 @@ export default function VendorExpenses() {
             <div className="flex flex-col items-end gap-3 w-full max-w-xs">
               <div className="space-y-1 text-right">
                 <p className="text-sm text-gray-400">Showing info for:</p>
-                <p className="text-sm font-semibold text-gray-800">Jan 01, 2025 - Dec 28, 2025</p>
+                <p className="text-sm font-semibold text-gray-800">{formattedDateRange}</p>
               </div>
 
               <div className="flex items-center gap-2">
@@ -126,8 +243,9 @@ export default function VendorExpenses() {
                     key={range}
                     type="button"
                     className={`px-4 py-2 rounded-lg text-xs font-semibold border ${
-                      range === '6M' ? 'bg-gray-900 text-white border-gray-900' : 'border-gray-200 text-gray-700 bg-white'
+                      range === selectedRange ? 'bg-gray-900 text-white border-gray-900' : 'border-gray-200 text-gray-700 bg-white'
                     }`}
+                    onClick={() => handleRangeSelect(range)}
                   >
                     {range}
                   </button>
@@ -155,15 +273,21 @@ export default function VendorExpenses() {
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                className="px-3 py-1.5 rounded-full text-sm font-semibold text-gray-600 hover:bg-gray-100"
+                className={`px-3 py-1.5 rounded-full text-sm font-semibold ${
+                  viewMode === 'products' ? 'bg-gray-100 text-gray-800' : 'text-gray-600 hover:bg-gray-100'
+                }`}
+                onClick={() => setViewMode('products')}
               >
                 Products
               </button>
               <button
                 type="button"
-                className="px-3 py-1.5 rounded-full text-sm font-semibold bg-gray-100 text-gray-800"
+                className={`px-3 py-1.5 rounded-full text-sm font-semibold ${
+                  viewMode === 'orders' ? 'bg-gray-100 text-gray-800' : 'text-gray-600 hover:bg-gray-100'
+                }`}
+                onClick={() => setViewMode('orders')}
               >
-                Orders (26)
+                Orders
               </button>
             </div>
           </div>
@@ -172,39 +296,118 @@ export default function VendorExpenses() {
             <table className="w-full text-sm">
               <thead className="bg-gray-50">
                 <tr>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">Order Number</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">Items Listed</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">Status</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">Quantity</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">Cut Taken</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">Earnings</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">Date</th>
-                  <th className="px-4 py-3 text-right text-xs font-semibold text-gray-500"> </th>
+                  {viewMode === 'products' && (
+                    <>
+                      <th className="w-16 px-4 py-3 text-left text-xs font-semibold text-gray-500"> </th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">Product Name</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">Status</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">Price</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">Quantity</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">Expense</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">Earnings</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">Date</th>
+                      <th className="px-4 py-3 text-right text-xs font-semibold text-gray-500"> </th>
+                    </>
+                  )}
+                  {viewMode === 'orders' && (
+                    <>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">Order Number</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">Items Listed</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">Status</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">Quantity</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">Cut Taken</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">Earnings</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">Date</th>
+                      <th className="px-4 py-3 text-right text-xs font-semibold text-gray-500"> </th>
+                    </>
+                  )}
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {rows.map((row) => (
-                  <tr key={row.id} className="hover:bg-gray-50">
-                    <td className="px-4 py-3 text-gray-900">{row.orderNumber}</td>
-                    <td className="px-4 py-3 text-gray-800">{row.itemsListed}</td>
-                    <td className="px-4 py-3">
-                      <StatusPill status={row.status} />
-                    </td>
-                    <td className="px-4 py-3 text-gray-800">{row.quantity}</td>
-                    <td className="px-4 py-3 font-semibold text-gray-900">${row.cutTaken}</td>
-                    <td className="px-4 py-3 font-semibold text-gray-900">${row.earnings}</td>
-                    <td className="px-4 py-3 text-gray-700">{row.date}</td>
-                    <td className="px-4 py-3 text-right">
-                      <button
-                        type="button"
-                        className="h-8 w-8 rounded-full border border-gray-200 flex items-center justify-center hover:bg-gray-100"
-                        aria-label="View details"
-                      >
-                        <Eye className="w-4 h-4 text-gray-600" />
-                      </button>
+                {loading && (
+                  <tr>
+                    <td className="px-4 py-6 text-center text-gray-500" colSpan={tableColumns}>
+                      Loading expenses...
                     </td>
                   </tr>
-                ))}
+                )}
+                {!loading && error && (
+                  <tr>
+                    <td className="px-4 py-6 text-center text-red-600" colSpan={tableColumns}>
+                      {error}
+                    </td>
+                  </tr>
+                )}
+                {!loading && !error && rows.length === 0 && (
+                  <tr>
+                    <td className="px-4 py-6 text-center text-gray-500" colSpan={tableColumns}>
+                      No expenses found for this period.
+                    </td>
+                  </tr>
+                )}
+                {!loading && !error && rows.length > 0 && viewMode === 'products' && rows.map((row) => {
+                  const productRow = row as VendorEarningsProductRow;
+                  return (
+                    <tr key={productRow.id} className="hover:bg-gray-50">
+                      <td className="px-4 py-3">
+                        {productRow.product_image_url ? (
+                          <img
+                            src={productRow.product_image_url}
+                            alt={productRow.product_title}
+                            className="h-12 w-10 rounded-full border border-gray-200 object-cover"
+                          />
+                        ) : (
+                          <div className="h-12 w-10 rounded-full bg-gray-100 border border-gray-200"></div>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-gray-900">{productRow.product_title}</td>
+                      <td className="px-4 py-3">
+                        <StatusPill status={productRow.status} />
+                      </td>
+                      <td className="px-4 py-3 font-semibold text-gray-900">{formatAmount(productRow.unit_price)}</td>
+                      <td className="px-4 py-3 text-gray-800">{productRow.quantity}</td>
+                      <td className="px-4 py-3 font-semibold text-gray-900">{formatAmount(productRow.commission_amount)}</td>
+                      <td className="px-4 py-3 font-semibold text-gray-900">{formatAmount(productRow.vendor_payout)}</td>
+                      <td className="px-4 py-3 text-gray-700">{formatDate(productRow.delivered_at)}</td>
+                      <td className="px-4 py-3 text-right">
+                        <button
+                          type="button"
+                          className="h-8 w-8 rounded-full border border-gray-200 flex items-center justify-center hover:bg-gray-100"
+                          aria-label="View details"
+                          onClick={() => navigate(`${ROUTES.VENDOR_PRODUCTS}/${productRow.product_id}/view`)}
+                        >
+                          <Eye className="w-4 h-4 text-gray-600" />
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+                {!loading && !error && rows.length > 0 && viewMode === 'orders' && rows.map((row) => {
+                  const orderRow = row as VendorEarningsOrderRow;
+                  return (
+                    <tr key={orderRow.id} className="hover:bg-gray-50">
+                      <td className="px-4 py-3 text-gray-900">{orderRow.order_number}</td>
+                      <td className="px-4 py-3 text-gray-800">{buildItemsListed(orderRow.items || [])}</td>
+                      <td className="px-4 py-3">
+                        <StatusPill status={orderRow.status} />
+                      </td>
+                      <td className="px-4 py-3 text-gray-800">{orderRow.total_quantity}</td>
+                      <td className="px-4 py-3 font-semibold text-gray-900">{formatAmount(orderRow.total_commission)}</td>
+                      <td className="px-4 py-3 font-semibold text-gray-900">{formatAmount(orderRow.total_payout)}</td>
+                      <td className="px-4 py-3 text-gray-700">{formatDate(orderRow.delivered_at)}</td>
+                      <td className="px-4 py-3 text-right">
+                        <button
+                          type="button"
+                          className="h-8 w-8 rounded-full border border-gray-200 flex items-center justify-center hover:bg-gray-100"
+                          aria-label="View details"
+                          onClick={() => navigate(ROUTES.VENDOR_ORDER_DETAIL.replace(':id', orderRow.id))}
+                        >
+                          <Eye className="w-4 h-4 text-gray-600" />
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -221,7 +424,14 @@ export default function VendorExpenses() {
           Withdraw Funds
         </button>
       </div>
-      <WithdrawModal open={showWithdraw} onClose={() => setShowWithdraw(false)} />
-    </div>
+      <WithdrawModal
+        open={showWithdraw}
+        onClose={() => setShowWithdraw(false)}
+        onSuccess={(message) => success(message, 'Success')}
+        onError={(message) => showError(message, 'Error')}
+      />
+      </div>
+      <ToastContainer toasts={toasts} onClose={hideToast} />
+    </>
   );
 }

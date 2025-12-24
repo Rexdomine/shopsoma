@@ -335,7 +335,9 @@ class VendorPayoutResponse(BaseModel):
 
 class VendorPayoutSummary(BaseModel):
     """Vendor payout summary"""
+    current_earnings: Decimal
     pending_amount: Decimal
+    available_payout: Decimal
     last_payout_amount: Decimal
     last_payout_date: Optional[date]
     total_earnings: Decimal
@@ -375,6 +377,9 @@ class VendorEarningsProductRow(BaseModel):
     payout_status: Optional[str] = None
     status: str
     delivered_at: Optional[datetime]
+    withdraw_available: bool = False
+    withdraw_days_left: Optional[int] = None
+    withdraw_available_at: Optional[datetime] = None
 
 
 class VendorEarningsOrderRow(BaseModel):
@@ -387,6 +392,10 @@ class VendorEarningsOrderRow(BaseModel):
     total_payout: float
     status: str
     delivered_at: Optional[datetime]
+    payout_status: Optional[str] = None
+    withdraw_available: bool = False
+    withdraw_days_left: Optional[int] = None
+    withdraw_available_at: Optional[datetime] = None
 
 
 class VendorAnalyticsSummary(BaseModel):
@@ -419,7 +428,6 @@ class VendorAnalyticsStats(BaseModel):
     wishlisted_products: int
     returning_customers: int
     new_customers: int
-
 # ==================== VENDOR DASHBOARD SCHEMAS ====================
 
 class VendorDashboardMetrics(BaseModel):

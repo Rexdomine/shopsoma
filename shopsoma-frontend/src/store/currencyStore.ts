@@ -5,6 +5,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { getExchangeRate } from '../services/settingsService';
+import { usePreferenceStore } from './preferenceStore';
 
 export type Currency = 'NGN' | 'USD';
 
@@ -46,6 +47,14 @@ export const useCurrencyStore = create<CurrencyState>()(
 
       setCurrency: (currency: Currency) => {
         set({ currentCurrency: currency });
+        try {
+          usePreferenceStore.getState().setCurrency(currency);
+        } catch (error) {
+          console.error('[CurrencyStore] Failed to persist preferred currency', {
+            currency,
+            error,
+          });
+        }
       },
 
       toggleCurrency: () => {

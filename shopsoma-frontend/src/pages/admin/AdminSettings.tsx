@@ -1,12 +1,25 @@
-import { useState, useEffect } from 'react';
-import { Save, DollarSign, Loader2, CheckCircle2, AlertCircle, Truck } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import {
+  Save,
+  DollarSign,
+  Loader2,
+  CheckCircle2,
+  AlertCircle,
+  Truck,
+  Database,
+  RefreshCw,
+} from 'lucide-react';
 import AdminSidebar from '../../components/admin/AdminSidebar';
 import {
   getExchangeRate,
   updateExchangeRate,
   getShippingProviderSettings,
   updateShippingProviderSettings,
+  getPayoutHoldSettings,
+  updatePayoutHoldSettings,
+  syncRenderDatabase,
   type ExchangeRate,
+  type PayoutHoldSettings,
 } from '../../services/settingsService';
 import { useToast } from '../../hooks/useToast';
 import ToastContainer from '../../components/ui/ToastContainer';
@@ -25,21 +38,41 @@ export default function AdminSettings() {
   // ShipBubble settings state
   const [useShipBubble, setUseShipBubble] = useState(false);
   const [savingShipping, setSavingShipping] = useState(false);
+  const [payoutHold, setPayoutHold] = useState<PayoutHoldSettings | null>(null);
+  const [payoutHoldInput, setPayoutHoldInput] = useState('');
+  const [savingPayoutHold, setSavingPayoutHold] = useState(false);
+  const [payoutHoldChanged, setPayoutHoldChanged] = useState(false);
+  const [syncingDb, setSyncingDb] = useState(false);
+  const [lastDbSync, setLastDbSync] = useState<string | null>(null);
+  const [syncProgress, setSyncProgress] = useState(0);
+  const [syncStatus, setSyncStatus] = useState<'idle' | 'running' | 'success' | 'error'>('idle');
+  const syncTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     fetchSettings();
   }, []);
 
+  useEffect(() => {
+    return () => {
+      if (syncTimerRef.current !== null) {
+        window.clearInterval(syncTimerRef.current);
+      }
+    };
+  }, []);
+
   const fetchSettings = async () => {
     try {
       setLoading(true);
-      const [rate, shipping] = await Promise.all([
+      const [rate, shipping, hold] = await Promise.all([
         getExchangeRate(),
-        getShippingProviderSettings()
+        getShippingProviderSettings(),
+        getPayoutHoldSettings()
       ]);
       setExchangeRate(rate);
       setRateInput(rate.rate.toString());
       setUseShipBubble(shipping.use_shipbubble);
+      setPayoutHold(hold);
+      setPayoutHoldInput(hold.hold_days.toString());
     } catch (err: any) {
       console.error('Failed to fetch settings:', err);
       error(err.response?.data?.detail || 'Failed to load settings', 'Error');
@@ -118,6 +151,91 @@ export default function AdminSettings() {
       setUseShipBubble(!enabled);
     } finally {
       setSavingShipping(false);
+    }
+  };
+
+  const handlePayoutHoldChange = (value: string) => {
+    setPayoutHoldInput(value);
+    const parsed = Number(value);
+    if (!Number.isNaN(parsed) && payoutHold) {
+      setPayoutHoldChanged(parsed !== payoutHold.hold_days);
+    }
+  };
+
+  const handleSavePayoutHold = async () => {
+    const parsed = Number(payoutHoldInput);
+    if (Number.isNaN(parsed) || parsed < 0 || parsed > 3650) {
+      error('Payout hold days must be between 0 and 3650', 'Invalid Input');
+      return;
+    }
+
+    try {
+      setSavingPayoutHold(true);
+      const updated = await updatePayoutHoldSettings(parsed);
+      setPayoutHold(updated);
+      setPayoutHoldInput(updated.hold_days.toString());
+      setPayoutHoldChanged(false);
+      success('Payout hold updated successfully', 'Success');
+    } catch (err: any) {
+      console.error('Failed to update payout hold:', err);
+      error(err.response?.data?.detail || 'Failed to update payout hold', 'Error');
+    } finally {
+      setSavingPayoutHold(false);
+    }
+  };
+
+  const handleResetPayoutHold = () => {
+    if (payoutHold) {
+      setPayoutHoldInput(payoutHold.hold_days.toString());
+      setPayoutHoldChanged(false);
+    }
+  };
+
+  const handleDbSync = async () => {
+    const confirmed = window.confirm(
+      'This will replace your local database with the latest data from Render. Continue?'
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    if (syncTimerRef.current !== null) {
+      window.clearInterval(syncTimerRef.current);
+    }
+
+    try {
+      setSyncingDb(true);
+      setSyncStatus('running');
+      setSyncProgress(5);
+      syncTimerRef.current = window.setInterval(() => {
+        setSyncProgress((prev) => {
+          if (prev >= 90) {
+            return prev;
+          }
+          const step = Math.max(2, Math.floor(Math.random() * 8));
+          return Math.min(90, prev + step);
+        });
+      }, 700);
+
+      const result = await syncRenderDatabase();
+      setLastDbSync(result.message);
+      setSyncStatus('success');
+      setSyncProgress(100);
+      success(result.message, 'Database Sync Complete');
+    } catch (err: any) {
+      console.error('Failed to sync database:', err);
+      error(err.response?.data?.detail || 'Database sync failed', 'Error');
+      setSyncStatus('error');
+    } finally {
+      if (syncTimerRef.current !== null) {
+        window.clearInterval(syncTimerRef.current);
+        syncTimerRef.current = null;
+      }
+      setSyncingDb(false);
+      window.setTimeout(() => {
+        setSyncProgress(0);
+        setSyncStatus('idle');
+      }, 1500);
     }
   };
 
@@ -369,6 +487,173 @@ export default function AdminSettings() {
                   </div>
                 </div>
               </div>
+            </div>
+          </div>
+
+          {/* Payout Hold Settings Card */}
+          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+            <div className="border-b border-gray-200 px-6 py-4">
+              <div className="flex items-center gap-3">
+                <div className="h-10 w-10 rounded-xl bg-[#0B1D2C] text-white flex items-center justify-center">
+                  <DollarSign className="w-5 h-5" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-semibold text-gray-900">Payout Hold</h2>
+                  <p className="text-sm text-gray-600">Set how long vendors wait before withdrawing</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="p-6 space-y-6">
+              <div>
+                <label htmlFor="payout-hold" className="block text-sm font-medium text-gray-700 mb-2">
+                  Hold period (days)
+                </label>
+                <div className="flex items-start gap-4">
+                  <div className="flex-1 max-w-md">
+                    <input
+                      id="payout-hold"
+                      type="number"
+                      min="0"
+                      max="3650"
+                      step="1"
+                      value={payoutHoldInput}
+                      onChange={(event) => handlePayoutHoldChange(event.target.value)}
+                      className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#105E53] focus:border-transparent text-gray-900"
+                      placeholder="Enter hold days"
+                    />
+                    <p className="text-xs text-gray-500 mt-2">
+                      Set to 0 for no hold. Max 3650 days.
+                    </p>
+                  </div>
+
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={handleResetPayoutHold}
+                      disabled={!payoutHoldChanged || savingPayoutHold}
+                      className="px-4 py-2.5 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Reset
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleSavePayoutHold}
+                      disabled={!payoutHoldChanged || savingPayoutHold}
+                      className="px-4 py-2.5 bg-[#105E53] text-white rounded-lg text-sm font-medium hover:bg-[#0d4a42] transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                    >
+                      {savingPayoutHold ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          Saving...
+                        </>
+                      ) : (
+                        <>
+                          <Save className="w-4 h-4" />
+                          Save Changes
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {payoutHold && (
+                <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-medium text-gray-700">Current Hold Period</p>
+                      <p className="text-2xl font-semibold text-[#0B1D2C] mt-1">
+                        {payoutHold.hold_days} day{payoutHold.hold_days === 1 ? '' : 's'}
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-xs text-gray-500">Last Updated</p>
+                      <p className="text-sm text-gray-700 mt-0.5">
+                        {payoutHold.updated_at
+                          ? new Date(payoutHold.updated_at).toLocaleString('en-US', {
+                              dateStyle: 'medium',
+                              timeStyle: 'short'
+                            })
+                          : 'Not set'}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Database Sync Card */}
+          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+            <div className="border-b border-gray-200 px-6 py-4">
+              <div className="flex items-center gap-3">
+                <div className="h-10 w-10 rounded-xl bg-[#105E53] text-white flex items-center justify-center">
+                  <Database className="w-5 h-5" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-semibold text-gray-900">Database Sync (Local)</h2>
+                  <p className="text-sm text-gray-600">Replace local data with Render staging data</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <div className="flex items-start gap-3">
+                <AlertCircle className="w-5 h-5 text-orange-600 mt-0.5 flex-shrink-0" />
+                <div>
+                  <p className="text-sm font-semibold text-orange-900">Destructive action</p>
+                  <p className="text-sm text-orange-800">
+                    This will overwrite your local database. Use only in local development.
+                  </p>
+                </div>
+              </div>
+
+              {lastDbSync && (
+                <div className="bg-gray-50 rounded-lg p-4 border border-gray-200 text-sm text-gray-700">
+                  {lastDbSync}
+                </div>
+              )}
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleDbSync}
+                  disabled={syncingDb}
+                  className="px-4 py-2.5 bg-[#0B1D2C] text-white rounded-lg text-sm font-medium hover:bg-[#081620] transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                >
+                  {syncingDb ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Syncing...
+                    </>
+                  ) : (
+                    <>
+                      <RefreshCw className="w-4 h-4" />
+                      Sync Render to Local
+                    </>
+                  )}
+                </button>
+              </div>
+
+              {(syncStatus === 'running' || syncProgress > 0) && (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-xs text-gray-600">
+                    <span>
+                      {syncStatus === 'running' ? 'Sync in progress' : 'Sync complete'}
+                    </span>
+                    <span>{syncProgress}%</span>
+                  </div>
+                  <div className="h-2 w-full rounded-full bg-gray-100 overflow-hidden">
+                    <div
+                      className={`h-full transition-all duration-300 ${
+                        syncStatus === 'error' ? 'bg-red-500' : 'bg-[#105E53]'
+                      }`}
+                      style={{ width: `${syncProgress}%` }}
+                    />
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>

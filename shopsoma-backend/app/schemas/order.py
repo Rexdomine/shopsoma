@@ -112,6 +112,7 @@ class OrderResponse(BaseModel):
     id: UUID
     order_number: str
     customer_id: UUID
+    currency: Optional[str] = None
     shipping_address_id: Optional[UUID]
     billing_address_id: Optional[UUID]
     subtotal: Decimal

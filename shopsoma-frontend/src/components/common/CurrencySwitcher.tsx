@@ -25,7 +25,17 @@ export default function CurrencySwitcher({
             <button
               key={currency}
               type="button"
-              onClick={() => onChange(currency)}
+              onClick={() => {
+                try {
+                  onChange(currency);
+                } catch (error) {
+                  console.error('[CurrencySwitcher] Failed to change currency', {
+                    from: value,
+                    to: currency,
+                    error,
+                  });
+                }
+              }}
               className={`px-3 py-1.5 text-xs font-semibold transition ${
                 isActive
                   ? 'bg-[#105E53] text-white'

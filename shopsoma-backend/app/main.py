@@ -3,6 +3,7 @@ Shopsoma Backend API
 Main application entry point
 """
 import os
+import logging
 from pathlib import Path
 from dotenv import load_dotenv
 from fastapi import FastAPI
@@ -13,8 +14,15 @@ from contextlib import asynccontextmanager
 # Load environment variables from .env file
 load_dotenv()
 
+# Basic logging configuration for app logs
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+logging.basicConfig(
+    level=LOG_LEVEL,
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s"
+)
+
 # Import routers
-from app.api.v1 import auth, products, images, admin, seed, cart, addresses, shipping_rates, orders, promo_codes, payments, users, wishlist, newsletter, preferences, payment_portals, vendors, vendor_activation, vendor_applications, vendor_payment_methods, categories, collections, settings, admin_orders, websocket
+from app.api.v1 import auth, products, images, admin, seed, cart, addresses, shipping_rates, orders, promo_codes, payments, users, wishlist, newsletter, preferences, payment_portals, vendors, vendor_activation, vendor_applications, vendor_payment_methods, categories, collections, settings, admin_orders, admin_payouts, websocket
 
 # Import middleware
 from app.middleware.rate_limit import RateLimitMiddleware
@@ -127,6 +135,7 @@ app.include_router(vendor_applications.router, prefix="/api/v1/vendor-applicatio
 app.include_router(vendor_payment_methods.router, prefix="/api/v1")
 app.include_router(settings.router, prefix="/api/v1")
 app.include_router(admin_orders.router, prefix="/api/v1")
+app.include_router(admin_payouts.router, prefix="/api/v1")
 app.include_router(websocket.router, prefix="/api/v1")
 
 # Mount static files for local image uploads (development only)

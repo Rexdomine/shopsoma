@@ -1,5 +1,5 @@
 """Order management endpoints"""
-from typing import Optional
+from typing import Optional, List, Dict
 from fastapi import APIRouter, Depends, HTTPException, status, Query, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, and_, or_, func
@@ -8,11 +8,13 @@ from uuid import UUID
 from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
 import secrets
+import logging
 
 from app.core.database import get_db
 from app.models.user import User, UserRole
 from app.models.order import Order, OrderItem, PaymentStatus, FulfillmentStatus
-from app.models.product import Product, ProductVariant, ProductStatus
+from app.models.product import Product, ProductVariant, ProductStatus, Variation, SizeStock
+from app.models.payment import Payment
 from app.models.address import Address
 from app.models.shipping_rate import ShippingRate
 from app.models.vendor import Vendor
@@ -30,9 +32,11 @@ from app.api.dependencies import get_current_active_user, get_optional_user
 from app.services.email_service import email_service
 from app.services.vendor_notification_service import VendorNotificationService
 from app.services.account_claim import queue_account_claim_email
+from app.core.config import settings
 
 router = APIRouter(prefix="/orders", tags=["Orders"])
 MIN_ORDER_AMOUNT_NGN = Decimal("60000.00")
+logger = logging.getLogger(__name__)
 
 # Simple promo code configuration (should eventually move to dedicated table/service)
 PROMO_CODES = {
@@ -71,6 +75,136 @@ def calculate_promo_discount(promo_code: Optional[str], subtotal: Decimal):
 TAX_RATE = Decimal("0.075")
 
 
+def _as_decimal(value) -> Decimal:
+    if isinstance(value, Decimal):
+        return value
+    if value is None:
+        return Decimal("0.00")
+    return Decimal(str(value))
+
+
+def _build_admin_recipients(admin_users: List[User]) -> List[Dict[str, str]]:
+    recipients = [
+        {"email": user.email, "name": user.full_name or "Admin"}
+        for user in admin_users
+        if user.email
+    ]
+    if settings.ADMIN_EMAIL and all(
+        recipient["email"] != settings.ADMIN_EMAIL for recipient in recipients
+    ):
+        recipients.append({"email": settings.ADMIN_EMAIL, "name": "Admin"})
+    return recipients
+
+
+def _resolve_product_image_url(product: Product, variant_details: Optional[Dict[str, str]]) -> Optional[str]:
+    if variant_details and product.variations:
+        variation_id = variant_details.get("variation_id")
+        if variation_id:
+            for variation in product.variations:
+                if str(variation.id) == str(variation_id) and variation.images:
+                    return variation.images[0]
+
+    if product.images:
+        primary = next((image for image in product.images if image.is_primary), None)
+        selected = primary or product.images[0]
+        return selected.thumbnail_url or selected.image_url
+
+    return None
+
+
+def _resolve_order_currency(order: Order) -> str:
+    if not getattr(order, "payments", None):
+        return "NGN"
+    latest_payment = max(
+        order.payments,
+        key=lambda payment: payment.created_at or datetime.min
+    )
+    return latest_payment.currency or "NGN"
+
+
+async def resolve_order_variant(
+    db: AsyncSession,
+    product: Product,
+    variant_id: str
+) -> dict:
+    """Resolve variant data across legacy variants and vendor variations."""
+    variant_result = await db.execute(
+        select(ProductVariant).where(ProductVariant.id == variant_id)
+    )
+    variant = variant_result.scalar_one_or_none()
+
+    if variant and variant.product_id == product.id:
+        return {
+            "variant_id": variant.id,
+            "unit_price": variant.price,
+            "stock": variant.stock,
+            "variant_details": {
+                "size": variant.size,
+                "color": variant.color,
+                "color_hex": variant.color_hex,
+            },
+            "stock_source": "product_variant",
+            "stock_id": variant.id,
+        }
+
+    size_stock_result = await db.execute(
+        select(SizeStock, Variation)
+        .join(Variation, SizeStock.variation_id == Variation.id)
+        .where(
+            SizeStock.id == variant_id,
+            Variation.product_id == product.id
+        )
+    )
+    size_stock_row = size_stock_result.first()
+
+    if size_stock_row:
+        size_stock, variation = size_stock_row
+        unit_price = variation.price if variation.price is not None else product.base_price
+        return {
+            "variant_id": None,
+            "unit_price": unit_price,
+            "stock": size_stock.stock,
+            "variant_details": {
+                "size": getattr(size_stock.size, "value", str(size_stock.size)),
+                "color": variation.title,
+                "color_hex": variation.color_hex,
+                "size_stock_id": str(size_stock.id),
+                "variation_id": str(variation.id),
+            },
+            "stock_source": "size_stock",
+            "stock_id": size_stock.id,
+        }
+
+    variation_result = await db.execute(
+        select(Variation).where(
+            Variation.id == variant_id,
+            Variation.product_id == product.id
+        )
+    )
+    variation = variation_result.scalar_one_or_none()
+
+    if variation:
+        unit_price = variation.price if variation.price is not None else product.base_price
+        return {
+            "variant_id": None,
+            "unit_price": unit_price,
+            "stock": product.total_stock,
+            "variant_details": {
+                "size": None,
+                "color": variation.title,
+                "color_hex": variation.color_hex,
+                "variation_id": str(variation.id),
+            },
+            "stock_source": "product",
+            "stock_id": product.id,
+        }
+
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail=f"Variant {variant_id} not found"
+    )
+
+
 def generate_order_number() -> str:
     """Generate a unique order number"""
     timestamp = datetime.now().strftime("%Y%m%d")
@@ -80,10 +214,11 @@ def generate_order_number() -> str:
 
 async def send_vendor_order_notification(
     vendor_id: str,
+    order_id: str,
     order_number: str,
-    product_title: str,
-    quantity: int,
-    vendor_payout: float,
+    order_date: datetime,
+    items: list,
+    total_payout: float,
     scheduled_pickup_date: datetime
 ):
     """
@@ -93,15 +228,30 @@ async def send_vendor_order_notification(
 
     async with get_db_context() as db:
         vendor_notification_service = VendorNotificationService(email_service)
-        await vendor_notification_service.send_order_notification(
-            db=db,
-            vendor_id=vendor_id,
-            order_number=order_number,
-            product_title=product_title,
-            quantity=quantity,
-            vendor_payout=vendor_payout,
-            scheduled_pickup_date=scheduled_pickup_date
-        )
+        try:
+            await vendor_notification_service.send_order_notification(
+                db=db,
+                vendor_id=vendor_id,
+                order_id=order_id,
+                order_number=order_number,
+                order_date=order_date,
+                items=items,
+                total_payout=total_payout,
+                scheduled_pickup_date=scheduled_pickup_date
+            )
+            logger.info(
+                "[Order Email] Vendor email queued for vendor_id=%s order=%s items=%s",
+                vendor_id,
+                order_number,
+                len(items)
+            )
+        except Exception as exc:
+            logger.exception(
+                "[Order Email] Vendor email failed for vendor_id=%s order=%s: %s",
+                vendor_id,
+                order_number,
+                exc
+            )
 
 
 async def calculate_order_totals(
@@ -111,14 +261,16 @@ async def calculate_order_totals(
 ) -> dict:
     """Calculate order totals"""
     subtotal = sum(Decimal(str(item.get('subtotal', 0))) for item in items_data)
-    tax_amount = (subtotal + shipping_cost) * TAX_RATE
-    total_amount = subtotal + shipping_cost + tax_amount - discount_amount
+    shipping_cost_decimal = _as_decimal(shipping_cost)
+    discount_decimal = _as_decimal(discount_amount)
+    tax_amount = (subtotal + shipping_cost_decimal) * TAX_RATE
+    total_amount = subtotal + shipping_cost_decimal + tax_amount - discount_decimal
 
     return {
         "subtotal": subtotal,
-        "shipping_cost": shipping_cost,
+        "shipping_cost": shipping_cost_decimal,
         "tax_amount": tax_amount,
-        "discount_amount": discount_amount,
+        "discount_amount": discount_decimal,
         "total_amount": total_amount
     }
 
@@ -200,29 +352,17 @@ async def review_order(
             )
 
         # Get variant if specified
-        variant = None
+        variant_id_for_response = None
         unit_price = product.base_price
         stock = product.total_stock
         variant_details = None
 
         if item.variant_id:
-            variant_query = select(ProductVariant).where(ProductVariant.id == item.variant_id)
-            variant_result = await db.execute(variant_query)
-            variant = variant_result.scalar_one_or_none()
-
-            if not variant or variant.product_id != product.id:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Variant {item.variant_id} not found"
-                )
-
-            unit_price = variant.price
-            stock = variant.stock
-            variant_details = {
-                "size": variant.size,
-                "color": variant.color,
-                "color_hex": variant.color_hex
-            }
+            resolved_variant = await resolve_order_variant(db, product, str(item.variant_id))
+            variant_id_for_response = item.variant_id
+            unit_price = resolved_variant["unit_price"]
+            stock = resolved_variant["stock"]
+            variant_details = resolved_variant["variant_details"]
 
         # Check stock
         if stock < item.quantity:
@@ -231,15 +371,16 @@ async def review_order(
                 detail=f"Insufficient stock for '{product.title}'. Available: {stock}"
             )
 
-        item_subtotal = unit_price * item.quantity
+        unit_price_decimal = _as_decimal(unit_price)
+        item_subtotal = unit_price_decimal * Decimal(item.quantity)
         subtotal += item_subtotal
 
         items_details.append({
             "product_id": str(product.id),
             "product_title": product.title,
-            "variant_id": str(variant.id) if variant else None,
+            "variant_id": str(variant_id_for_response) if variant_id_for_response else None,
             "variant_details": variant_details,
-            "unit_price": float(unit_price),
+            "unit_price": float(unit_price_decimal),
             "quantity": item.quantity,
             "subtotal": float(item_subtotal),
             "vendor_name": product.vendor.business_name if product.vendor else "Shopsoma"
@@ -294,7 +435,7 @@ async def review_order(
     if review_data.shipping_rate_id:
         selected_rate = next((r for r in shipping_rates if r.id == review_data.shipping_rate_id), None) or selected_rate
 
-    shipping_cost = selected_rate.base_rate
+    shipping_cost = _as_decimal(selected_rate.base_rate)
 
     # Calculate discount (if promo code provided)
     discount_amount, applied_promo = calculate_promo_discount(review_data.promo_code, subtotal)
@@ -427,12 +568,16 @@ async def create_order(
 
     # Process and validate items
     order_items = []
+    order_item_media = {}
+    stock_updates = []
     subtotal = Decimal("0.00")
 
     for item_data in order_data.items:
         # Get product with vendor
         product_query = select(Product).options(
-            selectinload(Product.vendor)
+            selectinload(Product.vendor),
+            selectinload(Product.images),
+            selectinload(Product.variations)
         ).where(Product.id == item_data.product_id)
 
         product_result = await db.execute(product_query)
@@ -445,29 +590,21 @@ async def create_order(
             )
 
         # Get variant if specified
-        variant = None
+        order_variant_id = None
         unit_price = product.base_price
         stock = product.total_stock
         variant_details = None
+        stock_source = "product"
+        stock_id = product.id
 
         if item_data.variant_id:
-            variant_query = select(ProductVariant).where(ProductVariant.id == item_data.variant_id)
-            variant_result = await db.execute(variant_query)
-            variant = variant_result.scalar_one_or_none()
-
-            if not variant:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Variant {item_data.variant_id} not found"
-                )
-
-            unit_price = variant.price
-            stock = variant.stock
-            variant_details = {
-                "size": variant.size,
-                "color": variant.color,
-                "color_hex": variant.color_hex
-            }
+            resolved_variant = await resolve_order_variant(db, product, str(item_data.variant_id))
+            order_variant_id = resolved_variant["variant_id"]
+            unit_price = resolved_variant["unit_price"]
+            stock = resolved_variant["stock"]
+            variant_details = resolved_variant["variant_details"]
+            stock_source = resolved_variant["stock_source"]
+            stock_id = resolved_variant["stock_id"]
 
         # Check stock
         if stock < item_data.quantity:
@@ -476,7 +613,8 @@ async def create_order(
                 detail=f"Insufficient stock for '{product.title}'"
             )
 
-        item_subtotal = unit_price * item_data.quantity
+        unit_price_decimal = _as_decimal(unit_price)
+        item_subtotal = unit_price_decimal * Decimal(item_data.quantity)
         subtotal += item_subtotal
 
         # Calculate vendor commission (e.g., 15%)
@@ -486,16 +624,23 @@ async def create_order(
 
         order_items.append({
             "product_id": product.id,
-            "variant_id": variant.id if variant else None,
+            "variant_id": order_variant_id,
             "vendor_id": product.vendor_id,
             "product_title": product.title,
             "variant_details": variant_details,
-            "unit_price": unit_price,
+            "unit_price": unit_price_decimal,
             "quantity": item_data.quantity,
             "subtotal": item_subtotal,
             "commission_rate": commission_rate,
             "commission_amount": commission_amount,
             "vendor_payout": vendor_payout
+        })
+        order_item_media[product.id] = _resolve_product_image_url(product, variant_details)
+
+        stock_updates.append({
+            "source": stock_source,
+            "id": stock_id,
+            "quantity": item_data.quantity
         })
 
     if subtotal < MIN_ORDER_AMOUNT_NGN:
@@ -541,7 +686,7 @@ async def create_order(
     if order_data.shipping_rate_id:
         selected_rate = next((r for r in shipping_rates if r.id == order_data.shipping_rate_id), None) or selected_rate
 
-    shipping_cost = selected_rate.base_rate
+    shipping_cost = _as_decimal(selected_rate.base_rate)
 
     # Calculate discount
     discount_amount, _ = calculate_promo_discount(order_data.promo_code, subtotal)
@@ -593,12 +738,27 @@ async def create_order(
     from app.models.vendor_pickup import OrderType, PickupStatus
     from datetime import datetime, timedelta
 
+    vendor_cache = {}
+    vendor_notifications = {}
+
     for order_item in created_order_items:
         # Get vendor info
-        vendor_result = await db.execute(
-            select(Vendor).options(selectinload(Vendor.user)).where(Vendor.id == order_item.vendor_id)
-        )
-        vendor = vendor_result.scalar_one_or_none()
+        vendor = vendor_cache.get(order_item.vendor_id)
+        if vendor is None:
+            vendor_result = await db.execute(
+                select(Vendor).options(selectinload(Vendor.user)).where(Vendor.id == order_item.vendor_id)
+            )
+            vendor = vendor_result.scalar_one_or_none()
+            vendor_cache[order_item.vendor_id] = vendor
+
+        if not vendor:
+            logger.warning(
+                "[Order Email] Vendor not found for order=%s vendor_id=%s item=%s",
+                new_order.order_number,
+                order_item.vendor_id,
+                order_item.id
+            )
+            continue
 
         if vendor:
             # Determine order type (default to RTW)
@@ -623,49 +783,121 @@ async def create_order(
             )
             db.add(pickup)
 
-            # Create vendor notification
-            notification = VendorNotification(
-                vendor_id=vendor.id,
-                notification_type="order_placed",
-                title=f"New Order #{new_order.order_number}",
-                message=f"You have received a new order for {order_item.product_title}. Pickup scheduled for {scheduled_date.strftime('%B %d, %Y at %I:%M %p')}.",
-                order_id=new_order.id,
-                data={
-                    "order_number": new_order.order_number,
-                    "product_title": order_item.product_title,
-                    "quantity": order_item.quantity,
-                    "vendor_payout": float(order_item.vendor_payout)
+            vendor_entry = vendor_notifications.setdefault(
+                vendor.id,
+                {
+                    "items": [],
+                    "total_payout": Decimal("0.00"),
+                    "scheduled_date": None,
                 }
             )
-            db.add(notification)
+            vendor_entry["items"].append(
+                {
+                    "product_title": order_item.product_title,
+                    "quantity": order_item.quantity,
+                    "vendor_payout": float(order_item.vendor_payout),
+                    "variant_details": order_item.variant_details,
+                    "image_url": order_item_media.get(order_item.product_id),
+                }
+            )
+            vendor_entry["total_payout"] += order_item.vendor_payout
+            if vendor_entry["scheduled_date"] is None:
+                vendor_entry["scheduled_date"] = scheduled_date
 
-            # Queue background task to send vendor notification email
-            background_tasks.add_task(
-                send_vendor_order_notification,
-                str(vendor.id),
+            logger.info(
+                "[Order Email] Prepared vendor item vendor_id=%s order=%s product=%s qty=%s",
+                vendor.id,
                 new_order.order_number,
                 order_item.product_title,
-                order_item.quantity,
-                float(order_item.vendor_payout),
-                scheduled_date
+                order_item.quantity
             )
 
+    if not vendor_notifications:
+        logger.warning(
+            "[Order Email] No vendor notifications built for order=%s items=%s",
+            new_order.order_number,
+            len(created_order_items)
+        )
+
+    for vendor_id, vendor_entry in vendor_notifications.items():
+        scheduled_date = vendor_entry["scheduled_date"] or datetime.utcnow()
+        items = vendor_entry["items"]
+        total_payout = float(vendor_entry["total_payout"])
+
+        notification = VendorNotification(
+            vendor_id=vendor_id,
+            notification_type="order_placed",
+            title=f"New Order #{new_order.order_number}",
+            message=f"You have received a new order with {len(items)} item(s). Pickup scheduled for {scheduled_date.strftime('%B %d, %Y at %I:%M %p')}.",
+            order_id=new_order.id,
+            data={
+                "order_number": new_order.order_number,
+                "items": items,
+                "total_payout": total_payout
+            }
+        )
+        db.add(notification)
+
+        logger.info(
+            "[Order Email] Prepared vendor notification vendor_id=%s order=%s items=%s",
+            vendor_id,
+            new_order.order_number,
+            len(items)
+        )
+
     # Update stock
-    for item_data, item_dict in zip(order_data.items, order_items):
-        if item_data.variant_id:
+    for update_entry in stock_updates:
+        if update_entry["source"] == "product_variant":
             await db.execute(
                 update(ProductVariant)
-                .where(ProductVariant.id == item_data.variant_id)
-                .values(stock=ProductVariant.stock - item_data.quantity)
+                .where(ProductVariant.id == update_entry["id"])
+                .values(stock=ProductVariant.stock - update_entry["quantity"])
+            )
+        elif update_entry["source"] == "size_stock":
+            await db.execute(
+                update(SizeStock)
+                .where(SizeStock.id == update_entry["id"])
+                .values(stock=SizeStock.stock - update_entry["quantity"])
             )
         else:
             await db.execute(
                 update(Product)
-                .where(Product.id == item_data.product_id)
-                .values(total_stock=Product.total_stock - item_data.quantity)
+                .where(Product.id == update_entry["id"])
+                .values(total_stock=Product.total_stock - update_entry["quantity"])
             )
 
     await db.commit()
+
+    vendor_notification_service = VendorNotificationService(email_service)
+    for vendor_id, vendor_entry in vendor_notifications.items():
+        scheduled_date = vendor_entry["scheduled_date"] or datetime.utcnow()
+        items = vendor_entry["items"]
+        total_payout = float(vendor_entry["total_payout"])
+
+        try:
+            await vendor_notification_service.send_order_notification(
+                db=db,
+                vendor_id=str(vendor_id),
+                order_id=str(new_order.id),
+                order_number=new_order.order_number,
+                order_date=new_order.created_at or datetime.utcnow(),
+                items=items,
+                total_payout=total_payout,
+                scheduled_pickup_date=scheduled_date
+            )
+            logger.info(
+                "[Order Email] Vendor email sent vendor_id=%s order=%s items=%s",
+                vendor_id,
+                new_order.order_number,
+                len(items)
+            )
+        except Exception as exc:
+            logger.exception(
+                "[Order Email] Vendor email failed vendor_id=%s order=%s: %s",
+                vendor_id,
+                new_order.order_number,
+                exc
+            )
 
     # Load order with all relationships
     order_query = select(Order).options(
@@ -717,8 +949,17 @@ async def create_order(
             shipping_address=shipping_addr_dict
         )
 
-        # Send admin notification email
-        await email_service.send_admin_order_notification(
+        # Send admin notification email to all admins
+        admin_result = await db.execute(
+            select(User).where(
+                User.role == UserRole.ADMIN,
+                User.is_active == True
+            )
+        )
+        admin_users = [user for user in admin_result.scalars().all() if user.email]
+        admin_recipients = _build_admin_recipients(admin_users)
+
+        admin_sent = await email_service.send_admin_order_notification(
             order_number=loaded_order.order_number,
             customer_name=loaded_order.customer.full_name,
             customer_email=loaded_order.customer.email,
@@ -729,7 +970,14 @@ async def create_order(
             tax=float(loaded_order.tax_amount),
             total=float(loaded_order.total_amount),
             payment_status=loaded_order.payment_status.value,
-            shipping_address=shipping_addr_dict
+            shipping_address=shipping_addr_dict,
+            recipients=admin_recipients or None
+        )
+        logger.info(
+            "[Order Email] Admin email sent=%s recipients=%s order=%s",
+            admin_sent,
+            [recipient.get("email") for recipient in admin_recipients],
+            loaded_order.order_number
         )
     except Exception as e:
         # Log error but don't fail order creation if email fails
@@ -761,10 +1009,13 @@ async def list_orders(
 
     # Get paginated results
     query = query.order_by(Order.created_at.desc()).offset((page - 1) * page_size).limit(page_size)
-    query = query.options(selectinload(Order.items))
+    query = query.options(selectinload(Order.items), selectinload(Order.payments))
 
     result = await db.execute(query)
     orders = result.scalars().all()
+
+    for order in orders:
+        order.currency = _resolve_order_currency(order)
 
     return OrderListResponse(
         orders=orders,
@@ -791,7 +1042,8 @@ async def get_order(
     query = select(Order).options(
         selectinload(Order.items).selectinload(OrderItem.product).selectinload(Product.images),
         selectinload(Order.shipping_address),
-        selectinload(Order.billing_address)
+        selectinload(Order.billing_address),
+        selectinload(Order.payments),
     ).where(Order.id == order_id)
 
     result = await db.execute(query)
@@ -821,6 +1073,8 @@ async def get_order(
             item.product_image_url = primary_image.image_url if primary_image else None
         else:
             item.product_image_url = None
+
+    order.currency = _resolve_order_currency(order)
 
     return order
 
@@ -937,12 +1191,20 @@ async def get_order_tracking(
             "occurred_at": order.cancelled_at.isoformat() if order.cancelled_at else order.updated_at.isoformat()
         })
 
+    currency_result = await db.execute(
+        select(Payment.currency)
+        .where(Payment.order_id == order.id)
+        .order_by(Payment.created_at.desc())
+        .limit(1)
+    )
+    currency = currency_result.scalar_one_or_none() or "NGN"
+
     return {
         "order_id": str(order.id),
         "order_number": order.order_number,
         "tracking_id": tracking_id,
         "amount": float(order.total_amount),
-        "currency": "NGN",
+        "currency": currency,
         "updated_at": order.updated_at.isoformat(),
         "current_status": current_status,
         "history": history
@@ -1001,6 +1263,18 @@ async def cancel_order(
                 update(ProductVariant)
                 .where(ProductVariant.id == item.variant_id)
                 .values(stock=ProductVariant.stock + item.quantity)
+            )
+            continue
+
+        size_stock_id = None
+        if item.variant_details:
+            size_stock_id = item.variant_details.get("size_stock_id")
+
+        if size_stock_id:
+            await db.execute(
+                update(SizeStock)
+                .where(SizeStock.id == size_stock_id)
+                .values(stock=SizeStock.stock + item.quantity)
             )
         else:
             await db.execute(

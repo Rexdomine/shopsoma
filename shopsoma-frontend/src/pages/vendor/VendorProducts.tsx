@@ -27,7 +27,7 @@ export default function VendorProducts() {
   const navigate = useNavigate();
   const { vendorProfile, isLoading: vendorLoading } = useVendor();
   const { toasts, hideToast, success, error } = useToast();
-  const { currentCurrency, setCurrency, exchangeRates } = useCurrencyStore();
+  const { currentCurrency, setCurrency, exchangeRates, fetchExchangeRate } = useCurrencyStore();
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
@@ -35,6 +35,10 @@ export default function VendorProducts() {
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [productToDelete, setProductToDelete] = useState<Product | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+
+  useEffect(() => {
+    fetchExchangeRate();
+  }, [fetchExchangeRate]);
 
   useEffect(() => {
     const fetchProducts = async () => {

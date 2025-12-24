@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     # Both Alembic (sync) and FastAPI async engine MUST point to the same database
     DATABASE_URL: str
     DATABASE_ECHO: bool = False
+    RENDER_DATABASE_URL: str = ""
 
     @property
     def ASYNC_DATABASE_URL(self) -> str:
@@ -56,6 +57,8 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+    CUSTOMER_ACCESS_TOKEN_EXPIRE_DAYS: int = 3650
+    CUSTOMER_REFRESH_TOKEN_EXPIRE_DAYS: int = 3650
 
     # CORS
     CORS_ORIGINS: List[str] = ["http://localhost:5173", "http://localhost:3000"]
@@ -111,6 +114,7 @@ class Settings(BaseSettings):
 
     # Business Settings
     DEFAULT_COMMISSION_RATE: float = 12.5
+    PAYOUT_HOLD_DAYS: int = 14
 
     # Admin Settings
     ADMIN_EMAIL: str = "admin@shopsoma.com"
