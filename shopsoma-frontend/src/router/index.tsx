@@ -30,6 +30,7 @@ const VendorProductView = lazy(() => import('../pages/vendor/VendorProductView')
 const VendorProductEdit = lazy(() => import('../pages/vendor/VendorProductEdit'));
 const VendorOrders = lazy(() => import('../pages/vendor/VendorOrders'));
 const VendorOrderDetail = lazy(() => import('../pages/vendor/VendorOrderDetail'));
+const VendorAnalytics = lazy(() => import('../pages/vendor/VendorAnalytics'));
 const VendorEarnings = lazy(() => import('../pages/vendor/VendorEarnings'));
 const VendorExpenses = lazy(() => import('../pages/vendor/VendorExpenses'));
 const VendorWithdrawals = lazy(() => import('../pages/vendor/VendorWithdrawals'));
@@ -287,6 +288,18 @@ const router = createBrowserRouter([
         <Suspense fallback={<Loading fullScreen message="Loading orders..." />}>
           <VendorLayout>
             <VendorOrders />
+          </VendorLayout>
+        </Suspense>
+      </ErrorBoundary>
+    ),
+  },
+  {
+    path: ROUTES.VENDOR_ANALYTICS,
+    element: (
+      <ErrorBoundary>
+        <Suspense fallback={<Loading fullScreen message="Loading analytics..." />}>
+          <VendorLayout>
+            <VendorAnalytics />
           </VendorLayout>
         </Suspense>
       </ErrorBoundary>

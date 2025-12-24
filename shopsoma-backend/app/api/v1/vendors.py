@@ -1,8 +1,9 @@
 """Vendor API endpoints"""
 from typing import List, Optional
+from datetime import datetime, date, time, timedelta
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_, or_, func, desc
+from sqlalchemy import select, and_, or_, func, desc, exists
 from sqlalchemy.orm import selectinload
 from uuid import UUID
 
@@ -13,7 +14,7 @@ from app.api.dependencies import (
 )
 from app.models import (
     Vendor, User, VendorAsset, VendorPickup, VendorNotification,
-    Order, OrderItem, Product, Payout
+    Order, OrderItem, Product, Payout, Wishlist
 )
 from app.models.vendor import KYCStatus
 from app.schemas.vendor import (
@@ -23,7 +24,9 @@ from app.schemas.vendor import (
     VendorPickupUpdate, VendorNotificationResponse, VendorNotificationMarkRead,
     VendorOrderResponse, VendorOrderItemResponse, VendorOrderItemUpdate, VendorPayoutResponse,
     VendorDashboardResponse, VendorDashboardMetrics, VendorPayoutSummary,
-    VendorProductPerformance, VendorBrandInfoUpdate, VendorPayoutInfoUpdate
+    VendorProductPerformance, VendorBrandInfoUpdate, VendorPayoutInfoUpdate,
+    VendorEarningsSummary, VendorPayoutRequest,
+    VendorAnalyticsSummary, VendorAnalyticsChartResponse, VendorAnalyticsStats
 )
 
 router = APIRouter(prefix="/vendor", tags=["Vendors"])
@@ -733,7 +736,658 @@ async def mark_notifications_read(
 
 
 # ==================== VENDOR FINANCIALS ====================
+def _parse_date(value: Optional[str], label: str) -> Optional[date]:
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").date()
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid {label}. Use YYYY-MM-DD."
+        ) from exc
 
+
+def _build_date_range(start_date: Optional[str], end_date: Optional[str]):
+    start = _parse_date(start_date, "start_date")
+    end = _parse_date(end_date, "end_date")
+
+    if start and end and start > end:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="start_date must be on or before end_date."
+        )
+
+    start_dt = datetime.combine(start, time.min) if start else None
+    end_dt = datetime.combine(end, time.max) if end else None
+    return start, end, start_dt, end_dt
+
+
+def _resolve_date_range(
+    start_date: Optional[str],
+    end_date: Optional[str],
+    default_days: int = 365
+):
+    start, end, start_dt, end_dt = _build_date_range(start_date, end_date)
+    if not end_dt:
+        end_dt = datetime.utcnow()
+        end = end_dt.date()
+    if not start_dt:
+        start_dt = end_dt - timedelta(days=default_days)
+        start = start_dt.date()
+    return start, end, start_dt, end_dt
+
+
+@router.get("/earnings/summary", response_model=VendorEarningsSummary)
+async def get_vendor_earnings_summary(
+    start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
+    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
+    vendor: Vendor = Depends(get_approved_vendor),
+    db: AsyncSession = Depends(get_db)
+):
+    """Get vendor earnings summary"""
+    from decimal import Decimal
+    from datetime import timedelta
+    from app.models.order import PaymentStatus
+    from app.models.payment import PayoutStatus
+
+    start, end, start_dt, end_dt = _build_date_range(start_date, end_date)
+    previous_start_dt = None
+    previous_end_dt = None
+    if start_dt and end_dt:
+        period_days = (end_dt.date() - start_dt.date()).days + 1
+        previous_end_dt = start_dt - timedelta(days=1)
+        previous_start_dt = previous_end_dt - timedelta(days=period_days - 1)
+
+    payout_expr = func.coalesce(
+        OrderItem.vendor_payout,
+        OrderItem.subtotal - func.coalesce(OrderItem.commission_amount, 0)
+    )
+    delivered_filters = [
+        OrderItem.vendor_id == vendor.id,
+        Order.payment_status == PaymentStatus.PAID,
+        or_(
+            OrderItem.fulfillment_status == FulfillmentStatus.DELIVERED,
+            Order.fulfillment_status == FulfillmentStatus.DELIVERED,
+        ),
+        Order.delivered_at.isnot(None),
+    ]
+    if start_dt:
+        delivered_filters.append(Order.delivered_at >= start_dt)
+    if end_dt:
+        delivered_filters.append(Order.delivered_at <= end_dt)
+
+    current_result = await db.execute(
+        select(func.sum(payout_expr)).join(Order).where(and_(*delivered_filters))
+    )
+    current_earnings = current_result.scalar() or Decimal("0.00")
+
+    expenses_result = await db.execute(
+        select(func.sum(OrderItem.commission_amount)).join(Order).where(and_(*delivered_filters))
+    )
+    expenses = expenses_result.scalar() or Decimal("0.00")
+
+    current_prev = None
+    expenses_prev = None
+    if previous_start_dt and previous_end_dt:
+        prev_filters = [
+            OrderItem.vendor_id == vendor.id,
+            Order.payment_status == PaymentStatus.PAID,
+            or_(
+                OrderItem.fulfillment_status == FulfillmentStatus.DELIVERED,
+                Order.fulfillment_status == FulfillmentStatus.DELIVERED,
+            ),
+            Order.delivered_at.isnot(None),
+            Order.delivered_at >= previous_start_dt,
+            Order.delivered_at <= previous_end_dt,
+        ]
+        prev_current_result = await db.execute(
+            select(func.sum(payout_expr)).join(Order).where(and_(*prev_filters))
+        )
+        current_prev = prev_current_result.scalar() or Decimal("0.00")
+        prev_expenses_result = await db.execute(
+            select(func.sum(OrderItem.commission_amount)).join(Order).where(and_(*prev_filters))
+        )
+        expenses_prev = prev_expenses_result.scalar() or Decimal("0.00")
+
+    projected_filters = [
+        OrderItem.vendor_id == vendor.id,
+        Order.payment_status == PaymentStatus.PAID,
+        Order.delivered_at.is_(None),
+    ]
+    if start_dt:
+        projected_filters.append(Order.created_at >= start_dt)
+    if end_dt:
+        projected_filters.append(Order.created_at <= end_dt)
+
+    projected_result = await db.execute(
+        select(func.sum(payout_expr)).join(Order).where(and_(*projected_filters))
+    )
+    projected_earnings = projected_result.scalar() or Decimal("0.00")
+
+    projected_prev = None
+    if previous_start_dt and previous_end_dt:
+        prev_projected_filters = [
+            OrderItem.vendor_id == vendor.id,
+            Order.payment_status == PaymentStatus.PAID,
+            Order.delivered_at.is_(None),
+            Order.created_at >= previous_start_dt,
+            Order.created_at <= previous_end_dt,
+        ]
+        prev_projected_result = await db.execute(
+            select(func.sum(payout_expr)).join(Order).where(and_(*prev_projected_filters))
+        )
+        projected_prev = prev_projected_result.scalar() or Decimal("0.00")
+
+    def pct_change(current: Decimal, previous: Optional[Decimal]) -> Optional[float]:
+        if previous is None or previous == 0:
+            return None
+        return float(((current - previous) / previous) * 100)
+
+    return VendorEarningsSummary(
+        current_earnings=float(current_earnings),
+        projected_earnings=float(projected_earnings),
+        expenses=float(expenses),
+        current_earnings_change_pct=pct_change(current_earnings, current_prev),
+        projected_earnings_change_pct=pct_change(projected_earnings, projected_prev),
+        expenses_change_pct=pct_change(expenses, expenses_prev),
+        start_date=start,
+        end_date=end
+    )
+
+
+@router.get("/earnings/items", response_model=dict)
+async def get_vendor_earnings_items(
+    view: str = Query("products", description="View mode: products or orders"),
+    page: int = Query(1, ge=1, description="Page number"),
+    page_size: int = Query(20, ge=1, le=100, description="Items per page"),
+    start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
+    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
+    search: Optional[str] = Query(None, description="Search by product title or order number"),
+    vendor: Vendor = Depends(get_approved_vendor),
+    db: AsyncSession = Depends(get_db)
+):
+    """Get vendor earnings items by products or orders"""
+    from decimal import Decimal
+    from app.models.order import PaymentStatus
+
+    if view not in {"products", "orders"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="view must be either 'products' or 'orders'."
+        )
+
+    _, _, start_dt, end_dt = _build_date_range(start_date, end_date)
+    hold_days = await _get_payout_hold_days(db)
+    today = datetime.utcnow().date()
+
+    payout_expr = func.coalesce(
+        OrderItem.vendor_payout,
+        OrderItem.subtotal - func.coalesce(OrderItem.commission_amount, 0)
+    )
+    delivered_filters = [
+        OrderItem.vendor_id == vendor.id,
+        Order.payment_status == PaymentStatus.PAID,
+        or_(
+            OrderItem.fulfillment_status == FulfillmentStatus.DELIVERED,
+            Order.fulfillment_status == FulfillmentStatus.DELIVERED,
+        ),
+        Order.delivered_at.isnot(None),
+    ]
+    if start_dt:
+        delivered_filters.append(Order.delivered_at >= start_dt)
+    if end_dt:
+        delivered_filters.append(Order.delivered_at <= end_dt)
+
+    completed_payouts_result = await db.execute(
+        select(func.sum(Payout.payout_amount)).where(
+            and_(
+                Payout.vendor_id == vendor.id,
+                Payout.status == PayoutStatus.COMPLETED
+            )
+        )
+    )
+    completed_payouts = completed_payouts_result.scalar() or Decimal("0.00")
+
+    if view == "products":
+        payout_value = payout_expr.label("payout_value")
+        cumulative_payout = func.sum(payout_expr).over(
+            order_by=[Order.delivered_at.asc(), OrderItem.id.asc()]
+        ).label("cumulative_payout")
+        query = select(
+            OrderItem,
+            Order.order_number,
+            Order.delivered_at,
+            Order.fulfillment_status,
+            payout_value,
+            cumulative_payout
+        ).join(Order).where(
+            and_(*delivered_filters)
+        )
+
+        if search:
+            query = query.where(
+                or_(
+                    Order.order_number.ilike(f"%{search}%"),
+                    OrderItem.product_title.ilike(f"%{search}%")
+                )
+            )
+
+        count_base = select(OrderItem.id).join(Order).where(and_(*delivered_filters))
+        if search:
+            count_base = count_base.where(
+                or_(
+                    Order.order_number.ilike(f"%{search}%"),
+                    OrderItem.product_title.ilike(f"%{search}%")
+                )
+            )
+        count_result = await db.execute(
+            select(func.count()).select_from(count_base.subquery())
+        )
+        total = count_result.scalar() or 0
+
+        offset = (page - 1) * page_size
+        query = query.options(
+            selectinload(OrderItem.product).selectinload(Product.images)
+        ).order_by(desc(Order.delivered_at)).offset(offset).limit(page_size)
+
+        result = await db.execute(query)
+        rows = result.all()
+
+        items = []
+        for item, order_number, delivered_at, fulfillment_status, payout_amount, cumulative_amount in rows:
+            product_image_url = None
+            if item.product and item.product.images:
+                primary_image = next((img for img in item.product.images if img.is_primary), None)
+                if primary_image:
+                    product_image_url = primary_image.thumbnail_url or primary_image.image_url
+                else:
+                    first_image = item.product.images[0]
+                    product_image_url = first_image.thumbnail_url or first_image.image_url
+
+            payout_status = "paid_out" if cumulative_amount and cumulative_amount <= completed_payouts else "available"
+            withdraw_available_at = None
+            withdraw_days_left = None
+            withdraw_available = False
+            if delivered_at:
+                withdraw_available_at = delivered_at + timedelta(days=hold_days)
+                withdraw_days_left = max(0, (withdraw_available_at.date() - today).days)
+                withdraw_available = withdraw_days_left == 0
+            items.append({
+                "id": str(item.id),
+                "order_id": str(item.order_id),
+                "product_id": str(item.product_id),
+                "order_number": order_number,
+                "product_title": item.product_title,
+                "product_image_url": product_image_url,
+                "unit_price": float(item.unit_price),
+                "quantity": item.quantity,
+                "commission_amount": float(item.commission_amount),
+                "vendor_payout": float(payout_amount or item.vendor_payout or 0),
+                "payout_status": payout_status,
+                "status": fulfillment_status.value if hasattr(fulfillment_status, "value") else str(fulfillment_status),
+                "delivered_at": delivered_at.isoformat() if delivered_at else None,
+                "withdraw_available": withdraw_available,
+                "withdraw_days_left": withdraw_days_left,
+                "withdraw_available_at": withdraw_available_at.isoformat() if withdraw_available_at else None,
+            })
+
+        return {
+            "view": "products",
+            "items": items,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": (total + page_size - 1) // page_size
+        }
+
+    orders_query = select(Order).join(OrderItem).where(and_(*delivered_filters)).distinct()
+    if search:
+        orders_query = orders_query.where(
+            or_(
+                Order.order_number.ilike(f"%{search}%"),
+                OrderItem.product_title.ilike(f"%{search}%")
+            )
+        )
+
+    count_query = select(func.count()).select_from(
+        select(Order.id).join(OrderItem).where(and_(*delivered_filters)).where(
+            or_(
+                Order.order_number.ilike(f"%{search}%"),
+                OrderItem.product_title.ilike(f"%{search}%")
+            )
+        ).distinct().subquery() if search else
+        select(Order.id).join(OrderItem).where(and_(*delivered_filters)).distinct().subquery()
+    )
+    total_result = await db.execute(count_query)
+    total = total_result.scalar() or 0
+
+    offset = (page - 1) * page_size
+    orders_query = orders_query.order_by(desc(Order.delivered_at)).offset(offset).limit(page_size)
+    orders_query = orders_query.options(selectinload(Order.items))
+
+    result = await db.execute(orders_query)
+    orders = result.scalars().all()
+
+    order_payout_status = {}
+    if orders:
+        cumulative_items = select(
+            OrderItem.id.label("item_id"),
+            OrderItem.order_id.label("order_id"),
+            func.sum(payout_expr).over(
+                order_by=[Order.delivered_at.asc(), OrderItem.id.asc()]
+            ).label("cumulative_payout")
+        ).join(Order).where(and_(*delivered_filters)).subquery()
+
+        paid_out_counts = select(
+            cumulative_items.c.order_id,
+            func.count().label("paid_out_count")
+        ).where(
+            cumulative_items.c.cumulative_payout <= completed_payouts
+        ).group_by(cumulative_items.c.order_id).subquery()
+
+        total_counts = select(
+            OrderItem.order_id.label("order_id"),
+            func.count().label("total_count")
+        ).join(Order).where(and_(*delivered_filters)).group_by(OrderItem.order_id).subquery()
+
+        payout_status_result = await db.execute(
+            select(
+                total_counts.c.order_id,
+                total_counts.c.total_count,
+                func.coalesce(paid_out_counts.c.paid_out_count, 0).label("paid_out_count")
+            ).outerjoin(
+                paid_out_counts,
+                paid_out_counts.c.order_id == total_counts.c.order_id
+            )
+        )
+
+        for row in payout_status_result:
+            order_id = row.order_id
+            order_payout_status[str(order_id)] = (
+                "paid_out" if row.paid_out_count >= row.total_count else "available"
+            )
+
+    items = []
+    for order in orders:
+        vendor_items = [item for item in order.items if item.vendor_id == vendor.id]
+        total_quantity = sum(item.quantity for item in vendor_items)
+        total_commission = sum((item.commission_amount or Decimal("0.00")) for item in vendor_items)
+        total_payout = sum((item.vendor_payout or Decimal("0.00")) for item in vendor_items)
+        withdraw_available_at = None
+        withdraw_days_left = None
+        withdraw_available = False
+        if order.delivered_at:
+            withdraw_available_at = order.delivered_at + timedelta(days=hold_days)
+            withdraw_days_left = max(0, (withdraw_available_at.date() - today).days)
+            withdraw_available = withdraw_days_left == 0
+        items.append({
+            "id": str(order.id),
+            "order_number": order.order_number,
+            "items": [item.product_title for item in vendor_items],
+            "total_quantity": total_quantity,
+            "total_commission": float(total_commission),
+            "total_payout": float(total_payout),
+            "status": order.fulfillment_status.value,
+            "delivered_at": order.delivered_at.isoformat() if order.delivered_at else None,
+            "payout_status": order_payout_status.get(str(order.id)),
+            "withdraw_available": withdraw_available,
+            "withdraw_days_left": withdraw_days_left,
+            "withdraw_available_at": withdraw_available_at.isoformat() if withdraw_available_at else None,
+        })
+
+    return {
+        "view": "orders",
+        "items": items,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": (total + page_size - 1) // page_size
+    }
+
+
+@router.get("/analytics/summary", response_model=VendorAnalyticsSummary)
+async def get_vendor_analytics_summary(
+    start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
+    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
+    vendor: Vendor = Depends(get_approved_vendor),
+    db: AsyncSession = Depends(get_db)
+):
+    """Get vendor analytics revenue summary"""
+    from decimal import Decimal
+
+    start, end, start_dt, end_dt = _resolve_date_range(start_date, end_date)
+    period_days = (end_dt.date() - start_dt.date()).days + 1
+
+    base_filters = [
+        OrderItem.vendor_id == vendor.id,
+        Order.payment_status == PaymentStatus.PAID,
+        Order.created_at >= start_dt,
+        Order.created_at <= end_dt,
+    ]
+
+    totals_result = await db.execute(
+        select(
+            func.sum(OrderItem.subtotal),
+            func.sum(OrderItem.commission_amount)
+        ).join(Order).where(and_(*base_filters))
+    )
+    total_revenue, total_commission = totals_result.one()
+    total_revenue = total_revenue or Decimal("0.00")
+    total_commission = total_commission or Decimal("0.00")
+
+    commission_rate_pct = None
+    if total_revenue > 0:
+        commission_rate_pct = float((total_commission / total_revenue) * 100)
+
+    previous_end_dt = start_dt - timedelta(days=1)
+    previous_start_dt = previous_end_dt - timedelta(days=period_days - 1)
+    prev_result = await db.execute(
+        select(func.sum(OrderItem.subtotal))
+        .join(Order)
+        .where(
+            and_(
+                OrderItem.vendor_id == vendor.id,
+                Order.payment_status == PaymentStatus.PAID,
+                Order.created_at >= previous_start_dt,
+                Order.created_at <= previous_end_dt,
+            )
+        )
+    )
+    prev_revenue = prev_result.scalar() or Decimal("0.00")
+
+    revenue_change_pct = None
+    if prev_revenue > 0:
+        revenue_change_pct = float(((total_revenue - prev_revenue) / prev_revenue) * 100)
+
+    return VendorAnalyticsSummary(
+        total_revenue=float(total_revenue),
+        revenue_change_pct=revenue_change_pct,
+        commission_rate_pct=commission_rate_pct,
+        start_date=start,
+        end_date=end
+    )
+
+
+@router.get("/analytics/chart", response_model=VendorAnalyticsChartResponse)
+async def get_vendor_analytics_chart(
+    range: str = Query("1Y", description="Chart range: 1D, 7D, 1M, 1Y"),
+    start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
+    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
+    vendor: Vendor = Depends(get_approved_vendor),
+    db: AsyncSession = Depends(get_db)
+):
+    """Get vendor analytics chart data"""
+    allowed_ranges = {"1D", "7D", "1M", "1Y"}
+    if range not in allowed_ranges:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="range must be one of 1D, 7D, 1M, 1Y."
+        )
+
+    if start_date or end_date:
+        _, _, start_dt, end_dt = _build_date_range(start_date, end_date)
+        if not start_dt or not end_dt:
+            start_dt = datetime.utcnow() - timedelta(days=365)
+            end_dt = datetime.utcnow()
+    else:
+        end_dt = datetime.utcnow()
+        if range == "1D":
+            start_dt = end_dt - timedelta(days=1)
+        elif range == "7D":
+            start_dt = end_dt - timedelta(days=7)
+        elif range == "1M":
+            start_dt = end_dt - timedelta(days=30)
+        else:
+            start_dt = end_dt - timedelta(days=365)
+
+    query = select(
+        Order.created_at,
+        OrderItem.subtotal,
+        OrderItem.commission_amount
+    ).join(Order).where(
+        and_(
+            OrderItem.vendor_id == vendor.id,
+            Order.payment_status == PaymentStatus.PAID,
+            Order.created_at >= start_dt,
+            Order.created_at <= end_dt,
+        )
+    )
+    result = await db.execute(query)
+    rows = result.all()
+
+    def bucket_key(value: datetime) -> datetime:
+        if range == "1D":
+            return value.replace(minute=0, second=0, microsecond=0)
+        if range in {"7D", "1M"}:
+            return datetime(value.year, value.month, value.day)
+        return datetime(value.year, value.month, 1)
+
+    buckets: dict[datetime, dict] = {}
+    for created_at, subtotal, commission_amount in rows:
+        key = bucket_key(created_at)
+        if key not in buckets:
+            buckets[key] = {"revenue": 0.0, "expenses": 0.0}
+        buckets[key]["revenue"] += float(subtotal or 0)
+        buckets[key]["expenses"] += float(commission_amount or 0)
+
+    points = []
+    cursor = bucket_key(start_dt)
+    if range == "1D":
+        step = timedelta(hours=1)
+        while cursor <= end_dt:
+            data = buckets.get(cursor, {"revenue": 0.0, "expenses": 0.0})
+            points.append({
+                "timestamp": cursor,
+                "revenue": data["revenue"],
+                "expenses": data["expenses"],
+            })
+            cursor += step
+    elif range in {"7D", "1M"}:
+        step = timedelta(days=1)
+        while cursor <= end_dt:
+            data = buckets.get(cursor, {"revenue": 0.0, "expenses": 0.0})
+            points.append({
+                "timestamp": cursor,
+                "revenue": data["revenue"],
+                "expenses": data["expenses"],
+            })
+            cursor += step
+    else:
+        while cursor <= end_dt:
+            data = buckets.get(cursor, {"revenue": 0.0, "expenses": 0.0})
+            points.append({
+                "timestamp": cursor,
+                "revenue": data["revenue"],
+                "expenses": data["expenses"],
+            })
+            next_month = (cursor.month % 12) + 1
+            next_year = cursor.year + (1 if cursor.month == 12 else 0)
+            cursor = datetime(next_year, next_month, 1)
+
+    return VendorAnalyticsChartResponse(
+        range=range,
+        start_date=start_dt,
+        end_date=end_dt,
+        points=points
+    )
+
+
+@router.get("/analytics/stats", response_model=VendorAnalyticsStats)
+async def get_vendor_analytics_stats(
+    start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
+    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
+    vendor: Vendor = Depends(get_approved_vendor),
+    db: AsyncSession = Depends(get_db)
+):
+    """Get vendor analytics stats"""
+    start, end, start_dt, end_dt = _resolve_date_range(start_date, end_date)
+
+    order_filters = [
+        OrderItem.vendor_id == vendor.id,
+        Order.payment_status == PaymentStatus.PAID,
+        Order.created_at >= start_dt,
+        Order.created_at <= end_dt,
+    ]
+
+    products_sold_result = await db.execute(
+        select(func.sum(OrderItem.quantity)).join(Order).where(and_(*order_filters))
+    )
+    total_products_sold = products_sold_result.scalar() or 0
+
+    wishlist_filters = [Product.vendor_id == vendor.id]
+    if start_dt:
+        wishlist_filters.append(Wishlist.created_at >= start_dt)
+    if end_dt:
+        wishlist_filters.append(Wishlist.created_at <= end_dt)
+
+    wishlist_result = await db.execute(
+        select(func.count(Wishlist.id)).join(Product).where(and_(*wishlist_filters))
+    )
+    wishlisted_products = wishlist_result.scalar() or 0
+
+    range_customers = (
+        select(Order.customer_id)
+        .join(OrderItem)
+        .where(and_(*order_filters))
+        .distinct()
+        .subquery()
+    )
+
+    prior_customers = (
+        select(Order.customer_id)
+        .join(OrderItem)
+        .where(
+            and_(
+                OrderItem.vendor_id == vendor.id,
+                Order.payment_status == PaymentStatus.PAID,
+                Order.created_at < start_dt,
+            )
+        )
+        .distinct()
+        .subquery()
+    )
+
+    returning_result = await db.execute(
+        select(func.count())
+        .select_from(range_customers)
+        .where(range_customers.c.customer_id.in_(select(prior_customers.c.customer_id)))
+    )
+    returning_customers = returning_result.scalar() or 0
+
+    new_result = await db.execute(
+        select(func.count())
+        .select_from(range_customers)
+        .where(~range_customers.c.customer_id.in_(select(prior_customers.c.customer_id)))
+    )
+    new_customers = new_result.scalar() or 0
+
+    return VendorAnalyticsStats(
+        total_products_sold=total_products_sold,
+        wishlisted_products=wishlisted_products,
+        returning_customers=returning_customers,
+        new_customers=new_customers
+    )
 @router.get("/payouts", response_model=dict)
 async def list_vendor_payouts(
     page: int = Query(1, ge=1, description="Page number"),
