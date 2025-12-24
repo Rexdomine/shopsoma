@@ -32,6 +32,7 @@ export const ROUTES = {
   VENDOR_EARNINGS: '/vendor/earnings',
   VENDOR_EXPENSES: '/vendor/earnings/expenses',
   VENDOR_WITHDRAWALS: '/vendor/earnings/withdrawals',
+  VENDOR_ANALYTICS: '/vendor/analytics',
   VENDOR_BRAND_INFO: '/vendor/settings/brand-info',
   VENDOR_PAYOUT_INFO: '/vendor/settings/payout-information',
   VENDOR_SECURITY: '/vendor/settings/security',

@@ -68,6 +68,33 @@ export interface VendorEarningsSummary {
   end_date?: string | null;
 }
 
+export interface VendorAnalyticsSummary {
+  total_revenue: number;
+  revenue_change_pct?: number | null;
+  commission_rate_pct?: number | null;
+  start_date?: string | null;
+  end_date?: string | null;
+}
+
+export interface VendorAnalyticsChartPoint {
+  timestamp: string;
+  revenue: number;
+  expenses: number;
+}
+
+export interface VendorAnalyticsChartResponse {
+  range: string;
+  start_date: string;
+  end_date: string;
+  points: VendorAnalyticsChartPoint[];
+}
+
+export interface VendorAnalyticsStats {
+  total_products_sold: number;
+  wishlisted_products: number;
+  returning_customers: number;
+  new_customers: number;
+}
 export interface VendorPayoutSummary {
   current_earnings: number;
   pending_amount: number;
@@ -142,6 +169,9 @@ export interface VendorEarningsProductRow {
   payout_status?: string | null;
   status: string;
   delivered_at: string | null;
+  withdraw_available?: boolean;
+  withdraw_days_left?: number | null;
+  withdraw_available_at?: string | null;
 }
 
 export interface VendorEarningsOrderRow {
@@ -153,6 +183,10 @@ export interface VendorEarningsOrderRow {
   total_payout: number;
   status: string;
   delivered_at: string | null;
+  payout_status?: string | null;
+  withdraw_available?: boolean;
+  withdraw_days_left?: number | null;
+  withdraw_available_at?: string | null;
 }
 
 export interface VendorEarningsItemsResponse<TItem> {
@@ -273,6 +307,45 @@ export const vendorService = {
     }
   },
 
+  async getAnalyticsSummary(params?: {
+    start_date?: string;
+    end_date?: string;
+  }): Promise<VendorAnalyticsSummary> {
+    try {
+      const response = await api.get('/vendor/analytics/summary', { params });
+      return response.data;
+    } catch (error: any) {
+      const message = error?.response?.data?.detail || 'Failed to fetch analytics summary';
+      throw new Error(message);
+    }
+  },
+
+  async getAnalyticsChart(params?: {
+    range?: string;
+    start_date?: string;
+    end_date?: string;
+  }): Promise<VendorAnalyticsChartResponse> {
+    try {
+      const response = await api.get('/vendor/analytics/chart', { params });
+      return response.data;
+    } catch (error: any) {
+      const message = error?.response?.data?.detail || 'Failed to fetch analytics chart';
+      throw new Error(message);
+    }
+  },
+
+  async getAnalyticsStats(params?: {
+    start_date?: string;
+    end_date?: string;
+  }): Promise<VendorAnalyticsStats> {
+    try {
+      const response = await api.get('/vendor/analytics/stats', { params });
+      return response.data;
+    } catch (error: any) {
+      const message = error?.response?.data?.detail || 'Failed to fetch analytics stats';
+      throw new Error(message);
+    }
+  },
   async getPayoutSummary(): Promise<VendorPayoutSummary> {
     try {
       const response = await api.get('/vendor/payouts/summary', { timeout: 30000 });

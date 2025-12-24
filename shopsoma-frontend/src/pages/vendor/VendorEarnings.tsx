@@ -140,6 +140,23 @@ export default function VendorEarnings() {
     if (Number.isNaN(parsed.getTime())) return '—';
     return parsed.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: '2-digit' });
   };
+  const renderWithdrawalBadge = (available?: boolean, daysLeft?: number | null) => {
+    if (available) {
+      return (
+        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 text-emerald-700">
+          Available
+        </span>
+      );
+    }
+    if (typeof daysLeft === 'number') {
+      return (
+        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-gray-100 text-gray-600">
+          {daysLeft} days left
+        </span>
+      );
+    }
+    return null;
+  };
   const tableColumns = viewMode === 'products' ? 9 : 8;
   const renderChange = (value?: number | null) => {
     if (value === null || value === undefined) {
@@ -382,7 +399,9 @@ export default function VendorEarnings() {
                       <td className="px-4 py-3 font-semibold text-gray-900">
                         <div className="flex flex-col gap-1">
                           <span>{formatAmount(productRow.vendor_payout)}</span>
-                          {productRow.payout_status && (
+                          {productRow.payout_status !== 'paid_out' &&
+                            renderWithdrawalBadge(productRow.withdraw_available, productRow.withdraw_days_left)}
+                          {productRow.payout_status === 'paid_out' && (
                             <span
                               className={`text-[11px] font-medium px-2 py-0.5 rounded-full w-fit ${
                                 productRow.payout_status === 'paid_out'
@@ -420,7 +439,18 @@ export default function VendorEarnings() {
                       </td>
                       <td className="px-4 py-3 text-gray-800">{orderRow.total_quantity}</td>
                       <td className="px-4 py-3 font-semibold text-gray-900">{formatAmount(orderRow.total_commission)}</td>
-                      <td className="px-4 py-3 font-semibold text-gray-900">{formatAmount(orderRow.total_payout)}</td>
+                      <td className="px-4 py-3 font-semibold text-gray-900">
+                        <div className="flex flex-col gap-1">
+                          <span>{formatAmount(orderRow.total_payout)}</span>
+                          {orderRow.payout_status !== 'paid_out' &&
+                            renderWithdrawalBadge(orderRow.withdraw_available, orderRow.withdraw_days_left)}
+                          {orderRow.payout_status === 'paid_out' && (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 text-emerald-700">
+                              Paid out
+                            </span>
+                          )}
+                        </div>
+                      </td>
                       <td className="px-4 py-3 text-gray-700">{formatDate(orderRow.delivered_at)}</td>
                       <td className="px-4 py-3 text-right">
                         <button

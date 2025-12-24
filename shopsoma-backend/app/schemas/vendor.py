@@ -377,6 +377,9 @@ class VendorEarningsProductRow(BaseModel):
     payout_status: Optional[str] = None
     status: str
     delivered_at: Optional[datetime]
+    withdraw_available: bool = False
+    withdraw_days_left: Optional[int] = None
+    withdraw_available_at: Optional[datetime] = None
 
 
 class VendorEarningsOrderRow(BaseModel):
@@ -389,8 +392,42 @@ class VendorEarningsOrderRow(BaseModel):
     total_payout: float
     status: str
     delivered_at: Optional[datetime]
+    payout_status: Optional[str] = None
+    withdraw_available: bool = False
+    withdraw_days_left: Optional[int] = None
+    withdraw_available_at: Optional[datetime] = None
 
 
+class VendorAnalyticsSummary(BaseModel):
+    """Vendor analytics revenue summary"""
+    total_revenue: float
+    revenue_change_pct: Optional[float]
+    commission_rate_pct: Optional[float]
+    start_date: Optional[date]
+    end_date: Optional[date]
+
+
+class VendorAnalyticsChartPoint(BaseModel):
+    """Vendor analytics chart point"""
+    timestamp: datetime
+    revenue: float
+    expenses: float
+
+
+class VendorAnalyticsChartResponse(BaseModel):
+    """Vendor analytics chart response"""
+    range: str
+    start_date: datetime
+    end_date: datetime
+    points: List[VendorAnalyticsChartPoint]
+
+
+class VendorAnalyticsStats(BaseModel):
+    """Vendor analytics key stats"""
+    total_products_sold: int
+    wishlisted_products: int
+    returning_customers: int
+    new_customers: int
 # ==================== VENDOR DASHBOARD SCHEMAS ====================
 
 class VendorDashboardMetrics(BaseModel):

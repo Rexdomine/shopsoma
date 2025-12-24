@@ -16,6 +16,7 @@ async def test_vendor_earnings_summary_and_items(
 ):
     from app.models.order import Order, OrderItem, PaymentStatus, FulfillmentStatus
     from app.models.product import Product, ProductStatus
+    from app.models.app_setting import AppSetting
 
     product = Product(
         id=uuid4(),
@@ -91,6 +92,12 @@ async def test_vendor_earnings_summary_and_items(
     )
     db_session.add(projected_item)
 
+    payout_hold_setting = AppSetting(
+        id=uuid4(),
+        key="payout_hold_days",
+        value="0",
+    )
+    db_session.add(payout_hold_setting)
     await db_session.commit()
 
     summary_response = await client.get(
@@ -116,6 +123,8 @@ async def test_vendor_earnings_summary_and_items(
     assert products_data["view"] == "products"
     assert products_data["total"] == 1
     assert products_data["items"][0]["product_title"] == "Test Product"
+    assert products_data["items"][0]["withdraw_available"] is True
+    assert products_data["items"][0]["withdraw_days_left"] == 0
 
     orders_response = await client.get(
         "/api/v1/vendor/earnings/items",
@@ -130,3 +139,5 @@ async def test_vendor_earnings_summary_and_items(
     assert orders_data["items"][0]["total_quantity"] == 2
     assert orders_data["items"][0]["total_commission"] == 20.0
     assert orders_data["items"][0]["total_payout"] == 180.0
+    assert orders_data["items"][0]["withdraw_available"] is True
+    assert orders_data["items"][0]["withdraw_days_left"] == 0

@@ -64,7 +64,7 @@ export default function VendorSidebar({
       { label: 'Products', route: ROUTES.VENDOR_PRODUCTS, icon: 'products', section: 'products' },
       { label: 'Collections', route: '/vendor/collections', icon: 'collections', section: 'collections' },
       { label: 'Marketing', route: '/vendor/marketing', icon: 'marketing', section: 'marketing' },
-      { label: 'Analytics', route: '/vendor/analytics', icon: 'analytics', section: 'analytics' },
+      { label: 'Analytics', route: ROUTES.VENDOR_ANALYTICS, icon: 'analytics', section: 'analytics' },
       { label: 'Earnings & Payout', route: ROUTES.VENDOR_EARNINGS, icon: 'earnings', section: 'earnings' },
     ],
     []
