@@ -39,7 +39,7 @@ export const productService = {
 
   // Get vendor product by ID (vendor only)
   async getVendorProduct(productId: string): Promise<Product> {
-    const response = await api.get(`/vendor/products/${productId}`);
+    const response = await api.get(`/products/${productId}`, { timeout: 20000 });
     return response.data;
   },
 
@@ -96,7 +96,7 @@ export const productService = {
 
   // Create product (vendor only)
   async createProduct(productData: Partial<Product>): Promise<Product> {
-    const response = await api.post('/products', productData);
+    const response = await api.post('/products', productData, { timeout: 20000 });
     return response.data;
   },
 

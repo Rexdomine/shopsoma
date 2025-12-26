@@ -95,6 +95,11 @@ export interface VendorAnalyticsStats {
   returning_customers: number;
   new_customers: number;
 }
+
+export interface VendorDashboardMetrics {
+  total_orders: number;
+  completed_orders: number;
+}
 export interface VendorPayoutSummary {
   current_earnings: number;
   pending_amount: number;
@@ -208,6 +213,15 @@ export const vendorService = {
       return response.data;
     } catch (error: any) {
       const message = error?.response?.data?.detail || 'Failed to fetch vendor profile';
+      throw new Error(message);
+    }
+  },
+  async getDashboardMetrics(): Promise<VendorDashboardMetrics> {
+    try {
+      const response = await api.get('/vendor/dashboard/metrics');
+      return response.data;
+    } catch (error: any) {
+      const message = error?.response?.data?.detail || 'Failed to fetch vendor dashboard metrics';
       throw new Error(message);
     }
   },

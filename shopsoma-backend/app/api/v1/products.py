@@ -508,6 +508,8 @@ async def delete_product(
 
     # Soft delete
     product.status = ProductStatus.ARCHIVED
+    # Ensure archived products no longer count toward collection totals
+    product.collection_id = None
     await db.commit()
 
 

@@ -1,5 +1,11 @@
 import api from './api';
-import type { Collection, CollectionCreate } from '../types';
+import type {
+  Collection,
+  CollectionCreate,
+  CollectionDetail,
+  CollectionSummary,
+  CollectionProductsResponse,
+} from '../types';
 
 /**
  * Collection Service
@@ -9,8 +15,10 @@ export const collectionService = {
   /**
    * Get all collections for the current vendor
    */
-  getCollections: async (): Promise<Collection[]> => {
-    const response = await api.get('/collections');
+  getCollections: async (includeInactive: boolean = true): Promise<CollectionSummary[]> => {
+    const response = await api.get('/collections', {
+      params: { include_inactive: includeInactive },
+    });
     return response.data;
   },
 
@@ -25,7 +33,7 @@ export const collectionService = {
   /**
    * Get a single collection by ID
    */
-  getCollection: async (collectionId: string): Promise<Collection> => {
+  getCollection: async (collectionId: string): Promise<CollectionDetail> => {
     const response = await api.get(`/collections/${collectionId}`);
     return response.data;
   },
@@ -35,7 +43,7 @@ export const collectionService = {
    */
   updateCollection: async (
     collectionId: string,
-    data: Partial<CollectionCreate>
+    data: Partial<CollectionCreate & { is_active: boolean; banner_image_url?: string }>
   ): Promise<Collection> => {
     const response = await api.patch(`/collections/${collectionId}`, data);
     return response.data;
@@ -46,5 +54,39 @@ export const collectionService = {
    */
   deleteCollection: async (collectionId: string): Promise<void> => {
     await api.delete(`/collections/${collectionId}`);
+  },
+
+  getCollectionProducts: async (
+    collectionId: string,
+    params?: { page?: number; page_size?: number; search?: string }
+  ): Promise<CollectionProductsResponse> => {
+    const response = await api.get(`/collections/${collectionId}/products`, { params });
+    return response.data;
+  },
+
+  getAvailableCollectionProducts: async (
+    collectionId: string,
+    params?: { page?: number; page_size?: number; search?: string }
+  ): Promise<CollectionProductsResponse> => {
+    const response = await api.get(`/collections/${collectionId}/available-products`, { params });
+    return response.data;
+  },
+
+  addProductsToCollection: async (
+    collectionId: string,
+    productIds: string[]
+  ): Promise<{ updated_count: number }> => {
+    const response = await api.post(`/collections/${collectionId}/products`, {
+      product_ids: productIds,
+    });
+    return response.data;
+  },
+
+  removeProductFromCollection: async (
+    collectionId: string,
+    productId: string
+  ): Promise<{ removed: boolean }> => {
+    const response = await api.delete(`/collections/${collectionId}/products/${productId}`);
+    return response.data;
   },
 };
