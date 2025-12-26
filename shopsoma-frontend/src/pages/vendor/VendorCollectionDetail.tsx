@@ -1,5 +1,5 @@
 import { Edit2, Filter, Search, Upload, X, Eye } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import VendorSidebar from '../../components/vendor/VendorSidebar';
 import { collectionService } from '../../services/collectionService';
@@ -14,7 +14,7 @@ import type { CollectionDetail, CollectionProductSummary, Product } from '../../
 
 const fallbackImage = '/images/placeholder-product.svg';
 
-const buildStatusBadge = (status: CollectionDetail['status']) => {
+const buildStatusBadge = (status: 'Live' | 'Archived') => {
   const className =
     status === 'Live'
       ? 'bg-emerald-50 text-emerald-700'
@@ -57,7 +57,6 @@ export default function VendorCollectionDetail() {
   const [modalSearch, setModalSearch] = useState('');
   const [modalPage, setModalPage] = useState(1);
   const [modalProducts, setModalProducts] = useState<CollectionProductSummary[]>([]);
-  const [modalMeta, setModalMeta] = useState({ total: 0, page: 1, total_pages: 1 });
   const [isModalLoading, setIsModalLoading] = useState(false);
   const { toasts, hideToast, success, error: showError } = useToast();
   const { vendorProfile } = useVendor();
@@ -143,7 +142,6 @@ export default function VendorCollectionDetail() {
         });
         if (response.items.length > 0) {
           setModalProducts(response.items);
-          setModalMeta({ total: response.total, page: response.page, total_pages: response.total_pages });
           return;
         }
 
@@ -158,18 +156,11 @@ export default function VendorCollectionDetail() {
           const unassigned = fallback.products.filter((product) => !product.collection_id);
           const mapped = unassigned.map(mapProductToSummary);
           setModalProducts(mapped);
-          setModalMeta({
-            total: mapped.length,
-            page: modalPage,
-            total_pages: Math.max(1, Math.ceil(mapped.length / 10)),
-          });
         } else {
           setModalProducts([]);
-          setModalMeta({ total: 0, page: 1, total_pages: 1 });
         }
       } catch (error) {
         setModalProducts([]);
-        setModalMeta({ total: 0, page: 1, total_pages: 1 });
       } finally {
         setIsModalLoading(false);
       }

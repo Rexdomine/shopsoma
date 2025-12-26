@@ -115,17 +115,20 @@ export default function VendorCollections() {
         setLoadingCollections(true);
       const response = await collectionService.getCollections(true);
       if (response.length) {
-        const mapped = response.map((collection: CollectionSummary) => ({
-          id: collection.id,
-          name: collection.name,
-          status: collection.is_active ? 'Live' : 'Archived',
+        const mapped = response.map((collection: CollectionSummary) => {
+          const status: CollectionCard['status'] = collection.is_active ? 'Live' : 'Archived';
+          return {
+            id: collection.id,
+            name: collection.name,
+            status,
           is_active: collection.is_active,
           dateCreated: new Date(collection.created_at).toLocaleDateString('en-GB'),
           productsAvailable: collection.products_available || 0,
           imageUrl: collection.banner_image_url || collection.thumbnails?.[0] || '',
           thumbnails: collection.thumbnails || [],
-          }));
-          setCollections(mapped);
+          };
+        });
+        setCollections(mapped);
         }
       } catch (error) {
         setCollections(fallbackCollections);
