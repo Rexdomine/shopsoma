@@ -31,6 +31,8 @@ const VendorProductEdit = lazy(() => import('../pages/vendor/VendorProductEdit')
 const VendorOrders = lazy(() => import('../pages/vendor/VendorOrders'));
 const VendorOrderDetail = lazy(() => import('../pages/vendor/VendorOrderDetail'));
 const VendorAnalytics = lazy(() => import('../pages/vendor/VendorAnalytics'));
+const VendorCollections = lazy(() => import('../pages/vendor/VendorCollections'));
+const VendorCollectionDetail = lazy(() => import('../pages/vendor/VendorCollectionDetail'));
 const VendorEarnings = lazy(() => import('../pages/vendor/VendorEarnings'));
 const VendorExpenses = lazy(() => import('../pages/vendor/VendorExpenses'));
 const VendorWithdrawals = lazy(() => import('../pages/vendor/VendorWithdrawals'));
@@ -301,6 +303,30 @@ const router = createBrowserRouter([
         <Suspense fallback={<Loading fullScreen message="Loading analytics..." />}>
           <VendorLayout>
             <VendorAnalytics />
+          </VendorLayout>
+        </Suspense>
+      </ErrorBoundary>
+    ),
+  },
+  {
+    path: ROUTES.VENDOR_COLLECTIONS,
+    element: (
+      <ErrorBoundary>
+        <Suspense fallback={<Loading fullScreen message="Loading collections..." />}>
+          <VendorLayout>
+            <VendorCollections />
+          </VendorLayout>
+        </Suspense>
+      </ErrorBoundary>
+    ),
+  },
+  {
+    path: `${ROUTES.VENDOR_COLLECTIONS}/:id`,
+    element: (
+      <ErrorBoundary>
+        <Suspense fallback={<Loading fullScreen message="Loading collection..." />}>
+          <VendorLayout>
+            <VendorCollectionDetail />
           </VendorLayout>
         </Suspense>
       </ErrorBoundary>

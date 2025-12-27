@@ -41,7 +41,7 @@ export default function VendorLogin() {
       if (userData?.role === 'admin') {
         navigate('/admin/users', { replace: true });
       } else if (userData?.role === 'vendor') {
-        navigate('/vendor/dashboard', { replace: true });
+        navigate('/vendor/analytics', { replace: true });
       } else {
         const from = (location.state as any)?.from?.pathname;
         if (from && from !== ROUTES.LOGIN) {

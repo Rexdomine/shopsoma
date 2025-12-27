@@ -49,7 +49,7 @@ export default function Login() {
       if (userData?.role === 'admin') {
         navigate('/admin/vendor-applications', { replace: true });
       } else if (userData?.role === 'vendor') {
-        navigate('/vendor/dashboard', { replace: true });
+        navigate('/vendor/analytics', { replace: true });
       } else {
         // Regular users: redirect to the page they were trying to access
         // Check if user came from checkout, otherwise go to home

@@ -86,6 +86,7 @@ export default function VendorProductAdd() {
   const [isSustainable, setIsSustainable] = useState(false);
   const [estimatedProductionTime, setEstimatedProductionTime] = useState('');
   const [estimatedReviewTime] = useState('3 days');
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Image management
   const [variations, setVariations] = useState<ProductVariation[]>([
@@ -589,6 +590,8 @@ export default function VendorProductAdd() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
+    setIsSubmitting(true);
 
     try {
       // Prepare variations data
@@ -602,6 +605,7 @@ export default function VendorProductAdd() {
 
         if (hasUnuploadedImages) {
           warning('Some images are still uploading or failed to upload. Please wait or remove failed images before submitting.');
+          setIsSubmitting(false);
           return;
         }
 
@@ -712,6 +716,7 @@ export default function VendorProductAdd() {
       // Validate required fields
       if (!subcategoryId) {
         warning('Please select a category for your product');
+        setIsSubmitting(false);
         return;
       }
 
@@ -723,6 +728,7 @@ export default function VendorProductAdd() {
 
       if (hasUnuploadedMainImages) {
         warning('Some product images are still uploading or failed to upload. Please wait or remove failed images before submitting.');
+        setIsSubmitting(false);
         return;
       }
 
@@ -776,35 +782,37 @@ export default function VendorProductAdd() {
       setTimeout(() => {
         navigate(ROUTES.VENDOR_PRODUCTS);
       }, 1500);
-    } catch (error: any) {
-      console.error('Error creating product:', error);
-      console.error('Error response:', error.response);
-      console.error('Error data:', error.response?.data);
+    } catch (submitError: any) {
+      console.error('Error creating product:', submitError);
+      console.error('Error response:', submitError.response);
+      console.error('Error data:', submitError.response?.data);
 
       // Extract detailed error message
       let errorMessage = 'Failed to create product. Please try again.';
       let errorTitle = 'Error Creating Product';
 
-      if (error.response?.data) {
-        if (error.response.data.detail) {
+      if (submitError.response?.data) {
+        if (submitError.response.data.detail) {
           // FastAPI validation errors
-          if (Array.isArray(error.response.data.detail)) {
+          if (Array.isArray(submitError.response.data.detail)) {
             // Pydantic validation errors - format nicely
-            const validationErrors = error.response.data.detail
+            const validationErrors = submitError.response.data.detail
               .map((err: any) => `${err.loc.join('.')}: ${err.msg}`)
               .join(', ');
             errorMessage = validationErrors;
             errorTitle = 'Validation Error';
           } else {
-            errorMessage = error.response.data.detail;
+            errorMessage = submitError.response.data.detail;
           }
-        } else if (error.response.data.message) {
-          errorMessage = error.response.data.message;
+        } else if (submitError.response.data.message) {
+          errorMessage = submitError.response.data.message;
         }
       }
 
       // Show error toast
       error(errorMessage, errorTitle, 7000);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -1923,9 +1931,17 @@ export default function VendorProductAdd() {
                     <p className="text-sm text-gray-600">Estimated Review time: {estimatedReviewTime}</p>
                     <button
                       type="submit"
-                      className="w-full bg-[#105E53] text-white font-medium rounded-lg py-3 hover:bg-[#0c4c45] transition"
+                      className="w-full bg-[#105E53] text-white font-medium rounded-lg py-3 hover:bg-[#0c4c45] transition inline-flex items-center justify-center gap-2 disabled:opacity-70"
+                      disabled={isSubmitting}
                     >
-                      Publish for Review
+                      {isSubmitting ? (
+                        <>
+                          <span className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                          Publishing...
+                        </>
+                      ) : (
+                        'Publish for Review'
+                      )}
                     </button>
                   </div>
                 </div>

@@ -415,6 +415,17 @@ export default function VendorProductView() {
                     </div>
                   )}
 
+                  {/* Collection */}
+                  <div className="flex items-center justify-between pt-4 border-t border-gray-200">
+                    <span className="text-sm font-medium text-gray-700 flex items-center gap-2">
+                      <Package className="h-4 w-4" />
+                      Collection
+                    </span>
+                    <span className="text-sm text-gray-900">
+                      {product.collection_name || 'Not assigned'}
+                    </span>
+                  </div>
+
                   {/* Created Date */}
                   <div className="flex items-center justify-between pt-4 border-t border-gray-200">
                     <span className="text-sm font-medium text-gray-700 flex items-center gap-2">

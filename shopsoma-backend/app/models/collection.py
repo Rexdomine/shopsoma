@@ -17,6 +17,7 @@ class Collection(Base):
     name = Column(String(100), nullable=False)
     slug = Column(String(100), nullable=False, index=True)
     description = Column(Text, nullable=True)
+    banner_image_url = Column(Text, nullable=True)
     is_active = Column(Boolean, default=True, nullable=False)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)

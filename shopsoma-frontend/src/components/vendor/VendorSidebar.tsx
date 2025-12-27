@@ -17,11 +17,12 @@ import {
   PanelLeftOpen,
   LogOut,
 } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { useVendor } from '../../context/VendorContext';
 import { ROUTES } from '../../config/constants';
+import { vendorService } from '../../services/vendorService';
 
 type SidebarProps = {
   disableMain?: boolean;
@@ -42,8 +43,15 @@ export default function VendorSidebar({
   const navigate = useNavigate();
   const location = useLocation();
   const { user, logout } = useAuth();
-  const { isOnboarding } = useVendor();
+  const { isOnboarding, vendorProfile } = useVendor();
   const [isCollapsed, setIsCollapsed] = useState(false);
+  const [logoError, setLogoError] = useState(false);
+  const [orderCounts, setOrderCounts] = useState<{pending: number; completed: number} | null>(null);
+
+  const vendorLogoUrl = vendorProfile?.logo_url?.trim();
+  const showVendorLogo = Boolean(vendorLogoUrl) && !logoError;
+  const resolvedPendingOrders = orderCounts?.pending ?? pendingOrders;
+  const resolvedCompletedOrders = orderCounts?.completed ?? completedOrders;
 
   const handleLogout = async () => {
     try {
@@ -54,17 +62,45 @@ export default function VendorSidebar({
     }
   };
 
+  useEffect(() => {
+    let isActive = true;
+    let intervalId: number | undefined;
+
+    const fetchOrderCounts = async () => {
+      try {
+        const metrics = await vendorService.getDashboardMetrics();
+
+        if (!isActive) return;
+
+        const completed = metrics.completed_orders || 0;
+        const pending = Math.max((metrics.total_orders || 0) - completed, 0);
+        setOrderCounts({ pending, completed });
+      } catch (error) {
+        console.error('Failed to load vendor order counts:', error);
+      }
+    };
+
+    fetchOrderCounts();
+    intervalId = window.setInterval(fetchOrderCounts, 60000);
+
+    return () => {
+      isActive = false;
+      if (intervalId) {
+        window.clearInterval(intervalId);
+      }
+    };
+  }, []);
+
   // Override disableMain if vendor is in onboarding mode
   const shouldDisableMain = disableMain || isOnboarding;
 
   const mainNav = useMemo(
     () => [
-      { label: 'Dashboard', route: ROUTES.VENDOR_DASHBOARD, icon: 'dashboard', section: 'dashboard' },
+      { label: 'Analytics', route: ROUTES.VENDOR_ANALYTICS, icon: 'analytics', section: 'analytics' },
       { label: 'Orders', route: ROUTES.VENDOR_ORDERS, icon: 'orders', section: 'orders' },
       { label: 'Products', route: ROUTES.VENDOR_PRODUCTS, icon: 'products', section: 'products' },
       { label: 'Collections', route: '/vendor/collections', icon: 'collections', section: 'collections' },
-      { label: 'Marketing', route: '/vendor/marketing', icon: 'marketing', section: 'marketing' },
-      { label: 'Analytics', route: ROUTES.VENDOR_ANALYTICS, icon: 'analytics', section: 'analytics' },
+      { label: 'Marketing', route: '/vendor/marketing', icon: 'marketing', section: 'marketing', comingSoon: true },
       { label: 'Earnings & Payout', route: ROUTES.VENDOR_EARNINGS, icon: 'earnings', section: 'earnings' },
     ],
     []
@@ -143,9 +179,18 @@ export default function VendorSidebar({
             type="button"
             className="w-full bg-white rounded-2xl border border-gray-200 shadow-sm px-3 py-3 flex items-center gap-3 text-left hover:shadow-md transition"
           >
-            <div className="h-10 w-10 rounded-full bg-[#105E53]/10 flex items-center justify-center text-[#105E53]">
-              <User className="w-5 h-5" />
-            </div>
+            {showVendorLogo ? (
+              <img
+                src={vendorLogoUrl}
+                alt={`${user?.full_name || 'Vendor'} logo`}
+                className="h-10 w-10 rounded-full object-cover"
+                onError={() => setLogoError(true)}
+              />
+            ) : (
+              <div className="h-10 w-10 rounded-full bg-[#105E53]/10 flex items-center justify-center text-[#105E53]">
+                <User className="w-5 h-5" />
+              </div>
+            )}
             <div className="flex-1">
               <p className="text-sm font-semibold text-gray-900 truncate">{user?.full_name || 'Your Brand'}</p>
               <p className="text-xs text-gray-500 truncate">{user?.email || 'email@brand.com'}</p>
@@ -156,9 +201,18 @@ export default function VendorSidebar({
           </button>
         ) : (
           <div className="flex justify-center">
-            <div className="h-10 w-10 rounded-full bg-[#105E53]/10 flex items-center justify-center text-[#105E53]">
-              <User className="w-5 h-5" />
-            </div>
+            {showVendorLogo ? (
+              <img
+                src={vendorLogoUrl}
+                alt={`${user?.full_name || 'Vendor'} logo`}
+                className="h-10 w-10 rounded-full object-cover"
+                onError={() => setLogoError(true)}
+              />
+            ) : (
+              <div className="h-10 w-10 rounded-full bg-[#105E53]/10 flex items-center justify-center text-[#105E53]">
+                <User className="w-5 h-5" />
+              </div>
+            )}
           </div>
         )}
 
@@ -167,11 +221,11 @@ export default function VendorSidebar({
           <div className="flex items-center gap-6 text-[12px] font-ui text-[#222] mb-6">
             <span className="flex items-center gap-2 whitespace-nowrap">
               <span className="h-2.5 w-2.5 rounded-full bg-amber-400" />
-              <span>Pending Orders: {pendingOrders}</span>
+              <span>Pending Orders: {resolvedPendingOrders}</span>
             </span>
             <span className="flex items-center gap-2 whitespace-nowrap">
               <span className="h-2.5 w-2.5 rounded-full bg-emerald-500" />
-              <span>Completed Orders: {completedOrders}</span>
+              <span>Completed Orders: {resolvedCompletedOrders}</span>
             </span>
           </div>
         )}
@@ -180,14 +234,16 @@ export default function VendorSidebar({
         <nav className="space-y-1">
           {mainNav.map((item) => {
             const isActive = currentSection === item.section;
+            const isComingSoon = item.comingSoon === true;
+            const isDisabled = shouldDisableMain || isComingSoon;
 
             return (
               <button
                 key={item.label}
                 type="button"
-                onClick={() => handleNav(item.route, shouldDisableMain)}
+                onClick={() => handleNav(item.route, isDisabled)}
                 className={`w-full flex items-center ${isCollapsed ? 'justify-center' : 'gap-3'} px-3 py-2.5 rounded-lg text-[15px] font-medium font-ui transition ${
-                  shouldDisableMain
+                  isDisabled
                     ? 'text-gray-400 cursor-not-allowed opacity-60 pointer-events-none'
                     : isActive
                     ? 'bg-white text-[#105E53] shadow-sm border border-gray-100'
@@ -196,7 +252,16 @@ export default function VendorSidebar({
                 title={isCollapsed ? item.label : ''}
               >
                 {renderIcon(item.icon, isActive)}
-                {!isCollapsed && <span>{item.label}</span>}
+                {!isCollapsed && (
+                  <div className="flex items-center gap-2">
+                    <span>{item.label}</span>
+                    {isComingSoon && (
+                      <span className="rounded-full bg-[#105E53]/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[#105E53]">
+                        Coming soon
+                      </span>
+                    )}
+                  </div>
+                )}
               </button>
             );
           })}
