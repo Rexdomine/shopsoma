@@ -447,6 +447,7 @@ export default function Home() {
   }, [featuredProducts, rotationMinutes]);
 
   const featuredProduct = featuredProducts[featuredIndex] || null;
+  const showFeaturedSkeleton = featuredLoading || featuredProducts.length === 0;
   const fallbackImage =
     products[4]?.images?.[0]?.image_url ||
     products[0]?.images?.[0]?.image_url ||
@@ -480,7 +481,7 @@ export default function Home() {
           </div>
         </section>
 
-        {featuredLoading ? (
+        {showFeaturedSkeleton ? (
           <FeaturedCollabSkeleton />
         ) : (
           <FeaturedCollab product={featuredProduct} fallbackImageUrl={fallbackImage} />
