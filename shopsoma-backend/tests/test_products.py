@@ -225,6 +225,72 @@ class TestProductList:
             prices = [float(p["base_price"]) for p in data["products"]]
             assert prices == sorted(prices)
 
+    @pytest.mark.asyncio
+    async def test_list_products_with_parent_category_filter(
+        self,
+        client: AsyncClient,
+        db_session: AsyncSession,
+        vendor_user,
+    ):
+        """Test category filter includes products in child categories."""
+        from app.models.category import Category
+        from app.models.product import Product, ProductStatus, ModerationStatus
+        import uuid
+
+        parent_category = Category(
+            id=uuid.uuid4(),
+            name="Men",
+            slug="men",
+            description="Menswear root",
+        )
+        child_category = Category(
+            id=uuid.uuid4(),
+            name="Men's Shirts",
+            slug="mens-shirts",
+            parent_id=parent_category.id,
+            description="Menswear shirts",
+        )
+        other_category = Category(
+            id=uuid.uuid4(),
+            name="Women",
+            slug="women",
+            description="Womenswear root",
+        )
+        db_session.add_all([parent_category, child_category, other_category])
+
+        men_product = Product(
+            id=uuid.uuid4(),
+            vendor_id=vendor_user["vendor"].id,
+            title="Men's Shirt",
+            description="Test shirt",
+            base_price=120.00,
+            total_stock=10,
+            status=ProductStatus.ACTIVE,
+            moderation_status=ModerationStatus.APPROVED,
+            category_id=child_category.id,
+        )
+        women_product = Product(
+            id=uuid.uuid4(),
+            vendor_id=vendor_user["vendor"].id,
+            title="Women's Dress",
+            description="Test dress",
+            base_price=150.00,
+            total_stock=5,
+            status=ProductStatus.ACTIVE,
+            moderation_status=ModerationStatus.APPROVED,
+            category_id=other_category.id,
+        )
+        db_session.add_all([men_product, women_product])
+        await db_session.commit()
+
+        response = await client.get(f"/api/v1/products?category_id={parent_category.id}")
+
+        assert response.status_code == 200
+        data = response.json()
+        product_titles = {product["title"] for product in data["products"]}
+        assert "Men's Shirt" in product_titles
+        assert "Women's Dress" not in product_titles
+
 
 class TestProductRetrieve:
     """Test get single product endpoint"""

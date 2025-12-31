@@ -233,7 +233,12 @@ async def list_products(
 
     # Category filter
     if category_id:
-        filters.append(Product.category_id == category_id)
+        filters.append(
+            or_(
+                Product.category_id == category_id,
+                Product.category.has(Category.parent_id == category_id),
+            )
+        )
 
     # Vendor filter
     if vendor_id and (not current_user or current_user.role == "admin"):
