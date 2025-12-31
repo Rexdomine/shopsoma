@@ -50,6 +50,15 @@ services:
     branch: develop
     buildCommand: "cd shopsoma-frontend && npm install && npm run build"
     staticPublishPath: shopsoma-frontend/dist
+    headers:
+      - path: /index.html
+        headers:
+          - name: Cache-Control
+            value: no-store
+      - path: /*
+        headers:
+          - name: Cache-Control
+            value: no-store
     routes:
       - type: rewrite
         source: /*
