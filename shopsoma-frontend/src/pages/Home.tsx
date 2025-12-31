@@ -10,7 +10,6 @@ import { useCurrency } from '../hooks/useCurrency';
 import { formatPriceWithConversion } from '../utils/pricing';
 
 const HERO_IMAGE = '/images/hero/demo-image-2.png';
-const SECONDARY_IMAGE = '/images/hero/happy-man-party-wearing-sunglasses.jpg';
 
 type HomeProductCardProps = {
   product: Product;
