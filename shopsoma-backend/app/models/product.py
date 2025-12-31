@@ -1,7 +1,8 @@
 """Product models"""
-from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey, Integer, Numeric, Text, Enum as SQLEnum, UniqueConstraint
+from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey, Integer, Numeric, Text, Enum as SQLEnum, UniqueConstraint, inspect
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
+from sqlalchemy.orm.attributes import NO_VALUE
 from sqlalchemy.sql import func
 import uuid
 import enum
@@ -117,8 +118,16 @@ class Product(Base):
     @property
     def category_parent_name(self):
         """Expose the parent category name for API responses."""
-        if self.category and self.category.parent:
-            return self.category.parent.name
+        if not self.category:
+            return None
+
+        parent_attr = inspect(self.category).attrs.parent
+        if parent_attr.loaded_value is NO_VALUE:
+            return None
+
+        parent = parent_attr.loaded_value
+        if parent:
+            return parent.name
         return None
 
     def __repr__(self):
