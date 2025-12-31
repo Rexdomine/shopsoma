@@ -50,6 +50,23 @@ services:
     branch: develop
     buildCommand: "cd shopsoma-frontend && npm install && npm run build"
     staticPublishPath: shopsoma-frontend/dist
+    headers:
+      - path: /index.html
+        headers:
+          - name: Cache-Control
+            value: no-store
+      - path: /assets/*
+        headers:
+          - name: Cache-Control
+            value: public, max-age=31536000, immutable
+      - path: /images/*
+        headers:
+          - name: Cache-Control
+            value: public, max-age=31536000, immutable
+      - path: /*
+        headers:
+          - name: Cache-Control
+            value: no-store
     routes:
       - type: rewrite
         source: /*
@@ -65,6 +82,8 @@ services:
           - key: Cache-Control
             value: no-store
     envVars:
+      - key: NODE_VERSION
+        value: 20.19.0
       - key: VITE_API_BASE_URL
         value: https://shopsoma-staging-api.onrender.com/api/v1
       - key: VITE_PAYSTACK_PUBLIC_KEY
