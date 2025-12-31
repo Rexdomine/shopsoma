@@ -54,6 +54,16 @@ services:
       - type: rewrite
         source: /*
         destination: /index.html
+      - type: header
+        source: /index.html
+        headers:
+          - key: Cache-Control
+            value: no-store
+      - type: header
+        source: /
+        headers:
+          - key: Cache-Control
+            value: no-store
     envVars:
       - key: VITE_API_BASE_URL
         value: https://shopsoma-staging-api.onrender.com/api/v1
