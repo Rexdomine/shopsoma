@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Loading from '../../components/common/Loading';
 import { MEN_HERO_IMAGE_URL } from '../../config/constants';
 import { categoryService } from '../../services/categoryService';
@@ -26,6 +26,11 @@ export default function MenStorefront() {
     loadPrimaryCategories();
   }, []);
 
+  const initialParams = useMemo(
+    () => (menCategoryId ? { category_id: menCategoryId } : undefined),
+    [menCategoryId]
+  );
+
   if (categoryLoading && !menCategoryId) {
     return <Loading fullScreen message="Loading men's collection..." />;
   }
@@ -33,7 +38,7 @@ export default function MenStorefront() {
   return (
     <ProductList
       presetCategory="Men"
-      initialParams={menCategoryId ? { category_id: menCategoryId } : undefined}
+      initialParams={initialParams}
       heroOverride={{
         title: 'Menswear: Elevated Everyday Style',
         body: 'Discover tailored pieces, bold silhouettes and everyday staples, curated for the modern man.',
