@@ -17,9 +17,12 @@ import {
   updateShippingProviderSettings,
   getPayoutHoldSettings,
   updatePayoutHoldSettings,
+  getAdminFeaturedRotationSettings,
+  updateFeaturedRotationSettings,
   syncRenderDatabase,
   type ExchangeRate,
   type PayoutHoldSettings,
+  type FeaturedRotationSettings,
 } from '../../services/settingsService';
 import { useToast } from '../../hooks/useToast';
 import ToastContainer from '../../components/ui/ToastContainer';
@@ -42,6 +45,10 @@ export default function AdminSettings() {
   const [payoutHoldInput, setPayoutHoldInput] = useState('');
   const [savingPayoutHold, setSavingPayoutHold] = useState(false);
   const [payoutHoldChanged, setPayoutHoldChanged] = useState(false);
+  const [featuredRotation, setFeaturedRotation] = useState<FeaturedRotationSettings | null>(null);
+  const [featuredRotationInput, setFeaturedRotationInput] = useState('');
+  const [savingFeaturedRotation, setSavingFeaturedRotation] = useState(false);
+  const [featuredRotationChanged, setFeaturedRotationChanged] = useState(false);
   const [syncingDb, setSyncingDb] = useState(false);
   const [lastDbSync, setLastDbSync] = useState<string | null>(null);
   const [syncProgress, setSyncProgress] = useState(0);
@@ -63,16 +70,19 @@ export default function AdminSettings() {
   const fetchSettings = async () => {
     try {
       setLoading(true);
-      const [rate, shipping, hold] = await Promise.all([
+      const [rate, shipping, hold, rotation] = await Promise.all([
         getExchangeRate(),
         getShippingProviderSettings(),
-        getPayoutHoldSettings()
+        getPayoutHoldSettings(),
+        getAdminFeaturedRotationSettings(),
       ]);
       setExchangeRate(rate);
       setRateInput(rate.rate.toString());
       setUseShipBubble(shipping.use_shipbubble);
       setPayoutHold(hold);
       setPayoutHoldInput(hold.hold_days.toString());
+      setFeaturedRotation(rotation);
+      setFeaturedRotationInput(rotation.rotation_minutes.toString());
     } catch (err: any) {
       console.error('Failed to fetch settings:', err);
       error(err.response?.data?.detail || 'Failed to load settings', 'Error');
@@ -188,6 +198,43 @@ export default function AdminSettings() {
     if (payoutHold) {
       setPayoutHoldInput(payoutHold.hold_days.toString());
       setPayoutHoldChanged(false);
+    }
+  };
+
+  const handleFeaturedRotationChange = (value: string) => {
+    setFeaturedRotationInput(value);
+    const parsed = Number(value);
+    if (!Number.isNaN(parsed) && featuredRotation) {
+      setFeaturedRotationChanged(parsed !== featuredRotation.rotation_minutes);
+    }
+  };
+
+  const handleSaveFeaturedRotation = async () => {
+    const parsed = Number(featuredRotationInput);
+    if (Number.isNaN(parsed) || parsed < 1 || parsed > 1440) {
+      error('Rotation interval must be between 1 and 1440 minutes', 'Invalid Input');
+      return;
+    }
+
+    try {
+      setSavingFeaturedRotation(true);
+      const updated = await updateFeaturedRotationSettings(parsed);
+      setFeaturedRotation(updated);
+      setFeaturedRotationInput(updated.rotation_minutes.toString());
+      setFeaturedRotationChanged(false);
+      success('Featured rotation updated successfully', 'Success');
+    } catch (err: any) {
+      console.error('Failed to update featured rotation:', err);
+      error(err.response?.data?.detail || 'Failed to update featured rotation', 'Error');
+    } finally {
+      setSavingFeaturedRotation(false);
+    }
+  };
+
+  const handleResetFeaturedRotation = () => {
+    if (featuredRotation) {
+      setFeaturedRotationInput(featuredRotation.rotation_minutes.toString());
+      setFeaturedRotationChanged(false);
     }
   };
 
@@ -572,6 +619,100 @@ export default function AdminSettings() {
                       <p className="text-sm text-gray-700 mt-0.5">
                         {payoutHold.updated_at
                           ? new Date(payoutHold.updated_at).toLocaleString('en-US', {
+                              dateStyle: 'medium',
+                              timeStyle: 'short'
+                            })
+                          : 'Not set'}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Featured Rotation Settings Card */}
+          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+            <div className="border-b border-gray-200 px-6 py-4">
+              <div className="flex items-center gap-3">
+                <div className="h-10 w-10 rounded-xl bg-[#105E53] text-white flex items-center justify-center">
+                  <RefreshCw className="w-5 h-5" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-semibold text-gray-900">Featured Rotation</h2>
+                  <p className="text-sm text-gray-600">Control how often the homepage feature changes</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="p-6 space-y-6">
+              <div>
+                <label htmlFor="featured-rotation" className="block text-sm font-medium text-gray-700 mb-2">
+                  Rotation interval (minutes)
+                </label>
+                <div className="flex items-start gap-4">
+                  <div className="flex-1 max-w-md">
+                    <input
+                      id="featured-rotation"
+                      type="number"
+                      min="1"
+                      max="1440"
+                      step="1"
+                      value={featuredRotationInput}
+                      onChange={(event) => handleFeaturedRotationChange(event.target.value)}
+                      className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#105E53] focus:border-transparent text-gray-900"
+                      placeholder="Enter minutes"
+                    />
+                    <p className="text-xs text-gray-500 mt-2">
+                      Set between 1 and 1440 minutes (24 hours).
+                    </p>
+                  </div>
+
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={handleResetFeaturedRotation}
+                      disabled={!featuredRotationChanged || savingFeaturedRotation}
+                      className="px-4 py-2.5 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Reset
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleSaveFeaturedRotation}
+                      disabled={!featuredRotationChanged || savingFeaturedRotation}
+                      className="px-4 py-2.5 bg-[#105E53] text-white rounded-lg text-sm font-medium hover:bg-[#0d4a42] transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                    >
+                      {savingFeaturedRotation ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          Saving...
+                        </>
+                      ) : (
+                        <>
+                          <Save className="w-4 h-4" />
+                          Save Changes
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {featuredRotation && (
+                <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-medium text-gray-700">Current Rotation Interval</p>
+                      <p className="text-2xl font-semibold text-[#0B1D2C] mt-1">
+                        {featuredRotation.rotation_minutes} minute{featuredRotation.rotation_minutes === 1 ? '' : 's'}
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-xs text-gray-500">Last Updated</p>
+                      <p className="text-sm text-gray-700 mt-0.5">
+                        {featuredRotation.updated_at
+                          ? new Date(featuredRotation.updated_at).toLocaleString('en-US', {
                               dateStyle: 'medium',
                               timeStyle: 'short'
                             })

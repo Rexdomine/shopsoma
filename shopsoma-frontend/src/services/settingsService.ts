@@ -39,6 +39,15 @@ export interface PayoutHoldUpdate {
   hold_days: number;
 }
 
+export interface FeaturedRotationSettings {
+  rotation_minutes: number;
+  updated_at?: string | null;
+}
+
+export interface FeaturedRotationUpdate {
+  rotation_minutes: number;
+}
+
 export interface DatabaseSyncResponse {
   status: 'success' | 'error';
   message: string;
@@ -109,6 +118,35 @@ export const updateShippingProviderSettings = async (
  */
 export const getPayoutHoldSettings = async (): Promise<PayoutHoldSettings> => {
   const response = await api.get<PayoutHoldSettings>('/settings/admin/payout-hold');
+  return response.data;
+};
+
+/**
+ * Get featured rotation settings (public endpoint)
+ */
+export const getFeaturedRotationSettings = async (): Promise<FeaturedRotationSettings> => {
+  const response = await api.get<FeaturedRotationSettings>('/settings/public/featured-rotation');
+  return response.data;
+};
+
+/**
+ * Get featured rotation settings (admin only)
+ */
+export const getAdminFeaturedRotationSettings = async (): Promise<FeaturedRotationSettings> => {
+  const response = await api.get<FeaturedRotationSettings>('/settings/admin/featured-rotation');
+  return response.data;
+};
+
+/**
+ * Update featured rotation settings (admin only)
+ */
+export const updateFeaturedRotationSettings = async (
+  rotationMinutes: number
+): Promise<FeaturedRotationSettings> => {
+  const response = await api.put<FeaturedRotationSettings>(
+    '/settings/admin/featured-rotation',
+    { rotation_minutes: rotationMinutes }
+  );
   return response.data;
 };
 

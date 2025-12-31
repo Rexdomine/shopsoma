@@ -11,6 +11,7 @@ from sqlalchemy.orm import selectinload
 from app.core.database import get_db
 from app.api.dependencies import get_current_user, get_current_vendor, get_current_admin, get_optional_user
 from app.models.user import User
+from app.models.category import Category
 from app.models.product import Product, ProductVariant, ProductImage, ProductStatus, ProductType, ModerationStatus, Variation, SizeStock, SizeEnum
 from app.models.vendor import Vendor
 from app.schemas.product import (
@@ -40,7 +41,7 @@ PRODUCT_RELATIONSHIPS = (
     selectinload(Product.variations).selectinload(Variation.size_stocks),
     selectinload(Product.images),
     selectinload(Product.vendor),
-    selectinload(Product.category),
+    selectinload(Product.category).selectinload(Category.parent),
     selectinload(Product.collection),
 )
 
@@ -232,7 +233,12 @@ async def list_products(
 
     # Category filter
     if category_id:
-        filters.append(Product.category_id == category_id)
+        filters.append(
+            or_(
+                Product.category_id == category_id,
+                Product.category.has(Category.parent_id == category_id),
+            )
+        )
 
     # Vendor filter
     if vendor_id and (not current_user or current_user.role == "admin"):

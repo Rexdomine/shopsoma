@@ -155,6 +155,19 @@ class VendorResponse(BaseModel):
         from_attributes = True
 
 
+class DesignerResponse(BaseModel):
+    """Public designer response schema"""
+    id: UUID4
+    business_name: str
+    logo_url: Optional[str]
+    total_products: int
+    total_orders: int
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
 # ==================== VENDOR PICKUP SCHEMAS ====================
 
 class VendorPickupBase(BaseModel):
