@@ -22,6 +22,7 @@ from app.schemas.admin_payout import (
     AdminPayoutResponse,
     AdminPayoutStatusUpdate,
     AdminPayoutBulkStatusUpdate,
+    AdminPayoutAccountDetails,
 )
 
 router = APIRouter(prefix="/admin/payouts", tags=["Admin Payouts"])
@@ -369,4 +370,62 @@ async def export_payouts_csv(
         headers={
             "Content-Disposition": f"attachment; filename=payouts_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
         },
+    )
+
+
+@router.get("/{payout_id}/account-details", response_model=AdminPayoutAccountDetails)
+async def get_payout_account_details(
+    payout_id: UUID,
+    _: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Fetch vendor bank details for a payout."""
+    result = await db.execute(
+        select(Payout)
+        .options(selectinload(Payout.vendor).selectinload(Vendor.payment_methods))
+        .where(Payout.id == payout_id)
+    )
+    payout = result.scalar_one_or_none()
+
+    if not payout or not payout.vendor:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Payout not found")
+
+    payment_methods = payout.vendor.payment_methods or []
+    payment_methods = sorted(
+        payment_methods,
+        key=lambda method: (not method.is_default, method.created_at),
+    )
+    selected_method = payment_methods[0] if payment_methods else None
+
+    if selected_method:
+        return AdminPayoutAccountDetails(
+            payout_id=payout.id,
+            vendor_id=payout.vendor_id,
+            vendor_name=payout.vendor.business_name,
+            bank_name=selected_method.bank_name,
+            account_number=selected_method.account_number,
+            account_holder=selected_method.account_holder,
+            account_type=selected_method.account_type,
+            is_default=selected_method.is_default,
+            payment_method_id=selected_method.id,
+            source="payment_method",
+        )
+
+    if payout.vendor.bank_name and payout.vendor.bank_account_number and payout.vendor.bank_account_name:
+        return AdminPayoutAccountDetails(
+            payout_id=payout.id,
+            vendor_id=payout.vendor_id,
+            vendor_name=payout.vendor.business_name,
+            bank_name=payout.vendor.bank_name,
+            account_number=payout.vendor.bank_account_number,
+            account_holder=payout.vendor.bank_account_name,
+            account_type=None,
+            is_default=True,
+            payment_method_id=None,
+            source="vendor_profile",
+        )
+
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail="Vendor bank details not found",
     )

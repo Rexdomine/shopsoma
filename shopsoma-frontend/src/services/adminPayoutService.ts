@@ -54,6 +54,19 @@ export interface AdminPayoutBulkStatusUpdate {
   notes?: string;
 }
 
+export interface AdminPayoutAccountDetails {
+  payout_id: string;
+  vendor_id: string;
+  vendor_name: string;
+  bank_name: string;
+  account_number: string;
+  account_holder: string;
+  account_type?: string | null;
+  is_default: boolean;
+  payment_method_id?: string | null;
+  source: string;
+}
+
 export const adminPayoutService = {
   async listPayouts(params?: AdminPayoutListParams): Promise<AdminPayoutListResponse> {
     const searchParams = new URLSearchParams();
@@ -85,6 +98,11 @@ export const adminPayoutService = {
       params,
       responseType: 'blob',
     });
+    return response.data;
+  },
+
+  async getPayoutAccountDetails(payoutId: string): Promise<AdminPayoutAccountDetails> {
+    const response = await api.get(`/admin/payouts/${payoutId}/account-details`);
     return response.data;
   },
 };

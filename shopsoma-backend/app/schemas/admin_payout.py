@@ -55,3 +55,16 @@ class AdminPayoutBulkStatusUpdate(BaseModel):
     payout_ids: List[UUID] = Field(..., min_length=1)
     status: PayoutStatus
     notes: Optional[str] = Field(None, max_length=500)
+
+
+class AdminPayoutAccountDetails(BaseModel):
+    payout_id: UUID
+    vendor_id: UUID
+    vendor_name: str
+    bank_name: str
+    account_number: str
+    account_holder: str
+    account_type: Optional[str]
+    is_default: bool
+    payment_method_id: Optional[UUID]
+    source: str
