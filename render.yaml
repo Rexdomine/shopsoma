@@ -55,6 +55,14 @@ services:
         headers:
           - name: Cache-Control
             value: no-store
+      - path: /assets/*
+        headers:
+          - name: Cache-Control
+            value: public, max-age=31536000, immutable
+      - path: /images/*
+        headers:
+          - name: Cache-Control
+            value: public, max-age=31536000, immutable
       - path: /*
         headers:
           - name: Cache-Control
