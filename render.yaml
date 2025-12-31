@@ -64,6 +64,8 @@ services:
         source: /*
         destination: /index.html
     envVars:
+      - key: NODE_VERSION
+        value: 20.19.0
       - key: VITE_API_BASE_URL
         value: https://shopsoma-staging-api.onrender.com/api/v1
       - key: VITE_PAYSTACK_PUBLIC_KEY
