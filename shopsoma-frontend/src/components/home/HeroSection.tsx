@@ -14,11 +14,6 @@ const heroImages = [
     alt: 'Elegant style inspiration'
   },
   {
-    webp: '/images/hero/happy-man-party-wearing-sunglasses.webp',
-    jpg: '/images/hero/happy-man-party-wearing-sunglasses.jpg',
-    alt: 'Modern fashion trends'
-  },
-  {
     webp: '/images/hero/portrait-cool-man-with-sunglasses-dancing.webp',
     jpg: '/images/hero/portrait-cool-man-with-sunglasses-dancing.jpg',
     alt: 'Contemporary streetwear'
