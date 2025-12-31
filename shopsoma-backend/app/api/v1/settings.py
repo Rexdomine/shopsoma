@@ -29,6 +29,8 @@ from app.schemas.app_setting import (
     AppSettingResponse,
     PayoutHoldSettings,
     PayoutHoldSettingsUpdate,
+    FeaturedRotationSettings,
+    FeaturedRotationSettingsUpdate,
     DatabaseSyncResponse,
 )
 from app.api.dependencies import get_current_user, require_admin
@@ -277,6 +279,31 @@ async def get_shipping_provider_settings(
     return ShippingProviderSettings(use_shipbubble=use_shipbubble)
 
 
+@router.get("/public/featured-rotation", response_model=FeaturedRotationSettings)
+async def get_featured_rotation_settings(db: AsyncSession = Depends(get_db)):
+    """Get featured product rotation interval (public endpoint)."""
+    default_minutes = 10
+    rotation_str = await get_app_setting_value(
+        db,
+        "featured_rotation_minutes",
+        str(default_minutes),
+    )
+    try:
+        rotation_minutes = int(rotation_str)
+    except ValueError:
+        rotation_minutes = default_minutes
+
+    rotation_minutes = min(max(rotation_minutes, 1), 1440)
+
+    result = await db.execute(
+        select(AppSetting).where(AppSetting.key == "featured_rotation_minutes")
+    )
+    setting = result.scalar_one_or_none()
+    updated_at = setting.updated_at if setting else None
+
+    return FeaturedRotationSettings(rotation_minutes=rotation_minutes, updated_at=updated_at)
+
+
 @router.put("/shipping-provider", response_model=ShippingProviderSettings)
 async def update_shipping_provider_settings(
     settings: ShippingProviderSettingsUpdate,
@@ -294,6 +321,67 @@ async def update_shipping_provider_settings(
     logger.info(f"[Settings] Admin {current_user.email} updated ShipBubble to: {settings.use_shipbubble}")
 
     return ShippingProviderSettings(use_shipbubble=settings.use_shipbubble)
+
+
+@router.get("/admin/featured-rotation", response_model=FeaturedRotationSettings)
+async def get_admin_featured_rotation_settings(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin)
+):
+    """Get featured product rotation interval (Admin only)."""
+    _ = current_user
+    default_minutes = 10
+
+    result = await db.execute(
+        select(AppSetting).where(AppSetting.key == "featured_rotation_minutes")
+    )
+    setting = result.scalar_one_or_none()
+
+    if setting and setting.value is not None:
+        try:
+            rotation_minutes = int(setting.value)
+        except ValueError:
+            rotation_minutes = default_minutes
+        updated_at = setting.updated_at
+    else:
+        rotation_minutes = default_minutes
+        updated_at = None
+
+    rotation_minutes = min(max(rotation_minutes, 1), 1440)
+
+    return FeaturedRotationSettings(rotation_minutes=rotation_minutes, updated_at=updated_at)
+
+
+@router.put("/admin/featured-rotation", response_model=FeaturedRotationSettings)
+async def update_admin_featured_rotation_settings(
+    payload: FeaturedRotationSettingsUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin)
+):
+    """Update featured product rotation interval (Admin only)."""
+    _ = current_user
+    await update_app_setting_value(
+        db,
+        "featured_rotation_minutes",
+        str(payload.rotation_minutes),
+    )
+
+    result = await db.execute(
+        select(AppSetting).where(AppSetting.key == "featured_rotation_minutes")
+    )
+    setting = result.scalar_one_or_none()
+    updated_at = setting.updated_at if setting else None
+
+    logger.info(
+        "[Settings] Admin %s updated featured rotation minutes to %s",
+        current_user.email,
+        payload.rotation_minutes,
+    )
+
+    return FeaturedRotationSettings(
+        rotation_minutes=payload.rotation_minutes,
+        updated_at=updated_at,
+    )
 
 
 @router.get("/app-settings", response_model=List[AppSettingResponse])

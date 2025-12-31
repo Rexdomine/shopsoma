@@ -114,6 +114,13 @@ class Product(Base):
             return self.collection.name
         return None
 
+    @property
+    def category_parent_name(self):
+        """Expose the parent category name for API responses."""
+        if self.category and self.category.parent:
+            return self.category.parent.name
+        return None
+
     def __repr__(self):
         return f"<Product {self.title}>"
 

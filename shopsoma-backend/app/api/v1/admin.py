@@ -17,7 +17,7 @@ from app.models.vendor import Vendor, KYCStatus
 from app.models.vendor_application import VendorApplication
 from app.schemas.auth import UserResponse, UserUpdate
 from app.schemas.common import PaginatedResponse
-from app.schemas.product import ProductApprovalRequest, ProductRejectionRequest
+from app.schemas.product import ProductApprovalRequest, ProductRejectionRequest, ProductFeatureUpdate
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -1202,6 +1202,40 @@ async def list_all_products(
         "page": page,
         "page_size": page_size,
         "total_pages": total_pages,
+    }
+
+
+@router.put("/products/{product_id}/feature")
+async def update_product_featured(
+    product_id: UUID,
+    request: ProductFeatureUpdate,
+    current_admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Toggle featured status for an approved product
+
+    Requires admin role
+    """
+    _ = current_admin
+
+    result = await db.execute(select(Product).where(Product.id == product_id))
+    product = result.scalar_one_or_none()
+
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+
+    if product.moderation_status != ModerationStatus.APPROVED:
+        raise HTTPException(status_code=400, detail="Only approved products can be featured")
+
+    product.is_featured = request.is_featured
+    await db.commit()
+    await db.refresh(product)
+
+    return {
+        "message": "Featured status updated",
+        "product_id": str(product.id),
+        "is_featured": product.is_featured,
     }
 
 

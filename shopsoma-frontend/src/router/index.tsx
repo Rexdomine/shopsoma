@@ -16,6 +16,10 @@ const ProductDetail = lazy(() => import('../pages/products/ProductDetail'));
 const ProductList = lazy(() => import('../pages/products/ProductList'));
 const MenStorefront = lazy(() => import('../pages/products/MenStorefront'));
 const WomenStorefront = lazy(() => import('../pages/products/WomenStorefront'));
+const NewArrivals = lazy(() => import('../pages/products/NewArrivals'));
+const PerfumesStorefront = lazy(() => import('../pages/products/PerfumesStorefront'));
+const BagsWalletsStorefront = lazy(() => import('../pages/products/BagsWalletsStorefront'));
+const Designers = lazy(() => import('../pages/designers/Designers'));
 const Cart = lazy(() => import('../pages/cart/Cart'));
 const Checkout = lazy(() => import('../pages/checkout/Checkout'));
 const Register = lazy(() => import('../pages/auth/Register'));
@@ -102,6 +106,46 @@ const router = createBrowserRouter([
       <ErrorBoundary>
         <Suspense fallback={<Loading fullScreen message="Loading womenswear..." />}>
           <WomenStorefront />
+        </Suspense>
+      </ErrorBoundary>
+    ),
+  },
+  {
+    path: ROUTES.NEW_ARRIVALS,
+    element: (
+      <ErrorBoundary>
+        <Suspense fallback={<Loading fullScreen message="Loading new arrivals..." />}>
+          <NewArrivals />
+        </Suspense>
+      </ErrorBoundary>
+    ),
+  },
+  {
+    path: ROUTES.PERFUMES,
+    element: (
+      <ErrorBoundary>
+        <Suspense fallback={<Loading fullScreen message="Loading perfumes..." />}>
+          <PerfumesStorefront />
+        </Suspense>
+      </ErrorBoundary>
+    ),
+  },
+  {
+    path: ROUTES.BAGS_WALLETS,
+    element: (
+      <ErrorBoundary>
+        <Suspense fallback={<Loading fullScreen message="Loading bags & wallets..." />}>
+          <BagsWalletsStorefront />
+        </Suspense>
+      </ErrorBoundary>
+    ),
+  },
+  {
+    path: ROUTES.DESIGNERS,
+    element: (
+      <ErrorBoundary>
+        <Suspense fallback={<Loading fullScreen message="Loading designers..." />}>
+          <Designers />
         </Suspense>
       </ErrorBoundary>
     ),

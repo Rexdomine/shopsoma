@@ -22,7 +22,7 @@ logging.basicConfig(
 )
 
 # Import routers
-from app.api.v1 import auth, products, images, admin, seed, cart, addresses, shipping_rates, orders, promo_codes, payments, users, wishlist, newsletter, preferences, payment_portals, vendors, vendor_activation, vendor_applications, vendor_payment_methods, categories, collections, settings, admin_orders, admin_payouts, websocket
+from app.api.v1 import auth, products, images, admin, seed, cart, addresses, shipping_rates, orders, promo_codes, payments, users, wishlist, newsletter, preferences, payment_portals, vendors, vendor_activation, vendor_applications, vendor_payment_methods, categories, collections, designers, settings, admin_orders, admin_payouts, websocket
 
 # Import middleware
 from app.middleware.rate_limit import RateLimitMiddleware
@@ -117,6 +117,7 @@ app.include_router(products.router, prefix="/api/v1")
 app.include_router(images.router, prefix="/api/v1")
 app.include_router(categories.router, prefix="/api/v1")
 app.include_router(collections.router, prefix="/api/v1")
+app.include_router(designers.router, prefix="/api/v1")
 app.include_router(admin.router, prefix="/api/v1")
 app.include_router(seed.router, prefix="/api/v1")
 app.include_router(cart.router, prefix="/api/v1")

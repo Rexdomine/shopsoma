@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import Layout from '../components/layout/Layout';
 import type { Product } from '../types';
 import { productService } from '../services/productService';
+import { getFeaturedRotationSettings } from '../services/settingsService';
 import { IMAGE_CONFIG } from '../config/constants';
 import { useWishlistActions } from '../hooks/useWishlistActions';
 import { useCurrency } from '../hooks/useCurrency';
@@ -188,10 +189,18 @@ function Hero() {
 }
 
 type FeaturedCollabProps = {
-  imageUrl: string;
+  product: Product | null;
+  fallbackImageUrl: string;
 };
 
-function FeaturedCollab({ imageUrl }: FeaturedCollabProps) {
+function FeaturedCollab({ product, fallbackImageUrl }: FeaturedCollabProps) {
+  const imageUrl = product?.images?.[0]?.image_url || fallbackImageUrl;
+  const title = product?.title || 'Brothers Lawee X Aso';
+  const description =
+    product?.description ||
+    'Chicharrones chicken put chicken biodiesel aesthetic austin. Gochujang trade ascot bushwick bumblebrag helvetica yolo dsa food.';
+  const productLink = product ? `/products/${product.id}` : '/products';
+
   return (
     <section className="w-full bg-[var(--color-page-bg)]">
       <div className="w-full">
@@ -209,19 +218,20 @@ function FeaturedCollab({ imageUrl }: FeaturedCollabProps) {
                   color: '#1E5053'
                 }}
               >
-                Brothers Lawee X Aso
+                {title}
               </h2>
               <p
                 className="text-sm font-serif leading-relaxed"
                 style={{ color: '#1E5053' }}
               >
-                Chicharrones chicken put chicken biodiesel aesthetic austin. Gochujang trade ascot bushwick bumblebrag helvetica yolo dsa food.
+                {description}
               </p>
-              <button
-                className="bg-[#1E5053] text-white text-xs font-ui uppercase tracking-[0.2em] px-8 py-3 hover:opacity-90 transition-opacity"
+              <Link
+                to={productLink}
+                className="bg-[#1E5053] text-white text-xs font-ui uppercase tracking-[0.2em] px-8 py-3 hover:opacity-90 transition-opacity inline-flex items-center justify-center"
               >
                 SHOP NOW
-              </button>
+              </Link>
             </div>
           </div>
 
@@ -229,7 +239,7 @@ function FeaturedCollab({ imageUrl }: FeaturedCollabProps) {
           <div className="relative h-[400px] lg:h-auto">
             <img
               src={imageUrl || '/images/profilebanner.jpg'}
-              alt="Featured collaboration"
+              alt={title}
               className="w-full h-full object-cover"
             />
           </div>
@@ -336,6 +346,10 @@ function EditorialSection() {
 export default function Home() {
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
+  const [featuredProducts, setFeaturedProducts] = useState<Product[]>([]);
+  const [featuredIndex, setFeaturedIndex] = useState(0);
+  const [featuredLoading, setFeaturedLoading] = useState(true);
+  const [rotationMinutes, setRotationMinutes] = useState(10);
   const { favorites, toggleFavorite } = useWishlistActions();
 
   useEffect(() => {
@@ -362,7 +376,46 @@ export default function Home() {
     };
   }, []);
 
-  const featureImage =
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        setFeaturedLoading(true);
+        const rotation = await getFeaturedRotationSettings();
+        if (mounted && rotation?.rotation_minutes) {
+          setRotationMinutes(rotation.rotation_minutes);
+        }
+        const data = await productService.getFeaturedProducts(12);
+        if (mounted) {
+          setFeaturedProducts(data || []);
+        }
+      } catch (error) {
+        console.error('Failed to load featured products', error);
+      } finally {
+        if (mounted) setFeaturedLoading(false);
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!featuredProducts.length) return undefined;
+    const rotationMs = Math.max(rotationMinutes, 1) * 60 * 1000;
+    const computeIndex = () =>
+      Math.floor(Date.now() / rotationMs) % featuredProducts.length;
+
+    setFeaturedIndex(computeIndex());
+    const timer = window.setInterval(() => {
+      setFeaturedIndex(computeIndex());
+    }, 60 * 1000);
+
+    return () => window.clearInterval(timer);
+  }, [featuredProducts, rotationMinutes]);
+
+  const featuredProduct = featuredProducts[featuredIndex] || null;
+  const fallbackImage =
     products[4]?.images?.[0]?.image_url ||
     products[0]?.images?.[0]?.image_url ||
     SECONDARY_IMAGE;
@@ -391,7 +444,7 @@ export default function Home() {
           </div>
         </section>
 
-        <FeaturedCollab imageUrl={featureImage} />
+        <FeaturedCollab product={featuredLoading ? null : featuredProduct} fallbackImageUrl={fallbackImage} />
         <CategoryStrip />
         <EditorialSection />
       </div>

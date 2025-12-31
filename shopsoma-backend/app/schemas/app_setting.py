@@ -55,6 +55,17 @@ class PayoutHoldSettingsUpdate(BaseModel):
     hold_days: int = Field(..., ge=0, le=3650)
 
 
+class FeaturedRotationSettings(BaseModel):
+    """Featured product rotation settings"""
+    rotation_minutes: int = Field(default=10, ge=1, le=1440)
+    updated_at: Optional[datetime] = None
+
+
+class FeaturedRotationSettingsUpdate(BaseModel):
+    """Update featured rotation settings"""
+    rotation_minutes: int = Field(..., ge=1, le=1440)
+
+
 class DatabaseSyncResponse(BaseModel):
     """Database sync response"""
     status: str = Field(..., pattern="^(success|error)$")

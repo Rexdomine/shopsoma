@@ -53,6 +53,7 @@ export interface Product {
   currency: 'NGN' | 'USD';
   category_id?: string | null;
   category_name?: string | null;
+  category_parent_name?: string | null;
   collection_id?: string | null;
   collection_name?: string | null;
   inventory_quantity: number;

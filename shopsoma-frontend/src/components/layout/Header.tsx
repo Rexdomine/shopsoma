@@ -175,12 +175,12 @@ export default function Header() {
 
         <nav className="border-t border-primary">
           <div className="main-nav header-nav-text w-full mx-auto px-8 py-2 flex items-center justify-center gap-8 text-primary">
-            <Link to="/designers" className="hover:text-primary-dark">Designers</Link>
-            <Link to="/new" className="hover:text-primary-dark">New</Link>
+            <Link to={ROUTES.DESIGNERS} className="hover:text-primary-dark">Designers</Link>
+            <Link to={ROUTES.NEW_ARRIVALS} className="hover:text-primary-dark">New</Link>
             <Link to={ROUTES.MEN} className="hover:text-primary-dark">Men</Link>
             <Link to={ROUTES.WOMEN} className="hover:text-primary-dark">Women</Link>
-            <Link to="/perfumes" className="hover:text-primary-dark">Perfumes</Link>
-            <Link to="/bags-wallets" className="hover:text-primary-dark">Bags &amp; Wallets</Link>
+            <Link to={ROUTES.PERFUMES} className="hover:text-primary-dark">Perfumes</Link>
+            <Link to={ROUTES.BAGS_WALLETS} className="hover:text-primary-dark">Bags &amp; Wallets</Link>
           </div>
         </nav>
       </header>

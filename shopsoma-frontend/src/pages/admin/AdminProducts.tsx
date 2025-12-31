@@ -45,6 +45,7 @@ export default function AdminProducts() {
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [featureLoadingId, setFeatureLoadingId] = useState<string | null>(null);
   const [rejectModal, setRejectModal] = useState<Product | null>(null);
   const [rejectionReason, setRejectionReason] = useState('');
   const [rejectionNotes, setRejectionNotes] = useState('');
@@ -151,6 +152,24 @@ export default function AdminProducts() {
 
   const handleEditProduct = (productId: string) => {
     navigate(`${ROUTES.ADMIN_PRODUCTS}/${productId}/edit`);
+  };
+
+  const handleFeatureToggle = async (product: Product) => {
+    const nextValue = !product.is_featured;
+    try {
+      setFeatureLoadingId(product.id);
+      await adminService.updateProductFeatured(product.id, nextValue);
+      setProducts((prev) =>
+        prev.map((item) =>
+          item.id === product.id ? { ...item, is_featured: nextValue } : item
+        )
+      );
+      showMessage('success', `"${product.title}" featured status updated.`);
+    } catch (err: any) {
+      showMessage('error', err?.response?.data?.detail || err.message || 'Failed to update featured status');
+    } finally {
+      setFeatureLoadingId(null);
+    }
   };
 
   const showMessage = (type: 'success' | 'error', text: string) => {
@@ -352,6 +371,9 @@ export default function AdminProducts() {
                     Moderation
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Feature Product
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Created
                   </th>
                   <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -362,13 +384,13 @@ export default function AdminProducts() {
               <tbody className="bg-white divide-y divide-gray-200">
                 {loading ? (
                   <tr>
-                    <td colSpan={8} className="px-6 py-12 text-center text-gray-500">
+                    <td colSpan={9} className="px-6 py-12 text-center text-gray-500">
                       Loading products...
                     </td>
                   </tr>
                 ) : products.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="px-6 py-12 text-center text-gray-500">
+                    <td colSpan={9} className="px-6 py-12 text-center text-gray-500">
                       No products found
                     </td>
                   </tr>
@@ -403,6 +425,28 @@ export default function AdminProducts() {
                       </td>
                       <td className="px-6 py-4">{getStatusBadge(product.status)}</td>
                       <td className="px-6 py-4">{getModerationBadge(product.moderation_status)}</td>
+                      <td className="px-6 py-4">
+                        <button
+                          type="button"
+                          onClick={() => handleFeatureToggle(product)}
+                          disabled={product.moderation_status !== 'approved' || featureLoadingId === product.id}
+                          className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                            product.is_featured ? 'bg-emerald-600' : 'bg-gray-200'
+                          } disabled:opacity-50`}
+                          aria-label="Feature Product"
+                          title={
+                            product.moderation_status === 'approved'
+                              ? 'Feature Product'
+                              : 'Only approved products can be featured'
+                          }
+                        >
+                          <span
+                            className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                              product.is_featured ? 'translate-x-6' : 'translate-x-1'
+                            }`}
+                          />
+                        </button>
+                      </td>
                       <td className="px-6 py-4">
                         <p className="text-sm text-gray-900">{formatDate(product.created_at)}</p>
                       </td>
