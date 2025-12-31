@@ -377,6 +377,7 @@ export default function Home() {
   const [featuredProducts, setFeaturedProducts] = useState<Product[]>([]);
   const [featuredIndex, setFeaturedIndex] = useState(0);
   const [featuredLoading, setFeaturedLoading] = useState(true);
+  const [featuredReady, setFeaturedReady] = useState(false);
   const [rotationMinutes, setRotationMinutes] = useState(10);
   const { favorites, toggleFavorite } = useWishlistActions();
 
@@ -443,11 +444,36 @@ export default function Home() {
   }, [featuredProducts, rotationMinutes]);
 
   const featuredProduct = featuredProducts[featuredIndex];
+  const featuredImageUrl = featuredProduct?.images?.[0]?.image_url || '';
   const showFeaturedSkeleton =
     featuredLoading ||
     !featuredProduct ||
     !featuredProduct.images?.length ||
-    !featuredProduct.images?.[0]?.image_url;
+    !featuredProduct.images?.[0]?.image_url ||
+    !featuredReady;
+
+  useEffect(() => {
+    if (!featuredImageUrl) {
+      setFeaturedReady(false);
+      return;
+    }
+
+    let isMounted = true;
+    setFeaturedReady(false);
+
+    const img = new Image();
+    img.onload = () => {
+      if (isMounted) setFeaturedReady(true);
+    };
+    img.onerror = () => {
+      if (isMounted) setFeaturedReady(true);
+    };
+    img.src = featuredImageUrl;
+
+    return () => {
+      isMounted = false;
+    };
+  }, [featuredImageUrl]);
 
   return (
     <Layout>
