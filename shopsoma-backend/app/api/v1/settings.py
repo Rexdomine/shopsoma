@@ -288,10 +288,13 @@ async def get_featured_rotation_settings(db: AsyncSession = Depends(get_db)):
         "featured_rotation_minutes",
         str(default_minutes),
     )
-    try:
-        rotation_minutes = int(rotation_str)
-    except ValueError:
+    if not rotation_str:
         rotation_minutes = default_minutes
+    else:
+        try:
+            rotation_minutes = int(rotation_str)
+        except (TypeError, ValueError):
+            rotation_minutes = default_minutes
 
     rotation_minutes = min(max(rotation_minutes, 1), 1440)
 

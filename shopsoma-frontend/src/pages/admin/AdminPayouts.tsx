@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Calendar, Filter, Search } from 'lucide-react';
+import { Calendar, Eye, Filter, Search } from 'lucide-react';
 import AdminSidebar from '../../components/admin/AdminSidebar';
 import CurrencySwitcher from '../../components/common/CurrencySwitcher';
 import { useCurrency } from '../../hooks/useCurrency';
@@ -8,6 +8,7 @@ import {
   adminPayoutService,
   downloadCSV,
   type AdminPayout,
+  type AdminPayoutAccountDetails,
   type AdminPayoutStatus,
   type AdminPayoutStatusUpdate,
 } from '../../services/adminPayoutService';
@@ -44,6 +45,10 @@ export default function AdminPayouts() {
   const [bulkStatus, setBulkStatus] = useState<AdminPayoutStatus>('processing');
   const [bulkNotes, setBulkNotes] = useState('');
   const [exporting, setExporting] = useState(false);
+  const [detailsPayoutId, setDetailsPayoutId] = useState<string | null>(null);
+  const [accountDetails, setAccountDetails] = useState<AdminPayoutAccountDetails | null>(null);
+  const [accountLoading, setAccountLoading] = useState(false);
+  const [accountError, setAccountError] = useState<string | null>(null);
 
   const today = useMemo(() => new Date(), []);
   const [startDate, setStartDate] = useState<Date>(new Date(today.getFullYear(), 0, 1));
@@ -236,6 +241,35 @@ export default function AdminPayouts() {
     } finally {
       setExporting(false);
     }
+  };
+
+  const selectedPayout = useMemo(
+    () => payouts.find((payout) => payout.id === detailsPayoutId) || null,
+    [detailsPayoutId, payouts]
+  );
+
+  const openAccountDetails = async (payoutId: string) => {
+    setDetailsPayoutId(payoutId);
+    setAccountDetails(null);
+    setAccountError(null);
+    try {
+      setAccountLoading(true);
+      const details = await adminPayoutService.getPayoutAccountDetails(payoutId);
+      setAccountDetails(details);
+    } catch (err) {
+      console.error('Failed to load payout account details:', err);
+      setAccountError('Failed to load payout account details.');
+      error('Failed to load payout account details');
+    } finally {
+      setAccountLoading(false);
+    }
+  };
+
+  const closeAccountDetails = () => {
+    setDetailsPayoutId(null);
+    setAccountDetails(null);
+    setAccountError(null);
+    setAccountLoading(false);
   };
 
   return (
@@ -468,6 +502,14 @@ export default function AdminPayouts() {
                     </td>
                     <td className="px-5 py-4">
                       <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => openAccountDetails(payout.id)}
+                          className="h-8 w-8 rounded-full border border-gray-200 flex items-center justify-center text-gray-600 hover:text-[#105E53] hover:border-[#105E53] transition-colors"
+                          title="View account details"
+                        >
+                          <Eye className="h-4 w-4" />
+                        </button>
                         <select
                           value={rowEdits[payout.id]?.status || payout.status}
                           onChange={(event) =>
@@ -535,6 +577,77 @@ export default function AdminPayouts() {
             </div>
           </div>
         </div>
+
+        {detailsPayoutId && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+            <div className="bg-white w-full max-w-lg rounded-2xl shadow-xl p-6 relative">
+              <button
+                type="button"
+                onClick={closeAccountDetails}
+                className="absolute right-4 top-4 text-gray-400 hover:text-gray-600"
+              >
+                ×
+              </button>
+              <div className="space-y-4">
+                <div>
+                  <h2 className="text-lg font-semibold text-gray-900">Vendor Account Details</h2>
+                  <p className="text-sm text-gray-500">
+                    {selectedPayout?.vendor.business_name || accountDetails?.vendor_name || 'Vendor'}
+                  </p>
+                </div>
+                {accountLoading && (
+                  <div className="text-sm text-gray-500">Loading account details...</div>
+                )}
+                {accountError && (
+                  <div className="text-sm text-rose-500">{accountError}</div>
+                )}
+                {accountDetails && !accountLoading && (
+                  <div className="grid grid-cols-2 gap-4 text-sm">
+                    <div>
+                      <div className="text-gray-500">Bank Name</div>
+                      <div className="font-semibold text-gray-900">{accountDetails.bank_name}</div>
+                    </div>
+                    <div>
+                      <div className="text-gray-500">Account Number</div>
+                      <div className="font-semibold text-gray-900">{accountDetails.account_number}</div>
+                    </div>
+                    <div>
+                      <div className="text-gray-500">Account Holder</div>
+                      <div className="font-semibold text-gray-900">{accountDetails.account_holder}</div>
+                    </div>
+                    <div>
+                      <div className="text-gray-500">Account Type</div>
+                      <div className="font-semibold text-gray-900">
+                        {accountDetails.account_type || '—'}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-gray-500">Default Method</div>
+                      <div className="font-semibold text-gray-900">
+                        {accountDetails.is_default ? 'Yes' : 'No'}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-gray-500">Source</div>
+                      <div className="font-semibold text-gray-900">
+                        {accountDetails.source === 'payment_method' ? 'Payment method' : 'Vendor profile'}
+                      </div>
+                    </div>
+                  </div>
+                )}
+                <div className="pt-2 flex justify-end">
+                  <button
+                    type="button"
+                    onClick={closeAccountDetails}
+                    className="px-4 py-2 rounded-lg border border-gray-200 text-sm text-gray-700"
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </main>
     </div>
   );
