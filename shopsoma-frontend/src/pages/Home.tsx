@@ -10,7 +10,6 @@ import { useCurrency } from '../hooks/useCurrency';
 import { formatPriceWithConversion } from '../utils/pricing';
 
 const HERO_IMAGE = '/images/hero/demo-image-2.png';
-const SECONDARY_IMAGE = '/images/hero/happy-man-party-wearing-sunglasses.jpg';
 
 type HomeProductCardProps = {
   product: Product;
@@ -189,17 +188,14 @@ function Hero() {
 }
 
 type FeaturedCollabProps = {
-  product: Product | null;
-  fallbackImageUrl: string;
+  product: Product;
 };
 
-function FeaturedCollab({ product, fallbackImageUrl }: FeaturedCollabProps) {
-  const imageUrl = product?.images?.[0]?.image_url || fallbackImageUrl;
-  const title = product?.title || 'Brothers Lawee X Aso';
-  const description =
-    product?.description ||
-    'Chicharrones chicken put chicken biodiesel aesthetic austin. Gochujang trade ascot bushwick bumblebrag helvetica yolo dsa food.';
-  const productLink = product ? `/products/${product.id}` : '/products';
+function FeaturedCollab({ product }: FeaturedCollabProps) {
+  const imageUrl = product.images?.[0]?.image_url || '';
+  const title = product.title;
+  const description = product.description || '';
+  const productLink = `/products/${product.id}`;
 
   return (
     <section className="w-full bg-[var(--color-page-bg)]">
@@ -238,7 +234,7 @@ function FeaturedCollab({ product, fallbackImageUrl }: FeaturedCollabProps) {
           {/* Right Side - Image */}
           <div className="relative h-[400px] lg:h-auto">
             <img
-              src={imageUrl || '/images/profilebanner.jpg'}
+              src={imageUrl}
               alt={title}
               className="w-full h-full object-cover"
             />
@@ -446,12 +442,12 @@ export default function Home() {
     return () => window.clearInterval(timer);
   }, [featuredProducts, rotationMinutes]);
 
-  const featuredProduct = featuredProducts[featuredIndex] || null;
-  const showFeaturedSkeleton = featuredLoading || featuredProducts.length === 0;
-  const fallbackImage =
-    products[4]?.images?.[0]?.image_url ||
-    products[0]?.images?.[0]?.image_url ||
-    SECONDARY_IMAGE;
+  const featuredProduct = featuredProducts[featuredIndex];
+  const showFeaturedSkeleton =
+    featuredLoading ||
+    !featuredProduct ||
+    !featuredProduct.images?.length ||
+    !featuredProduct.images?.[0]?.image_url;
 
   return (
     <Layout>
@@ -484,7 +480,7 @@ export default function Home() {
         {showFeaturedSkeleton ? (
           <FeaturedCollabSkeleton />
         ) : (
-          <FeaturedCollab product={featuredProduct} fallbackImageUrl={fallbackImage} />
+          <FeaturedCollab product={featuredProduct} />
         )}
         <CategoryStrip />
         <EditorialSection />
