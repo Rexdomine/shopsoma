@@ -3,7 +3,7 @@ import ProductList from './ProductList';
 
 export default function NewArrivals() {
   const initialParams = useMemo(
-    () => ({ sort_by: 'created_at', sort_order: 'desc' }),
+    () => ({ sort_by: 'created_at', sort_order: 'desc' } as const),
     []
   );
 
