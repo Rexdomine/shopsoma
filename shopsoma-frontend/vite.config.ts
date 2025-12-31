@@ -22,4 +22,8 @@ export default defineConfig({
   optimizeDeps: {
     include: ['react', 'react-dom', 'react-dom/client', 'react/jsx-runtime', 'react/jsx-dev-runtime'],
   },
+  test: {
+    environment: 'jsdom',
+    setupFiles: './src/tests/setup.ts',
+  },
 })

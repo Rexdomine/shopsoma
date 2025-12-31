@@ -142,6 +142,11 @@ export default function ProductList({
   const [customPriceRange, setCustomPriceRange] = useState<{ min?: number; max?: number } | null>(null);
   const { favorites, toggleFavorite } = useWishlistActions();
   const activeCategory = presetCategory || filters.category;
+  const initialParamsKey = useMemo(() => JSON.stringify(initialParams ?? {}), [initialParams]);
+  const stableInitialParams = useMemo(() => {
+    if (!initialParams) return undefined;
+    return { ...initialParams };
+  }, [initialParamsKey, initialParams]);
 
   const normalize = (value: string) =>
     value.toLowerCase().replace(/’/g, "'").trim();
@@ -175,12 +180,13 @@ export default function ProductList({
     const loadProducts = async () => {
       try {
         setLoading(true);
+        setPage(1);
         const response = await productService.getProducts({
           page: 1,
           page_size: 60,
           sort_by: 'created_at',
           sort_order: 'desc',
-          ...initialParams,
+          ...stableInitialParams,
         });
         setAllProducts(response.products || []);
         setError(null);
@@ -193,7 +199,7 @@ export default function ProductList({
     };
 
     loadProducts();
-  }, []);
+  }, [initialParamsKey, stableInitialParams]);
 
   // Derive interest category from preference
   const interestCategory = preferredInterest === 'menswear' ? 'Men' : preferredInterest === 'womenswear' ? 'Women' : null;
