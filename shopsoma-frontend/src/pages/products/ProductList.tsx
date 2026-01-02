@@ -108,8 +108,8 @@ const WOMEN_HERO: HeroContent = {
   ctaLabel: 'Shop all womenswear',
 };
 
-const MEN_CATEGORY_KEYS = ['men', 'menswear', "men's fashion", 'mens fashion', "men's wear", 'mens wear'];
-const WOMEN_CATEGORY_KEYS = ['women', 'womenswear', "women's fashion", 'womens fashion', "women's wear", 'womens wear'];
+const MEN_CATEGORY_KEYS = ['men', 'mens', 'menswear', "men's fashion", 'mens fashion', "men's wear", 'mens wear'];
+const WOMEN_CATEGORY_KEYS = ['women', 'womens', 'womenswear', "women's fashion", 'womens fashion', "women's wear", 'womens wear'];
 
 export default function ProductList({
   presetCategory,
@@ -142,6 +142,11 @@ export default function ProductList({
   const [customPriceRange, setCustomPriceRange] = useState<{ min?: number; max?: number } | null>(null);
   const { favorites, toggleFavorite } = useWishlistActions();
   const activeCategory = presetCategory || filters.category;
+  const initialParamsKey = useMemo(() => JSON.stringify(initialParams ?? {}), [initialParams]);
+  const stableInitialParams = useMemo(() => {
+    if (!initialParams) return undefined;
+    return { ...initialParams };
+  }, [initialParamsKey, initialParams]);
 
   const normalize = (value: string) =>
     value.toLowerCase().replace(/’/g, "'").trim();
@@ -155,9 +160,17 @@ export default function ProductList({
 
   const matchesCategory = (product: Product, category: string) => {
     if (!category || category === 'All') return true;
-    const productCategory = normalize(product.category_name || product.collection_name || '');
-    if (productCategory) {
-      return categoryMatchesPreset(productCategory, category);
+    const productCategory = normalize(product.category_name || '');
+    const parentCategory = normalize(product.category_parent_name || '');
+    if (productCategory && categoryMatchesPreset(productCategory, category)) {
+      return true;
+    }
+    if (parentCategory && categoryMatchesPreset(parentCategory, category)) {
+      return true;
+    }
+    const collectionCategory = normalize(product.collection_name || '');
+    if (collectionCategory && categoryMatchesPreset(collectionCategory, category)) {
+      return true;
     }
     const description = normalize(product.description || '');
     return description.startsWith(`${normalize(category)} -`);
@@ -167,12 +180,13 @@ export default function ProductList({
     const loadProducts = async () => {
       try {
         setLoading(true);
+        setPage(1);
         const response = await productService.getProducts({
           page: 1,
           page_size: 60,
           sort_by: 'created_at',
           sort_order: 'desc',
-          ...initialParams,
+          ...stableInitialParams,
         });
         setAllProducts(response.products || []);
         setError(null);
@@ -185,7 +199,7 @@ export default function ProductList({
     };
 
     loadProducts();
-  }, []);
+  }, [initialParamsKey, stableInitialParams]);
 
   // Derive interest category from preference
   const interestCategory = preferredInterest === 'menswear' ? 'Men' : preferredInterest === 'womenswear' ? 'Women' : null;

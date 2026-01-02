@@ -53,8 +53,22 @@ export const useCartStore = create<CartState>((set, get) => ({
     set({ cart: updatedCart, error: null });
 
     // Always sync to server for both authenticated users AND guests
-    CartService.addItemToServer(product.id, variant.id, quantity).catch((error) => {
-      console.error('[CartStore] addItem: failed to sync with server', error);
+    CartService.addItemToServer(product.id, variant.id, quantity).catch((error: any) => {
+      const serverMessage =
+        error?.response?.data?.detail?.message ||
+        error?.response?.data?.detail ||
+        error?.message ||
+        'Unknown cart sync error';
+
+      console.error('[CartStore] addItem: failed to sync with server', {
+        productId: product.id,
+        variantId: variant.id,
+        quantity,
+        serverMessage,
+        responseData: error?.response?.data,
+      });
+
+      set({ error: serverMessage });
     });
   },
 

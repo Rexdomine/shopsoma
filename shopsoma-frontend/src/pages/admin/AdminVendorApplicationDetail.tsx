@@ -129,7 +129,7 @@ export default function AdminVendorApplicationDetail() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-[#FAFAF8] flex gap-8 px-8 py-6">
+      <div className="min-h-screen bg-[var(--color-page-bg)] flex gap-8 px-8 py-6">
         <AdminSidebar activeSection="vendor-applications" />
         <main className="flex-1 max-w-[1400px]">
           <div className="p-12 text-center">
@@ -143,7 +143,7 @@ export default function AdminVendorApplicationDetail() {
 
   if (!application) {
     return (
-      <div className="min-h-screen bg-[#FAFAF8] flex gap-8 px-8 py-6">
+      <div className="min-h-screen bg-[var(--color-page-bg)] flex gap-8 px-8 py-6">
         <AdminSidebar activeSection="vendor-applications" />
         <main className="flex-1 max-w-[1400px]">
           <div className="p-12 text-center">
@@ -162,7 +162,7 @@ export default function AdminVendorApplicationDetail() {
   }
 
   return (
-    <div className="min-h-screen bg-[#FAFAF8] flex gap-8 px-8 py-6">
+    <div className="min-h-screen bg-[var(--color-page-bg)] flex gap-8 px-8 py-6">
       <AdminSidebar activeSection="vendor-applications" />
 
       <main className="flex-1 space-y-6 max-w-[1400px]">

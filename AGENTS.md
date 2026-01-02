@@ -20,7 +20,7 @@ Backend (`shopsoma-backend/`):
 - `uvicorn app.main:app --reload` runs the API locally.
 - `pytest` or `pytest --cov=app tests/` runs tests.
 - `black app/ tests/` and `ruff check app/ tests/` format/lint.
-- `alembic upgrade head` applies migrations.
+- `alembic upgrade heads` applies migrations.
 - `celery -A app.celery_app worker --loglevel=info` runs workers.
 
 ## Coding Style & Naming Conventions
@@ -165,3 +165,7 @@ DEFAULTS
 Your goal:  
 Deliver code, tests, and explanations that I can **copy into my repo, run the test command you gave, and have everything pass** before I even look at the UI.
 Always prioritise correctness, safety, and clarity.
+
+## Context7 Documentation
+- Use Context7 for third‑party library documentation; call `resolve-library-id` first, then `get-library-docs` (`mode=code` for APIs/examples, `mode=info` for concepts). Prefer Context7 over web search.
+- When providing code snippets from Context7, ensure they are complete and runnable in the target environment.

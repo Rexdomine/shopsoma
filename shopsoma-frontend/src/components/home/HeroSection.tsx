@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom';
 import { ArrowRight } from 'lucide-react';
-import { useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 
 const heroImages = [
   {
@@ -14,19 +14,33 @@ const heroImages = [
     alt: 'Elegant style inspiration'
   },
   {
-    webp: '/images/hero/happy-man-party-wearing-sunglasses.webp',
-    jpg: '/images/hero/happy-man-party-wearing-sunglasses.jpg',
-    alt: 'Modern fashion trends'
-  },
-  {
     webp: '/images/hero/portrait-cool-man-with-sunglasses-dancing.webp',
     jpg: '/images/hero/portrait-cool-man-with-sunglasses-dancing.jpg',
     alt: 'Contemporary streetwear'
   },
 ];
 
-function OptimizedImage({ webp, jpg, alt, index }: { webp: string; jpg: string; alt: string; index: number }) {
+function OptimizedImage({
+  webp,
+  jpg,
+  alt,
+  index,
+  onLoaded,
+}: {
+  webp: string;
+  jpg: string;
+  alt: string;
+  index: number;
+  onLoaded: () => void;
+}) {
   const [isLoaded, setIsLoaded] = useState(false);
+
+  const handleLoad = () => {
+    if (!isLoaded) {
+      setIsLoaded(true);
+      onLoaded();
+    }
+  };
 
   return (
     <div className="aspect-square overflow-hidden bg-gray-100 shadow-lg relative border border-gray-200">
@@ -42,7 +56,7 @@ function OptimizedImage({ webp, jpg, alt, index }: { webp: string; jpg: string; 
             isLoaded ? 'opacity-100' : 'opacity-0'
           }`}
           loading={index === 0 ? 'eager' : 'lazy'}
-          onLoad={() => setIsLoaded(true)}
+          onLoad={handleLoad}
           decoding="async"
         />
       </picture>
@@ -51,6 +65,16 @@ function OptimizedImage({ webp, jpg, alt, index }: { webp: string; jpg: string; 
 }
 
 export default function HeroSection() {
+  const totalImages = heroImages.length;
+  const [loadedCount, setLoadedCount] = useState(0);
+
+  const handleImageLoaded = useCallback(() => {
+    setLoadedCount((prev) => Math.min(prev + 1, totalImages));
+  }, [totalImages]);
+
+  const showHeroGrid = loadedCount >= totalImages;
+  const skeletonTiles = useMemo(() => Array.from({ length: totalImages }), [totalImages]);
+
   return (
     <section className="bg-[var(--color-page-bg)]">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16 lg:py-24">
@@ -95,9 +119,24 @@ export default function HeroSection() {
 
           {/* Right Content - Product Showcase */}
           <div className="relative hidden lg:block">
-            <div className="grid grid-cols-2 gap-4">
+            {!showHeroGrid && (
+              <div className="grid grid-cols-2 gap-4">
+                {skeletonTiles.map((_, index) => (
+                  <div
+                    key={`hero-skeleton-${index}`}
+                    className="aspect-square rounded-md bg-gradient-to-br from-gray-200 to-gray-100 animate-pulse"
+                  />
+                ))}
+              </div>
+            )}
+            <div className={`grid grid-cols-2 gap-4 ${showHeroGrid ? 'opacity-100' : 'opacity-0'}`}>
               {heroImages.map((image, index) => (
-                <OptimizedImage key={image.jpg} {...image} index={index} />
+                <OptimizedImage
+                  key={image.jpg}
+                  {...image}
+                  index={index}
+                  onLoaded={handleImageLoaded}
+                />
               ))}
             </div>
           </div>

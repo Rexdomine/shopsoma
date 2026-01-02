@@ -1,9 +1,17 @@
 """Settings API endpoints"""
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
-from typing import List
 import logging
+import os
+import shutil
+import subprocess
+import tempfile
+import time
+from typing import List
+from urllib.parse import urlparse
+
+import anyio
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.models.setting import Setting
@@ -19,12 +27,73 @@ from app.schemas.app_setting import (
     ShippingProviderSettings,
     ShippingProviderSettingsUpdate,
     AppSettingResponse,
+    PayoutHoldSettings,
+    PayoutHoldSettingsUpdate,
+    FeaturedRotationSettings,
+    FeaturedRotationSettingsUpdate,
+    DatabaseSyncResponse,
 )
 from app.api.dependencies import get_current_user, require_admin
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/settings", tags=["settings"])
+
+LOCAL_DB_HOSTS = {"localhost", "127.0.0.1", "host.docker.internal"}
+
+
+def _normalize_sync_db_url(url: str) -> str:
+    if url.startswith("postgresql+asyncpg://"):
+        return url.replace("postgresql+asyncpg://", "postgresql://", 1)
+    return url
+
+
+def _is_local_database(url: str) -> bool:
+    parsed = urlparse(url)
+    return (parsed.hostname or "").lower() in LOCAL_DB_HOSTS
+
+
+def _run_db_sync(source_url: str, target_url: str) -> None:
+    if not shutil.which("pg_dump"):
+        raise RuntimeError("pg_dump is not available on PATH")
+    if not shutil.which("pg_restore"):
+        raise RuntimeError("pg_restore is not available on PATH")
+
+    temp_file = tempfile.NamedTemporaryFile(suffix=".dump", delete=False)
+    temp_path = temp_file.name
+    temp_file.close()
+
+    try:
+        subprocess.run(
+            [
+                "pg_dump",
+                "--format=custom",
+                "--no-owner",
+                "--no-privileges",
+                "--file",
+                temp_path,
+                source_url,
+            ],
+            check=True,
+            env=os.environ.copy(),
+        )
+        subprocess.run(
+            [
+                "pg_restore",
+                "--clean",
+                "--if-exists",
+                "--no-owner",
+                "--no-privileges",
+                "--dbname",
+                target_url,
+                temp_path,
+            ],
+            check=True,
+            env=os.environ.copy(),
+        )
+    finally:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
 
 
 @router.get("/public/exchange-rate", response_model=ExchangeRateResponse)
@@ -210,6 +279,34 @@ async def get_shipping_provider_settings(
     return ShippingProviderSettings(use_shipbubble=use_shipbubble)
 
 
+@router.get("/public/featured-rotation", response_model=FeaturedRotationSettings)
+async def get_featured_rotation_settings(db: AsyncSession = Depends(get_db)):
+    """Get featured product rotation interval (public endpoint)."""
+    default_minutes = 10
+    rotation_str = await get_app_setting_value(
+        db,
+        "featured_rotation_minutes",
+        str(default_minutes),
+    )
+    if not rotation_str:
+        rotation_minutes = default_minutes
+    else:
+        try:
+            rotation_minutes = int(rotation_str)
+        except (TypeError, ValueError):
+            rotation_minutes = default_minutes
+
+    rotation_minutes = min(max(rotation_minutes, 1), 1440)
+
+    result = await db.execute(
+        select(AppSetting).where(AppSetting.key == "featured_rotation_minutes")
+    )
+    setting = result.scalar_one_or_none()
+    updated_at = setting.updated_at if setting else None
+
+    return FeaturedRotationSettings(rotation_minutes=rotation_minutes, updated_at=updated_at)
+
+
 @router.put("/shipping-provider", response_model=ShippingProviderSettings)
 async def update_shipping_provider_settings(
     settings: ShippingProviderSettingsUpdate,
@@ -229,6 +326,67 @@ async def update_shipping_provider_settings(
     return ShippingProviderSettings(use_shipbubble=settings.use_shipbubble)
 
 
+@router.get("/admin/featured-rotation", response_model=FeaturedRotationSettings)
+async def get_admin_featured_rotation_settings(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin)
+):
+    """Get featured product rotation interval (Admin only)."""
+    _ = current_user
+    default_minutes = 10
+
+    result = await db.execute(
+        select(AppSetting).where(AppSetting.key == "featured_rotation_minutes")
+    )
+    setting = result.scalar_one_or_none()
+
+    if setting and setting.value is not None:
+        try:
+            rotation_minutes = int(setting.value)
+        except ValueError:
+            rotation_minutes = default_minutes
+        updated_at = setting.updated_at
+    else:
+        rotation_minutes = default_minutes
+        updated_at = None
+
+    rotation_minutes = min(max(rotation_minutes, 1), 1440)
+
+    return FeaturedRotationSettings(rotation_minutes=rotation_minutes, updated_at=updated_at)
+
+
+@router.put("/admin/featured-rotation", response_model=FeaturedRotationSettings)
+async def update_admin_featured_rotation_settings(
+    payload: FeaturedRotationSettingsUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin)
+):
+    """Update featured product rotation interval (Admin only)."""
+    _ = current_user
+    await update_app_setting_value(
+        db,
+        "featured_rotation_minutes",
+        str(payload.rotation_minutes),
+    )
+
+    result = await db.execute(
+        select(AppSetting).where(AppSetting.key == "featured_rotation_minutes")
+    )
+    setting = result.scalar_one_or_none()
+    updated_at = setting.updated_at if setting else None
+
+    logger.info(
+        "[Settings] Admin %s updated featured rotation minutes to %s",
+        current_user.email,
+        payload.rotation_minutes,
+    )
+
+    return FeaturedRotationSettings(
+        rotation_minutes=payload.rotation_minutes,
+        updated_at=updated_at,
+    )
+
+
 @router.get("/app-settings", response_model=List[AppSettingResponse])
 async def get_all_app_settings(
     db: AsyncSession = Depends(get_db),
@@ -244,3 +402,110 @@ async def get_all_app_settings(
     settings = result.scalars().all()
 
     return settings
+
+
+@router.get("/admin/payout-hold", response_model=PayoutHoldSettings)
+async def get_payout_hold_settings(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin)
+):
+    """Get payout hold settings (Admin only)."""
+    from app.core.config import settings as app_settings
+
+    result = await db.execute(
+        select(AppSetting).where(AppSetting.key == "payout_hold_days")
+    )
+    setting = result.scalar_one_or_none()
+
+    if setting and setting.value is not None:
+        try:
+            hold_days = int(setting.value)
+        except ValueError:
+            hold_days = app_settings.PAYOUT_HOLD_DAYS
+        updated_at = setting.updated_at
+    else:
+        hold_days = app_settings.PAYOUT_HOLD_DAYS
+        updated_at = None
+
+    hold_days = max(hold_days, 0)
+
+    return PayoutHoldSettings(hold_days=hold_days, updated_at=updated_at)
+
+
+@router.put("/admin/payout-hold", response_model=PayoutHoldSettings)
+async def update_payout_hold_settings(
+    payload: PayoutHoldSettingsUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin)
+):
+    """Update payout hold settings (Admin only)."""
+    await update_app_setting_value(db, "payout_hold_days", str(payload.hold_days))
+
+    result = await db.execute(
+        select(AppSetting).where(AppSetting.key == "payout_hold_days")
+    )
+    setting = result.scalar_one_or_none()
+    updated_at = setting.updated_at if setting else None
+
+    logger.info(f"[Settings] Admin {current_user.email} updated payout hold days to {payload.hold_days}")
+
+    return PayoutHoldSettings(hold_days=payload.hold_days, updated_at=updated_at)
+
+
+@router.post("/admin/db-sync", response_model=DatabaseSyncResponse)
+async def sync_render_database(
+    current_user: User = Depends(require_admin),
+):
+    """Sync Render database to local database (Admin only, development environments)."""
+    from app.core.config import settings as app_settings
+
+    environment = app_settings.ENVIRONMENT.lower()
+    if environment not in {"development", "local"}:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Database sync is only available in local development environments.",
+        )
+
+    if not app_settings.RENDER_DATABASE_URL:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="RENDER_DATABASE_URL is not configured.",
+        )
+
+    if not _is_local_database(app_settings.DATABASE_URL):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Target database must be a local database.",
+        )
+
+    source_url = _normalize_sync_db_url(app_settings.RENDER_DATABASE_URL)
+    target_url = _normalize_sync_db_url(app_settings.DATABASE_URL)
+
+    start_time = time.monotonic()
+    try:
+        await anyio.to_thread.run_sync(_run_db_sync, source_url, target_url)
+    except RuntimeError as exc:
+        logger.exception("[Settings] Database sync failed: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(exc),
+        )
+    except subprocess.CalledProcessError as exc:
+        logger.exception("[Settings] Database sync command failed: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Database sync failed. Check server logs for details.",
+        )
+
+    duration = round(time.monotonic() - start_time, 2)
+    logger.info(
+        "[Settings] Admin %s synced Render DB to local in %ss",
+        current_user.email,
+        duration,
+    )
+
+    return DatabaseSyncResponse(
+        status="success",
+        message="Render database synced to local database.",
+        duration_seconds=duration,
+    )

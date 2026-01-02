@@ -3,12 +3,13 @@ import { Link } from 'react-router-dom';
 import Layout from '../components/layout/Layout';
 import type { Product } from '../types';
 import { productService } from '../services/productService';
+import { getFeaturedRotationSettings } from '../services/settingsService';
 import { IMAGE_CONFIG } from '../config/constants';
 import { useWishlistActions } from '../hooks/useWishlistActions';
 import { useCurrency } from '../hooks/useCurrency';
+import { formatPriceWithConversion } from '../utils/pricing';
 
 const HERO_IMAGE = '/images/hero/demo-image-2.png';
-const SECONDARY_IMAGE = '/images/hero/happy-man-party-wearing-sunglasses.jpg';
 
 type HomeProductCardProps = {
   product: Product;
@@ -22,7 +23,7 @@ function HomeProductCard({
   onToggleFavorite,
 }: HomeProductCardProps) {
   const [isHovered, setIsHovered] = useState(false);
-  const { formatBasePrice } = useCurrency();
+  const { currentCurrency, exchangeRates } = useCurrency();
   const primaryImage = product.images?.[0]?.image_url || IMAGE_CONFIG.PLACEHOLDER;
   const secondaryImage = product.images?.[1]?.image_url || primaryImage;
   const vendor = product.vendor_name || 'Shopsoma';
@@ -75,8 +76,8 @@ function HomeProductCard({
             width="20"
             height="20"
             viewBox="0 0 24 24"
-            fill={isFavorite ? "#2C3E2E" : "none"}
-            stroke="#2C3E2E"
+            fill={isFavorite ? "#ffffff" : "none"}
+            stroke="#ffffff"
             strokeWidth="1.5"
             className="transition-all"
           >
@@ -143,7 +144,7 @@ function HomeProductCard({
           {product.title}
         </h3>
         <p className="text-sm font-ui" style={{ color: '#1E5053' }}>
-          {formatBasePrice(price)}
+          {formatPriceWithConversion(price, product.currency, currentCurrency, exchangeRates)}
         </p>
       </Link>
     </div>
@@ -187,10 +188,15 @@ function Hero() {
 }
 
 type FeaturedCollabProps = {
-  imageUrl: string;
+  product: Product;
 };
 
-function FeaturedCollab({ imageUrl }: FeaturedCollabProps) {
+function FeaturedCollab({ product }: FeaturedCollabProps) {
+  const imageUrl = product.images?.[0]?.image_url || '';
+  const title = product.title;
+  const description = product.description || '';
+  const productLink = `/products/${product.id}`;
+
   return (
     <section className="w-full bg-[var(--color-page-bg)]">
       <div className="w-full">
@@ -208,31 +214,64 @@ function FeaturedCollab({ imageUrl }: FeaturedCollabProps) {
                   color: '#1E5053'
                 }}
               >
-                Brothers Lawee X Aso
+                {title}
               </h2>
               <p
                 className="text-sm font-serif leading-relaxed"
                 style={{ color: '#1E5053' }}
               >
-                Chicharrones chicken put chicken biodiesel aesthetic austin. Gochujang trade ascot bushwick bumblebrag helvetica yolo dsa food.
+                {description}
               </p>
-              <button
-                className="bg-[#1E5053] text-white text-xs font-ui uppercase tracking-[0.2em] px-8 py-3 hover:opacity-90 transition-opacity"
+              <Link
+                to={productLink}
+                className="bg-[#1E5053] text-white text-xs font-ui uppercase tracking-[0.2em] px-8 py-3 hover:opacity-90 transition-opacity inline-flex items-center justify-center"
               >
                 SHOP NOW
-              </button>
+              </Link>
             </div>
           </div>
 
           {/* Right Side - Image */}
           <div className="relative h-[400px] lg:h-auto">
             <img
-              src={imageUrl || '/images/profilebanner.jpg'}
-              alt="Featured collaboration"
+              src={imageUrl}
+              alt={title}
               className="w-full h-full object-cover"
             />
           </div>
         </div>
+      </div>
+    </section>
+  );
+}
+
+function HomeProductCardSkeleton() {
+  return (
+    <div className="bg-white border border-[#E7E3DA] rounded-lg overflow-hidden animate-pulse">
+      <div className="h-64 bg-gray-200" />
+      <div className="p-4 space-y-3">
+        <div className="h-3 w-24 bg-gray-200 rounded" />
+        <div className="h-4 w-3/4 bg-gray-200 rounded" />
+        <div className="h-3 w-32 bg-gray-200 rounded" />
+      </div>
+    </div>
+  );
+}
+
+function FeaturedCollabSkeleton() {
+  return (
+    <section className="w-full bg-[var(--color-page-bg)]">
+      <div className="grid lg:grid-cols-2 items-stretch">
+        <div className="bg-[var(--color-page-bg)] flex flex-col justify-center items-center text-center px-16 lg:px-24 py-20 lg:py-28">
+          <div className="max-w-md space-y-6 w-full animate-pulse">
+            <div className="h-3 w-20 bg-gray-200 rounded mx-auto" />
+            <div className="h-8 w-3/4 bg-gray-200 rounded mx-auto" />
+            <div className="h-4 w-full bg-gray-200 rounded mx-auto" />
+            <div className="h-4 w-5/6 bg-gray-200 rounded mx-auto" />
+            <div className="h-10 w-40 bg-gray-200 rounded mx-auto" />
+          </div>
+        </div>
+        <div className="relative h-[400px] lg:h-auto bg-gray-200 animate-pulse" />
       </div>
     </section>
   );
@@ -335,6 +374,11 @@ function EditorialSection() {
 export default function Home() {
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
+  const [featuredProducts, setFeaturedProducts] = useState<Product[]>([]);
+  const [featuredIndex, setFeaturedIndex] = useState(0);
+  const [featuredLoading, setFeaturedLoading] = useState(true);
+  const [featuredReady, setFeaturedReady] = useState(false);
+  const [rotationMinutes, setRotationMinutes] = useState(10);
   const { favorites, toggleFavorite } = useWishlistActions();
 
   useEffect(() => {
@@ -361,10 +405,75 @@ export default function Home() {
     };
   }, []);
 
-  const featureImage =
-    products[4]?.images?.[0]?.image_url ||
-    products[0]?.images?.[0]?.image_url ||
-    SECONDARY_IMAGE;
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        setFeaturedLoading(true);
+        const rotation = await getFeaturedRotationSettings();
+        if (mounted && rotation?.rotation_minutes) {
+          setRotationMinutes(rotation.rotation_minutes);
+        }
+        const data = await productService.getFeaturedProducts(12);
+        if (mounted) {
+          setFeaturedProducts(data || []);
+        }
+      } catch (error) {
+        console.error('Failed to load featured products', error);
+      } finally {
+        if (mounted) setFeaturedLoading(false);
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!featuredProducts.length) return undefined;
+    const rotationMs = Math.max(rotationMinutes, 1) * 60 * 1000;
+    const computeIndex = () =>
+      Math.floor(Date.now() / rotationMs) % featuredProducts.length;
+
+    setFeaturedIndex(computeIndex());
+    const timer = window.setInterval(() => {
+      setFeaturedIndex(computeIndex());
+    }, 60 * 1000);
+
+    return () => window.clearInterval(timer);
+  }, [featuredProducts, rotationMinutes]);
+
+  const featuredProduct = featuredProducts[featuredIndex];
+  const featuredImageUrl = featuredProduct?.images?.[0]?.image_url || '';
+  const showFeaturedSkeleton =
+    featuredLoading ||
+    !featuredProduct ||
+    !featuredProduct.images?.length ||
+    !featuredProduct.images?.[0]?.image_url ||
+    !featuredReady;
+
+  useEffect(() => {
+    if (!featuredImageUrl) {
+      setFeaturedReady(false);
+      return;
+    }
+
+    let isMounted = true;
+    setFeaturedReady(false);
+
+    const img = new Image();
+    img.onload = () => {
+      if (isMounted) setFeaturedReady(true);
+    };
+    img.onerror = () => {
+      if (isMounted) setFeaturedReady(true);
+    };
+    img.src = featuredImageUrl;
+
+    return () => {
+      isMounted = false;
+    };
+  }, [featuredImageUrl]);
 
   return (
     <Layout>
@@ -374,7 +483,11 @@ export default function Home() {
         <section className="py-12 bg-[var(--color-page-bg)] border-b border-[#1E5053]">
           <div className="w-full px-16 lg:px-20 space-y-6">
             {loading ? (
-              <div className="text-center text-sm font-ui text-gray-600">Loading featured products...</div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+                {Array.from({ length: 4 }).map((_, index) => (
+                  <HomeProductCardSkeleton key={`home-skeleton-${index}`} />
+                ))}
+              </div>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
                 {products.slice(0, 4).map((product) => (
@@ -390,7 +503,11 @@ export default function Home() {
           </div>
         </section>
 
-        <FeaturedCollab imageUrl={featureImage} />
+        {showFeaturedSkeleton ? (
+          <FeaturedCollabSkeleton />
+        ) : (
+          <FeaturedCollab product={featuredProduct} />
+        )}
         <CategoryStrip />
         <EditorialSection />
       </div>

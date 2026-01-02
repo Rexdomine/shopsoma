@@ -4,8 +4,9 @@ import type { Product, ProductVariant } from '../../types';
 import { ROUTES } from '../../config/constants';
 import ProductCard from '../products/ProductCard';
 import { IMAGE_CONFIG } from '../../config/constants';
-import { formatPriceWithCurrency } from '../../utils/pricing';
+import { formatPriceWithConversion } from '../../utils/pricing';
 import { usePreferenceStore } from '../../store/preferenceStore';
+import { useCurrencyStore } from '../../store/currencyStore';
 
 interface AddToBagModalProps {
   open: boolean;
@@ -25,6 +26,7 @@ export default function AddToBagModal({
   onClose,
 }: AddToBagModalProps) {
   const preferredCurrency = usePreferenceStore((state) => state.currency);
+  const exchangeRates = useCurrencyStore((state) => state.exchangeRates);
   if (!open) return null;
 
   const brand = product.vendor_name ?? 'Shopsoma Collective';
@@ -78,7 +80,12 @@ export default function AddToBagModal({
             <InfoRow label="Color" value={color} />
             <InfoRow
               label="Price"
-              value={formatPriceWithCurrency(Number(price), preferredCurrency)}
+              value={formatPriceWithConversion(
+                Number(price),
+                product.currency,
+                preferredCurrency,
+                exchangeRates
+              )}
               bold
             />
             <InfoRow label="Availability" value={availability} />

@@ -73,6 +73,14 @@ export default function Footer() {
                 </p>
               )}
             </form>
+            <div>
+              <Link
+                to="/vendor/signup"
+                className="inline-flex items-center justify-center border border-[#1E5053] text-xs font-ui uppercase tracking-[0.2em] px-6 py-2 text-[#1E5053] hover:bg-[#1E5053] hover:text-white transition-colors"
+              >
+                Sell on Shopsoma
+              </Link>
+            </div>
           </div>
 
           {/* Customer Care */}

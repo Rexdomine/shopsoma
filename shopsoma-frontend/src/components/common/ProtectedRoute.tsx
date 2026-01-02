@@ -28,7 +28,9 @@ export default function ProtectedRoute({
 
   // Redirect to login if authentication is required but user is not authenticated
   if (requireAuth && !isAuthenticated) {
-    return <Navigate to={ROUTES.LOGIN} state={{ from: location }} replace />;
+    const isVendorRoute = roles?.includes('vendor') || location.pathname.startsWith('/vendor');
+    const loginRoute = isVendorRoute ? ROUTES.VENDOR_LOGIN : ROUTES.LOGIN;
+    return <Navigate to={loginRoute} state={{ from: location }} replace />;
   }
 
   // Check if user has required role
@@ -36,7 +38,7 @@ export default function ProtectedRoute({
     if (!roles.includes(user.role)) {
       // User doesn't have required role, redirect to appropriate page
       if (user.role === 'vendor') {
-        return <Navigate to={ROUTES.VENDOR_DASHBOARD} replace />;
+        return <Navigate to={ROUTES.VENDOR_ANALYTICS} replace />;
       } else if (user.role === 'admin') {
         return <Navigate to={ROUTES.ADMIN_DASHBOARD} replace />;
       } else {

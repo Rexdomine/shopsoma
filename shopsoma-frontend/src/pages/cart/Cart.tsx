@@ -10,7 +10,8 @@ import { useCartStore } from '../../store/cartStore';
 import { useWishlistActions } from '../../hooks/useWishlistActions';
 import EditVariantModal from '../../components/modals/EditVariantModal';
 import { usePreferenceStore } from '../../store/preferenceStore';
-import { formatPriceWithCurrency, type Currency } from '../../utils/pricing';
+import { useCurrencyStore } from '../../store/currencyStore';
+import { formatPriceWithConversion, type Currency } from '../../utils/pricing';
 
 export default function Cart() {
   const navigate = useNavigate();
@@ -19,6 +20,7 @@ export default function Cart() {
   const updateVariant = useCartStore((state) => state.updateVariant);
   const removeItem = useCartStore((state) => state.removeItem);
   const preferredCurrency = usePreferenceStore((state) => state.currency);
+  const exchangeRates = useCurrencyStore((state) => state.exchangeRates);
   const { favorites, toggleFavorite } = useWishlistActions();
   const [toastMessage, setToastMessage] = useState('');
   const [toastVisible, setToastVisible] = useState(false);
@@ -207,7 +209,12 @@ export default function Cart() {
                             </span>
                           )}
                           <span className="text-base font-semibold text-dark">
-                            {formatPriceWithCurrency(item.subtotal, preferredCurrency)}
+                            {formatPriceWithConversion(
+                              item.subtotal,
+                              item.product.currency || 'NGN',
+                              preferredCurrency,
+                              exchangeRates
+                            )}
                           </span>
                         </div>
                         <div className="flex items-center justify-end gap-3 pt-2">
@@ -240,7 +247,12 @@ export default function Cart() {
                   Order Summary
                 </h3>
                 <div className="text-sm space-y-2">
-                  <SummaryRow label="Subtotal" value={cart.summary.subtotal} currency={preferredCurrency} />
+                  <SummaryRow
+                    label="Subtotal"
+                    value={cart.summary.subtotal}
+                    currency={preferredCurrency}
+                    exchangeRates={exchangeRates}
+                  />
                   <div className="flex items-center justify-between text-xs text-gray-400 italic">
                     <span>Shipping</span>
                     <span>Calculated at checkout</span>
@@ -251,7 +263,13 @@ export default function Cart() {
                   </div>
                 </div>
                 <div className="border-t border-gray-200 pt-4">
-                  <SummaryRow label="Estimated Total" value={cart.summary.subtotal} bold currency={preferredCurrency} />
+                  <SummaryRow
+                    label="Estimated Total"
+                    value={cart.summary.subtotal}
+                    bold
+                    currency={preferredCurrency}
+                    exchangeRates={exchangeRates}
+                  />
                 </div>
                 <div className="space-y-3 pt-2">
                   <button
@@ -311,17 +329,19 @@ function SummaryRow({
   value,
   bold,
   currency,
+  exchangeRates,
 }: {
   label: string;
   value: number;
   bold?: boolean;
   currency: Currency;
+  exchangeRates: { USD_TO_NGN: number; NGN_TO_USD: number };
 }) {
   return (
     <div className="flex items-center justify-between">
       <span className="text-sm text-gray-500">{label}</span>
       <span className={`text-sm ${bold ? 'font-semibold text-dark' : 'text-gray-700'}`}>
-        {formatPriceWithCurrency(value, currency)}
+        {formatPriceWithConversion(value, 'NGN', currency, exchangeRates)}
       </span>
     </div>
   );

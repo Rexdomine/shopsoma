@@ -8,8 +8,9 @@ import { CartService } from '../../services/cartService';
 import { paymentService } from '../../services/paymentService';
 import { useAuth } from '../../context/AuthContext';
 import { usePreferenceStore } from '../../store/preferenceStore';
+import { useCurrencyStore } from '../../store/currencyStore';
 import { useCartStore } from '../../store/cartStore';
-import { formatPriceWithCurrency, type Currency } from '../../utils/pricing';
+import { formatPriceWithConversion, type Currency } from '../../utils/pricing';
 import { loadStripe } from '@stripe/stripe-js';
 import { Elements } from '@stripe/react-stripe-js';
 import StripePaymentForm from '../../components/payment/StripePaymentForm';
@@ -47,6 +48,7 @@ export default function Checkout() {
   const navigate = useNavigate();
   const { user, isAuthenticated } = useAuth();
   const { currency, setCurrency } = usePreferenceStore();
+  const exchangeRates = useCurrencyStore((state) => state.exchangeRates);
 
   const [step, setStep] = useState<Step>('email');
   const [email, setEmail] = useState('');
@@ -114,6 +116,7 @@ export default function Checkout() {
   // Loading states
   const [isLoadingAddresses, setIsLoadingAddresses] = useState(false);
   const [isLoadingShipping, setIsLoadingShipping] = useState(false);
+  const [isReviewingOrder, setIsReviewingOrder] = useState(false);
   const [isApplyingPromo, setIsApplyingPromo] = useState(false);
   const [isCreatingOrder, setIsCreatingOrder] = useState(false);
 
@@ -299,8 +302,8 @@ export default function Checkout() {
     }
   };
 
-  const handleReviewOrder = async () => {
-    if (!selectedAddressId) return;
+  const handleReviewOrder = async (): Promise<OrderReview | null> => {
+    if (!selectedAddressId) return null;
 
     try {
       const items = cart.items.map(item => ({
@@ -339,9 +342,11 @@ export default function Checkout() {
       const review = await checkoutService.reviewOrder(reviewRequest);
 
       setOrderReview(review);
+      return review;
     } catch (error) {
       console.error('Error reviewing order:', error);
       alert('Failed to review order. Please try again.');
+      return null;
     }
   };
 
@@ -559,8 +564,15 @@ export default function Checkout() {
   };
 
   const handleShippingSave = async () => {
-    await handleReviewOrder();
-    setStep('payment');
+    setIsReviewingOrder(true);
+    try {
+      const review = await handleReviewOrder();
+      if (review) {
+        setStep('payment');
+      }
+    } finally {
+      setIsReviewingOrder(false);
+    }
   };
 
   const renderStepTitle = (label: string, active: boolean) => (
@@ -571,7 +583,7 @@ export default function Checkout() {
 
   // Helper function to format price in selected currency
   const formatPrice = (amountInNGN: number) => {
-    return formatPriceWithCurrency(amountInNGN, currency);
+    return formatPriceWithConversion(amountInNGN, 'NGN', currency, exchangeRates);
   };
 
   return (
@@ -880,10 +892,18 @@ export default function Checkout() {
                       <button
                         type="button"
                         onClick={handleShippingSave}
-                        disabled={!hasSelectedShipping}
-                        className="px-6 py-2 rounded-sm bg-primary text-white text-sm font-semibold disabled:opacity-50"
+                        disabled={!hasSelectedShipping || isReviewingOrder}
+                        aria-busy={isReviewingOrder}
+                        className="px-6 py-2 rounded-sm bg-primary text-white text-sm font-semibold disabled:opacity-50 flex items-center justify-center gap-2"
                       >
-                        Continue
+                        {isReviewingOrder ? (
+                          <>
+                            <span className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                            Reviewing...
+                          </>
+                        ) : (
+                          'Continue'
+                        )}
                       </button>
                     </div>
                   ) : (

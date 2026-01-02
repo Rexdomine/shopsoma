@@ -31,8 +31,8 @@
 
     /* Semantic roles */
     --color-page-bg: #ffffff;
-    --color-section-alt-bg: var(--shopsoma-dun);
-    --color-card-bg: var(--shopsoma-ecru);
+    --color-section-alt-bg: #ffffff;
+    --color-card-bg: #ffffff;
     --color-text-main: var(--shopsoma-eerie-black);
     --color-text-muted: rgba(34, 36, 36, 0.72);
     --color-text-on-dark: var(--shopsoma-bone);
@@ -44,7 +44,9 @@
   }
 
   /* Base body font */
-  html {
+  html,
+  body,
+  #root {
     background-color: var(--color-page-bg);
     color: var(--color-text-main);
   }
@@ -54,8 +56,6 @@
     font-size: 1rem;
     line-height: 1.5;
     letter-spacing: 0.01em;
-    color: var(--color-text-main);
-    background-color: var(--color-page-bg);
     font-optical-sizing: auto;
     font-variation-settings: "opsz" 6;
   }

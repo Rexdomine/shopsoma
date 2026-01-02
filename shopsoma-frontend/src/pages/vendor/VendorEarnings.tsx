@@ -10,33 +10,39 @@ import {
 import VendorSidebar from '../../components/vendor/VendorSidebar';
 import { useNavigate } from 'react-router-dom';
 import { ROUTES } from '../../config/constants';
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import WithdrawModal from '../../components/vendor/WithdrawModal';
+import CurrencySwitcher from '../../components/common/CurrencySwitcher';
+import { useCurrencyStore } from '../../store/currencyStore';
+import { formatPriceWithConversion } from '../../utils/pricing';
+import { useToast } from '../../hooks/useToast';
+import ToastContainer from '../../components/ui/ToastContainer';
+import {
+  vendorService,
+  type VendorEarningsProductRow,
+  type VendorEarningsOrderRow,
+  type VendorEarningsSummary,
+  type EarningsViewMode,
+} from '../../services/vendorService';
 
-type EarningsRow = {
-  id: string;
-  product: string;
-  price: number;
-  quantity: number;
-  expense: number;
-  earnings: number;
-  date: string;
-  status: 'complete' | 'pending';
+type EarningsRow = VendorEarningsProductRow | VendorEarningsOrderRow;
+
+const getRangeStart = (end: Date, range: string) => {
+  const start = new Date(end);
+  if (range === '1D') {
+    start.setDate(end.getDate() - 1);
+  } else if (range === '7D') {
+    start.setDate(end.getDate() - 7);
+  } else if (range === '1M') {
+    start.setMonth(end.getMonth() - 1);
+  } else {
+    start.setFullYear(end.getFullYear() - 1);
+  }
+  return start;
 };
 
-const mockRows: EarningsRow[] = Array.from({ length: 9 }).map((_, idx) => ({
-  id: `row-${idx + 1}`,
-  product: 'Semiotics twee williamsburg helvetica offal sustainable juice church.',
-  price: 423,
-  quantity: 16,
-  expense: idx % 2 === 0 ? 123 : 83,
-  earnings: 1822,
-  date: '12/09/25',
-  status: 'complete',
-}));
-
-function StatusPill({ status }: { status: EarningsRow['status'] }) {
-  if (status === 'complete') {
+function StatusPill({ status }: { status: string }) {
+  if (status.toLowerCase() === 'delivered') {
     return <span className="px-4 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700">Complete</span>;
   }
   return <span className="px-4 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-700">Pending</span>;
@@ -44,9 +50,137 @@ function StatusPill({ status }: { status: EarningsRow['status'] }) {
 
 export default function VendorEarnings() {
   const navigate = useNavigate();
+  const { toasts, hideToast, success, error: showError } = useToast();
   const [showWithdraw, setShowWithdraw] = useState(false);
+  const [viewMode, setViewMode] = useState<EarningsViewMode>('products');
+  const [summary, setSummary] = useState<VendorEarningsSummary | null>(null);
+  const [rows, setRows] = useState<EarningsRow[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [search, setSearch] = useState('');
+  const [endDate, setEndDate] = useState<Date>(() => new Date());
+  const [selectedRange, setSelectedRange] = useState('1Y');
+  const [startDate, setStartDate] = useState<Date>(() => getRangeStart(new Date(), '1Y'));
+  const { currentCurrency, exchangeRates, fetchExchangeRate, setCurrency } = useCurrencyStore();
+
+  useEffect(() => {
+    fetchExchangeRate();
+  }, [fetchExchangeRate]);
+
+  const dateParams = useMemo(() => {
+    const toParam = (value: Date) => value.toISOString().split('T')[0];
+    return {
+      start_date: toParam(startDate),
+      end_date: toParam(endDate),
+    };
+  }, [startDate, endDate]);
+
+  const formattedDateRange = useMemo(() => {
+    const format = (value: Date) =>
+      value.toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' });
+    return `${format(startDate)} - ${format(endDate)}`;
+  }, [startDate, endDate]);
+  const comparisonLabel = useMemo(() => {
+    const days = Math.max(1, Math.round((endDate.getTime() - startDate.getTime()) / 86400000) + 1);
+    return `vs Previous ${days} Day${days === 1 ? '' : 's'}`;
+  }, [startDate, endDate]);
+
+  const formatAmount = (amount: number) =>
+    formatPriceWithConversion(amount, 'NGN', currentCurrency, exchangeRates);
+
+  const fetchSummary = async () => {
+    try {
+      const response = await vendorService.getEarningsSummary(dateParams);
+      setSummary(response);
+    } catch (err: any) {
+      setError(err?.message || 'Failed to load earnings summary');
+    }
+  };
+
+  const fetchRows = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      const response = await vendorService.getEarningsItems({
+        view: viewMode,
+        page: 1,
+        page_size: 20,
+        search: search || undefined,
+        ...dateParams,
+      });
+      setRows(response.items || []);
+    } catch (err: any) {
+      setError(err?.message || 'Failed to load earnings items');
+      setRows([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchSummary();
+    fetchRows();
+  }, [viewMode, search, dateParams]);
+
+  const handleRangeSelect = (range: string) => {
+    const end = new Date();
+    const start = range === '6M' ? (() => {
+      const sixMonthStart = new Date(end);
+      sixMonthStart.setMonth(end.getMonth() - 6);
+      return sixMonthStart;
+    })() : getRangeStart(end, range);
+    setSelectedRange(range);
+    setStartDate(start);
+    setEndDate(end);
+  };
+
+  const buildItemsListed = (items?: string[]) => {
+    if (!items?.length) return '—';
+    const [first, ...rest] = items;
+    return rest.length ? `${first} +${rest.length}` : first;
+  };
+
+  const formatDate = (value?: string | null) => {
+    if (!value) return '—';
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return '—';
+    return parsed.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: '2-digit' });
+  };
+  const renderWithdrawalBadge = (available?: boolean, daysLeft?: number | null) => {
+    if (typeof daysLeft === 'number' && daysLeft > 0) {
+      return (
+        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-gray-100 text-gray-600">
+          {daysLeft} days left
+        </span>
+      );
+    }
+    if (available || daysLeft === 0) {
+      return (
+        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 text-emerald-700">
+          Available
+        </span>
+      );
+    }
+    return null;
+  };
+  const tableColumns = viewMode === 'products' ? 9 : 8;
+  const renderChange = (value?: number | null) => {
+    if (value === null || value === undefined) {
+      return <span className="text-gray-400">—</span>;
+    }
+    const isPositive = value >= 0;
+    const displayValue = `${Math.abs(value).toFixed(1)}%`;
+    return (
+      <span className={`flex items-center gap-1 text-sm font-semibold ${isPositive ? 'text-emerald-600' : 'text-rose-600'}`}>
+        <TrendingUp className={`w-4 h-4 ${isPositive ? '' : 'rotate-180'}`} />
+        {displayValue}
+      </span>
+    );
+  };
+
   return (
-    <div className="flex min-h-screen bg-gray-50">
+    <>
+      <div className="flex min-h-screen bg-[var(--color-page-bg)]">
       <VendorSidebar activePrimary="earnings" />
 
       <div className="flex-1">
@@ -54,11 +188,14 @@ export default function VendorEarnings() {
           <div className="flex flex-wrap items-center justify-between gap-4">
             <h1 className="text-2xl font-semibold text-gray-900">Earnings & Payout</h1>
             <div className="flex items-center gap-3 flex-1 justify-end">
+              <CurrencySwitcher className="mr-2" value={currentCurrency} onChange={setCurrency} />
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
                 <input
                   type="text"
                   placeholder="Search"
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
                   className="pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#105E53] focus:border-transparent w-64"
                 />
               </div>
@@ -82,13 +219,12 @@ export default function VendorEarnings() {
               <div className="space-y-3">
                 <p className="text-sm text-gray-400">Current Earnings</p>
                 <div className="flex items-center gap-4">
-                  <p className="text-4xl font-semibold text-gray-900 tracking-tight">₦2,732,983</p>
+                  <p className="text-4xl font-semibold text-gray-900 tracking-tight">
+                    {formatAmount(summary?.current_earnings ?? 0)}
+                  </p>
                   <div className="flex items-center gap-2 text-sm">
-                    <span className="flex items-center gap-1 text-emerald-600 font-semibold">
-                      <TrendingUp className="w-4 h-4" />
-                      6%
-                    </span>
-                    <span className="text-gray-500">vs Last Week</span>
+                    {renderChange(summary?.current_earnings_change_pct)}
+                    <span className="text-gray-500">{comparisonLabel}</span>
                     <ChevronDown className="w-4 h-4 text-gray-400" />
                   </div>
                 </div>
@@ -98,14 +234,13 @@ export default function VendorEarnings() {
                 <div className="flex items-start gap-8">
                   <div className="space-y-1">
                     <p className="text-sm text-gray-400">Projected Earnings</p>
-                    <div className="flex items-center gap-2">
-                      <p className="text-2xl font-semibold text-gray-900 tracking-tight">₦3,032,832</p>
-                      <span className="text-xs font-semibold text-emerald-600 flex items-center gap-1">
-                        <TrendingUp className="w-4 h-4" />
-                        16%
-                      </span>
-                    </div>
+                  <div className="flex items-center gap-2">
+                    <p className="text-2xl font-semibold text-gray-900 tracking-tight">
+                      {formatAmount(summary?.projected_earnings ?? 0)}
+                    </p>
+                    <span className="text-xs">{renderChange(summary?.projected_earnings_change_pct)}</span>
                   </div>
+                </div>
 
                   <div className="space-y-2">
                     <p className="text-sm text-gray-400 flex items-center gap-2">
@@ -113,16 +248,15 @@ export default function VendorEarnings() {
                       Expenses
                     </p>
                     <div className="flex items-center gap-2">
-                      <p className="text-2xl font-semibold text-gray-900 tracking-tight">₦432,298</p>
-                      <span className="text-xs font-semibold text-emerald-600 flex items-center gap-1">
-                        <TrendingUp className="w-4 h-4" />
-                        16%
-                      </span>
+                      <p className="text-2xl font-semibold text-gray-900 tracking-tight">
+                        {formatAmount(summary?.expenses ?? 0)}
+                      </p>
+                      <span className="text-xs">{renderChange(summary?.expenses_change_pct)}</span>
                     </div>
                     <button
                       type="button"
                       className="text-sm text-gray-500 underline"
-                      onClick={() => navigate(ROUTES.VENDOR_EXPENSES)}
+                      onClick={() => navigate(`${ROUTES.VENDOR_EXPENSES}?view=orders`)}
                     >
                       View All
                     </button>
@@ -134,7 +268,7 @@ export default function VendorEarnings() {
             <div className="flex flex-col items-end gap-3 w-full max-w-xs">
               <div className="space-y-1 text-right">
                 <p className="text-sm text-gray-400">Showing info for:</p>
-                <p className="text-sm font-semibold text-gray-800">Jan 01, 2025 - Dec 28, 2025</p>
+                <p className="text-sm font-semibold text-gray-800">{formattedDateRange}</p>
               </div>
 
               <div className="flex items-center gap-2">
@@ -142,7 +276,10 @@ export default function VendorEarnings() {
                   <button
                     key={range}
                     type="button"
-                    className="px-4 py-2 rounded-lg text-xs font-semibold border border-gray-200 bg-white text-gray-700"
+                    className={`px-4 py-2 rounded-lg text-xs font-semibold border ${
+                      selectedRange === range ? 'border-gray-900 bg-gray-900 text-white' : 'border-gray-200 bg-white text-gray-700'
+                    }`}
+                    onClick={() => handleRangeSelect(range)}
                   >
                     {range}
                   </button>
@@ -171,13 +308,19 @@ export default function VendorEarnings() {
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                className="px-3 py-1.5 rounded-full text-sm font-semibold bg-gray-100 text-gray-800"
+                className={`px-3 py-1.5 rounded-full text-sm font-semibold ${
+                  viewMode === 'products' ? 'bg-gray-100 text-gray-800' : 'text-gray-600 hover:bg-gray-100'
+                }`}
+                onClick={() => setViewMode('products')}
               >
-                Products (19)
+                Products
               </button>
               <button
                 type="button"
-                className="px-3 py-1.5 rounded-full text-sm font-semibold text-gray-600 hover:bg-gray-100"
+                className={`px-3 py-1.5 rounded-full text-sm font-semibold ${
+                  viewMode === 'orders' ? 'bg-gray-100 text-gray-800' : 'text-gray-600 hover:bg-gray-100'
+                }`}
+                onClick={() => setViewMode('orders')}
               >
                 Orders
               </button>
@@ -188,43 +331,146 @@ export default function VendorEarnings() {
             <table className="w-full text-sm">
               <thead className="bg-gray-50">
                 <tr>
-                  <th className="w-16 px-4 py-3 text-left text-xs font-semibold text-gray-500"> </th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">Product Name</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">Status</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">Price</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">Quantity</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">Expense</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">Earnings</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">Date</th>
-                  <th className="w-12 px-4 py-3 text-right text-xs font-semibold text-gray-500"> </th>
+                  {viewMode === 'products' && (
+                    <>
+                      <th className="w-16 px-4 py-3 text-left text-xs font-semibold text-gray-500"> </th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">Product Name</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">Status</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">Price</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">Quantity</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">Expense</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">Earnings</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">Date</th>
+                      <th className="w-12 px-4 py-3 text-right text-xs font-semibold text-gray-500"> </th>
+                    </>
+                  )}
+                  {viewMode === 'orders' && (
+                    <>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">Order Number</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">Items Listed</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">Status</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">Quantity</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">Cut Taken</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">Earnings</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">Date</th>
+                      <th className="w-12 px-4 py-3 text-right text-xs font-semibold text-gray-500"> </th>
+                    </>
+                  )}
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {mockRows.map((row) => (
-                  <tr key={row.id} className="hover:bg-gray-50">
-                    <td className="px-4 py-3">
-                      <div className="h-12 w-10 rounded-full bg-gray-100 border border-gray-200"></div>
-                    </td>
-                    <td className="px-4 py-3 text-gray-900">{row.product}</td>
-                    <td className="px-4 py-3">
-                      <StatusPill status={row.status} />
-                    </td>
-                    <td className="px-4 py-3 font-semibold text-gray-900">${row.price}</td>
-                    <td className="px-4 py-3 text-gray-800">{row.quantity}</td>
-                    <td className="px-4 py-3 font-semibold text-gray-900">${row.expense}</td>
-                    <td className="px-4 py-3 font-semibold text-gray-900">${row.earnings}</td>
-                    <td className="px-4 py-3 text-gray-700">{row.date}</td>
-                    <td className="px-4 py-3 text-right">
-                      <button
-                        type="button"
-                        className="h-8 w-8 rounded-full border border-gray-200 flex items-center justify-center hover:bg-gray-100"
-                        aria-label="View details"
-                      >
-                        <Eye className="w-4 h-4 text-gray-600" />
-                      </button>
+                {loading && (
+                  <tr>
+                    <td className="px-4 py-6 text-center text-gray-500" colSpan={tableColumns}>
+                      Loading earnings...
                     </td>
                   </tr>
-                ))}
+                )}
+                {!loading && error && (
+                  <tr>
+                    <td className="px-4 py-6 text-center text-red-600" colSpan={tableColumns}>
+                      {error}
+                    </td>
+                  </tr>
+                )}
+                {!loading && !error && rows.length === 0 && (
+                  <tr>
+                    <td className="px-4 py-6 text-center text-gray-500" colSpan={tableColumns}>
+                      No earnings found for this period.
+                    </td>
+                  </tr>
+                )}
+                {!loading && !error && rows.length > 0 && viewMode === 'products' && rows.map((row) => {
+                  const productRow = row as VendorEarningsProductRow;
+                  return (
+                    <tr key={productRow.id} className="hover:bg-gray-50">
+                      <td className="px-4 py-3">
+                        {productRow.product_image_url ? (
+                          <img
+                            src={productRow.product_image_url}
+                            alt={productRow.product_title}
+                            className="h-12 w-10 rounded-full border border-gray-200 object-cover"
+                          />
+                        ) : (
+                          <div className="h-12 w-10 rounded-full bg-gray-100 border border-gray-200"></div>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-gray-900">{productRow.product_title}</td>
+                      <td className="px-4 py-3">
+                        <StatusPill status={productRow.status} />
+                      </td>
+                      <td className="px-4 py-3 font-semibold text-gray-900">{formatAmount(productRow.unit_price)}</td>
+                      <td className="px-4 py-3 text-gray-800">{productRow.quantity}</td>
+                      <td className="px-4 py-3 font-semibold text-gray-900">{formatAmount(productRow.commission_amount)}</td>
+                      <td className="px-4 py-3 font-semibold text-gray-900">
+                        <div className="flex flex-col gap-1">
+                          <span>{formatAmount(productRow.vendor_payout)}</span>
+                          {productRow.payout_status !== 'paid_out' &&
+                            renderWithdrawalBadge(productRow.withdraw_available, productRow.withdraw_days_left)}
+                          {productRow.payout_status === 'paid_out' && (
+                            <span
+                              className={`text-[11px] font-medium px-2 py-0.5 rounded-full w-fit ${
+                                productRow.payout_status === 'paid_out'
+                                  ? 'bg-emerald-50 text-emerald-700'
+                                  : 'bg-amber-50 text-amber-700'
+                              }`}
+                            >
+                              {productRow.payout_status === 'paid_out' ? 'Paid out' : 'Available'}
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-gray-700">{formatDate(productRow.delivered_at)}</td>
+                      <td className="px-4 py-3 text-right">
+                        <button
+                          type="button"
+                          className="h-8 w-8 rounded-full border border-gray-200 flex items-center justify-center hover:bg-gray-100"
+                          aria-label="View details"
+                          onClick={() => navigate(`${ROUTES.VENDOR_PRODUCTS}/${productRow.product_id}/view`)}
+                        >
+                          <Eye className="w-4 h-4 text-gray-600" />
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+                {!loading && !error && rows.length > 0 && viewMode === 'orders' && rows.map((row) => {
+                  const orderRow = row as VendorEarningsOrderRow;
+                  return (
+                    <tr key={orderRow.id} className="hover:bg-gray-50">
+                      <td className="px-4 py-3 text-gray-900">{orderRow.order_number}</td>
+                      <td className="px-4 py-3 text-gray-700">{buildItemsListed(orderRow.items || [])}</td>
+                      <td className="px-4 py-3">
+                        <StatusPill status={orderRow.status} />
+                      </td>
+                      <td className="px-4 py-3 text-gray-800">{orderRow.total_quantity}</td>
+                      <td className="px-4 py-3 font-semibold text-gray-900">{formatAmount(orderRow.total_commission)}</td>
+                      <td className="px-4 py-3 font-semibold text-gray-900">
+                        <div className="flex flex-col gap-1">
+                          <span>{formatAmount(orderRow.total_payout)}</span>
+                          {orderRow.payout_status !== 'paid_out' &&
+                            renderWithdrawalBadge(orderRow.withdraw_available, orderRow.withdraw_days_left)}
+                          {orderRow.payout_status === 'paid_out' && (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 text-emerald-700">
+                              Paid out
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-gray-700">{formatDate(orderRow.delivered_at)}</td>
+                      <td className="px-4 py-3 text-right">
+                        <button
+                          type="button"
+                          className="h-8 w-8 rounded-full border border-gray-200 flex items-center justify-center hover:bg-gray-100"
+                          aria-label="View details"
+                          onClick={() => navigate(ROUTES.VENDOR_ORDER_DETAIL.replace(':id', orderRow.id))}
+                        >
+                          <Eye className="w-4 h-4 text-gray-600" />
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -241,7 +487,14 @@ export default function VendorEarnings() {
           Withdraw Funds
         </button>
       </div>
-      <WithdrawModal open={showWithdraw} onClose={() => setShowWithdraw(false)} />
-    </div>
+      <WithdrawModal
+        open={showWithdraw}
+        onClose={() => setShowWithdraw(false)}
+        onSuccess={(message) => success(message, 'Success')}
+        onError={(message) => showError(message, 'Error')}
+      />
+      </div>
+      <ToastContainer toasts={toasts} onClose={hideToast} />
+    </>
   );
 }

@@ -6,6 +6,7 @@ import { useCartStore } from '../../store/cartStore';
 import { useAuth } from '../../context/AuthContext';
 import { useCurrencyStore } from '../../store/currencyStore';
 import type { Currency } from '../../store/currencyStore';
+import { usePreferenceStore } from '../../store/preferenceStore';
 
 export default function Header() {
   const [searchOpen, setSearchOpen] = useState(false);
@@ -15,6 +16,7 @@ export default function Header() {
   const itemCount = cart.summary.itemCount;
   const { isAuthenticated, user } = useAuth();
   const { currentCurrency, setCurrency } = useCurrencyStore();
+  const setPreferredCurrency = usePreferenceStore((state) => state.setCurrency);
   const currencyDropdownRef = useRef<HTMLDivElement>(null);
 
   const handleProfileClick = () => {
@@ -64,6 +66,7 @@ export default function Header() {
   // Handle currency selection
   const handleCurrencyChange = (currency: Currency) => {
     setCurrency(currency);
+    setPreferredCurrency(currency);
     setCurrencyDropdownOpen(false);
   };
 
@@ -172,12 +175,12 @@ export default function Header() {
 
         <nav className="border-t border-primary">
           <div className="main-nav header-nav-text w-full mx-auto px-8 py-2 flex items-center justify-center gap-8 text-primary">
-            <Link to="/designers" className="hover:text-primary-dark">Designers</Link>
-            <Link to="/new" className="hover:text-primary-dark">New</Link>
+            <Link to={ROUTES.DESIGNERS} className="hover:text-primary-dark">Designers</Link>
+            <Link to={ROUTES.NEW_ARRIVALS} className="hover:text-primary-dark">New</Link>
             <Link to={ROUTES.MEN} className="hover:text-primary-dark">Men</Link>
             <Link to={ROUTES.WOMEN} className="hover:text-primary-dark">Women</Link>
-            <Link to="/perfumes" className="hover:text-primary-dark">Perfumes</Link>
-            <Link to="/bags-wallets" className="hover:text-primary-dark">Bags &amp; Wallets</Link>
+            <Link to={ROUTES.PERFUMES} className="hover:text-primary-dark">Perfumes</Link>
+            <Link to={ROUTES.BAGS_WALLETS} className="hover:text-primary-dark">Bags &amp; Wallets</Link>
           </div>
         </nav>
       </header>

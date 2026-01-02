@@ -249,7 +249,11 @@ export const updateOrderStatus = async (
   orderId: string,
   data: OrderStatusUpdate
 ): Promise<OrderDetail> => {
-  const response = await api.patch<OrderDetail>(`/admin/orders/${orderId}/status`, data);
+  const response = await api.patch<OrderDetail>(
+    `/admin/orders/${orderId}/status`,
+    data,
+    { timeout: 30000 }
+  );
   return response.data;
 };
 
@@ -260,7 +264,11 @@ export const updateShippingInfo = async (
   orderId: string,
   data: ShippingInfoUpdate
 ): Promise<OrderDetail> => {
-  const response = await api.patch<OrderDetail>(`/admin/orders/${orderId}/shipping`, data);
+  const response = await api.patch<OrderDetail>(
+    `/admin/orders/${orderId}/shipping`,
+    data,
+    { timeout: 30000 }
+  );
   return response.data;
 };
 
@@ -274,7 +282,8 @@ export const updatePickupStatus = async (
 ): Promise<OrderDetail> => {
   const response = await api.patch<OrderDetail>(
     `/admin/orders/${orderId}/pickup/${pickupId}`,
-    data
+    data,
+    { timeout: 30000 }
   );
   return response.data;
 };
@@ -283,7 +292,7 @@ export const updatePickupStatus = async (
  * Bulk update order statuses
  */
 export const bulkUpdateStatus = async (data: BulkStatusUpdate): Promise<{ success: boolean; updated_count: number; message: string }> => {
-  const response = await api.patch('/admin/orders/bulk/status', data);
+  const response = await api.patch('/admin/orders/bulk/status', data, { timeout: 30000 });
   return response.data;
 };
 
@@ -294,7 +303,7 @@ export const cancelOrder = async (
   orderId: string,
   data: CancelOrderRequest
 ): Promise<{ success: boolean; message: string; order_id: string; order_number: string }> => {
-  const response = await api.post(`/admin/orders/${orderId}/cancel`, data);
+  const response = await api.post(`/admin/orders/${orderId}/cancel`, data, { timeout: 30000 });
   return response.data;
 };
 

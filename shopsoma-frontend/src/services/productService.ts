@@ -37,6 +37,12 @@ export const productService = {
     return response.data;
   },
 
+  // Get vendor product by ID (vendor only)
+  async getVendorProduct(productId: string): Promise<Product> {
+    const response = await api.get(`/products/${productId}`, { timeout: 20000 });
+    return response.data;
+  },
+
   // Get featured products
   async getFeaturedProducts(pageSize: number = 8): Promise<Product[]> {
     const response = await api.get('/products', {
@@ -90,7 +96,7 @@ export const productService = {
 
   // Create product (vendor only)
   async createProduct(productData: Partial<Product>): Promise<Product> {
-    const response = await api.post('/products', productData);
+    const response = await api.post('/products', productData, { timeout: 20000 });
     return response.data;
   },
 
@@ -192,6 +198,32 @@ export const productService = {
       headers: {
         'Content-Type': 'multipart/form-data',
       },
+    });
+    return response.data;
+  },
+
+  async bulkUploadSingleProducts(file: File): Promise<{ created_count: number }> {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const response = await api.post('/products/bulk-upload/single', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+      timeout: 30000,
+    });
+    return response.data;
+  },
+
+  async bulkUploadVariableProducts(file: File): Promise<{ created_count: number }> {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const response = await api.post('/products/bulk-upload/variable', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+      timeout: 30000,
     });
     return response.data;
   },

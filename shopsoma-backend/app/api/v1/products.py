@@ -1,9 +1,11 @@
 """
 Product CRUD API endpoints
 """
-from typing import List, Optional
+from typing import List, Optional, Dict, Any, Tuple
+import csv
+import io
 from uuid import UUID
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, or_, and_
 from sqlalchemy.orm import selectinload
@@ -11,6 +13,7 @@ from sqlalchemy.orm import selectinload
 from app.core.database import get_db
 from app.api.dependencies import get_current_user, get_current_vendor, get_current_admin, get_optional_user
 from app.models.user import User
+from app.models.category import Category
 from app.models.product import Product, ProductVariant, ProductImage, ProductStatus, ProductType, ModerationStatus, Variation, SizeStock, SizeEnum
 from app.models.vendor import Vendor
 from app.schemas.product import (
@@ -40,9 +43,93 @@ PRODUCT_RELATIONSHIPS = (
     selectinload(Product.variations).selectinload(Variation.size_stocks),
     selectinload(Product.images),
     selectinload(Product.vendor),
-    selectinload(Product.category),
+    selectinload(Product.category).selectinload(Category.parent),
     selectinload(Product.collection),
 )
+
+BULK_SINGLE_HEADERS = [
+    "title",
+    "description",
+    "category_slug",
+    "currency",
+    "base_price",
+    "compare_at_price",
+    "total_stock",
+    "sku",
+    "collection_name",
+    "made_to_order",
+    "made_to_order_timeline",
+    "care_instructions",
+    "fabric_composition",
+    "status",
+]
+
+BULK_VARIABLE_HEADERS = [
+    "product_title",
+    "description",
+    "category_slug",
+    "currency",
+    "base_price",
+    "compare_at_price",
+    "product_sku",
+    "collection_name",
+    "made_to_order",
+    "made_to_order_timeline",
+    "care_instructions",
+    "fabric_composition",
+    "color_name",
+    "color_hex",
+    "size",
+    "stock",
+    "variant_sku",
+    "variation_price",
+    "variation_sale_price",
+]
+
+
+def _parse_bool(value: Optional[str]) -> bool:
+    if value is None:
+        return False
+    return value.strip().lower() in {"true", "1", "yes", "y"}
+
+
+def _parse_int(value: Optional[str], field: str, row: int, errors: List[Dict[str, Any]]) -> Optional[int]:
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        errors.append({"row": row, "field": field, "message": "Must be an integer"})
+        return None
+
+
+def _parse_decimal(value: Optional[str], field: str, row: int, errors: List[Dict[str, Any]]) -> Optional[float]:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except ValueError:
+        errors.append({"row": row, "field": field, "message": "Must be a number"})
+        return None
+
+
+async def _get_category_by_slug(db: AsyncSession, slug: str) -> Optional[Category]:
+    result = await db.execute(select(Category).where(Category.slug == slug, Category.is_active == True))
+    return result.scalar_one_or_none()
+
+
+async def _get_collection_by_name(
+    db: AsyncSession, vendor_id: UUID, name: str
+) -> Optional["Collection"]:
+    from app.models.collection import Collection
+
+    result = await db.execute(
+        select(Collection).where(
+            Collection.vendor_id == vendor_id,
+            Collection.name == name
+        )
+    )
+    return result.scalar_one_or_none()
 
 # ============================================================================
 # Product CRUD Endpoints
@@ -177,6 +264,271 @@ async def create_product(
     return product
 
 
+@router.post("/bulk-upload/single", status_code=status.HTTP_201_CREATED)
+async def bulk_upload_single_products(
+    file: UploadFile = File(..., description="CSV file for single products"),
+    current_user: User = Depends(get_current_vendor),
+    db: AsyncSession = Depends(get_db)
+):
+    """Bulk upload single products from CSV (vendors only)."""
+    if not file.filename or not file.filename.lower().endswith(".csv"):
+        raise HTTPException(status_code=400, detail="Please upload a CSV file.")
+
+    result = await db.execute(select(Vendor).where(Vendor.user_id == current_user.id))
+    vendor = result.scalar_one_or_none()
+    if not vendor or not vendor.approved:
+        raise HTTPException(status_code=403, detail="Vendor account not approved.")
+
+    content = await file.read()
+    reader = csv.DictReader(io.StringIO(content.decode("utf-8-sig")))
+    headers = reader.fieldnames or []
+    missing_headers = [h for h in BULK_SINGLE_HEADERS if h not in headers]
+    if missing_headers:
+        raise HTTPException(
+            status_code=422,
+            detail={"message": "Missing required headers", "missing_headers": missing_headers},
+        )
+
+    errors: List[Dict[str, Any]] = []
+    products_to_create: List[Product] = []
+
+    for row_index, row in enumerate(reader, start=2):
+        row_errors: List[Dict[str, Any]] = []
+        title = (row.get("title") or "").strip()
+        category_slug = (row.get("category_slug") or "").strip()
+        currency = (row.get("currency") or "NGN").strip().upper()
+        base_price = _parse_decimal(row.get("base_price"), "base_price", row_index, row_errors)
+        compare_price = _parse_decimal(row.get("compare_at_price"), "compare_at_price", row_index, row_errors)
+        total_stock = _parse_int(row.get("total_stock"), "total_stock", row_index, row_errors)
+        status_value = (row.get("status") or "draft").strip().lower()
+
+        if not title:
+            row_errors.append({"row": row_index, "field": "title", "message": "Title is required"})
+        if not category_slug:
+            row_errors.append({"row": row_index, "field": "category_slug", "message": "Category slug is required"})
+        if currency not in {"NGN", "USD"}:
+            row_errors.append({"row": row_index, "field": "currency", "message": "Currency must be NGN or USD"})
+        if base_price is None:
+            row_errors.append({"row": row_index, "field": "base_price", "message": "Base price is required"})
+        if status_value not in {"draft", "active", "inactive", "archived"}:
+            row_errors.append({"row": row_index, "field": "status", "message": "Invalid status"})
+
+        category = None
+        if category_slug:
+            category = await _get_category_by_slug(db, category_slug)
+            if not category:
+                row_errors.append({"row": row_index, "field": "category_slug", "message": "Category slug not found"})
+
+        collection = None
+        collection_name = (row.get("collection_name") or "").strip()
+        if collection_name:
+            collection = await _get_collection_by_name(db, vendor.id, collection_name)
+            if not collection:
+                row_errors.append({"row": row_index, "field": "collection_name", "message": "Collection not found"})
+
+        if row_errors:
+            errors.extend(row_errors)
+            continue
+
+        product = Product(
+            vendor_id=vendor.id,
+            title=title,
+            description=(row.get("description") or "").strip() or None,
+            category_id=category.id if category else None,
+            collection_id=collection.id if collection else None,
+            sku=(row.get("sku") or "").strip() or None,
+            base_price=base_price,
+            compare_at_price=compare_price,
+            currency=currency,
+            total_stock=total_stock or 0,
+            status=ProductStatus(status_value),
+            is_featured=False,
+            product_type=ProductType.SINGLE,
+            made_to_order=_parse_bool(row.get("made_to_order")),
+            made_to_order_timeline=(row.get("made_to_order_timeline") or "").strip() or None,
+            care_instructions=(row.get("care_instructions") or "").strip() or None,
+            fabric_composition=(row.get("fabric_composition") or "").strip() or None,
+            moderation_status=ModerationStatus.PENDING,
+        )
+        products_to_create.append(product)
+
+    if errors:
+        raise HTTPException(status_code=422, detail={"message": "Validation failed", "errors": errors})
+
+    db.add_all(products_to_create)
+    await db.commit()
+
+    return {"success": True, "created_count": len(products_to_create)}
+
+
+@router.post("/bulk-upload/variable", status_code=status.HTTP_201_CREATED)
+async def bulk_upload_variable_products(
+    file: UploadFile = File(..., description="CSV file for variable products"),
+    current_user: User = Depends(get_current_vendor),
+    db: AsyncSession = Depends(get_db)
+):
+    """Bulk upload variable products (with variations) from CSV."""
+    if not file.filename or not file.filename.lower().endswith(".csv"):
+        raise HTTPException(status_code=400, detail="Please upload a CSV file.")
+
+    result = await db.execute(select(Vendor).where(Vendor.user_id == current_user.id))
+    vendor = result.scalar_one_or_none()
+    if not vendor or not vendor.approved:
+        raise HTTPException(status_code=403, detail="Vendor account not approved.")
+
+    content = await file.read()
+    reader = csv.DictReader(io.StringIO(content.decode("utf-8-sig")))
+    headers = reader.fieldnames or []
+    missing_headers = [h for h in BULK_VARIABLE_HEADERS if h not in headers]
+    if missing_headers:
+        raise HTTPException(
+            status_code=422,
+            detail={"message": "Missing required headers", "missing_headers": missing_headers},
+        )
+
+    errors: List[Dict[str, Any]] = []
+    grouped: Dict[str, Dict[str, Any]] = {}
+    allowed_sizes = {size.value for size in SizeEnum}
+
+    for row_index, row in enumerate(reader, start=2):
+        row_errors: List[Dict[str, Any]] = []
+        title = (row.get("product_title") or "").strip()
+        category_slug = (row.get("category_slug") or "").strip()
+        currency = (row.get("currency") or "NGN").strip().upper()
+        base_price = _parse_decimal(row.get("base_price"), "base_price", row_index, row_errors)
+        compare_price = _parse_decimal(row.get("compare_at_price"), "compare_at_price", row_index, row_errors)
+
+        color_name = (row.get("color_name") or "").strip()
+        color_hex = (row.get("color_hex") or "").strip() or None
+        size = (row.get("size") or "").strip()
+        stock = _parse_int(row.get("stock"), "stock", row_index, row_errors)
+        variation_price = _parse_decimal(row.get("variation_price"), "variation_price", row_index, row_errors)
+        variation_sale_price = _parse_decimal(row.get("variation_sale_price"), "variation_sale_price", row_index, row_errors)
+
+        if not title:
+            row_errors.append({"row": row_index, "field": "product_title", "message": "Product title is required"})
+        if not category_slug:
+            row_errors.append({"row": row_index, "field": "category_slug", "message": "Category slug is required"})
+        if currency not in {"NGN", "USD"}:
+            row_errors.append({"row": row_index, "field": "currency", "message": "Currency must be NGN or USD"})
+        if base_price is None:
+            row_errors.append({"row": row_index, "field": "base_price", "message": "Base price is required"})
+        if not color_name:
+            row_errors.append({"row": row_index, "field": "color_name", "message": "Color name is required"})
+        if not size:
+            row_errors.append({"row": row_index, "field": "size", "message": "Size is required"})
+        if stock is None:
+            row_errors.append({"row": row_index, "field": "stock", "message": "Stock is required"})
+        if size and size not in allowed_sizes:
+            row_errors.append({"row": row_index, "field": "size", "message": "Invalid size value"})
+
+        category = None
+        if category_slug:
+            category = await _get_category_by_slug(db, category_slug)
+            if not category:
+                row_errors.append({"row": row_index, "field": "category_slug", "message": "Category slug not found"})
+
+        collection = None
+        collection_name = (row.get("collection_name") or "").strip()
+        if collection_name:
+            collection = await _get_collection_by_name(db, vendor.id, collection_name)
+            if not collection:
+                row_errors.append({"row": row_index, "field": "collection_name", "message": "Collection not found"})
+
+        if row_errors:
+            errors.extend(row_errors)
+            continue
+
+        group_key = f"{title.lower()}::{category_slug.lower()}::{currency}"
+        if group_key not in grouped:
+            grouped[group_key] = {
+                "title": title,
+                "description": (row.get("description") or "").strip() or None,
+                "category_id": category.id if category else None,
+                "collection_id": collection.id if collection else None,
+                "currency": currency,
+                "base_price": base_price,
+                "compare_at_price": compare_price,
+                "sku": (row.get("product_sku") or "").strip() or None,
+                "made_to_order": _parse_bool(row.get("made_to_order")),
+                "made_to_order_timeline": (row.get("made_to_order_timeline") or "").strip() or None,
+                "care_instructions": (row.get("care_instructions") or "").strip() or None,
+                "fabric_composition": (row.get("fabric_composition") or "").strip() or None,
+                "variations": {},
+            }
+
+        variations = grouped[group_key]["variations"]
+        variation_key = f"{color_name.lower()}::{color_hex or ''}"
+        if variation_key not in variations:
+            variations[variation_key] = {
+                "title": color_name,
+                "type": "color",
+                "color_hex": color_hex,
+                "price": variation_price,
+                "sale_price": variation_sale_price,
+                "sizes": [],
+            }
+
+        variations[variation_key]["sizes"].append(
+            {"size": size, "stock": stock}
+        )
+
+    if errors:
+        raise HTTPException(status_code=422, detail={"message": "Validation failed", "errors": errors})
+
+    created = 0
+    for group in grouped.values():
+        product = Product(
+            vendor_id=vendor.id,
+            title=group["title"],
+            description=group["description"],
+            category_id=group["category_id"],
+            collection_id=group["collection_id"],
+            sku=group["sku"],
+            base_price=group["base_price"],
+            compare_at_price=group["compare_at_price"],
+            currency=group["currency"],
+            total_stock=0,
+            status=ProductStatus.DRAFT,
+            is_featured=False,
+            product_type=ProductType.VARIABLE,
+            made_to_order=group["made_to_order"],
+            made_to_order_timeline=group["made_to_order_timeline"],
+            care_instructions=group["care_instructions"],
+            fabric_composition=group["fabric_composition"],
+            moderation_status=ModerationStatus.PENDING,
+        )
+        db.add(product)
+        await db.flush()
+
+        for variation_data in group["variations"].values():
+            variation = Variation(
+                product_id=product.id,
+                title=variation_data["title"],
+                type=variation_data["type"],
+                color_hex=variation_data["color_hex"],
+                price=variation_data["price"],
+                sale_price=variation_data["sale_price"],
+                images=[],
+                is_active=True,
+            )
+            db.add(variation)
+            await db.flush()
+
+            for size_data in variation_data["sizes"]:
+                size_stock = SizeStock(
+                    variation_id=variation.id,
+                    size=SizeEnum(size_data["size"]),
+                    stock=size_data["stock"],
+                )
+                db.add(size_stock)
+
+        created += 1
+
+    await db.commit()
+
+    return {"success": True, "created_count": created}
+
 @router.get("", response_model=ProductListResponse)
 async def list_products(
     search: Optional[str] = Query(None, max_length=255),
@@ -232,7 +584,12 @@ async def list_products(
 
     # Category filter
     if category_id:
-        filters.append(Product.category_id == category_id)
+        filters.append(
+            or_(
+                Product.category_id == category_id,
+                Product.category.has(Category.parent_id == category_id),
+            )
+        )
 
     # Vendor filter
     if vendor_id and (not current_user or current_user.role == "admin"):
@@ -508,6 +865,8 @@ async def delete_product(
 
     # Soft delete
     product.status = ProductStatus.ARCHIVED
+    # Ensure archived products no longer count toward collection totals
+    product.collection_id = None
     await db.commit()
 
 

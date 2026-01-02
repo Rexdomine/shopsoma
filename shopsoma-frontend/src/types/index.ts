@@ -53,6 +53,7 @@ export interface Product {
   currency: 'NGN' | 'USD';
   category_id?: string | null;
   category_name?: string | null;
+  category_parent_name?: string | null;
   collection_id?: string | null;
   collection_name?: string | null;
   inventory_quantity: number;
@@ -210,8 +211,37 @@ export interface Collection {
   slug: string;
   description?: string;
   is_active: boolean;
+  banner_image_url?: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface CollectionSummary extends Collection {
+  products_available?: number;
+  thumbnails?: string[];
+}
+
+export interface CollectionDetail extends CollectionSummary {
+  description?: string;
+}
+
+export interface CollectionProductSummary {
+  id: string;
+  title: string;
+  status: string;
+  base_price: number;
+  total_stock: number;
+  created_at: string;
+  image_url?: string | null;
+  collection_name?: string | null;
+}
+
+export interface CollectionProductsResponse {
+  items: CollectionProductSummary[];
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
 }
 
 export interface CollectionCreate {

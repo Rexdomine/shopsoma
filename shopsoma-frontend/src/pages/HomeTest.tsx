@@ -6,7 +6,7 @@ import Layout from '../components/layout/Layout';
 export default function HomeTest() {
   return (
     <Layout>
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+      <div className="min-h-screen flex items-center justify-center bg-[var(--color-page-bg)]">
         <div className="text-center">
           <h1 className="text-4xl font-bold text-gray-900 mb-4">
             Shopsoma Homepage Test

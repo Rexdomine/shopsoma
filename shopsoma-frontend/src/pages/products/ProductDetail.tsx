@@ -52,6 +52,7 @@ export default function ProductDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
   const addItem = useCartStore((state) => state.addItem);
+  const cartError = useCartStore((state) => state.error);
   const { currentCurrency: preferredCurrency, exchangeRates, fetchExchangeRate } = useCurrencyStore();
 
   const [product, setProduct] = useState<Product | null>(null);
@@ -67,6 +68,7 @@ export default function ProductDetail() {
   const [sizeGuideOpen, setSizeGuideOpen] = useState(false);
   const [sizeMenuOpen, setSizeMenuOpen] = useState(false);
   const [bagModalOpen, setBagModalOpen] = useState(false);
+  const [addToBagError, setAddToBagError] = useState<string | null>(null);
   const [addedVariant, setAddedVariant] = useState<ProductVariant | null>(null);
   const sizeDropdownRef = useRef<HTMLDivElement>(null);
 
@@ -122,7 +124,9 @@ export default function ProductDetail() {
 
   // Effect to switch images when color variation is selected
   useEffect(() => {
-    if (!product || !selectedColor) {
+    const normalizedColor = normalizeValue(selectedColor);
+
+    if (!product || !normalizedColor) {
       // If no color selected, use default product images
       if (product?.images?.[0]?.image_url) {
         setSelectedImage(product.images[0].image_url);
@@ -132,8 +136,8 @@ export default function ProductDetail() {
 
     // Find the variation matching the selected color
     // Note: Variation titles are formatted as "Product Name (Color)", so we check if title contains the color
-    const selectedVariation = product.variations?.find(
-      (variation) => variation.title.toLowerCase().includes(selectedColor.toLowerCase())
+    const selectedVariation = product.variations?.find((variation) =>
+      normalizeValue(variation.title).includes(normalizedColor)
     );
 
     if (selectedVariation && selectedVariation.images.length > 0) {
@@ -170,43 +174,84 @@ export default function ProductDetail() {
     }
   };
 
-  const getColorOptions = (variants: ProductVariant[]): ColorOption[] => {
+  const normalizeValue = (value?: string | null) => value?.trim().toLowerCase() ?? '';
+
+  const getColorOptions = (
+    variants: ProductVariant[],
+    sizeFilter?: string | null
+  ): ColorOption[] => {
     const uniqueMap = new Map<string, ColorOption>();
+    const normalizedSize = normalizeValue(sizeFilter);
+
     variants.forEach((variant) => {
-      if (variant.color) {
-        const key = variant.color.toLowerCase();
-        if (!uniqueMap.has(key)) {
-          uniqueMap.set(key, {
-            label: variant.color,
-            value: variant.color,
-            hex: variant.color_hex ?? null,
-          });
-        }
+      if (!variant.color) return;
+      if (normalizedSize && normalizeValue(variant.size) !== normalizedSize) return;
+
+      const key = normalizeValue(variant.color);
+      if (!uniqueMap.has(key)) {
+        uniqueMap.set(key, {
+          label: variant.color,
+          value: variant.color,
+          hex: variant.color_hex ?? null,
+        });
       }
     });
     return Array.from(uniqueMap.values());
   };
 
-  const getSizeOptions = (variants: ProductVariant[]): string[] => {
+  const getSizeOptions = (
+    variants: ProductVariant[],
+    colorFilter?: string | null
+  ): string[] => {
     const set = new Set<string>();
+    const normalizedColor = normalizeValue(colorFilter);
+
     variants.forEach((variant) => {
-      if (variant.size) {
-        set.add(variant.size);
-      }
+      if (!variant.size) return;
+      if (normalizedColor && normalizeValue(variant.color) !== normalizedColor) return;
+
+      set.add(variant.size);
     });
     return Array.from(set);
   };
 
   const colorOptions = useMemo(
-    () => getColorOptions(product?.variants ?? []),
-    [product?.variants]
+    () => getColorOptions(product?.variants ?? [], selectedSize),
+    [product?.variants, selectedSize]
   );
   const sizeOptions = useMemo(
-    () => getSizeOptions(product?.variants ?? []),
-    [product?.variants]
+    () => getSizeOptions(product?.variants ?? [], selectedColor),
+    [product?.variants, selectedColor]
   );
 
+  useEffect(() => {
+    if (!selectedColor || colorOptions.length === 0) return;
+    const normalizedSelected = normalizeValue(selectedColor);
+    const isValid = colorOptions.some(
+      (option) => normalizeValue(option.value) === normalizedSelected
+    );
+    if (!isValid) {
+      setSelectedColor(null);
+    }
+  }, [selectedColor, colorOptions]);
+
+  useEffect(() => {
+    if (!selectedSize || sizeOptions.length === 0) return;
+    const normalizedSelected = normalizeValue(selectedSize);
+    const isValid = sizeOptions.some(
+      (option) => normalizeValue(option) === normalizedSelected
+    );
+    if (!isValid) {
+      setSelectedSize(null);
+    }
+  }, [selectedSize, sizeOptions]);
+
   const selectedVariant = useMemo(() => {
+    const normalizeSelection = {
+      color: normalizeValue(selectedColor),
+      size: normalizeValue(selectedSize),
+    };
+
     if (!product?.variants?.length) {
       // For products without variants, create a default variant
       if (!product) return null;
@@ -221,22 +266,54 @@ export default function ProductDetail() {
       } as ProductVariant;
     }
 
-    let variants = product.variants;
+    const variants = product.variants;
 
-    if (colorOptions.length && selectedColor) {
-      variants = variants.filter(
-        (variant) => variant.color?.toLowerCase() === selectedColor.toLowerCase()
+    const hasColorSelection = Boolean(normalizeSelection.color);
+    const hasSizeSelection = Boolean(normalizeSelection.size);
+
+    const strictMatch = variants.find((variant) => {
+      const variantColor = normalizeValue(variant.color);
+      const variantSize = normalizeValue(variant.size);
+
+      const colorMatches = !hasColorSelection || variantColor === normalizeSelection.color;
+      const sizeMatches = !hasSizeSelection || variantSize === normalizeSelection.size;
+
+      return colorMatches && sizeMatches;
+    });
+
+    if (strictMatch) {
+      return strictMatch;
+    }
+
+    if (hasColorSelection && hasSizeSelection) {
+      return null;
+    }
+
+    if (hasColorSelection) {
+      return (
+        variants.find(
+          (variant) => normalizeValue(variant.color) === normalizeSelection.color
+        ) ?? null
       );
     }
 
-    if (sizeOptions.length && selectedSize) {
-      variants = variants.filter(
-        (variant) => variant.size?.toLowerCase() === selectedSize.toLowerCase()
+    if (hasSizeSelection) {
+      return (
+        variants.find(
+          (variant) => normalizeValue(variant.size) === normalizeSelection.size
+        ) ?? null
       );
     }
 
     return variants[0] ?? null;
   }, [product, colorOptions.length, sizeOptions.length, selectedColor, selectedSize]);
+
+  const hasInvalidSelection = useMemo(() => {
+    if (!product?.variants?.length) return false;
+    if (!selectedColor && !selectedSize) return false;
+
+    return !selectedVariant;
+  }, [product?.variants?.length, selectedColor, selectedSize, selectedVariant]);
 
   const currentPrice = selectedVariant?.price ?? product?.base_price ?? 0;
   const comparePrice = selectedVariant?.compare_at_price ?? product?.compare_at_price ?? null;
@@ -262,6 +339,17 @@ export default function ProductDetail() {
     }
   }, [selectedVariant?.id, selectedVariant?.stock]);
 
+  useEffect(() => {
+    if (cartError) {
+      console.error('[ProductDetail] Cart synchronization error', {
+        productId: product?.id,
+        variantId: selectedVariant?.id,
+        cartError,
+      });
+      setAddToBagError(cartError);
+    }
+  }, [cartError, product?.id, selectedVariant?.id]);
+
   const handleQuantityChange = (direction: 'increment' | 'decrement') => {
     if (isOutOfStock) return;
     if (direction === 'increment') {
@@ -272,21 +360,80 @@ export default function ProductDetail() {
   };
 
   const handleAddToBag = () => {
-    if (missingSelection || !product || !selectedVariant || isOutOfStock || quantity < 1) return;
-    if (quantity > maxQuantity) {
-      setQuantity(maxQuantity);
+    setAddToBagError(null);
+
+    if (missingSelection) {
+      console.warn('[ProductDetail] Add to bag blocked: missing selection', {
+        productId: product?.id,
+        selectedColor,
+        selectedSize,
+      });
+      setAddToBagError('Select a color and size to add this item to your bag.');
       return;
     }
 
-    // Add to cart using Zustand store
-    addItem({
-      product,
-      variant: selectedVariant,
-      quantity,
-    });
+    if (hasInvalidSelection) {
+      console.warn('[ProductDetail] Add to bag blocked: invalid selection', {
+        productId: product?.id,
+        selectedColor,
+        selectedSize,
+      });
+      setAddToBagError('This color and size combination is unavailable. Please choose another option.');
+      return;
+    }
 
-    setAddedVariant(selectedVariant);
-    setBagModalOpen(true);
+    if (!product || !selectedVariant) {
+      console.error('[ProductDetail] Add to bag failed: missing product or variant', {
+        productId: product?.id,
+        variantId: selectedVariant?.id,
+        availableVariants: product?.variants?.length,
+        availableVariations: product?.variations?.length,
+      });
+      setAddToBagError('We could not find the selected variation. Please refresh and try again.');
+      return;
+    }
+
+    if (isOutOfStock || quantity < 1) {
+      console.warn('[ProductDetail] Add to bag blocked: item out of stock or invalid quantity', {
+        productId: product.id,
+        variantId: selectedVariant.id,
+        quantity,
+        maxQuantity,
+      });
+      setAddToBagError('This variation is currently unavailable.');
+      return;
+    }
+
+    if (quantity > maxQuantity) {
+      console.warn('[ProductDetail] Quantity adjusted to available stock', {
+        productId: product.id,
+        variantId: selectedVariant.id,
+        requested: quantity,
+        maxQuantity,
+      });
+      setQuantity(maxQuantity);
+      setAddToBagError('Quantity adjusted to available stock.');
+      return;
+    }
+
+    try {
+      // Add to cart using Zustand store
+      addItem({
+        product,
+        variant: selectedVariant,
+        quantity,
+      });
+
+      setAddedVariant(selectedVariant);
+      setBagModalOpen(true);
+    } catch (err) {
+      console.error('[ProductDetail] Unexpected error while adding to bag', {
+        productId: product.id,
+        variantId: selectedVariant.id,
+        err,
+      });
+      setAddToBagError('Unable to add to bag. Check console logs for details.');
+    }
   };
 
   const handleWishlistToggle = async () => {
@@ -707,6 +854,11 @@ export default function ProductDetail() {
             >
               Add to Bag
             </button>
+            {addToBagError && (
+              <p className="mt-3 text-sm text-red-600" role="alert">
+                {addToBagError}
+              </p>
+            )}
           </div>
         </div>
 

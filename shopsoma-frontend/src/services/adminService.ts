@@ -287,4 +287,12 @@ export const adminService = {
   async deleteProduct(productId: string): Promise<void> {
     await api.delete(`/admin/products/${productId}`);
   },
+
+  // Update featured status
+  async updateProductFeatured(productId: string, isFeatured: boolean): Promise<{ is_featured: boolean }> {
+    const response = await api.put(`/admin/products/${productId}/feature`, {
+      is_featured: isFeatured,
+    });
+    return response.data;
+  },
 };

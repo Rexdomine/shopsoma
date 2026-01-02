@@ -358,6 +358,7 @@ class ProductResponse(ProductBase):
     vendor_id: UUID
     vendor_name: Optional[str] = None
     category_name: Optional[str] = None
+    category_parent_name: Optional[str] = None
     collection_name: Optional[str] = None
     moderation_status: str
     moderation_notes: Optional[str] = None
@@ -479,3 +480,8 @@ class ProductRejectionRequest(BaseModel):
     """Schema for rejecting a product"""
     reason: str = Field(..., min_length=10, max_length=1000, description="Rejection reason (required)")
     notes: Optional[str] = Field(None, max_length=500, description="Additional notes")
+
+
+class ProductFeatureUpdate(BaseModel):
+    """Schema for toggling a product's featured status"""
+    is_featured: bool = Field(..., description="Whether the product is featured")

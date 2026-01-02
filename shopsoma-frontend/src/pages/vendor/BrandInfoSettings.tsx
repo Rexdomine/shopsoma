@@ -179,10 +179,14 @@ export default function BrandInfoSettings() {
 
     initialized.current = true;
 
-    // Populate phone and email from user data (available during onboarding)
-    if (user) {
-      setPhone(user.phone_number || vendorProfile?.business_phone || '');
-      setEmail(user.email || '');
+    // Populate phone and email from existing user/vendor data
+    const nextPhone = user?.phone_number || vendorProfile?.business_phone || '';
+    const nextEmail = user?.email || '';
+    if (nextPhone) {
+      setPhone(nextPhone);
+    }
+    if (nextEmail) {
+      setEmail(nextEmail);
     }
 
     // Populate description from vendor profile (brand story from signup)
@@ -234,6 +238,16 @@ export default function BrandInfoSettings() {
     // Note: Bank details are now managed through payment methods API
     // and populated via fetchPaymentMethods()
   }, [vendorProfile, isOnboarding, user]);
+
+  useEffect(() => {
+    if (!user) return;
+    if (!phone && user.phone_number) {
+      setPhone(user.phone_number);
+    }
+    if (!email && user.email) {
+      setEmail(user.email);
+    }
+  }, [user, phone, email]);
 
   useEffect(() => {
     if (sameAsShipping) {
@@ -441,7 +455,7 @@ export default function BrandInfoSettings() {
   const disabledNav = isOnboarding && !brandInfoCompleted;
 
   return (
-    <div className="min-h-screen bg-[#F9FAFB] flex">
+    <div className="min-h-screen bg-[var(--color-page-bg)] flex">
       {/* Toast Notification */}
       {toastVisible && (
         <div className="fixed inset-x-0 top-0 z-50">

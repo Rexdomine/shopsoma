@@ -16,6 +16,10 @@ const ProductDetail = lazy(() => import('../pages/products/ProductDetail'));
 const ProductList = lazy(() => import('../pages/products/ProductList'));
 const MenStorefront = lazy(() => import('../pages/products/MenStorefront'));
 const WomenStorefront = lazy(() => import('../pages/products/WomenStorefront'));
+const NewArrivals = lazy(() => import('../pages/products/NewArrivals'));
+const PerfumesStorefront = lazy(() => import('../pages/products/PerfumesStorefront'));
+const BagsWalletsStorefront = lazy(() => import('../pages/products/BagsWalletsStorefront'));
+const Designers = lazy(() => import('../pages/designers/Designers'));
 const Cart = lazy(() => import('../pages/cart/Cart'));
 const Checkout = lazy(() => import('../pages/checkout/Checkout'));
 const Register = lazy(() => import('../pages/auth/Register'));
@@ -30,6 +34,9 @@ const VendorProductView = lazy(() => import('../pages/vendor/VendorProductView')
 const VendorProductEdit = lazy(() => import('../pages/vendor/VendorProductEdit'));
 const VendorOrders = lazy(() => import('../pages/vendor/VendorOrders'));
 const VendorOrderDetail = lazy(() => import('../pages/vendor/VendorOrderDetail'));
+const VendorAnalytics = lazy(() => import('../pages/vendor/VendorAnalytics'));
+const VendorCollections = lazy(() => import('../pages/vendor/VendorCollections'));
+const VendorCollectionDetail = lazy(() => import('../pages/vendor/VendorCollectionDetail'));
 const VendorEarnings = lazy(() => import('../pages/vendor/VendorEarnings'));
 const VendorExpenses = lazy(() => import('../pages/vendor/VendorExpenses'));
 const VendorWithdrawals = lazy(() => import('../pages/vendor/VendorWithdrawals'));
@@ -63,6 +70,7 @@ const AdminVendorDetail = lazy(() => import('../pages/admin/AdminVendorDetail'))
 const AdminSettings = lazy(() => import('../pages/admin/AdminSettings'));
 const AdminOrders = lazy(() => import('../pages/admin/AdminOrders'));
 const AdminOrderDetail = lazy(() => import('../pages/admin/AdminOrderDetail'));
+const AdminPayouts = lazy(() => import('../pages/admin/AdminPayouts'));
 const Debug = lazy(() => import('../pages/Debug'));
 const NotFound = lazy(() => import('../pages/errors/NotFound'));
 const ServerError = lazy(() => import('../pages/errors/ServerError'));
@@ -98,6 +106,46 @@ const router = createBrowserRouter([
       <ErrorBoundary>
         <Suspense fallback={<Loading fullScreen message="Loading womenswear..." />}>
           <WomenStorefront />
+        </Suspense>
+      </ErrorBoundary>
+    ),
+  },
+  {
+    path: ROUTES.NEW_ARRIVALS,
+    element: (
+      <ErrorBoundary>
+        <Suspense fallback={<Loading fullScreen message="Loading new arrivals..." />}>
+          <NewArrivals />
+        </Suspense>
+      </ErrorBoundary>
+    ),
+  },
+  {
+    path: ROUTES.PERFUMES,
+    element: (
+      <ErrorBoundary>
+        <Suspense fallback={<Loading fullScreen message="Loading perfumes..." />}>
+          <PerfumesStorefront />
+        </Suspense>
+      </ErrorBoundary>
+    ),
+  },
+  {
+    path: ROUTES.BAGS_WALLETS,
+    element: (
+      <ErrorBoundary>
+        <Suspense fallback={<Loading fullScreen message="Loading bags & wallets..." />}>
+          <BagsWalletsStorefront />
+        </Suspense>
+      </ErrorBoundary>
+    ),
+  },
+  {
+    path: ROUTES.DESIGNERS,
+    element: (
+      <ErrorBoundary>
+        <Suspense fallback={<Loading fullScreen message="Loading designers..." />}>
+          <Designers />
         </Suspense>
       </ErrorBoundary>
     ),
@@ -287,6 +335,42 @@ const router = createBrowserRouter([
         <Suspense fallback={<Loading fullScreen message="Loading orders..." />}>
           <VendorLayout>
             <VendorOrders />
+          </VendorLayout>
+        </Suspense>
+      </ErrorBoundary>
+    ),
+  },
+  {
+    path: ROUTES.VENDOR_ANALYTICS,
+    element: (
+      <ErrorBoundary>
+        <Suspense fallback={<Loading fullScreen message="Loading analytics..." />}>
+          <VendorLayout>
+            <VendorAnalytics />
+          </VendorLayout>
+        </Suspense>
+      </ErrorBoundary>
+    ),
+  },
+  {
+    path: ROUTES.VENDOR_COLLECTIONS,
+    element: (
+      <ErrorBoundary>
+        <Suspense fallback={<Loading fullScreen message="Loading collections..." />}>
+          <VendorLayout>
+            <VendorCollections />
+          </VendorLayout>
+        </Suspense>
+      </ErrorBoundary>
+    ),
+  },
+  {
+    path: `${ROUTES.VENDOR_COLLECTIONS}/:id`,
+    element: (
+      <ErrorBoundary>
+        <Suspense fallback={<Loading fullScreen message="Loading collection..." />}>
+          <VendorLayout>
+            <VendorCollectionDetail />
           </VendorLayout>
         </Suspense>
       </ErrorBoundary>
@@ -643,6 +727,18 @@ const router = createBrowserRouter([
         <Suspense fallback={<Loading fullScreen message="Loading order details..." />}>
           <ProtectedRoute roles={['admin']}>
             <AdminOrderDetail />
+          </ProtectedRoute>
+        </Suspense>
+      </ErrorBoundary>
+    ),
+  },
+  {
+    path: ROUTES.ADMIN_PAYOUTS,
+    element: (
+      <ErrorBoundary>
+        <Suspense fallback={<Loading fullScreen message="Loading payouts..." />}>
+          <ProtectedRoute roles={['admin']}>
+            <AdminPayouts />
           </ProtectedRoute>
         </Suspense>
       </ErrorBoundary>

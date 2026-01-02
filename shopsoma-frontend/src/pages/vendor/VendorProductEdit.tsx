@@ -112,7 +112,7 @@ export default function VendorProductEdit() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-[#F9FAFB]">
+      <div className="min-h-screen bg-[var(--color-page-bg)]">
         <div className="flex">
           <VendorSidebar activePrimary="products" />
           <main className="flex-1 p-8">
@@ -131,7 +131,7 @@ export default function VendorProductEdit() {
   }
 
   return (
-    <div className="min-h-screen bg-[#F9FAFB]">
+    <div className="min-h-screen bg-[var(--color-page-bg)]">
       <ToastContainer toasts={toasts} onClose={hideToast} />
       <div className="flex">
         <VendorSidebar activePrimary="products" />

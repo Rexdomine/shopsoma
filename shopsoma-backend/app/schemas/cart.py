@@ -6,7 +6,7 @@ from app.schemas.product import ProductResponse, ProductVariantResponse
 
 class CartItemBase(BaseModel):
     product_id: str
-    variant_id: str
+    variant_id: Optional[str] = None
     quantity: int = Field(ge=1, description="Quantity must be at least 1")
 
 

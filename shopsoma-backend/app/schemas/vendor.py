@@ -155,6 +155,19 @@ class VendorResponse(BaseModel):
         from_attributes = True
 
 
+class DesignerResponse(BaseModel):
+    """Public designer response schema"""
+    id: UUID4
+    business_name: str
+    logo_url: Optional[str]
+    total_products: int
+    total_orders: int
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
 # ==================== VENDOR PICKUP SCHEMAS ====================
 
 class VendorPickupBase(BaseModel):
@@ -335,13 +348,99 @@ class VendorPayoutResponse(BaseModel):
 
 class VendorPayoutSummary(BaseModel):
     """Vendor payout summary"""
-    pending_amount: Decimal
-    last_payout_amount: Decimal
+    current_earnings: float
+    pending_amount: float
+    available_payout: float
+    last_payout_amount: float
     last_payout_date: Optional[date]
-    total_earnings: Decimal
-    current_month_sales: Decimal
+    total_earnings: float
+    current_month_sales: float
 
 
+class VendorPayoutRequest(BaseModel):
+    """Vendor payout request"""
+    amount: Decimal = Field(..., gt=0)
+    payment_method_id: Optional[UUID4] = None
+
+
+class VendorEarningsSummary(BaseModel):
+    """Vendor earnings summary"""
+    current_earnings: float
+    projected_earnings: float
+    expenses: float
+    current_earnings_change_pct: Optional[float]
+    projected_earnings_change_pct: Optional[float]
+    expenses_change_pct: Optional[float]
+    start_date: Optional[date]
+    end_date: Optional[date]
+
+
+class VendorEarningsProductRow(BaseModel):
+    """Vendor earnings row by product item"""
+    id: UUID4
+    order_id: UUID4
+    product_id: UUID4
+    order_number: str
+    product_title: str
+    product_image_url: Optional[str]
+    unit_price: float
+    quantity: int
+    commission_amount: float
+    vendor_payout: float
+    payout_status: Optional[str] = None
+    status: str
+    delivered_at: Optional[datetime]
+    withdraw_available: bool = False
+    withdraw_days_left: Optional[int] = None
+    withdraw_available_at: Optional[datetime] = None
+
+
+class VendorEarningsOrderRow(BaseModel):
+    """Vendor earnings row by order"""
+    id: UUID4
+    order_number: str
+    items: List[str]
+    total_quantity: int
+    total_commission: float
+    total_payout: float
+    status: str
+    delivered_at: Optional[datetime]
+    payout_status: Optional[str] = None
+    withdraw_available: bool = False
+    withdraw_days_left: Optional[int] = None
+    withdraw_available_at: Optional[datetime] = None
+
+
+class VendorAnalyticsSummary(BaseModel):
+    """Vendor analytics revenue summary"""
+    total_revenue: float
+    revenue_change_pct: Optional[float]
+    commission_rate_pct: Optional[float]
+    start_date: Optional[date]
+    end_date: Optional[date]
+
+
+class VendorAnalyticsChartPoint(BaseModel):
+    """Vendor analytics chart point"""
+    timestamp: datetime
+    revenue: float
+    expenses: float
+
+
+class VendorAnalyticsChartResponse(BaseModel):
+    """Vendor analytics chart response"""
+    range: str
+    start_date: datetime
+    end_date: datetime
+    points: List[VendorAnalyticsChartPoint]
+
+
+class VendorAnalyticsStats(BaseModel):
+    """Vendor analytics key stats"""
+    total_products_sold: int
+    wishlisted_products: int
+    returning_customers: int
+    new_customers: int
 # ==================== VENDOR DASHBOARD SCHEMAS ====================
 
 class VendorDashboardMetrics(BaseModel):
