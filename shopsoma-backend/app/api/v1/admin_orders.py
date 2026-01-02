@@ -7,6 +7,7 @@ from sqlalchemy.orm import selectinload
 from typing import Optional, List
 from datetime import datetime, date, timedelta
 from decimal import Decimal
+import logging
 import csv
 import io
 import math
@@ -18,6 +19,8 @@ from app.models.vendor import Vendor
 from app.models.address import Address
 from app.models.vendor_pickup import VendorPickup, PickupStatus
 from app.models.product import Product
+
+logger = logging.getLogger(__name__)
 from app.services.order_notification_service import OrderNotificationService
 from app.services.websocket_manager import get_connection_manager
 from app.schemas.admin_order import (
@@ -451,9 +454,15 @@ async def update_order_status(
         else:
             order.admin_notes = f"[{datetime.now().isoformat()}] {update_data.admin_notes}"
 
-    # Set delivered_at timestamp if status is DELIVERED
-    if new_status == FulfillmentStatus.DELIVERED and not order.delivered_at:
+    # Always refresh delivered_at when status is set to DELIVERED
+    if new_status == FulfillmentStatus.DELIVERED:
         order.delivered_at = datetime.now()
+        logger.info(
+            "[Order Status] order=%s status=%s delivered_at=%s",
+            order.order_number,
+            new_status.value,
+            order.delivered_at.isoformat(),
+        )
 
     # Set cancelled_at timestamp if status is CANCELLED
     if new_status == FulfillmentStatus.CANCELLED and not order.cancelled_at:
@@ -680,6 +689,7 @@ async def bulk_update_status(
 
     updated_count = 0
     for order in orders:
+        previous_status = order.fulfillment_status
         order.fulfillment_status = update_data.fulfillment_status
 
         if update_data.admin_notes:
@@ -689,9 +699,15 @@ async def bulk_update_status(
             else:
                 order.admin_notes = note
 
-        # Set delivered_at if status is DELIVERED
-        if update_data.fulfillment_status == FulfillmentStatus.DELIVERED and not order.delivered_at:
+        # Always refresh delivered_at when status is set to DELIVERED
+        if update_data.fulfillment_status == FulfillmentStatus.DELIVERED:
             order.delivered_at = datetime.now()
+            logger.info(
+                "[Order Status] order=%s status=%s delivered_at=%s",
+                order.order_number,
+                update_data.fulfillment_status.value,
+                order.delivered_at.isoformat(),
+            )
 
         updated_count += 1
 

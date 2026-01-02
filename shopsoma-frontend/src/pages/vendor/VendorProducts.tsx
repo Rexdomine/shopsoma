@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ROUTES } from '../../config/constants';
 import VendorSidebar from '../../components/vendor/VendorSidebar';
 import DeleteProductModal from '../../components/vendor/DeleteProductModal';
+import BulkUploadModal from '../../components/vendor/BulkUploadModal';
 import ToastContainer from '../../components/ui/ToastContainer';
 import CurrencySwitcher from '../../components/common/CurrencySwitcher';
 import { useVendor } from '../../context/VendorContext';
@@ -11,7 +12,7 @@ import { productService } from '../../services/productService';
 import type { Product } from '../../types';
 import { useCurrencyStore } from '../../store/currencyStore';
 import { formatPriceWithConversion } from '../../utils/pricing';
-import { Eye, PencilLine, Shirt, Search, Loader2, ArrowUpDown, Filter, Trash2, Copy } from 'lucide-react';
+import { Eye, PencilLine, Shirt, Search, Loader2, ArrowUpDown, Filter, Trash2, Copy, Upload } from 'lucide-react';
 
 type GroupBy = 'all' | 'collections';
 
@@ -35,46 +36,48 @@ export default function VendorProducts() {
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [productToDelete, setProductToDelete] = useState<Product | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [bulkUploadOpen, setBulkUploadOpen] = useState(false);
 
   useEffect(() => {
     fetchExchangeRate();
   }, [fetchExchangeRate]);
 
-  useEffect(() => {
-    const fetchProducts = async () => {
-      if (!vendorProfile?.id) {
-        console.log('Vendor profile not loaded yet, skipping product fetch');
-        return;
-      }
-      try {
-        setLoading(true);
-        console.log('Fetching products for vendor:', vendorProfile.id);
-        const res = await productService.getVendorProducts(vendorProfile.id, {
-          page_size: 100, // Backend max is 100
-        });
-        console.log('Products fetched:', res);
-        console.log('Products array:', res.products);
-        console.log('Products count:', res.products?.length || 0);
-        setProducts(res.products || []);
-      } catch (err: any) {
-        console.error('Failed to load vendor products', err);
-        console.error('Error response:', err.response);
-        console.error('Error data:', err.response?.data);
-        console.error('Error detail:', err.response?.data?.detail);
+  const loadProducts = useCallback(async () => {
+    if (!vendorProfile?.id) {
+      console.log('Vendor profile not loaded yet, skipping product fetch');
+      return;
+    }
+    try {
+      setLoading(true);
+      console.log('Fetching products for vendor:', vendorProfile.id);
+      const res = await productService.getVendorProducts(vendorProfile.id, {
+        page_size: 100, // Backend max is 100
+      });
+      console.log('Products fetched:', res);
+      console.log('Products array:', res.products);
+      console.log('Products count:', res.products?.length || 0);
+      setProducts(res.products || []);
+    } catch (err: any) {
+      console.error('Failed to load vendor products', err);
+      console.error('Error response:', err.response);
+      console.error('Error data:', err.response?.data);
+      console.error('Error detail:', err.response?.data?.detail);
 
-        // Format validation error for display
-        if (err.response?.data?.detail && Array.isArray(err.response.data.detail)) {
-          console.error('Validation errors:');
-          err.response.data.detail.forEach((error: any, index: number) => {
-            console.error(`  ${index + 1}. ${error.loc?.join('.')}: ${error.msg}`);
-          });
-        }
-      } finally {
-        setLoading(false);
+      // Format validation error for display
+      if (err.response?.data?.detail && Array.isArray(err.response.data.detail)) {
+        console.error('Validation errors:');
+        err.response.data.detail.forEach((error: any, index: number) => {
+          console.error(`  ${index + 1}. ${error.loc?.join('.')}: ${error.msg}`);
+        });
       }
-    };
-    fetchProducts();
+    } finally {
+      setLoading(false);
+    }
   }, [vendorProfile?.id]);
+
+  useEffect(() => {
+    loadProducts();
+  }, [loadProducts]);
 
   const filteredProducts = useMemo(() => {
     let list = [...products];
@@ -207,6 +210,14 @@ export default function VendorProducts() {
         onConfirm={handleDeleteConfirm}
         isDeleting={isDeleting}
       />
+      <BulkUploadModal
+        isOpen={bulkUploadOpen}
+        onClose={() => setBulkUploadOpen(false)}
+        onUploaded={(count) => {
+          success(`Uploaded ${count} product${count === 1 ? '' : 's'} successfully.`);
+          loadProducts();
+        }}
+      />
       <div className="flex">
         <VendorSidebar activePrimary="products" />
 
@@ -240,6 +251,14 @@ export default function VendorProducts() {
                   title="Sort"
                 >
                   <ArrowUpDown className="h-5 w-5 text-gray-600" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setBulkUploadOpen(true)}
+                  className="inline-flex items-center justify-center rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 transition whitespace-nowrap gap-2"
+                >
+                  <Upload className="h-4 w-4" />
+                  Bulk Upload
                 </button>
                 <button
                   type="button"

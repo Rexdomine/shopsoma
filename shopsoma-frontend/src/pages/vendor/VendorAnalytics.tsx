@@ -16,6 +16,8 @@ import VendorSidebar from '../../components/vendor/VendorSidebar';
 import CurrencySwitcher from '../../components/common/CurrencySwitcher';
 import { useCurrencyStore } from '../../store/currencyStore';
 import { formatPriceWithConversion } from '../../utils/pricing';
+import { useNavigate } from 'react-router-dom';
+import { ROUTES } from '../../config/constants';
 import {
   vendorService,
   type VendorAnalyticsChartPoint,
@@ -30,6 +32,20 @@ import {
 type ViewMode = EarningsViewMode;
 
 type AnalyticsRow = VendorEarningsProductRow | VendorEarningsOrderRow;
+
+const getRangeStart = (end: Date, range: string) => {
+  const start = new Date(end);
+  if (range === '1D') {
+    start.setDate(end.getDate() - 1);
+  } else if (range === '7D') {
+    start.setDate(end.getDate() - 7);
+  } else if (range === '1M') {
+    start.setMonth(end.getMonth() - 1);
+  } else {
+    start.setFullYear(end.getFullYear() - 1);
+  }
+  return start;
+};
 
 const formatAxisLabel = (timestamp: string, range: string) => {
   const date = new Date(timestamp);
@@ -169,6 +185,7 @@ function AnalyticsChart({
 }
 
 export default function VendorAnalytics() {
+  const navigate = useNavigate();
   const [viewMode, setViewMode] = useState<ViewMode>('products');
   const [selectedRange, setSelectedRange] = useState('1Y');
   const [search, setSearch] = useState('');
@@ -180,11 +197,8 @@ export default function VendorAnalytics() {
   const [loading, setLoading] = useState(false);
   const [chartLoading, setChartLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const today = useMemo(() => new Date(), []);
-  const [startDate, setStartDate] = useState<Date>(
-    new Date(today.getFullYear(), 0, 1)
-  );
-  const [endDate, setEndDate] = useState<Date>(today);
+  const [endDate, setEndDate] = useState<Date>(() => new Date());
+  const [startDate, setStartDate] = useState<Date>(() => getRangeStart(new Date(), '1Y'));
   const { currentCurrency, exchangeRates, fetchExchangeRate, setCurrency } = useCurrencyStore();
 
   useEffect(() => {
@@ -277,16 +291,7 @@ export default function VendorAnalytics() {
 
   const handleRangeSelect = (range: string) => {
     const end = new Date();
-    const start = new Date(end);
-    if (range === '1D') {
-      start.setDate(end.getDate() - 1);
-    } else if (range === '7D') {
-      start.setDate(end.getDate() - 7);
-    } else if (range === '1M') {
-      start.setMonth(end.getMonth() - 1);
-    } else if (range === '1Y') {
-      start.setFullYear(end.getFullYear() - 1);
-    }
+    const start = getRangeStart(end, range);
     setSelectedRange(range);
     setStartDate(start);
     setEndDate(end);
@@ -569,6 +574,14 @@ export default function VendorAnalytics() {
                           <td className="px-4 py-3">
                             <button
                               type="button"
+                              onClick={() => {
+                                if (viewMode === 'products') {
+                                  const targetId = (row as VendorEarningsProductRow).product_id;
+                                  navigate(`${ROUTES.VENDOR_PRODUCTS}/${targetId}/view`);
+                                } else {
+                                  navigate(`/vendor/orders/${row.id}`);
+                                }
+                              }}
                               className="w-9 h-9 rounded-full border border-gray-200 flex items-center justify-center hover:bg-gray-50"
                             >
                               <Eye className="w-4 h-4 text-gray-500" />

@@ -27,6 +27,20 @@ import {
 
 type EarningsRow = VendorEarningsProductRow | VendorEarningsOrderRow;
 
+const getRangeStart = (end: Date, range: string) => {
+  const start = new Date(end);
+  if (range === '1D') {
+    start.setDate(end.getDate() - 1);
+  } else if (range === '7D') {
+    start.setDate(end.getDate() - 7);
+  } else if (range === '1M') {
+    start.setMonth(end.getMonth() - 1);
+  } else {
+    start.setFullYear(end.getFullYear() - 1);
+  }
+  return start;
+};
+
 function StatusPill({ status }: { status: string }) {
   if (status.toLowerCase() === 'delivered') {
     return <span className="px-4 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700">Complete</span>;
@@ -44,12 +58,9 @@ export default function VendorEarnings() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
-  const today = useMemo(() => new Date(), []);
-  const [startDate, setStartDate] = useState<Date>(
-    new Date(today.getFullYear(), 0, 1)
-  );
-  const [endDate, setEndDate] = useState<Date>(today);
+  const [endDate, setEndDate] = useState<Date>(() => new Date());
   const [selectedRange, setSelectedRange] = useState('1Y');
+  const [startDate, setStartDate] = useState<Date>(() => getRangeStart(new Date(), '1Y'));
   const { currentCurrency, exchangeRates, fetchExchangeRate, setCurrency } = useCurrencyStore();
 
   useEffect(() => {
@@ -113,16 +124,11 @@ export default function VendorEarnings() {
 
   const handleRangeSelect = (range: string) => {
     const end = new Date();
-    const start = new Date(end);
-    if (range === '1D') {
-      start.setDate(end.getDate() - 1);
-    } else if (range === '7D') {
-      start.setDate(end.getDate() - 7);
-    } else if (range === '1M') {
-      start.setMonth(end.getMonth() - 1);
-    } else if (range === '6M') {
-      start.setMonth(end.getMonth() - 6);
-    }
+    const start = range === '6M' ? (() => {
+      const sixMonthStart = new Date(end);
+      sixMonthStart.setMonth(end.getMonth() - 6);
+      return sixMonthStart;
+    })() : getRangeStart(end, range);
     setSelectedRange(range);
     setStartDate(start);
     setEndDate(end);
@@ -141,17 +147,17 @@ export default function VendorEarnings() {
     return parsed.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: '2-digit' });
   };
   const renderWithdrawalBadge = (available?: boolean, daysLeft?: number | null) => {
-    if (available) {
-      return (
-        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 text-emerald-700">
-          Available
-        </span>
-      );
-    }
-    if (typeof daysLeft === 'number') {
+    if (typeof daysLeft === 'number' && daysLeft > 0) {
       return (
         <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-gray-100 text-gray-600">
           {daysLeft} days left
+        </span>
+      );
+    }
+    if (available || daysLeft === 0) {
+      return (
+        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 text-emerald-700">
+          Available
         </span>
       );
     }

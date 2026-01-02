@@ -25,6 +25,20 @@ import {
 
 type ExpenseRow = VendorEarningsProductRow | VendorEarningsOrderRow;
 
+const getRangeStart = (end: Date, range: string) => {
+  const start = new Date(end);
+  if (range === '1D') {
+    start.setDate(end.getDate() - 1);
+  } else if (range === '7D') {
+    start.setDate(end.getDate() - 7);
+  } else if (range === '1M') {
+    start.setMonth(end.getMonth() - 1);
+  } else if (range === '6M') {
+    start.setMonth(end.getMonth() - 6);
+  }
+  return start;
+};
+
 function StatusPill({ status }: { status: string }) {
   if (status.toLowerCase() === 'delivered') {
     return <span className="px-4 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700">Complete</span>;
@@ -43,12 +57,9 @@ export default function VendorExpenses() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
-  const today = useMemo(() => new Date(), []);
-  const [startDate, setStartDate] = useState<Date>(
-    new Date(today.getFullYear(), 0, 1)
-  );
-  const [endDate, setEndDate] = useState<Date>(today);
+  const [endDate, setEndDate] = useState<Date>(() => new Date());
   const [selectedRange, setSelectedRange] = useState('6M');
+  const [startDate, setStartDate] = useState<Date>(() => getRangeStart(new Date(), '6M'));
   const { currentCurrency, exchangeRates, fetchExchangeRate, setCurrency } = useCurrencyStore();
 
   useEffect(() => {
@@ -119,16 +130,7 @@ export default function VendorExpenses() {
 
   const handleRangeSelect = (range: string) => {
     const end = new Date();
-    const start = new Date(end);
-    if (range === '1D') {
-      start.setDate(end.getDate() - 1);
-    } else if (range === '7D') {
-      start.setDate(end.getDate() - 7);
-    } else if (range === '1M') {
-      start.setMonth(end.getMonth() - 1);
-    } else if (range === '6M') {
-      start.setMonth(end.getMonth() - 6);
-    }
+    const start = getRangeStart(end, range);
     setSelectedRange(range);
     setStartDate(start);
     setEndDate(end);

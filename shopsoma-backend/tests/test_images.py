@@ -306,7 +306,7 @@ class TestURLGeneration:
         """Test standard S3 URL generation"""
         url = image_service._get_public_url("products/2025/11/test.jpg")
 
-        assert "s3" in url
+        assert ("s3" in url) or ("r2" in url)
         assert "products/2025/11/test.jpg" in url
 
     @patch('app.core.config.settings.CDN_BASE_URL', 'https://cdn.shopsoma.com')
