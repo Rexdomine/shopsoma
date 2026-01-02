@@ -1014,27 +1014,33 @@ async def get_vendor_earnings_items(
         delivered_filters.append(Order.delivered_at <= end_dt)
 
     completed_payouts_result = await db.execute(
-        select(func.sum(Payout.payout_amount)).where(
+        select(Payout.payout_period_start, Payout.payout_period_end).where(
             and_(
                 Payout.vendor_id == vendor.id,
                 Payout.status == PayoutStatus.COMPLETED
             )
         )
     )
-    completed_payouts = completed_payouts_result.scalar() or Decimal("0.00")
+    completed_periods = completed_payouts_result.all()
+
+    def is_paid_out(delivered: Optional[datetime]) -> bool:
+        if not delivered:
+            return False
+        delivered_date = delivered.date()
+        if delivered_date + timedelta(days=hold_days) > today:
+            return False
+        return any(
+            period_start <= delivered_date <= period_end
+            for period_start, period_end in completed_periods
+        )
 
     if view == "products":
-        payout_value = payout_expr.label("payout_value")
-        cumulative_payout = func.sum(payout_expr).over(
-            order_by=[Order.delivered_at.asc(), OrderItem.id.asc()]
-        ).label("cumulative_payout")
         query = select(
             OrderItem,
             Order.order_number,
             Order.delivered_at,
             Order.fulfillment_status,
-            payout_value,
-            cumulative_payout
+            payout_expr.label("payout_value"),
         ).join(Order).where(
             and_(*delivered_filters)
         )
@@ -1069,7 +1075,7 @@ async def get_vendor_earnings_items(
         rows = result.all()
 
         items = []
-        for item, order_number, delivered_at, fulfillment_status, payout_amount, cumulative_amount in rows:
+        for item, order_number, delivered_at, fulfillment_status, payout_amount in rows:
             product_image_url = None
             if item.product and item.product.images:
                 primary_image = next((img for img in item.product.images if img.is_primary), None)
@@ -1079,7 +1085,7 @@ async def get_vendor_earnings_items(
                     first_image = item.product.images[0]
                     product_image_url = first_image.thumbnail_url or first_image.image_url
 
-            payout_status = "paid_out" if cumulative_amount and cumulative_amount <= completed_payouts else "available"
+            payout_status = "paid_out" if is_paid_out(delivered_at) else "available"
             withdraw_available_at = None
             withdraw_days_left = None
             withdraw_available = False
@@ -1087,6 +1093,15 @@ async def get_vendor_earnings_items(
                 withdraw_available_at = delivered_at + timedelta(days=hold_days)
                 withdraw_days_left = max(0, (withdraw_available_at.date() - today).days)
                 withdraw_available = withdraw_days_left == 0
+                logger.info(
+                    "[Earnings Items] order=%s delivered_at=%s hold_days=%s days_left=%s available=%s payout_status=%s",
+                    order_number,
+                    delivered_at.isoformat(),
+                    hold_days,
+                    withdraw_days_left,
+                    withdraw_available,
+                    payout_status,
+                )
             items.append({
                 "id": str(item.id),
                 "order_id": str(item.order_id),
@@ -1143,44 +1158,6 @@ async def get_vendor_earnings_items(
     result = await db.execute(orders_query)
     orders = result.scalars().all()
 
-    order_payout_status = {}
-    if orders:
-        cumulative_items = select(
-            OrderItem.id.label("item_id"),
-            OrderItem.order_id.label("order_id"),
-            func.sum(payout_expr).over(
-                order_by=[Order.delivered_at.asc(), OrderItem.id.asc()]
-            ).label("cumulative_payout")
-        ).join(Order).where(and_(*delivered_filters)).subquery()
-
-        paid_out_counts = select(
-            cumulative_items.c.order_id,
-            func.count().label("paid_out_count")
-        ).where(
-            cumulative_items.c.cumulative_payout <= completed_payouts
-        ).group_by(cumulative_items.c.order_id).subquery()
-
-        total_counts = select(
-            OrderItem.order_id.label("order_id"),
-            func.count().label("total_count")
-        ).join(Order).where(and_(*delivered_filters)).group_by(OrderItem.order_id).subquery()
-
-        payout_status_result = await db.execute(
-            select(
-                total_counts.c.order_id,
-                total_counts.c.total_count,
-                func.coalesce(paid_out_counts.c.paid_out_count, 0).label("paid_out_count")
-            ).outerjoin(
-                paid_out_counts,
-                paid_out_counts.c.order_id == total_counts.c.order_id
-            )
-        )
-
-        for row in payout_status_result:
-            order_id = row.order_id
-            order_payout_status[str(order_id)] = (
-                "paid_out" if row.paid_out_count >= row.total_count else "available"
-            )
     items = []
     for order in orders:
         vendor_items = [item for item in order.items if item.vendor_id == vendor.id]
@@ -1194,6 +1171,15 @@ async def get_vendor_earnings_items(
             withdraw_available_at = order.delivered_at + timedelta(days=hold_days)
             withdraw_days_left = max(0, (withdraw_available_at.date() - today).days)
             withdraw_available = withdraw_days_left == 0
+            logger.info(
+                "[Earnings Orders] order=%s delivered_at=%s hold_days=%s days_left=%s available=%s payout_status=%s",
+                order.order_number,
+                order.delivered_at.isoformat(),
+                hold_days,
+                withdraw_days_left,
+                withdraw_available,
+                "paid_out" if is_paid_out(order.delivered_at) else "available",
+            )
         items.append({
             "id": str(order.id),
             "order_number": order.order_number,
@@ -1203,7 +1189,7 @@ async def get_vendor_earnings_items(
             "total_payout": float(total_payout),
             "status": order.fulfillment_status.value,
             "delivered_at": order.delivered_at.isoformat() if order.delivered_at else None,
-            "payout_status": order_payout_status.get(str(order.id)),
+            "payout_status": "paid_out" if is_paid_out(order.delivered_at) else "available",
             "withdraw_available": withdraw_available,
             "withdraw_days_left": withdraw_days_left,
             "withdraw_available_at": withdraw_available_at.isoformat() if withdraw_available_at else None,
@@ -1839,13 +1825,13 @@ async def get_payout_summary(
     current_month_sales = current_month_result.scalar() or Decimal("0.00")
 
     return VendorPayoutSummary(
-        current_earnings=total_delivered,
-        pending_amount=pending_amount,
-        available_payout=available_payout,
-        last_payout_amount=last_payout.payout_amount if last_payout else Decimal("0.00"),
+        current_earnings=float(total_delivered),
+        pending_amount=float(pending_amount),
+        available_payout=float(available_payout),
+        last_payout_amount=float(last_payout.payout_amount) if last_payout else 0.0,
         last_payout_date=last_payout.payout_period_end if last_payout else None,
-        total_earnings=completed_payouts,
-        current_month_sales=current_month_sales
+        total_earnings=float(completed_payouts),
+        current_month_sales=float(current_month_sales)
     )
 
 

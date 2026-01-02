@@ -348,13 +348,13 @@ class VendorPayoutResponse(BaseModel):
 
 class VendorPayoutSummary(BaseModel):
     """Vendor payout summary"""
-    current_earnings: Decimal
-    pending_amount: Decimal
-    available_payout: Decimal
-    last_payout_amount: Decimal
+    current_earnings: float
+    pending_amount: float
+    available_payout: float
+    last_payout_amount: float
     last_payout_date: Optional[date]
-    total_earnings: Decimal
-    current_month_sales: Decimal
+    total_earnings: float
+    current_month_sales: float
 
 
 class VendorPayoutRequest(BaseModel):

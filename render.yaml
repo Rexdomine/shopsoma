@@ -4,7 +4,7 @@
 databases:
   # PostgreSQL Database
   - name: shopsoma-staging-db
-    plan: free
+    plan: basic-256mb
     region: oregon
     databaseName: shopsoma_staging
     user: shopsoma_user

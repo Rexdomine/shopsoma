@@ -19,6 +19,20 @@ import { vendorService, type VendorPayout } from '../../services/vendorService';
 import { useToast } from '../../hooks/useToast';
 import ToastContainer from '../../components/ui/ToastContainer';
 
+const getRangeStart = (end: Date, range: string) => {
+  const start = new Date(end);
+  if (range === '1D') {
+    start.setDate(end.getDate() - 1);
+  } else if (range === '7D') {
+    start.setDate(end.getDate() - 7);
+  } else if (range === '1M') {
+    start.setMonth(end.getMonth() - 1);
+  } else if (range === '6M') {
+    start.setMonth(end.getMonth() - 6);
+  }
+  return start;
+};
+
 function StatusBadge({ status }: { status: string }) {
   const normalized = status.toLowerCase();
   if (normalized === 'completed') {
@@ -45,12 +59,9 @@ export default function VendorWithdrawals() {
   const [detailPayout, setDetailPayout] = useState<VendorPayout | null>(null);
   const [canceling, setCanceling] = useState(false);
   const [search, setSearch] = useState('');
-  const today = useMemo(() => new Date(), []);
-  const [startDate, setStartDate] = useState<Date>(
-    new Date(today.getFullYear(), 0, 1)
-  );
-  const [endDate, setEndDate] = useState<Date>(today);
+  const [endDate, setEndDate] = useState<Date>(() => new Date());
   const [selectedRange, setSelectedRange] = useState('6M');
+  const [startDate, setStartDate] = useState<Date>(() => getRangeStart(new Date(), '6M'));
   const { currentCurrency, exchangeRates, fetchExchangeRate, setCurrency } = useCurrencyStore();
 
   useEffect(() => {
@@ -83,16 +94,7 @@ export default function VendorWithdrawals() {
 
   const handleRangeSelect = (range: string) => {
     const end = new Date();
-    const start = new Date(end);
-    if (range === '1D') {
-      start.setDate(end.getDate() - 1);
-    } else if (range === '7D') {
-      start.setDate(end.getDate() - 7);
-    } else if (range === '1M') {
-      start.setMonth(end.getMonth() - 1);
-    } else if (range === '6M') {
-      start.setMonth(end.getMonth() - 6);
-    }
+    const start = getRangeStart(end, range);
     setSelectedRange(range);
     setStartDate(start);
     setEndDate(end);
