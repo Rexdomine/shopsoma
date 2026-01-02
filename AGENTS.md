@@ -42,6 +42,9 @@ Backend:
 - Branches follow `feature/*`, `bugfix/*`, and `hotfix/*` off `develop`; PRs target `develop`.
 - PRs should include a summary, testing steps, linked issues, and screenshots for UI changes. Call out migrations or new environment variables and request code owner review.
 
+## Git Operations
+- Use the GitHub MCP server for all git operations in this project (branches, commits, pushes, PRs, merges, reviews) instead of direct CLI commands.
+
 ## Configuration & Secrets
 - Use `.env` files from `.env.example` in both apps; never commit real secrets.
 - Backend expects PostgreSQL and Redis locally; ensure those services are running before testing.
