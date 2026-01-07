@@ -62,6 +62,8 @@ class Settings(BaseSettings):
 
     # CORS
     CORS_ORIGINS: List[str] = ["http://localhost:5173", "http://localhost:3000"]
+    ALLOWED_ORIGINS: Optional[str] = None
+    ALLOWED_ORIGIN_REGEX: Optional[str] = None
 
     # Stripe
     STRIPE_SECRET_KEY: str = ""

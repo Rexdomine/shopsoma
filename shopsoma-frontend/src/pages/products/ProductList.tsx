@@ -149,7 +149,7 @@ export default function ProductList({
   }, [initialParamsKey, initialParams]);
 
   const normalize = (value: string) =>
-    value.toLowerCase().replace(/’/g, "'").trim();
+    value.toLowerCase().replace(//g, "'").trim();
 
   const categoryMatchesPreset = (categoryValue: string, preset: string) => {
     const normalized = normalize(categoryValue);
@@ -219,562 +219,344 @@ export default function ProductList({
     }
   }, [categoryParam, presetCategory]);
 
-  // Sync filters.category when preference changes while curated filter is active
-  useEffect(() => {
-    if (presetCategory) return;
-    if (curatedFilterApplied) {
-      if (interestCategory) {
-        // Update to the new preference category
-        setFilters(prev => ({
-          ...prev,
-          category: interestCategory,
-        }));
-      } else {
-        // If preference is set to "neither", turn off curated filter
-        setFilters(prev => ({
-          ...prev,
-          category: 'All',
-        }));
-        setCuratedFilterApplied(false);
-      }
-    }
-  }, [preferredInterest, interestCategory, curatedFilterApplied, presetCategory]);
-
-  const filterMenuRef = useRef<HTMLDivElement>(null);
-
-  const categories = useMemo(() => {
-    const unique = new Set<string>();
-    allProducts.forEach((product) => {
-      if (product.category_name) unique.add(product.category_name);
-    });
-    return ['All', ...Array.from(unique)];
-  }, [allProducts]);
-
-  // Get products filtered by search and category (but not color/price) for building filter options
-  const searchAndCategoryFilteredProducts = useMemo(() => {
-    let list = [...allProducts];
-
-    // Apply search query filter
-    if (searchQuery.trim()) {
-      const query = searchQuery.toLowerCase().trim();
-      list = list.filter((product) => {
-        const titleMatch = product.title?.toLowerCase().includes(query);
-        const descriptionMatch = product.description?.toLowerCase().includes(query);
-        const categoryMatch = product.category_name?.toLowerCase().includes(query);
-        return titleMatch || descriptionMatch || categoryMatch;
-      });
-    }
-
-    // Apply category filter
-    if (activeCategory !== 'All') {
-      list = list.filter((product) => matchesCategory(product, activeCategory));
-    }
-
-    return list;
-  }, [allProducts, searchQuery, activeCategory]);
-
-  const { colorOptions, colorMeta } = useMemo(() => {
-    const metaMap = new Map<
-      string,
-      { label: string; hex?: string; productIds: Set<string> }
-    >();
-    // Use search-filtered products instead of all products
-    searchAndCategoryFilteredProducts.forEach((product) => {
-      product.variants?.forEach((variant) => {
-        if (!variant.color) return;
-        const normalizedKey = variant.color.toLowerCase();
-        const existing =
-          metaMap.get(normalizedKey) ?? {
-            label: variant.color,
-            hex: variant.color_hex ?? undefined,
-            productIds: new Set<string>(),
-          };
-        if (!existing.hex && variant.color_hex) {
-          existing.hex = variant.color_hex;
-        }
-        existing.label = variant.color;
-        existing.productIds.add(product.id);
-        metaMap.set(normalizedKey, existing);
-      });
-    });
-
-    const sortedEntries = Array.from(metaMap.entries()).sort((a, b) =>
-      a[1].label.localeCompare(b[1].label, undefined, { sensitivity: 'base' })
-    );
-
-    const colorMeta: Record<string, ColorMeta> = {};
-    sortedEntries.forEach(([key, meta]) => {
-      const finalMeta: ColorMeta = {
-        label: meta.label,
-        hex: meta.hex,
-        count: meta.productIds.size,
-      };
-      colorMeta[meta.label] = finalMeta;
-      colorMeta[key] = finalMeta;
-    });
-
-    return {
-      colorOptions: ['All', ...sortedEntries.map(([, meta]) => meta.label)],
-      colorMeta,
-    };
-  }, [searchAndCategoryFilteredProducts]);
-
-  const priceRangeCounts = useMemo(() => {
-    const counts: Record<string, number> = {
-      all: searchAndCategoryFilteredProducts.length,
-    };
-    priceRanges.forEach((range) => {
-      if (range.value !== 'all') {
-        counts[range.value] = 0;
-      }
-    });
-
-    searchAndCategoryFilteredProducts.forEach((product) => {
-      const price = Number(product.variants?.[0]?.price ?? product.base_price ?? 0);
-      priceRanges.forEach((range) => {
-        if (range.value === 'all') return;
-        const minMatch = range.min !== undefined ? price >= range.min : true;
-        const maxMatch = range.max !== undefined ? price <= range.max : true;
-        if (minMatch && maxMatch) {
-          counts[range.value] += 1;
-        }
-      });
-    });
-
-    return counts;
-  }, [searchAndCategoryFilteredProducts]);
-
+  // Determine if there are products in current filters
   const filteredProducts = useMemo(() => {
-    let list = [...allProducts];
+    return allProducts.filter((product) => {
+      const matchesSearch =
+        !searchQuery ||
+        product.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        product.description?.toLowerCase().includes(searchQuery.toLowerCase());
 
-    // Apply search query filter
-    if (searchQuery.trim()) {
-      const query = searchQuery.toLowerCase().trim();
-      list = list.filter((product) => {
-        const titleMatch = product.title?.toLowerCase().includes(query);
-        const descriptionMatch = product.description?.toLowerCase().includes(query);
-        const categoryMatch = product.category_name?.toLowerCase().includes(query);
-        return titleMatch || descriptionMatch || categoryMatch;
-      });
-    }
+      const matchesCategoryFilter = matchesCategory(product, activeCategory);
 
-    if (activeCategory !== 'All') {
-      list = list.filter((product) => matchesCategory(product, activeCategory));
-    }
-
-    if (filters.color !== 'All') {
-      list = list.filter((product) =>
+      const matchesColor =
+        filters.color === 'All' ||
         product.variants?.some(
-          (variant) =>
-            variant.color &&
-            variant.color.toLowerCase() === filters.color.toLowerCase()
-        )
-      );
-    }
+          variant =>
+            variant.color?.toLowerCase() === filters.color.toLowerCase()
+        );
 
-    if (filters.price === 'custom' && customPriceRange) {
-      list = list.filter((product) => {
-        const price = Number(product.variants?.[0]?.price ?? product.base_price ?? 0);
-        if (customPriceRange.min !== undefined && price < customPriceRange.min) {
-          return false;
+      let matchesPrice = true;
+      if (filters.price !== 'all') {
+        const range = priceRanges.find(r => r.value === filters.price);
+        if (range) {
+          if (range.min !== undefined && product.base_price < range.min) matchesPrice = false;
+          if (range.max !== undefined && product.base_price > range.max) matchesPrice = false;
         }
-        if (customPriceRange.max !== undefined && price > customPriceRange.max) {
-          return false;
-        }
-        return true;
-      });
-    } else if (filters.price !== 'all') {
-      list = list.filter((product) => {
-        const price = Number(product.variants?.[0]?.price ?? product.base_price ?? 0);
-        switch (filters.price) {
-          case '0-50000':
-            return price < 50000;
-          case '50000-100000':
-            return price >= 50000 && price <= 100000;
-          case '100000-200000':
-            return price >= 100000 && price <= 200000;
-          case '200000+':
-            return price >= 200000;
-          default:
-            return true;
-        }
-      });
-    }
+      }
 
-    const sorted = [...list];
+      if (customPriceRange) {
+        if (customPriceRange.min !== undefined && product.base_price < customPriceRange.min) matchesPrice = false;
+        if (customPriceRange.max !== undefined && product.base_price > customPriceRange.max) matchesPrice = false;
+      }
+
+      return matchesSearch && matchesCategoryFilter && matchesColor && matchesPrice;
+    });
+  }, [allProducts, searchQuery, activeCategory, filters, customPriceRange]);
+
+  const sortedProducts = useMemo(() => {
+    const products = [...filteredProducts];
     switch (sortOption) {
       case 'newest':
-        sorted.sort(
-          (a, b) =>
-            new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-        );
+        products.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
         break;
       case 'price-asc':
-        sorted.sort((a, b) => {
-          const priceA = Number(a.variants?.[0]?.price ?? a.base_price ?? 0);
-          const priceB = Number(b.variants?.[0]?.price ?? b.base_price ?? 0);
-          return priceA - priceB;
-        });
+        products.sort((a, b) => a.base_price - b.base_price);
         break;
       case 'price-desc':
-        sorted.sort((a, b) => {
-          const priceA = Number(a.variants?.[0]?.price ?? a.base_price ?? 0);
-          const priceB = Number(b.variants?.[0]?.price ?? b.base_price ?? 0);
-          return priceB - priceA;
-        });
+        products.sort((a, b) => b.base_price - a.base_price);
         break;
       default:
         break;
     }
-
-    return sorted;
-  }, [allProducts, filters, sortOption, customPriceRange, searchQuery, activeCategory]);
-
-  const totalPages = Math.max(1, Math.ceil(filteredProducts.length / PAGE_SIZE));
-
-  useEffect(() => {
-    setPage((prev) => Math.min(prev, totalPages));
-  }, [totalPages]);
+    return products;
+  }, [filteredProducts, sortOption]);
 
   const paginatedProducts = useMemo(() => {
     const start = (page - 1) * PAGE_SIZE;
-    return filteredProducts.slice(start, start + PAGE_SIZE);
-  }, [filteredProducts, page]);
+    return sortedProducts.slice(start, start + PAGE_SIZE);
+  }, [sortedProducts, page]);
 
-  const emptyStateMessage =
-    presetCategory === 'Men'
-      ? 'No menswear products available yet. Please check back soon.'
-      : presetCategory === 'Women'
-        ? 'No womenswear products available yet. Please check back soon.'
-        : 'No products found for the selected filters.';
-
-const handleFilterChange = (key: keyof FilterState, value: string) => {
-  if (key === 'price' && value !== 'custom') {
-    setCustomPriceInputs({ min: '', max: '' });
-    setCustomPriceRange(null);
-  }
-  if (key === 'category' && value !== interestCategory) {
-    setCuratedFilterApplied(false);
-  }
-  setFilters((prev) => ({ ...prev, [key]: value }));
-  setPage(1);
-};
-
-  const parsePriceInput = (value: string): number | undefined => {
-    if (!value) return undefined;
-    const cleaned = value.replace(/[^\d.]/g, '');
-    if (!cleaned) return undefined;
-    const parsed = Number(cleaned);
-    return Number.isNaN(parsed) ? undefined : parsed;
-  };
-
-  const handleCustomPriceApply = () => {
-    const minValue = parsePriceInput(customPriceInputs.min);
-    const maxValue = parsePriceInput(customPriceInputs.max);
-
-    if (minValue === undefined && maxValue === undefined) {
-      setCustomPriceRange(null);
-      setFilters((prev) => ({ ...prev, price: 'all' }));
-      setPage(1);
-      return;
-    }
-
-    const rangeMin =
-      minValue !== undefined && maxValue !== undefined
-        ? Math.min(minValue, maxValue)
-        : minValue;
-    const rangeMax =
-      minValue !== undefined && maxValue !== undefined
-        ? Math.max(minValue, maxValue)
-        : maxValue;
-
-    setCustomPriceRange({
-      min: rangeMin,
-      max: rangeMax,
-    });
-    setFilters((prev) => ({ ...prev, price: 'custom' }));
-    setPage(1);
-  };
+  const totalPages = Math.max(1, Math.ceil(sortedProducts.length / PAGE_SIZE));
 
   const paginationItems = useMemo(() => {
-    if (totalPages <= 5) {
-      return Array.from({ length: totalPages }, (_, index) => index + 1);
-    }
-
-    if (page <= 3) {
-      return [1, 2, 3, '...', totalPages];
-    }
-
-    if (page >= totalPages - 2) {
-      return [1, '...', totalPages - 2, totalPages - 1, totalPages];
-    }
-
-    return [1, '...', page, '...', totalPages];
+    if (totalPages <= 5) return Array.from({ length: totalPages }, (_, i) => i + 1);
+    const items: (number | string)[] = [1];
+    if (page > 3) items.push('...');
+    const start = Math.max(2, page - 1);
+    const end = Math.min(totalPages - 1, page + 1);
+    for (let i = start; i <= end; i++) items.push(i);
+    if (page < totalPages - 2) items.push('...');
+    items.push(totalPages);
+    return items;
   }, [page, totalPages]);
 
   useEffect(() => {
-    if (!filterMenuOpen) return undefined;
+    if (page > totalPages) setPage(1);
+  }, [totalPages, page]);
 
-    const handleClickOutside = (event: MouseEvent) => {
-      if (
-        filterMenuRef.current &&
-        !filterMenuRef.current.contains(event.target as Node)
-      ) {
-        setFilterMenuOpen(false);
+  const allCategories = useMemo(() => {
+    const categories = new Set<string>();
+    allProducts.forEach(product => {
+      if (product.category_name) categories.add(product.category_name);
+      if (product.category_parent_name) categories.add(product.category_parent_name);
+    });
+    return ['All', ...Array.from(categories)];
+  }, [allProducts]);
+
+  const allColors = useMemo(() => {
+    const colors = new Set<string>();
+    allProducts.forEach(product => {
+      product.variants?.forEach(variant => {
+        if (variant.color) colors.add(variant.color);
+      });
+    });
+    return ['All', ...Array.from(colors)];
+  }, [allProducts]);
+
+  const colorMeta = useMemo(() => {
+    const meta: Record<string, ColorMeta> = {};
+    allProducts.forEach((product) => {
+      product.variants?.forEach((variant) => {
+        if (!variant.color) return;
+        if (!meta[variant.color]) {
+          meta[variant.color] = { label: variant.color, hex: variant.color_hex, count: 0 };
+        }
+        meta[variant.color].count += 1;
+        if (!meta[variant.color].hex && variant.color_hex) {
+          meta[variant.color].hex = variant.color_hex;
+        }
+      });
+    });
+    return meta;
+  }, [allProducts]);
+
+  const priceCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    priceRanges.forEach(range => {
+      if (range.value === 'all') {
+        counts[range.value] = filteredProducts.length;
+        return;
       }
-    };
+      counts[range.value] = filteredProducts.filter(product => {
+        const price = product.base_price;
+        if (range.min !== undefined && price < range.min) return false;
+        if (range.max !== undefined && price > range.max) return false;
+        return true;
+      }).length;
+    });
+    return counts;
+  }, [filteredProducts]);
 
-    const handleEsc = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setFilterMenuOpen(false);
-      }
-    };
+  const formatCount = (count: number) => (count < 10 ? `0${count}` : `${count}`);
 
-    document.addEventListener('mousedown', handleClickOutside);
-    document.addEventListener('keydown', handleEsc);
+  const emptyStateMessage = useMemo(() => {
+    if (presetCategory === 'Men') return 'No menswear products available yet. Please check back soon.';
+    if (presetCategory === 'Women') return 'No womenswear products available yet. Please check back soon.';
+    if (presetCategory === 'Perfumes') return 'No perfumes available yet. Please check back soon.';
+    if (presetCategory === 'Bags and Wallets') return 'No bags or wallets available yet. Please check back soon.';
+    if (searchQuery) return `No results found for "${searchQuery}".`;
+    return 'No products match the current filters.';
+  }, [presetCategory, searchQuery]);
 
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-      document.removeEventListener('keydown', handleEsc);
-    };
-  }, [filterMenuOpen]);
+  const heroContent = useMemo(() => {
+    if (heroOverride) return heroOverride;
+    if (presetCategory === 'Men') return MEN_HERO;
+    if (presetCategory === 'Women') return WOMEN_HERO;
+    return DEFAULT_HERO;
+  }, [heroOverride, presetCategory]);
 
-  const heroContent =
-    heroOverride ||
-    (presetCategory === 'Men'
-      ? MEN_HERO
-      : presetCategory === 'Women'
-        ? WOMEN_HERO
-        : DEFAULT_HERO);
+  const heroCtaLinks = useMemo(() => {
+    if (presetCategory) {
+      return [{ label: heroContent.ctaLabel ?? 'Shop all', to: '/products' }];
+    }
+    return [
+      { label: 'Shop Men', to: '/products/men' },
+      { label: 'Shop Women', to: '/products/women' },
+    ];
+  }, [heroContent.ctaLabel, presetCategory]);
+
+  const handleFilterChange = (type: keyof FilterState, value: string) => {
+    setFilters(prev => ({ ...prev, [type]: value }));
+    setPage(1);
+    if (type === 'category' && value === 'All') {
+      setCuratedFilterApplied(false);
+    }
+  };
+
+  const handleSortChange = (value: string) => {
+    setSortOption(value);
+    setPage(1);
+  };
+
+  const handleCustomPriceChange = (field: 'min' | 'max', value: string) => {
+    setCustomPriceInputs(prev => ({ ...prev, [field]: value }));
+  };
+
+  const applyCustomPrice = () => {
+    const min = customPriceInputs.min ? Number(customPriceInputs.min.replace(/[^0-9.]/g, '')) : undefined;
+    const max = customPriceInputs.max ? Number(customPriceInputs.max.replace(/[^0-9.]/g, '')) : undefined;
+
+    setCustomPriceRange({
+      min: min !== undefined && !Number.isNaN(min) ? min : undefined,
+      max: max !== undefined && !Number.isNaN(max) ? max : undefined,
+    });
+    setFilters(prev => ({ ...prev, price: 'custom' }));
+    setPage(1);
+  };
+
+  const resetFilters = () => {
+    setFilters({ category: presetCategory || categoryParam || 'All', color: 'All', price: 'all' });
+    setCustomPriceRange(null);
+    setCustomPriceInputs({ min: '', max: '' });
+    setSortOption('suggested');
+    setPage(1);
+  };
 
   return (
     <Layout>
-      {/* Store Hero Section */}
-      <section
-        className="relative w-full min-h-[50vh] bg-cover bg-center flex items-end"
-        style={{
-          backgroundImage: `url('${heroContent.imageUrl}')`,
-        }}
-      >
-        {/* Dark overlay for text legibility */}
-        <div className="absolute inset-0 bg-black/20" />
-
-        {/* Overlay content - Left positioned */}
-        <div className="relative z-10 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 w-full pb-12 lg:pb-16">
-          <div className="max-w-md">
-            <h1
-              className="text-3xl lg:text-4xl font-display text-white mb-4"
-              style={{ textShadow: '0 2px 8px rgba(0,0,0,0.4)' }}
-            >
-              {heroContent.title}
-            </h1>
-            <p
-              className="text-sm font-serif text-white/95 leading-relaxed mb-6"
-              style={{ textShadow: '0 1px 4px rgba(0,0,0,0.3)' }}
-            >
-              {heroContent.body}
-            </p>
-            <button
-              className="inline-block px-6 py-2.5 bg-white/10 backdrop-blur-sm border border-white text-white text-xs font-ui uppercase tracking-[0.2em] hover:bg-white hover:text-dark transition-all"
-            >
-              {heroContent.ctaLabel || 'Learn More'}
-            </button>
-          </div>
-        </div>
-      </section>
-
-      {/* Filter Bar + Search Row */}
-      <section className="bg-[var(--color-page-bg)] border-b border-gray-200">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-          <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4">
-            {/* Left side: Tabs */}
-            <div className="flex items-center gap-6">
-              <button
-                type="button"
-                className="text-sm font-ui tracking-wide text-dark border-b-2 border-primary pb-1"
-              >
-                All Items ({filteredProducts.length})
-              </button>
-              <button
-                type="button"
-                className="text-sm font-ui tracking-wide text-gray-500 hover:text-dark pb-1"
-              >
-                Collections
-              </button>
-            </div>
-
-            {/* Right side: Search + Refine */}
-            <div className="flex items-center gap-4 w-full lg:w-auto">
-              <div className="relative flex-1 lg:flex-initial lg:w-64">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                <input
-                  type="text"
-                  placeholder="Search"
-                  className="w-full pl-10 pr-4 py-2 border border-gray-300 text-sm font-ui focus:outline-none focus:border-primary transition"
-                  defaultValue={searchQuery}
-                />
-              </div>
-              <button
-                type="button"
-                onClick={() => setFilterMenuOpen(true)}
-                className="px-6 py-2 border border-gray-300 text-xs font-ui uppercase tracking-[0.2em] text-dark hover:border-primary hover:text-primary transition whitespace-nowrap"
-              >
-                REFINE
-              </button>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* Filter Modal */}
-      {filterMenuOpen && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+      <section className="relative">
+        <div className="relative h-[440px] md:h-[480px] lg:h-[520px] overflow-hidden">
           <div
-            ref={filterMenuRef}
-            className="bg-white w-full max-w-2xl max-h-[80vh] overflow-y-auto shadow-2xl"
-          >
-            {/* Modal Header */}
-            <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between">
-              <h2 className="text-lg font-ui uppercase tracking-[0.2em] text-dark">Filter Products</h2>
-              <button
-                type="button"
-                onClick={() => setFilterMenuOpen(false)}
-                className="p-2 hover:bg-gray-100 transition"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            {/* Modal Body */}
-            <div className="p-6">
-              <aside className="space-y-8">
-
-              {searchQuery && (
-                <div className="bg-primary/5 border border-primary/20 px-6 py-4">
-                  <p className="text-sm text-gray-700">
-                    Search results for: <span className="font-semibold text-primary">"{searchQuery}"</span>
-                    {filters.category !== 'All' && (
-                      <span className="ml-2">
-                        in <span className="font-semibold text-primary">{filters.category}</span>
-                      </span>
-                    )}
-                  </p>
-                  <p className="text-xs text-gray-500 mt-1">
-                    Found {filteredProducts.length} {filteredProducts.length === 1 ? 'product' : 'products'}
-                  </p>
-                </div>
-              )}
-
-              <div className="space-y-6">
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between border-b border-gray-100 pb-3">
-                    <span className="text-[11px] uppercase tracking-[0.4em] text-gray-400">
-                      Sort by
-                    </span>
-                    <div className="relative">
-                      <select
-                        value={sortOption}
-                        onChange={(e) => setSortOption(e.target.value)}
-                        className="border border-gray-200 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.3em] text-gray-600 hover:border-primary focus:border-primary focus:outline-none transition"
-                      >
-                        {sortOptions.map((option) => (
-                          <option key={option.value} value={option.value}>
-                            {option.label}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  </div>
-                  <FilterGroup
-                    title="Category"
-                    options={categories}
-                    selected={filters.category}
-                    onChange={(value) => handleFilterChange('category', value)}
-                  />
-                  <FilterGroup
-                    title="Color"
-                    options={colorOptions}
-                    selected={filters.color}
-                    onChange={(value) => handleFilterChange('color', value)}
-                    type="color"
-                    colorMeta={colorMeta}
-                  />
-                  <PriceFilter
-                    selected={filters.price}
-                    ranges={priceRanges}
-                    counts={priceRangeCounts}
-                    inputs={customPriceInputs}
-                    onInputChange={(field, value) =>
-                      setCustomPriceInputs((prev) => ({ ...prev, [field]: value }))
-                    }
-                    onApplyCustom={handleCustomPriceApply}
-                    onSelectRange={(value) => handleFilterChange('price', value)}
-                  />
-                </div>
+            className="absolute inset-0"
+            style={{
+              backgroundImage: `url(${heroContent.imageUrl})`,
+              backgroundSize: 'cover',
+              backgroundPosition: 'center',
+            }}
+          />
+          <div className="absolute inset-0 bg-black/10" />
+          <div className="relative z-10 h-full flex flex-col justify-center text-center text-white px-6">
+            <div className="max-w-2xl mx-auto space-y-6">
+              <h1 className="text-2xl sm:text-3xl md:text-4xl font-serif tracking-[0.08em]">
+                {heroContent.title}
+              </h1>
+              <p className="text-sm md:text-base font-serif text-white/90">
+                {heroContent.body}
+              </p>
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-center gap-4">
+                {heroCtaLinks.map((cta) => (
+                  <Link
+                    key={cta.label}
+                    to={cta.to}
+                    className="inline-flex justify-center border border-white/70 px-4 py-2 text-xs uppercase tracking-[0.4em] hover:bg-white hover:text-primary transition"
+                  >
+                    {cta.label}
+                  </Link>
+                ))}
               </div>
-              </aside>
             </div>
+          </div>
+        </div>
 
-            {/* Modal Footer */}
-            <div className="sticky bottom-0 bg-white border-t border-gray-200 px-6 py-4 flex items-center justify-between">
-              <button
-                type="button"
-                onClick={() => {
-                  setFilters({ category: 'All', color: 'All', price: 'all' });
-                  setCustomPriceInputs({ min: '', max: '' });
+        <div className="bg-white border-b border-gray-200">
+          <div className="max-w-7xl mx-auto px-4 md:px-6">
+            <div className="flex flex-wrap items-center justify-between gap-3 py-4">
+              <div className="flex items-center gap-4 text-sm">
+                <button
+                  type="button"
+                  className={`text-sm uppercase tracking-[0.2em] ${filters.category === 'All' ? 'text-primary font-semibold' : 'text-gray-500'}`}
+                  onClick={() => handleFilterChange('category', 'All')}
+                >
+                  All Items ({formatCount(filteredProducts.length)})
+                </button>
+                <button
+                  type="button"
+                  className="text-sm uppercase tracking-[0.2em] text-gray-500"
+                >
+                  Collections
+                </button>
+              </div>
+              <div className="flex flex-wrap items-center gap-3">
+                <div className="flex items-center gap-2">
+                  <Search className="w-4 h-4 text-gray-400" />
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    placeholder="Search"
+                    className="text-sm border-b border-gray-200 focus:outline-none focus:border-primary"
+                    onChange={() => {
+                      // Search is currently handled via URL param
+                    }}
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setFilterMenuOpen(true)}
+                  className="text-xs uppercase tracking-[0.3em] border border-gray-200 px-4 py-2"
+                >
+                  Refine
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Product grid */}
+      <section className="max-w-7xl mx-auto px-4 md:px-6 py-10">
+        <div className="flex gap-8">
+          {/* Filters Sidebar */}
+          <aside className="hidden lg:block w-64 shrink-0">
+            <div className="sticky top-24">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-xs font-semibold uppercase tracking-[0.4em] text-gray-400">Filters</h3>
+                <button
+                  type="button"
+                  onClick={resetFilters}
+                  className="text-xs font-semibold uppercase tracking-[0.4em] text-primary"
+                >
+                  Reset
+                </button>
+              </div>
+              <FilterGroup
+                title="Category"
+                options={allCategories}
+                selected={filters.category}
+                onChange={(value) => handleFilterChange('category', value)}
+              />
+              <FilterGroup
+                title="Color"
+                options={allColors}
+                selected={filters.color}
+                onChange={(value) => handleFilterChange('color', value)}
+                type="color"
+                colorMeta={colorMeta}
+              />
+              <PriceFilter
+                selected={filters.price}
+                ranges={priceRanges}
+                counts={priceCounts}
+                inputs={customPriceInputs}
+                onInputChange={handleCustomPriceChange}
+                onApplyCustom={applyCustomPrice}
+                onSelectRange={(value) => {
+                  handleFilterChange('price', value);
                   setCustomPriceRange(null);
                 }}
-                className="text-sm font-ui text-gray-600 hover:text-primary underline"
-              >
-                Clear All
-              </button>
-              <button
-                type="button"
-                onClick={() => setFilterMenuOpen(false)}
-                className="px-8 py-2.5 bg-primary text-white text-xs font-ui uppercase tracking-[0.2em] hover:bg-primary-dark transition"
-              >
-                Apply Filters
-              </button>
+              />
             </div>
-          </div>
-        </div>
-      )}
+          </aside>
 
-      {/* Product Grid Section */}
-      <section className="bg-[var(--color-page-bg)] py-12">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="space-y-8">
-              {preferredInterest && !showInterestBanner && (
-                <div className="text-right">
-                  <button
-                    type="button"
-                    className="text-xs text-gray-500 hover:text-primary underline"
-                    onClick={() => {
-                      setShowInterestBanner(true);
-                      if (typeof window !== 'undefined') {
-                        window.localStorage.removeItem('shopsoma_pref_interest_banner');
-                      }
-                    }}
-                  >
-                    Show curated picks reminder
-                  </button>
-                </div>
-              )}
-
-              {preferredInterest && showInterestBanner && (
-                <div className="border border-gray-200 rounded-sm p-4 text-sm text-gray-700 bg-gray-50">
-                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          {/* Product grid content */}
+          <div className="flex-1">
+              {/* Preference Based Filter Banner */}
+              {interestCategory && showInterestBanner && (
+                <div className="mb-8 rounded-none border border-gray-200 bg-gray-50 px-6 py-5">
+                  <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
                     <div>
-                      <p>
-                        You're interested in{' '}
-                        <span className="font-semibold">
-                          {preferredInterest === 'menswear' ? 'Menswear' : 'Womenswear'}
-                        </span>{' '}
-                        looks.
+                      <p className="text-xs uppercase tracking-[0.4em] text-gray-400">Suggested for you</p>
+                      <h2 className="text-lg font-serif text-gray-900">
+                        {interestCategory === 'Men' ? 'Menswear picks tailored for you' : 'Womenswear picks tailored for you'}
+                      </h2>
+                      <p className="text-sm text-gray-500">
+                        Based on your account preference, we pulled the best {interestCategory.toLowerCase()} drops.
                       </p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-3">
                       <button
                         type="button"
-                        className="mt-2 text-xs text-gray-500 hover:text-primary underline"
+                        className="text-xs uppercase tracking-[0.4em] text-gray-500 hover:text-primary"
                         onClick={() => {
                           setShowInterestBanner(false);
                           if (typeof window !== 'undefined') {
@@ -784,7 +566,6 @@ const handleFilterChange = (key: keyof FilterState, value: string) => {
                       >
                         Hide this reminder
                       </button>
-                    </div>
                     <button
                       type="button"
                       className={`px-4 py-2 text-xs font-semibold uppercase tracking-[0.3em] rounded-sm transition border ${
@@ -828,104 +609,158 @@ const handleFilterChange = (key: keyof FilterState, value: string) => {
                   {/* Page 1: 4 rows with vendor showcases */}
                   {page === 1 ? (
                     <>
-                      {/* Row 1: Vendor Showcase (2 cols) + 1 Product - 3 column grid */}
-                      {paginatedProducts.length >= 1 && (
-                        <div className="grid grid-cols-1 lg:grid-cols-3 gap-x-6 gap-y-10 mb-10">
-                          <div className="lg:col-span-2">
-                            <VendorShowcaseCard
-                              vendorId={SPOTLIGHT_VENDOR.id}
-                              vendorName={SPOTLIGHT_VENDOR.name}
-                              imageUrl={SPOTLIGHT_VENDOR.imageUrl}
-                              productCount={SPOTLIGHT_VENDOR.productCount}
-                            />
+                      {/* Mobile layout: 2-column grid with full-width featured vendors */}
+                      <div className="lg:hidden space-y-10">
+                        <VendorShowcaseCard
+                          vendorId={SPOTLIGHT_VENDOR.id}
+                          vendorName={SPOTLIGHT_VENDOR.name}
+                          imageUrl={SPOTLIGHT_VENDOR.imageUrl}
+                          productCount={SPOTLIGHT_VENDOR.productCount}
+                        />
+                        <div className="grid grid-cols-2 gap-x-4 gap-y-8">
+                          {(() => {
+                            const mobileItems = paginatedProducts.slice(0, 12).reduce<
+                              Array<
+                                | { type: 'product'; product: Product }
+                                | { type: 'vendor'; key: string }
+                              >
+                            >((acc, product, index) => {
+                              acc.push({ type: 'product', product });
+                              if (index === 5) {
+                                acc.push({ type: 'vendor', key: 'featured-vendor' });
+                              }
+                              return acc;
+                            }, []);
+
+                            return mobileItems.map((item) => {
+                              if (item.type === 'vendor') {
+                                return (
+                                  <div key={item.key} className="col-span-2">
+                                    <VendorShowcaseCard
+                                      vendorId={SPOTLIGHT_VENDOR.id}
+                                      vendorName="Featured Designer"
+                                      imageUrl={SPOTLIGHT_VENDOR.imageUrl}
+                                      productCount={SPOTLIGHT_VENDOR.productCount}
+                                    />
+                                  </div>
+                                );
+                              }
+                              const isFavorite = favorites.has(item.product.id);
+                              return (
+                                <div key={item.product.id} className="col-span-1">
+                                  <ProductCard
+                                    product={item.product}
+                                    onToggleFavorite={toggleFavorite}
+                                    isFavorite={isFavorite}
+                                  />
+                                </div>
+                              );
+                            });
+                          })()}
+                        </div>
+                      </div>
+
+                      {/* Desktop layout: curated vendor + product grid */}
+                      <div className="hidden lg:block">
+                        {/* Row 1: Vendor Showcase (2 cols) + 1 Product - 3 column grid */}
+                        {paginatedProducts.length >= 1 && (
+                          <div className="grid grid-cols-3 gap-x-6 gap-y-10 mb-10">
+                            <div className="col-span-2">
+                              <VendorShowcaseCard
+                                vendorId={SPOTLIGHT_VENDOR.id}
+                                vendorName={SPOTLIGHT_VENDOR.name}
+                                imageUrl={SPOTLIGHT_VENDOR.imageUrl}
+                                productCount={SPOTLIGHT_VENDOR.productCount}
+                              />
+                            </div>
+                            {paginatedProducts.slice(0, 1).map((product) => {
+                              const isFavorite = favorites.has(product.id);
+                              return (
+                                <ProductCard
+                                  key={product.id}
+                                  product={product}
+                                  onToggleFavorite={toggleFavorite}
+                                  isFavorite={isFavorite}
+                                />
+                              );
+                            })}
                           </div>
-                          {paginatedProducts.slice(0, 1).map((product) => {
-                            const isFavorite = favorites.has(product.id);
-                            return (
-                              <ProductCard
-                                key={product.id}
-                                product={product}
-                                onToggleFavorite={toggleFavorite}
-                                isFavorite={isFavorite}
-                              />
-                            );
-                          })}
-                        </div>
-                      )}
+                        )}
 
-                      {/* Row 2: 4 Products - 4 column grid */}
-                      {paginatedProducts.length >= 2 && (
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-x-6 gap-y-10 mb-10">
-                          {paginatedProducts.slice(1, 5).map((product) => {
-                            const isFavorite = favorites.has(product.id);
-                            return (
-                              <ProductCard
-                                key={product.id}
-                                product={product}
-                                onToggleFavorite={toggleFavorite}
-                                isFavorite={isFavorite}
-                              />
-                            );
-                          })}
-                        </div>
-                      )}
-
-                      {/* Row 3: 4 Products - 4 column grid */}
-                      {paginatedProducts.length >= 6 && (
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-x-6 gap-y-10 mb-10">
-                          {paginatedProducts.slice(5, 9).map((product) => {
-                            const isFavorite = favorites.has(product.id);
-                            return (
-                              <ProductCard
-                                key={product.id}
-                                product={product}
-                                onToggleFavorite={toggleFavorite}
-                                isFavorite={isFavorite}
-                              />
-                            );
-                          })}
-                        </div>
-                      )}
-
-                      {/* Row 4: 1 Product + Vendor Showcase (2 cols) + 1 Product - 4 column grid */}
-                      {paginatedProducts.length >= 10 && (
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-x-6 gap-y-10">
-                          {paginatedProducts.slice(9, 10).map((product) => {
-                            const isFavorite = favorites.has(product.id);
-                            return (
-                              <ProductCard
-                                key={product.id}
-                                product={product}
-                                onToggleFavorite={toggleFavorite}
-                                isFavorite={isFavorite}
-                              />
-                            );
-                          })}
-                          <div className="lg:col-span-2">
-                            <VendorShowcaseCard
-                              vendorId={SPOTLIGHT_VENDOR.id}
-                              vendorName="Featured Designer"
-                              imageUrl={SPOTLIGHT_VENDOR.imageUrl}
-                              productCount={SPOTLIGHT_VENDOR.productCount}
-                            />
+                        {/* Row 2: 4 Products - 4 column grid */}
+                        {paginatedProducts.length >= 2 && (
+                          <div className="grid grid-cols-4 gap-x-6 gap-y-10 mb-10">
+                            {paginatedProducts.slice(1, 5).map((product) => {
+                              const isFavorite = favorites.has(product.id);
+                              return (
+                                <ProductCard
+                                  key={product.id}
+                                  product={product}
+                                  onToggleFavorite={toggleFavorite}
+                                  isFavorite={isFavorite}
+                                />
+                              );
+                            })}
                           </div>
-                          {paginatedProducts.slice(10, 11).map((product) => {
-                            const isFavorite = favorites.has(product.id);
-                            return (
-                              <ProductCard
-                                key={product.id}
-                                product={product}
-                                onToggleFavorite={toggleFavorite}
-                                isFavorite={isFavorite}
+                        )}
+
+                        {/* Row 3: 4 Products - 4 column grid */}
+                        {paginatedProducts.length >= 6 && (
+                          <div className="grid grid-cols-4 gap-x-6 gap-y-10 mb-10">
+                            {paginatedProducts.slice(5, 9).map((product) => {
+                              const isFavorite = favorites.has(product.id);
+                              return (
+                                <ProductCard
+                                  key={product.id}
+                                  product={product}
+                                  onToggleFavorite={toggleFavorite}
+                                  isFavorite={isFavorite}
+                                />
+                              );
+                            })}
+                          </div>
+                        )}
+
+                        {/* Row 4: 1 Product + Vendor Showcase (2 cols) + 1 Product - 4 column grid */}
+                        {paginatedProducts.length >= 10 && (
+                          <div className="grid grid-cols-4 gap-x-6 gap-y-10">
+                            {paginatedProducts.slice(9, 10).map((product) => {
+                              const isFavorite = favorites.has(product.id);
+                              return (
+                                <ProductCard
+                                  key={product.id}
+                                  product={product}
+                                  onToggleFavorite={toggleFavorite}
+                                  isFavorite={isFavorite}
+                                />
+                              );
+                            })}
+                            <div className="col-span-2">
+                              <VendorShowcaseCard
+                                vendorId={SPOTLIGHT_VENDOR.id}
+                                vendorName="Featured Designer"
+                                imageUrl={SPOTLIGHT_VENDOR.imageUrl}
+                                productCount={SPOTLIGHT_VENDOR.productCount}
                               />
-                            );
-                          })}
-                        </div>
-                      )}
+                            </div>
+                            {paginatedProducts.slice(10, 11).map((product) => {
+                              const isFavorite = favorites.has(product.id);
+                              return (
+                                <ProductCard
+                                  key={product.id}
+                                  product={product}
+                                  onToggleFavorite={toggleFavorite}
+                                  isFavorite={isFavorite}
+                                />
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
                     </>
                   ) : (
                     /* Other pages: Regular 4-column grid, 4 rows = 12 products */
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-x-6 gap-y-10">
+                    <div className="grid grid-cols-2 lg:grid-cols-4 gap-x-6 gap-y-10">
                       {paginatedProducts.map((product) => {
                         const isFavorite = favorites.has(product.id);
                         return (
@@ -1138,7 +973,8 @@ function PriceFilter({
                 </label>
                 <div className="relative">
                   <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-gray-400">
-                    ₦
+                    
+6
                   </span>
                   <input
                     type="text"
