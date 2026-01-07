@@ -4,8 +4,7 @@ import { Bookmark, Menu, Search, User, X } from 'lucide-react';
 import { ROUTES } from '../../config/constants';
 import { useCartStore } from '../../store/cartStore';
 import { useAuth } from '../../context/AuthContext';
-import { useCurrencyStore } from '../../store/currencyStore';
-import type { Currency } from '../../store/currencyStore';
+import { useCurrencyStore, type Currency } from '../../store/currencyStore';
 import { usePreferenceStore } from '../../store/preferenceStore';
 
 export default function Header() {
