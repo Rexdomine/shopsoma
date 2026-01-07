@@ -1,16 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Bookmark, Search, User, X } from 'lucide-react';
+import { Bookmark, Menu, Search, User, X } from 'lucide-react';
 import { ROUTES } from '../../config/constants';
 import { useCartStore } from '../../store/cartStore';
 import { useAuth } from '../../context/AuthContext';
-import { useCurrencyStore } from '../../store/currencyStore';
-import type { Currency } from '../../store/currencyStore';
+import { useCurrencyStore, type Currency } from '../../store/currencyStore';
 import { usePreferenceStore } from '../../store/preferenceStore';
 
 export default function Header() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [currencyDropdownOpen, setCurrencyDropdownOpen] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const navigate = useNavigate();
   const cart = useCartStore((state) => state.cart);
   const itemCount = cart.summary.itemCount;
@@ -82,11 +82,28 @@ export default function Header() {
   return (
     <>
       <header className="bg-[var(--color-page-bg)] text-primary border-b border-primary relative z-30">
-        <div className="max-w-6xl mx-auto px-8 py-3 flex items-center justify-between gap-2">
+        <div className="max-w-6xl mx-auto px-4 sm:px-8 py-3 flex items-center justify-between gap-2">
           <div className="flex items-center gap-2 flex-1">
+            <div className="flex items-center gap-3 sm:hidden">
+              <button
+                type="button"
+                onClick={() => setMobileMenuOpen((prev) => !prev)}
+                className="p-1.5 hover:text-primary-dark"
+                aria-label={mobileMenuOpen ? 'Close menu' : 'Open menu'}
+              >
+                {mobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
+              </button>
+              <button
+                onClick={() => setSearchOpen(true)}
+                className="p-1.5 hover:text-primary-dark"
+                aria-label="Open search"
+              >
+                <Search className="w-6 h-6" />
+              </button>
+            </div>
             <button
               onClick={() => setSearchOpen(true)}
-              className="flex items-center gap-2 header-nav-text text-primary hover:text-primary-dark transition-colors"
+              className="hidden sm:flex items-center gap-2 header-nav-text text-primary hover:text-primary-dark transition-colors"
               aria-label="Open search"
             >
               <Search className="w-5 h-5" />
@@ -104,7 +121,7 @@ export default function Header() {
             </Link>
           </div>
 
-          <div className="flex items-center justify-end gap-4 text-sm font-ui flex-1">
+          <div className="flex items-center justify-end gap-2 sm:gap-4 text-sm font-ui flex-1">
             {/* Currency Switcher */}
             <div className="hidden sm:block relative" ref={currencyDropdownRef}>
               <button
@@ -141,7 +158,7 @@ export default function Header() {
               )}
             </div>
 
-            <Link to={ROUTES.PROFILE_WISHLIST || ROUTES.PROFILE} className="p-1.5 hover:text-primary-dark" aria-label="Wishlist">
+            <Link to={ROUTES.PROFILE_WISHLIST || ROUTES.PROFILE} className="hidden sm:inline-flex p-1.5 hover:text-primary-dark" aria-label="Wishlist">
               <Bookmark className="w-5 h-5" />
             </Link>
             <button onClick={handleProfileClick} className="p-1.5 hover:text-primary-dark" aria-label="Account">
@@ -173,7 +190,7 @@ export default function Header() {
           </div>
         </div>
 
-        <nav className="border-t border-primary">
+        <nav className="hidden sm:block border-t border-primary">
           <div className="main-nav header-nav-text w-full mx-auto px-8 py-2 flex items-center justify-center gap-8 text-primary">
             <Link to={ROUTES.DESIGNERS} className="hover:text-primary-dark">Designers</Link>
             <Link to={ROUTES.NEW_ARRIVALS} className="hover:text-primary-dark">New</Link>
@@ -183,6 +200,28 @@ export default function Header() {
             <Link to={ROUTES.BAGS_WALLETS} className="hover:text-primary-dark">Bags &amp; Wallets</Link>
           </div>
         </nav>
+
+        {mobileMenuOpen && (
+          <div className="sm:hidden border-t border-primary bg-[var(--color-page-bg)] px-6 py-6">
+            <div className="space-y-4 text-2xl font-serif" style={{ color: '#1E5053' }}>
+              <Link to={ROUTES.NEW_ARRIVALS} className="block" onClick={() => setMobileMenuOpen(false)}>
+                New
+              </Link>
+              <Link to={ROUTES.MEN} className="block" onClick={() => setMobileMenuOpen(false)}>
+                Men
+              </Link>
+              <Link to={ROUTES.WOMEN} className="block" onClick={() => setMobileMenuOpen(false)}>
+                Women
+              </Link>
+              <Link to={ROUTES.PERFUMES} className="block" onClick={() => setMobileMenuOpen(false)}>
+                Perfumes
+              </Link>
+              <Link to={ROUTES.BAGS_WALLETS} className="block" onClick={() => setMobileMenuOpen(false)}>
+                Bags And Wallets
+              </Link>
+            </div>
+          </div>
+        )}
       </header>
       <PremiumSearchOverlay open={searchOpen} onClose={() => setSearchOpen(false)} />
     </>

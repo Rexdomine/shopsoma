@@ -820,7 +820,7 @@ const handleFilterChange = (key: keyof FilterState, value: string) => {
                   <p className="text-sm text-red-500">{error}</p>
                 </div>
               ) : paginatedProducts.length === 0 ? (
-              <div className="py-16 text-center">
+                <div className="py-16 text-center">
                   <p className="text-sm text-gray-500">{emptyStateMessage}</p>
                 </div>
               ) : (
@@ -828,104 +828,158 @@ const handleFilterChange = (key: keyof FilterState, value: string) => {
                   {/* Page 1: 4 rows with vendor showcases */}
                   {page === 1 ? (
                     <>
-                      {/* Row 1: Vendor Showcase (2 cols) + 1 Product - 3 column grid */}
-                      {paginatedProducts.length >= 1 && (
-                        <div className="grid grid-cols-1 lg:grid-cols-3 gap-x-6 gap-y-10 mb-10">
-                          <div className="lg:col-span-2">
-                            <VendorShowcaseCard
-                              vendorId={SPOTLIGHT_VENDOR.id}
-                              vendorName={SPOTLIGHT_VENDOR.name}
-                              imageUrl={SPOTLIGHT_VENDOR.imageUrl}
-                              productCount={SPOTLIGHT_VENDOR.productCount}
-                            />
+                      {/* Mobile layout: 2-column grid with full-width featured vendors */}
+                      <div className="lg:hidden space-y-10">
+                        <VendorShowcaseCard
+                          vendorId={SPOTLIGHT_VENDOR.id}
+                          vendorName={SPOTLIGHT_VENDOR.name}
+                          imageUrl={SPOTLIGHT_VENDOR.imageUrl}
+                          productCount={SPOTLIGHT_VENDOR.productCount}
+                        />
+                        <div className="grid grid-cols-2 gap-x-4 gap-y-8">
+                          {(() => {
+                            const mobileItems = paginatedProducts.slice(0, 12).reduce<
+                              Array<
+                                | { type: 'product'; product: Product }
+                                | { type: 'vendor'; key: string }
+                              >
+                            >((acc, product, index) => {
+                              acc.push({ type: 'product', product });
+                              if (index === 5) {
+                                acc.push({ type: 'vendor', key: 'featured-vendor' });
+                              }
+                              return acc;
+                            }, []);
+
+                            return mobileItems.map((item) => {
+                              if (item.type === 'vendor') {
+                                return (
+                                  <div key={item.key} className="col-span-2">
+                                    <VendorShowcaseCard
+                                      vendorId={SPOTLIGHT_VENDOR.id}
+                                      vendorName="Featured Designer"
+                                      imageUrl={SPOTLIGHT_VENDOR.imageUrl}
+                                      productCount={SPOTLIGHT_VENDOR.productCount}
+                                    />
+                                  </div>
+                                );
+                              }
+                              const isFavorite = favorites.has(item.product.id);
+                              return (
+                                <div key={item.product.id} className="col-span-1">
+                                  <ProductCard
+                                    product={item.product}
+                                    onToggleFavorite={toggleFavorite}
+                                    isFavorite={isFavorite}
+                                  />
+                                </div>
+                              );
+                            });
+                          })()}
+                        </div>
+                      </div>
+
+                      {/* Desktop layout: curated vendor + product grid */}
+                      <div className="hidden lg:block">
+                        {/* Row 1: Vendor Showcase (2 cols) + 1 Product - 3 column grid */}
+                        {paginatedProducts.length >= 1 && (
+                          <div className="grid grid-cols-3 gap-x-6 gap-y-10 mb-10">
+                            <div className="col-span-2">
+                              <VendorShowcaseCard
+                                vendorId={SPOTLIGHT_VENDOR.id}
+                                vendorName={SPOTLIGHT_VENDOR.name}
+                                imageUrl={SPOTLIGHT_VENDOR.imageUrl}
+                                productCount={SPOTLIGHT_VENDOR.productCount}
+                              />
+                            </div>
+                            {paginatedProducts.slice(0, 1).map((product) => {
+                              const isFavorite = favorites.has(product.id);
+                              return (
+                                <ProductCard
+                                  key={product.id}
+                                  product={product}
+                                  onToggleFavorite={toggleFavorite}
+                                  isFavorite={isFavorite}
+                                />
+                              );
+                            })}
                           </div>
-                          {paginatedProducts.slice(0, 1).map((product) => {
-                            const isFavorite = favorites.has(product.id);
-                            return (
-                              <ProductCard
-                                key={product.id}
-                                product={product}
-                                onToggleFavorite={toggleFavorite}
-                                isFavorite={isFavorite}
-                              />
-                            );
-                          })}
-                        </div>
-                      )}
+                        )}
 
-                      {/* Row 2: 4 Products - 4 column grid */}
-                      {paginatedProducts.length >= 2 && (
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-x-6 gap-y-10 mb-10">
-                          {paginatedProducts.slice(1, 5).map((product) => {
-                            const isFavorite = favorites.has(product.id);
-                            return (
-                              <ProductCard
-                                key={product.id}
-                                product={product}
-                                onToggleFavorite={toggleFavorite}
-                                isFavorite={isFavorite}
-                              />
-                            );
-                          })}
-                        </div>
-                      )}
-
-                      {/* Row 3: 4 Products - 4 column grid */}
-                      {paginatedProducts.length >= 6 && (
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-x-6 gap-y-10 mb-10">
-                          {paginatedProducts.slice(5, 9).map((product) => {
-                            const isFavorite = favorites.has(product.id);
-                            return (
-                              <ProductCard
-                                key={product.id}
-                                product={product}
-                                onToggleFavorite={toggleFavorite}
-                                isFavorite={isFavorite}
-                              />
-                            );
-                          })}
-                        </div>
-                      )}
-
-                      {/* Row 4: 1 Product + Vendor Showcase (2 cols) + 1 Product - 4 column grid */}
-                      {paginatedProducts.length >= 10 && (
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-x-6 gap-y-10">
-                          {paginatedProducts.slice(9, 10).map((product) => {
-                            const isFavorite = favorites.has(product.id);
-                            return (
-                              <ProductCard
-                                key={product.id}
-                                product={product}
-                                onToggleFavorite={toggleFavorite}
-                                isFavorite={isFavorite}
-                              />
-                            );
-                          })}
-                          <div className="lg:col-span-2">
-                            <VendorShowcaseCard
-                              vendorId={SPOTLIGHT_VENDOR.id}
-                              vendorName="Featured Designer"
-                              imageUrl={SPOTLIGHT_VENDOR.imageUrl}
-                              productCount={SPOTLIGHT_VENDOR.productCount}
-                            />
+                        {/* Row 2: 4 Products - 4 column grid */}
+                        {paginatedProducts.length >= 2 && (
+                          <div className="grid grid-cols-4 gap-x-6 gap-y-10 mb-10">
+                            {paginatedProducts.slice(1, 5).map((product) => {
+                              const isFavorite = favorites.has(product.id);
+                              return (
+                                <ProductCard
+                                  key={product.id}
+                                  product={product}
+                                  onToggleFavorite={toggleFavorite}
+                                  isFavorite={isFavorite}
+                                />
+                              );
+                            })}
                           </div>
-                          {paginatedProducts.slice(10, 11).map((product) => {
-                            const isFavorite = favorites.has(product.id);
-                            return (
-                              <ProductCard
-                                key={product.id}
-                                product={product}
-                                onToggleFavorite={toggleFavorite}
-                                isFavorite={isFavorite}
+                        )}
+
+                        {/* Row 3: 4 Products - 4 column grid */}
+                        {paginatedProducts.length >= 6 && (
+                          <div className="grid grid-cols-4 gap-x-6 gap-y-10 mb-10">
+                            {paginatedProducts.slice(5, 9).map((product) => {
+                              const isFavorite = favorites.has(product.id);
+                              return (
+                                <ProductCard
+                                  key={product.id}
+                                  product={product}
+                                  onToggleFavorite={toggleFavorite}
+                                  isFavorite={isFavorite}
+                                />
+                              );
+                            })}
+                          </div>
+                        )}
+
+                        {/* Row 4: 1 Product + Vendor Showcase (2 cols) + 1 Product - 4 column grid */}
+                        {paginatedProducts.length >= 10 && (
+                          <div className="grid grid-cols-4 gap-x-6 gap-y-10">
+                            {paginatedProducts.slice(9, 10).map((product) => {
+                              const isFavorite = favorites.has(product.id);
+                              return (
+                                <ProductCard
+                                  key={product.id}
+                                  product={product}
+                                  onToggleFavorite={toggleFavorite}
+                                  isFavorite={isFavorite}
+                                />
+                              );
+                            })}
+                            <div className="col-span-2">
+                              <VendorShowcaseCard
+                                vendorId={SPOTLIGHT_VENDOR.id}
+                                vendorName="Featured Designer"
+                                imageUrl={SPOTLIGHT_VENDOR.imageUrl}
+                                productCount={SPOTLIGHT_VENDOR.productCount}
                               />
-                            );
-                          })}
-                        </div>
-                      )}
+                            </div>
+                            {paginatedProducts.slice(10, 11).map((product) => {
+                              const isFavorite = favorites.has(product.id);
+                              return (
+                                <ProductCard
+                                  key={product.id}
+                                  product={product}
+                                  onToggleFavorite={toggleFavorite}
+                                  isFavorite={isFavorite}
+                                />
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
                     </>
                   ) : (
                     /* Other pages: Regular 4-column grid, 4 rows = 12 products */
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-x-6 gap-y-10">
+                    <div className="grid grid-cols-2 lg:grid-cols-4 gap-x-6 gap-y-10">
                       {paginatedProducts.map((product) => {
                         const isFavorite = favorites.has(product.id);
                         return (
