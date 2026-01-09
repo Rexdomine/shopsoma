@@ -4,7 +4,7 @@
  */
 import axios from 'axios';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+import { API_BASE_URL } from '../config/constants';
 
 export interface SocialMediaHandles {
   instagram?: string;
@@ -67,7 +67,7 @@ export const vendorApplicationService = {
       social_media_handles: data.socialMediaHandles,
     };
 
-    const response = await axios.post(`${API_URL}/api/v1/vendor-applications/`, payload);
+    const response = await axios.post(`${API_BASE_URL}/vendor-applications/`, payload);
     return response.data;
   },
 };
