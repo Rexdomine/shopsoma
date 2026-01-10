@@ -11,10 +11,10 @@ const resolveApiBaseUrl = () => {
 
   if (typeof window !== 'undefined') {
     const host = window.location.hostname;
-    if (host.includes('shopsoma-staging')) {
+    if (host === 'shopsoma-staging.onrender.com') {
       return 'https://shopsoma-staging-api.onrender.com/api/v1';
     }
-    if (host.includes('shopsoma')) {
+    if (host === 'shopsoma.com' || host === 'www.shopsoma.com') {
       return 'https://api.shopsoma.com/api/v1';
     }
   }
