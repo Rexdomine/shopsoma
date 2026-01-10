@@ -3,7 +3,26 @@
  */
 
 // API Configuration
-export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1';
+const resolveApiBaseUrl = () => {
+  const envUrl = import.meta.env.VITE_API_BASE_URL;
+  if (envUrl) {
+    return envUrl;
+  }
+
+  if (typeof window !== 'undefined') {
+    const host = window.location.hostname;
+    if (host === 'shopsoma-staging.onrender.com') {
+      return 'https://shopsoma-staging-api.onrender.com/api/v1';
+    }
+    if (host === 'shopsoma.com' || host === 'www.shopsoma.com') {
+      return 'https://api.shopsoma.com/api/v1';
+    }
+  }
+
+  return 'http://localhost:8000/api/v1';
+};
+
+export const API_BASE_URL = resolveApiBaseUrl();
 
 // App Configuration
 export const APP_NAME = 'Shopsoma';
