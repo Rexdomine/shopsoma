@@ -34,13 +34,15 @@ def get_password_hash(password: str) -> str:
 
 def get_access_token_expires_delta(role: Optional[str]) -> timedelta:
     if role == "customer":
-        return timedelta(days=settings.CUSTOMER_ACCESS_TOKEN_EXPIRE_DAYS)
+        customer_days = getattr(settings, "CUSTOMER_ACCESS_TOKEN_EXPIRE_DAYS", None) or 3650
+        return timedelta(days=customer_days)
     return timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
 
 
 def get_refresh_token_expires_delta(role: Optional[str]) -> timedelta:
     if role == "customer":
-        return timedelta(days=settings.CUSTOMER_REFRESH_TOKEN_EXPIRE_DAYS)
+        customer_days = getattr(settings, "CUSTOMER_REFRESH_TOKEN_EXPIRE_DAYS", None) or 3650
+        return timedelta(days=customer_days)
     return timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
 
 
@@ -211,6 +213,31 @@ def verify_account_claim_token(token: str) -> Optional[str]:
     try:
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
         if payload.get("type") != "account_claim":
+            return None
+        return payload.get("email")
+    except JWTError:
+        return None
+
+
+def create_password_reset_token(email: str, expires_minutes: int = 60) -> str:
+    """
+    Create a password reset token for an email address.
+    """
+    data = {
+        "email": email.lower(),
+        "type": "password_reset",
+        "exp": datetime.utcnow() + timedelta(minutes=expires_minutes),
+    }
+    return jwt.encode(data, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+
+
+def verify_password_reset_token(token: str) -> Optional[str]:
+    """
+    Verify a password reset token and return the encoded email address.
+    """
+    try:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        if payload.get("type") != "password_reset":
             return None
         return payload.get("email")
     except JWTError:

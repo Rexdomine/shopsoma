@@ -65,9 +65,20 @@ class EmailService:
                 configuration = brevo_python.Configuration()
                 configuration.api_key['api-key'] = settings.BREVO_API_KEY
                 self.api_instance = brevo_python.TransactionalEmailsApi(brevo_python.ApiClient(configuration))
+                sender_name = (
+                    getattr(settings, "BREVO_SENDER_NAME", None)
+                    or getattr(settings, "SMTP_FROM_NAME", None)
+                    or "Shopsoma"
+                )
+                sender_email = (
+                    getattr(settings, "BREVO_SENDER_EMAIL", None)
+                    or getattr(settings, "SMTP_FROM_EMAIL", None)
+                    or getattr(settings, "FROM_EMAIL", None)
+                    or ""
+                )
                 self.sender = {
-                    "name": settings.BREVO_SENDER_NAME,
-                    "email": settings.BREVO_SENDER_EMAIL
+                    "name": sender_name,
+                    "email": sender_email
                 }
                 logger.info("EmailService initialized successfully with Brevo SDK")
             except Exception as e:
@@ -119,7 +130,7 @@ class EmailService:
 
         # Use text-based logo if no valid image URL
         logo_html = ""
-        if self.logo_url and self.logo_url.startswith("http"):
+        if self.logo_url and (self.logo_url.startswith("http") or self.logo_url.startswith("data:")):
             logo_html = f'<img src="{self.logo_url}" alt="Shopsoma" style="height:40px;display:block;" />'
         else:
             # Fallback to text-based logo
@@ -790,6 +801,31 @@ class EmailService:
         """
         preheader = "Activate your Shopsoma account in seconds for faster checkout."
         html_content = self._wrap_email("Claim Your Account", body_html, preheader)
+        return await self.send_email(email, name, subject, html_content)
+
+    async def send_password_reset_email(
+        self,
+        email: str,
+        name: str,
+        reset_link: str,
+        expires_minutes: int
+    ) -> bool:
+        """Send password reset email."""
+        subject = "Reset Your Password · Shopsoma"
+        body_html = f"""
+        <p style="font-size:16px;">Hi {name or 'there'},</p>
+        <p>We received a request to reset your Shopsoma password. Use the button below to set a new password.</p>
+        <div style="margin:32px 0;text-align:center;">
+            <a href="{reset_link}" style="display:inline-block;padding:14px 32px;background:{BRAND_PRIMARY};color:#fff;border-radius:999px;text-decoration:none;font-weight:600;font-size:16px;">
+                Reset Password
+            </a>
+        </div>
+        <p style="color:#6B7280;font-size:14px;">This link expires in {expires_minutes} minutes. If you didn't request a password reset, you can safely ignore this email.</p>
+        <p style="color:#6B7280;font-size:14px;">If the button doesn't work, copy and paste this link into your browser:</p>
+        <p style="color:{BRAND_PRIMARY};font-size:12px;word-break:break-all;">{reset_link}</p>
+        """
+        preheader = "Use this secure link to reset your Shopsoma password."
+        html_content = self._wrap_email("Reset Password", body_html, preheader)
         return await self.send_email(email, name, subject, html_content)
 
     async def send_vendor_application_confirmation(self, email: str, first_name: str, business_name: str) -> bool:

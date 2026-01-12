@@ -62,6 +62,42 @@ class Settings(BaseSettings):
     CELERY_BROKER_URL: str = ""
     CELERY_RESULT_BACKEND: str = ""
 
+    # Brevo Email Service
+    BREVO_API_KEY: str = ""
+    BREVO_SENDER_EMAIL: str = "noreply@shopsoma.com"
+    BREVO_SENDER_NAME: str = "Shopsoma"
+    BREVO_NEWSLETTER_LIST_ID: Optional[int] = None
+
+    # ShipBubble Shipping Service
+    # Docs: https://docs.shipbubble.com
+    SHIPBUBBLE_API_KEY: str = ""
+    SHIPBUBBLE_WEBHOOK_SECRET: str = ""  # For webhook signature verification
+
+    @property
+    def FRONTEND_URL(self) -> str:
+        """Alias for FRONTEND_BASE_URL for backward compatibility"""
+        return self.FRONTEND_BASE_URL
+
+    # S3/Object Storage
+    USE_LOCAL_STORAGE: bool = True  # Use local file storage for development
+    LOCAL_UPLOAD_DIR: str = "uploads"  # Directory for local uploads
+    S3_BUCKET_NAME: str = "shopsoma-uploads"
+    S3_ENDPOINT_URL: str = ""  # For CloudFlare R2 or MinIO
+    CDN_BASE_URL: str = ""  # CloudFront or CloudFlare CDN
+
+    # Image Processing
+    MAX_IMAGE_SIZE_MB: int = 5
+    ALLOWED_IMAGE_TYPES: str = "image/jpeg,image/png,image/webp"
+    IMAGE_QUALITY: int = 85
+    THUMBNAIL_SIZE: str = "300,300"
+    MEDIUM_SIZE: str = "800,800"
+    LARGE_SIZE: str = "1600,1600"
+
+    # Business Settings
+    DEFAULT_COMMISSION_RATE: float = 12.5
+    PAYOUT_HOLD_DAYS: int = 14
+    PASSWORD_RESET_EXPIRE_MINUTES: int = 60
+
     # Admin Settings
     ADMIN_EMAIL: str = "admin@shopsoma.com"
 
@@ -69,26 +105,26 @@ class Settings(BaseSettings):
     DEFAULT_PAGE_SIZE: int = 20
     MAX_PAGE_SIZE: int = 100
 
-    # File Upload Settings
-    MAX_IMAGE_SIZE_MB: int = 5
-    ALLOWED_IMAGE_TYPES: str = "image/jpeg,image/png,image/webp"
-
     # Security Headers
     SECURITY_HEADERS_ENABLED: bool = True
 
     # Default Currency
     DEFAULT_CURRENCY: str = "NGN"
 
-    # Email Service
-    BREVO_API_KEY: str = ""
-
-    # CDN
-    CDN_BASE_URL: str = ""
-
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
         extra = "forbid"
+
+    def model_post_init(self, __context) -> None:
+        if self.AWS_S3_BUCKET and not self.S3_BUCKET_NAME:
+            self.S3_BUCKET_NAME = self.AWS_S3_BUCKET
+        if self.AWS_S3_ENDPOINT_URL and not self.S3_ENDPOINT_URL:
+            self.S3_ENDPOINT_URL = self.AWS_S3_ENDPOINT_URL
+        if self.S3_BUCKET_NAME and not self.AWS_S3_BUCKET:
+            self.AWS_S3_BUCKET = self.S3_BUCKET_NAME
+        if self.S3_ENDPOINT_URL and not self.AWS_S3_ENDPOINT_URL:
+            self.AWS_S3_ENDPOINT_URL = self.S3_ENDPOINT_URL
 
 
 settings = Settings()

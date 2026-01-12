@@ -1,18 +1,44 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import Layout from '../../components/layout/Layout';
 import Newsletter from '../../components/home/Newsletter';
+import { ROUTES } from '../../config/constants';
+import { authService } from '../../services/authService';
 
 export default function ForgotPassword() {
+  const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
   const [email, setEmail] = useState('');
   const isComplete = email.trim().length > 0;
   const [toast, setToast] = useState(false);
+  const [toastMessage, setToastMessage] = useState('Reset password link sent successfully');
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const handleSubmit = (event: React.FormEvent) => {
+  useEffect(() => {
+    const token = searchParams.get('token');
+    if (token) {
+      navigate(`${ROUTES.RESET_PASSWORD}?token=${token}`, { replace: true });
+    }
+  }, [navigate, searchParams]);
+
+  const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
-    // TODO: hook to API
-    console.log('Forgot password for', email);
-    setToast(true);
-    setTimeout(() => setToast(false), 4000);
+    if (!isComplete || isSubmitting) {
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      await authService.requestPasswordReset(email.trim());
+      setToastMessage('If the email exists, a reset link has been sent.');
+      setToast(true);
+    } catch (error: any) {
+      setToastMessage(error?.message || 'Unable to send reset email. Please try again.');
+      setToast(true);
+    } finally {
+      setIsSubmitting(false);
+      setTimeout(() => setToast(false), 4000);
+    }
   };
 
   return (
@@ -22,7 +48,7 @@ export default function ForgotPassword() {
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3 flex items-center justify-center text-center">
             <div className="text-sm">
               <p className="font-semibold">Forgot password</p>
-              <p className="text-white/90">Reset password link sent successfully</p>
+              <p className="text-white/90">{toastMessage}</p>
             </div>
           </div>
         </div>
@@ -47,14 +73,14 @@ export default function ForgotPassword() {
             </div>
             <button
               type="submit"
-              disabled={!isComplete}
+              disabled={!isComplete || isSubmitting}
               className={`w-full py-3 rounded-sm text-sm font-semibold transition ${
-                isComplete
+                isComplete && !isSubmitting
                   ? 'bg-primary text-white hover:bg-primary-dark'
                   : 'bg-gray-200 text-gray-500 cursor-not-allowed'
               }`}
             >
-              Send instructions
+              {isSubmitting ? 'Sending...' : 'Send instructions'}
             </button>
           </form>
         </div>
