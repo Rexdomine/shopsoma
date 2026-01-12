@@ -2,6 +2,7 @@
 Authentication endpoints
 """
 from datetime import datetime, timedelta
+import logging
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,6 +21,8 @@ from app.core.security import (
     create_email_verification_token,
     verify_email_verification_token,
     verify_account_claim_token,
+    create_password_reset_token,
+    verify_password_reset_token,
 )
 from app.core.config import settings
 from app.models.user import User, UserRole
@@ -36,12 +39,26 @@ from app.schemas.auth import (
     EmailStatusRequest,
     EmailStatusResponse,
     ClaimAccountEmailRequest,
+    PasswordReset,
+    PasswordResetConfirm,
 )
 from app.api.dependencies import get_current_user, get_current_active_user, get_optional_user
 from app.services.email_service import email_service
 from app.services.account_claim import queue_account_claim_email
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
+logger = logging.getLogger(__name__)
+
+
+def _mask_email(email: str) -> str:
+    if not email or "@" not in email:
+        return email
+    local, domain = email.split("@", 1)
+    if len(local) <= 2:
+        masked_local = f"{local[0]}*"
+    else:
+        masked_local = f"{local[0]}***{local[-1]}"
+    return f"{masked_local}@{domain}"
 
 
 def _access_expires_in_seconds(role: UserRole) -> int:
@@ -354,6 +371,87 @@ async def check_email_status(
         is_active=user.is_active,
         can_claim=not has_password
     )
+
+
+@router.post("/password-reset/request")
+async def request_password_reset(
+    payload: PasswordReset,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Request a password reset link.
+
+    Always returns success to avoid disclosing whether the email exists.
+    """
+    masked_email = _mask_email(payload.email)
+    logger.info("[Password Reset] Request received for %s", masked_email)
+    result = await db.execute(select(User).where(User.email == payload.email))
+    user = result.scalar_one_or_none()
+
+    if user and user.is_active:
+        token = create_password_reset_token(
+            user.email,
+            settings.PASSWORD_RESET_EXPIRE_MINUTES
+        )
+        reset_link = f"{settings.FRONTEND_BASE_URL}/reset-password?token={token}"
+        logger.info(
+            "[Password Reset] Queuing email for user_id=%s email=%s frontend=%s expires_minutes=%s email_enabled=%s api_instance=%s",
+            user.id,
+            masked_email,
+            settings.FRONTEND_BASE_URL,
+            settings.PASSWORD_RESET_EXPIRE_MINUTES,
+            email_service.enabled,
+            "configured" if email_service.api_instance else "None",
+        )
+        background_tasks.add_task(
+            email_service.send_password_reset_email,
+            user.email,
+            user.full_name,
+            reset_link,
+            settings.PASSWORD_RESET_EXPIRE_MINUTES
+        )
+    elif user and not user.is_active:
+        logger.info("[Password Reset] Ignored: inactive user_id=%s email=%s", user.id, masked_email)
+    else:
+        logger.info("[Password Reset] Ignored: no active user for %s", masked_email)
+
+    return {
+        "message": "If the email exists, a password reset link has been sent.",
+        "expires_in": settings.PASSWORD_RESET_EXPIRE_MINUTES * 60
+    }
+
+
+@router.post("/password-reset/confirm")
+async def confirm_password_reset(
+    payload: PasswordResetConfirm,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Confirm password reset with token and new password.
+    """
+    email = verify_password_reset_token(payload.token)
+    if not email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired password reset token"
+        )
+
+    result = await db.execute(select(User).where(User.email == email))
+    user = result.scalar_one_or_none()
+
+    if not user or not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired password reset token"
+        )
+
+    user.hashed_password = get_password_hash(payload.new_password)
+    user.is_guest_created = False
+    await db.commit()
+    await db.refresh(user)
+
+    return {"message": "Password reset successful"}
 
 
 @router.post("/refresh", response_model=Token)

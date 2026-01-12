@@ -44,6 +44,7 @@ const VendorOtp = lazy(() => import('../pages/auth/VendorOtp'));
 const VendorSetPassword = lazy(() => import('../pages/auth/VendorSetPassword'));
 const VendorDashboard = lazy(() => import('../pages/vendor/VendorDashboard'));
 const ForgotPassword = lazy(() => import('../pages/auth/ForgotPassword'));
+const ResetPassword = lazy(() => import('../pages/auth/ResetPassword'));
 const VerifyEmail = lazy(() => import('../pages/auth/VerifyEmail'));
 const ClaimAccount = lazy(() => import('../pages/auth/ClaimAccount'));
 const OrderSuccess = lazy(() => import('../pages/orders/OrderSuccess'));
@@ -216,6 +217,16 @@ const router = createBrowserRouter([
       <ErrorBoundary>
         <Suspense fallback={<Loading fullScreen message="Loading order..." />}>
           <OrderTracking />
+        </Suspense>
+      </ErrorBoundary>
+    ),
+  },
+  {
+    path: ROUTES.FORGOT_PASSWORD,
+    element: (
+      <ErrorBoundary>
+        <Suspense fallback={<Loading fullScreen message="Loading..." />}>
+          <ForgotPassword />
         </Suspense>
       </ErrorBoundary>
     ),
@@ -476,6 +487,16 @@ const router = createBrowserRouter([
       <ErrorBoundary>
         <Suspense fallback={<Loading fullScreen message="Loading..." />}>
           <ForgotPassword />
+        </Suspense>
+      </ErrorBoundary>
+    ),
+  },
+  {
+    path: ROUTES.RESET_PASSWORD,
+    element: (
+      <ErrorBoundary>
+        <Suspense fallback={<Loading fullScreen message="Loading..." />}>
+          <ResetPassword />
         </Suspense>
       </ErrorBoundary>
     ),

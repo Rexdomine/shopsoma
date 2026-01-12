@@ -57,6 +57,7 @@ export const ROUTES = {
   VENDOR_PAYOUT_INFO: '/vendor/settings/payout-information',
   VENDOR_SECURITY: '/vendor/settings/security',
   FORGOT_PASSWORD: '/forgot-password',
+  RESET_PASSWORD: '/reset-password',
   REGISTER: '/register',
   MEN: '/men',
   WOMEN: '/women',
