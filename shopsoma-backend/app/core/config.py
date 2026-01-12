@@ -4,6 +4,7 @@ This module defines the Settings class using Pydantic BaseSettings for loading
 configuration from environment variables.
 """
 
+import re
 from typing import List, Optional
 from pydantic_settings import BaseSettings
 
@@ -24,6 +25,7 @@ class Settings(BaseSettings):
     # Database Settings
     DATABASE_URL: str
     DATABASE_ECHO: bool = False
+    ASYNC_DATABASE_URL: Optional[str] = None
 
     # Redis Settings
     REDIS_HOST: str = "localhost"
@@ -117,6 +119,8 @@ class Settings(BaseSettings):
         extra = "forbid"
 
     def model_post_init(self, __context) -> None:
+        if not self.ASYNC_DATABASE_URL:
+            self.ASYNC_DATABASE_URL = self._build_async_db_url(self.DATABASE_URL)
         if self.AWS_S3_BUCKET and not self.S3_BUCKET_NAME:
             self.S3_BUCKET_NAME = self.AWS_S3_BUCKET
         if self.AWS_S3_ENDPOINT_URL and not self.S3_ENDPOINT_URL:
@@ -125,6 +129,20 @@ class Settings(BaseSettings):
             self.AWS_S3_BUCKET = self.S3_BUCKET_NAME
         if self.S3_ENDPOINT_URL and not self.AWS_S3_ENDPOINT_URL:
             self.AWS_S3_ENDPOINT_URL = self.S3_ENDPOINT_URL
+
+    @staticmethod
+    def _build_async_db_url(database_url: str) -> str:
+        if database_url.startswith("postgresql+asyncpg://"):
+            return database_url
+        if database_url.startswith("postgres://"):
+            database_url = database_url.replace("postgres://", "postgresql://", 1)
+        if database_url.startswith("postgresql://"):
+            return database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+        return database_url
+
+    @staticmethod
+    def get_masked_db_url(database_url: str) -> str:
+        return re.sub(r"://([^:]+):([^@]+)@", r"://\\1:***@", database_url)
 
 
 settings = Settings()
