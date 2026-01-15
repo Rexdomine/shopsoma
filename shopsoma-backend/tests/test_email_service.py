@@ -87,3 +87,49 @@ async def test_send_vendor_new_order_email(monkeypatch):
     assert result is True
     assert calls[0][0] == "vendor@example.com"
     assert calls[0][1] == "Vendor Store"
+
+
+@pytest.mark.asyncio
+async def test_send_vendor_payout_processed_email(monkeypatch):
+    service = EmailService()
+    calls = []
+
+    async def fake_send_email(to_email, to_name, subject, html_content, template_params=None):
+        calls.append((to_email, to_name, subject))
+        return True
+
+    monkeypatch.setattr(service, "send_email", fake_send_email)
+
+    result = await service.send_vendor_payout_processed_email(
+        email="vendor@example.com",
+        name="Vendor Store",
+        payout_amount=1200,
+        processed_at=datetime(2025, 1, 1, 10, 0),
+    )
+
+    assert result is True
+    assert calls[0][0] == "vendor@example.com"
+    assert calls[0][2] == "Payout Processed"
+
+
+@pytest.mark.asyncio
+async def test_send_vendor_payout_failed_email(monkeypatch):
+    service = EmailService()
+    calls = []
+
+    async def fake_send_email(to_email, to_name, subject, html_content, template_params=None):
+        calls.append((to_email, to_name, subject))
+        return True
+
+    monkeypatch.setattr(service, "send_email", fake_send_email)
+
+    result = await service.send_vendor_payout_failed_email(
+        email="vendor@example.com",
+        name="Vendor Store",
+        payout_amount=1200,
+        failure_reason="Bank transfer failed",
+    )
+
+    assert result is True
+    assert calls[0][0] == "vendor@example.com"
+    assert calls[0][2] == "Payout Failed"
