@@ -88,7 +88,12 @@ class EmailService:
                 self.sender = None
 
         self.asset_base = getattr(settings, "CDN_BASE_URL", "") or getattr(settings, "FRONTEND_BASE_URL", "")
-        self.logo_url = self._resolve_image_url(getattr(settings, "BRAND_LOGO_URL", ""), LOGO_FALLBACK)
+        raw_logo = getattr(settings, "BRAND_LOGO_URL", "") or ""
+        if raw_logo and not raw_logo.startswith(("http://", "https://", "data:")):
+            base = (getattr(settings, "FRONTEND_BASE_URL", "") or "").rstrip("/")
+            if base:
+                raw_logo = f"{base}/{raw_logo.lstrip('/')}"
+        self.logo_url = self._resolve_image_url(raw_logo, LOGO_FALLBACK)
         self.product_placeholder = PRODUCT_PLACEHOLDER
 
     @staticmethod
@@ -213,8 +218,6 @@ class EmailService:
             return False
         except Exception as e:
             logger.error(f"❌ Unexpected error sending email to {to_email}: {type(e).__name__} - {e}")
-            import traceback
-            logger.error(traceback.format_exc())
             return False
 
     async def send_welcome_email(self, email: str, name: str) -> bool:
@@ -387,8 +390,7 @@ class EmailService:
                 <tr><td>Tax (7.5%)</td><td style="text-align:right;">{self._format_amount(tax)}</td></tr>
                 <tr style="font-size:16px;font-weight:600;border-top:1px solid {BRAND_BORDER};">
                     <td style="padding-top:8px;">Total</td>
-                    <td style="text-align:right;padding-top:8px;">{self._format_amount(total)}</td>
-                </tr>
+                    <td style="text-align:right;padding-top:8px;">{self._format_amount(total)}</td></tr>
             </table>
         </div>
         <div style="border:1px solid {BRAND_BORDER};border-radius:10px;padding:20px;">
@@ -478,229 +480,63 @@ class EmailService:
         <p style="font-size:16px;">Hello {name or 'there'},</p>
         <p>Your payout request has been received and is being reviewed.</p>
         <div style="margin:24px 0;padding:20px;border:1px solid {BRAND_BORDER};border-radius:10px;background:{BRAND_LIGHT};">
-            <p style="margin:0;"><strong>Amount:</strong> {self._format_amount(payout_amount)}</p>
-            <p style="margin:4px 0;"><strong>Requested at:</strong> {request_date}</p>
-            <p style="margin:4px 0;"><strong>Destination:</strong> {method_line}</p>
+            <p style="margin:0;"><strong>Request Date:</strong> {request_date}</p>
+            <p style="margin:4px 0;"><strong>Requested Amount:</strong> {self._format_amount(payout_amount)}</p>
+            <p style="margin:4px 0;"><strong>Payout Method:</strong> {method_line}</p>
             {hold_note}
         </div>
-        <p style="text-align:center;margin-top:32px;">
-            <a href="{settings.FRONTEND_BASE_URL}/vendor/earnings/withdrawals" style="display:inline-block;padding:12px 24px;background:{BRAND_PRIMARY};color:#fff;text-decoration:none;border-radius:999px;font-weight:600;">
-                View Withdrawal Status
-            </a>
-        </p>
-        <p style="margin-top:24px;color:#6B7280;font-size:13px;">
-            Need help? Reach out to our vendor support team at
-            <a href="mailto:partnerships@shopsoma.com" style="color:{BRAND_PRIMARY};">partnerships@shopsoma.com</a>.
-        </p>
+        <p>We'll notify you once the payout is processed. If you have any questions, feel free to reach out.</p>
         """
 
-        html_content = self._wrap_email("Payout Request", body_html, "Your payout request has been received.")
+        html_content = self._wrap_email("Payout Request", body_html, "Your Shopsoma payout request has been received.")
         return await self.send_email(email, name, subject, html_content)
 
-    async def send_vendor_payout_status_update_email(
+    async def send_vendor_payout_processed_email(
         self,
         email: str,
         name: str,
         payout_amount: float,
-        status: str,
-        processed_at: Optional[datetime] = None,
-        payment_reference: Optional[str] = None,
-        notes: Optional[str] = None,
+        processed_at: datetime,
+        payout_method: Optional[str] = None,
     ) -> bool:
-        status_label = status.replace("_", " ").title()
-        subject = f"Payout Status Update - {status_label}"
-        processed_str = processed_at.strftime("%d %B %Y - %I:%M %p") if processed_at else "-"
-        reference_line = payment_reference or "-"
-        note_line = notes or "-"
+        subject = "Payout Processed"
+        processed_date = processed_at.strftime("%d %B %Y - %I:%M %p")
+        method_line = payout_method or "Your default payout account"
 
         body_html = f"""
         <p style="font-size:16px;">Hello {name or 'there'},</p>
-        <p>Your payout request status has been updated.</p>
+        <p>Your payout has been processed successfully.</p>
         <div style="margin:24px 0;padding:20px;border:1px solid {BRAND_BORDER};border-radius:10px;background:{BRAND_LIGHT};">
-            <p style="margin:0;"><strong>Amount:</strong> {self._format_amount(payout_amount)}</p>
-            <p style="margin:4px 0;"><strong>Status:</strong> {status_label}</p>
-            <p style="margin:4px 0;"><strong>Processed at:</strong> {processed_str}</p>
-            <p style="margin:4px 0;"><strong>Reference:</strong> {reference_line}</p>
-            <p style="margin:4px 0;"><strong>Notes:</strong> {note_line}</p>
+            <p style="margin:0;"><strong>Processed Date:</strong> {processed_date}</p>
+            <p style="margin:4px 0;"><strong>Amount:</strong> {self._format_amount(payout_amount)}</p>
+            <p style="margin:4px 0;"><strong>Method:</strong> {method_line}</p>
         </div>
-        <p style="text-align:center;margin-top:32px;">
-            <a href="{settings.FRONTEND_BASE_URL}/vendor/earnings/withdrawals" style="display:inline-block;padding:12px 24px;background:{BRAND_PRIMARY};color:#fff;text-decoration:none;border-radius:999px;font-weight:600;">
-                View Withdrawal Status
-            </a>
-        </p>
+        <p>If you have any questions about this payout, please contact support.</p>
         """
 
-        html_content = self._wrap_email("Payout Update", body_html, "Your payout status has been updated.")
+        html_content = self._wrap_email("Payout Processed", body_html, "Your Shopsoma payout has been sent.")
         return await self.send_email(email, name, subject, html_content)
 
-    async def send_admin_payout_request_email(
+    async def send_vendor_payout_failed_email(
         self,
-        recipients: List[Dict[str, str]],
-        vendor_name: str,
-        vendor_email: str,
+        email: str,
+        name: str,
         payout_amount: float,
-        requested_at: datetime,
-        payout_id: str,
+        failure_reason: str
     ) -> bool:
-        if not recipients:
-            return False
-
-        subject = f"New Payout Request - {vendor_name}"
-        request_date = requested_at.strftime("%d %B %Y - %I:%M %p")
-
+        subject = "Payout Failed"
         body_html = f"""
-        <p style="font-size:16px;">Hello Admin,</p>
-        <p>A vendor has submitted a payout request.</p>
+        <p style="font-size:16px;">Hello {name or 'there'},</p>
+        <p>We attempted to process your payout but ran into an issue.</p>
         <div style="margin:24px 0;padding:20px;border:1px solid {BRAND_BORDER};border-radius:10px;background:{BRAND_LIGHT};">
-            <p style="margin:0;"><strong>Vendor:</strong> {vendor_name}</p>
-            <p style="margin:4px 0;"><strong>Email:</strong> {vendor_email}</p>
-            <p style="margin:4px 0;"><strong>Amount:</strong> {self._format_amount(payout_amount)}</p>
-            <p style="margin:4px 0;"><strong>Requested at:</strong> {request_date}</p>
-            <p style="margin:4px 0;"><strong>Payout ID:</strong> {payout_id}</p>
+            <p style="margin:0;"><strong>Amount:</strong> {self._format_amount(payout_amount)}</p>
+            <p style="margin:4px 0;"><strong>Reason:</strong> {failure_reason}</p>
         </div>
-        <p style="text-align:center;margin-top:32px;">
-            <a href="{settings.FRONTEND_BASE_URL}/admin/payouts" style="display:inline-block;padding:12px 24px;background:{BRAND_PRIMARY};color:#fff;text-decoration:none;border-radius:999px;font-weight:600;">
-                Review Payouts
-            </a>
-        </p>
+        <p>Please update your payout details or contact support for assistance.</p>
         """
 
-        html_content = self._wrap_email("Payout Request", body_html, "A new payout request is waiting.")
-
-        sent_any = False
-        for recipient in recipients:
-            sent_any = await self.send_email(
-                recipient["email"],
-                recipient.get("name") or "Admin",
-                subject,
-                html_content,
-            ) or sent_any
-        return sent_any
-
-    async def send_admin_order_notification(
-        self,
-        order_number: str,
-        customer_name: str,
-        customer_email: str,
-        order_date: datetime,
-        items: list,
-        subtotal: float,
-        shipping: float,
-        tax: float,
-        total: float,
-        payment_status: str,
-        shipping_address: Dict[str, str],
-        recipients: Optional[List[Dict[str, str]]] = None
-    ) -> bool:
-        """
-        Send new order notification to admin
-
-        Args:
-            order_number: Order number
-            customer_name: Customer's full name
-            customer_email: Customer's email
-            order_date: When order was placed
-            items: List of order items
-            subtotal: Order subtotal
-            shipping: Shipping cost
-            tax: Tax amount
-            total: Total amount
-            payment_status: Payment status (paid, pending, etc.)
-            shipping_address: Shipping address dict
-            recipients: Optional list of {"email": str, "name": str} recipients
-
-        Returns:
-            bool: True if email sent successfully
-        """
-        from app.core.config import settings
-
-        subject = f"New Order Alert · {order_number}"
-        items_table = self._build_items_table(items)
-
-        def _addr(key: str):
-            return shipping_address.get(key) or shipping_address.get(key.replace('_', ''))
-
-        address_lines = "<br/>".join(
-            filter(
-                None,
-                [
-                    shipping_address.get('full_name'),
-                    _addr('address_line_1'),
-                    _addr('address_line_2'),
-                    f"{shipping_address.get('city', '')}, {shipping_address.get('state', '')} {shipping_address.get('postal_code', '')}",
-                    shipping_address.get('country', 'Nigeria'),
-                    f"Phone: {shipping_address.get('phone_number', '')}",
-                ],
-            )
-        )
-
-        # Payment status badge
-        payment_badge_colors = {
-            'paid': '#19984B',
-            'pending': '#D97706',
-            'failed': '#DC2626',
-        }
-        payment_color = payment_badge_colors.get(payment_status.lower(), '#6B7280')
-
-        body_html = f"""
-        <p style="font-size:16px;">New order received on Shopsoma.</p>
-        <div style="margin:24px 0;padding:20px;border:1px solid {BRAND_BORDER};border-radius:10px;background:{BRAND_LIGHT};">
-            <p style="margin:0;"><strong>Order Number:</strong> {order_number}</p>
-            <p style="margin:4px 0;"><strong>Order Date:</strong> {order_date.strftime('%d %B %Y · %I:%M %p')}</p>
-            <p style="margin:4px 0;"><strong>Payment Status:</strong> <span style="color:{payment_color};font-weight:600;">{payment_status.upper()}</span></p>
-        </div>
-        <div style="border:1px solid {BRAND_BORDER};border-radius:10px;padding:20px;margin-bottom:24px;">
-            <p style="margin:0 0 8px;font-weight:600;">Customer Information</p>
-            <p style="margin:0;color:#6B7280;"><strong>Name:</strong> {customer_name}</p>
-            <p style="margin:4px 0;color:#6B7280;"><strong>Email:</strong> {customer_email}</p>
-        </div>
-        <table style="width:100%;border-collapse:collapse;margin-bottom:24px;">
-            <thead>
-                <tr style="background:{BRAND_LIGHT};text-transform:uppercase;font-size:12px;letter-spacing:0.15em;color:#6B7280;">
-                    <th style="padding:12px;text-align:left;">Item</th>
-                    <th style="padding:12px;text-align:center;">Qty</th>
-                    <th style="padding:12px;text-align:right;">Price</th>
-                    <th style="padding:12px;text-align:right;">Subtotal</th>
-                </tr>
-            </thead>
-            <tbody>
-                {items_table}
-            </tbody>
-        </table>
-        <div style="border:1px solid {BRAND_BORDER};border-radius:10px;padding:20px;margin-bottom:24px;">
-            <table style="width:100%;font-size:14px;">
-                <tr><td>Subtotal</td><td style="text-align:right;">{self._format_amount(subtotal)}</td></tr>
-                <tr><td>Shipping</td><td style="text-align:right;">{self._format_amount(shipping)}</td></tr>
-                <tr><td>Tax (7.5%)</td><td style="text-align:right;">{self._format_amount(tax)}</td></tr>
-                <tr style="font-size:16px;font-weight:600;border-top:1px solid {BRAND_BORDER};">
-                    <td style="padding-top:8px;">Total</td>
-                    <td style="text-align:right;padding-top:8px;">{self._format_amount(total)}</td>
-                </tr>
-            </table>
-        </div>
-        <div style="border:1px solid {BRAND_BORDER};border-radius:10px;padding:20px;">
-            <p style="margin:0 0 8px;font-weight:600;">Shipping Address</p>
-            <p style="margin:0;color:#6B7280;">{address_lines}</p>
-        </div>
-        <p style="text-align:center;margin-top:32px;">
-            <a href="{settings.FRONTEND_BASE_URL}/admin/orders" style="display:inline-block;padding:12px 24px;background:{BRAND_PRIMARY};color:#fff;text-decoration:none;border-radius:999px;font-weight:600;">
-                View in Admin Dashboard
-            </a>
-        </p>
-        """
-
-        html_content = self._wrap_email("New Order", body_html, f"New order {order_number} from {customer_name}")
-        recipient_list = recipients or [{"email": settings.ADMIN_EMAIL, "name": "Admin"}]
-        all_sent = True
-        for recipient in recipient_list:
-            sent = await self.send_email(
-                recipient.get("email", settings.ADMIN_EMAIL),
-                recipient.get("name", "Admin"),
-                subject,
-                html_content
-            )
-            all_sent = all_sent and sent
-        return all_sent
+        html_content = self._wrap_email("Payout Failed", body_html, "Issue processing your Shopsoma payout.")
+        return await self.send_email(email, name, subject, html_content)
 
     async def send_order_status_update_email(
         self,
@@ -712,9 +548,9 @@ class EmailService:
     ) -> bool:
         subject = f"Order Update · {order_number}"
         status_messages = {
-            "processing": "We're perfecting your order. Expect a shipping update soon.",
-            "shipped": f"Your order is en route. Tracking number: <strong>{tracking_number}</strong>",
-            "delivered": "Delivered! We hope you love your new pieces.",
+            "processing": "Your order is being processed and packaged.",
+            "shipped": "Your order has shipped and is on the way.",
+            "delivered": "Your order has been delivered. We hope you love your new pieces.",
             "cancelled": "Your order has been cancelled. Refunds (if applicable) will be processed shortly."
         }
         message = status_messages.get(status.lower(), "Your order status has been updated.")
