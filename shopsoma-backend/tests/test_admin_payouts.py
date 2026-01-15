@@ -84,11 +84,21 @@ async def test_admin_update_payout_status(
     db_session: AsyncSession,
     admin_user,
     vendor_user,
+    monkeypatch,
 ):
     from app.models.payment import Payout, PayoutStatus
+    from app.services.email_service import email_service
 
     vendor = vendor_user["vendor"]
     today = date.today()
+    captured = {}
+
+    async def fake_send_processed(email, name, payout_amount, processed_at, payout_method=None):
+        captured["email"] = email
+        captured["processed_at"] = processed_at
+        return True
+
+    monkeypatch.setattr(email_service, "send_vendor_payout_processed_email", fake_send_processed)
 
     payout = Payout(
         id=uuid4(),
@@ -119,6 +129,60 @@ async def test_admin_update_payout_status(
     assert data["payment_reference"] == "REF-PAID"
     assert data["notes"] == "Paid via bank transfer"
     assert data["processed_at"] is not None
+    assert captured["email"] == vendor.user.email
+    assert captured["processed_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_admin_update_payout_status_failed_sends_email(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    admin_user,
+    vendor_user,
+    monkeypatch,
+):
+    from app.models.payment import Payout, PayoutStatus
+    from app.services.email_service import email_service
+
+    vendor = vendor_user["vendor"]
+    today = date.today()
+    captured = {}
+
+    async def fake_send_failed(email, name, payout_amount, failure_reason):
+        captured["email"] = email
+        captured["failure_reason"] = failure_reason
+        return True
+
+    monkeypatch.setattr(email_service, "send_vendor_payout_failed_email", fake_send_failed)
+
+    payout = Payout(
+        id=uuid4(),
+        vendor_id=vendor.id,
+        payout_period_start=today,
+        payout_period_end=today,
+        total_sales=Decimal("600.00"),
+        commission_amount=Decimal("60.00"),
+        payout_amount=Decimal("540.00"),
+        status=PayoutStatus.PENDING,
+    )
+    db_session.add(payout)
+    await db_session.commit()
+
+    response = await client.patch(
+        f"/api/v1/admin/payouts/{payout.id}/status",
+        json={
+            "status": "failed",
+            "payment_reference": "REF-FAILED",
+            "notes": "Bank transfer failed",
+        },
+        headers=admin_user["headers"],
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "failed"
+    assert captured["email"] == vendor.user.email
+    assert captured["failure_reason"] == "Bank transfer failed"
 
 
 @pytest.mark.asyncio
