@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Info, Maximize2, Trash2, ChevronDown, Upload, X, Plus, Edit2, HelpCircle, Check } from 'lucide-react';
+import { ArrowLeft, Info, Trash2, ChevronDown, Upload, X, Plus, Edit2, HelpCircle, Check } from 'lucide-react';
 import VendorSidebar from '../../components/vendor/VendorSidebar';
 import CollectionModal from '../../components/vendor/CollectionModal';
 import ToastContainer from '../../components/ui/ToastContainer';
@@ -363,11 +363,8 @@ export default function VendorProductAdd() {
     ));
   };
 
-  const deleteCurrentVariation = () => {
-    if (variations.length === 1) return; // Don't delete the last variation
-    const updatedVariations = variations.filter(v => v.id !== currentVariation);
-    setVariations(updatedVariations);
-    setCurrentVariation(updatedVariations[0].id);
+  const handleProductTypeChange = (value: 'single' | 'variable') => {
+    setProductType(value);
   };
 
   const toggleSize = (size: SizeOption) => {
@@ -826,6 +823,7 @@ export default function VendorProductAdd() {
   };
 
   const currentVar = variations.find(v => v.id === currentVariation);
+  const currentVarImages = currentVar?.images ?? [];
   const productId = '75D83E'; // TODO: Generate from backend
 
   return (
@@ -969,12 +967,12 @@ export default function VendorProductAdd() {
                   </div>
 
                   {/* Image preview */}
-                  {variations.find(v => v.id === currentVariation)?.images.length > 0 && (
+                  {currentVarImages.length > 0 && (
                     <div className="grid grid-cols-4 gap-4 mt-4">
-                      {variations.find(v => v.id === currentVariation)?.images.map((image) => (
+                      {currentVarImages.map((image, index) => (
                         <div key={image.id} className="relative group">
                           <div className="aspect-square rounded-lg overflow-hidden bg-gray-100">
-                            <img src={image.preview} alt="Product" className="w-full h-full object-cover" />
+                            <img src={image.preview} alt={`Product ${index + 1}`} className="w-full h-full object-cover" />
                           </div>
                           <button
                             type="button"
