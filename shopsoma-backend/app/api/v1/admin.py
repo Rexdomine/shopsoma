@@ -656,8 +656,8 @@ async def list_vendors(
                 "is_onboarding": vendor.is_onboarding,
                 "brand_info_completed": vendor.brand_info_completed,
                 "payout_info_completed": vendor.payout_info_completed,
-                "total_products": len(vendor.products) if vendor.products else 0,
-                "total_orders": len(vendor.orders) if vendor.orders else 0,
+                "total_products": vendor.total_products or 0,
+                "total_orders": vendor.total_orders or 0,
                 "total_revenue": float(vendor.total_revenue) if vendor.total_revenue else 0.0,
                 "created_at": vendor.created_at.isoformat() if vendor.created_at else None,
                 "store_active": vendor.store_active,
@@ -674,83 +674,101 @@ async def list_vendors(
 
 
 @router.get("/vendors/{vendor_id}")
-async def get_vendor(
+async def get_vendor_details(
     vendor_id: UUID,
     current_admin: User = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Get detailed vendor information
-
+    Get detailed vendor information including user account and metrics
+    
     Requires admin role
     """
+    # Get vendor with user
     result = await db.execute(
         select(Vendor, User).join(User, Vendor.user_id == User.id).where(Vendor.id == vendor_id)
     )
     vendor_with_user = result.first()
-
+    
     if not vendor_with_user:
         raise HTTPException(status_code=404, detail="Vendor not found")
-
+    
     vendor, user = vendor_with_user
-
+    
+    # Get product count
+    product_count_result = await db.execute(
+        select(func.count()).select_from(Product).where(Product.vendor_id == vendor_id)
+    )
+    product_count = product_count_result.scalar()
+    
     return {
         "id": str(vendor.id),
         "user_id": str(vendor.user_id),
+        "user": {
+            "email": user.email,
+            "full_name": user.full_name,
+            "phone_number": user.phone_number,
+            "is_active": user.is_active,
+            "email_verified": user.email_verified,
+            "created_at": user.created_at.isoformat() if user.created_at else None,
+        },
         "business_name": vendor.business_name,
         "business_description": vendor.business_description,
         "business_address": vendor.business_address,
         "business_phone": vendor.business_phone,
-        "email": user.email,
-        "full_name": user.full_name,
         "approved": vendor.approved,
         "approved_at": vendor.approved_at.isoformat() if vendor.approved_at else None,
+        "approved_by": str(vendor.approved_by) if vendor.approved_by else None,
         "kyc_status": vendor.kyc_status.value if vendor.kyc_status else None,
+        "kyc_document_type": vendor.kyc_document_type,
+        "kyc_document_url": vendor.kyc_document_url,
         "kyc_submitted_at": vendor.kyc_submitted_at.isoformat() if vendor.kyc_submitted_at else None,
+        "kyc_reviewed_at": vendor.kyc_reviewed_at.isoformat() if vendor.kyc_reviewed_at else None,
+        "bank_name": vendor.bank_name,
+        "bank_account_number": vendor.bank_account_number,
+        "bank_account_name": vendor.bank_account_name,
         "commission_rate": float(vendor.commission_rate) if vendor.commission_rate else 0.0,
-        "is_active": user.is_active,
         "is_onboarding": vendor.is_onboarding,
         "brand_info_completed": vendor.brand_info_completed,
         "payout_info_completed": vendor.payout_info_completed,
-        "total_products": len(vendor.products) if vendor.products else 0,
-        "total_orders": len(vendor.orders) if vendor.orders else 0,
+        "onboarding_completed_at": vendor.onboarding_completed_at.isoformat() if vendor.onboarding_completed_at else None,
+        "total_products": product_count,
+        "total_orders": vendor.total_orders or 0,
         "total_revenue": float(vendor.total_revenue) if vendor.total_revenue else 0.0,
         "created_at": vendor.created_at.isoformat() if vendor.created_at else None,
-        "store_active": vendor.store_active,
-        "store_paused_at": vendor.store_paused_at.isoformat() if vendor.store_paused_at else None,
-        "store_deleted_at": vendor.store_deleted_at.isoformat() if vendor.store_deleted_at else None,
+        "updated_at": vendor.updated_at.isoformat() if vendor.updated_at else None,
     }
 
 
 @router.put("/vendors/{vendor_id}/commission")
 async def update_vendor_commission(
     vendor_id: UUID,
-    commission_rate: float = Query(..., ge=0, le=100, description="New commission rate percentage"),
+    commission_rate: float = Query(..., ge=0, le=100, description="Commission rate percentage (0-100)"),
     current_admin: User = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db)
 ):
     """
     Update vendor commission rate
-
+    
     Requires admin role
     """
-    # Get vendor
     result = await db.execute(
         select(Vendor).where(Vendor.id == vendor_id)
     )
     vendor = result.scalar_one_or_none()
-
+    
     if not vendor:
         raise HTTPException(status_code=404, detail="Vendor not found")
-
-    # Update commission rate
+    
     vendor.commission_rate = commission_rate
+    
     await db.commit()
-
+    await db.refresh(vendor)
+    
     return {
         "message": "Commission rate updated successfully",
-        "vendor_id": str(vendor_id),
-        "commission_rate": commission_rate
+        "vendor_id": str(vendor.id),
+        "commission_rate": float(vendor.commission_rate)
     }
 
 
@@ -762,7 +780,7 @@ async def approve_vendor(
 ):
     """
     Approve a vendor account
-
+    
     Requires admin role
     """
     from app.services.email_service import email_service
@@ -812,7 +830,7 @@ async def approve_vendor_kyc(
 ):
     """
     Approve vendor KYC
-
+    
     Requires admin role
     """
     from app.services.email_service import email_service
@@ -861,7 +879,7 @@ async def reject_vendor_kyc(
 ):
     """
     Reject vendor KYC
-
+    
     Requires admin role
     """
     from app.services.email_service import email_service
