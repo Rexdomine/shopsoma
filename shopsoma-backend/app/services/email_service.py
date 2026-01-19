@@ -489,4 +489,609 @@ class EmailService:
             {hold_note}
         </div>
         <p style="text-align:center;margin-top:32px;">
-            <a href="{settings.FRONTEND_BASE_URL}/vendor/earnings/withdrawals
+            <a href="{settings.FRONTEND_BASE_URL}/vendor/earnings/withdrawals" style="display:inline-block;padding:12px 24px;background:{BRAND_PRIMARY};color:#fff;text-decoration:none;border-radius:999px;font-weight:600;">
+                View Withdrawal Status
+            </a>
+        </p>
+        <p style="margin-top:24px;color:#6B7280;font-size:13px;">
+            Need help? Reach out to our vendor support team at
+            <a href="mailto:partnerships@shopsoma.com" style="color:{BRAND_PRIMARY};">partnerships@shopsoma.com</a>.
+        </p>
+        """
+
+        html_content = self._wrap_email("Payout Request", body_html, "Your payout request has been received.")
+        return await self.send_email(email, name, subject, html_content)
+
+    async def send_vendor_payout_processed_email(
+        self,
+        email: str,
+        name: str,
+        payout_amount: float,
+        processed_at: datetime,
+        payout_method: Optional[str] = None,
+    ) -> bool:
+        subject = "Payout Processed"
+        processed_date = processed_at.strftime("%d %B %Y - %I:%M %p")
+        method_line = payout_method or "Your default payout account"
+
+        body_html = f"""
+        <p style="font-size:16px;">Hello {name or 'there'},</p>
+        <p>Your payout has been processed successfully.</p>
+        <div style="margin:24px 0;padding:20px;border:1px solid {BRAND_BORDER};border-radius:10px;background:{BRAND_LIGHT};">
+            <p style="margin:0;"><strong>Processed Date:</strong> {processed_date}</p>
+            <p style="margin:4px 0;"><strong>Amount:</strong> {self._format_amount(payout_amount)}</p>
+            <p style="margin:4px 0;"><strong>Method:</strong> {method_line}</p>
+        </div>
+        <p>If you have any questions about this payout, please contact support.</p>
+        """
+
+        html_content = self._wrap_email("Payout Processed", body_html, "Your Shopsoma payout has been sent.")
+        return await self.send_email(email, name, subject, html_content)
+
+    async def send_vendor_payout_failed_email(
+        self,
+        email: str,
+        name: str,
+        payout_amount: float,
+        failure_reason: str,
+    ) -> bool:
+        subject = "Payout Failed"
+
+        body_html = f"""
+        <p style="font-size:16px;">Hello {name or 'there'},</p>
+        <p>We attempted to process your payout but ran into an issue.</p>
+        <div style="margin:24px 0;padding:20px;border:1px solid {BRAND_BORDER};border-radius:10px;background:{BRAND_LIGHT};">
+            <p style="margin:0;"><strong>Amount:</strong> {self._format_amount(payout_amount)}</p>
+            <p style="margin:4px 0;"><strong>Reason:</strong> {failure_reason}</p>
+        </div>
+        <p>Please update your payout details or contact support for assistance.</p>
+        """
+
+        html_content = self._wrap_email("Payout Failed", body_html, "Issue processing your Shopsoma payout.")
+        return await self.send_email(email, name, subject, html_content)
+
+    async def send_admin_payout_request_email(
+        self,
+        recipients: List[Dict[str, str]],
+        vendor_name: str,
+        vendor_email: str,
+        payout_amount: float,
+        requested_at: datetime,
+        payout_id: str,
+    ) -> bool:
+        if not recipients:
+            return False
+
+        subject = f"New Payout Request - {vendor_name}"
+        request_date = requested_at.strftime("%d %B %Y - %I:%M %p")
+
+        body_html = f"""
+        <p style="font-size:16px;">Hello Admin,</p>
+        <p>A vendor has submitted a payout request.</p>
+        <div style="margin:24px 0;padding:20px;border:1px solid {BRAND_BORDER};border-radius:10px;background:{BRAND_LIGHT};">
+            <p style="margin:0;"><strong>Vendor:</strong> {vendor_name}</p>
+            <p style="margin:4px 0;"><strong>Email:</strong> {vendor_email}</p>
+            <p style="margin:4px 0;"><strong>Amount:</strong> {self._format_amount(payout_amount)}</p>
+            <p style="margin:4px 0;"><strong>Requested at:</strong> {request_date}</p>
+            <p style="margin:4px 0;"><strong>Payout ID:</strong> {payout_id}</p>
+        </div>
+        <p style="text-align:center;margin-top:32px;">
+            <a href="{settings.FRONTEND_BASE_URL}/admin/payouts" style="display:inline-block;padding:12px 24px;background:{BRAND_PRIMARY};color:#fff;text-decoration:none;border-radius:999px;font-weight:600;">
+                Review Payouts
+            </a>
+        </p>
+        """
+
+        html_content = self._wrap_email("Payout Request", body_html, "A new payout request is waiting.")
+
+        sent_any = False
+        for recipient in recipients:
+            sent_any = await self.send_email(
+                recipient["email"],
+                recipient.get("name") or "Admin",
+                subject,
+                html_content,
+            ) or sent_any
+        return sent_any
+
+    async def send_admin_order_notification(
+        self,
+        order_number: str,
+        customer_name: str,
+        customer_email: str,
+        order_date: datetime,
+        items: list,
+        subtotal: float,
+        shipping: float,
+        tax: float,
+        total: float,
+        payment_status: str,
+        shipping_address: Dict[str, str],
+        recipients: Optional[List[Dict[str, str]]] = None
+    ) -> bool:
+        """
+        Send new order notification to admin
+
+        Args:
+            order_number: Order number
+            customer_name: Customer's full name
+            customer_email: Customer's email
+            order_date: When order was placed
+            items: List of order items
+            subtotal: Order subtotal
+            shipping: Shipping cost
+            tax: Tax amount
+            total: Total amount
+            payment_status: Payment status (paid, pending, etc.)
+            shipping_address: Shipping address dict
+            recipients: Optional list of {"email": str, "name": str} recipients
+
+        Returns:
+            bool: True if email sent successfully
+        """
+        from app.core.config import settings
+
+        subject = f"New Order Alert · {order_number}"
+        items_table = self._build_items_table(items)
+
+        def _addr(key: str):
+            return shipping_address.get(key) or shipping_address.get(key.replace('_', ''))
+
+        address_lines = "<br/>".join(
+            filter(
+                None,
+                [
+                    shipping_address.get('full_name'),
+                    _addr('address_line_1'),
+                    _addr('address_line_2'),
+                    f"{shipping_address.get('city', '')}, {shipping_address.get('state', '')} {shipping_address.get('postal_code', '')}",
+                    shipping_address.get('country', 'Nigeria'),
+                    f"Phone: {shipping_address.get('phone_number', '')}",
+                ],
+            )
+        )
+
+        # Payment status badge
+        payment_badge_colors = {
+            'paid': '#19984B',
+            'pending': '#D97706',
+            'failed': '#DC2626',
+        }
+        payment_color = payment_badge_colors.get(payment_status.lower(), '#6B7280')
+
+        body_html = f"""
+        <p style="font-size:16px;">New order received on Shopsoma.</p>
+        <div style="margin:24px 0;padding:20px;border:1px solid {BRAND_BORDER};border-radius:10px;background:{BRAND_LIGHT};">
+            <p style="margin:0;"><strong>Order Number:</strong> {order_number}</p>
+            <p style="margin:4px 0;"><strong>Order Date:</strong> {order_date.strftime('%d %B %Y · %I:%M %p')}</p>
+            <p style="margin:4px 0;"><strong>Payment Status:</strong> <span style="color:{payment_color};font-weight:600;">{payment_status.upper()}</span></p>
+        </div>
+        <div style="border:1px solid {BRAND_BORDER};border-radius:10px;padding:20px;margin-bottom:24px;">
+            <p style="margin:0 0 8px;font-weight:600;">Customer Information</p>
+            <p style="margin:0;color:#6B7280;"><strong>Name:</strong> {customer_name}</p>
+            <p style="margin:4px 0;color:#6B7280;"><strong>Email:</strong> {customer_email}</p>
+        </div>
+        <table style="width:100%;border-collapse:collapse;margin-bottom:24px;">
+            <thead>
+                <tr style="background:{BRAND_LIGHT};text-transform:uppercase;font-size:12px;letter-spacing:0.15em;color:#6B7280;">
+                    <th style="padding:12px;text-align:left;">Item</th>
+                    <th style="padding:12px;text-align:center;">Qty</th>
+                    <th style="padding:12px;text-align:right;">Price</th>
+                    <th style="padding:12px;text-align:right;">Subtotal</th>
+                </tr>
+            </thead>
+            <tbody>
+                {items_table}
+            </tbody>
+        </table>
+        <div style="border:1px solid {BRAND_BORDER};border-radius:10px;padding:20px;margin-bottom:24px;">
+            <table style="width:100%;font-size:14px;">
+                <tr><td>Subtotal</td><td style="text-align:right;">{self._format_amount(subtotal)}</td></tr>
+                <tr><td>Shipping</td><td style="text-align:right;">{self._format_amount(shipping)}</td></tr>
+                <tr><td>Tax (7.5%)</td><td style="text-align:right;">{self._format_amount(tax)}</td></tr>
+                <tr style="font-size:16px;font-weight:600;border-top:1px solid {BRAND_BORDER};">
+                    <td style="padding-top:8px;">Total</td>
+                    <td style="text-align:right;padding-top:8px;">{self._format_amount(total)}</td>
+                </tr>
+            </table>
+        </div>
+        <div style="border:1px solid {BRAND_BORDER};border-radius:10px;padding:20px;">
+            <p style="margin:0 0 8px;font-weight:600;">Shipping Address</p>
+            <p style="margin:0;color:#6B7280;">{address_lines}</p>
+        </div>
+        <p style="text-align:center;margin-top:32px;">
+            <a href="{settings.FRONTEND_BASE_URL}/admin/orders" style="display:inline-block;padding:12px 24px;background:{BRAND_PRIMARY};color:#fff;text-decoration:none;border-radius:999px;font-weight:600;">
+                View in Admin Dashboard
+            </a>
+        </p>
+        """
+
+        html_content = self._wrap_email("New Order", body_html, f"New order {order_number} from {customer_name}")
+        recipient_list = recipients or [{"email": settings.ADMIN_EMAIL, "name": "Admin"}]
+        all_sent = True
+        for recipient in recipient_list:
+            sent = await self.send_email(
+                recipient.get("email", settings.ADMIN_EMAIL),
+                recipient.get("name", "Admin"),
+                subject,
+                html_content
+            )
+            all_sent = all_sent and sent
+        return all_sent
+
+    async def send_order_status_update_email(
+        self,
+        email: str,
+        name: str,
+        order_number: str,
+        status: str,
+        tracking_number: Optional[str] = None
+    ) -> bool:
+        subject = f"Order Update · {order_number}"
+        status_messages = {
+            "processing": "We're perfecting your order. Expect a shipping update soon.",
+            "shipped": f"Your order is en route. Tracking number: <strong>{tracking_number}</strong>",
+            "delivered": "Delivered! We hope you love your new pieces.",
+            "cancelled": "Your order has been cancelled. Refunds (if applicable) will be processed shortly."
+        }
+        message = status_messages.get(status.lower(), "Your order status has been updated.")
+
+        body_html = f"""
+        <p style="font-size:16px;">Hi {name or 'there'},</p>
+        <p>{message}</p>
+        <div style="border:1px solid {BRAND_BORDER};border-radius:10px;padding:20px;margin:24px 0;">
+            <p style="margin:0 0 6px;"><strong>Order:</strong> {order_number}</p>
+            <p style="margin:0;color:#6B7280;">Status: {status.title()}</p>
+            {f'<p style="margin:6px 0 0;color:#6B7280;">Tracking: {tracking_number}</p>' if tracking_number else ''}
+        </div>
+        <p style="text-align:center;margin-top:32px;">
+            <a href="https://shopsoma.com/profile/orders" style="display:inline-block;padding:12px 24px;border:1px solid {BRAND_PRIMARY};color:{BRAND_PRIMARY};text-decoration:none;border-radius:999px;font-weight:600;">
+                Track Order
+            </a>
+        </p>
+        """
+
+        html_content = self._wrap_email("Order Update", body_html, "Your Shopsoma order status has changed.")
+        return await self.send_email(email, name, subject, html_content)
+
+    async def send_payment_receipt_email(
+        self,
+        email: str,
+        name: str,
+        order_number: str,
+        amount: float,
+        payment_method: str,
+        reference: str
+    ) -> bool:
+        subject = f"Payment Receipt · {order_number}"
+        body_html = f"""
+        <p style="font-size:16px;">Hello {name or 'there'},</p>
+        <p>Thank you for your purchase. This is a confirmation that we successfully received your payment.</p>
+        <div style="border:1px solid {BRAND_BORDER};border-radius:10px;padding:20px;margin:24px 0;background:{BRAND_LIGHT};">
+            <table style="width:100%;font-size:14px;">
+                <tr><td>Order number</td><td style="text-align:right;">{order_number}</td></tr>
+                <tr><td>Amount paid</td><td style="text-align:right;">{self._format_amount(amount)}</td></tr>
+                <tr><td>Payment method</td><td style="text-align:right;">{payment_method}</td></tr>
+                <tr><td>Reference</td><td style="text-align:right;">{reference}</td></tr>
+                <tr><td>Date</td><td style="text-align:right;">{datetime.now().strftime('%d %B %Y')}</td></tr>
+            </table>
+        </div>
+        <p>Keep this receipt for your records. If anything looks incorrect please contact support immediately.</p>
+        """
+        html_content = self._wrap_email("Payment Receipt", body_html, "Payment confirmed for your Shopsoma order.")
+        return await self.send_email(email, name, subject, html_content)
+
+    async def send_verification_email(self, email: str, name: str, verification_link: str) -> bool:
+        """Send email verification link"""
+        subject = "Verify Your Email · Shopsoma"
+        body_html = f"""
+        <p style="font-size:16px;">Hi {name or 'there'},</p>
+        <p>Thank you for registering with Shopsoma. Please verify your email address to complete your account setup and start shopping.</p>
+        <div style="margin:32px 0;text-align:center;">
+            <a href="{verification_link}" style="display:inline-block;padding:14px 32px;background:{BRAND_PRIMARY};color:#fff;border-radius:999px;text-decoration:none;font-weight:600;font-size:16px;">
+                Verify Email Address
+            </a>
+        </div>
+        <p style="color:#6B7280;font-size:14px;">This verification link will expire in 24 hours. If you didn't create an account with Shopsoma, you can safely ignore this email.</p>
+        <p style="color:#6B7280;font-size:14px;">If the button doesn't work, copy and paste this link into your browser:</p>
+        <p style="color:{BRAND_PRIMARY};font-size:12px;word-break:break-all;">{verification_link}</p>
+        """
+        html_content = self._wrap_email("Verify Your Email", body_html, "Complete your Shopsoma registration by verifying your email.")
+        return await self.send_email(email, name, subject, html_content)
+
+    async def send_account_claim_email(self, email: str, name: str, claim_link: str) -> bool:
+        """Send account claim / password setup email for silently created guest accounts."""
+        subject = "Secure Your Shopsoma Account"
+        body_html = f"""
+        <p style="font-size:16px;">Hi {name or 'there'},</p>
+        <p>Thanks for shopping with Shopsoma. We created a secure profile for you so your order history and saved preferences stay in sync.</p>
+        <p>Set a password now to unlock faster checkout, saved addresses, and priority support.</p>
+        <div style="margin:32px 0;text-align:center;">
+            <a href="{claim_link}" style="display:inline-block;padding:14px 32px;background:{BRAND_PRIMARY};color:#fff;border-radius:999px;text-decoration:none;font-weight:600;font-size:16px;">
+                Set Your Password
+            </a>
+        </div>
+        <p style="color:#6B7280;font-size:14px;">This secure link expires in 7 days. If it expires or you prefer a fresh link, you can request another anytime from the checkout or profile pages.</p>
+        <p style="color:#6B7280;font-size:14px;">If the button doesn't work, copy and paste this link into your browser:</p>
+        <p style="color:{BRAND_PRIMARY};font-size:12px;word-break:break-all;">{claim_link}</p>
+        <p>We're excited to keep curating premium African fashion for you.</p>
+        """
+        preheader = "Activate your Shopsoma account in seconds for faster checkout."
+        html_content = self._wrap_email("Claim Your Account", body_html, preheader)
+        return await self.send_email(email, name, subject, html_content)
+
+    async def send_password_reset_email(
+        self,
+        email: str,
+        name: str,
+        reset_link: str,
+        expires_minutes: int
+    ) -> bool:
+        """Send password reset email."""
+        subject = "Reset Your Password · Shopsoma"
+        body_html = f"""
+        <p style="font-size:16px;">Hi {name or 'there'},</p>
+        <p>We received a request to reset your Shopsoma password. Use the button below to set a new password.</p>
+        <div style="margin:32px 0;text-align:center;">
+            <a href="{reset_link}" style="display:inline-block;padding:14px 32px;background:{BRAND_PRIMARY};color:#fff;border-radius:999px;text-decoration:none;font-weight:600;font-size:16px;">
+                Reset Password
+            </a>
+        </div>
+        <p style="color:#6B7280;font-size:14px;">This link expires in {expires_minutes} minutes. If you didn't request a password reset, you can safely ignore this email.</p>
+        <p style="color:#6B7280;font-size:14px;">If the button doesn't work, copy and paste this link into your browser:</p>
+        <p style="color:{BRAND_PRIMARY};font-size:12px;word-break:break-all;">{reset_link}</p>
+        """
+        preheader = "Use this secure link to reset your Shopsoma password."
+        html_content = self._wrap_email("Reset Password", body_html, preheader)
+        return await self.send_email(email, name, subject, html_content)
+
+    async def send_vendor_application_confirmation(self, email: str, first_name: str, business_name: str) -> bool:
+        """Send confirmation email when vendor application is submitted"""
+        subject = "Application Received - Shopsoma Vendor Program"
+        body_html = f"""
+        <p style="font-size:16px;">Hi {first_name},</p>
+        <p>Thank you for applying to become a vendor on Shopsoma! We're excited to review your application for <strong>{business_name}</strong>.</p>
+        <div style="border:1px solid {BRAND_BORDER};border-radius:10px;padding:20px;margin:24px 0;background:{BRAND_LIGHT};">
+            <p style="margin:0 0 12px;font-weight:600;">What happens next?</p>
+            <ul style="padding-left:20px;margin:0;color:{BRAND_DARK};">
+                <li style="margin-bottom:8px;">Our team will review your application within 3-5 business days</li>
+                <li style="margin-bottom:8px;">We'll verify your business information and brand story</li>
+                <li style="margin-bottom:8px;">You'll receive an email with our decision</li>
+                <li>If approved, you'll get access to your vendor dashboard</li>
+            </ul>
+        </div>
+        <p>We receive many applications from talented designers across Africa, and we carefully review each one to ensure the best experience for our customers.</p>
+        <p style="color:#6B7280;font-size:14px;margin-top:24px;">
+            <strong>Need to update your application?</strong> Please reply to this email with any changes or additional information.
+        </p>
+        <p>Thank you for your interest in joining the Shopsoma community. We're building Africa's premier luxury fashion marketplace, one designer at a time.</p>
+        """
+        preheader = "Your vendor application has been received and is under review."
+        html_content = self._wrap_email("Application Received", body_html, preheader)
+        return await self.send_email(email, first_name, subject, html_content)
+
+    async def send_vendor_application_rejection(self, email: str, first_name: str, business_name: str, reason: str = None) -> bool:
+        """Send rejection email when vendor application is declined"""
+        subject = "Vendor Application Update - Shopsoma"
+
+        reason_html = ""
+        if reason and reason.strip():
+            reason_html = f"""
+            <div style="border:1px solid {BRAND_BORDER};border-radius:10px;padding:20px;margin:24px 0;background:{BRAND_LIGHT};">
+                <p style="margin:0 0 8px;font-weight:600;color:{BRAND_DARK};">Feedback from our team:</p>
+                <p style="margin:0;color:#6B7280;font-style:italic;">"{reason}"</p>
+            </div>
+            """
+
+        body_html = f"""
+        <p style="font-size:16px;">Hi {first_name},</p>
+        <p>Thank you for your interest in joining Shopsoma as a vendor. We've carefully reviewed your application for <strong>{business_name}</strong>.</p>
+        <p>Unfortunately, we're unable to approve your application at this time. We receive many applications from talented designers and have to be selective to maintain the quality our customers expect.</p>
+        {reason_html}
+        <div style="border:1px solid {BRAND_BORDER};border-radius:10px;padding:20px;margin:24px 0;background:{BRAND_LIGHT};">
+            <p style="margin:0 0 12px;font-weight:600;">What you can do:</p>
+            <ul style="padding-left:20px;margin:0;color:{BRAND_DARK};">
+                <li style="margin-bottom:8px;">Review and improve your brand story and product offerings</li>
+                <li style="margin-bottom:8px;">Build your online presence and customer reviews</li>
+                <li style="margin-bottom:8px;">Reapply in the future when your business has grown</li>
+            </ul>
+        </div>
+        <p>We appreciate your interest in Shopsoma and wish you success with your business. Feel free to reach out if you have any questions.</p>
+        <p style="color:#6B7280;font-size:14px;margin-top:24px;">
+            If you believe this decision was made in error or would like more information, please reply to this email.
+        </p>
+        """
+        preheader = "Update on your Shopsoma vendor application"
+        html_content = self._wrap_email("Application Update", body_html, preheader)
+        return await self.send_email(email, first_name, subject, html_content)
+
+    async def send_vendor_otp_email(self, email: str, otp_code: str, expiry_minutes: int = 15) -> bool:
+        """Send vendor activation OTP code via email"""
+        subject = "Your Shopsoma Designer Verification Code"
+
+        # Get the activation link with email parameter
+        frontend_url = (getattr(settings, 'FRONTEND_BASE_URL', '') or 'http://localhost:5173').rstrip("/")
+        # Avoid exposing vendor email in the URL.
+        activation_link = f"{frontend_url}/vendor/otp"
+
+        body_html = f"""
+        <div style="text-align:center;margin:32px 0;">
+            <div style="display:inline-block;background:{BRAND_LIGHT};border:2px solid {BRAND_BORDER};border-radius:12px;padding:24px 48px;">
+                <p style="font-size:14px;color:{BRAND_DARK};margin:0 0 12px 0;text-transform:uppercase;letter-spacing:1px;font-weight:600;">Verification Code</p>
+                <p style="font-size:42px;font-weight:700;color:{BRAND_PRIMARY};margin:0;letter-spacing:8px;font-family:monospace;">{otp_code}</p>
+            </div>
+        </div>
+        <p style="font-size:16px;">Welcome to Shopsoma!</p>
+        <p>You're almost ready to start showcasing your designs to thousands of fashion enthusiasts across Africa.</p>
+        <p>Click the button below to activate your vendor account, then enter the verification code above:</p>
+        <div style="text-align:center;margin:32px 0;">
+            <a href="{activation_link}" style="display:inline-block;padding:16px 32px;background:{BRAND_PRIMARY};color:#ffffff;text-decoration:none;border-radius:8px;font-weight:600;font-size:16px;">Activate My Account</a>
+        </div>
+        <p style="color:#6B7280;font-size:14px;margin-top:24px;">
+            <strong>Security reminder:</strong> This code expires in {expiry_minutes} minutes and is for one-time use only.
+            Never share this code with anyone - Shopsoma staff will never ask for it.
+        </p>
+        <p style="color:#6B7280;font-size:14px;">If the button doesn't work, copy and paste this link into your browser:</p>
+        <p style="color:{BRAND_PRIMARY};font-size:12px;word-break:break-all;">{activation_link}</p>
+        <p>Questions? Contact our vendor support team at support@shopsoma.com.</p>
+        """
+        preheader = f"Your verification code is {otp_code}. Enter it to activate your vendor account."
+        html_content = self._wrap_email("Activate Your Vendor Account", body_html, preheader)
+        return await self.send_email(email, "Vendor", subject, html_content)
+
+    async def send_vendor_store_restored_email(self, email: str, vendor_name: str, business_name: str) -> bool:
+        """Send notification email when vendor store is restored by admin"""
+        subject = "Your Shopsoma Store Has Been Restored"
+
+        # Get vendor dashboard link
+        frontend_url = getattr(settings, 'FRONTEND_BASE_URL', 'http://localhost:5173')
+        dashboard_link = f"{frontend_url}/vendor/dashboard"
+
+        body_html = f"""
+        <p style="font-size:16px;">Hi {vendor_name},</p>
+        <p>Great news! Your Shopsoma store <strong>{business_name}</strong> has been successfully restored and is now active again.</p>
+        <div style="border:1px solid {BRAND_BORDER};border-radius:10px;padding:20px;margin:24px 0;background:{BRAND_LIGHT};">
+            <p style="margin:0 0 12px;font-weight:600;">What this means:</p>
+            <ul style="padding-left:20px;margin:0;color:{BRAND_DARK};">
+                <li style="margin-bottom:8px;">Your products are now visible to customers</li>
+                <li style="margin-bottom:8px;">You can accept new orders</li>
+                <li style="margin-bottom:8px;">Your store profile is back online</li>
+                <li>All your previous data and settings have been preserved</li>
+            </ul>
+        </div>
+        <p>You can now log in to your vendor dashboard to manage your products, view orders, and update your store settings.</p>
+        <div style="text-align:center;margin:32px 0;">
+            <a href="{dashboard_link}" style="display:inline-block;padding:16px 32px;background:{BRAND_PRIMARY};color:#ffffff;text-decoration:none;border-radius:8px;font-weight:600;font-size:16px;">Go to Dashboard</a>
+        </div>
+        <p style="color:#6B7280;font-size:14px;margin-top:24px;">
+            <strong>Need help getting started?</strong> Our vendor support team is here to assist you. Reply to this email or contact us at support@shopsoma.com.
+        </p>
+        <p>Welcome back! We're excited to continue showcasing your designs to our community of fashion enthusiasts.</p>
+        """
+        preheader = f"Your store {business_name} is now active and ready to accept orders."
+        html_content = self._wrap_email("Store Restored", body_html, preheader)
+        return await self.send_email(email, vendor_name, subject, html_content)
+
+    async def send_product_approved_email(
+        self,
+        email: str,
+        vendor_name: str,
+        product_title: str,
+        product_id: str,
+        notes: Optional[str] = None
+    ) -> bool:
+        """
+        Send product approval notification to vendor
+
+        Args:
+            email: Vendor email
+            vendor_name: Vendor name
+            product_title: Title of the approved product
+            product_id: Product UUID
+            notes: Optional approval notes from admin
+        """
+        subject = f"🎉 Product Approved: {product_title}"
+
+        product_link = f"{settings.FRONTEND_URL}/vendor/products/{product_id}/view"
+        dashboard_link = f"{settings.FRONTEND_URL}/vendor/products"
+
+        notes_section = f"""
+        <div style="background: {BRAND_LIGHT}; padding: 16px; border-radius: 8px; margin: 20px 0;">
+            <p style="margin: 0; font-size: 14px; color: {BRAND_DARK};"><strong>Admin Notes:</strong></p>
+            <p style="margin: 8px 0 0; font-size: 14px; color: #4B5563;">{notes}</p>
+        </div>
+        """ if notes else ""
+
+        body_html = f"""
+        <p style="font-size:16px;">Hi {vendor_name},</p>
+        <p style="font-size:16px;margin-top:16px;">
+            Great news! Your product <strong>"{product_title}"</strong> has been approved and is now live on Shopsoma.
+        </p>
+        {notes_section}
+        <div style="background: #E8F7EF; padding: 20px; border-radius: 8px; margin: 24px 0; border-left: 4px solid {BRAND_PRIMARY};">
+            <p style="margin: 0; font-size: 14px; color: {BRAND_DARK};">
+                <strong>✓ Your product is now visible to customers</strong><br>
+                Shoppers can now discover, view, and purchase your product.
+            </p>
+        </div>
+        <div style="text-align:center;margin:32px 0;">
+            <a href="{product_link}" style="display:inline-block;padding:16px 32px;background:{BRAND_PRIMARY};color:#ffffff;text-decoration:none;border-radius:8px;font-weight:600;font-size:16px;margin-right:12px;">View Product</a>
+            <a href="{dashboard_link}" style="display:inline-block;padding:16px 32px;background:#ffffff;color:{BRAND_PRIMARY};text-decoration:none;border-radius:8px;font-weight:600;font-size:16px;border:2px solid {BRAND_PRIMARY};">Go to Dashboard</a>
+        </div>
+        <p style="color:#6B7280;font-size:14px;margin-top:24px;">
+            Keep adding amazing products to grow your store! If you have any questions, our support team is here to help.
+        </p>
+        """
+        preheader = f"Your product '{product_title}' is now live and available to customers."
+        html_content = self._wrap_email("Product Approved", body_html, preheader)
+        return await self.send_email(email, vendor_name, subject, html_content)
+
+    async def send_product_rejected_email(
+        self,
+        email: str,
+        vendor_name: str,
+        product_title: str,
+        product_id: str,
+        reason: str,
+        notes: Optional[str] = None
+    ) -> bool:
+        """
+        Send product rejection notification to vendor
+
+        Args:
+            email: Vendor email
+            vendor_name: Vendor name
+            product_title: Title of the rejected product
+            product_id: Product UUID
+            reason: Rejection reason (required)
+            notes: Optional additional notes from admin
+        """
+        subject = f"Product Review Update: {product_title}"
+
+        product_link = f"{settings.FRONTEND_URL}/vendor/products/{product_id}/edit"
+        guidelines_link = f"{settings.FRONTEND_URL}/vendor/guidelines"
+        support_email = "support@shopsoma.com"
+
+        notes_section = f"""
+        <div style="background: {BRAND_LIGHT}; padding: 16px; border-radius: 8px; margin: 20px 0;">
+            <p style="margin: 0; font-size: 14px; color: {BRAND_DARK};"><strong>Additional Notes:</strong></p>
+            <p style="margin: 8px 0 0; font-size: 14px; color: #4B5563;">{notes}</p>
+        </div>
+        """ if notes else ""
+
+        body_html = f"""
+        <p style="font-size:16px;">Hi {vendor_name},</p>
+        <p style="font-size:16px;margin-top:16px;">
+            Thank you for submitting <strong>"{product_title}"</strong> for review. After careful consideration, we're unable to approve this product at this time.
+        </p>
+
+        <div style="background: #FEF2F2; padding: 20px; border-radius: 8px; margin: 24px 0; border-left: 4px solid #DC2626;">
+            <p style="margin: 0; font-size: 14px; color: {BRAND_DARK};"><strong>Reason for Rejection:</strong></p>
+            <p style="margin: 12px 0 0; font-size: 14px; color: #4B5563; line-height: 1.6;">{reason}</p>
+        </div>
+        {notes_section}
+
+        <div style="background: #FFFBEB; padding: 20px; border-radius: 8px; margin: 24px 0; border-left: 4px solid #F59E0B;">
+            <p style="margin: 0; font-size: 14px; color: {BRAND_DARK};"><strong>What's Next?</strong></p>
+            <ul style="margin: 12px 0 0; padding-left: 20px; font-size: 14px; color: #4B5563;">
+                <li style="margin-bottom: 8px;">Review our product guidelines to understand our quality standards</li>
+                <li style="margin-bottom: 8px;">Make the necessary changes to your product</li>
+                <li style="margin-bottom: 8px;">Resubmit for review - we're here to help you succeed!</li>
+            </ul>
+        </div>
+
+        <div style="text-align:center;margin:32px 0;">
+            <a href="{product_link}" style="display:inline-block;padding:16px 32px;background:{BRAND_PRIMARY};color:#ffffff;text-decoration:none;border-radius:8px;font-weight:600;font-size:16px;margin-right:12px;">Edit Product</a>
+            <a href="{guidelines_link}" style="display:inline-block;padding:16px 32px;background:#ffffff;color:{BRAND_PRIMARY};text-decoration:none;border-radius:8px;font-weight:600;font-size:16px;border:2px solid {BRAND_PRIMARY};">View Guidelines</a>
+        </div>
+
+        <p style="color:#6B7280;font-size:14px;margin-top:24px;">
+            <strong>Need help?</strong> If you have questions about this decision or need guidance on how to improve your product, please reach out to our support team at <a href="mailto:{support_email}" style="color:{BRAND_PRIMARY};">{support_email}</a>. We're here to support your success!
+        </p>
+        """
+        preheader = f"Your product '{product_title}' needs some updates before it can go live."
+        html_content = self._wrap_email("Product Review Update", body_html, preheader)
+        return await self.send_email(email, vendor_name, subject, html_content)
+
+
+email_service = EmailService()
