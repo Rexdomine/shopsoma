@@ -3,6 +3,7 @@ from datetime import datetime
 import pytest
 
 from app.services.email_service import EmailService
+from app.core.config import settings
 
 
 @pytest.mark.asyncio
@@ -133,3 +134,26 @@ async def test_send_vendor_payout_failed_email(monkeypatch):
     assert result is True
     assert calls[0][0] == "vendor@example.com"
     assert calls[0][2] == "Payout Failed"
+
+
+@pytest.mark.asyncio
+async def test_send_vendor_otp_email_uses_frontend_base_url_without_email(monkeypatch):
+    service = EmailService()
+    captured = {}
+
+    async def fake_send_email(to_email, to_name, subject, html_content, template_params=None):
+        captured["html"] = html_content
+        return True
+
+    monkeypatch.setattr(service, "send_email", fake_send_email)
+    monkeypatch.setattr(settings, "FRONTEND_BASE_URL", "https://staging.shopsoma.com")
+
+    result = await service.send_vendor_otp_email(
+        email="vendor@example.com",
+        otp_code="123456",
+        expiry_minutes=15,
+    )
+
+    assert result is True
+    assert "https://staging.shopsoma.com/vendor/otp" in captured["html"]
+    assert "email=" not in captured["html"]
