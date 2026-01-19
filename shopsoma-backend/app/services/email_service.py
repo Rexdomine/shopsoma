@@ -910,9 +910,8 @@ class EmailService:
         subject = "Your Shopsoma Designer Verification Code"
 
         # Get the activation link with email parameter
-        frontend_url = (getattr(settings, 'FRONTEND_BASE_URL', '') or 'http://localhost:5173').rstrip("/")
-        # Avoid exposing vendor email in the URL.
-        activation_link = f"{frontend_url}/vendor/otp"
+        frontend_url = getattr(settings, 'FRONTEND_BASE_URL', 'http://localhost:5173')
+        activation_link = f"{frontend_url}/vendor/otp?email={email}"
 
         body_html = f"""
         <div style="text-align:center;margin:32px 0;">
