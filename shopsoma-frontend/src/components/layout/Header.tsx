@@ -192,33 +192,22 @@ export default function Header() {
 
         <nav className="hidden sm:block border-t border-primary">
           <div className="main-nav header-nav-text w-full mx-auto px-8 py-2 flex items-center justify-center gap-8 text-primary">
-            <Link to={ROUTES.DESIGNERS} className="hover:text-primary-dark">Designers</Link>
-            <Link to={ROUTES.NEW_ARRIVALS} className="hover:text-primary-dark">New</Link>
             <Link to={ROUTES.MEN} className="hover:text-primary-dark">Men</Link>
             <Link to={ROUTES.WOMEN} className="hover:text-primary-dark">Women</Link>
-            <Link to={ROUTES.PERFUMES} className="hover:text-primary-dark">Perfumes</Link>
-            <Link to={ROUTES.BAGS_WALLETS} className="hover:text-primary-dark">Bags &amp; Wallets</Link>
+            <span className="cursor-default">Shop Edits</span>
           </div>
         </nav>
 
         {mobileMenuOpen && (
           <div className="sm:hidden border-t border-primary bg-[var(--color-page-bg)] px-6 py-6">
             <div className="space-y-4 text-2xl font-serif" style={{ color: '#1E5053' }}>
-              <Link to={ROUTES.NEW_ARRIVALS} className="block" onClick={() => setMobileMenuOpen(false)}>
-                New
-              </Link>
               <Link to={ROUTES.MEN} className="block" onClick={() => setMobileMenuOpen(false)}>
                 Men
               </Link>
               <Link to={ROUTES.WOMEN} className="block" onClick={() => setMobileMenuOpen(false)}>
                 Women
               </Link>
-              <Link to={ROUTES.PERFUMES} className="block" onClick={() => setMobileMenuOpen(false)}>
-                Perfumes
-              </Link>
-              <Link to={ROUTES.BAGS_WALLETS} className="block" onClick={() => setMobileMenuOpen(false)}>
-                Bags And Wallets
-              </Link>
+              <span className="block cursor-default">Shop Edits</span>
             </div>
           </div>
         )}
