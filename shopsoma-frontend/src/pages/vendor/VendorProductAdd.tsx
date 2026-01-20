@@ -9,7 +9,7 @@ import { useToast } from '../../hooks/useToast';
 import { productService } from '../../services/productService';
 import { categoryService } from '../../services/categoryService';
 import { collectionService } from '../../services/collectionService';
-import type { Variation, Category, Collection } from '../../types';
+import type { Category, Collection } from '../../types';
 import type { Currency } from '../../store/currencyStore';
 
 // US Sizing: Letter sizes (XXS-XXXL)
@@ -44,6 +44,8 @@ interface DetailedVariation {
   sizeStock: Record<SizeOption, string>;
   images: ProductImage[];
 }
+
+type VariationInput = Record<string, unknown>;
 
 export default function VendorProductAdd() {
   const navigate = useNavigate();
@@ -123,7 +125,6 @@ export default function VendorProductAdd() {
   const [showMaterialsDropdown, setShowMaterialsDropdown] = useState(false);
   const [showCollectionDropdown, setShowCollectionDropdown] = useState(false);
   const [showSizingDropdown, setShowSizingDropdown] = useState(false);
-  const [showVariationDropdown, setShowVariationDropdown] = useState(false);
 
   const materialOptions = ['Leather', 'Cotton', 'Wire', 'Silk', 'Wool', 'Polyester', 'Denim'];
 
@@ -591,116 +592,238 @@ export default function VendorProductAdd() {
     setEditingVariation(null);
   };
 
-  // Currency handling for variations (when product currency changes)
-  useEffect(() => {
-    // If the product currency changes, reset variation pricing
-    if (variationHasDifferentPricing) {
-      setVariationPrice('');
-      setVariationSalesPrice('');
-    }
-  }, [productCurrency]);
-
-  // Update available sizes when sizing system changes
-  useEffect(() => {
-    setAvailableSizes(SIZE_MAPPINGS[sizingSystem]);
-    setSelectedSizes([]); // Clear selected sizes when sizing system changes
-  }, [sizingSystem]);
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-
-    // Validate
-    if (!productName) {
-      warning('Please enter a product name');
-      return;
-    }
-    if (!primaryCategoryId) {
-      warning('Please select a primary category');
-      return;
-    }
-    if (!subcategoryId) {
-      warning('Please select a subcategory');
-      return;
-    }
-    if (!productPrice) {
-      warning('Please enter a product price');
-      return;
-    }
-    if (!productDescription) {
-      warning('Please enter a product description');
-      return;
-    }
-
-    if (productType === 'variable' && detailedVariations.length > 0) {
-      // Save variations data for later
-    } else if (productType === 'single' && (selectedSizes.length > 0 || color)) {
-      // Save single product data for later
-    }
+    if (isSubmitting) return;
+    setIsSubmitting(true);
 
     try {
-      setIsSubmitting(true);
+      // Prepare variations data
+      let variationsData: VariationInput[] | undefined;
 
-      // Prepare images data
+      if (productType === 'variable' && detailedVariations.length > 0) {
+        // VARIABLE PRODUCTS: Use detailed variations from modal
+        const hasUnuploadedImages = detailedVariations.some(v =>
+          v.images.some(img => !img.uploaded || !img.imageUrl)
+        );
+
+        if (hasUnuploadedImages) {
+          warning('Some images are still uploading or failed to upload. Please wait or remove failed images before submitting.');
+          setIsSubmitting(false);
+          return;
+        }
+
+        const mappedVariations = detailedVariations.map((variation) => ({
+          title: variation.name,
+          type: variation.type || 'color',
+          color_hex: variation.color,
+          price: variation.hasDifferentPricing && variation.price ? parseFloat(variation.price) : undefined,
+          sale_price: variation.hasDifferentPricing && variation.salesPrice ? parseFloat(variation.salesPrice) : undefined,
+          images: variation.images.map((img) => img.imageUrl!),
+          is_active: true,
+          sizes: variation.selectedSizes.map((size) => ({
+            size,
+            stock: parseInt(variation.sizeStock[size] || '0')
+          }))
+        })) as VariationInput[];
+        variationsData = mappedVariations;
+      } else if (productType === 'single' && (selectedSizes.length > 0 || color)) {
+        // SINGLE PRODUCTS: Create one variation from selected color/sizes
+        const getColorName = (hex: string): string => {
+          const colorMap: Record<string, string> = {
+            '#000000': 'Black', '#0D0D0D': 'Black', '#1A1A1A': 'Black',
+            '#FFFFFF': 'White', '#FAFAFA': 'White', '#F5F5F5': 'White',
+            '#FF0000': 'Red', '#DC143C': 'Crimson', '#8B0000': 'Dark Red',
+            '#00FF00': 'Green', '#008000': 'Green', '#228B22': 'Forest Green',
+            '#0000FF': 'Blue', '#4169E1': 'Royal Blue', '#000080': 'Navy',
+            '#FFFF00': 'Yellow', '#FFD700': 'Gold',
+            '#FFA500': 'Orange', '#FF8C00': 'Dark Orange',
+            '#800080': 'Purple', '#9370DB': 'Medium Purple',
+            '#FFC0CB': 'Pink', '#FF1493': 'Deep Pink',
+            '#A52A2A': 'Brown', '#8B4513': 'Saddle Brown',
+            '#808080': 'Gray', '#A9A9A9': 'Dark Gray', '#D3D3D3': 'Light Gray',
+            '#00FFFF': 'Cyan', '#008B8B': 'Dark Cyan',
+            '#FF00FF': 'Magenta', '#8B008B': 'Dark Magenta',
+            '#F0E68C': 'Khaki', '#BDB76B': 'Dark Khaki',
+            '#E6E6FA': 'Lavender', '#DDA0DD': 'Plum',
+            '#F5DEB3': 'Wheat', '#D2B48C': 'Tan',
+            '#FA8072': 'Salmon', '#E9967A': 'Dark Salmon',
+            '#87CEEB': 'Sky Blue', '#4682B4': 'Steel Blue',
+            '#98FB98': 'Pale Green', '#90EE90': 'Light Green',
+            '#FFB6C1': 'Light Pink', '#FF69B4': 'Hot Pink',
+            '#F08080': 'Light Coral', '#CD5C5C': 'Indian Red',
+            '#FFDAB9': 'Peach Puff', '#FFE4B5': 'Moccasin',
+            '#E0FFFF': 'Light Cyan', '#B0E0E6': 'Powder Blue',
+            '#C0C0C0': 'Silver', '#708090': 'Slate Gray',
+            '#FFE4E1': 'Misty Rose', '#FAEBD7': 'Antique White',
+            '#F5F5DC': 'Beige', '#FFFAF0': 'Floral White',
+          };
+
+          // Try exact match first
+          const upperHex = hex.toUpperCase();
+          if (colorMap[upperHex]) return colorMap[upperHex];
+
+          // Try to find closest color by comparing RGB values
+          const hexToRGB = (h: string) => {
+            const r = parseInt(h.slice(1, 3), 16);
+            const g = parseInt(h.slice(3, 5), 16);
+            const b = parseInt(h.slice(5, 7), 16);
+            return { r, g, b };
+          };
+
+          const targetRGB = hexToRGB(hex);
+          let closestColor = 'Custom Color';
+          let minDistance = Infinity;
+
+          for (const [knownHex, colorName] of Object.entries(colorMap)) {
+            const knownRGB = hexToRGB(knownHex);
+            const distance = Math.sqrt(
+              Math.pow(targetRGB.r - knownRGB.r, 2) +
+              Math.pow(targetRGB.g - knownRGB.g, 2) +
+              Math.pow(targetRGB.b - knownRGB.b, 2)
+            );
+
+            if (distance < minDistance) {
+              minDistance = distance;
+              closestColor = colorName;
+            }
+          }
+
+          // If very close (within 50 units), use that name, otherwise "Custom Color"
+          return minDistance < 50 ? closestColor : 'Custom Color';
+        };
+
+        const colorName = getColorName(colorHex);
+
+        // Create variation with product title and color
+        const variation: VariationInput = {
+          title: `${productName} (${colorName})`,
+          type: 'color',
+          color_hex: colorHex,
+          price: undefined, // Use product base price
+          sale_price: undefined,
+          images: [], // Single products use product-level images
+          is_active: true,
+          sizes: selectedSizes.length > 0
+            ? selectedSizes.map(size => ({
+                size,
+                stock: parseInt(stockAmount || '0')
+              }))
+            : [{
+                size: 'One Size' as any,
+                stock: parseInt(stockAmount || '0')
+              }]
+        };
+
+        variationsData = [variation];
+      }
+
+      // Validate required fields
+      if (!primaryCategoryId) {
+        warning('Please select a primary category');
+        setIsSubmitting(false);
+        return;
+      }
+
+      if (!subcategoryId) {
+        warning('Please select a subcategory');
+        setIsSubmitting(false);
+        return;
+      }
+
+      if (!productName.trim()) {
+        warning('Please enter a product name');
+        setIsSubmitting(false);
+        return;
+      }
+
+      if (!productPrice || isNaN(parseFloat(productPrice))) {
+        warning('Please enter a valid product price');
+        setIsSubmitting(false);
+        return;
+      }
+
+      if (!productDescription.trim()) {
+        warning('Please enter a product description');
+        setIsSubmitting(false);
+        return;
+      }
+
+      // Prepare images
       const currentVar = variations.find(v => v.id === currentVariation);
       const currentVarImages = currentVar?.images ?? [];
-      const images = currentVarImages
-        .filter(img => img.uploaded && img.imageUrl)
-        .map(img => ({ url: img.imageUrl!, thumbnail: img.thumbnailUrl }));
+      const productImages = currentVarImages.map(img => ({
+        url: img.imageUrl || img.preview,
+        is_primary: false
+      }));
 
-      const payload: any = {
-        name: productName,
+      // Prepare product data
+      const productData = {
+        title: productName,
         description: productDescription,
-        price: parseFloat(productPrice),
-        sale_price: salesPrice ? parseFloat(salesPrice) : undefined,
-        category_id: childCategoryId || subcategoryId || primaryCategoryId,
-        primary_category_id: primaryCategoryId,
-        subcategory_id: subcategoryId,
-        child_category_id: childCategoryId,
-        images,
+        base_price: parseFloat(productPrice),
+        compare_at_price: salesPrice ? parseFloat(salesPrice) : undefined,
+        total_stock: stockAmount ? parseInt(stockAmount) : 0,
+        category_id: childCategoryId || subcategoryId,
+        collection_id: collectionId || undefined,
+        status: 'draft' as const,
+        is_featured: false,
         currency: productCurrency,
-        is_sustainable: isSustainable,
-        material: materials,
-        care_instructions: productCare,
-        stock: stockAmount ? parseInt(stockAmount) : undefined,
-        made_to_order: madeToOrder,
-        production_time: estimatedProductionTime,
-        size_system: sizingSystem,
-        sizes: selectedSizes,
-        color,
         product_type: productType,
-        detailed_variations: productType === 'variable' ? detailedVariations.map(v => ({
-          name: v.name,
-          variation_type: v.type,
-          has_different_pricing: v.hasDifferentPricing,
-          price: v.price ? parseFloat(v.price) : undefined,
-          sale_price: v.salesPrice ? parseFloat(v.salesPrice) : undefined,
-          color: v.color,
-          sizes: v.selectedSizes,
-          size_stock: v.sizeStock,
-          images: v.images.filter(img => img.uploaded && img.imageUrl).map(img => ({
-            url: img.imageUrl!,
-            thumbnail: img.thumbnailUrl
-          }))
-        })) : undefined
+        made_to_order: madeToOrder,
+        made_to_order_timeline: madeToOrder ? estimatedProductionTime : undefined,
+        care_instructions: productCare || undefined,
+        fabric_composition: materials || undefined,
+        variations: variationsData,
+        images: productImages.length > 0 ? productImages : undefined,
       };
 
-      if (collectionId) {
-        payload.collection_id = collectionId;
+      console.log('Creating product with data:', productData);
+
+      // Create the product
+      // Type cast as any because productImages don't have id/product_id yet (backend will generate them)
+      const createdProduct = await productService.createProduct(productData as any);
+
+      console.log('Product created successfully:', createdProduct);
+
+      // Show success notification
+      success(
+        'Your product has been created and is now pending review. You can manage it in your products list.',
+        'Product submitted for review successfully!'
+      );
+
+      // Navigate to products list after a short delay to show the toast
+      setTimeout(() => {
+        navigate(ROUTES.VENDOR_PRODUCTS);
+      }, 1500);
+    } catch (submitError: any) {
+      console.error('Error creating product:', submitError);
+      console.error('Error response:', submitError.response);
+      console.error('Error data:', submitError.response?.data);
+
+      // Extract detailed error message
+      let errorMessage = 'Failed to create product. Please try again.';
+      let errorTitle = 'Error Creating Product';
+
+      if (submitError.response?.data) {
+        if (submitError.response.data.detail) {
+          // FastAPI validation errors
+          if (Array.isArray(submitError.response.data.detail)) {
+            // Pydantic validation errors - format nicely
+            const validationErrors = submitError.response.data.detail
+              .map((err: any) => `${err.loc.join('.')}: ${err.msg}`)
+              .join(', ');
+            errorMessage = validationErrors;
+            errorTitle = 'Validation Error';
+          } else {
+            errorMessage = submitError.response.data.detail;
+          }
+        } else if (submitError.response.data.message) {
+          errorMessage = submitError.response.data.message;
+        }
       }
 
-      const response = await productService.createProduct(payload);
-
-      success('Product submitted for review successfully', 'Success');
-      navigate(ROUTES.VENDOR_PRODUCTS);
-    } catch (err: any) {
-      console.error('Error creating product:', err);
-
-      let errorMsg = 'Failed to create product. Please try again.';
-      if (err.response?.data?.detail) {
-        errorMsg = err.response.data.detail;
-      }
-
-      error(errorMsg, 'Submission Error');
+      error(errorMessage, errorTitle, 5000);
     } finally {
       setIsSubmitting(false);
     }
@@ -975,7 +1098,7 @@ export default function VendorProductAdd() {
                       <svg className="w-5 h-5 text-purple-600 flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
                         <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
                       </svg>
-                      <span>Variable product: Add color/size variations and manage individual pricing/inventory.</span>
+                      <span>Variable product: Base color/size fields will be disabled. Use the Variations section below to set colors and sizes.</span>
                     </div>
                   )}
                 </div>
@@ -1380,46 +1503,54 @@ export default function VendorProductAdd() {
                 </div>
               </div>
 
-              {/* Additional Details */}
-              <div className="bg-white rounded-xl border border-gray-200 p-6">
-                <h3 className="text-base font-semibold text-gray-900 mb-4">Additional Details</h3>
+              {/* Other Details */}
+              <div className="bg-white rounded-lg border border-gray-200 p-6 mt-6">
+                <h2 className="text-lg font-semibold text-gray-900 mb-4">Other Details</h2>
 
                 <div className="space-y-4">
                   {/* Made to Order */}
-                  <div className="flex items-center gap-3">
-                    <input
-                      type="checkbox"
-                      checked={madeToOrder}
-                      onChange={(e) => setMadeToOrder(e.target.checked)}
-                      className="w-4 h-4 text-[#105E53] rounded border-gray-300 focus:ring-[#105E53]"
-                      id="made-to-order"
-                    />
-                    <label htmlFor="made-to-order" className="text-sm font-medium text-gray-700">
-                      Made to Order
-                    </label>
-                    <div className="ml-auto">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <label className="text-sm font-medium text-gray-700">Made to Order</label>
                       <HelpCircle className="w-4 h-4 text-gray-400" />
                     </div>
+                    <button
+                      type="button"
+                      onClick={() => setMadeToOrder(!madeToOrder)}
+                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                        madeToOrder ? 'bg-[#105E53]' : 'bg-gray-200'
+                      }`}
+                    >
+                      <span
+                        className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                          madeToOrder ? 'translate-x-6' : 'translate-x-1'
+                        }`}
+                      />
+                    </button>
                   </div>
 
                   {/* Sustainable */}
-                  <div className="flex items-center gap-3">
-                    <input
-                      type="checkbox"
-                      checked={isSustainable}
-                      onChange={(e) => setIsSustainable(e.target.checked)}
-                      className="w-4 h-4 text-[#105E53] rounded border-gray-300 focus:ring-[#105E53]"
-                      id="sustainable"
-                    />
-                    <label htmlFor="sustainable" className="text-sm font-medium text-gray-700">
-                      Sustainable
-                    </label>
-                    <div className="ml-auto">
-                      <HelpCircle className="w-4 h-4 text-gray-400" />
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <label className="text-sm font-medium text-gray-700">Sustainable</label>
+                      <Edit2 className="w-4 h-4 text-gray-400 cursor-pointer hover:text-gray-600" />
                     </div>
+                    <button
+                      type="button"
+                      onClick={() => setIsSustainable(!isSustainable)}
+                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                        isSustainable ? 'bg-[#105E53]' : 'bg-gray-200'
+                      }`}
+                    >
+                      <span
+                        className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                          isSustainable ? 'translate-x-6' : 'translate-x-1'
+                        }`}
+                      />
+                    </button>
                   </div>
 
-                  {/* Estimated Production Time */}
+                  {/* Estimated Production Time - Only show when Made to Order is enabled */}
                   {madeToOrder && (
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -1429,7 +1560,7 @@ export default function VendorProductAdd() {
                         type="text"
                         value={estimatedProductionTime}
                         onChange={(e) => setEstimatedProductionTime(e.target.value)}
-                        placeholder="e.g., 2-3 weeks"
+                        placeholder="E.g., 2-3 weeks"
                         className="w-full rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
                       />
                     </div>
@@ -1437,368 +1568,366 @@ export default function VendorProductAdd() {
                 </div>
               </div>
 
-              {/* Variations Section */}
-              <div className="bg-white rounded-xl border border-gray-200 p-6">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-base font-semibold text-gray-900">Variations</h3>
-                  {productType === 'variable' && (
+              {/* Variations Section - Only show when Variable Product is selected */}
+              {productType === 'variable' ? (
+                <div className="bg-white rounded-lg border border-gray-200 p-6 mt-6">
+                  <div className="flex items-center justify-between mb-4">
+                    <h2 className="text-lg font-semibold text-gray-900">Variations</h2>
                     <button
                       type="button"
                       onClick={() => {
-                        setEditingVariation(null);
                         setShowVariationModal(true);
+                        setEditingVariation(null);
                       }}
-                      className="px-3 py-1.5 text-sm font-medium text-[#105E53] border border-[#105E53] rounded-lg hover:bg-[#105E53]/5 transition"
+                      className="flex items-center gap-2 px-4 py-2 bg-[#105E53] text-white text-sm font-medium rounded-lg hover:bg-[#0c4c45] transition"
                     >
+                      <Plus className="w-4 h-4" />
                       Add Variation
                     </button>
+                  </div>
+
+                  {/* List of existing variations */}
+                  {detailedVariations.length > 0 ? (
+                    <div className="space-y-3">
+                      {detailedVariations.map((variation) => (
+                        <div
+                          key={variation.id}
+                          className="flex items-center justify-between p-4 border border-gray-200 rounded-lg hover:border-gray-300 transition"
+                        >
+                          <div className="flex-1">
+                            <div className="flex items-center gap-3">
+                              <div
+                                className="w-6 h-6 rounded-full border border-gray-300"
+                                style={{ backgroundColor: variation.color }}
+                              />
+                              <div>
+                                <p className="font-medium text-gray-900">{variation.name}</p>
+                                <p className="text-sm text-gray-500">
+                                  {variation.type} • {variation.selectedSizes.join(', ')} • Stock: {Object.values(variation.sizeStock).reduce((acc, val) => acc + (parseInt(val) || 0), 0)}
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingVariation(variation);
+                                setShowVariationModal(true);
+                              }}
+                              className="p-2 text-gray-600 hover:text-[#105E53] transition"
+                            >
+                              <Edit2 className="w-4 h-4" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setDetailedVariations(detailedVariations.filter(v => v.id !== variation.id));
+                              }}
+                              className="p-2 text-gray-600 hover:text-red-600 transition"
+                            >
+                              <X className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-center py-8 text-gray-500">
+                      <p className="text-sm">No variations added yet. Click "Add Variation" to create one.</p>
+                    </div>
                   )}
                 </div>
-
-                {productType === 'variable' ? (
-                  <div>
-                    {detailedVariations.length > 0 ? (
-                      <div className="space-y-3">
-                        {detailedVariations.map((variation) => (
-                          <div
-                            key={variation.id}
-                            className="flex items-center justify-between p-4 border border-gray-200 rounded-lg hover:border-gray-300 transition"
-                          >
-                            <div className="flex-1">
-                              <div className="flex items-center gap-3">
-                                <div
-                                  className="w-6 h-6 rounded-full border border-gray-300"
-                                  style={{ backgroundColor: variation.color }}
-                                />
-                                <div>
-                                  <p className="font-medium text-gray-900">{variation.name}</p>
-                                  <p className="text-sm text-gray-500">
-                                    {variation.type} • {variation.selectedSizes.join(', ')} • Stock: {Object.values(variation.sizeStock).reduce((acc, val) => acc + (parseInt(val) || 0), 0)}
-                                  </p>
-                                </div>
-                              </div>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setEditingVariation(variation);
-                                  setShowVariationModal(true);
-                                }}
-                                className="p-2 text-gray-600 hover:text-[#105E53] transition"
-                              >
-                                <Edit2 className="w-4 h-4" />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setDetailedVariations(detailedVariations.filter(v => v.id !== variation.id));
-                                }}
-                                className="p-2 text-gray-600 hover:text-red-600 transition"
-                              >
-                                <X className="w-4 h-4" />
-                              </button>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <div className="text-center py-8 text-gray-500">
-                        <p className="text-sm">No variations added yet. Click "Add Variation" to create one.</p>
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  <div className="bg-gray-50 rounded-lg border-2 border-dashed border-gray-300 p-8 mt-6">
-                    <div className="text-center">
-                      <div className="inline-flex items-center justify-center w-12 h-12 bg-gray-200 rounded-full mb-3">
-                        <svg className="w-6 h-6 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                        </svg>
-                      </div>
-                      <p className="font-semibold text-gray-700 mb-2">Variations Disabled</p>
-                      <p className="text-sm text-gray-600 max-w-md mx-auto">
-                        Variations are only available for Variable Products. Switch to "Variable Product" above to enable this section.
-                      </p>
+              ) : (
+                <div className="bg-gray-50 rounded-lg border-2 border-dashed border-gray-300 p-8 mt-6">
+                  <div className="text-center">
+                    <div className="inline-flex items-center justify-center w-12 h-12 bg-gray-200 rounded-full mb-3">
+                      <svg className="w-6 h-6 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                      </svg>
                     </div>
+                    <p className="font-semibold text-gray-700 mb-2">Variations Disabled</p>
+                    <p className="text-sm text-gray-600 max-w-md mx-auto">
+                      Variations are only available for Variable Products. Switch to "Variable Product" above to enable this section.
+                    </p>
                   </div>
-                )}
+                </div>
+              )}
 
-                {/* Variation Modal */}
-                {showVariationModal && (
-                  <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-                    <div className="bg-white rounded-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-                      <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between">
-                        <h3 className="text-xl font-semibold text-gray-900">
-                          {editingVariation ? 'Edit Variation' : 'Add Variation'}
-                        </h3>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setShowVariationModal(false);
-                            setEditingVariation(null);
-                          }}
-                          className="p-2 text-gray-400 hover:text-gray-600 transition"
-                        >
-                          <X className="w-5 h-5" />
-                        </button>
+              {/* Variation Modal */}
+              {showVariationModal && (
+                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+                  <div className="bg-white rounded-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+                    <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between">
+                      <h3 className="text-xl font-semibold text-gray-900">
+                        {editingVariation ? 'Edit Variation' : 'Add Variation'}
+                      </h3>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowVariationModal(false);
+                          setEditingVariation(null);
+                        }}
+                        className="p-2 text-gray-400 hover:text-gray-600 transition"
+                      >
+                        <X className="w-5 h-5" />
+                      </button>
+                    </div>
+
+                    <div className="p-6 space-y-6">
+                      {/* Variation Name */}
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          Variation Name *
+                        </label>
+                        <input
+                          type="text"
+                          value={variationName}
+                          onChange={(e) => setVariationName(e.target.value)}
+                          placeholder="E.g., Red Large"
+                          className="w-full rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
+                        />
                       </div>
 
-                      <div className="p-6 space-y-6">
-                        {/* Variation Name */}
+                      {/* Variation Type */}
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          Type *
+                        </label>
+                        <select
+                          value={variationType}
+                          onChange={(e) => setVariationType(e.target.value)}
+                          className="w-full rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
+                        >
+                          <option value="">Select type</option>
+                          <option value="Color">Color</option>
+                          <option value="Size">Size</option>
+                          <option value="Material">Material</option>
+                          <option value="Style">Style</option>
+                        </select>
+                      </div>
+
+                      {/* Different Variation Pricing */}
+                      <div className="flex items-center gap-3">
+                        <input
+                          type="checkbox"
+                          checked={variationHasDifferentPricing}
+                          onChange={(e) => setVariationHasDifferentPricing(e.target.checked)}
+                          className="w-4 h-4 text-[#105E53] rounded border-gray-300 focus:ring-[#105E53]"
+                          id="variation-pricing"
+                        />
+                        <label htmlFor="variation-pricing" className="text-sm font-medium text-gray-700">
+                          Different Variation Pricing
+                        </label>
+                      </div>
+
+                      {/* Variation Price & Sales Price */}
+                      <div className="grid grid-cols-2 gap-4">
                         <div>
                           <label className="block text-sm font-medium text-gray-700 mb-2">
-                            Variation Name *
+                            Variation Price
                           </label>
-                          <input
-                            type="text"
-                            value={variationName}
-                            onChange={(e) => setVariationName(e.target.value)}
-                            placeholder="E.g., Red Large"
-                            className="w-full rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
-                          />
-                        </div>
-
-                        {/* Variation Type */}
-                        <div>
-                          <label className="block text-sm font-medium text-gray-700 mb-2">
-                            Type *
-                          </label>
-                          <select
-                            value={variationType}
-                            onChange={(e) => setVariationType(e.target.value)}
-                            className="w-full rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
-                          >
-                            <option value="">Select type</option>
-                            <option value="Color">Color</option>
-                            <option value="Size">Size</option>
-                            <option value="Material">Material</option>
-                            <option value="Style">Style</option>
-                          </select>
-                        </div>
-
-                        {/* Different Variation Pricing */}
-                        <div className="flex items-center gap-3">
-                          <input
-                            type="checkbox"
-                            checked={variationHasDifferentPricing}
-                            onChange={(e) => setVariationHasDifferentPricing(e.target.checked)}
-                            className="w-4 h-4 text-[#105E53] rounded border-gray-300 focus:ring-[#105E53]"
-                            id="variation-pricing"
-                          />
-                          <label htmlFor="variation-pricing" className="text-sm font-medium text-gray-700">
-                            Different Variation Pricing
-                          </label>
-                        </div>
-
-                        {/* Variation Price & Sales Price */}
-                        <div className="grid grid-cols-2 gap-4">
-                          <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-2">
-                              Variation Price
-                            </label>
-                            <div className="relative">
-                              <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 text-sm">
-                                {currencySymbol}
-                              </span>
-                              <input
-                                type="text"
-                                value={variationPrice}
-                                onChange={(e) => setVariationPrice(e.target.value)}
-                                placeholder="0.00"
-                                disabled={!variationHasDifferentPricing}
-                                className="w-full rounded-lg border border-gray-200 bg-gray-50 pl-8 pr-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20 disabled:opacity-50 disabled:cursor-not-allowed"
-                              />
-                            </div>
-                          </div>
-                          <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-2">
-                              Sales Price
-                            </label>
-                            <div className="relative">
-                              <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 text-sm">
-                                {currencySymbol}
-                              </span>
-                              <input
-                                type="text"
-                                value={variationSalesPrice}
-                                onChange={(e) => setVariationSalesPrice(e.target.value)}
-                                placeholder="0.00"
-                                disabled={!variationHasDifferentPricing}
-                                className="w-full rounded-lg border border-gray-200 bg-gray-50 pl-8 pr-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20 disabled:opacity-50 disabled:cursor-not-allowed"
-                              />
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* Color Selector */}
-                        <div>
-                          <label className="block text-sm font-medium text-gray-700 mb-2">
-                            Color Selector
-                          </label>
-                          <div className="flex items-center gap-3">
-                            <input
-                              type="color"
-                              value={variationColor}
-                              onChange={handleColorPickerChange}
-                              className="w-12 h-12 rounded-lg border border-gray-200 cursor-pointer"
-                            />
+                          <div className="relative">
+                            <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 text-sm">
+                              {currencySymbol}
+                            </span>
                             <input
                               type="text"
-                              value={variationColorHex}
-                              onChange={handleColorHexChange}
-                              placeholder="#000000"
-                              className="flex-1 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
+                              value={variationPrice}
+                              onChange={(e) => setVariationPrice(e.target.value)}
+                              placeholder="0.00"
+                              disabled={!variationHasDifferentPricing}
+                              className="w-full rounded-lg border border-gray-200 bg-gray-50 pl-8 pr-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20 disabled:opacity-50 disabled:cursor-not-allowed"
                             />
                           </div>
                         </div>
-
-                        {/* Select Available Sizes */}
                         <div>
-                          <label className="block text-sm font-medium text-gray-700 mb-3">
-                            Select Available Sizes *
+                          <label className="block text-sm font-medium text-gray-700 mb-2">
+                            Sales Price
                           </label>
-                          <div className="flex flex-wrap gap-2">
-                            {(['XXXL', 'XXL', 'XL', 'L', 'M', 'S', 'XS', 'XXS'] as SizeOption[]).map((size) => (
-                              <button
-                                key={size}
-                                type="button"
-                                className={`px-4 py-2 border rounded-lg text-sm font-medium transition ${
-                                  variationSelectedSizes.includes(size)
-                                    ? 'bg-[#105E53] text-white border-[#105E53]'
-                                    : 'border-gray-300 hover:border-[#105E53] hover:bg-[#105E53]/5'
-                                }`}
-                                onClick={() => toggleVariationSize(size)}
-                              >
-                                {size}
-                              </button>
-                            ))}
+                          <div className="relative">
+                            <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 text-sm">
+                              {currencySymbol}
+                            </span>
+                            <input
+                              type="text"
+                              value={variationSalesPrice}
+                              onChange={(e) => setVariationSalesPrice(e.target.value)}
+                              placeholder="0.00"
+                              disabled={!variationHasDifferentPricing}
+                              className="w-full rounded-lg border border-gray-200 bg-gray-50 pl-8 pr-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                            />
                           </div>
                         </div>
+                      </div>
 
-                        {/* Stock for each size */}
-                        <div>
-                          <label className="block text-sm font-medium text-gray-700 mb-3">
-                            Stock per Size
-                          </label>
-                          <div className="grid grid-cols-4 gap-3">
-                            {(['XXXL', 'XXL', 'XL', 'L', 'M', 'S', 'XS', 'XXS'] as SizeOption[]).map((size) => (
-                              <div key={size}>
-                                <label className="block text-xs text-gray-500 mb-1">{size}</label>
-                                <input
-                                  type="number"
-                                  min="0"
-                                  placeholder="0"
-                                  value={variationSizeStock[size] || ''}
-                                  onChange={(e) => handleVariationStockChange(size, e.target.value)}
-                                  className="w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
+                      {/* Color Selector */}
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          Color Selector
+                        </label>
+                        <div className="flex items-center gap-3">
+                          <input
+                            type="color"
+                            value={variationColor}
+                            onChange={handleColorPickerChange}
+                            className="w-12 h-12 rounded-lg border border-gray-200 cursor-pointer"
+                          />
+                          <input
+                            type="text"
+                            value={variationColorHex}
+                            onChange={handleColorHexChange}
+                            placeholder="#000000"
+                            className="flex-1 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Select Available Sizes */}
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-3">
+                          Select Available Sizes *
+                        </label>
+                        <div className="flex flex-wrap gap-2">
+                          {(['XXXL', 'XXL', 'XL', 'L', 'M', 'S', 'XS', 'XXS'] as SizeOption[]).map((size) => (
+                            <button
+                              key={size}
+                              type="button"
+                              className={`px-4 py-2 border rounded-lg text-sm font-medium transition ${
+                                variationSelectedSizes.includes(size)
+                                  ? 'bg-[#105E53] text-white border-[#105E53]'
+                                  : 'border-gray-300 hover:border-[#105E53] hover:bg-[#105E53]/5'
+                              }`}
+                              onClick={() => toggleVariationSize(size)}
+                            >
+                              {size}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Stock for each size */}
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-3">
+                          Stock per Size
+                        </label>
+                        <div className="grid grid-cols-4 gap-3">
+                          {(['XXXL', 'XXL', 'XL', 'L', 'M', 'S', 'XS', 'XXS'] as SizeOption[]).map((size) => (
+                            <div key={size}>
+                              <label className="block text-xs text-gray-500 mb-1">{size}</label>
+                              <input
+                                type="number"
+                                min="0"
+                                placeholder="0"
+                                value={variationSizeStock[size] || ''}
+                                onChange={(e) => handleVariationStockChange(size, e.target.value)}
+                                className="w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
+                              />
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Upload Images */}
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          Upload Images
+                        </label>
+
+                        {/* Hidden file input */}
+                        <input
+                          ref={variationFileInputRef}
+                          type="file"
+                          accept="image/*"
+                          multiple
+                          className="hidden"
+                          onChange={handleVariationImageUpload}
+                        />
+
+                        {/* Image grid */}
+                        {variationImages.length > 0 && (
+                          <div className="grid grid-cols-4 gap-3 mb-3">
+                            {variationImages.map((image) => (
+                              <div key={image.id} className="relative group aspect-square">
+                                <img
+                                  src={image.preview}
+                                  alt="Variation"
+                                  className="w-full h-full object-cover rounded-lg"
                                 />
+                                {!image.uploaded && (
+                                  <div className="absolute inset-0 bg-black/50 rounded-lg flex items-center justify-center">
+                                    <div className="w-6 h-6 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                                  </div>
+                                )}
+                                {image.uploaded && (
+                                  <div className="absolute top-2 left-2 p-1 bg-green-500 rounded-full">
+                                    <Check className="h-3 w-3 text-white" />
+                                  </div>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => removeVariationImage(image.id)}
+                                  className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition flex items-center justify-center rounded-lg"
+                                >
+                                  <Trash2 className="h-5 w-5 text-white" />
+                                </button>
                               </div>
                             ))}
                           </div>
-                        </div>
+                        )}
 
-                        {/* Upload Images */}
-                        <div>
-                          <label className="block text-sm font-medium text-gray-700 mb-2">
-                            Upload Images
-                          </label>
-
-                          {/* Hidden file input */}
-                          <input
-                            ref={variationFileInputRef}
-                            type="file"
-                            accept="image/*"
-                            multiple
-                            className="hidden"
-                            onChange={handleVariationImageUpload}
-                          />
-
-                          {/* Image grid */}
-                          {variationImages.length > 0 && (
-                            <div className="grid grid-cols-4 gap-3 mb-3">
-                              {variationImages.map((image) => (
-                                <div key={image.id} className="relative group aspect-square">
-                                  <img
-                                    src={image.preview}
-                                    alt="Variation"
-                                    className="w-full h-full object-cover rounded-lg"
-                                  />
-                                  {!image.uploaded && (
-                                    <div className="absolute inset-0 bg-black/50 rounded-lg flex items-center justify-center">
-                                      <div className="w-6 h-6 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                                    </div>
-                                  )}
-                                  {image.uploaded && (
-                                    <div className="absolute top-2 left-2 p-1 bg-green-500 rounded-full">
-                                      <Check className="h-3 w-3 text-white" />
-                                    </div>
-                                  )}
-                                  <button
-                                    type="button"
-                                    onClick={() => removeVariationImage(image.id)}
-                                    className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition flex items-center justify-center rounded-lg"
-                                  >
-                                    <Trash2 className="h-5 w-5 text-white" />
-                                  </button>
-                                </div>
-                              ))}
-                            </div>
-                          )}
-
-                          {/* Upload button */}
-                          <button
-                            type="button"
-                            onClick={() => variationFileInputRef.current?.click()}
-                            disabled={isUploading}
-                            className="w-full border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-[#105E53] hover:bg-[#105E53]/5 transition disabled:opacity-50 disabled:cursor-not-allowed"
-                          >
-                            {isUploading ? (
-                              <span className="inline-flex flex-col items-center gap-2">
-                                <div className="w-8 h-8 border-2 border-gray-400 border-t-[#105E53] rounded-full animate-spin mx-auto mb-2" />
-                                <p className="text-sm text-gray-600">Uploading... {Math.round(uploadProgress)}%</p>
-                              </span>
-                            ) : (
-                              <span className="inline-flex flex-col items-center gap-2">
-                                <Upload className="w-8 h-8 text-gray-400 mx-auto mb-2" />
-                                <p className="text-sm text-gray-600">Click to upload variation images</p>
-                              </span>
-                            )}
-                          </button>
-                        </div>
-
-                        {/* Save Button */}
+                        {/* Upload button */}
                         <button
                           type="button"
-                          onClick={handleSaveVariation}
-                          className="w-full bg-[#105E53] text-white py-3 rounded-lg font-medium hover:bg-[#0c4c45] transition"
+                          onClick={() => variationFileInputRef.current?.click()}
+                          disabled={isUploading}
+                          className="w-full border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-[#105E53] hover:bg-[#105E53]/5 transition disabled:opacity-50 disabled:cursor-not-allowed"
                         >
-                          {editingVariation ? 'Update Variation' : 'Save Variation'}
+                          {isUploading ? (
+                            <span className="inline-flex flex-col items-center gap-2">
+                              <div className="w-8 h-8 border-2 border-gray-400 border-t-[#105E53] rounded-full animate-spin mx-auto mb-2" />
+                              <p className="text-sm text-gray-600">Uploading... {Math.round(uploadProgress)}%</p>
+                            </span>
+                          ) : (
+                            <span className="inline-flex flex-col items-center gap-2">
+                              <Upload className="w-8 h-8 text-gray-400 mx-auto mb-2" />
+                              <p className="text-sm text-gray-600">Click to upload variation images</p>
+                            </span>
+                          )}
                         </button>
                       </div>
+
+                      {/* Save Button */}
+                      <button
+                        type="button"
+                        onClick={handleSaveVariation}
+                        className="w-full bg-[#105E53] text-white py-3 rounded-lg font-medium hover:bg-[#0c4c45] transition"
+                      >
+                        {editingVariation ? 'Update Variation' : 'Save Variation'}
+                      </button>
                     </div>
                   </div>
-                )}
+                </div>
+              )}
 
-                {/* Bottom Section */}
-                <div className="bg-white rounded-lg border border-gray-200 p-6 mt-6">
-                  <div className="text-center space-y-4">
-                    <p className="text-sm text-gray-600">Estimated Review time: {estimatedReviewTime}</p>
-                    <button
-                      type="submit"
-                      className="w-full bg-[#105E53] text-white font-medium rounded-lg py-3 hover:bg-[#0c4c45] transition inline-flex items-center justify-center gap-2 disabled:opacity-70"
-                      disabled={isSubmitting}
-                    >
-                      {isSubmitting ? (
-                        <span className="inline-flex items-center gap-2">
-                          <span className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
-                          Publishing...
-                        </span>
-                      ) : (
-                        'Publish for Review'
-                      )}
-                    </button>
-                  </div>
+              {/* Bottom Section */}
+              <div className="bg-white rounded-lg border border-gray-200 p-6 mt-6">
+                <div className="text-center space-y-4">
+                  <p className="text-sm text-gray-600">Estimated Review time: {estimatedReviewTime}</p>
+                  <button
+                    type="submit"
+                    className="w-full bg-[#105E53] text-white font-medium rounded-lg py-3 hover:bg-[#0c4c45] transition inline-flex items-center justify-center gap-2 disabled:opacity-70"
+                    disabled={isSubmitting}
+                  >
+                    {isSubmitting ? (
+                      <span className="inline-flex items-center gap-2">
+                        <span className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                        Publishing...
+                      </span>
+                    ) : (
+                      'Publish for Review'
+                    )}
+                  </button>
                 </div>
               </div>
             </div>
