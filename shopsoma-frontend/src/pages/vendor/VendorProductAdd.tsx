@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Info, Trash2, ChevronDown, Upload, X, Plus, Edit2, HelpCircle, Check } from 'lucide-react';
+import { ArrowLeft, Trash2, ChevronDown, Upload, X, Plus, Edit2, Check } from 'lucide-react';
 import VendorSidebar from '../../components/vendor/VendorSidebar';
 import CollectionModal from '../../components/vendor/CollectionModal';
 import ToastContainer from '../../components/ui/ToastContainer';
@@ -45,7 +45,6 @@ interface DetailedVariation {
   images: ProductImage[];
 }
 
-type VariationInput = Record<string, unknown>;
 
 export default function VendorProductAdd() {
   const navigate = useNavigate();
@@ -96,7 +95,7 @@ export default function VendorProductAdd() {
   const [variations, setVariations] = useState<ProductVariation[]>([
     { id: '1', images: [] }
   ]);
-  const [currentVariation, setCurrentVariation] = useState('1');
+  const [currentVariation] = useState('1');
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
 
