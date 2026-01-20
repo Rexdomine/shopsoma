@@ -726,46 +726,29 @@ export default function VendorProductAdd() {
   };
 
   const currentVar = variations.find(v => v.id === currentVariation);
-  const currentVarImages = currentVar ? currentVar.images : [];
-
-  useEffect(() => {
-    return () => {
-      // Revoke object URLs when component unmounts
-      currentVarImages.forEach(image => {
-        if (image.preview) {
-          URL.revokeObjectURL(image.preview);
-        }
-      });
-      variationImages.forEach(image => {
-        if (image.preview) {
-          URL.revokeObjectURL(image.preview);
-        }
-      });
-    };
-  }, [currentVarImages, variationImages]);
+  const currentVarImages = currentVar?.images ?? [];
+  const productId = '75D83E'; // TODO: Generate from backend
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <ToastContainer toasts={toasts} onHideToast={hideToast} />
-
-      {/* Sidebar + Main Content Layout */}
-      <div className="flex">
-        <VendorSidebar />
-
-        <main className="flex-1 p-8">
+    <div>
+      <ToastContainer toasts={toasts} onClose={hideToast} />
+      <div className="min-h-screen bg-[var(--color-page-bg)]">
+        <div className="flex">
+          <VendorSidebar activePrimary="products" />
+          <main className="flex-1 p-8">
           {/* Header */}
           <div className="flex items-center justify-between mb-8">
             <div className="flex items-center gap-4">
               <button
                 type="button"
                 onClick={() => navigate(ROUTES.VENDOR_PRODUCTS)}
-                className="p-2 text-gray-500 hover:text-gray-700"
+                className="p-2 hover:bg-gray-100 rounded-lg transition"
               >
-                <ArrowLeft className="h-5 w-5" />
+                <ArrowLeft className="h-5 w-5 text-gray-600" />
               </button>
               <div>
-                <h1 className="text-2xl font-bold text-gray-900">Add New Product</h1>
-                <p className="text-sm text-gray-500">Product ID: 75D83E</p>
+                <h1 className="text-2xl font-semibold text-gray-900">Add New Product</h1>
+                <p className="text-sm text-gray-500 mt-1">Product ID: {productId}</p>
               </div>
             </div>
             <div className="flex items-center gap-3">
@@ -1044,7 +1027,11 @@ export default function VendorProductAdd() {
                                 key={cat.id}
                                 type="button"
                                 onClick={() => handlePrimaryCategoryChange(cat.id)}
-                                className="w-full px-4 py-3 text-left text-sm hover:bg-gray-50 transition"
+                                className={`w-full px-4 py-2.5 text-left text-sm transition ${
+                                  cat.id === primaryCategoryId
+                                    ? 'bg-[#105E53]/10 text-[#105E53] font-medium'
+                                    : 'text-gray-700 hover:bg-gray-50'
+                                }`}
                               >
                                 {cat.name}
                               </button>
@@ -1054,7 +1041,7 @@ export default function VendorProductAdd() {
                       </div>
                     </div>
 
-                    {/* Subcategory */}
+                    {/* Subcategory - Only show if primary category is selected */}
                     {primaryCategoryId && (
                       <div>
                         <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -1064,13 +1051,17 @@ export default function VendorProductAdd() {
                           <button
                             type="button"
                             onClick={() => setShowSubcategoryDropdown(!showSubcategoryDropdown)}
-                            disabled={loadingCategories}
+                            disabled={loadingCategories || subcategories.length === 0}
                             className="w-full rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-left flex items-center justify-between hover:border-gray-300 transition disabled:opacity-50 disabled:cursor-not-allowed"
                           >
                             <span className={subcategoryId ? 'text-gray-900' : 'text-gray-400'}>
                               {subcategoryId
                                 ? subcategories.find(c => c.id === subcategoryId)?.name
-                                : loadingCategories ? 'Loading...' : 'Select Subcategory'}
+                                : loadingCategories
+                                  ? 'Loading...'
+                                  : subcategories.length === 0
+                                    ? 'No subcategories available'
+                                    : 'Select Subcategory'}
                             </span>
                             <ChevronDown className="h-4 w-4 text-gray-400" />
                           </button>
@@ -1081,7 +1072,11 @@ export default function VendorProductAdd() {
                                   key={cat.id}
                                   type="button"
                                   onClick={() => handleSubcategoryChange(cat.id)}
-                                  className="w-full px-4 py-3 text-left text-sm hover:bg-gray-50 transition"
+                                  className={`w-full px-4 py-2.5 text-left text-sm transition ${
+                                    cat.id === subcategoryId
+                                      ? 'bg-[#105E53]/10 text-[#105E53] font-medium'
+                                      : 'text-gray-700 hover:bg-gray-50'
+                                  }`}
                                 >
                                   {cat.name}
                                 </button>
@@ -1092,23 +1087,27 @@ export default function VendorProductAdd() {
                       </div>
                     )}
 
-                    {/* Child Category */}
+                    {/* Child Category - Only show if subcategory has children */}
                     {subcategoryId && childCategories.length > 0 && (
                       <div>
                         <label className="block text-sm font-medium text-gray-700 mb-2">
-                          Child Category
+                          Child Category <span className="text-red-500">*</span>
                         </label>
                         <div className="relative">
                           <button
                             type="button"
                             onClick={() => setShowChildCategoryDropdown(!showChildCategoryDropdown)}
-                            disabled={loadingCategories}
+                            disabled={loadingCategories || childCategories.length === 0}
                             className="w-full rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-left flex items-center justify-between hover:border-gray-300 transition disabled:opacity-50 disabled:cursor-not-allowed"
                           >
                             <span className={childCategoryId ? 'text-gray-900' : 'text-gray-400'}>
                               {childCategoryId
                                 ? childCategories.find(c => c.id === childCategoryId)?.name
-                                : loadingCategories ? 'Loading...' : 'Select Child Category'}
+                                : loadingCategories
+                                  ? 'Loading...'
+                                  : childCategories.length === 0
+                                    ? 'No child categories available'
+                                    : 'Select Child Category'}
                             </span>
                             <ChevronDown className="h-4 w-4 text-gray-400" />
                           </button>
@@ -1119,7 +1118,11 @@ export default function VendorProductAdd() {
                                   key={cat.id}
                                   type="button"
                                   onClick={() => handleChildCategoryChange(cat.id)}
-                                  className="w-full px-4 py-3 text-left text-sm hover:bg-gray-50 transition"
+                                  className={`w-full px-4 py-2.5 text-left text-sm transition ${
+                                    cat.id === childCategoryId
+                                      ? 'bg-[#105E53]/10 text-[#105E53] font-medium'
+                                      : 'text-gray-700 hover:bg-gray-50'
+                                  }`}
                                 >
                                   {cat.name}
                                 </button>
@@ -1131,41 +1134,44 @@ export default function VendorProductAdd() {
                     )}
                   </div>
 
-                  {/* Selling Price */}
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Selling Price <span className="text-red-500">*</span>
-                      <span className="block text-xs text-gray-500 mt-0.5">(What customers pay)</span>
-                    </label>
-                    <div className="relative">
-                      <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 text-sm">
-                        {currencySymbol}
-                      </span>
-                      <input
-                        type="text"
-                        value={productPrice}
-                        onChange={(e) => setProductPrice(e.target.value)}
-                        className="w-full rounded-lg border border-gray-200 bg-gray-50 pl-8 pr-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
-                      />
+                  {/* Product Price & Sales Price */}
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Selling Price <span className="text-xs text-gray-500">(What customers pay)</span>
+                      </label>
+                      <div className="relative">
+                        <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 text-sm">
+                          {currencySymbol}
+                        </span>
+                        <input
+                          type="text"
+                          value={productPrice}
+                          onChange={(e) => setProductPrice(e.target.value)}
+                          placeholder="000"
+                          className="w-full rounded-lg border border-gray-200 bg-gray-50 pl-8 pr-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
+                        />
+                      </div>
                     </div>
-                  </div>
-
-                  {/* Compare at Price */}
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Compare At Price
-                      <span className="block text-xs text-gray-500 mt-0.5">(Optional - original price for comparison)</span>
-                    </label>
-                    <div className="relative">
-                      <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 text-sm">
-                        {currencySymbol}
-                      </span>
-                      <input
-                        type="text"
-                        value={salesPrice}
-                        onChange={(e) => setSalesPrice(e.target.value)}
-                        className="w-full rounded-lg border border-gray-200 bg-gray-50 pl-8 pr-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
-                      />
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Compare At Price <span className="text-xs text-gray-500">(Optional - original price for comparison)</span>
+                      </label>
+                      <div className="relative">
+                        <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 text-sm">
+                          {currencySymbol}
+                        </span>
+                        <input
+                          type="text"
+                          value={salesPrice}
+                          onChange={(e) => setSalesPrice(e.target.value)}
+                          placeholder="000"
+                          className="w-full rounded-lg border border-gray-200 bg-gray-50 pl-8 pr-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
+                        />
+                      </div>
+                      <p className="mt-1.5 text-xs text-gray-500">
+                        Set a higher price to show as crossed out (e.g., was $100, now $80). Must be ≥ selling price.
+                      </p>
                     </div>
                   </div>
 
@@ -1401,9 +1407,10 @@ export default function VendorProductAdd() {
                     />
                   </div>
                 </div>
+              </div>
 
-                {/* Other Details */}
-                <div className="bg-white rounded-lg border border-gray-200 p-6 mt-6">
+              {/* Other Details */}
+              <div className="bg-white rounded-lg border border-gray-200 p-6 mt-6">
                   <h2 className="text-lg font-semibold text-gray-900 mb-4">Other Details</h2>
 
                   <div className="space-y-4">
@@ -1427,6 +1434,7 @@ export default function VendorProductAdd() {
                         />
                       </button>
                     </div>
+
 
                     {/* Sustainable */}
                     <div className="flex items-center justify-between">
@@ -1467,366 +1475,367 @@ export default function VendorProductAdd() {
                   </div>
                 </div>
 
-              {/* Variations Section - Only show when Variable Product is selected */}
-              {productType === 'variable' ? (
-                <div className="bg-white rounded-lg border border-gray-200 p-6 mt-6">
-                  <div className="flex items-center justify-between mb-4">
-                    <h2 className="text-lg font-semibold text-gray-900">Variations</h2>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowVariationModal(true);
-                        setEditingVariation(null);
-                      }}
-                      className="flex items-center gap-2 px-4 py-2 bg-[#105E53] text-white text-sm font-medium rounded-lg hover:bg-[#0c4c45] transition"
-                    >
-                      <Plus className="w-4 h-4" />
-                      Add Variation
-                    </button>
-                  </div>
-
-                  {/* List of existing variations */}
-                  {detailedVariations.length > 0 ? (
-                    <div className="space-y-3">
-                      {detailedVariations.map((variation) => (
-                        <div
-                          key={variation.id}
-                          className="flex items-center justify-between p-4 border border-gray-200 rounded-lg hover:border-gray-300 transition"
-                        >
-                          <div className="flex-1">
-                            <div className="flex items-center gap-3">
-                              <div
-                                className="w-6 h-6 rounded-full border border-gray-300"
-                                style={{ backgroundColor: variation.color }}
-                              />
-                              <div>
-                                <p className="font-medium text-gray-900">{variation.name}</p>
-                                <p className="text-sm text-gray-500">
-                                  {variation.type} • {variation.selectedSizes.join(', ')} • Stock: {Object.values(variation.sizeStock).reduce((acc, val) => acc + (parseInt(val) || 0), 0)}
-                                </p>
-                              </div>
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setEditingVariation(variation);
-                                setShowVariationModal(true);
-                              }}
-                              className="p-2 text-gray-600 hover:text-[#105E53] transition"
-                            >
-                              <Edit2 className="w-4 h-4" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setDetailedVariations(detailedVariations.filter(v => v.id !== variation.id));
-                              }}
-                              className="p-2 text-gray-600 hover:text-red-600 transition"
-                            >
-                              <X className="w-4 h-4" />
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="text-center py-8 text-gray-500">
-                      <p className="text-sm">No variations added yet. Click "Add Variation" to create one.</p>
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <div className="bg-gray-50 rounded-lg border-2 border-dashed border-gray-300 p-8 mt-6">
-                  <div className="text-center">
-                    <div className="inline-flex items-center justify-center w-12 h-12 bg-gray-200 rounded-full mb-3">
-                      <svg className="w-6 h-6 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                      </svg>
-                    </div>
-                    <p className="font-semibold text-gray-700 mb-2">Variations Disabled</p>
-                    <p className="text-sm text-gray-600 max-w-md mx-auto">
-                      Variations are only available for Variable Products. Switch to "Variable Product" above to enable this section.
-                    </p>
-                  </div>
-                </div>
-              )}
-
-              {/* Variation Modal */}
-              {showVariationModal && (
-                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-                  <div className="bg-white rounded-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-                    <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between">
-                      <h3 className="text-xl font-semibold text-gray-900">
-                        {editingVariation ? 'Edit Variation' : 'Add Variation'}
-                      </h3>
+                {/* Variations Section - Only show when Variable Product is selected */}
+                {productType === 'variable' ? (
+                  <div className="bg-white rounded-lg border border-gray-200 p-6 mt-6">
+                    <div className="flex items-center justify-between mb-4">
+                      <h2 className="text-lg font-semibold text-gray-900">Variations</h2>
                       <button
                         type="button"
                         onClick={() => {
-                          setShowVariationModal(false);
+                          setShowVariationModal(true);
                           setEditingVariation(null);
                         }}
-                        className="p-2 text-gray-400 hover:text-gray-600 transition"
+                        className="flex items-center gap-2 px-4 py-2 bg-[#105E53] text-white text-sm font-medium rounded-lg hover:bg-[#0c4c45] transition"
                       >
-                        <X className="w-5 h-5" />
+                        <Plus className="w-4 h-4" />
+                        Add Variation
                       </button>
                     </div>
 
-                    <div className="p-6 space-y-6">
-                      {/* Variation Name */}
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-2">
-                          Variation Name *
-                        </label>
-                        <input
-                          type="text"
-                          value={variationName}
-                          onChange={(e) => setVariationName(e.target.value)}
-                          placeholder="E.g., Red Large"
-                          className="w-full rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
-                        />
-                      </div>
-
-                      {/* Variation Type */}
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-2">
-                          Type *
-                        </label>
-                        <select
-                          value={variationType}
-                          onChange={(e) => setVariationType(e.target.value)}
-                          className="w-full rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
-                        >
-                          <option value="">Select type</option>
-                          <option value="Color">Color</option>
-                          <option value="Size">Size</option>
-                          <option value="Material">Material</option>
-                          <option value="Style">Style</option>
-                        </select>
-                      </div>
-
-                      {/* Different Variation Pricing */}
-                      <div className="flex items-center gap-3">
-                        <input
-                          type="checkbox"
-                          checked={variationHasDifferentPricing}
-                          onChange={(e) => setVariationHasDifferentPricing(e.target.checked)}
-                          className="w-4 h-4 text-[#105E53] rounded border-gray-300 focus:ring-[#105E53]"
-                          id="variation-pricing"
-                        />
-                        <label htmlFor="variation-pricing" className="text-sm font-medium text-gray-700">
-                          Different Variation Pricing
-                        </label>
-                      </div>
-
-                      {/* Variation Price & Sales Price */}
-                      <div className="grid grid-cols-2 gap-4">
-                        <div>
-                          <label className="block text-sm font-medium text-gray-700 mb-2">
-                            Variation Price
-                          </label>
-                          <div className="relative">
-                            <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 text-sm">
-                              {currencySymbol}
-                            </span>
-                            <input
-                              type="text"
-                              value={variationPrice}
-                              onChange={(e) => setVariationPrice(e.target.value)}
-                              placeholder="0.00"
-                              disabled={!variationHasDifferentPricing}
-                              className="w-full rounded-lg border border-gray-200 bg-gray-50 pl-8 pr-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20 disabled:opacity-50 disabled:cursor-not-allowed"
-                            />
-                          </div>
-                        </div>
-                        <div>
-                          <label className="block text-sm font-medium text-gray-700 mb-2">
-                            Sales Price
-                          </label>
-                          <div className="relative">
-                            <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 text-sm">
-                              {currencySymbol}
-                            </span>
-                            <input
-                              type="text"
-                              value={variationSalesPrice}
-                              onChange={(e) => setVariationSalesPrice(e.target.value)}
-                              placeholder="0.00"
-                              disabled={!variationHasDifferentPricing}
-                              className="w-full rounded-lg border border-gray-200 bg-gray-50 pl-8 pr-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20 disabled:opacity-50 disabled:cursor-not-allowed"
-                            />
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Color Selector */}
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-2">
-                          Color Selector
-                        </label>
-                        <div className="flex items-center gap-3">
-                          <input
-                            type="color"
-                            value={variationColor}
-                            onChange={handleColorPickerChange}
-                            className="w-12 h-12 rounded-lg border border-gray-200 cursor-pointer"
-                          />
-                          <input
-                            type="text"
-                            value={variationColorHex}
-                            onChange={handleColorHexChange}
-                            placeholder="#000000"
-                            className="flex-1 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
-                          />
-                        </div>
-                      </div>
-
-                      {/* Select Available Sizes */}
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-3">
-                          Select Available Sizes *
-                        </label>
-                        <div className="flex flex-wrap gap-2">
-                          {(['XXXL', 'XXL', 'XL', 'L', 'M', 'S', 'XS', 'XXS'] as SizeOption[]).map((size) => (
-                            <button
-                              key={size}
-                              type="button"
-                              className={`px-4 py-2 border rounded-lg text-sm font-medium transition ${
-                                variationSelectedSizes.includes(size)
-                                  ? 'bg-[#105E53] text-white border-[#105E53]'
-                                  : 'border-gray-300 hover:border-[#105E53] hover:bg-[#105E53]/5'
-                              }`}
-                              onClick={() => toggleVariationSize(size)}
-                            >
-                              {size}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-
-                      {/* Stock for each size */}
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-3">
-                          Stock per Size
-                        </label>
-                        <div className="grid grid-cols-4 gap-3">
-                          {(['XXXL', 'XXL', 'XL', 'L', 'M', 'S', 'XS', 'XXS'] as SizeOption[]).map((size) => (
-                            <div key={size}>
-                              <label className="block text-xs text-gray-500 mb-1">{size}</label>
-                              <input
-                                type="number"
-                                min="0"
-                                placeholder="0"
-                                value={variationSizeStock[size] || ''}
-                                onChange={(e) => handleVariationStockChange(size, e.target.value)}
-                                className="w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
-                              />
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-
-                      {/* Upload Images */}
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-2">
-                          Upload Images
-                        </label>
-
-                        {/* Hidden file input */}
-                        <input
-                          ref={variationFileInputRef}
-                          type="file"
-                          accept="image/*"
-                          multiple
-                          className="hidden"
-                          onChange={handleVariationImageUpload}
-                        />
-
-                        {/* Image grid */}
-                        {variationImages.length > 0 && (
-                          <div className="grid grid-cols-4 gap-3 mb-3">
-                            {variationImages.map((image) => (
-                              <div key={image.id} className="relative group aspect-square">
-                                <img
-                                  src={image.preview}
-                                  alt="Variation"
-                                  className="w-full h-full object-cover rounded-lg"
+                    {/* List of existing variations */}
+                    {detailedVariations.length > 0 ? (
+                      <div className="space-y-3">
+                        {detailedVariations.map((variation) => (
+                          <div
+                            key={variation.id}
+                            className="flex items-center justify-between p-4 border border-gray-200 rounded-lg hover:border-gray-300 transition"
+                          >
+                            <div className="flex-1">
+                              <div className="flex items-center gap-3">
+                                <div
+                                  className="w-6 h-6 rounded-full border border-gray-300"
+                                  style={{ backgroundColor: variation.color }}
                                 />
-                                {!image.uploaded && (
-                                  <div className="absolute inset-0 bg-black/50 rounded-lg flex items-center justify-center">
-                                    <div className="w-6 h-6 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                                  </div>
-                                )}
-                                {image.uploaded && (
-                                  <div className="absolute top-2 left-2 p-1 bg-green-500 rounded-full">
-                                    <Check className="h-3 w-3 text-white" />
-                                  </div>
-                                )}
-                                <button
-                                  type="button"
-                                  onClick={() => removeVariationImage(image.id)}
-                                  className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition flex items-center justify-center rounded-lg"
-                                >
-                                  <Trash2 className="h-5 w-5 text-white" />
-                                </button>
+                                <div>
+                                  <p className="font-medium text-gray-900">{variation.name}</p>
+                                  <p className="text-sm text-gray-500">
+                                    {variation.type} • {variation.selectedSizes.join(', ')} • Stock: {Object.values(variation.sizeStock).reduce((acc, val) => acc + (parseInt(val) || 0), 0)}
+                                  </p>
+                                </div>
                               </div>
-                            ))}
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setEditingVariation(variation);
+                                  setShowVariationModal(true);
+                                }}
+                                className="p-2 text-gray-600 hover:text-[#105E53] transition"
+                              >
+                                <Edit2 className="w-4 h-4" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setDetailedVariations(detailedVariations.filter(v => v.id !== variation.id));
+                                }}
+                                className="p-2 text-gray-600 hover:text-red-600 transition"
+                              >
+                                <X className="w-4 h-4" />
+                              </button>
+                            </div>
                           </div>
-                        )}
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="text-center py-8 text-gray-500">
+                        <p className="text-sm">No variations added yet. Click "Add Variation" to create one.</p>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="bg-gray-50 rounded-lg border-2 border-dashed border-gray-300 p-8 mt-6">
+                    <div className="text-center">
+                      <div className="inline-flex items-center justify-center w-12 h-12 bg-gray-200 rounded-full mb-3">
+                        <svg className="w-6 h-6 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                        </svg>
+                      </div>
+                      <p className="font-semibold text-gray-700 mb-2">Variations Disabled</p>
+                      <p className="text-sm text-gray-600 max-w-md mx-auto">
+                        Variations are only available for Variable Products. Switch to "Variable Product" above to enable this section.
+                      </p>
+                    </div>
+                  </div>
+                )}
 
-                        {/* Upload button */}
+                {/* Variation Modal */}
+                {showVariationModal && (
+                  <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+                    <div className="bg-white rounded-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+                      <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between">
+                        <h3 className="text-xl font-semibold text-gray-900">
+                          {editingVariation ? 'Edit Variation' : 'Add Variation'}
+                        </h3>
                         <button
                           type="button"
-                          onClick={() => variationFileInputRef.current?.click()}
-                          disabled={isUploading}
-                          className="w-full border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-[#105E53] hover:bg-[#105E53]/5 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                          onClick={() => {
+                            setShowVariationModal(false);
+                            setEditingVariation(null);
+                          }}
+                          className="p-2 text-gray-400 hover:text-gray-600 transition"
                         >
-                          {isUploading ? (
-                            <span className="inline-flex flex-col items-center gap-2">
-                              <div className="w-8 h-8 border-2 border-gray-400 border-t-[#105E53] rounded-full animate-spin mx-auto mb-2" />
-                              <p className="text-sm text-gray-600">Uploading... {Math.round(uploadProgress)}%</p>
-                            </span>
-                          ) : (
-                            <span className="inline-flex flex-col items-center gap-2">
-                              <Upload className="w-8 h-8 text-gray-400 mx-auto mb-2" />
-                              <p className="text-sm text-gray-600">Click to upload variation images</p>
-                            </span>
-                          )}
+                          <X className="w-5 h-5" />
                         </button>
                       </div>
 
-                      {/* Save Button */}
-                      <button
-                        type="button"
-                        onClick={handleSaveVariation}
-                        className="w-full bg-[#105E53] text-white py-3 rounded-lg font-medium hover:bg-[#0c4c45] transition"
-                      >
-                        {editingVariation ? 'Update Variation' : 'Save Variation'}
-                      </button>
+                      <div className="p-6 space-y-6">
+                        {/* Variation Name */}
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-2">
+                            Variation Name *
+                          </label>
+                          <input
+                            type="text"
+                            value={variationName}
+                            onChange={(e) => setVariationName(e.target.value)}
+                            placeholder="E.g., Red Large"
+                            className="w-full rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
+                          />
+                        </div>
+
+                        {/* Variation Type */}
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-2">
+                            Type *
+                          </label>
+                          <select
+                            value={variationType}
+                            onChange={(e) => setVariationType(e.target.value)}
+                            className="w-full rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
+                          >
+                            <option value="">Select type</option>
+                            <option value="Color">Color</option>
+                            <option value="Size">Size</option>
+                            <option value="Material">Material</option>
+                            <option value="Style">Style</option>
+                          </select>
+                        </div>
+
+                        {/* Different Variation Pricing */}
+                        <div className="flex items-center gap-3">
+                          <input
+                            type="checkbox"
+                            checked={variationHasDifferentPricing}
+                            onChange={(e) => setVariationHasDifferentPricing(e.target.checked)}
+                            className="w-4 h-4 text-[#105E53] rounded border-gray-300 focus:ring-[#105E53]"
+                            id="variation-pricing"
+                          />
+                          <label htmlFor="variation-pricing" className="text-sm font-medium text-gray-700">
+                            Different Variation Pricing
+                          </label>
+                        </div>
+
+                        {/* Variation Price & Sales Price */}
+                        <div className="grid grid-cols-2 gap-4">
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                              Variation Price
+                            </label>
+                            <div className="relative">
+                              <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 text-sm">
+                                {currencySymbol}
+                              </span>
+                              <input
+                                type="text"
+                                value={variationPrice}
+                                onChange={(e) => setVariationPrice(e.target.value)}
+                                placeholder="0.00"
+                                disabled={!variationHasDifferentPricing}
+                                className="w-full rounded-lg border border-gray-200 bg-gray-50 pl-8 pr-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                              />
+                            </div>
+                          </div>
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                              Sales Price
+                            </label>
+                            <div className="relative">
+                              <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 text-sm">
+                                {currencySymbol}
+                              </span>
+                              <input
+                                type="text"
+                                value={variationSalesPrice}
+                                onChange={(e) => setVariationSalesPrice(e.target.value)}
+                                placeholder="0.00"
+                                disabled={!variationHasDifferentPricing}
+                                className="w-full rounded-lg border border-gray-200 bg-gray-50 pl-8 pr-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                              />
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Color Selector */}
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-2">
+                            Color Selector
+                          </label>
+                          <div className="flex items-center gap-3">
+                            <input
+                              type="color"
+                              value={variationColor}
+                              onChange={handleColorPickerChange}
+                              className="w-12 h-12 rounded-lg border border-gray-200 cursor-pointer"
+                            />
+                            <input
+                              type="text"
+                              value={variationColorHex}
+                              onChange={handleColorHexChange}
+                              placeholder="#000000"
+                              className="flex-1 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
+                            />
+                          </div>
+                        </div>
+
+                        {/* Select Available Sizes */}
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-3">
+                            Select Available Sizes *
+                          </label>
+                          <div className="flex flex-wrap gap-2">
+                            {(['XXXL', 'XXL', 'XL', 'L', 'M', 'S', 'XS', 'XXS'] as SizeOption[]).map((size) => (
+                              <button
+                                key={size}
+                                type="button"
+                                className={`px-4 py-2 border rounded-lg text-sm font-medium transition ${
+                                  variationSelectedSizes.includes(size)
+                                    ? 'bg-[#105E53] text-white border-[#105E53]'
+                                    : 'border-gray-300 hover:border-[#105E53] hover:bg-[#105E53]/5'
+                                }`}
+                                onClick={() => toggleVariationSize(size)}
+                              >
+                                {size}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* Stock for each size */}
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-3">
+                            Stock per Size
+                          </label>
+                          <div className="grid grid-cols-4 gap-3">
+                            {(['XXXL', 'XXL', 'XL', 'L', 'M', 'S', 'XS', 'XXS'] as SizeOption[]).map((size) => (
+                              <div key={size}>
+                                <label className="block text-xs text-gray-500 mb-1">{size}</label>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  placeholder="0"
+                                  value={variationSizeStock[size] || ''}
+                                  onChange={(e) => handleVariationStockChange(size, e.target.value)}
+                                  className="w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
+                                />
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* Upload Images */}
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-2">
+                            Upload Images
+                          </label>
+
+                          {/* Hidden file input */}
+                          <input
+                            ref={variationFileInputRef}
+                            type="file"
+                            accept="image/*"
+                            multiple
+                            className="hidden"
+                            onChange={handleVariationImageUpload}
+                          />
+
+                          {/* Image grid */}
+                          {variationImages.length > 0 && (
+                            <div className="grid grid-cols-4 gap-3 mb-3">
+                              {variationImages.map((image) => (
+                                <div key={image.id} className="relative group aspect-square">
+                                  <img
+                                    src={image.preview}
+                                    alt="Variation"
+                                    className="w-full h-full object-cover rounded-lg"
+                                  />
+                                  {!image.uploaded && (
+                                    <div className="absolute inset-0 bg-black/50 rounded-lg flex items-center justify-center">
+                                      <div className="w-6 h-6 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                                    </div>
+                                  )}
+                                  {image.uploaded && (
+                                    <div className="absolute top-2 left-2 p-1 bg-green-500 rounded-full">
+                                      <Check className="h-3 w-3 text-white" />
+                                    </div>
+                                  )}
+                                  <button
+                                    type="button"
+                                    onClick={() => removeVariationImage(image.id)}
+                                    className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition flex items-center justify-center rounded-lg"
+                                  >
+                                    <Trash2 className="h-5 w-5 text-white" />
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+
+                          {/* Upload button */}
+                          <button
+                            type="button"
+                            onClick={() => variationFileInputRef.current?.click()}
+                            disabled={isUploading}
+                            className="w-full border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-[#105E53] hover:bg-[#105E53]/5 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            {isUploading ? (
+                              <span className="inline-flex flex-col items-center gap-2">
+                                <div className="w-8 h-8 border-2 border-gray-400 border-t-[#105E53] rounded-full animate-spin mx-auto mb-2" />
+                                <p className="text-sm text-gray-600">Uploading... {Math.round(uploadProgress)}%</p>
+                              </span>
+                            ) : (
+                              <span className="inline-flex flex-col items-center gap-2">
+                                <Upload className="w-8 h-8 text-gray-400 mx-auto mb-2" />
+                                <p className="text-sm text-gray-600">Click to upload variation images</p>
+                              </span>
+                            )}
+                          </button>
+                        </div>
+
+                        {/* Save Button */}
+                        <button
+                          type="button"
+                          onClick={handleSaveVariation}
+                          className="w-full bg-[#105E53] text-white py-3 rounded-lg font-medium hover:bg-[#0c4c45] transition"
+                        >
+                          {editingVariation ? 'Update Variation' : 'Save Variation'}
+                        </button>
+                      </div>
                     </div>
                   </div>
-                </div>
-              )}
+                )}
 
-              {/* Bottom Section */}
-              <div className="bg-white rounded-lg border border-gray-200 p-6 mt-6">
-                <div className="text-center space-y-4">
-                  <p className="text-sm text-gray-600">Estimated Review time: {estimatedReviewTime}</p>
-                  <button
-                    type="submit"
-                    className="w-full bg-[#105E53] text-white font-medium rounded-lg py-3 hover:bg-[#0c4c45] transition inline-flex items-center justify-center gap-2 disabled:opacity-70"
-                    disabled={isSubmitting}
-                  >
-                    {isSubmitting ? (
-                      <span className="inline-flex items-center gap-2">
-                        <span className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
-                        Publishing...
-                      </span>
-                    ) : (
-                      'Publish for Review'
-                    )}
-                  </button>
+                {/* Bottom Section */}
+                <div className="bg-white rounded-lg border border-gray-200 p-6 mt-6">
+                  <div className="text-center space-y-4">
+                    <p className="text-sm text-gray-600">Estimated Review time: {estimatedReviewTime}</p>
+                    <button
+                      type="submit"
+                      className="w-full bg-[#105E53] text-white font-medium rounded-lg py-3 hover:bg-[#0c4c45] transition inline-flex items-center justify-center gap-2 disabled:opacity-70"
+                      disabled={isSubmitting}
+                    >
+                      {isSubmitting ? (
+                        <span className="inline-flex items-center gap-2">
+                          <span className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                          Publishing...
+                        </span>
+                      ) : (
+                        'Publish for Review'
+                      )}
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
