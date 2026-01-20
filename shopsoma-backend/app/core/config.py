@@ -6,6 +6,7 @@ configuration from environment variables.
 
 import re
 from typing import List, Optional
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings
 
 
@@ -31,6 +32,7 @@ class Settings(BaseSettings):
     REDIS_HOST: str = "localhost"
     REDIS_PORT: int = 6379
     REDIS_DB: int = 0
+    REDIS_URL: Optional[str] = Field(default=None, validation_alias=AliasChoices("REDIS_URL", "redis_url"))
 
     # Email Settings
     SMTP_HOST: str = ""
@@ -58,7 +60,14 @@ class Settings(BaseSettings):
     PAYSTACK_PUBLIC_KEY: str = ""
 
     # CORS Settings
-    ALLOWED_ORIGINS: str = "http://localhost:5173,http://localhost:5174"
+    ALLOWED_ORIGINS: str = Field(
+        default="http://localhost:5173,http://localhost:5174",
+        validation_alias=AliasChoices("ALLOWED_ORIGINS", "allowed_origins"),
+    )
+    ALLOWED_ORIGIN_REGEX: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("ALLOWED_ORIGIN_REGEX", "allowed_origin_regex"),
+    )
 
     # Celery Settings
     CELERY_BROKER_URL: str = ""
