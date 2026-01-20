@@ -138,7 +138,7 @@ export default function VendorProductAdd() {
   const sizingSystems: SizingSystem[] = ['US Sizing', 'UK Sizing', 'EU Sizing'];
 
   // Available sizes based on selected sizing system
-  const [availableSizes, setAvailableSizes] = useState<SizeOption[]>(SIZE_MAPPINGS['US Sizing']);
+  const availableSizes = SIZE_MAPPINGS[sizingSystem];
 
   // Fetch primary categories and collections on mount
   useEffect(() => {
