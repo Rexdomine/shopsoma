@@ -112,6 +112,7 @@ export default function VendorProductAdd() {
   const [variationSalesPrice, setVariationSalesPrice] = useState('');
   const [variationColor, setVariationColor] = useState('#000000');
   const [variationColorHex, setVariationColorHex] = useState('#000000');
+  const [variationSizingSystem, setVariationSizingSystem] = useState<SizingSystem>('US Sizing');
   const [variationSelectedSizes, setVariationSelectedSizes] = useState<SizeOption[]>([]);
   const [variationSizeStock, setVariationSizeStock] = useState<Record<SizeOption, string>>({} as Record<SizeOption, string>);
   const [variationImages, setVariationImages] = useState<ProductImage[]>([]);
@@ -242,6 +243,7 @@ export default function VendorProductAdd() {
       setVariationSalesPrice('');
       setVariationColor('#000000');
       setVariationColorHex('#000000');
+      setVariationSizingSystem('US Sizing');
       setVariationSelectedSizes([]);
       setVariationSizeStock({} as Record<SizeOption, string>);
       setVariationImages([]);
@@ -794,43 +796,219 @@ export default function VendorProductAdd() {
             </div>
           </div>
 
-          <form
-            id="product-form"
-            data-ui-version="vendor-product-add-redeploy-2026-01-20"
-            onSubmit={handleSubmit}
-            className="grid grid-cols-2 gap-8"
-          >
+          <form id="product-form" onSubmit={handleSubmit} className="grid grid-cols-2 gap-8">
+            {/* Left Column - Image Manager */}
             <div className="space-y-6">
-              <div className="bg-white rounded-lg border border-gray-200 p-6">
-                <div className="flex items-center justify-between mb-6">
-                  <h2 className="text-lg font-semibold text-gray-900">Product Details</h2>
-                  <div className="flex items-center gap-2">
+              <div className="bg-white rounded-xl border border-gray-200 p-6">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-base font-semibold text-gray-900">Image Manager</h3>
+
+                  <div className="flex items-center gap-3">
                     <button
                       type="button"
-                      className={`px-4 py-2 rounded-lg text-sm font-medium transition ${
-                        productType === 'single'
-                          ? 'bg-[#105E53] text-white'
-                          : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                      }`}
-                      onClick={() => setProductType('single')}
+                      onClick={() => {
+                        const newVariation = {
+                          id: Date.now().toString(),
+                          images: [] as ProductImage[]
+                        };
+                        setVariations([...variations, newVariation]);
+                        setCurrentVariation(newVariation.id);
+                      }}
+                      className="flex items-center gap-2 px-4 py-2.5 bg-[#105E53] text-white rounded-lg text-sm font-medium hover:bg-[#0c4c45] transition"
                     >
-                      Single Product
-                    </button>
-                    <button
-                      type="button"
-                      className={`px-4 py-2 rounded-lg text-sm font-medium transition ${
-                        productType === 'variable'
-                          ? 'bg-[#105E53] text-white'
-                          : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                      }`}
-                      onClick={() => setProductType('variable')}
-                    >
-                      Variable Product
+                      <Plus className="h-4 w-4" />
+                      Add Variation
                     </button>
                   </div>
                 </div>
 
+                {/* Variation Tabs */}
+                <div className="flex flex-wrap gap-2 mb-6">
+                  {variations.map((variation, index) => (
+                    <button
+                      key={variation.id}
+                      type="button"
+                      onClick={() => setCurrentVariation(variation.id)}
+                      className={`px-4 py-2 rounded-lg text-sm font-medium transition ${
+                        currentVariation === variation.id
+                          ? 'bg-[#105E53] text-white'
+                          : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                      }`}
+                    >
+                      Variation {index + 1}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Image Preview Grid */}
+                <div className="grid grid-cols-3 gap-4 mb-6">
+                  {variations.find(v => v.id === currentVariation)?.images.map((image) => (
+                    <div key={image.id} className="relative group">
+                      <img
+                        src={image.preview}
+                        alt="Product"
+                        className="w-full h-32 object-cover rounded-lg"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => removeImage(image.id)}
+                        className="absolute top-2 right-2 p-1 bg-white/90 rounded-full opacity-0 group-hover:opacity-100 transition"
+                      >
+                        <X className="h-4 w-4 text-gray-600" />
+                      </button>
+                    </div>
+                  ))}
+
+                  {/* Upload Button */}
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="border-2 border-dashed border-gray-300 rounded-lg h-32 flex flex-col items-center justify-center text-gray-500 hover:border-[#105E53] hover:text-[#105E53] transition"
+                  >
+                    <Upload className="h-6 w-6 mb-2" />
+                    <span className="text-sm">Add Images</span>
+                  </button>
+                </div>
+
+                {/* Upload Progress & Actions */}
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-sm text-gray-500">
+                    <Info className="h-4 w-4" />
+                    <span>JPEG, PNG, or WEBP, max 10MB each</span>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={isUploading}
+                      className="flex items-center gap-2 px-4 py-2.5 bg-[#105E53] text-white rounded-lg text-sm font-medium hover:bg-[#0c4c45] transition disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {isUploading ? (
+                        <span className="inline-flex items-center gap-2">
+                          <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                          Uploading...
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-2">
+                          Upload Images
+                        </span>
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (variations.length === 1) return;
+                        const updatedVariations = variations.filter(v => v.id !== currentVariation);
+                        setVariations(updatedVariations);
+                        setCurrentVariation(updatedVariations[0].id);
+                      }}
+                      disabled={variations.length === 1}
+                      className="flex items-center gap-2 px-4 py-2.5 text-red-600 hover:bg-red-50 rounded-lg text-sm font-medium transition disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                      Delete
+                    </button>
+                  </div>
+                </div>
+
+                {/* Upload Progress Bar */}
+                {isUploading && (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between text-xs text-gray-600">
+                      <span>Uploading images...</span>
+                      <span>{Math.round(uploadProgress)}%</span>
+                    </div>
+                    <div className="w-full bg-gray-200 rounded-full h-2 overflow-hidden">
+                      <div
+                        className="h-full bg-[#105E53] rounded-full transition-all duration-300 ease-out"
+                        style={{ width: `${uploadProgress}%` }}
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                accept="image/jpeg,image/png,image/webp,image/gif"
+                onChange={handleImageUpload}
+                className="hidden"
+              />
+            </div>
+
+            {/* Right Column - Product Details */}
+            <div className="space-y-6">
+              {/* Product Type Selector */}
+              <div className="bg-white rounded-xl border border-gray-200 p-6">
+                <h3 className="text-base font-semibold text-gray-900 mb-4">Product Type</h3>
+
                 <div className="space-y-4">
+                  {/* Radio Options */}
+                  <div className="flex gap-6">
+                    {/* Single Product Option */}
+                    <label className="flex items-start gap-3 cursor-pointer flex-1 p-4 border-2 rounded-lg transition hover:border-[#105E53]/30" style={{ borderColor: productType === 'single' ? '#105E53' : '#E5E7EB' }}>
+                      <input
+                        type="radio"
+                        name="productType"
+                        value="single"
+                        checked={productType === 'single'}
+                        onChange={(e) => setProductType(e.target.value as 'single' | 'variable')}
+                        className="mt-1 text-[#105E53] focus:ring-[#105E53]"
+                      />
+                      <div className="flex-1">
+                        <div className="font-semibold text-gray-900 mb-1">Single Product</div>
+                        <div className="text-sm text-gray-600">
+                          Standard product with base color and size
+                        </div>
+                      </div>
+                    </label>
+
+                    {/* Variable Product Option */}
+                    <label className="flex items-start gap-3 cursor-pointer flex-1 p-4 border-2 rounded-lg transition hover:border-[#105E53]/30" style={{ borderColor: productType === 'variable' ? '#105E53' : '#E5E7EB' }}>
+                      <input
+                        type="radio"
+                        name="productType"
+                        value="variable"
+                        checked={productType === 'variable'}
+                        onChange={(e) => setProductType(e.target.value as 'single' | 'variable')}
+                        className="mt-1 text-[#105E53] focus:ring-[#105E53]"
+                      />
+                      <div className="flex-1">
+                        <div className="font-semibold text-gray-900 mb-1">Variable Product</div>
+                        <div className="text-sm text-gray-600">
+                          Product with multiple color/size variations
+                        </div>
+                      </div>
+                    </label>
+                  </div>
+
+                  {/* Helper Text */}
+                  {productType === 'single' ? (
+                    <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-800 flex items-start gap-2">
+                      <svg className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+                        <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+                      </svg>
+                      <span>Single product: Use the fields below to set base color and size. Variations section will be disabled.</span>
+                    </div>
+                  ) : (
+                    <div className="p-3 bg-purple-50 border border-purple-200 rounded-lg text-sm text-purple-800 flex items-start gap-2">
+                      <svg className="w-5 h-5 text-purple-600 flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+                        <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+                      </svg>
+                      <span>Variable product: Base color/size fields will be disabled. Use the Variations section below to set colors and sizes.</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Product Details */}
+              <div className="bg-white rounded-xl border border-gray-200 p-6">
+                <h3 className="text-base font-semibold text-gray-900 mb-4">Product Details</h3>
+
+                <div className="space-y-4">
+                  {/* Product Name */}
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">
                       Product Name *
@@ -840,11 +1018,10 @@ export default function VendorProductAdd() {
                       value={productName}
                       onChange={(e) => setProductName(e.target.value)}
                       className="w-full rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
-                      placeholder="Enter product name"
-                      required
                     />
                   </div>
 
+                  {/* Primary Category */}
                   <div className="grid grid-cols-2 gap-4">
                     <div className="relative">
                       <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -856,7 +1033,7 @@ export default function VendorProductAdd() {
                         className="w-full rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-left flex items-center justify-between"
                       >
                         <span className={primaryCategoryId ? 'text-gray-900' : 'text-gray-400'}>
-                          {primaryCategories.find(cat => cat.id === primaryCategoryId)?.name || 'Select category'}
+                          {primaryCategories.find(cat => cat.id === primaryCategoryId)?.name || 'Select primary category'}
                         </span>
                         <ChevronDown className={`w-4 h-4 text-gray-400 transition ${showPrimaryCategoryDropdown ? 'rotate-180' : ''}`} />
                       </button>
@@ -1148,6 +1325,67 @@ export default function VendorProductAdd() {
                     </div>
                   </div>
 
+                  {/* Sizing */}
+                  {productType === 'single' && (
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          Sizing System
+                        </label>
+                        <div className="relative">
+                          <button
+                            type="button"
+                            onClick={() => setShowSizingDropdown(!showSizingDropdown)}
+                            className="w-full rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-left flex items-center justify-between"
+                          >
+                            <span className="text-gray-900">{sizingSystem}</span>
+                            <ChevronDown className={`w-4 h-4 text-gray-400 transition ${showSizingDropdown ? 'rotate-180' : ''}`} />
+                          </button>
+                          {showSizingDropdown && (
+                            <div className="absolute z-10 mt-2 w-full bg-white border border-gray-200 rounded-lg shadow-lg max-h-60 overflow-y-auto">
+                              {sizingSystems.map((system) => (
+                                <button
+                                  key={system}
+                                  type="button"
+                                  onClick={() => {
+                                    setSizingSystem(system);
+                                    setShowSizingDropdown(false);
+                                  }}
+                                  className="w-full px-4 py-3 text-left text-sm text-gray-700 hover:bg-gray-50"
+                                >
+                                  {system}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-3">
+                          Select Available Sizes *
+                        </label>
+                        <div className="flex flex-wrap gap-2">
+                          {availableSizes.map((size) => (
+                            <button
+                              key={size}
+                              type="button"
+                              className={`px-4 py-2 border rounded-lg text-sm font-medium transition ${
+                                selectedSizes.includes(size)
+                                  ? 'bg-[#105E53] text-white border-[#105E53]'
+                                  : 'border-gray-300 hover:border-[#105E53] hover:bg-[#105E53]/5'
+                              }`}
+                              onClick={() => toggleSize(size)}
+                            >
+                              {size}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Stock Amount */}
                   {productType === 'single' && (
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -1155,106 +1393,32 @@ export default function VendorProductAdd() {
                       </label>
                       <input
                         type="number"
-                        min="0"
                         value={stockAmount}
                         onChange={(e) => setStockAmount(e.target.value)}
+                        placeholder="Enter stock amount"
                         className="w-full rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
-                        placeholder="0"
                       />
                     </div>
                   )}
 
-                  <div className="flex items-center gap-3">
-                    <input
-                      type="checkbox"
-                      checked={madeToOrder}
-                      onChange={(e) => setMadeToOrder(e.target.checked)}
-                      className="w-4 h-4 text-[#105E53] rounded border-gray-300 focus:ring-[#105E53]"
-                      id="made-to-order"
-                    />
-                    <label htmlFor="made-to-order" className="text-sm font-medium text-gray-700">
-                      Made to Order
+                  {/* Product Care */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Product Care Instructions
                     </label>
-                  </div>
-
-                  <div className="flex items-center gap-3">
-                    <input
-                      type="checkbox"
-                      checked={isSustainable}
-                      onChange={(e) => setIsSustainable(e.target.checked)}
-                      className="w-4 h-4 text-[#105E53] rounded border-gray-300 focus:ring-[#105E53]"
-                      id="sustainable"
+                    <textarea
+                      value={productCare}
+                      onChange={(e) => setProductCare(e.target.value)}
+                      placeholder="Enter care instructions"
+                      rows={3}
+                      className="w-full rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
                     />
-                    <label htmlFor="sustainable" className="text-sm font-medium text-gray-700">
-                      Sustainable
-                    </label>
                   </div>
                 </div>
               </div>
+            </div>
 
-              {productType === 'single' && (
-                <div className="bg-white rounded-lg border border-gray-200 p-6">
-                  <h2 className="text-lg font-semibold text-gray-900 mb-6">Size Selection</h2>
-
-                  <div className="space-y-4">
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">
-                        Sizing System
-                      </label>
-                      <div className="relative">
-                        <button
-                          type="button"
-                          onClick={() => setShowSizingDropdown(!showSizingDropdown)}
-                          className="w-full rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-left flex items-center justify-between"
-                        >
-                          <span className="text-gray-900">{sizingSystem}</span>
-                          <ChevronDown className={`w-4 h-4 text-gray-400 transition ${showSizingDropdown ? 'rotate-180' : ''}`} />
-                        </button>
-                        {showSizingDropdown && (
-                          <div className="absolute z-10 mt-2 w-full bg-white border border-gray-200 rounded-lg shadow-lg">
-                            {sizingSystems.map((system) => (
-                              <button
-                                key={system}
-                                type="button"
-                                onClick={() => {
-                                  setSizingSystem(system);
-                                  setShowSizingDropdown(false);
-                                }}
-                                className="w-full px-4 py-3 text-left text-sm text-gray-700 hover:bg-gray-50"
-                              >
-                                {system}
-                              </button>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-3">
-                        Select Available Sizes *
-                      </label>
-                      <div className="flex flex-wrap gap-2">
-                        {availableSizes.map((size) => (
-                          <button
-                            key={size}
-                            type="button"
-                            className={`px-4 py-2 border rounded-lg text-sm font-medium transition ${
-                              selectedSizes.includes(size)
-                                ? 'bg-[#105E53] text-white border-[#105E53]'
-                                : 'border-gray-300 hover:border-[#105E53] hover:bg-[#105E53]/5'
-                            }`}
-                            onClick={() => toggleSize(size)}
-                          >
-                            {size}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
-
+            <div className="space-y-6">
               <div className="bg-white rounded-lg border border-gray-200 p-6">
                 <h2 className="text-lg font-semibold text-gray-900 mb-6">Product Images</h2>
 
@@ -1322,9 +1486,7 @@ export default function VendorProductAdd() {
                   </button>
                 </div>
               </div>
-            </div>
 
-            <div className="space-y-6">
               {productType === 'variable' ? (
                 <div className="bg-white rounded-lg border border-gray-200 p-6">
                   <div className="flex items-center justify-between mb-6">
@@ -1539,13 +1701,49 @@ export default function VendorProductAdd() {
                         </div>
                       </div>
 
+                      {/* Variation Sizing System */}
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          Sizing System
+                        </label>
+                        <div className="relative">
+                          <button
+                            type="button"
+                            onClick={() => setShowSizingDropdown(!showSizingDropdown)}
+                            className="w-full rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-left flex items-center justify-between"
+                          >
+                            <span className="text-gray-900">{variationSizingSystem}</span>
+                            <ChevronDown className="w-4 h-4 text-gray-400" />
+                          </button>
+                          {showSizingDropdown && (
+                            <div className="absolute z-10 mt-2 w-full bg-white border border-gray-200 rounded-lg shadow-lg max-h-60 overflow-y-auto">
+                              {sizingSystems.map((system) => (
+                                <button
+                                  key={system}
+                                  type="button"
+                                  onClick={() => {
+                                    setVariationSizingSystem(system);
+                                    setVariationSelectedSizes([]);
+                                    setVariationSizeStock({} as Record<SizeOption, string>);
+                                    setShowSizingDropdown(false);
+                                  }}
+                                  className="w-full px-4 py-3 text-left text-sm text-gray-700 hover:bg-gray-50"
+                                >
+                                  {system}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
                       {/* Select Available Sizes */}
                       <div>
                         <label className="block text-sm font-medium text-gray-700 mb-3">
                           Select Available Sizes *
                         </label>
                         <div className="flex flex-wrap gap-2">
-                          {(['XXXL', 'XXL', 'XL', 'L', 'M', 'S', 'XS', 'XXS'] as SizeOption[]).map((size) => (
+                          {SIZE_MAPPINGS[variationSizingSystem].map((size) => (
                             <button
                               key={size}
                               type="button"
@@ -1568,7 +1766,7 @@ export default function VendorProductAdd() {
                           Stock per Size
                         </label>
                         <div className="grid grid-cols-4 gap-3">
-                          {(['XXXL', 'XXL', 'XL', 'L', 'M', 'S', 'XS', 'XXS'] as SizeOption[]).map((size) => (
+                          {SIZE_MAPPINGS[variationSizingSystem].map((size) => (
                             <div key={size}>
                               <label className="block text-xs text-gray-500 mb-1">{size}</label>
                               <input
