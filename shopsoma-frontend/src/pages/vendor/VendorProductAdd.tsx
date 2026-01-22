@@ -40,6 +40,7 @@ interface DetailedVariation {
   price: string;
   salesPrice: string;
   color: string;
+  sizingSystem: SizingSystem;
   selectedSizes: SizeOption[];
   sizeStock: Record<SizeOption, string>;
   images: ProductImage[];
@@ -231,6 +232,7 @@ export default function VendorProductAdd() {
       setVariationSalesPrice(editingVariation.salesPrice);
       setVariationColor(editingVariation.color);
       setVariationColorHex(editingVariation.color);
+      setVariationSizingSystem(editingVariation.sizingSystem);
       setVariationSelectedSizes(editingVariation.selectedSizes);
       setVariationSizeStock(editingVariation.sizeStock);
       setVariationImages(editingVariation.images);
@@ -579,6 +581,7 @@ export default function VendorProductAdd() {
       price: variationPrice,
       salesPrice: variationSalesPrice,
       color: variationColor,
+      sizingSystem: variationSizingSystem,
       selectedSizes: variationSelectedSizes,
       sizeStock: variationSizeStock,
       images: variationImages,
