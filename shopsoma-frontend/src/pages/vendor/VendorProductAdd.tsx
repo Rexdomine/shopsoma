@@ -40,6 +40,7 @@ interface DetailedVariation {
   price: string;
   salesPrice: string;
   color: string;
+  sizingSystem: SizingSystem;
   selectedSizes: SizeOption[];
   sizeStock: Record<SizeOption, string>;
   images: ProductImage[];
@@ -112,6 +113,7 @@ export default function VendorProductAdd() {
   const [variationSalesPrice, setVariationSalesPrice] = useState('');
   const [variationColor, setVariationColor] = useState('#000000');
   const [variationColorHex, setVariationColorHex] = useState('#000000');
+  const [variationSizingSystem, setVariationSizingSystem] = useState<SizingSystem>('US Sizing');
   const [variationSelectedSizes, setVariationSelectedSizes] = useState<SizeOption[]>([]);
   const [variationSizeStock, setVariationSizeStock] = useState<Record<SizeOption, string>>({} as Record<SizeOption, string>);
   const [variationImages, setVariationImages] = useState<ProductImage[]>([]);
@@ -230,6 +232,7 @@ export default function VendorProductAdd() {
       setVariationSalesPrice(editingVariation.salesPrice);
       setVariationColor(editingVariation.color);
       setVariationColorHex(editingVariation.color);
+      setVariationSizingSystem(editingVariation.sizingSystem);
       setVariationSelectedSizes(editingVariation.selectedSizes);
       setVariationSizeStock(editingVariation.sizeStock);
       setVariationImages(editingVariation.images);
@@ -242,6 +245,7 @@ export default function VendorProductAdd() {
       setVariationSalesPrice('');
       setVariationColor('#000000');
       setVariationColorHex('#000000');
+      setVariationSizingSystem('US Sizing');
       setVariationSelectedSizes([]);
       setVariationSizeStock({} as Record<SizeOption, string>);
       setVariationImages([]);
@@ -577,6 +581,7 @@ export default function VendorProductAdd() {
       price: variationPrice,
       salesPrice: variationSalesPrice,
       color: variationColor,
+      sizingSystem: variationSizingSystem,
       selectedSizes: variationSelectedSizes,
       sizeStock: variationSizeStock,
       images: variationImages,
@@ -1255,6 +1260,9 @@ export default function VendorProductAdd() {
                 </div>
               )}
 
+            </div>
+
+            <div className="space-y-6">
               <div className="bg-white rounded-lg border border-gray-200 p-6">
                 <h2 className="text-lg font-semibold text-gray-900 mb-6">Product Images</h2>
 
@@ -1322,9 +1330,7 @@ export default function VendorProductAdd() {
                   </button>
                 </div>
               </div>
-            </div>
 
-            <div className="space-y-6">
               {productType === 'variable' ? (
                 <div className="bg-white rounded-lg border border-gray-200 p-6">
                   <div className="flex items-center justify-between mb-6">
@@ -1539,13 +1545,49 @@ export default function VendorProductAdd() {
                         </div>
                       </div>
 
+                      {/* Variation Sizing System */}
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          Sizing System
+                        </label>
+                        <div className="relative">
+                          <button
+                            type="button"
+                            onClick={() => setShowSizingDropdown(!showSizingDropdown)}
+                            className="w-full rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-left flex items-center justify-between"
+                          >
+                            <span className="text-gray-900">{variationSizingSystem}</span>
+                            <ChevronDown className="w-4 h-4 text-gray-400" />
+                          </button>
+                          {showSizingDropdown && (
+                            <div className="absolute z-10 mt-2 w-full bg-white border border-gray-200 rounded-lg shadow-lg max-h-60 overflow-y-auto">
+                              {sizingSystems.map((system) => (
+                                <button
+                                  key={system}
+                                  type="button"
+                                  onClick={() => {
+                                    setVariationSizingSystem(system);
+                                    setVariationSelectedSizes([]);
+                                    setVariationSizeStock({} as Record<SizeOption, string>);
+                                    setShowSizingDropdown(false);
+                                  }}
+                                  className="w-full px-4 py-3 text-left text-sm text-gray-700 hover:bg-gray-50"
+                                >
+                                  {system}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
                       {/* Select Available Sizes */}
                       <div>
                         <label className="block text-sm font-medium text-gray-700 mb-3">
                           Select Available Sizes *
                         </label>
                         <div className="flex flex-wrap gap-2">
-                          {(['XXXL', 'XXL', 'XL', 'L', 'M', 'S', 'XS', 'XXS'] as SizeOption[]).map((size) => (
+                          {SIZE_MAPPINGS[variationSizingSystem].map((size) => (
                             <button
                               key={size}
                               type="button"
@@ -1568,7 +1610,7 @@ export default function VendorProductAdd() {
                           Stock per Size
                         </label>
                         <div className="grid grid-cols-4 gap-3">
-                          {(['XXXL', 'XXL', 'XL', 'L', 'M', 'S', 'XS', 'XXS'] as SizeOption[]).map((size) => (
+                          {SIZE_MAPPINGS[variationSizingSystem].map((size) => (
                             <div key={size}>
                               <label className="block text-xs text-gray-500 mb-1">{size}</label>
                               <input
@@ -1690,6 +1732,7 @@ export default function VendorProductAdd() {
           </form>
         </main>
       </div>
+    </div>
 
       {/* Collection Modal */}
       <CollectionModal
@@ -1697,7 +1740,6 @@ export default function VendorProductAdd() {
         onClose={() => setShowCollectionModal(false)}
         onCollectionCreated={handleCollectionCreated}
       />
-      </div>
     </div>
   );
 }
