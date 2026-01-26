@@ -16,6 +16,7 @@ const ProductDetail = lazy(() => import('../pages/products/ProductDetail'));
 const ProductList = lazy(() => import('../pages/products/ProductList'));
 const MenStorefront = lazy(() => import('../pages/products/MenStorefront'));
 const WomenStorefront = lazy(() => import('../pages/products/WomenStorefront'));
+const ShopEditsStorefront = lazy(() => import('../pages/products/ShopEditsStorefront'));
 const NewArrivals = lazy(() => import('../pages/products/NewArrivals'));
 const PerfumesStorefront = lazy(() => import('../pages/products/PerfumesStorefront'));
 const BagsWalletsStorefront = lazy(() => import('../pages/products/BagsWalletsStorefront'));
@@ -157,6 +158,16 @@ const router = createBrowserRouter([
       <ErrorBoundary>
         <Suspense fallback={<Loading fullScreen message="Loading menswear..." />}>
           <MenStorefront />
+        </Suspense>
+      </ErrorBoundary>
+    ),
+  },
+  {
+    path: ROUTES.SHOP_EDITS,
+    element: (
+      <ErrorBoundary>
+        <Suspense fallback={<Loading fullScreen message="Loading shop edits..." />}>
+          <ShopEditsStorefront />
         </Suspense>
       </ErrorBoundary>
     ),

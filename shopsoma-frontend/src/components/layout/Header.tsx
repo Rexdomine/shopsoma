@@ -194,7 +194,7 @@ export default function Header() {
           <div className="main-nav header-nav-text w-full mx-auto px-8 py-2 flex items-center justify-center gap-8 text-primary">
             <Link to={ROUTES.MEN} className="hover:text-primary-dark">Men</Link>
             <Link to={ROUTES.WOMEN} className="hover:text-primary-dark">Women</Link>
-            <span className="cursor-default">Shop Edits</span>
+            <Link to={ROUTES.SHOP_EDITS} className="hover:text-primary-dark">Shop Edits</Link>
           </div>
         </nav>
 
@@ -207,7 +207,9 @@ export default function Header() {
               <Link to={ROUTES.WOMEN} className="block" onClick={() => setMobileMenuOpen(false)}>
                 Women
               </Link>
-              <span className="block cursor-default">Shop Edits</span>
+              <Link to={ROUTES.SHOP_EDITS} className="block" onClick={() => setMobileMenuOpen(false)}>
+                Shop Edits
+              </Link>
             </div>
           </div>
         )}
