@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
-import { ArrowLeft, ArrowRight, ChevronDown, Search, X } from 'lucide-react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { ArrowLeft, ArrowRight, ChevronDown, X } from 'lucide-react';
 import Layout from '../../components/layout/Layout';
 import Loading from '../../components/common/Loading';
-import type { Product } from '../../types';
+import type { Category, Product } from '../../types';
 import { productService, type ProductListParams } from '../../services/productService';
-import { MEN_HERO_IMAGE_URL, WOMEN_HERO_IMAGE_URL } from '../../config/constants';
+import { categoryService } from '../../services/categoryService';
+import { MEN_HERO_IMAGE_URL, ROUTES, WOMEN_HERO_IMAGE_URL } from '../../config/constants';
 import ProductCard from '../../components/products/ProductCard';
 import VendorShowcaseCard from '../../components/products/VendorShowcaseCard';
 import { useWishlistActions } from '../../hooks/useWishlistActions';
@@ -85,6 +86,8 @@ type ProductListProps = {
   presetCategory?: string;
   initialParams?: ProductListParams;
   heroOverride?: HeroContent;
+  categoryNav?: Category[];
+  childCategoryOverrides?: Record<string, Category[]>;
 };
 
 const DEFAULT_HERO: HeroContent = {
@@ -115,6 +118,8 @@ export default function ProductList({
   presetCategory,
   initialParams,
   heroOverride,
+  categoryNav,
+  childCategoryOverrides,
 }: ProductListProps = {}) {
   const [searchParams] = useSearchParams();
   const searchQuery = searchParams.get('q') || '';
@@ -130,6 +135,7 @@ export default function ProductList({
     color: 'All',
     price: 'all',
   });
+  const navigate = useNavigate();
   const preferredInterest = usePreferenceStore((state) => state.interest);
   const [curatedFilterApplied, setCuratedFilterApplied] = useState(false);
   const [showInterestBanner, setShowInterestBanner] = useState<boolean>(() => {
@@ -141,7 +147,8 @@ export default function ProductList({
   const [customPriceInputs, setCustomPriceInputs] = useState({ min: '', max: '' });
   const [customPriceRange, setCustomPriceRange] = useState<{ min?: number; max?: number } | null>(null);
   const { favorites, toggleFavorite } = useWishlistActions();
-  const activeCategory = presetCategory || filters.category;
+  const activeCategory = filters.category;
+  const showSubcategoryNav = Boolean(categoryNav?.length) && Boolean(presetCategory);
   const initialParamsKey = useMemo(() => JSON.stringify(initialParams ?? {}), [initialParams]);
   const stableInitialParams = useMemo(() => {
     if (!initialParams) return undefined;
@@ -176,10 +183,36 @@ export default function ProductList({
     return description.startsWith(`${normalize(category)} -`);
   };
 
+  const navigateToCategory = (categoryName: string) => {
+    const params = new URLSearchParams();
+    params.set('category', categoryName);
+    navigate(`${ROUTES.PRODUCTS}?${params.toString()}`);
+  };
+
   useEffect(() => {
     const loadProducts = async () => {
+      const cacheKey = `shopsoma_products_${initialParamsKey || 'all'}`;
+      const cacheRaw = sessionStorage.getItem(cacheKey);
+      let hasCachedData = false;
+
+      if (cacheRaw) {
+        try {
+          const cached = JSON.parse(cacheRaw) as { products: Product[]; timestamp: number };
+          if (cached?.products?.length) {
+            setAllProducts(cached.products);
+            setLoading(false);
+            setError(null);
+            hasCachedData = true;
+          }
+        } catch {
+          sessionStorage.removeItem(cacheKey);
+        }
+      }
+
       try {
-        setLoading(true);
+        if (!hasCachedData) {
+          setLoading(true);
+        }
         setPage(1);
         const response = await productService.getProducts({
           page: 1,
@@ -189,12 +222,22 @@ export default function ProductList({
           ...stableInitialParams,
         });
         setAllProducts(response.products || []);
+        sessionStorage.setItem(
+          cacheKey,
+          JSON.stringify({ products: response.products || [], timestamp: Date.now() })
+        );
         setError(null);
       } catch (err) {
-        console.error('Failed to load products', err);
-        setError('We could not load the current collection. Please refresh.');
+        if (!hasCachedData) {
+          console.error('Failed to load products', err);
+        }
+        if (!hasCachedData) {
+          setError('We could not load the current collection. Please refresh.');
+        }
       } finally {
-        setLoading(false);
+        if (!hasCachedData) {
+          setLoading(false);
+        }
       }
     };
 
@@ -242,13 +285,138 @@ export default function ProductList({
 
   const filterMenuRef = useRef<HTMLDivElement>(null);
 
-  const categories = useMemo(() => {
+  const navItems = useMemo(() => {
+    if (categoryNav?.length) {
+      return [...categoryNav]
+        .filter((category) => category.is_active && category.name)
+        .sort((a, b) => a.display_order - b.display_order)
+        .map((category) => ({ id: category.id, name: category.name }));
+    }
+
     const unique = new Set<string>();
     allProducts.forEach((product) => {
       if (product.category_name) unique.add(product.category_name);
     });
-    return ['All', ...Array.from(unique)];
-  }, [allProducts]);
+    return Array.from(unique).map((name) => ({ id: name, name }));
+  }, [allProducts, categoryNav]);
+
+  const categories = useMemo(
+    () => ['All', ...navItems.map((item) => item.name)],
+    [navItems]
+  );
+
+  const [hoveredNavId, setHoveredNavId] = useState<string | null>(null);
+  const [navHasScrolled, setNavHasScrolled] = useState(false);
+  const [navIsOverflowing, setNavIsOverflowing] = useState(false);
+  const navHoverRef = useRef<HTMLDivElement | null>(null);
+  const hoverPanelRef = useRef<HTMLDivElement | null>(null);
+  const navScrollRef = useRef<HTMLDivElement | null>(null);
+  const [childCategoryMap, setChildCategoryMap] = useState<Record<string, Category[]>>({});
+  const [featuredHoverProduct, setFeaturedHoverProduct] = useState<Product | null>(null);
+  const hoverCloseRef = useRef<number | null>(null);
+
+  const hoveredNavItem = useMemo(
+    () => navItems.find((item) => item.id === hoveredNavId) || null,
+    [navItems, hoveredNavId]
+  );
+
+  const hoveredChildCategories = useMemo(() => {
+    if (!hoveredNavId) return [];
+    const override = childCategoryOverrides?.[hoveredNavId];
+    if (override?.length) return override;
+    return childCategoryMap[hoveredNavId] || [];
+  }, [hoveredNavId, childCategoryOverrides, childCategoryMap]);
+  const hoveredChildColumns = useMemo(() => {
+    if (!hoveredChildCategories.length) return [];
+    const columns = 3;
+    const perColumn = Math.ceil(hoveredChildCategories.length / columns);
+    return Array.from({ length: columns }, (_, index) =>
+      hoveredChildCategories.slice(index * perColumn, index * perColumn + perColumn)
+    ).filter((group) => group.length);
+  }, [hoveredChildCategories]);
+
+  useEffect(() => {
+    if (!hoveredNavId || childCategoryMap[hoveredNavId] || childCategoryOverrides?.[hoveredNavId]) return;
+
+    const loadChildren = async () => {
+      try {
+        const children = await categoryService.getSubcategories(hoveredNavId);
+        setChildCategoryMap((prev) => ({ ...prev, [hoveredNavId]: children }));
+      } catch (error) {
+        console.error('Failed to load child categories for nav', error);
+      }
+    };
+
+    loadChildren();
+  }, [hoveredNavId, childCategoryMap]);
+
+  useEffect(() => {
+    if (!hoveredNavItem) {
+      setFeaturedHoverProduct(null);
+      return;
+    }
+
+    const childNames = hoveredChildCategories.map((category) => normalize(category.name));
+    const targetName = normalize(hoveredNavItem.name);
+    const candidates = allProducts.filter((product) => {
+      const productCategory = normalize(product.category_name || '');
+      const parentCategory = normalize(product.category_parent_name || '');
+      if (childNames.length && childNames.includes(productCategory)) return true;
+      return productCategory === targetName || parentCategory === targetName;
+    });
+
+    const pool = candidates.length ? candidates : allProducts;
+    if (!pool.length) {
+      setFeaturedHoverProduct(null);
+      return;
+    }
+    const randomIndex = Math.floor(Math.random() * pool.length);
+    setFeaturedHoverProduct(pool[randomIndex]);
+  }, [hoveredNavItem, hoveredChildCategories, allProducts]);
+
+  const handleNavEnter = (categoryId: string) => {
+    if (hoverCloseRef.current) {
+      window.clearTimeout(hoverCloseRef.current);
+      hoverCloseRef.current = null;
+    }
+    setHoveredNavId(categoryId);
+  };
+
+  const handleNavLeave = () => {
+    hoverCloseRef.current = window.setTimeout(() => {
+      setHoveredNavId(null);
+    }, 120);
+  };
+
+  useEffect(() => {
+    if (!hoveredNavId) return undefined;
+
+    const handleOutsideClick = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (navHoverRef.current?.contains(target)) return;
+      if (hoverPanelRef.current?.contains(target)) return;
+      setHoveredNavId(null);
+    };
+
+    document.addEventListener('mousedown', handleOutsideClick);
+    return () => {
+      document.removeEventListener('mousedown', handleOutsideClick);
+    };
+  }, [hoveredNavId]);
+
+  useEffect(() => {
+    const updateOverflowState = () => {
+      if (!navScrollRef.current) return;
+      const { scrollWidth, clientWidth } = navScrollRef.current;
+      setNavIsOverflowing(scrollWidth > clientWidth + 4);
+    };
+
+    updateOverflowState();
+    window.addEventListener('resize', updateOverflowState);
+    return () => {
+      window.removeEventListener('resize', updateOverflowState);
+    };
+  }, [navItems.length, showSubcategoryNav]);
 
   // Get products filtered by search and category (but not color/price) for building filter options
   const searchAndCategoryFilteredProducts = useMemo(() => {
@@ -586,7 +754,7 @@ const handleFilterChange = (key: keyof FilterState, value: string) => {
       {/* Filter Bar + Search Row */}
       <section className="bg-[var(--color-page-bg)] border-b border-gray-200">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-          <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4">
+          <div className="flex items-center gap-6">
             {/* Left side: Tabs */}
             <div className="flex items-center gap-6">
               <button
@@ -603,26 +771,143 @@ const handleFilterChange = (key: keyof FilterState, value: string) => {
               </button>
             </div>
 
-            {/* Right side: Search + Refine */}
-            <div className="flex items-center gap-4 w-full lg:w-auto">
-              <div className="relative flex-1 lg:flex-initial lg:w-64">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                <input
-                  type="text"
-                  placeholder="Search"
-                  className="w-full pl-10 pr-4 py-2 border border-gray-300 text-sm font-ui focus:outline-none focus:border-primary transition"
-                  defaultValue={searchQuery}
-                />
-              </div>
-              <button
-                type="button"
-                onClick={() => setFilterMenuOpen(true)}
-                className="px-6 py-2 border border-gray-300 text-xs font-ui uppercase tracking-[0.2em] text-dark hover:border-primary hover:text-primary transition whitespace-nowrap"
+            {showSubcategoryNav ? (
+              <div
+                ref={navHoverRef}
+                className="flex items-center gap-6 flex-1"
+                onMouseLeave={handleNavLeave}
               >
-                REFINE
-              </button>
-            </div>
+                <div className="relative max-w-full lg:max-w-[760px] lg:mx-auto">
+                  <div className="pointer-events-none absolute -left-3 top-1/2 h-8 w-10 -translate-y-1/2 bg-gradient-to-r from-[var(--color-page-bg)] via-[var(--color-page-bg)]/80 to-transparent" />
+                  <div className="pointer-events-none absolute -right-3 top-1/2 h-8 w-10 -translate-y-1/2 bg-gradient-to-l from-[var(--color-page-bg)] via-[var(--color-page-bg)]/80 to-transparent" />
+                  {navIsOverflowing && (
+                    <div
+                      className={`pointer-events-none absolute -right-6 top-1/2 -translate-y-1/2 hidden lg:flex items-center gap-2 rounded-full border border-primary/30 bg-white/80 px-3 py-1 text-[10px] font-ui uppercase tracking-[0.3em] text-primary shadow-[0_6px_16px_rgba(16,94,83,0.18)] transition-all duration-500 ${
+                        navHasScrolled ? 'opacity-0 translate-y-1' : 'opacity-100 translate-y-0'
+                      }`}
+                    >
+                      <span className="block h-1 w-6 rounded-full bg-primary/70" />
+                      Scroll
+                    </div>
+                  )}
+                  <div
+                    className="flex items-center gap-6 overflow-x-auto whitespace-nowrap pb-1 pr-16"
+                    ref={navScrollRef}
+                    onScroll={() => setNavHasScrolled(true)}
+                  >
+                    {navItems.map((item) => (
+                      <button
+                        key={item.id}
+                        type="button"
+                        onMouseEnter={() => handleNavEnter(item.id)}
+                        onFocus={() => handleNavEnter(item.id)}
+                        onClick={() => handleFilterChange('category', item.name)}
+                        className={`text-[11px] font-ui uppercase tracking-[0.25em] pb-1.5 border-b-2 transition ${
+                          activeCategory === item.name
+                            ? 'text-dark border-primary'
+                            : 'text-gray-500 border-transparent hover:text-dark hover:border-gray-300'
+                        }`}
+                      >
+                        {item.name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setFilterMenuOpen(true)}
+                  className="ml-auto px-6 py-2 border border-gray-300 text-xs font-ui uppercase tracking-[0.2em] text-dark hover:border-primary hover:text-primary transition whitespace-nowrap"
+                >
+                  REFINE
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center ml-auto">
+                <button
+                  type="button"
+                  onClick={() => setFilterMenuOpen(true)}
+                  className="px-6 py-2 border border-gray-300 text-xs font-ui uppercase tracking-[0.2em] text-dark hover:border-primary hover:text-primary transition whitespace-nowrap"
+                >
+                  REFINE
+                </button>
+              </div>
+            )}
           </div>
+
+          {showSubcategoryNav && hoveredNavItem && (
+            <div
+              ref={hoverPanelRef}
+              className="mt-4 border-t border-white/50 bg-white/55 backdrop-blur-2xl shadow-[0_20px_70px_rgba(15,23,42,0.14)]"
+              onMouseEnter={() => handleNavEnter(hoveredNavItem.id)}
+            >
+              <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,2.4fr)_minmax(0,0.9fr)] gap-8 px-6 py-6">
+                <div>
+                  <div className="flex items-center justify-between mb-4">
+                    <p className="text-[11px] font-ui uppercase tracking-[0.35em] text-gray-400">
+                      {hoveredNavItem.name}
+                    </p>
+                  </div>
+                  {hoveredChildColumns.length ? (
+                    <div className="grid grid-cols-1 sm:grid-cols-4 gap-5">
+                      {hoveredChildColumns.map((column, columnIndex) => (
+                        <div
+                          key={`column-${columnIndex}`}
+                          className={columnIndex === 0 ? '' : 'border-l border-gray-100 pl-6'}
+                        >
+                          <div className="flex flex-col gap-2.5">
+                            {column.map((child) => (
+                              <button
+                                key={child.id}
+                                type="button"
+                                onClick={() => navigateToCategory(child.name)}
+                                className="text-left text-sm text-gray-700 hover:text-dark transition"
+                              >
+                                {child.name}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-sm text-gray-500">No child categories yet.</p>
+                  )}
+                </div>
+
+                <div className="bg-transparent">
+                  {featuredHoverProduct ? (
+                    <>
+                      <div className="aspect-[4/5] bg-gray-100 overflow-hidden mb-3">
+                        {featuredHoverProduct.images?.[0]?.image_url ? (
+                          <img
+                            src={featuredHoverProduct.images[0].image_url}
+                            alt={featuredHoverProduct.title}
+                            className="w-full h-full object-cover"
+                          />
+                        ) : null}
+                      </div>
+                      <p className="text-xs font-ui uppercase tracking-[0.3em] text-gray-400 mb-2">
+                        Spotlight
+                      </p>
+                      <h3 className="text-sm font-semibold text-dark mb-3 line-clamp-2">
+                        {featuredHoverProduct.title}
+                      </h3>
+                      <button
+                        type="button"
+                        className="inline-flex items-center gap-2 text-xs font-ui uppercase tracking-[0.25em] text-primary border-b border-primary/40 hover:text-dark hover:border-dark transition"
+                      >
+                        Shop now
+                      </button>
+                    </>
+                  ) : (
+                    <div className="flex items-center justify-center text-sm text-gray-500 h-full">
+                      Featured product coming soon.
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </section>
 
