@@ -46,7 +46,7 @@ export default function ShopEditsStorefront() {
         let shopEditsCategory = categories.find((category) => matchesShopEdits(category));
         if (!shopEditsCategory) {
           const allCategories = await categoryService.getAllCategories();
-          shopEditsCategory = allCategories.find((category) => matchesShopEdits(category)) || null;
+          shopEditsCategory = allCategories.find((category) => matchesShopEdits(category));
         }
         setShopEditsCategoryId(shopEditsCategory?.id ?? null);
         sessionStorage.setItem(
