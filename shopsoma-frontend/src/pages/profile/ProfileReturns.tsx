@@ -6,7 +6,7 @@ import { ROUTES } from '../../config/constants';
 import ProfileMenu from './ProfileMenu';
 import { useAuthStore } from '../../store/authStore';
 import { userService } from '../../services/userService';
-import type { Order } from '../../types';
+import type { Order as UserOrder } from '../../services/userService';
 import type { ReturnRequest } from '../../services/userService';
 
 type ViewMode = 'list' | 'empty' | 'formStep1' | 'formStep2';
@@ -21,7 +21,7 @@ export default function ProfileReturns() {
   const [toastMessage, setToastMessage] = useState('Return submitted successfully');
   const [toastTone, setToastTone] = useState<'success' | 'error'>('success');
   const { user, setUser } = useAuthStore();
-  const [orders, setOrders] = useState<Order[]>([]);
+  const [orders, setOrders] = useState<UserOrder[]>([]);
   const [ordersLoading, setOrdersLoading] = useState(false);
   const [selectedOrderNumber, setSelectedOrderNumber] = useState('');
   const [selectedProductId, setSelectedProductId] = useState('');
@@ -177,7 +177,9 @@ export default function ProfileReturns() {
     [orders, selectedOrderNumber]
   );
 
-  const parseOrderItems = (order: Order): Array<{ id: string; label: string; image?: string; quantity?: number; amount?: number }> => {
+  const parseOrderItems = (
+    order: UserOrder & { order_content?: string }
+  ): Array<{ id: string; label: string; image?: string; quantity?: number; amount?: number }> => {
     const orderItems = (order as any).items as Array<any> | undefined;
     if (Array.isArray(orderItems) && orderItems.length) {
       return orderItems
