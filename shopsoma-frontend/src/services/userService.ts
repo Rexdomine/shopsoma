@@ -75,6 +75,42 @@ export interface OrderItem {
   quantity: number;
   price: number;
   subtotal: number;
+  product_image_url?: string;
+}
+
+export interface ReturnRequest {
+  id: string;
+  return_number: string;
+  status: string;
+  reason: string;
+  description?: string;
+  opened?: string;
+  return_action?: string;
+  rejection_reason?: string;
+  created_at: string;
+  order_id: string;
+  order_number?: string;
+  order_date?: string;
+  product_title?: string;
+  quantity?: number;
+  amount?: number;
+  product_image_url?: string;
+}
+
+export interface ReturnCreateRequest {
+  order_id: string;
+  order_item_id: string;
+  reason: string;
+  opened?: string;
+  return_action?: string;
+  description?: string;
+}
+
+export interface ReturnUpdateRequest {
+  reason?: string;
+  opened?: string;
+  return_action?: string;
+  description?: string;
 }
 
 export const userService = {
@@ -212,6 +248,66 @@ export const userService = {
         throw new Error('Please login to view orders');
       }
       throw new Error('Failed to load orders');
+    }
+  },
+
+  // Get user returns
+  async getReturns(): Promise<ReturnRequest[]> {
+    try {
+      const response = await api.get('/users/me/returns');
+      return response.data;
+    } catch (error: any) {
+      if (error.response?.status === 401) {
+        throw new Error('Please login to view returns');
+      }
+      throw new Error('Failed to load returns');
+    }
+  },
+
+  // Get single return
+  async getReturn(returnId: string): Promise<ReturnRequest> {
+    try {
+      const response = await api.get(`/users/me/returns/${returnId}`);
+      return response.data;
+    } catch (error: any) {
+      if (error.response?.status === 404) {
+        throw new Error('Return not found');
+      } else if (error.response?.status === 401) {
+        throw new Error('Please login to view returns');
+      }
+      throw new Error('Failed to load return request');
+    }
+  },
+
+  // Update return request
+  async updateReturn(returnId: string, data: ReturnUpdateRequest): Promise<ReturnRequest> {
+    try {
+      const response = await api.patch(`/users/me/returns/${returnId}`, data);
+      return response.data;
+    } catch (error: any) {
+      if (error.response?.status === 404) {
+        throw new Error('Return not found');
+      } else if (error.response?.status === 400) {
+        throw new Error(error.response.data?.detail || 'Return request can no longer be edited');
+      } else if (error.response?.status === 401) {
+        throw new Error('Please login to edit returns');
+      }
+      throw new Error('Failed to update return request');
+    }
+  },
+
+  // Create return request
+  async createReturn(data: ReturnCreateRequest): Promise<ReturnRequest> {
+    try {
+      const response = await api.post('/users/me/returns', data);
+      return response.data;
+    } catch (error: any) {
+      if (error.response?.status === 404) {
+        throw new Error(error.response.data?.detail || 'Order not found');
+      } else if (error.response?.status === 401) {
+        throw new Error('Please login to submit a return');
+      }
+      throw new Error('Failed to submit return request');
     }
   },
 
