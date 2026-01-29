@@ -43,7 +43,8 @@ Backend:
 - PRs should include a summary, testing steps, linked issues, and screenshots for UI changes. Call out migrations or new environment variables and request code owner review.
 
 ## Git Operations
-- Use the git CLI for all git operations in this project (branches, commits, pushes, PRs, merges, reviews) instead of the GitHub MCP server.
+- Use the git CLI for all git operations in this project (branches, commits, pushes, PRs, merges, reviews) to keep the workspace clean and speed up workflows.
+- Use the GitHub MCP server only when explicitly requested.
 
 ## Configuration & Secrets
 - Use `.env` files from `.env.example` in both apps; never commit real secrets.
