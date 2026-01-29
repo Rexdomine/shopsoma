@@ -327,7 +327,13 @@ export default function ProfileReturns() {
                 {displayStatus(item.status) !== 'denied' && (
                   <button
                     type="button"
-                    onClick={() => navigate(`${ROUTES.PROFILE_RETURNS}/${item.id}/edit`)}
+                    onClick={() =>
+                      navigate(
+                        displayStatus(item.status) === 'submitted'
+                          ? `${ROUTES.PROFILE_RETURNS}/${item.id}/edit`
+                          : `${ROUTES.PROFILE_RETURNS}/${item.id}`
+                      )
+                    }
                     className="px-6 py-2 border border-gray-400 text-gray-600 text-xs uppercase tracking-[0.3em] rounded-sm hover:bg-gray-100 transition"
                   >
                     {displayStatus(item.status) === 'submitted' ? 'Edit Return Request' : 'Shipping Instructions'}
