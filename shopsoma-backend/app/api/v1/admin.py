@@ -6,6 +6,9 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, or_, delete
+from sqlalchemy.orm import selectinload
+from datetime import datetime
+from decimal import Decimal
 import asyncio
 import os
 
@@ -2237,7 +2240,11 @@ async def list_orders(
     from app.models.order import Order
 
     # Build query
-    query = select(Order, User).join(User, Order.customer_id == User.id)
+    query = (
+        select(Order, User)
+        .join(User, Order.customer_id == User.id)
+        .options(selectinload(Order.items))
+    )
 
     # Apply filters
     filters = []
@@ -2285,8 +2292,12 @@ async def list_orders(
     # Calculate pagination info
     total_pages = (total + page_size - 1) // page_size
 
-    return {
-        "items": [
+    orders_data = []
+    for order, user in orders_with_users:
+        vendor_ids = {item.vendor_id for item in order.items}
+        item_count = sum(item.quantity for item in order.items)
+
+        orders_data.append(
             {
                 "id": str(order.id),
                 "order_number": order.order_number,
@@ -2299,14 +2310,94 @@ async def list_orders(
                 "payment_status": order.payment_status,
                 "fulfillment_status": order.fulfillment_status,
                 "created_at": order.created_at.isoformat() if order.created_at else None,
-                "items_count": len(order.items),
+                "vendor_count": len(vendor_ids),
+                "item_count": item_count,
             }
-            for order, user in orders_with_users
-        ],
+        )
+
+    return {
+        "orders": orders_data,
+        "items": orders_data,
         "total": total,
         "page": page,
         "page_size": page_size,
         "total_pages": total_pages,
+    }
+
+
+@router.get("/orders/stats")
+async def get_order_statistics(
+    current_admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Get order statistics for admin dashboard
+
+    Requires admin role
+    """
+    from app.models.order import Order, PaymentStatus, FulfillmentStatus
+
+    total_query = select(
+        func.count(Order.id).label("total_orders"),
+        func.coalesce(func.sum(Order.total_amount), 0).label("total_revenue"),
+    )
+    total_result = await db.execute(total_query)
+    total_row = total_result.one()
+
+    pending_count = await db.scalar(
+        select(func.count(Order.id)).where(Order.fulfillment_status == FulfillmentStatus.ORDER_RECEIVED)
+    ) or 0
+
+    processing_count = await db.scalar(
+        select(func.count(Order.id)).where(Order.fulfillment_status == FulfillmentStatus.PREPARING_FOR_PICKUP)
+    ) or 0
+
+    shipped_count = await db.scalar(
+        select(func.count(Order.id)).where(Order.fulfillment_status == FulfillmentStatus.IN_TRANSIT)
+    ) or 0
+
+    delivered_count = await db.scalar(
+        select(func.count(Order.id)).where(Order.fulfillment_status == FulfillmentStatus.DELIVERED)
+    ) or 0
+
+    cancelled_count = await db.scalar(
+        select(func.count(Order.id)).where(Order.fulfillment_status == FulfillmentStatus.CANCELLED)
+    ) or 0
+
+    pending_payment = await db.scalar(
+        select(func.count(Order.id)).where(Order.payment_status == PaymentStatus.PENDING)
+    ) or 0
+
+    failed_payment = await db.scalar(
+        select(func.count(Order.id)).where(Order.payment_status == PaymentStatus.FAILED)
+    ) or 0
+
+    today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    today_stats = await db.execute(
+        select(
+            func.count(Order.id).label("orders_today"),
+            func.coalesce(func.sum(Order.total_amount), 0).label("revenue_today"),
+        ).where(Order.created_at >= today_start)
+    )
+    today_row = today_stats.one()
+
+    average_order_value = Decimal("0.00")
+    if total_row.total_orders > 0:
+        average_order_value = total_row.total_revenue / total_row.total_orders
+
+    return {
+        "total_orders": total_row.total_orders,
+        "total_revenue": float(total_row.total_revenue),
+        "pending_orders": pending_count,
+        "processing_orders": processing_count,
+        "shipped_orders": shipped_count,
+        "delivered_orders": delivered_count,
+        "cancelled_orders": cancelled_count,
+        "pending_payment": pending_payment,
+        "failed_payment": failed_payment,
+        "average_order_value": float(average_order_value),
+        "orders_today": today_row.orders_today,
+        "revenue_today": float(today_row.revenue_today),
     }
 
 
@@ -2322,10 +2413,13 @@ async def get_order(
     Requires admin role
     """
     from app.models.order import Order, OrderItem
+    from app.models.product import Product
 
     # Get order
     result = await db.execute(
-        select(Order, User).join(User, Order.customer_id == User.id).where(Order.id == order_id)
+        select(Order, User)
+        .join(User, Order.customer_id == User.id)
+        .where(Order.id == order_id)
     )
     order_with_user = result.first()
 
@@ -2336,7 +2430,12 @@ async def get_order(
 
     # Get order items
     items_result = await db.execute(
-        select(OrderItem).where(OrderItem.order_id == order_id)
+        select(OrderItem)
+        .where(OrderItem.order_id == order_id)
+        .options(
+            selectinload(OrderItem.vendor),
+            selectinload(OrderItem.product).selectinload(Product.images),
+        )
     )
     items = items_result.scalars().all()
 
@@ -2360,6 +2459,14 @@ async def get_order(
                 "unit_price": float(item.unit_price),
                 "subtotal": float(item.subtotal),
                 "fulfillment_status": item.fulfillment_status,
+                "product_image_url": (
+                    (
+                        (next((img for img in item.product.images if img.is_primary), None) or item.product.images[0])
+                        .image_url
+                    )
+                    if item.product and item.product.images
+                    else None
+                ),
                 "vendor": {
                     "id": str(item.vendor.id),
                     "business_name": item.vendor.business_name,

@@ -57,6 +57,8 @@ const ProfilePassword = lazy(() => import('../pages/profile/ProfilePassword'));
 const ProfileAddress = lazy(() => import('../pages/profile/ProfileAddress'));
 const ProfileOrders = lazy(() => import('../pages/profile/ProfileOrders'));
 const ProfileReturns = lazy(() => import('../pages/profile/ProfileReturns'));
+const ProfileReturnDetail = lazy(() => import('../pages/profile/ProfileReturnDetail'));
+const ProfileReturnEdit = lazy(() => import('../pages/profile/ProfileReturnEdit'));
 const ProfileWishlist = lazy(() => import('../pages/profile/ProfileWishlist'));
 const ProfileNewsletter = lazy(() => import('../pages/profile/ProfileNewsletter'));
 const ProfileManagePreference = lazy(() => import('../pages/profile/ProfileManagePreference'));
@@ -64,6 +66,8 @@ const ProfilePayments = lazy(() => import('../pages/profile/ProfilePayments'));
 const AdminUsers = lazy(() => import('../pages/admin/AdminUsers'));
 const AdminProducts = lazy(() => import('../pages/admin/AdminProducts'));
 const AdminProductDetail = lazy(() => import('../pages/admin/AdminProductDetail'));
+const AdminReturns = lazy(() => import('../pages/admin/AdminReturns'));
+const AdminReturnDetail = lazy(() => import('../pages/admin/AdminReturnDetail'));
 const AdminProductEdit = lazy(() => import('../pages/admin/AdminProductEdit'));
 const AdminVendorApplications = lazy(() => import('../pages/admin/AdminVendorApplications'));
 const AdminVendorApplicationDetail = lazy(() => import('../pages/admin/AdminVendorApplicationDetail'));
@@ -593,6 +597,26 @@ const router = createBrowserRouter([
     ),
   },
   {
+    path: ROUTES.PROFILE_RETURN_DETAIL,
+    element: (
+      <ErrorBoundary>
+        <Suspense fallback={<Loading fullScreen message="Loading..." />}>
+          <ProfileReturnDetail />
+        </Suspense>
+      </ErrorBoundary>
+    ),
+  },
+  {
+    path: ROUTES.PROFILE_RETURN_EDIT,
+    element: (
+      <ErrorBoundary>
+        <Suspense fallback={<Loading fullScreen message="Loading..." />}>
+          <ProfileReturnEdit />
+        </Suspense>
+      </ErrorBoundary>
+    ),
+  },
+  {
     path: ROUTES.PROFILE_WISHLIST,
     element: (
       <ErrorBoundary>
@@ -651,6 +675,30 @@ const router = createBrowserRouter([
         <Suspense fallback={<Loading fullScreen message="Loading products..." />}>
           <ProtectedRoute roles={['admin']}>
             <AdminProducts />
+          </ProtectedRoute>
+        </Suspense>
+      </ErrorBoundary>
+    ),
+  },
+  {
+    path: ROUTES.ADMIN_RETURNS,
+    element: (
+      <ErrorBoundary>
+        <Suspense fallback={<Loading fullScreen message="Loading returns..." />}>
+          <ProtectedRoute roles={['admin']}>
+            <AdminReturns />
+          </ProtectedRoute>
+        </Suspense>
+      </ErrorBoundary>
+    ),
+  },
+  {
+    path: ROUTES.ADMIN_RETURN_DETAIL,
+    element: (
+      <ErrorBoundary>
+        <Suspense fallback={<Loading fullScreen message="Loading return..." />}>
+          <ProtectedRoute roles={['admin']}>
+            <AdminReturnDetail />
           </ProtectedRoute>
         </Suspense>
       </ErrorBoundary>

@@ -1,6 +1,7 @@
 """Returns model"""
 from sqlalchemy import Column, String, DateTime, ForeignKey, Numeric, Text, Enum as SQLEnum
 from sqlalchemy.dialects.postgresql import UUID, JSONB
+from sqlalchemy.ext.mutable import MutableDict
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 import uuid
@@ -30,7 +31,9 @@ class Return(Base):
     # Return Details
     reason = Column(String(100), nullable=False)
     description = Column(Text, nullable=True)
+    request_details = Column(MutableDict.as_mutable(JSONB), nullable=True)
     return_images = Column(JSONB, nullable=True)  # Array of image URLs
+    order_item_id = Column(UUID(as_uuid=True), ForeignKey("order_items.id", ondelete="RESTRICT"), nullable=True, index=True)
 
     # Status
     status = Column(SQLEnum(ReturnStatus), default=ReturnStatus.REQUESTED, nullable=False, index=True)
@@ -38,6 +41,7 @@ class Return(Base):
     # Refund
     refund_amount = Column(Numeric(10, 2), nullable=True)
     refund_method = Column(String(50), nullable=True)
+    admin_notes = Column(Text, nullable=True)
 
     # Processing
     approved_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
@@ -49,6 +53,7 @@ class Return(Base):
 
     # Relationships
     order = relationship("Order", back_populates="returns")
+    order_item = relationship("OrderItem")
     customer = relationship("User", back_populates="returns", foreign_keys=[customer_id])
     approver = relationship("User", foreign_keys=[approved_by])
 
