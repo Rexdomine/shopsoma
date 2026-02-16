@@ -56,34 +56,36 @@ function HomeProductCard({
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
     >
-      <Link to={`/products/${product.id}`} className="relative aspect-[3/4] overflow-hidden bg-white block">
-        <img
-          src={isHovered ? secondaryImage : primaryImage}
-          alt={product.title}
-          className="w-full h-full object-cover transition-all duration-500"
-        />
-        <button
-          type="button"
-          onClick={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            onToggleFavorite(product.id);
-          }}
-          className="absolute top-3 right-3 p-1.5 hover:opacity-80 transition-opacity z-10"
-          aria-label="Toggle favorite"
-        >
-          <svg
-            width="20"
-            height="20"
-            viewBox="0 0 24 24"
-            fill={isFavorite ? '#ffffff' : 'none'}
-            stroke="#ffffff"
-            strokeWidth="1.5"
-            className="transition-all"
+      <div className="relative">
+        <Link to={`/products/${product.id}`} className="relative aspect-[3/4] overflow-hidden bg-white block">
+          <img
+            src={isHovered ? secondaryImage : primaryImage}
+            alt={product.title}
+            className="w-full h-full object-cover transition-all duration-500"
+          />
+          <button
+            type="button"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onToggleFavorite(product.id);
+            }}
+            className="absolute top-3 right-3 p-1.5 hover:opacity-80 transition-opacity z-10"
+            aria-label="Toggle favorite"
           >
-            <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
-          </svg>
-        </button>
+            <svg
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill={isFavorite ? '#ffffff' : 'none'}
+              stroke="#ffffff"
+              strokeWidth="1.5"
+              className="transition-all"
+            >
+              <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
+            </svg>
+          </button>
+        </Link>
 
         {/* Hover Modal */}
         {isHovered && (
@@ -134,7 +136,7 @@ function HomeProductCard({
             </div>
           </div>
         )}
-      </Link>
+      </div>
 
       <Link to={`/products/${product.id}`} className="block pt-3 space-y-1">
         <p className="text-[10px] font-ui uppercase tracking-[0.25em]" style={{ color: '#1E5053' }}>
