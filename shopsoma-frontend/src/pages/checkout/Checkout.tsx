@@ -505,7 +505,21 @@ export default function Checkout() {
     return emailRegex.test(email);
   };
 
+  const isValidNigerianPhone = (value: string): boolean => {
+    const digits = value.replace(/\D/g, '');
+    return /^(0|234)[789]\d{9}$/.test(digits);
+  };
+
   const hasEmail = email.trim().length > 3 && isValidEmail(email);
+  const isAddressComplete = Boolean(
+    newAddress.full_name.trim() &&
+    newAddress.phone_number.trim() &&
+    isValidNigerianPhone(newAddress.phone_number) &&
+    newAddress.address_line1.trim() &&
+    newAddress.city.trim() &&
+    newAddress.state.trim() &&
+    newAddress.country.trim()
+  );
   const hasSelectedAddress = !!selectedAddressId;
   const hasSelectedShipping = !!selectedShippingRateId;
   const canPurchase = step === 'payment' && hasEmail && hasSelectedAddress && hasSelectedShipping && orderReview;
@@ -740,20 +754,48 @@ export default function Checkout() {
                         <>
                           {/* Existing Addresses */}
                           {addresses.filter(addr => addr.address_type === 'shipping').map((addr) => (
-                            <button
+                            <div
                               key={addr.id}
-                              type="button"
-                              onClick={() => setSelectedAddressId(addr.id)}
-                              className={`w-full text-left border border-gray-200 px-4 py-3 rounded-sm ${
+                              className={`w-full border border-gray-200 px-4 py-3 rounded-sm flex items-start gap-4 ${
                                 selectedAddressId === addr.id ? 'bg-gray-50 border-primary' : ''
                               }`}
                             >
-                              <p className="text-sm font-semibold text-gray-800">{addr.full_name}</p>
-                              <p className="text-xs text-gray-600">
-                                {addr.address_line1}, {addr.city}, {addr.state}, {addr.country}
-                              </p>
-                              <p className="text-xs text-gray-500">{addr.phone_number}</p>
-                            </button>
+                              <button
+                                type="button"
+                                onClick={() => setSelectedAddressId(addr.id)}
+                                className="flex-1 text-left"
+                              >
+                                <p className="text-sm font-semibold text-gray-800">{addr.full_name}</p>
+                                <p className="text-xs text-gray-600">
+                                  {addr.address_line1}, {addr.city}, {addr.state}, {addr.country}
+                                </p>
+                                <p className="text-xs text-gray-500">{addr.phone_number}</p>
+                              </button>
+                              {isGuestCheckout && addr.id === 'guest-address' && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setNewAddress({
+                                      full_name: addr.full_name,
+                                      phone_number: addr.phone_number,
+                                      address_line1: addr.address_line1,
+                                      address_line2: addr.address_line2 || '',
+                                      city: addr.city,
+                                      state: addr.state,
+                                      postal_code: addr.postal_code || '',
+                                      country: addr.country,
+                                      address_type: addr.address_type,
+                                      is_default: addr.is_default,
+                                    });
+                                    setSelectedAddressId(addr.id);
+                                    setShowNewAddressForm(true);
+                                  }}
+                                  className="text-xs font-ui uppercase tracking-[0.2em] text-primary hover:text-primary-dark"
+                                >
+                                  Edit
+                                </button>
+                              )}
+                            </div>
                           ))}
 
                           {/* New Address Form */}
@@ -767,16 +809,32 @@ export default function Checkout() {
                                   value={newAddress.full_name}
                                   onChange={(e) => setNewAddress({ ...newAddress, full_name: e.target.value })}
                                   className="w-full border-b border-gray-300 focus:border-primary focus:outline-none py-2 text-sm"
+                                  required
                                 />
                               </div>
                               <div>
                                 <label className="text-xs text-gray-500">Phone</label>
-                                <input
-                                  type="tel"
-                                  value={newAddress.phone_number}
-                                  onChange={(e) => setNewAddress({ ...newAddress, phone_number: e.target.value })}
-                                  className="w-full border-b border-gray-300 focus:border-primary focus:outline-none py-2 text-sm"
-                                />
+                                <div className="flex items-center gap-2 border-b border-gray-300 focus-within:border-primary py-2">
+                                  <span className="inline-flex items-center gap-2 text-xs font-ui text-gray-500">
+                                    <span className="inline-flex h-4 w-6 overflow-hidden rounded-sm border border-gray-200">
+                                      <span className="h-full w-2 bg-[#137a3a]" />
+                                      <span className="h-full w-2 bg-white" />
+                                      <span className="h-full w-2 bg-[#137a3a]" />
+                                    </span>
+                                    +234
+                                  </span>
+                                  <input
+                                    type="tel"
+                                    value={newAddress.phone_number}
+                                    onChange={(e) => setNewAddress({ ...newAddress, phone_number: e.target.value })}
+                                    className="w-full bg-transparent focus:outline-none text-sm"
+                                    inputMode="tel"
+                                    pattern="^(0|234)[789]\\d{9}$"
+                                    title="Enter a valid Nigerian phone number (e.g. 08012345678 or 2348012345678)"
+                                    placeholder="08012345678"
+                                    required
+                                  />
+                                </div>
                               </div>
                               <div>
                                 <label className="text-xs text-gray-500">Street Address</label>
@@ -785,6 +843,7 @@ export default function Checkout() {
                                   value={newAddress.address_line1}
                                   onChange={(e) => setNewAddress({ ...newAddress, address_line1: e.target.value })}
                                   className="w-full border-b border-gray-300 focus:border-primary focus:outline-none py-2 text-sm"
+                                  required
                                 />
                               </div>
                               <div className="grid grid-cols-2 gap-4">
@@ -795,6 +854,7 @@ export default function Checkout() {
                                     value={newAddress.city}
                                     onChange={(e) => setNewAddress({ ...newAddress, city: e.target.value })}
                                     className="w-full border-b border-gray-300 focus:border-primary focus:outline-none py-2 text-sm"
+                                    required
                                   />
                                 </div>
                                 <div>
@@ -804,6 +864,7 @@ export default function Checkout() {
                                     value={newAddress.state}
                                     onChange={(e) => setNewAddress({ ...newAddress, state: e.target.value })}
                                     className="w-full border-b border-gray-300 focus:border-primary focus:outline-none py-2 text-sm"
+                                    required
                                   />
                                 </div>
                               </div>
@@ -822,7 +883,8 @@ export default function Checkout() {
                                 <button
                                   type="button"
                                   onClick={handleCreateAddress}
-                                  className="flex-1 py-2 rounded-sm bg-primary text-white text-sm font-semibold"
+                                  disabled={!isAddressComplete}
+                                  className="flex-1 py-2 rounded-sm bg-primary text-white text-sm font-semibold disabled:opacity-50"
                                 >
                                   Save Address
                                 </button>
@@ -835,7 +897,7 @@ export default function Checkout() {
                                 </button>
                               </div>
                             </div>
-                          ) : (
+                          ) : !isGuestCheckout || addresses.length === 0 ? (
                             <button
                               type="button"
                               onClick={() => setShowNewAddressForm(true)}
@@ -843,7 +905,7 @@ export default function Checkout() {
                             >
                               + Add New Address
                             </button>
-                          )}
+                          ) : null}
 
                           <div className="pt-4">
                             <button
