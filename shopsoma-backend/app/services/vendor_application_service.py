@@ -10,7 +10,7 @@ from datetime import datetime
 
 from app.models.vendor_application import VendorApplication
 from app.models.vendor import Vendor, KYCStatus
-from app.models.user import User
+from app.models.user import User, UserRole
 from app.schemas.vendor_application import VendorApplicationCreate, VendorApplicationApproval
 from app.services.vendor_otp_service import VendorOTPService
 from app.services.email_service import EmailService
@@ -122,21 +122,36 @@ class VendorApplicationService:
         if application.status == "approved":
             raise ValueError("Application already approved")
 
-        # Create User account for vendor
+        # Create or reuse User account for vendor
         from app.core.security import get_password_hash
         import secrets
 
-        temp_password = secrets.token_urlsafe(32)
-        new_user = User(
-            full_name=f"{application.first_name} {application.last_name}",
-            email=application.email,
-            phone_number=f"{application.phone_country_code}{application.phone_number}",
-            hashed_password=get_password_hash(temp_password),
-            role="vendor",
-            is_active=False  # Will be activated after OTP verification
+        existing_user_result = await db.execute(
+            select(User).where(User.email == application.email)
         )
-        db.add(new_user)
-        await db.flush()
+        existing_user = existing_user_result.scalar_one_or_none()
+
+        if existing_user and existing_user.vendor:
+            raise ValueError("A vendor with this email already exists")
+
+        if existing_user:
+            new_user = existing_user
+            new_user.full_name = f"{application.first_name} {application.last_name}"
+            new_user.phone_number = f"{application.phone_country_code}{application.phone_number}"
+            if new_user.role != UserRole.VENDOR:
+                new_user.role = UserRole.VENDOR
+        else:
+            temp_password = secrets.token_urlsafe(32)
+            new_user = User(
+                full_name=f"{application.first_name} {application.last_name}",
+                email=application.email,
+                phone_number=f"{application.phone_country_code}{application.phone_number}",
+                hashed_password=get_password_hash(temp_password),
+                role=UserRole.VENDOR,
+                is_active=False  # Will be activated after OTP verification
+            )
+            db.add(new_user)
+            await db.flush()
 
         # Create Vendor profile
         vendor = Vendor(
