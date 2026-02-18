@@ -131,8 +131,12 @@ class VendorApplicationService:
         )
         existing_user = existing_user_result.scalar_one_or_none()
 
-        if existing_user and existing_user.vendor:
-            raise ValueError("A vendor with this email already exists")
+        if existing_user:
+            existing_vendor_result = await db.execute(
+                select(Vendor).where(Vendor.user_id == existing_user.id)
+            )
+            if existing_vendor_result.scalar_one_or_none():
+                raise ValueError("A vendor with this email already exists")
 
         if existing_user:
             new_user = existing_user
