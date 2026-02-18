@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import type { PaymentGateway } from '../../services/paymentService';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import Layout from '../../components/layout/Layout';
 import { ROUTES } from '../../config/constants';
 import { checkoutService, type Address, type ShippingRate, type OrderReview, type CreateAddressData } from '../../services/checkoutService';
@@ -46,6 +46,7 @@ const stripePromise = loadStripe(import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY || 
 
 export default function Checkout() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { user, isAuthenticated } = useAuth();
   const { currency, setCurrency } = usePreferenceStore();
   const exchangeRates = useCurrencyStore((state) => state.exchangeRates);
@@ -138,6 +139,24 @@ export default function Checkout() {
       setIsGuestCheckout(true);
     }
   }, [isAuthenticated, user]);
+
+  useEffect(() => {
+    if (isAuthenticated) return;
+    const stateEmail = (location.state as any)?.guestEmail as string | undefined;
+    const storedEmail = sessionStorage.getItem('shopsoma_guest_email') || undefined;
+    const params = new URLSearchParams(location.search);
+    const hasGuestFlag = params.get('guest') === '1';
+    const prefillEmail = stateEmail || storedEmail;
+
+    if (prefillEmail) {
+      setEmail(prefillEmail);
+      setIsGuestCheckout(true);
+    }
+
+    if (hasGuestFlag) {
+      setIsGuestCheckout(true);
+    }
+  }, [isAuthenticated, location.search, location.state]);
 
   const loadAddresses = async () => {
     setIsLoadingAddresses(true);
@@ -563,6 +582,10 @@ export default function Checkout() {
     setIsEmailConfirmed(true);
     setIsEditingEmail(false);
     setStep('address');
+
+    if (isGuestCheckout) {
+      sessionStorage.setItem('shopsoma_guest_email', email.trim());
+    }
   };
 
   const handleEditEmail = () => {

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import type { Product } from '../../types';
 import { Bookmark } from 'lucide-react';
 import { IMAGE_CONFIG } from '../../config/constants';
@@ -17,6 +17,7 @@ export default function ProductCard({
   onToggleFavorite,
   isFavorite = false,
 }: ProductCardProps) {
+  const navigate = useNavigate();
   const [isHovered, setIsHovered] = useState(false);
   const [imageLoaded, setImageLoaded] = useState(false);
   const { currentCurrency, exchangeRates } = useCurrencyStore();
@@ -180,7 +181,7 @@ export default function ProductCard({
                 onClick={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
-                  // Navigate to product detail page
+                  navigate(`/products/${product.id}`);
                 }}
                 className="w-full py-2.5 bg-primary text-white text-[10px] font-serif uppercase tracking-[0.15em] hover:bg-primary-dark transition-colors"
               >
