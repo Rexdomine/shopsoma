@@ -395,6 +395,8 @@ async def request_password_reset(
             settings.PASSWORD_RESET_EXPIRE_MINUTES
         )
         reset_link = f"{settings.FRONTEND_BASE_URL}/reset-password?token={token}"
+        if getattr(user, "role", None) == "vendor":
+            reset_link = f"{reset_link}&role=vendor"
         logger.info(
             "[Password Reset] Queuing email for user_id=%s email=%s frontend=%s expires_minutes=%s email_enabled=%s api_instance=%s",
             user.id,

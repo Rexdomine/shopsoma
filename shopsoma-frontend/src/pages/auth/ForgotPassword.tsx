@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import Layout from '../../components/layout/Layout';
-import Newsletter from '../../components/home/Newsletter';
 import { ROUTES } from '../../config/constants';
 import { authService } from '../../services/authService';
 
@@ -9,6 +8,7 @@ export default function ForgotPassword() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const [email, setEmail] = useState('');
+  const role = searchParams.get('role');
   const isComplete = email.trim().length > 0;
   const [toast, setToast] = useState(false);
   const [toastMessage, setToastMessage] = useState('Reset password link sent successfully');
@@ -55,7 +55,9 @@ export default function ForgotPassword() {
       )}
       <section className="bg-white py-10 lg:py-16">
         <div className="max-w-xl mx-auto px-4 sm:px-6 lg:px-8 text-center space-y-6">
-          <h1 className="text-2xl font-display text-dark">Forgot Password</h1>
+          <h1 className="text-2xl font-display text-dark">
+            {role === 'vendor' ? 'Vendor Password Reset' : 'Forgot Password'}
+          </h1>
           <p className="text-sm text-gray-600">
             Enter your email address used in signing up on Shopsoma. We&apos;ll send you an email with a link in order to choose a new password.
           </p>
@@ -85,7 +87,6 @@ export default function ForgotPassword() {
           </form>
         </div>
       </section>
-      <Newsletter />
     </Layout>
   );
 }
