@@ -9,6 +9,7 @@ export default function ResetPassword() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const token = searchParams.get('token') || '';
+  const role = searchParams.get('role');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [toast, setToast] = useState(false);
@@ -36,7 +37,7 @@ export default function ResetPassword() {
       setToastMessage('Your password has been updated. Please sign in.');
       setToast(true);
       setTimeout(() => {
-        navigate(ROUTES.LOGIN);
+        navigate(role === 'vendor' ? ROUTES.VENDOR_LOGIN : ROUTES.LOGIN);
       }, 1200);
     } catch (error: any) {
       setToastMessage(error?.message || 'Unable to reset password. Please try again.');
@@ -110,7 +111,9 @@ export default function ResetPassword() {
             <div className="text-center text-sm text-gray-600">
               <button
                 type="button"
-                onClick={() => navigate(ROUTES.FORGOT_PASSWORD)}
+                onClick={() =>
+                  navigate(role === 'vendor' ? `${ROUTES.FORGOT_PASSWORD}?role=vendor` : ROUTES.FORGOT_PASSWORD)
+                }
                 className="text-primary hover:text-primary-dark"
               >
                 Request a new reset link

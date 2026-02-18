@@ -106,6 +106,7 @@ export default function AddToBagModal({
             </button>
             <Link
               to={ROUTES.CART}
+              onClick={onClose}
               className="flex-1 py-2.5 text-sm font-semibold text-white text-center bg-primary hover:bg-primary-dark transition border border-primary"
             >
               Go to Bag
@@ -121,7 +122,7 @@ export default function AddToBagModal({
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               {recommendations.slice(0, 3).map((item) => (
-                <div key={item.id} onClick={onClose}>
+                <div key={item.id} onClickCapture={onClose}>
                   <ProductCard product={item} />
                 </div>
               ))}

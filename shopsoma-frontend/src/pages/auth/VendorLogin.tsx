@@ -142,7 +142,7 @@ export default function VendorLogin() {
                   </div>
 
                   <div className="flex items-center justify-between text-xs font-[var(--font-ui)] text-[#105E53]">
-                    <Link to={ROUTES.FORGOT_PASSWORD} className="hover:text-[#0c4c45] font-[var(--font-ui)]">
+                    <Link to={`${ROUTES.FORGOT_PASSWORD}?role=vendor`} className="hover:text-[#0c4c45] font-[var(--font-ui)]">
                       Forgot Password?
                     </Link>
                     <a href="mailto:support@shopsoma.com" className="hover:text-[#0c4c45] font-[var(--font-ui)]">
