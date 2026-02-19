@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, Check, X, Eye, AlertCircle, CheckCircle, Clock, FileText } from 'lucide-react';
+import { Search, Check, X, Eye, AlertCircle, CheckCircle, Clock, FileText, Mail } from 'lucide-react';
 import AdminSidebar from '../../components/admin/AdminSidebar';
 import { adminService, type VendorApplication } from '../../services/adminService';
 
@@ -78,9 +78,41 @@ export default function AdminVendorApplications() {
     }
   };
 
+  const handleResendActivation = async (application: VendorApplication) => {
+    if (!confirm(`Resend activation email to ${application.email}?`)) {
+      return;
+    }
+
+    try {
+      setActionLoading(application.id);
+      const response = await adminService.resendVendorActivation(application.id);
+      showMessage('success', `Activation email sent to ${response.email}`);
+      loadApplications();
+    } catch (error: any) {
+      console.error('Failed to resend activation email:', error);
+      const errorMessage = error?.response?.data?.detail || error?.message || 'Failed to resend activation email';
+      showMessage('error', errorMessage);
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
   const showMessage = (type: 'success' | 'error', text: string) => {
     setMessage({ type, text });
     setTimeout(() => setMessage(null), 5000);
+  };
+
+  const isVendorSetupComplete = (app: VendorApplication) => {
+    return Boolean(
+      app.vendor_user_is_active &&
+      app.vendor_is_onboarding === false &&
+      app.vendor_brand_info_completed &&
+      app.vendor_payout_info_completed
+    );
+  };
+
+  const canResendActivation = (app: VendorApplication) => {
+    return app.status === 'approved' && !isVendorSetupComplete(app);
   };
 
   const getStatusBadge = (status: string) => {
@@ -285,6 +317,17 @@ export default function AdminVendorApplications() {
                                 <X className="w-4 h-4" />
                               </button>
                             </>
+                          )}
+
+                          {canResendActivation(app) && (
+                            <button
+                              onClick={() => handleResendActivation(app)}
+                              disabled={actionLoading === app.id}
+                              className="p-2 text-[#105E53] hover:text-[#0c4c45] hover:bg-[#eef5f4] rounded-lg transition disabled:opacity-50"
+                              title="Resend activation email"
+                            >
+                              <Mail className="w-4 h-4" />
+                            </button>
                           )}
                         </div>
                       </td>

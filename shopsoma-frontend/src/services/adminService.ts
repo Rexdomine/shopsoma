@@ -81,6 +81,11 @@ export interface VendorApplication {
   status: string;
   admin_notes?: string;
   vendor_id?: string;
+  vendor_user_id?: string;
+  vendor_user_is_active?: boolean;
+  vendor_is_onboarding?: boolean;
+  vendor_brand_info_completed?: boolean;
+  vendor_payout_info_completed?: boolean;
   created_at: string;
   reviewed_at?: string;
 }
@@ -215,6 +220,11 @@ export const adminService = {
   // Update application notes
   async updateApplicationNotes(applicationId: string, notes: string): Promise<void> {
     await api.put(`/admin/vendor-applications/${applicationId}/notes?admin_notes=${encodeURIComponent(notes)}`);
+  },
+
+  async resendVendorActivation(applicationId: string): Promise<{ message: string; email: string }> {
+    const response = await api.post(`/admin/vendor-applications/${applicationId}/resend-activation`);
+    return response.data;
   },
 
   // Approve vendor application (uses the existing endpoint from vendor_applications.py)

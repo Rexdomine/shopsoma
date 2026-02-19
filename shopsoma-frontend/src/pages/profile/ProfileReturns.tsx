@@ -457,7 +457,6 @@ function getReturnStatusStyles(status: string): string {
       return 'bg-emerald-50 text-emerald-700 border border-emerald-200';
     case 'rejected':
     case 'denied':
-    case 'denied':
       return 'bg-red-50 text-red-700 border border-red-200';
     default:
       return 'bg-gray-100 text-gray-600 border border-gray-200';
