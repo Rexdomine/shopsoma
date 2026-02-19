@@ -970,6 +970,20 @@ async def list_vendor_applications(
     
     result = await db.execute(query)
     applications = result.scalars().all()
+
+    vendor_by_id = {}
+    if applications:
+        vendor_ids = [app.vendor_id for app in applications if app.vendor_id]
+        if vendor_ids:
+            vendor_result = await db.execute(
+                select(Vendor, User)
+                .join(User, Vendor.user_id == User.id)
+                .where(Vendor.id.in_(vendor_ids))
+            )
+            vendor_by_id = {
+                str(vendor.id): (vendor, user)
+                for vendor, user in vendor_result.all()
+            }
     
     # Calculate pagination info
     total_pages = (total + page_size - 1) // page_size
@@ -996,6 +1010,31 @@ async def list_vendor_applications(
                 "vendor_id": str(app.vendor_id) if app.vendor_id else None,
                 "created_at": app.created_at.isoformat() if app.created_at else None,
                 "reviewed_at": app.reviewed_at.isoformat() if app.reviewed_at else None,
+                "vendor_user_id": (
+                    str(vendor_by_id[str(app.vendor_id)][1].id)
+                    if app.vendor_id and str(app.vendor_id) in vendor_by_id
+                    else None
+                ),
+                "vendor_user_is_active": (
+                    vendor_by_id[str(app.vendor_id)][1].is_active
+                    if app.vendor_id and str(app.vendor_id) in vendor_by_id
+                    else None
+                ),
+                "vendor_is_onboarding": (
+                    vendor_by_id[str(app.vendor_id)][0].is_onboarding
+                    if app.vendor_id and str(app.vendor_id) in vendor_by_id
+                    else None
+                ),
+                "vendor_brand_info_completed": (
+                    vendor_by_id[str(app.vendor_id)][0].brand_info_completed
+                    if app.vendor_id and str(app.vendor_id) in vendor_by_id
+                    else None
+                ),
+                "vendor_payout_info_completed": (
+                    vendor_by_id[str(app.vendor_id)][0].payout_info_completed
+                    if app.vendor_id and str(app.vendor_id) in vendor_by_id
+                    else None
+                ),
             }
             for app in applications
         ],
@@ -1025,6 +1064,18 @@ async def get_vendor_application(
     if not application:
         raise HTTPException(status_code=404, detail="Application not found")
     
+    vendor_user = None
+    vendor = None
+    if application.vendor_id:
+        vendor_result = await db.execute(
+            select(Vendor, User)
+            .join(User, Vendor.user_id == User.id)
+            .where(Vendor.id == application.vendor_id)
+        )
+        vendor_row = vendor_result.first()
+        if vendor_row:
+            vendor, vendor_user = vendor_row
+
     return {
         "id": str(application.id),
         "first_name": application.first_name,
@@ -1046,6 +1097,11 @@ async def get_vendor_application(
         "reviewed_by": str(application.reviewed_by) if application.reviewed_by else None,
         "reviewed_at": application.reviewed_at.isoformat() if application.reviewed_at else None,
         "vendor_id": str(application.vendor_id) if application.vendor_id else None,
+        "vendor_user_id": str(vendor_user.id) if vendor_user else None,
+        "vendor_user_is_active": vendor_user.is_active if vendor_user else None,
+        "vendor_is_onboarding": vendor.is_onboarding if vendor else None,
+        "vendor_brand_info_completed": vendor.brand_info_completed if vendor else None,
+        "vendor_payout_info_completed": vendor.payout_info_completed if vendor else None,
         "created_at": application.created_at.isoformat() if application.created_at else None,
         "updated_at": application.updated_at.isoformat() if application.updated_at else None,
     }
@@ -1080,6 +1136,60 @@ async def update_application_notes(
         "message": "Notes updated successfully",
         "application_id": str(application.id),
         "admin_notes": application.admin_notes
+    }
+
+
+@router.post("/vendor-applications/{application_id}/resend-activation")
+async def resend_vendor_activation(
+    application_id: UUID,
+    current_admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Resend vendor activation email for approved applications
+
+    Requires admin role
+    """
+    from app.services.vendor_otp_service import VendorOTPService
+
+    application_result = await db.execute(
+        select(VendorApplication).where(VendorApplication.id == application_id)
+    )
+    application = application_result.scalar_one_or_none()
+
+    if not application:
+        raise HTTPException(status_code=404, detail="Application not found")
+
+    if application.status != "approved":
+        raise HTTPException(status_code=400, detail="Activation can only be resent for approved applications")
+
+    if not application.vendor_id:
+        raise HTTPException(status_code=400, detail="Approved application is missing vendor record")
+
+    vendor_result = await db.execute(
+        select(Vendor, User)
+        .join(User, Vendor.user_id == User.id)
+        .where(Vendor.id == application.vendor_id)
+    )
+    vendor_row = vendor_result.first()
+
+    if not vendor_row:
+        raise HTTPException(status_code=404, detail="Vendor record not found for this application")
+
+    vendor, vendor_user = vendor_row
+
+    if vendor_user.is_active:
+        raise HTTPException(status_code=400, detail="Vendor account is already activated")
+
+    await VendorOTPService.create_and_send_otp(
+        db=db,
+        vendor_id=vendor.id,
+        email=vendor_user.email
+    )
+
+    return {
+        "message": "Activation email resent successfully",
+        "email": vendor_user.email
     }
 
 
