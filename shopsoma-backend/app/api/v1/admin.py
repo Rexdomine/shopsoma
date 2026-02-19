@@ -1178,15 +1178,8 @@ async def resend_vendor_activation(
 
     vendor, vendor_user = vendor_row
 
-    setup_complete = (
-        vendor_user.is_active
-        and not vendor.is_onboarding
-        and vendor.brand_info_completed
-        and vendor.payout_info_completed
-    )
-
-    if setup_complete:
-        raise HTTPException(status_code=400, detail="Vendor account is already active and fully onboarded")
+    if vendor_user.is_active:
+        raise HTTPException(status_code=400, detail="Vendor account is already activated")
 
     await VendorOTPService.create_and_send_otp(
         db=db,

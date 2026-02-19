@@ -102,17 +102,8 @@ export default function AdminVendorApplications() {
     setTimeout(() => setMessage(null), 5000);
   };
 
-  const isVendorSetupComplete = (app: VendorApplication) => {
-    return Boolean(
-      app.vendor_user_is_active &&
-      app.vendor_is_onboarding === false &&
-      app.vendor_brand_info_completed &&
-      app.vendor_payout_info_completed
-    );
-  };
-
   const canResendActivation = (app: VendorApplication) => {
-    return app.status === 'approved' && !isVendorSetupComplete(app);
+    return app.status === 'approved' && app.vendor_user_is_active === false;
   };
 
   const getStatusBadge = (status: string) => {
