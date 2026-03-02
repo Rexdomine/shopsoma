@@ -82,7 +82,10 @@ export default function AdminVendorApplicationDetail() {
     try {
       setActionLoading(true);
       const response = await adminService.resendVendorActivation(application.id);
-      showMessage('success', `Activation email sent to ${response.email}`);
+      const setupSuffix = response.account_already_setup
+        ? ' This account is already set up, so the invite link will direct them to reset password/contact admin guidance.'
+        : '';
+      showMessage('success', `Activation email sent to ${response.email}.${setupSuffix}`);
       await loadApplication();
     } catch (error: any) {
       console.error('Failed to resend activation email:', error);
@@ -120,7 +123,7 @@ export default function AdminVendorApplicationDetail() {
   };
 
   const canResendActivation = (app: VendorApplication) => {
-    return app.status === 'approved' && app.vendor_user_is_active === false;
+    return app.status === 'approved';
   };
 
   const getStatusBadge = (status: string) => {

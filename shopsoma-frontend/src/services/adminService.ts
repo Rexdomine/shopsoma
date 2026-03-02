@@ -222,7 +222,9 @@ export const adminService = {
     await api.put(`/admin/vendor-applications/${applicationId}/notes?admin_notes=${encodeURIComponent(notes)}`);
   },
 
-  async resendVendorActivation(applicationId: string): Promise<{ message: string; email: string }> {
+  async resendVendorActivation(
+    applicationId: string
+  ): Promise<{ message: string; email: string; account_already_setup?: boolean }> {
     const response = await api.post(`/admin/vendor-applications/${applicationId}/resend-activation`);
     return response.data;
   },

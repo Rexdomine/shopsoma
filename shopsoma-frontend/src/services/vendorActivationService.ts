@@ -6,8 +6,11 @@ export interface InitiateActivationRequest {
 
 export interface InitiateActivationResponse {
   message: string;
-  masked_email: string;
-  token: string;
+  masked_email?: string;
+  token?: string;
+  account_already_setup?: boolean;
+  reset_password_url?: string;
+  support_email?: string;
 }
 
 export interface VerifyOTPRequest {
