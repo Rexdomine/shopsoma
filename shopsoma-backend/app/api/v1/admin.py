@@ -1178,9 +1178,6 @@ async def resend_vendor_activation(
 
     vendor, vendor_user = vendor_row
 
-    if vendor_user.is_active:
-        raise HTTPException(status_code=400, detail="Vendor account is already activated")
-
     await VendorOTPService.create_and_send_otp(
         db=db,
         vendor_id=vendor.id,
@@ -1189,7 +1186,8 @@ async def resend_vendor_activation(
 
     return {
         "message": "Activation email resent successfully",
-        "email": vendor_user.email
+        "email": vendor_user.email,
+        "account_already_setup": vendor_user.is_active
     }
 
 

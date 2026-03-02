@@ -24,8 +24,11 @@ class InitiateActivationRequest(BaseModel):
 class InitiateActivationResponse(BaseModel):
     """Response after initiating activation"""
     message: str
-    masked_email: str
-    token: str  # Temporary token to identify the vendor during OTP verification
+    masked_email: Optional[str] = None
+    token: Optional[str] = None  # Temporary token to identify the vendor during OTP verification
+    account_already_setup: bool = False
+    reset_password_url: Optional[str] = None
+    support_email: Optional[str] = None
 
 
 class VerifyOTPRequest(BaseModel):
@@ -92,11 +95,14 @@ async def initiate_vendor_activation(
             detail="Vendor profile not found"
         )
 
-    # Check if vendor is already approved and activated
+    # If this vendor has already completed account setup, provide
+    # a user-friendly response with the password reset route.
     if vendor.approved and user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Your vendor account is already activated. Please log in."
+        return InitiateActivationResponse(
+            message="Your vendor account is already set up. Please reset your password if you cannot sign in, or contact admin for help.",
+            account_already_setup=True,
+            reset_password_url=f"{settings.FRONTEND_BASE_URL}/forgot-password",
+            support_email=settings.ADMIN_EMAIL
         )
 
     # Check if vendor is approved (required before activation)
