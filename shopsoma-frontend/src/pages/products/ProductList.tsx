@@ -754,9 +754,9 @@ const handleFilterChange = (key: keyof FilterState, value: string) => {
       {/* Filter Bar + Search Row */}
       <section className="bg-[var(--color-page-bg)] border-b border-gray-200">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-          <div className="flex items-center gap-6">
+          <div className="flex items-end gap-6">
             {/* Left side: Tabs */}
-            <div className="flex items-center gap-6">
+            <div className="flex shrink-0 items-end gap-6">
               <button
                 type="button"
                 className="text-sm font-ui tracking-wide text-dark border-b-2 border-primary pb-1"
@@ -774,24 +774,14 @@ const handleFilterChange = (key: keyof FilterState, value: string) => {
             {showSubcategoryNav ? (
               <div
                 ref={navHoverRef}
-                className="flex items-center gap-6 flex-1"
+                className="flex min-w-0 flex-1 items-end gap-4"
                 onMouseLeave={handleNavLeave}
               >
-                <div className="relative max-w-full lg:max-w-[760px] lg:mx-auto">
-                  <div className="pointer-events-none absolute -left-3 top-1/2 h-8 w-10 -translate-y-1/2 bg-gradient-to-r from-[var(--color-page-bg)] via-[var(--color-page-bg)]/80 to-transparent" />
-                  <div className="pointer-events-none absolute -right-3 top-1/2 h-8 w-10 -translate-y-1/2 bg-gradient-to-l from-[var(--color-page-bg)] via-[var(--color-page-bg)]/80 to-transparent" />
-                  {navIsOverflowing && (
-                    <div
-                      className={`pointer-events-none absolute -right-6 top-1/2 -translate-y-1/2 hidden lg:flex items-center gap-2 rounded-full border border-primary/30 bg-white/80 px-3 py-1 text-[10px] font-ui uppercase tracking-[0.3em] text-primary shadow-[0_6px_16px_rgba(16,94,83,0.18)] transition-all duration-500 ${
-                        navHasScrolled ? 'opacity-0 translate-y-1' : 'opacity-100 translate-y-0'
-                      }`}
-                    >
-                      <span className="block h-1 w-6 rounded-full bg-primary/70" />
-                      Scroll
-                    </div>
-                  )}
+                <div className="relative min-w-0 flex-1 self-end">
+                  <div className="pointer-events-none absolute -left-3 top-1/2 h-9 w-10 -translate-y-1/2 bg-gradient-to-r from-[var(--color-page-bg)] via-[var(--color-page-bg)]/80 to-transparent" />
+                  <div className="pointer-events-none absolute -right-3 top-1/2 h-9 w-10 -translate-y-1/2 bg-gradient-to-l from-[var(--color-page-bg)] via-[var(--color-page-bg)]/80 to-transparent" />
                   <div
-                    className="flex items-center gap-6 overflow-x-auto whitespace-nowrap pb-1 pr-16"
+                    className="flex items-end gap-6 overflow-x-auto whitespace-nowrap pb-1 pr-1 scrollbar-hide"
                     ref={navScrollRef}
                     onScroll={() => setNavHasScrolled(true)}
                   >
@@ -802,7 +792,7 @@ const handleFilterChange = (key: keyof FilterState, value: string) => {
                         onMouseEnter={() => handleNavEnter(item.id)}
                         onFocus={() => handleNavEnter(item.id)}
                         onClick={() => handleFilterChange('category', item.name)}
-                        className={`text-[11px] font-ui uppercase tracking-[0.25em] pb-1.5 border-b-2 transition ${
+                        className={`text-[11px] font-ui uppercase tracking-[0.25em] pb-1 border-b-2 leading-none transition ${
                           activeCategory === item.name
                             ? 'text-dark border-primary'
                             : 'text-gray-500 border-transparent hover:text-dark hover:border-gray-300'
@@ -813,10 +803,20 @@ const handleFilterChange = (key: keyof FilterState, value: string) => {
                     ))}
                   </div>
                 </div>
+                {navIsOverflowing && (
+                  <div
+                    className={`hidden lg:inline-flex shrink-0 items-center gap-3 rounded-full border border-primary/20 bg-[#f8fbfa] px-5 py-2.5 text-[10px] font-ui uppercase tracking-[0.34em] text-primary shadow-[0_4px_14px_rgba(16,94,83,0.12)] transition-all duration-300 ${
+                      navHasScrolled ? 'opacity-0 translate-x-2 pointer-events-none' : 'opacity-100 translate-x-0'
+                    }`}
+                  >
+                    <span className="block h-[4px] w-8 rounded-full bg-primary/65" />
+                    <span>Scroll</span>
+                  </div>
+                )}
                 <button
                   type="button"
                   onClick={() => setFilterMenuOpen(true)}
-                  className="ml-auto px-6 py-2 border border-gray-300 text-xs font-ui uppercase tracking-[0.2em] text-dark hover:border-primary hover:text-primary transition whitespace-nowrap"
+                  className="shrink-0 px-6 py-2.5 border border-gray-300 text-xs font-ui uppercase tracking-[0.2em] text-dark hover:border-primary hover:text-primary transition whitespace-nowrap"
                 >
                   REFINE
                 </button>
