@@ -262,7 +262,7 @@ export default function ProductDetail() {
         price: product.base_price,
         compare_at_price: product.compare_at_price,
         stock: product.total_stock,
-        is_available: product.total_stock > 0,
+        is_available: product.made_to_order ? true : product.total_stock > 0,
       } as ProductVariant;
     }
 
@@ -320,12 +320,19 @@ export default function ProductDetail() {
 
   const baseStock = product?.total_stock ?? 0;
   const variantStock = selectedVariant?.stock ?? null;
-  const maxQuantity = variantStock !== null ? variantStock : baseStock;
-  const isOutOfStock = maxQuantity <= 0;
+  const usesInventoryTracking = !product?.made_to_order;
+  const maxQuantity = usesInventoryTracking
+    ? (variantStock !== null ? variantStock : baseStock)
+    : 99;
+  const isOutOfStock = usesInventoryTracking ? maxQuantity <= 0 : false;
 
   useEffect(() => {
     if (!selectedVariant) {
       setQuantity(1);
+      return;
+    }
+    if (!usesInventoryTracking) {
+      setQuantity((prev) => (prev <= 0 ? 1 : Math.min(prev, 99)));
       return;
     }
     const stock = selectedVariant.stock ?? 0;
@@ -337,7 +344,7 @@ export default function ProductDetail() {
         return Math.min(prev, stock);
       });
     }
-  }, [selectedVariant?.id, selectedVariant?.stock]);
+  }, [selectedVariant?.id, selectedVariant?.stock, usesInventoryTracking]);
 
   useEffect(() => {
     if (cartError) {
@@ -404,7 +411,7 @@ export default function ProductDetail() {
       return;
     }
 
-    if (quantity > maxQuantity) {
+    if (usesInventoryTracking && quantity > maxQuantity) {
       console.warn('[ProductDetail] Quantity adjusted to available stock', {
         productId: product.id,
         variantId: selectedVariant.id,
@@ -835,7 +842,7 @@ export default function ProductDetail() {
             )}
 
             {/* Inventory Note */}
-            {!isOutOfStock && maxQuantity > 0 && maxQuantity <= 10 && (
+            {usesInventoryTracking && !isOutOfStock && maxQuantity > 0 && maxQuantity <= 10 && (
               <p className="text-xs font-ui uppercase tracking-[0.2em] text-primary">
                 Only {maxQuantity} left in stock
               </p>

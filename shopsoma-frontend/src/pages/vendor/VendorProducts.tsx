@@ -105,6 +105,7 @@ export default function VendorProducts() {
   const collectionsCount = Object.keys(productsByCollection).length;
 
   const renderStatusBadge = (p: Product) => {
+    const qty = p.total_stock ?? p.inventory_quantity ?? 0;
     const lowStock = (p.total_stock ?? p.inventory_quantity ?? 0) < 5;
 
     // Priority: Show rejection first, then low stock, then approval status
@@ -114,8 +115,14 @@ export default function VendorProducts() {
     if (p.moderation_status === 'rejected') {
       label = 'Rejected';
       color = 'text-red-700 bg-red-100';
+    } else if (p.made_to_order) {
+      label = 'Made to Order';
+      color = 'text-sky-700 bg-sky-50';
     } else if (lowStock) {
       label = 'Low Stock';
+      color = 'text-[#19984B] bg-[#E8F7EF]';
+    } else if (qty > 0) {
+      label = 'Ready to Ship';
       color = 'text-[#19984B] bg-[#E8F7EF]';
     } else if (p.moderation_status === 'approved') {
       label = 'Approved';
@@ -134,7 +141,18 @@ export default function VendorProducts() {
 
   const getStockLabel = (p: Product) => {
     const qty = p.total_stock ?? p.inventory_quantity ?? 0;
-    return qty > 0 ? 'In Stock' : 'Out of Stock';
+    if (p.made_to_order) {
+      return p.made_to_order_timeline
+        ? `Made to Order • ${p.made_to_order_timeline}`
+        : 'Made to Order';
+    }
+    if (qty <= 0) {
+      return 'Out of Stock';
+    }
+    if (qty < 5) {
+      return `Low Stock • ${qty} left`;
+    }
+    return `Ready to Ship • ${qty} in stock`;
   };
 
   const getImage = (p: Product) => {
@@ -343,7 +361,7 @@ export default function VendorProducts() {
                           Last Edited
                         </th>
                         <th className="px-6 py-4 text-center text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                          Stock
+                          Fulfillment
                         </th>
                         <th className="px-6 py-4 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider">
                           Actions
@@ -384,7 +402,7 @@ export default function VendorProducts() {
                               <div className="text-sm text-gray-600">{formatDate(product.created_at)}</div>
                             </td>
                             <td className="px-6 py-4 text-center">
-                              <div className="text-sm font-medium text-[#19984B]">{stockLabel}</div>
+                              <div className={`text-sm font-medium ${product.made_to_order ? 'text-sky-700' : 'text-[#19984B]'}`}>{stockLabel}</div>
                             </td>
                             <td className="px-6 py-4">
                               <div className="flex items-center justify-end gap-1">
@@ -455,7 +473,7 @@ export default function VendorProducts() {
                       Price
                     </th>
                     <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                      Stock Status
+                      Fulfillment
                     </th>
                     <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
                       Date Created
@@ -496,7 +514,7 @@ export default function VendorProducts() {
                           </div>
                         </td>
                         <td className="px-6 py-4">
-                          <div className="text-sm font-medium text-[#19984B]">{stockLabel}</div>
+                          <div className={`text-sm font-medium ${product.made_to_order ? 'text-sky-700' : 'text-[#19984B]'}`}>{stockLabel}</div>
                         </td>
                         <td className="px-6 py-4">
                           <div className="text-sm text-gray-600">{formatDate(product.created_at)}</div>

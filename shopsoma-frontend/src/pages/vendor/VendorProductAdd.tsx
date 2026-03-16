@@ -7,6 +7,7 @@ import ToastContainer from '../../components/ui/ToastContainer';
 import { ROUTES } from '../../config/constants';
 import { useToast } from '../../hooks/useToast';
 import { productService } from '../../services/productService';
+import type { CreateProductPayload } from '../../services/productService';
 import { categoryService } from '../../services/categoryService';
 import { collectionService } from '../../services/collectionService';
 import type { Category, Collection } from '../../types';
@@ -17,6 +18,7 @@ import type { Currency } from '../../store/currencyStore';
 // EU Sizing: Numeric sizes (32-50)
 type SizeOption = 'XXXL' | 'XXL' | 'XL' | 'L' | 'M' | 'S' | 'XS' | 'XXS' | '4' | '6' | '8' | '10' | '12' | '14' | '16' | '18' | '20' | '22' | '32' | '34' | '36' | '38' | '40' | '42' | '44' | '46' | '48' | '50';
 type SizingSystem = 'US Sizing' | 'UK Sizing' | 'EU Sizing';
+type VariationMode = 'Size' | 'Color';
 
 interface ProductImage {
   id: string;
@@ -35,11 +37,12 @@ interface ProductVariation {
 interface DetailedVariation {
   id: string;
   name: string;
-  type: string;
+  type: VariationMode;
   hasDifferentPricing: boolean;
   price: string;
   salesPrice: string;
   color: string;
+  colorStock: string;
   sizingSystem: SizingSystem;
   selectedSizes: SizeOption[];
   sizeStock: Record<SizeOption, string>;
@@ -107,12 +110,13 @@ export default function VendorProductAdd() {
 
   // Variation modal form state (controlled inputs)
   const [variationName, setVariationName] = useState('');
-  const [variationType, setVariationType] = useState('');
+  const [variationType, setVariationType] = useState<VariationMode>('Color');
   const [variationHasDifferentPricing, setVariationHasDifferentPricing] = useState(false);
   const [variationPrice, setVariationPrice] = useState('');
   const [variationSalesPrice, setVariationSalesPrice] = useState('');
   const [variationColor, setVariationColor] = useState('#000000');
   const [variationColorHex, setVariationColorHex] = useState('#000000');
+  const [variationColorStock, setVariationColorStock] = useState('');
   const [variationSizingSystem, setVariationSizingSystem] = useState<SizingSystem>('US Sizing');
   const [variationSelectedSizes, setVariationSelectedSizes] = useState<SizeOption[]>([]);
   const [variationSizeStock, setVariationSizeStock] = useState<Record<SizeOption, string>>({} as Record<SizeOption, string>);
@@ -232,6 +236,7 @@ export default function VendorProductAdd() {
       setVariationSalesPrice(editingVariation.salesPrice);
       setVariationColor(editingVariation.color);
       setVariationColorHex(editingVariation.color);
+      setVariationColorStock(editingVariation.colorStock);
       setVariationSizingSystem(editingVariation.sizingSystem);
       setVariationSelectedSizes(editingVariation.selectedSizes);
       setVariationSizeStock(editingVariation.sizeStock);
@@ -239,18 +244,39 @@ export default function VendorProductAdd() {
     } else {
       // Reset form for new variation
       setVariationName('');
-      setVariationType('');
+      setVariationType('Color');
       setVariationHasDifferentPricing(false);
       setVariationPrice('');
       setVariationSalesPrice('');
       setVariationColor('#000000');
       setVariationColorHex('#000000');
+      setVariationColorStock('');
       setVariationSizingSystem('US Sizing');
       setVariationSelectedSizes([]);
       setVariationSizeStock({} as Record<SizeOption, string>);
       setVariationImages([]);
     }
   }, [editingVariation, showVariationModal]);
+
+  useEffect(() => {
+    if (variationType === 'Color') {
+      setVariationSelectedSizes([]);
+      setVariationSizeStock({} as Record<SizeOption, string>);
+      return;
+    }
+    setVariationColor('#000000');
+    setVariationColorHex('#000000');
+    setVariationColorStock('');
+  }, [variationType]);
+
+  useEffect(() => {
+    if (!madeToOrder) {
+      return;
+    }
+    setStockAmount('');
+    setVariationColorStock('');
+    setVariationSizeStock({} as Record<SizeOption, string>);
+  }, [madeToOrder]);
 
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -535,21 +561,24 @@ export default function VendorProductAdd() {
       return;
     }
 
-    if (!variationType) {
-      warning('Please select a variation type');
-      return;
-    }
+    if (variationType === 'Size') {
+      if (variationSelectedSizes.length === 0) {
+        warning('Please select at least one size');
+        return;
+      }
 
-    if (variationSelectedSizes.length === 0) {
-      warning('Please select at least one size');
-      return;
-    }
-
-    // Validate stock values
-    for (const size of variationSelectedSizes) {
-      const stockValue = variationSizeStock[size];
-      if (stockValue && (isNaN(parseInt(stockValue)) || parseInt(stockValue) < 0)) {
-        warning(`Invalid stock value for size ${size}`);
+      if (!madeToOrder) {
+        for (const size of variationSelectedSizes) {
+          const stockValue = variationSizeStock[size];
+          if (stockValue && (isNaN(parseInt(stockValue)) || parseInt(stockValue) < 0)) {
+            warning(`Invalid stock value for size ${size}`);
+            return;
+          }
+        }
+      }
+    } else {
+      if (!madeToOrder && variationColorStock && (isNaN(parseInt(variationColorStock)) || parseInt(variationColorStock) < 0)) {
+        warning('Invalid stock value for color');
         return;
       }
     }
@@ -581,6 +610,7 @@ export default function VendorProductAdd() {
       price: variationPrice,
       salesPrice: variationSalesPrice,
       color: variationColor,
+      colorStock: variationColorStock,
       sizingSystem: variationSizingSystem,
       selectedSizes: variationSelectedSizes,
       sizeStock: variationSizeStock,
@@ -621,6 +651,11 @@ export default function VendorProductAdd() {
       return;
     }
 
+    if (madeToOrder && !estimatedProductionTime.trim()) {
+      warning('Estimated production time is required for made-to-order items', 'Missing info');
+      return;
+    }
+
     if (productType === 'single' && selectedSizes.length === 0) {
       warning('Please select at least one size', 'Missing info');
       return;
@@ -637,68 +672,116 @@ export default function VendorProductAdd() {
     setIsSubmitting(true);
 
     try {
-      const formData = new FormData();
-      formData.append('title', productName);
-      formData.append('description', productDescription);
-      formData.append('base_price', productPrice);
-      if (salesPrice) {
-        formData.append('sale_price', salesPrice);
-      }
-      formData.append('currency', productCurrency);
-      formData.append('primary_category_id', primaryCategoryId);
-      if (subcategoryId) {
-        formData.append('subcategory_id', subcategoryId);
-      }
-      if (childCategoryId) {
-        formData.append('child_category_id', childCategoryId);
-      }
-      if (collectionId) {
-        formData.append('collection_id', collectionId);
-      }
-      formData.append('product_type', productType);
-      formData.append('materials', materials);
-      formData.append('product_care', productCare);
-      formData.append('color', colorHex);
-      if (estimatedProductionTime) {
-        formData.append('estimated_production_time', estimatedProductionTime);
-      }
-      formData.append('made_to_order', String(madeToOrder));
-      formData.append('is_sustainable', String(isSustainable));
+      const parsedProductPrice = parseFloat(productPrice);
+      const parsedSalesPrice = salesPrice ? parseFloat(salesPrice) : undefined;
+      const basePrice =
+        parsedSalesPrice && parsedSalesPrice > 0 && parsedSalesPrice < parsedProductPrice
+          ? parsedSalesPrice
+          : parsedProductPrice;
+      const compareAtPrice =
+        parsedSalesPrice && parsedSalesPrice > 0 && parsedSalesPrice < parsedProductPrice
+          ? parsedProductPrice
+          : undefined;
+      const parsedStockAmount = parseInt(stockAmount || '0', 10) || 0;
+      const shouldTrackStock = !madeToOrder;
+      const resolvedCategoryId = childCategoryId || subcategoryId || primaryCategoryId;
+      const uploadedImages = imageUploads.filter((image) => image.uploaded && image.imageUrl);
+
+      const payload: CreateProductPayload = {
+        title: productName.trim(),
+        description: productDescription.trim(),
+        category_id: resolvedCategoryId,
+        collection_id: collectionId || undefined,
+        base_price: basePrice,
+        compare_at_price: compareAtPrice,
+        currency: productCurrency,
+        total_stock: shouldTrackStock ? parsedStockAmount : 0,
+        status: 'draft',
+        is_featured: false,
+        product_type: productType,
+        made_to_order: madeToOrder,
+        made_to_order_timeline: estimatedProductionTime.trim() || undefined,
+        care_instructions: productCare || undefined,
+        fabric_composition: materials || undefined,
+        images: uploadedImages.map((image, index) => ({
+          image_url: image.imageUrl!,
+          thumbnail_url: image.thumbnailUrl,
+          alt_text: productName.trim() || undefined,
+          display_order: index,
+          is_primary: index === 0,
+        })),
+      };
 
       if (productType === 'single') {
-        formData.append('sizes', selectedSizes.join(','));
-        formData.append('stock_amount', stockAmount || '0');
-      }
-
-      const transformedVariations = detailedVariations.map((variation) => ({
-        name: variation.name,
-        type: variation.type,
-        price: variation.hasDifferentPricing ? variation.price : productPrice,
-        sale_price: variation.hasDifferentPricing ? variation.salesPrice : salesPrice,
-        color: variation.color,
-        sizes: variation.selectedSizes,
-        size_stocks: variation.selectedSizes.map((size) => ({
+        payload.variants = selectedSizes.map((size) => ({
           size,
-          stock: parseInt(variation.sizeStock[size] || '0', 10),
-        })),
-        images: variation.images
-          .filter((image) => image.uploaded && image.imageUrl)
-          .map((image) => image.imageUrl),
-      }));
+          color_hex: colorHex || undefined,
+          price: basePrice,
+          stock: shouldTrackStock ? parsedStockAmount : 0,
+          is_available: shouldTrackStock ? parsedStockAmount > 0 : true,
+        }));
+      } else {
+        const variantPayload: NonNullable<CreateProductPayload['variants']> = [];
+        const variationPayload: NonNullable<CreateProductPayload['variations']> = [];
 
-      if (productType === 'variable') {
-        formData.append('variations', JSON.stringify(transformedVariations));
-      }
+        detailedVariations.forEach((variation) => {
+          const variationRegularPrice = variation.price ? parseFloat(variation.price) : parsedProductPrice;
+          const variationSales = variation.salesPrice ? parseFloat(variation.salesPrice) : undefined;
+          const variationBasePrice =
+            variation.hasDifferentPricing && variationSales && variationSales > 0 && variationSales < variationRegularPrice
+              ? variationSales
+              : variation.hasDifferentPricing && variationRegularPrice > 0
+                ? variationRegularPrice
+                : basePrice;
+          const variationCompareAtPrice =
+            variation.hasDifferentPricing && variationSales && variationSales > 0 && variationSales < variationRegularPrice
+              ? variationRegularPrice
+              : undefined;
 
-      imageUploads
-        .filter((image) => image.uploaded && image.imageUrl)
-        .forEach((image) => {
-          if (image.imageUrl) {
-            formData.append('images', image.imageUrl);
+          if (variation.type === 'Color') {
+            const colorStock = shouldTrackStock ? parseInt(variation.colorStock || '0', 10) || 0 : 0;
+            variationPayload.push({
+              title: variation.name,
+              type: 'color',
+              color_hex: variation.color || undefined,
+              price: variationBasePrice,
+              sale_price: variationCompareAtPrice,
+              images: variation.images
+                .filter((image) => image.uploaded && image.imageUrl)
+                .map((image) => image.imageUrl!),
+              is_active: true,
+              sizes: [],
+            });
+            variantPayload.push({
+              color: variation.name,
+              color_hex: variation.color || undefined,
+              price: variationBasePrice,
+              stock: colorStock,
+              is_available: shouldTrackStock ? colorStock > 0 : true,
+            });
+            return;
           }
+
+          variation.selectedSizes.forEach((size) => {
+            const sizeStock = shouldTrackStock ? parseInt(variation.sizeStock[size] || '0', 10) || 0 : 0;
+            variantPayload.push({
+              size,
+              price: variationBasePrice,
+              stock: sizeStock,
+              is_available: shouldTrackStock ? sizeStock > 0 : true,
+            });
+          });
         });
 
-      await productService.createProduct(formData);
+        if (variationPayload.length > 0) {
+          payload.variations = variationPayload;
+        }
+        if (variantPayload.length > 0) {
+          payload.variants = variantPayload;
+        }
+      }
+
+      await productService.createProduct(payload);
 
       success('Product submitted for review. We will notify you once it is approved.', 'Submitted');
       navigate(ROUTES.VENDOR_PRODUCTS);
@@ -1128,7 +1211,7 @@ export default function VendorProductAdd() {
                   <div className="grid grid-cols-2 gap-4">
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-2">
-                        Estimated Production Time
+                        Estimated Production Time {madeToOrder ? '*' : ''}
                       </label>
                       <input
                         type="text"
@@ -1136,7 +1219,13 @@ export default function VendorProductAdd() {
                         onChange={(e) => setEstimatedProductionTime(e.target.value)}
                         className="w-full rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
                         placeholder="E.g., 2-3 weeks"
+                        required={madeToOrder}
                       />
+                      {madeToOrder && (
+                        <p className="mt-2 text-xs text-[#105E53]">
+                          Required for made-to-order pieces so customers know the production timeline.
+                        </p>
+                      )}
                     </div>
 
                     <div>
@@ -1163,9 +1252,19 @@ export default function VendorProductAdd() {
                         min="0"
                         value={stockAmount}
                         onChange={(e) => setStockAmount(e.target.value)}
-                        className="w-full rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
-                        placeholder="0"
+                        className={`w-full rounded-lg border px-4 py-3 text-sm transition ${
+                          madeToOrder
+                            ? 'border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed'
+                            : 'border-gray-200 bg-gray-50 focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20'
+                        }`}
+                        placeholder={madeToOrder ? 'Disabled for made-to-order' : '0'}
+                        disabled={madeToOrder}
                       />
+                      <p className="mt-2 text-xs text-gray-500">
+                        {madeToOrder
+                          ? 'Inventory tracking is disabled for made-to-order products. Use production time instead.'
+                          : 'Use stock amount only for ready-to-ship inventory.'}
+                      </p>
                     </div>
                   )}
 
@@ -1365,7 +1464,9 @@ export default function VendorProductAdd() {
                               <div>
                                 <p className="font-medium text-gray-900">{variation.name}</p>
                                 <p className="text-sm text-gray-500">
-                                  {variation.type} • {variation.selectedSizes.join(', ')} • Stock: {Object.values(variation.sizeStock).reduce((acc, val) => acc + (parseInt(val) || 0), 0)}
+                                  {variation.type} • {variation.type === 'Size'
+                                    ? `${variation.selectedSizes.join(', ')} • Stock: ${Object.values(variation.sizeStock).reduce((acc, val) => acc + (parseInt(val) || 0), 0)}`
+                                    : `Stock: ${parseInt(variation.colorStock || '0', 10) || 0}`}
                                 </p>
                               </div>
                             </div>
@@ -1458,14 +1559,11 @@ export default function VendorProductAdd() {
                         </label>
                         <select
                           value={variationType}
-                          onChange={(e) => setVariationType(e.target.value)}
+                          onChange={(e) => setVariationType(e.target.value as VariationMode)}
                           className="w-full rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
                         >
-                          <option value="">Select type</option>
                           <option value="Color">Color</option>
                           <option value="Size">Size</option>
-                          <option value="Material">Material</option>
-                          <option value="Style">Style</option>
                         </select>
                       </div>
 
@@ -1529,20 +1627,42 @@ export default function VendorProductAdd() {
                           Color Selector
                         </label>
                         <div className="flex items-center gap-3">
-                          <input
-                            type="color"
-                            value={variationColor}
-                            onChange={handleColorPickerChange}
-                            className="w-12 h-12 rounded-lg border border-gray-200 cursor-pointer"
-                          />
-                          <input
-                            type="text"
-                            value={variationColorHex}
-                            onChange={handleColorHexChange}
-                            placeholder="#000000"
-                            className="flex-1 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
-                          />
-                        </div>
+                            <input
+                              type="color"
+                              value={variationColor}
+                              onChange={handleColorPickerChange}
+                              disabled={variationType === 'Size'}
+                              className="w-12 h-12 rounded-lg border border-gray-200 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                            />
+                            <input
+                              type="text"
+                              value={variationColorHex}
+                              onChange={handleColorHexChange}
+                              placeholder="#000000"
+                              disabled={variationType === 'Size'}
+                              className="flex-1 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                            />
+                          </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          Stock per Color
+                        </label>
+                        <input
+                          type="number"
+                          min="0"
+                          value={variationColorStock}
+                          onChange={(e) => setVariationColorStock(e.target.value)}
+                          disabled={variationType === 'Size' || madeToOrder}
+                          placeholder={madeToOrder ? 'Disabled for made-to-order' : '0'}
+                          className="w-full rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                        />
+                        {madeToOrder && (
+                          <p className="mt-2 text-xs text-gray-500">
+                            Stock tracking is off for made-to-order variations.
+                          </p>
+                        )}
                       </div>
 
                       {/* Variation Sizing System */}
@@ -1554,7 +1674,8 @@ export default function VendorProductAdd() {
                           <button
                             type="button"
                             onClick={() => setShowSizingDropdown(!showSizingDropdown)}
-                            className="w-full rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-left flex items-center justify-between"
+                            disabled={variationType === 'Color'}
+                            className="w-full rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-left flex items-center justify-between disabled:opacity-50 disabled:cursor-not-allowed"
                           >
                             <span className="text-gray-900">{variationSizingSystem}</span>
                             <ChevronDown className="w-4 h-4 text-gray-400" />
@@ -1591,11 +1712,12 @@ export default function VendorProductAdd() {
                             <button
                               key={size}
                               type="button"
+                              disabled={variationType === 'Color'}
                               className={`px-4 py-2 border rounded-lg text-sm font-medium transition ${
                                 variationSelectedSizes.includes(size)
                                   ? 'bg-[#105E53] text-white border-[#105E53]'
                                   : 'border-gray-300 hover:border-[#105E53] hover:bg-[#105E53]/5'
-                              }`}
+                              } disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:border-gray-300 disabled:hover:bg-transparent`}
                               onClick={() => toggleVariationSize(size)}
                             >
                               {size}
@@ -1619,11 +1741,17 @@ export default function VendorProductAdd() {
                                 placeholder="0"
                                 value={variationSizeStock[size] || ''}
                                 onChange={(e) => handleVariationStockChange(size, e.target.value)}
-                                className="w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
+                                disabled={variationType === 'Color' || madeToOrder}
+                                className="w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20 disabled:opacity-50 disabled:cursor-not-allowed"
                               />
                             </div>
                           ))}
                         </div>
+                        {madeToOrder && (
+                          <p className="mt-2 text-xs text-gray-500">
+                            Size-level inventory is disabled for made-to-order products.
+                          </p>
+                        )}
                       </div>
 
                       {/* Upload Images */}

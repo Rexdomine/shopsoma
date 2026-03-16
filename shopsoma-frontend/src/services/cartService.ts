@@ -213,7 +213,7 @@ export class CartService {
         errors.push(`Invalid quantity for ${item.product.title}`);
       }
 
-      if (!item.variant.stock || item.variant.stock < item.quantity) {
+      if (!item.product.made_to_order && (!item.variant.stock || item.variant.stock < item.quantity)) {
         errors.push(`${item.product.title} (${item.variant.size}) is out of stock`);
       }
     });
