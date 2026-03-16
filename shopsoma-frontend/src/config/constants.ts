@@ -3,7 +3,26 @@
  */
 
 // API Configuration
-export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1';
+const resolveApiBaseUrl = () => {
+  const envUrl = import.meta.env.VITE_API_BASE_URL;
+  if (envUrl) {
+    return envUrl;
+  }
+
+  if (typeof window !== 'undefined') {
+    const host = window.location.hostname;
+    if (host === 'shopsoma-staging.onrender.com') {
+      return 'https://shopsoma-staging-api.onrender.com/api/v1';
+    }
+    if (host === 'shopsoma.com' || host === 'www.shopsoma.com') {
+      return 'https://api.shopsoma.com/api/v1';
+    }
+  }
+
+  return 'http://localhost:8000/api/v1';
+};
+
+export const API_BASE_URL = resolveApiBaseUrl();
 
 // App Configuration
 export const APP_NAME = 'Shopsoma';
@@ -37,7 +56,9 @@ export const ROUTES = {
   VENDOR_BRAND_INFO: '/vendor/settings/brand-info',
   VENDOR_PAYOUT_INFO: '/vendor/settings/payout-information',
   VENDOR_SECURITY: '/vendor/settings/security',
+  SHOP_EDITS: '/shop-edits',
   FORGOT_PASSWORD: '/forgot-password',
+  RESET_PASSWORD: '/reset-password',
   REGISTER: '/register',
   MEN: '/men',
   WOMEN: '/women',
@@ -65,12 +86,16 @@ export const ROUTES = {
   ADMIN_PRODUCT_DETAIL: '/admin/products/:id',
   ADMIN_PRODUCT_EDIT: '/admin/products/:id/edit',
   ADMIN_PAYOUTS: '/admin/payouts',
+  ADMIN_RETURNS: '/admin/returns',
+  ADMIN_RETURN_DETAIL: '/admin/returns/:id',
   PROFILE: '/profile',
   PROFILE_EDIT: '/profile/edit',
   PROFILE_PASSWORD: '/profile/password',
   PROFILE_ADDRESS: '/profile/address',
   PROFILE_ORDERS: '/profile/orders',
   PROFILE_RETURNS: '/profile/returns',
+  PROFILE_RETURN_DETAIL: '/profile/returns/:id',
+  PROFILE_RETURN_EDIT: '/profile/returns/:id/edit',
   PROFILE_WISHLIST: '/profile/wishlist',
   PROFILE_NEWSLETTER: '/profile/newsletter',
   PROFILE_MANAGE_PREFERENCE: '/profile/preferences',

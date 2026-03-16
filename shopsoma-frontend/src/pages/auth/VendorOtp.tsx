@@ -31,6 +31,10 @@ export default function VendorOtp() {
   const [success, setSuccess] = useState(false);
   const [resendLoading, setResendLoading] = useState(false);
   const [initializing, setInitializing] = useState(!!emailFromUrl);
+  const [accountAlreadySetup, setAccountAlreadySetup] = useState(false);
+  const [alreadySetupMessage, setAlreadySetupMessage] = useState('');
+  const [resetPasswordUrl, setResetPasswordUrl] = useState<string>(ROUTES.FORGOT_PASSWORD);
+  const [supportEmail, setSupportEmail] = useState('admin@shopsoma.com');
   const inputsRef = useRef<Array<HTMLInputElement | null>>([]);
 
   const code = useMemo(() => values.join(''), [values]);
@@ -45,8 +49,24 @@ export default function VendorOtp() {
 
       try {
         const response = await vendorActivationService.initiateActivation(emailFromUrl);
-        setActivationToken(response.token);
-        setDisplayEmail(response.masked_email);
+        if (response.account_already_setup) {
+          setAccountAlreadySetup(true);
+          setAlreadySetupMessage(
+            response.message ||
+              'This vendor account is already set up. Please reset your password or contact admin for help.'
+          );
+          setResetPasswordUrl(response.reset_password_url || ROUTES.FORGOT_PASSWORD);
+          setSupportEmail(response.support_email || 'admin@shopsoma.com');
+          setInitializing(false);
+          return;
+        }
+
+        if (response.token) {
+          setActivationToken(response.token);
+        }
+        if (response.masked_email) {
+          setDisplayEmail(response.masked_email);
+        }
         setInitializing(false);
       } catch (err: any) {
         setError(err?.message || 'Failed to initialize activation. Please try again.');
@@ -155,6 +175,37 @@ export default function VendorOtp() {
   }
 
   // Show error if no activation token available
+  if (accountAlreadySetup && !initializing) {
+    return (
+      <div className="min-h-screen bg-[var(--color-page-bg)] flex items-center justify-center px-4">
+        <div className="max-w-md text-center">
+          <div className="bg-white rounded-lg shadow-md p-8">
+            <div className="w-12 h-12 mx-auto mb-4 rounded-full bg-amber-100 flex items-center justify-center">
+              <span className="text-amber-700 text-2xl">!</span>
+            </div>
+            <h2 className="text-xl font-display text-[#105E53] mb-2">Account Already Set Up</h2>
+            <p className="text-gray-600 mb-6">{alreadySetupMessage}</p>
+            <div className="space-y-3">
+              <a
+                href={resetPasswordUrl}
+                className="inline-block w-full px-6 py-3 bg-[#105E53] text-white rounded-xl hover:bg-[#0c4c45] transition"
+              >
+                Reset Password
+              </a>
+              <p className="text-sm text-gray-600">
+                Need help? Contact admin at{' '}
+                <a href={`mailto:${supportEmail}`} className="text-[#105E53] underline">
+                  {supportEmail}
+                </a>
+                .
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (!activationToken && !initializing) {
     return (
       <div className="min-h-screen bg-[var(--color-page-bg)] flex items-center justify-center px-4">

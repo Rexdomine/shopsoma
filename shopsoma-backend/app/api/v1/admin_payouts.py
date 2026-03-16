@@ -174,15 +174,20 @@ async def bulk_update_payout_status(
     for payout in payouts:
         if payout.vendor and payout.vendor.user and payout.vendor.user.email:
             try:
-                await email_service.send_vendor_payout_status_update_email(
-                    email=payout.vendor.user.email,
-                    name=payout.vendor.business_name,
-                    payout_amount=float(payout.payout_amount),
-                    status=payout.status.value,
-                    processed_at=payout.processed_at,
-                    payment_reference=payout.payment_reference,
-                    notes=payout.notes,
-                )
+                if payout.status == PayoutStatus.COMPLETED:
+                    await email_service.send_vendor_payout_processed_email(
+                        email=payout.vendor.user.email,
+                        name=payout.vendor.business_name,
+                        payout_amount=float(payout.payout_amount),
+                        processed_at=payout.processed_at,
+                    )
+                elif payout.status == PayoutStatus.FAILED:
+                    await email_service.send_vendor_payout_failed_email(
+                        email=payout.vendor.user.email,
+                        name=payout.vendor.business_name,
+                        payout_amount=float(payout.payout_amount),
+                        failure_reason=payout.notes or "Payout failed.",
+                    )
             except Exception:
                 logger.exception(
                     "[Admin Payout] Failed to send bulk payout update email for payout_id=%s",
@@ -227,15 +232,20 @@ async def update_payout_status(
 
     if previous_status != payout.status and payout.vendor and payout.vendor.user and payout.vendor.user.email:
         try:
-            await email_service.send_vendor_payout_status_update_email(
-                email=payout.vendor.user.email,
-                name=payout.vendor.business_name,
-                payout_amount=float(payout.payout_amount),
-                status=payout.status.value,
-                processed_at=payout.processed_at,
-                payment_reference=payout.payment_reference,
-                notes=payout.notes,
-            )
+            if payout.status == PayoutStatus.COMPLETED:
+                await email_service.send_vendor_payout_processed_email(
+                    email=payout.vendor.user.email,
+                    name=payout.vendor.business_name,
+                    payout_amount=float(payout.payout_amount),
+                    processed_at=payout.processed_at,
+                )
+            elif payout.status == PayoutStatus.FAILED:
+                await email_service.send_vendor_payout_failed_email(
+                    email=payout.vendor.user.email,
+                    name=payout.vendor.business_name,
+                    payout_amount=float(payout.payout_amount),
+                    failure_reason=payout.notes or "Payout failed.",
+                )
         except Exception:
             logger.exception(
                 "[Admin Payout] Failed to send payout status email for payout_id=%s",

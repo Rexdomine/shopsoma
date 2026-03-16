@@ -65,9 +65,20 @@ class EmailService:
                 configuration = brevo_python.Configuration()
                 configuration.api_key['api-key'] = settings.BREVO_API_KEY
                 self.api_instance = brevo_python.TransactionalEmailsApi(brevo_python.ApiClient(configuration))
+                sender_name = (
+                    getattr(settings, "BREVO_SENDER_NAME", None)
+                    or getattr(settings, "SMTP_FROM_NAME", None)
+                    or "Shopsoma"
+                )
+                sender_email = (
+                    getattr(settings, "BREVO_SENDER_EMAIL", None)
+                    or getattr(settings, "SMTP_FROM_EMAIL", None)
+                    or getattr(settings, "FROM_EMAIL", None)
+                    or ""
+                )
                 self.sender = {
-                    "name": settings.BREVO_SENDER_NAME,
-                    "email": settings.BREVO_SENDER_EMAIL
+                    "name": sender_name,
+                    "email": sender_email
                 }
                 logger.info("EmailService initialized successfully with Brevo SDK")
             except Exception as e:
@@ -77,7 +88,12 @@ class EmailService:
                 self.sender = None
 
         self.asset_base = getattr(settings, "CDN_BASE_URL", "") or getattr(settings, "FRONTEND_BASE_URL", "")
-        self.logo_url = self._resolve_image_url(getattr(settings, "BRAND_LOGO_URL", ""), LOGO_FALLBACK)
+        raw_logo = getattr(settings, "BRAND_LOGO_URL", "") or ""
+        if raw_logo and not raw_logo.startswith(("http://", "https://", "data:")):
+            base = (getattr(settings, "FRONTEND_BASE_URL", "") or "").rstrip("/")
+            if base:
+                raw_logo = f"{base}/{raw_logo.lstrip('/')}"
+        self.logo_url = self._resolve_image_url(raw_logo, LOGO_FALLBACK)
         self.product_placeholder = PRODUCT_PLACEHOLDER
 
     @staticmethod
@@ -119,7 +135,7 @@ class EmailService:
 
         # Use text-based logo if no valid image URL
         logo_html = ""
-        if self.logo_url and self.logo_url.startswith("http"):
+        if self.logo_url and (self.logo_url.startswith("http") or self.logo_url.startswith("data:")):
             logo_html = f'<img src="{self.logo_url}" alt="Shopsoma" style="height:40px;display:block;" />'
         else:
             # Fallback to text-based logo
@@ -486,40 +502,52 @@ class EmailService:
         html_content = self._wrap_email("Payout Request", body_html, "Your payout request has been received.")
         return await self.send_email(email, name, subject, html_content)
 
-    async def send_vendor_payout_status_update_email(
+    async def send_vendor_payout_processed_email(
         self,
         email: str,
         name: str,
         payout_amount: float,
-        status: str,
-        processed_at: Optional[datetime] = None,
-        payment_reference: Optional[str] = None,
-        notes: Optional[str] = None,
+        processed_at: datetime,
+        payout_method: Optional[str] = None,
     ) -> bool:
-        status_label = status.replace("_", " ").title()
-        subject = f"Payout Status Update - {status_label}"
-        processed_str = processed_at.strftime("%d %B %Y - %I:%M %p") if processed_at else "-"
-        reference_line = payment_reference or "-"
-        note_line = notes or "-"
+        subject = "Payout Processed"
+        processed_date = processed_at.strftime("%d %B %Y - %I:%M %p")
+        method_line = payout_method or "Your default payout account"
 
         body_html = f"""
         <p style="font-size:16px;">Hello {name or 'there'},</p>
-        <p>Your payout request status has been updated.</p>
+        <p>Your payout has been processed successfully.</p>
         <div style="margin:24px 0;padding:20px;border:1px solid {BRAND_BORDER};border-radius:10px;background:{BRAND_LIGHT};">
-            <p style="margin:0;"><strong>Amount:</strong> {self._format_amount(payout_amount)}</p>
-            <p style="margin:4px 0;"><strong>Status:</strong> {status_label}</p>
-            <p style="margin:4px 0;"><strong>Processed at:</strong> {processed_str}</p>
-            <p style="margin:4px 0;"><strong>Reference:</strong> {reference_line}</p>
-            <p style="margin:4px 0;"><strong>Notes:</strong> {note_line}</p>
+            <p style="margin:0;"><strong>Processed Date:</strong> {processed_date}</p>
+            <p style="margin:4px 0;"><strong>Amount:</strong> {self._format_amount(payout_amount)}</p>
+            <p style="margin:4px 0;"><strong>Method:</strong> {method_line}</p>
         </div>
-        <p style="text-align:center;margin-top:32px;">
-            <a href="{settings.FRONTEND_BASE_URL}/vendor/earnings/withdrawals" style="display:inline-block;padding:12px 24px;background:{BRAND_PRIMARY};color:#fff;text-decoration:none;border-radius:999px;font-weight:600;">
-                View Withdrawal Status
-            </a>
-        </p>
+        <p>If you have any questions about this payout, please contact support.</p>
         """
 
-        html_content = self._wrap_email("Payout Update", body_html, "Your payout status has been updated.")
+        html_content = self._wrap_email("Payout Processed", body_html, "Your Shopsoma payout has been sent.")
+        return await self.send_email(email, name, subject, html_content)
+
+    async def send_vendor_payout_failed_email(
+        self,
+        email: str,
+        name: str,
+        payout_amount: float,
+        failure_reason: str,
+    ) -> bool:
+        subject = "Payout Failed"
+
+        body_html = f"""
+        <p style="font-size:16px;">Hello {name or 'there'},</p>
+        <p>We attempted to process your payout but ran into an issue.</p>
+        <div style="margin:24px 0;padding:20px;border:1px solid {BRAND_BORDER};border-radius:10px;background:{BRAND_LIGHT};">
+            <p style="margin:0;"><strong>Amount:</strong> {self._format_amount(payout_amount)}</p>
+            <p style="margin:4px 0;"><strong>Reason:</strong> {failure_reason}</p>
+        </div>
+        <p>Please update your payout details or contact support for assistance.</p>
+        """
+
+        html_content = self._wrap_email("Payout Failed", body_html, "Issue processing your Shopsoma payout.")
         return await self.send_email(email, name, subject, html_content)
 
     async def send_admin_payout_request_email(
@@ -790,6 +818,31 @@ class EmailService:
         """
         preheader = "Activate your Shopsoma account in seconds for faster checkout."
         html_content = self._wrap_email("Claim Your Account", body_html, preheader)
+        return await self.send_email(email, name, subject, html_content)
+
+    async def send_password_reset_email(
+        self,
+        email: str,
+        name: str,
+        reset_link: str,
+        expires_minutes: int
+    ) -> bool:
+        """Send password reset email."""
+        subject = "Reset Your Password · Shopsoma"
+        body_html = f"""
+        <p style="font-size:16px;">Hi {name or 'there'},</p>
+        <p>We received a request to reset your Shopsoma password. Use the button below to set a new password.</p>
+        <div style="margin:32px 0;text-align:center;">
+            <a href="{reset_link}" style="display:inline-block;padding:14px 32px;background:{BRAND_PRIMARY};color:#fff;border-radius:999px;text-decoration:none;font-weight:600;font-size:16px;">
+                Reset Password
+            </a>
+        </div>
+        <p style="color:#6B7280;font-size:14px;">This link expires in {expires_minutes} minutes. If you didn't request a password reset, you can safely ignore this email.</p>
+        <p style="color:#6B7280;font-size:14px;">If the button doesn't work, copy and paste this link into your browser:</p>
+        <p style="color:{BRAND_PRIMARY};font-size:12px;word-break:break-all;">{reset_link}</p>
+        """
+        preheader = "Use this secure link to reset your Shopsoma password."
+        html_content = self._wrap_email("Reset Password", body_html, preheader)
         return await self.send_email(email, name, subject, html_content)
 
     async def send_vendor_application_confirmation(self, email: str, first_name: str, business_name: str) -> bool:

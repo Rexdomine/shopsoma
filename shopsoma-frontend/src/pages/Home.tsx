@@ -56,34 +56,36 @@ function HomeProductCard({
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
     >
-      <Link to={`/products/${product.id}`} className="relative aspect-[3/4] overflow-hidden bg-white block">
-        <img
-          src={isHovered ? secondaryImage : primaryImage}
-          alt={product.title}
-          className="w-full h-full object-cover transition-all duration-500"
-        />
-        <button
-          type="button"
-          onClick={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            onToggleFavorite(product.id);
-          }}
-          className="absolute top-3 right-3 p-1.5 hover:opacity-80 transition-opacity z-10"
-          aria-label="Toggle favorite"
-        >
-          <svg
-            width="20"
-            height="20"
-            viewBox="0 0 24 24"
-            fill={isFavorite ? "#ffffff" : "none"}
-            stroke="#ffffff"
-            strokeWidth="1.5"
-            className="transition-all"
+      <div className="relative">
+        <Link to={`/products/${product.id}`} className="relative aspect-[3/4] overflow-hidden bg-white block">
+          <img
+            src={isHovered ? secondaryImage : primaryImage}
+            alt={product.title}
+            className="w-full h-full object-cover transition-all duration-500"
+          />
+          <button
+            type="button"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onToggleFavorite(product.id);
+            }}
+            className="absolute top-3 right-3 p-1.5 hover:opacity-80 transition-opacity z-10"
+            aria-label="Toggle favorite"
           >
-            <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
-          </svg>
-        </button>
+            <svg
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill={isFavorite ? '#ffffff' : 'none'}
+              stroke="#ffffff"
+              strokeWidth="1.5"
+              className="transition-all"
+            >
+              <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
+            </svg>
+          </button>
+        </Link>
 
         {/* Hover Modal */}
         {isHovered && (
@@ -134,7 +136,7 @@ function HomeProductCard({
             </div>
           </div>
         )}
-      </Link>
+      </div>
 
       <Link to={`/products/${product.id}`} className="block pt-3 space-y-1">
         <p className="text-[10px] font-ui uppercase tracking-[0.25em]" style={{ color: '#1E5053' }}>
@@ -154,12 +156,12 @@ function HomeProductCard({
 function Hero() {
   return (
     <section
-      className="hero relative w-full min-h-[70vh] bg-cover bg-center flex items-end justify-center"
+      className="hero relative w-full min-h-[45vh] sm:min-h-[60vh] lg:min-h-[70vh] bg-cover bg-center flex items-end justify-center"
       style={{ backgroundImage: `url(${HERO_IMAGE})` }}
     >
-      <div className="text-center pb-16 px-4">
+      <div className="text-center pb-10 sm:pb-14 lg:pb-16 px-4">
         <h1
-          className="text-2xl md:text-3xl lg:text-4xl font-serif font-normal text-white mb-6"
+          className="text-xl sm:text-2xl lg:text-4xl font-serif font-normal text-white mb-4 sm:mb-6"
           style={{
             fontFamily: 'var(--font-serif)',
             fontWeight: 400,
@@ -168,7 +170,7 @@ function Hero() {
         >
           Orange Culture: A night Beyond
         </h1>
-        <div className="flex items-center justify-center gap-12">
+        <div className="flex items-center justify-center gap-10">
           <Link
             to="/men"
             className="text-white font-ui uppercase tracking-[0.2em] text-sm border-b border-white pb-1 hover:opacity-80 transition-opacity"
@@ -200,15 +202,15 @@ function FeaturedCollab({ product }: FeaturedCollabProps) {
   return (
     <section className="w-full bg-[var(--color-page-bg)]">
       <div className="w-full">
-        <div className="grid lg:grid-cols-2 items-stretch">
+        <div className="grid grid-cols-1 lg:grid-cols-2 items-stretch">
           {/* Left Side - Text Content with Theme Background */}
-          <div className="bg-[var(--color-page-bg)] flex flex-col justify-center items-center text-center px-16 lg:px-24 py-20 lg:py-28">
+          <div className="order-2 lg:order-1 bg-[var(--color-page-bg)] flex flex-col justify-center items-center text-center px-6 sm:px-10 lg:px-24 py-12 sm:py-16 lg:py-28">
             <div className="max-w-md space-y-6">
               <p className="text-[10px] font-ui uppercase tracking-[0.3em]" style={{ color: '#1E5053' }}>
                 FEATURED
               </p>
               <h2
-                className="text-3xl lg:text-4xl font-serif leading-tight"
+                className="text-2xl sm:text-3xl lg:text-4xl font-serif leading-tight"
                 style={{
                   fontFamily: 'var(--font-serif)',
                   color: '#1E5053'
@@ -217,7 +219,7 @@ function FeaturedCollab({ product }: FeaturedCollabProps) {
                 {title}
               </h2>
               <p
-                className="text-sm font-serif leading-relaxed"
+                className="text-sm sm:text-base font-serif leading-relaxed"
                 style={{ color: '#1E5053' }}
               >
                 {description}
@@ -232,7 +234,7 @@ function FeaturedCollab({ product }: FeaturedCollabProps) {
           </div>
 
           {/* Right Side - Image */}
-          <div className="relative h-[400px] lg:h-auto">
+          <div className="order-1 lg:order-2 relative h-[280px] sm:h-[360px] lg:h-auto">
             <img
               src={imageUrl}
               alt={title}
@@ -261,8 +263,8 @@ function HomeProductCardSkeleton() {
 function FeaturedCollabSkeleton() {
   return (
     <section className="w-full bg-[var(--color-page-bg)]">
-      <div className="grid lg:grid-cols-2 items-stretch">
-        <div className="bg-[var(--color-page-bg)] flex flex-col justify-center items-center text-center px-16 lg:px-24 py-20 lg:py-28">
+      <div className="grid grid-cols-1 lg:grid-cols-2 items-stretch">
+        <div className="order-2 lg:order-1 bg-[var(--color-page-bg)] flex flex-col justify-center items-center text-center px-6 sm:px-10 lg:px-24 py-12 sm:py-16 lg:py-28">
           <div className="max-w-md space-y-6 w-full animate-pulse">
             <div className="h-3 w-20 bg-gray-200 rounded mx-auto" />
             <div className="h-8 w-3/4 bg-gray-200 rounded mx-auto" />
@@ -271,7 +273,7 @@ function FeaturedCollabSkeleton() {
             <div className="h-10 w-40 bg-gray-200 rounded mx-auto" />
           </div>
         </div>
-        <div className="relative h-[400px] lg:h-auto bg-gray-200 animate-pulse" />
+        <div className="order-1 lg:order-2 relative h-[280px] sm:h-[360px] lg:h-auto bg-gray-200 animate-pulse" />
       </div>
     </section>
   );
@@ -290,8 +292,8 @@ function CategoryStrip() {
 
   return (
     <section className="py-16 bg-[var(--color-page-bg)]">
-      <div className="w-full px-6 space-y-8">
-        <h3 className="text-left text-sm font-ui tracking-normal" style={{ color: '#1E5053' }}>
+      <div className="w-full px-4 sm:px-6 space-y-6 sm:space-y-8">
+        <h3 className="text-left text-xs sm:text-sm font-ui tracking-normal" style={{ color: '#1E5053' }}>
           Shop by Category
         </h3>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -323,9 +325,9 @@ function CategoryStrip() {
 function EditorialSection() {
   return (
     <section className="py-16 bg-[var(--color-page-bg)]">
-      <div className="max-w-4xl mx-auto px-12 text-center space-y-12">
+      <div className="max-w-4xl mx-auto px-4 sm:px-8 lg:px-12 text-center space-y-10 sm:space-y-12">
         <p
-          className="text-base font-serif leading-relaxed"
+          className="text-sm sm:text-base font-serif leading-relaxed"
           style={{
             fontFamily: 'var(--font-serif)',
             color: '#1E5053',
@@ -339,7 +341,7 @@ function EditorialSection() {
         <div className="space-y-6">
           <div className="space-y-2">
             <h4
-              className="text-2xl font-serif"
+              className="text-xl sm:text-2xl font-serif"
               style={{
                 fontFamily: 'var(--font-serif)',
                 color: '#1E5053'
@@ -348,7 +350,7 @@ function EditorialSection() {
               Kilentar: Avant Premier
             </h4>
             <p
-              className="text-base font-serif"
+              className="text-sm sm:text-base font-serif"
               style={{
                 fontFamily: 'var(--font-serif)',
                 color: '#1E5053'
@@ -481,15 +483,15 @@ export default function Home() {
         <Hero />
 
         <section className="py-12 bg-[var(--color-page-bg)] border-b border-[#1E5053]">
-          <div className="w-full px-16 lg:px-20 space-y-6">
+          <div className="w-full px-4 sm:px-8 lg:px-20 space-y-6">
             {loading ? (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
                 {Array.from({ length: 4 }).map((_, index) => (
                   <HomeProductCardSkeleton key={`home-skeleton-${index}`} />
                 ))}
               </div>
             ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
                 {products.slice(0, 4).map((product) => (
                   <HomeProductCard
                     key={product.id}

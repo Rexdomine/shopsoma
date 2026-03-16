@@ -95,8 +95,11 @@ export const productService = {
   },
 
   // Create product (vendor only)
-  async createProduct(productData: Partial<Product>): Promise<Product> {
-    const response = await api.post('/products', productData, { timeout: 20000 });
+  async createProduct(productData: Partial<Product> | FormData): Promise<Product> {
+    const config = productData instanceof FormData
+      ? { timeout: 20000, headers: { 'Content-Type': 'multipart/form-data' } }
+      : { timeout: 20000 };
+    const response = await api.post('/products', productData, config);
     return response.data;
   },
 

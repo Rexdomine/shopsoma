@@ -73,6 +73,29 @@ export default function AdminVendorApplicationDetail() {
     }
   };
 
+  const handleResendActivation = async () => {
+    if (!application) return;
+    if (!confirm(`Resend activation email to ${application.email}?`)) {
+      return;
+    }
+
+    try {
+      setActionLoading(true);
+      const response = await adminService.resendVendorActivation(application.id);
+      const setupSuffix = response.account_already_setup
+        ? ' This account is already set up, so the invite link will direct them to reset password/contact admin guidance.'
+        : '';
+      showMessage('success', `Activation email sent to ${response.email}.${setupSuffix}`);
+      await loadApplication();
+    } catch (error: any) {
+      console.error('Failed to resend activation email:', error);
+      const errorMessage = error?.response?.data?.detail || error?.message || 'Failed to resend activation email';
+      showMessage('error', errorMessage);
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
   const handleDelete = async () => {
     if (!application) return;
 
@@ -97,6 +120,10 @@ export default function AdminVendorApplicationDetail() {
   const showMessage = (type: 'success' | 'error', text: string) => {
     setMessage({ type, text });
     setTimeout(() => setMessage(null), 5000);
+  };
+
+  const canResendActivation = (app: VendorApplication) => {
+    return app.status === 'approved';
   };
 
   const getStatusBadge = (status: string) => {
@@ -231,6 +258,25 @@ export default function AdminVendorApplicationDetail() {
             </div>
             <p className="text-xs text-gray-500 mt-3 font-ui">
               Approving will create a vendor account and send activation instructions to {application.email}
+            </p>
+          </div>
+        )}
+
+        {canResendActivation(application) && (
+          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6">
+            <h2 className="text-lg font-display text-gray-900 mb-4">Resend Activation</h2>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={handleResendActivation}
+                disabled={actionLoading}
+                className="flex items-center gap-2 px-6 py-3 bg-[#105E53] text-white rounded-full hover:bg-[#0c4c45] transition disabled:opacity-50 disabled:cursor-not-allowed font-ui text-sm"
+              >
+                <Mail className="w-4 h-4" />
+                Resend Approval Email
+              </button>
+            </div>
+            <p className="text-xs text-gray-500 mt-3 font-ui">
+              Send a fresh activation code to {application.email} if the previous one expired.
             </p>
           </div>
         )}

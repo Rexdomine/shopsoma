@@ -10,6 +10,7 @@ export default function Login() {
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [guestEmail, setGuestEmail] = useState('');
+  const [guestError, setGuestError] = useState('');
   const [newsletterOptIn, setNewsletterOptIn] = useState(false);
 
   const { login } = useAuth();
@@ -24,6 +25,7 @@ export default function Login() {
   }, [location.state]);
 
   const isComplete = form.email.trim() && form.password.trim();
+  const isValidEmail = (email: string): boolean => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 
   const handleChange = (key: keyof typeof form, value: string) => {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -65,6 +67,23 @@ export default function Login() {
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleGuestSubmit = (event: React.FormEvent) => {
+    event.preventDefault();
+    setGuestError('');
+    const trimmedEmail = guestEmail.trim();
+    if (!trimmedEmail || !isValidEmail(trimmedEmail)) {
+      setGuestError('Please enter a valid email address.');
+      return;
+    }
+    sessionStorage.setItem('shopsoma_guest_email', trimmedEmail);
+    if (newsletterOptIn) {
+      sessionStorage.setItem('shopsoma_guest_newsletter', 'true');
+    } else {
+      sessionStorage.removeItem('shopsoma_guest_newsletter');
+    }
+    navigate('/cart', { state: { guestEmail: trimmedEmail, guestNewsletter: newsletterOptIn } });
   };
 
   return (
@@ -190,7 +209,7 @@ export default function Login() {
                 </p>
               </div>
 
-              <form className="space-y-8 text-left" onSubmit={(e) => e.preventDefault()}>
+              <form className="space-y-8 text-left" onSubmit={handleGuestSubmit}>
                 <div className="space-y-2">
                   <label className="text-base font-serif text-[#105E53]">Email</label>
                   <input
@@ -200,10 +219,14 @@ export default function Login() {
                     className="w-full border-0 border-b border-[#105E53] bg-transparent px-0 py-3 text-base font-serif text-[#222424] focus:border-[#105E53] focus:outline-none focus:ring-0"
                     required
                   />
+                  {guestError && (
+                    <p className="text-xs font-ui text-red-600">{guestError}</p>
+                  )}
                 </div>
 
                 <button
                   type="submit"
+                  disabled={!guestEmail.trim()}
                   className="w-full py-4 text-sm font-ui uppercase tracking-[0.24em] bg-[#105E53] text-white hover:bg-[#0c4c45] transition"
                 >
                   Continue as guest

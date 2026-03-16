@@ -4,6 +4,8 @@ User profile and management endpoints
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import selectinload
 from typing import List, Optional
 from pydantic import BaseModel, EmailStr, Field
 from uuid import UUID
@@ -13,11 +15,15 @@ from app.core.database import get_db
 from app.core.security import verify_password, get_password_hash
 from app.models.user import User
 from app.models.address import Address
-from app.models.order import Order
+from app.models.order import Order, OrderItem
+from app.models.product import Product
+from app.models.returns import Return, ReturnStatus
 from app.schemas.auth import UserResponse
 from app.schemas.address import AddressResponse, AddressCreate, AddressUpdate
 from app.schemas.order import OrderResponse
+from app.schemas.returns import ReturnCreateRequest, ReturnResponse, ReturnUpdateRequest
 from app.api.dependencies import get_current_active_user
+import uuid
 
 router = APIRouter(prefix="/users", tags=["Users"])
 
@@ -336,12 +342,25 @@ async def get_user_orders(
     # Get orders with pagination
     result = await db.execute(
         select(Order)
-        .where(Order.user_id == current_user.id)
+        .where(Order.customer_id == current_user.id)
         .order_by(Order.created_at.desc())
         .limit(page_size)
         .offset(offset)
+        .options(
+            selectinload(Order.items).selectinload(OrderItem.product).selectinload(Product.images)
+        )
     )
     orders = result.scalars().all()
+
+    for order in orders:
+        for item in order.items:
+            if item.product and item.product.images:
+                primary_image = next((img for img in item.product.images if img.is_primary), None)
+                if not primary_image and item.product.images:
+                    primary_image = item.product.images[0]
+                item.product_image_url = primary_image.image_url if primary_image else None
+            else:
+                item.product_image_url = None
 
     return orders
 
@@ -358,9 +377,13 @@ async def get_user_order(
     Only the order owner can view their order details.
     """
     result = await db.execute(
-        select(Order).where(
+        select(Order)
+        .where(
             Order.id == order_id,
-            Order.user_id == current_user.id
+            Order.customer_id == current_user.id
+        )
+        .options(
+            selectinload(Order.items).selectinload(OrderItem.product).selectinload(Product.images)
         )
     )
     order = result.scalar_one_or_none()
@@ -371,4 +394,244 @@ async def get_user_order(
             detail="Order not found"
         )
 
+    for item in order.items:
+        if item.product and item.product.images:
+            primary_image = next((img for img in item.product.images if img.is_primary), None)
+            if not primary_image and item.product.images:
+                primary_image = item.product.images[0]
+            item.product_image_url = primary_image.image_url if primary_image else None
+        else:
+            item.product_image_url = None
+
     return order
+
+
+@router.get("/me/returns", response_model=List[ReturnResponse])
+async def get_user_returns(
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(Return)
+        .where(Return.customer_id == current_user.id)
+        .order_by(Return.created_at.desc())
+        .options(
+            selectinload(Return.order),
+            selectinload(Return.order_item).selectinload(OrderItem.product).selectinload(Product.images),
+        )
+    )
+    returns = result.scalars().all()
+
+    response = []
+    for ret in returns:
+        order_item = ret.order_item
+        product_image_url = None
+        if order_item and order_item.product and order_item.product.images:
+            primary_image = next((img for img in order_item.product.images if img.is_primary), None)
+            if not primary_image and order_item.product.images:
+                primary_image = order_item.product.images[0]
+            product_image_url = primary_image.image_url if primary_image else None
+
+        response.append(
+            ReturnResponse(
+                id=ret.id,
+                return_number=ret.return_number,
+                status=ret.status.value,
+                reason=ret.reason,
+                description=ret.description,
+                opened=(ret.request_details or {}).get("opened"),
+                return_action=(ret.request_details or {}).get("return_action"),
+                rejection_reason=ret.rejection_reason,
+                created_at=ret.created_at,
+                order_id=ret.order_id,
+                order_number=ret.order.order_number if ret.order else None,
+                order_date=ret.order.created_at if ret.order else None,
+                product_title=order_item.product_title if order_item else None,
+                quantity=order_item.quantity if order_item else None,
+                amount=float(order_item.subtotal) if order_item else None,
+                product_image_url=product_image_url,
+            )
+        )
+
+    return response
+
+
+@router.get("/me/returns/{return_id}", response_model=ReturnResponse)
+async def get_user_return(
+    return_id: UUID,
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(Return)
+        .where(Return.id == return_id, Return.customer_id == current_user.id)
+        .options(
+            selectinload(Return.order),
+            selectinload(Return.order_item).selectinload(OrderItem.product).selectinload(Product.images),
+        )
+    )
+    ret = result.scalar_one_or_none()
+    if not ret:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Return not found")
+
+    order_item = ret.order_item
+    product_image_url = None
+    if order_item and order_item.product and order_item.product.images:
+        primary_image = next((img for img in order_item.product.images if img.is_primary), None)
+        if not primary_image and order_item.product.images:
+            primary_image = order_item.product.images[0]
+        product_image_url = primary_image.image_url if primary_image else None
+
+    return ReturnResponse(
+        id=ret.id,
+        return_number=ret.return_number,
+        status=ret.status.value,
+        reason=ret.reason,
+        description=ret.description,
+        opened=(ret.request_details or {}).get("opened"),
+        return_action=(ret.request_details or {}).get("return_action"),
+        rejection_reason=ret.rejection_reason,
+        created_at=ret.created_at,
+        order_id=ret.order_id,
+        order_number=ret.order.order_number if ret.order else None,
+        order_date=ret.order.created_at if ret.order else None,
+        product_title=order_item.product_title if order_item else None,
+        quantity=order_item.quantity if order_item else None,
+        amount=float(order_item.subtotal) if order_item else None,
+        product_image_url=product_image_url,
+    )
+
+
+@router.post("/me/returns", response_model=ReturnResponse, status_code=status.HTTP_201_CREATED)
+async def create_user_return(
+    payload: ReturnCreateRequest,
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+):
+    order_result = await db.execute(
+        select(Order)
+        .where(Order.id == payload.order_id, Order.customer_id == current_user.id)
+        .options(
+            selectinload(Order.items).selectinload(OrderItem.product).selectinload(Product.images)
+        )
+    )
+    order = order_result.scalar_one_or_none()
+    if not order:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Order not found")
+
+    order_item = next((item for item in order.items if item.id == payload.order_item_id), None)
+    if not order_item:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Order item not found")
+
+    return_number = f"RET-{uuid.uuid4().hex[:8].upper()}"
+    existing = await db.execute(select(Return).where(Return.return_number == return_number))
+    while existing.scalar_one_or_none() is not None:
+        return_number = f"RET-{uuid.uuid4().hex[:8].upper()}"
+        existing = await db.execute(select(Return).where(Return.return_number == return_number))
+
+    new_return = Return(
+        return_number=return_number,
+        order_id=order.id,
+        customer_id=current_user.id,
+        order_item_id=order_item.id,
+        reason=payload.reason,
+        description=payload.description,
+        request_details={
+            "opened": payload.opened,
+            "return_action": payload.return_action,
+        },
+        status=ReturnStatus.REQUESTED,
+    )
+    db.add(new_return)
+    await db.commit()
+    await db.refresh(new_return)
+
+    product_image_url = None
+    if order_item.product and order_item.product.images:
+        primary_image = next((img for img in order_item.product.images if img.is_primary), None)
+        if not primary_image and order_item.product.images:
+            primary_image = order_item.product.images[0]
+        product_image_url = primary_image.image_url if primary_image else None
+
+    return ReturnResponse(
+        id=new_return.id,
+        return_number=new_return.return_number,
+        status=new_return.status.value,
+        reason=new_return.reason,
+        description=new_return.description,
+        opened=(new_return.request_details or {}).get("opened"),
+        return_action=(new_return.request_details or {}).get("return_action"),
+        rejection_reason=new_return.rejection_reason,
+        created_at=new_return.created_at,
+        order_id=order.id,
+        order_number=order.order_number,
+        order_date=order.created_at,
+        product_title=order_item.product_title,
+        quantity=order_item.quantity,
+        amount=float(order_item.subtotal),
+        product_image_url=product_image_url,
+    )
+
+
+@router.patch("/me/returns/{return_id}", response_model=ReturnResponse)
+async def update_user_return(
+    return_id: UUID,
+    payload: ReturnUpdateRequest,
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(Return)
+        .where(Return.id == return_id, Return.customer_id == current_user.id)
+        .options(
+            selectinload(Return.order),
+            selectinload(Return.order_item).selectinload(OrderItem.product).selectinload(Product.images),
+        )
+    )
+    ret = result.scalar_one_or_none()
+    if not ret:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Return not found")
+
+    if ret.status != ReturnStatus.REQUESTED:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Return request can no longer be edited")
+
+    if payload.reason is not None:
+        ret.reason = payload.reason
+    if payload.description is not None:
+        ret.description = payload.description
+
+    details = ret.request_details or {}
+    if payload.opened is not None:
+        details["opened"] = payload.opened
+    if payload.return_action is not None:
+        details["return_action"] = payload.return_action
+    ret.request_details = details
+
+    await db.commit()
+    await db.refresh(ret)
+
+    order_item = ret.order_item
+    product_image_url = None
+    if order_item and order_item.product and order_item.product.images:
+        primary_image = next((img for img in order_item.product.images if img.is_primary), None)
+        if not primary_image and order_item.product.images:
+            primary_image = order_item.product.images[0]
+        product_image_url = primary_image.image_url if primary_image else None
+
+    return ReturnResponse(
+        id=ret.id,
+        return_number=ret.return_number,
+        status=ret.status.value,
+        reason=ret.reason,
+        description=ret.description,
+        opened=(ret.request_details or {}).get("opened"),
+        return_action=(ret.request_details or {}).get("return_action"),
+        created_at=ret.created_at,
+        order_id=ret.order_id,
+        order_number=ret.order.order_number if ret.order else None,
+        order_date=ret.order.created_at if ret.order else None,
+        product_title=order_item.product_title if order_item else None,
+        quantity=order_item.quantity if order_item else None,
+        amount=float(order_item.subtotal) if order_item else None,
+        product_image_url=product_image_url,
+    )

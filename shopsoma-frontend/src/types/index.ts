@@ -262,6 +262,15 @@ export interface Order {
   order_content: string;
   created_at: string;
   updated_at: string;
+  items?: Array<{
+    id: string;
+    product_title: string;
+    quantity: number;
+    unit_price: number;
+    subtotal: number;
+    product_image_url?: string;
+    variant_details?: any;
+  }>;
 }
 
 export interface OrderListResponse {
