@@ -1,6 +1,62 @@
 import api from './api';
 import type { Product, ImageUploadResponse, ImageBatchUploadResponse } from '../types';
 
+export interface CreateProductImagePayload {
+  image_url: string;
+  thumbnail_url?: string;
+  alt_text?: string;
+  display_order?: number;
+  is_primary?: boolean;
+}
+
+export interface CreateProductVariantPayload {
+  size?: string;
+  color?: string;
+  color_hex?: string;
+  price: number;
+  stock: number;
+  sku?: string;
+  is_available?: boolean;
+}
+
+export interface CreateProductVariationPayload {
+  title: string;
+  type?: string;
+  color_hex?: string;
+  price?: number;
+  sale_price?: number;
+  images?: string[];
+  is_active?: boolean;
+  sizes: Array<{
+    size: string;
+    stock: number;
+  }>;
+}
+
+export interface CreateProductPayload {
+  title: string;
+  description?: string;
+  category_id?: string;
+  collection_id?: string;
+  sku?: string;
+  base_price: number;
+  compare_at_price?: number;
+  currency?: 'NGN' | 'USD';
+  total_stock?: number;
+  status?: 'draft' | 'active' | 'inactive' | 'archived';
+  is_featured?: boolean;
+  product_type?: 'single' | 'variable';
+  made_to_order?: boolean;
+  made_to_order_timeline?: string;
+  care_instructions?: string;
+  fabric_composition?: string;
+  meta_title?: string;
+  meta_description?: string;
+  images?: CreateProductImagePayload[];
+  variants?: CreateProductVariantPayload[];
+  variations?: CreateProductVariationPayload[];
+}
+
 export interface ProductListParams {
   page?: number;
   page_size?: number;
@@ -95,7 +151,7 @@ export const productService = {
   },
 
   // Create product (vendor only)
-  async createProduct(productData: Partial<Product> | FormData): Promise<Product> {
+  async createProduct(productData: CreateProductPayload | FormData): Promise<Product> {
     const config = productData instanceof FormData
       ? { timeout: 20000, headers: { 'Content-Type': 'multipart/form-data' } }
       : { timeout: 20000 };

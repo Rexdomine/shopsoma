@@ -24,6 +24,8 @@ export default function VendorProductEdit() {
   const [comparePrice, setComparePrice] = useState('');
   const [stock, setStock] = useState('');
   const [status, setStatus] = useState<'draft' | 'active' | 'inactive' | 'archived'>('draft');
+  const [madeToOrder, setMadeToOrder] = useState(false);
+  const [productionTimeline, setProductionTimeline] = useState('');
 
   useEffect(() => {
     const fetchProduct = async () => {
@@ -45,6 +47,8 @@ export default function VendorProductEdit() {
         setComparePrice(data.compare_at_price?.toString() || '');
         setStock(data.total_stock?.toString() || '0');
         setStatus(data.status);
+        setMadeToOrder(Boolean(data.made_to_order));
+        setProductionTimeline(data.made_to_order_timeline || '');
       } catch (err: any) {
         console.error('Failed to load product', err);
         error(
@@ -59,6 +63,12 @@ export default function VendorProductEdit() {
 
     fetchProduct();
   }, [id, navigate, error]);
+
+  useEffect(() => {
+    if (madeToOrder) {
+      setStock('');
+    }
+  }, [madeToOrder]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -76,6 +86,11 @@ export default function VendorProductEdit() {
       return;
     }
 
+    if (madeToOrder && !productionTimeline.trim()) {
+      warning('Estimated production time is required for made-to-order items');
+      return;
+    }
+
     try {
       setSaving(true);
 
@@ -84,8 +99,10 @@ export default function VendorProductEdit() {
         description: description.trim(),
         base_price: parseFloat(basePrice),
         compare_at_price: comparePrice ? parseFloat(comparePrice) : undefined,
-        total_stock: stock ? parseInt(stock) : 0,
+        total_stock: madeToOrder ? 0 : stock ? parseInt(stock) : 0,
         status,
+        made_to_order: madeToOrder,
+        made_to_order_timeline: madeToOrder ? productionTimeline.trim() : undefined,
       };
 
       await productService.updateProduct(id, updateData as any);
@@ -230,6 +247,41 @@ export default function VendorProductEdit() {
                   </div>
                 </div>
 
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="flex items-center gap-3 pt-8">
+                    <input
+                      id="madeToOrder"
+                      type="checkbox"
+                      checked={madeToOrder}
+                      onChange={(e) => setMadeToOrder(e.target.checked)}
+                      className="w-4 h-4 text-[#105E53] rounded border-gray-300 focus:ring-[#105E53]"
+                    />
+                    <label htmlFor="madeToOrder" className="text-sm font-medium text-gray-700">
+                      Made to Order
+                    </label>
+                  </div>
+
+                  <div>
+                    <label htmlFor="productionTimeline" className="block text-sm font-medium text-gray-700 mb-2">
+                      Estimated Production Time {madeToOrder ? '*' : ''}
+                    </label>
+                    <input
+                      id="productionTimeline"
+                      type="text"
+                      value={productionTimeline}
+                      onChange={(e) => setProductionTimeline(e.target.value)}
+                      className="w-full rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
+                      placeholder="E.g., 2-3 weeks"
+                      required={madeToOrder}
+                    />
+                    {madeToOrder && (
+                      <p className="mt-2 text-xs text-[#105E53]">
+                        Required for made-to-order pieces so customers see the fulfillment timeline.
+                      </p>
+                    )}
+                  </div>
+                </div>
+
                 {/* Stock and Status Row */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   <div>
@@ -242,9 +294,19 @@ export default function VendorProductEdit() {
                       min="0"
                       value={stock}
                       onChange={(e) => setStock(e.target.value)}
-                      className="w-full rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
-                      placeholder="0"
+                      disabled={madeToOrder}
+                      className={`w-full rounded-lg border px-4 py-2.5 text-sm transition ${
+                        madeToOrder
+                          ? 'border-gray-300 bg-gray-100 text-gray-400 cursor-not-allowed'
+                          : 'border-gray-300 bg-white focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20'
+                      }`}
+                      placeholder={madeToOrder ? 'Disabled for made-to-order' : '0'}
                     />
+                    <p className="mt-2 text-xs text-gray-500">
+                      {madeToOrder
+                        ? 'Inventory tracking is disabled for made-to-order products.'
+                        : 'Use stock only for ready-to-ship inventory.'}
+                    </p>
                   </div>
 
                   <div>

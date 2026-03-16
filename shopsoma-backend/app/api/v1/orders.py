@@ -134,10 +134,13 @@ async def resolve_order_variant(
     variant = variant_result.scalar_one_or_none()
 
     if variant and variant.product_id == product.id:
+        variant_stock = variant.stock
+        if product.made_to_order:
+            variant_stock = max(variant_stock, 999999)
         return {
             "variant_id": variant.id,
             "unit_price": variant.price,
-            "stock": variant.stock,
+            "stock": variant_stock,
             "variant_details": {
                 "size": variant.size,
                 "color": variant.color,
@@ -160,10 +163,13 @@ async def resolve_order_variant(
     if size_stock_row:
         size_stock, variation = size_stock_row
         unit_price = variation.price if variation.price is not None else product.base_price
+        available_stock = size_stock.stock
+        if product.made_to_order:
+            available_stock = max(available_stock, 999999)
         return {
             "variant_id": None,
             "unit_price": unit_price,
-            "stock": size_stock.stock,
+            "stock": available_stock,
             "variant_details": {
                 "size": getattr(size_stock.size, "value", str(size_stock.size)),
                 "color": variation.title,
@@ -185,10 +191,13 @@ async def resolve_order_variant(
 
     if variation:
         unit_price = variation.price if variation.price is not None else product.base_price
+        available_stock = product.total_stock
+        if product.made_to_order:
+            available_stock = max(available_stock, 999999)
         return {
             "variant_id": None,
             "unit_price": unit_price,
-            "stock": product.total_stock,
+            "stock": available_stock,
             "variant_details": {
                 "size": None,
                 "color": variation.title,
@@ -365,7 +374,7 @@ async def review_order(
             variant_details = resolved_variant["variant_details"]
 
         # Check stock
-        if stock < item.quantity:
+        if not product.made_to_order and stock < item.quantity:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Insufficient stock for '{product.title}'. Available: {stock}"
@@ -607,7 +616,7 @@ async def create_order(
             stock_id = resolved_variant["stock_id"]
 
         # Check stock
-        if stock < item_data.quantity:
+        if not product.made_to_order and stock < item_data.quantity:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Insufficient stock for '{product.title}'"
@@ -637,11 +646,12 @@ async def create_order(
         })
         order_item_media[product.id] = _resolve_product_image_url(product, variant_details)
 
-        stock_updates.append({
-            "source": stock_source,
-            "id": stock_id,
-            "quantity": item_data.quantity
-        })
+        if not product.made_to_order:
+            stock_updates.append({
+                "source": stock_source,
+                "id": stock_id,
+                "quantity": item_data.quantity
+            })
 
     if subtotal < MIN_ORDER_AMOUNT_NGN:
         raise HTTPException(
