@@ -661,12 +661,24 @@ export default function VendorProductAdd() {
       return;
     }
 
-    const imageUploads = variations.flatMap((variation) => variation.images);
-    const hasUploadedImages = imageUploads.some((image) => image.uploaded && image.imageUrl);
+    const productImageUploads = variations.flatMap((variation) => variation.images);
+    const variationImageUploads = detailedVariations.flatMap((variation) => variation.images);
 
-    if (!hasUploadedImages) {
-      warning('At least one image is required', 'Missing info');
+    if (productType === 'single' && !productImageUploads.some((image) => image.uploaded && image.imageUrl)) {
+      warning('At least one product image is required', 'Missing info');
       return;
+    }
+
+    if (productType === 'variable') {
+      if (detailedVariations.length === 0) {
+        warning('Add at least one variation before publishing a variable product', 'Missing info');
+        return;
+      }
+
+      if (!variationImageUploads.some((image) => image.uploaded && image.imageUrl)) {
+        warning('At least one variation image is required', 'Missing info');
+        return;
+      }
     }
 
     setIsSubmitting(true);
@@ -685,7 +697,16 @@ export default function VendorProductAdd() {
       const parsedStockAmount = parseInt(stockAmount || '0', 10) || 0;
       const shouldTrackStock = !madeToOrder;
       const resolvedCategoryId = childCategoryId || subcategoryId || primaryCategoryId;
-      const uploadedImages = imageUploads.filter((image) => image.uploaded && image.imageUrl);
+      const uploadedImages =
+        productType === 'single'
+          ? productImageUploads.filter((image) => image.uploaded && image.imageUrl)
+          : Array.from(
+              new Map(
+                variationImageUploads
+                  .filter((image) => image.uploaded && image.imageUrl)
+                  .map((image) => [image.imageUrl!, image])
+              ).values()
+            );
 
       const payload: CreateProductPayload = {
         title: productName.trim(),
@@ -1363,7 +1384,14 @@ export default function VendorProductAdd() {
 
             <div className="space-y-6">
               <div className="bg-white rounded-lg border border-gray-200 p-6">
-                <h2 className="text-lg font-semibold text-gray-900 mb-6">Product Images</h2>
+                <div className="mb-6">
+                  <h2 className="text-lg font-semibold text-gray-900">Product Images</h2>
+                  <p className="mt-2 text-sm text-gray-500">
+                    {productType === 'single'
+                      ? 'Upload the main product images that shoppers will see first.'
+                      : 'Variable products use variation images only. Add images inside each variation to avoid duplicate galleries.'}
+                  </p>
+                </div>
 
                 <div className="space-y-4">
                   {/* Hidden file input */}
@@ -1377,7 +1405,7 @@ export default function VendorProductAdd() {
                   />
 
                   {/* Image grid */}
-                  {currentVarImages.length > 0 && (
+                  {productType === 'single' && currentVarImages.length > 0 && (
                     <div className="grid grid-cols-4 gap-3">
                       {currentVarImages.map((image) => (
                         <div key={image.id} className="relative group aspect-square">
@@ -1409,24 +1437,33 @@ export default function VendorProductAdd() {
                   )}
 
                   {/* Upload button */}
-                  <button
-                    type="button"
-                    onClick={() => fileInputRef.current?.click()}
-                    disabled={isUploading}
-                    className="w-full border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-[#105E53] hover:bg-[#105E53]/5 transition disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    {isUploading ? (
-                      <span className="inline-flex flex-col items-center gap-2">
-                        <div className="w-8 h-8 border-2 border-gray-400 border-t-[#105E53] rounded-full animate-spin mx-auto mb-2" />
-                        <p className="text-sm text-gray-600">Uploading... {Math.round(uploadProgress)}%</p>
-                      </span>
-                    ) : (
-                      <span className="inline-flex flex-col items-center gap-2">
-                        <Upload className="w-8 h-8 text-gray-400 mx-auto mb-2" />
-                        <p className="text-sm text-gray-600">Click to upload product images</p>
-                      </span>
-                    )}
-                  </button>
+                  {productType === 'single' ? (
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={isUploading}
+                      className="w-full border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-[#105E53] hover:bg-[#105E53]/5 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {isUploading ? (
+                        <span className="inline-flex flex-col items-center gap-2">
+                          <div className="w-8 h-8 border-2 border-gray-400 border-t-[#105E53] rounded-full animate-spin mx-auto mb-2" />
+                          <p className="text-sm text-gray-600">Uploading... {Math.round(uploadProgress)}%</p>
+                        </span>
+                      ) : (
+                        <span className="inline-flex flex-col items-center gap-2">
+                          <Upload className="w-8 h-8 text-gray-400 mx-auto mb-2" />
+                          <p className="text-sm text-gray-600">Click to upload product images</p>
+                        </span>
+                      )}
+                    </button>
+                  ) : (
+                    <div className="w-full border-2 border-dashed border-gray-300 rounded-lg p-8 text-center bg-gray-50">
+                      <p className="text-sm font-medium text-gray-700">Featured image disabled for variable products</p>
+                      <p className="mt-2 text-sm text-gray-500">
+                        Upload images inside each variation. The product gallery will be generated from those variation images.
+                      </p>
+                    </div>
+                  )}
                 </div>
               </div>
 
