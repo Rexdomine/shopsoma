@@ -10,7 +10,7 @@ import { useAuth } from '../../context/AuthContext';
 import { usePreferenceStore } from '../../store/preferenceStore';
 import { useCurrencyStore } from '../../store/currencyStore';
 import { useCartStore } from '../../store/cartStore';
-import { formatPriceWithConversion, type Currency } from '../../utils/pricing';
+import { convertCurrencyWithRates, formatPriceWithConversion, type Currency } from '../../utils/pricing';
 import { loadStripe } from '@stripe/stripe-js';
 import { Elements } from '@stripe/react-stripe-js';
 import StripePaymentForm from '../../components/payment/StripePaymentForm';
@@ -123,6 +123,24 @@ export default function Checkout() {
 
   // Email validation state
   const [emailError, setEmailError] = useState('');
+
+  const cartSubtotalInNgn = cart.items.reduce((sum, item) => {
+    return sum + convertCurrencyWithRates(
+      item.subtotal,
+      item.product.currency || 'NGN',
+      'NGN',
+      exchangeRates
+    );
+  }, 0);
+
+  const cartSubtotalInSelectedCurrency = cart.items.reduce((sum, item) => {
+    return sum + convertCurrencyWithRates(
+      item.subtotal,
+      item.product.currency || 'NGN',
+      currency,
+      exchangeRates
+    );
+  }, 0);
 
   // Prefill user data on mount if authenticated
   useEffect(() => {
@@ -266,7 +284,7 @@ export default function Checkout() {
       const data = await checkoutService.calculateShipping({
         country: selectedAddress.country,
         state: selectedAddress.state,
-        order_value: cart.summary.subtotal,
+        order_value: cartSubtotalInNgn,
       });
 
       setShippingRates(data.available_rates);
@@ -297,7 +315,7 @@ export default function Checkout() {
     try {
       const result = await checkoutService.validatePromoCode({
         code: promo,
-        order_subtotal: cart.summary.subtotal,
+        order_subtotal: cartSubtotalInNgn,
       });
 
       if (result.valid && result.discount_amount) {
@@ -546,23 +564,29 @@ export default function Checkout() {
   const canPurchase = step === 'payment' && hasEmail && hasSelectedAddress && hasSelectedShipping && orderReview;
 
   const selectedShippingRate = shippingRates.find(rate => rate.id === selectedShippingRateId);
+  const shippingRateInSelectedCurrency = selectedShippingRate
+    ? convertCurrencyWithRates(Number(selectedShippingRate.base_rate), 'NGN', currency, exchangeRates)
+    : 0;
+  const promoDiscountInSelectedCurrency = appliedPromo
+    ? convertCurrencyWithRates(Number(appliedPromo.discount_amount || 0), 'NGN', currency, exchangeRates)
+    : 0;
 
   // Calculate tax and total for checkout display (before order review is available)
   const TAX_RATE = 0.075; // 7.5% VAT
   const calculateCheckoutTax = () => {
     if (orderReview) return orderReview.summary.tax_amount;
     // Calculate tax on subtotal (before order review is created)
-    const subtotal = cart.summary.subtotal;
+    const subtotal = cartSubtotalInSelectedCurrency;
     return Math.round(subtotal * TAX_RATE * 100) / 100;
   };
 
   const calculateCheckoutTotal = () => {
     if (orderReview) return orderReview.summary.total_amount;
     // Calculate total (before order review is created)
-    const subtotal = Number(cart.summary.subtotal);
-    const shipping = Number(selectedShippingRate?.base_rate || 0);
+    const subtotal = Number(cartSubtotalInSelectedCurrency);
+    const shipping = Number(shippingRateInSelectedCurrency);
     const tax = calculateCheckoutTax();
-    const discount = Number(appliedPromo?.discount_amount || 0);
+    const discount = Number(promoDiscountInSelectedCurrency);
     return subtotal + shipping + tax - discount;
   };
 
@@ -1069,11 +1093,11 @@ export default function Checkout() {
               <div className="text-sm text-gray-700 space-y-2">
                 <div className="flex items-center justify-between">
                   <span>Subtotal</span>
-                  <span>{formatPrice(orderReview?.summary.subtotal ?? cart.summary.subtotal, orderReview?.summary.currency ?? 'NGN')}</span>
+                  <span>{formatPrice(orderReview?.summary.subtotal ?? cartSubtotalInSelectedCurrency, orderReview?.summary.currency ?? 'NGN')}</span>
                 </div>
                 <div className="flex items-center justify-between">
                   <span>Shipping cost</span>
-                  <span>{formatPrice(orderReview?.summary.shipping_cost ?? Number(selectedShippingRate?.base_rate || 0), orderReview?.summary.currency ?? 'NGN')}</span>
+                  <span>{formatPrice(orderReview?.summary.shipping_cost ?? Number(shippingRateInSelectedCurrency), orderReview?.summary.currency ?? 'NGN')}</span>
                 </div>
                 <div className="flex items-center justify-between">
                   <span>Tax (VAT 7.5%)</span>
@@ -1082,7 +1106,7 @@ export default function Checkout() {
                 {(appliedPromo || (orderReview?.summary.discount_amount ?? 0) > 0) && (
                   <div className="flex items-center justify-between text-primary">
                     <span>Promo {appliedPromo && `(${appliedPromo.code})`}</span>
-                    <span>-{formatPrice(orderReview?.summary.discount_amount ?? appliedPromo?.discount_amount ?? 0, orderReview?.summary.currency ?? 'NGN')}</span>
+                    <span>-{formatPrice(orderReview?.summary.discount_amount ?? promoDiscountInSelectedCurrency, orderReview?.summary.currency ?? 'NGN')}</span>
                   </div>
                 )}
                 <div className="flex items-center gap-2 pt-2">
