@@ -1093,20 +1093,20 @@ export default function Checkout() {
               <div className="text-sm text-gray-700 space-y-2">
                 <div className="flex items-center justify-between">
                   <span>Subtotal</span>
-                  <span>{formatPrice(orderReview?.summary.subtotal ?? cartSubtotalInSelectedCurrency, orderReview?.summary.currency ?? currency)}</span>
+                  <span>{formatPrice(orderReview?.summary.subtotal ?? cartSubtotalInSelectedCurrency, orderReview?.summary.currency ?? 'NGN')}</span>
                 </div>
                 <div className="flex items-center justify-between">
                   <span>Shipping cost</span>
-                  <span>{formatPrice(orderReview?.summary.shipping_cost ?? Number(shippingRateInSelectedCurrency), orderReview?.summary.currency ?? currency)}</span>
+                  <span>{formatPrice(orderReview?.summary.shipping_cost ?? Number(shippingRateInSelectedCurrency), orderReview?.summary.currency ?? 'NGN')}</span>
                 </div>
                 <div className="flex items-center justify-between">
                   <span>Tax (VAT 7.5%)</span>
-                  <span>{formatPrice(calculateCheckoutTax(), orderReview?.summary.currency ?? currency)}</span>
+                  <span>{formatPrice(calculateCheckoutTax(), orderReview?.summary.currency ?? 'NGN')}</span>
                 </div>
                 {(appliedPromo || (orderReview?.summary.discount_amount ?? 0) > 0) && (
                   <div className="flex items-center justify-between text-primary">
                     <span>Promo {appliedPromo && `(${appliedPromo.code})`}</span>
-                    <span>-{formatPrice(orderReview?.summary.discount_amount ?? promoDiscountInSelectedCurrency, orderReview?.summary.currency ?? currency)}</span>
+                    <span>-{formatPrice(orderReview?.summary.discount_amount ?? promoDiscountInSelectedCurrency, orderReview?.summary.currency ?? 'NGN')}</span>
                   </div>
                 )}
                 <div className="flex items-center gap-2 pt-2">
@@ -1139,7 +1139,7 @@ export default function Checkout() {
               </div>
               <div className="flex items-center justify-between text-sm font-semibold text-gray-800 border-t border-gray-200 pt-3">
                 <span>Total</span>
-                <span>{formatPrice(calculateCheckoutTotal(), orderReview?.summary.currency ?? currency)}</span>
+                <span>{formatPrice(calculateCheckoutTotal(), orderReview?.summary.currency ?? 'NGN')}</span>
               </div>
               <button
                 className={`w-full py-3 rounded-sm text-sm font-semibold ${
