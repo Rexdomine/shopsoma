@@ -35,7 +35,7 @@ Backend:
 ## Testing Guidelines
 - Backend: `pytest` tests in `shopsoma-backend/tests/` with `test_*.py`; no explicit coverage threshold.
 - Frontend: no test runner in `shopsoma-frontend/package.json`; if you add one, document the command and use consistent naming (for example, `*.test.tsx`).
-- Root `test_*.sh` and `verify_*.sh` scripts are ad-hoc feature checks.
+- Ad-hoc root-level verification scripts now live in `scripts/ad-hoc-tests/` and remain optional feature checks.
 
 ## Commit & Pull Request Guidelines
 - Use conventional commits. History shows prefixes like `feat:`, `fix:`, `docs:`, `refactor:`, `chore:`, `test:`, `perf:`, and `debug:`.
