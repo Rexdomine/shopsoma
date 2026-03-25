@@ -16,17 +16,27 @@ branch_labels = None
 depends_on = None
 
 
+def _column_exists(table_name: str, column_name: str) -> bool:
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    return column_name in {column["name"] for column in inspector.get_columns(table_name)}
+
+
 def upgrade():
-    op.add_column(
-        "orders",
-        sa.Column("currency", sa.String(length=3), nullable=False, server_default="NGN"),
-    )
-    op.add_column(
-        "order_items",
-        sa.Column("currency", sa.String(length=3), nullable=False, server_default="NGN"),
-    )
+    if not _column_exists("orders", "currency"):
+        op.add_column(
+            "orders",
+            sa.Column("currency", sa.String(length=3), nullable=False, server_default="NGN"),
+        )
+    if not _column_exists("order_items", "currency"):
+        op.add_column(
+            "order_items",
+            sa.Column("currency", sa.String(length=3), nullable=False, server_default="NGN"),
+        )
 
 
 def downgrade():
-    op.drop_column("order_items", "currency")
-    op.drop_column("orders", "currency")
+    if _column_exists("order_items", "currency"):
+        op.drop_column("order_items", "currency")
+    if _column_exists("orders", "currency"):
+        op.drop_column("orders", "currency")
