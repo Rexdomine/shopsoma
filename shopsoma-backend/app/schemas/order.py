@@ -30,6 +30,7 @@ class OrderItemResponse(BaseModel):
     product_title: str
     variant_details: Optional[Dict[str, Any]]
     unit_price: Decimal
+    currency: str
     quantity: int
     subtotal: Decimal
     commission_rate: Decimal
@@ -67,10 +68,12 @@ class OrderCreate(BaseModel):
     customer_notes: Optional[str] = Field(None, max_length=1000, description="Customer notes")
     shipping_rate_id: Optional[UUID] = Field(None, description="Selected shipping rate ID")
     promo_code: Optional[str] = Field(None, description="Promo code to apply")
+    currency: str = Field("NGN", pattern="^(NGN|USD)$", description="Checkout currency")
 
 
 class OrderSummary(BaseModel):
     """Order summary for review before creation"""
+    currency: str = Field("NGN", pattern="^(NGN|USD)$")
     subtotal: Decimal
     shipping_cost: Decimal
     tax_amount: Decimal
@@ -87,6 +90,7 @@ class OrderReviewRequest(BaseModel):
     guest_address: Optional[GuestAddressData] = None
     shipping_rate_id: Optional[UUID] = None
     promo_code: Optional[str] = None
+    currency: str = Field("NGN", pattern="^(NGN|USD)$", description="Checkout currency")
 
 
 class OrderReviewResponse(BaseModel):

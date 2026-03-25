@@ -234,6 +234,7 @@ export const productService = {
       headers: {
         'Content-Type': 'multipart/form-data',
       },
+      timeout: 60000,
     });
     return response.data;
   },
@@ -257,6 +258,7 @@ export const productService = {
       headers: {
         'Content-Type': 'multipart/form-data',
       },
+      timeout: 60000,
     });
     return response.data;
   },

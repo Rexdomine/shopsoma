@@ -127,6 +127,7 @@ class OrderItemDetail(BaseModel):
     product_image_url: Optional[str] = None
     variant_details: Optional[dict]
     unit_price: Decimal
+    currency: str
     quantity: int
     subtotal: Decimal
     commission_rate: Decimal
