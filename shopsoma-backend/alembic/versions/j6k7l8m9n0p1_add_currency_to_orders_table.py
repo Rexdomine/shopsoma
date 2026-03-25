@@ -25,7 +25,8 @@ def _column_exists(table_name: str, column_name: str) -> bool:
 
 
 def _set_column_marker(table_name: str, column_name: str, marker: str) -> None:
-    op.execute(
+    bind = op.get_bind()
+    bind.execute(
         sa.text(f"COMMENT ON COLUMN {table_name}.{column_name} IS :marker"),
         {"marker": marker},
     )
