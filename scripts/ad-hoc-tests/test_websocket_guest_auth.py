@@ -203,8 +203,8 @@ async def main():
 
     # Get test parameters from command line or use defaults
     if len(sys.argv) < 2:
-        print_error("Usage: python test_websocket_guest_auth.py <order_id> [auth_token] [wrong_token]")
-        print_info("Example: python test_websocket_guest_auth.py abc-123-def eyJhbGc...")
+        print_error("Usage: python scripts/ad-hoc-tests/test_websocket_guest_auth.py <order_id> [auth_token] [wrong_token]")
+        print_info("Example: python scripts/ad-hoc-tests/test_websocket_guest_auth.py abc-123-def eyJhbGc...")
         print_info("\nOr run without parameters to see usage instructions")
         sys.exit(1)
 

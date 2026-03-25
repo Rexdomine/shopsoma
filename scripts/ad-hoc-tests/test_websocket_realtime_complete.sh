@@ -161,11 +161,11 @@ print_info "Testing WebSocket connection WITHOUT authentication (guest mode)"
 print_info "Order ID: ${ORDER_ID}"
 
 # Since we can't easily test WebSocket from bash, we'll use the Python script
-if [ -f "test_websocket_guest_auth.py" ]; then
-    python3 test_websocket_guest_auth.py "${ORDER_ID}" "${CUSTOMER_TOKEN}"
+if [ -f "scripts/ad-hoc-tests/test_websocket_guest_auth.py" ]; then
+    python3 scripts/ad-hoc-tests/test_websocket_guest_auth.py "${ORDER_ID}" "${CUSTOMER_TOKEN}"
 else
     print_warning "Python test script not found, skipping WebSocket tests"
-    print_info "Run: python3 test_websocket_guest_auth.py ${ORDER_ID} ${CUSTOMER_TOKEN}"
+    print_info "Run: python3 scripts/ad-hoc-tests/test_websocket_guest_auth.py ${ORDER_ID} ${CUSTOMER_TOKEN}"
 fi
 
 # Test 2: Status Update Flow
