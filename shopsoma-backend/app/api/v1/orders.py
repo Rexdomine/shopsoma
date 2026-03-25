@@ -909,6 +909,7 @@ async def create_order(
                     "product_title": order_item.product_title,
                     "quantity": order_item.quantity,
                     "vendor_payout": float(order_item.vendor_payout),
+                    "currency": order_item.currency,
                     "variant_details": order_item.variant_details,
                     "image_url": order_item_media.get(order_item.product_id),
                 }
@@ -946,7 +947,8 @@ async def create_order(
             data={
                 "order_number": new_order.order_number,
                 "items": items,
-                "total_payout": total_payout
+                "total_payout": total_payout,
+                "currency": new_order.currency,
             }
         )
         db.add(notification)
@@ -996,7 +998,8 @@ async def create_order(
                 order_date=new_order.created_at or datetime.utcnow(),
                 items=items,
                 total_payout=total_payout,
-                scheduled_pickup_date=scheduled_date
+                scheduled_pickup_date=scheduled_date,
+                currency=new_order.currency or "NGN",
             )
             logger.info(
                 "[Order Email] Vendor email sent vendor_id=%s order=%s items=%s",

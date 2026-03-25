@@ -357,12 +357,13 @@ class EmailService:
             """
         return rows
 
-    def _build_vendor_items_table(self, items: List[dict]) -> str:
+    def _build_vendor_items_table(self, items: List[dict], fallback_currency: Optional[str] = "NGN") -> str:
         rows = ""
         for item in items:
             name = item.get("product_title") or item.get("product_name") or "Product"
             quantity = item.get("quantity", 1)
-            payout = self._format_amount(item.get("vendor_payout", 0))
+            currency = self._normalize_currency(item.get("currency") or fallback_currency)
+            payout = self._format_amount(item.get("vendor_payout", 0), currency)
             variant_details = ""
             details_dict = item.get("variant_details")
             if isinstance(details_dict, dict):
@@ -482,10 +483,12 @@ class EmailService:
         order_date: datetime,
         items: List[dict],
         total_payout: float,
-        pickup_date: datetime
+        pickup_date: datetime,
+        currency: Optional[str] = "NGN",
     ) -> bool:
         subject = f"New Order Received · {order_number}"
-        items_table = self._build_vendor_items_table(items)
+        normalized_currency = self._normalize_currency(currency)
+        items_table = self._build_vendor_items_table(items, normalized_currency)
         pickup_date_str = pickup_date.strftime("%d %B %Y · %I:%M %p")
 
         body_html = f"""
@@ -512,7 +515,7 @@ class EmailService:
             <table style="width:100%;font-size:14px;">
                 <tr style="font-size:16px;font-weight:600;">
                     <td>Total Payout</td>
-                    <td style="text-align:right;">{self._format_amount(total_payout)}</td>
+                    <td style="text-align:right;">{self._format_amount(total_payout, normalized_currency)}</td>
                 </tr>
             </table>
         </div>
