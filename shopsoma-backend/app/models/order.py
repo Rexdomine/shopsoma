@@ -44,6 +44,7 @@ class Order(Base):
     billing_address_id = Column(UUID(as_uuid=True), ForeignKey("addresses.id"), nullable=True)
 
     # Pricing
+    currency = Column(String(3), nullable=False, default="NGN", server_default="NGN")
     subtotal = Column(Numeric(10, 2), nullable=False)
     shipping_cost = Column(Numeric(10, 2), default=0.00, nullable=False)
     tax_amount = Column(Numeric(10, 2), default=0.00, nullable=False)
@@ -100,6 +101,7 @@ class OrderItem(Base):
 
     # Pricing
     unit_price = Column(Numeric(10, 2), nullable=False)
+    currency = Column(String(3), nullable=False, default="NGN", server_default="NGN")
     quantity = Column(Integer, default=1, nullable=False)
     subtotal = Column(Numeric(10, 2), nullable=False)
 

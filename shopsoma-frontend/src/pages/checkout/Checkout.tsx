@@ -337,6 +337,7 @@ export default function Checkout() {
       // Prepare request based on guest vs authenticated user
       const reviewRequest: any = {
         items,
+        currency,
         shipping_rate_id: selectedShippingRateId || undefined,
         promo_code: appliedPromo?.code,
       };
@@ -386,6 +387,7 @@ export default function Checkout() {
       // Prepare order request based on guest vs authenticated user
       const orderRequest: any = {
         items,
+        currency,
         shipping_rate_id: selectedShippingRateId || undefined,
         promo_code: appliedPromo?.code,
       };
@@ -619,8 +621,8 @@ export default function Checkout() {
   );
 
   // Helper function to format price in selected currency
-  const formatPrice = (amountInNGN: number) => {
-    return formatPriceWithConversion(amountInNGN, 'NGN', currency, exchangeRates);
+  const formatPrice = (amount: number, sourceCurrency: Currency = 'NGN') => {
+    return formatPriceWithConversion(amount, sourceCurrency, currency, exchangeRates);
   };
 
   return (
@@ -1067,20 +1069,20 @@ export default function Checkout() {
               <div className="text-sm text-gray-700 space-y-2">
                 <div className="flex items-center justify-between">
                   <span>Subtotal</span>
-                  <span>{formatPrice(orderReview?.summary.subtotal ?? cart.summary.subtotal)}</span>
+                  <span>{formatPrice(orderReview?.summary.subtotal ?? cart.summary.subtotal, orderReview?.summary.currency ?? 'NGN')}</span>
                 </div>
                 <div className="flex items-center justify-between">
                   <span>Shipping cost</span>
-                  <span>{formatPrice(orderReview?.summary.shipping_cost ?? Number(selectedShippingRate?.base_rate || 0))}</span>
+                  <span>{formatPrice(orderReview?.summary.shipping_cost ?? Number(selectedShippingRate?.base_rate || 0), orderReview?.summary.currency ?? 'NGN')}</span>
                 </div>
                 <div className="flex items-center justify-between">
                   <span>Tax (VAT 7.5%)</span>
-                  <span>{formatPrice(calculateCheckoutTax())}</span>
+                  <span>{formatPrice(calculateCheckoutTax(), orderReview?.summary.currency ?? 'NGN')}</span>
                 </div>
                 {(appliedPromo || (orderReview?.summary.discount_amount ?? 0) > 0) && (
                   <div className="flex items-center justify-between text-primary">
                     <span>Promo {appliedPromo && `(${appliedPromo.code})`}</span>
-                    <span>-{formatPrice(orderReview?.summary.discount_amount ?? appliedPromo?.discount_amount ?? 0)}</span>
+                    <span>-{formatPrice(orderReview?.summary.discount_amount ?? appliedPromo?.discount_amount ?? 0, orderReview?.summary.currency ?? 'NGN')}</span>
                   </div>
                 )}
                 <div className="flex items-center gap-2 pt-2">
@@ -1113,7 +1115,7 @@ export default function Checkout() {
               </div>
               <div className="flex items-center justify-between text-sm font-semibold text-gray-800 border-t border-gray-200 pt-3">
                 <span>Total</span>
-                <span>{formatPrice(calculateCheckoutTotal())}</span>
+                <span>{formatPrice(calculateCheckoutTotal(), orderReview?.summary.currency ?? 'NGN')}</span>
               </div>
               <button
                 className={`w-full py-3 rounded-sm text-sm font-semibold ${

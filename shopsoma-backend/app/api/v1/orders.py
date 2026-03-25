@@ -18,6 +18,7 @@ from app.models.payment import Payment
 from app.models.address import Address
 from app.models.shipping_rate import ShippingRate
 from app.models.vendor import Vendor
+from app.models.setting import Setting
 from app.schemas.order import (
     OrderCreate,
     OrderUpdate,
@@ -37,6 +38,7 @@ from app.core.config import settings
 router = APIRouter(prefix="/orders", tags=["Orders"])
 MIN_ORDER_AMOUNT_NGN = Decimal("60000.00")
 logger = logging.getLogger(__name__)
+SUPPORTED_ORDER_CURRENCIES = {"NGN", "USD"}
 
 # Simple promo code configuration (should eventually move to dedicated table/service)
 PROMO_CODES = {
@@ -45,7 +47,12 @@ PROMO_CODES = {
 }
 
 
-def calculate_promo_discount(promo_code: Optional[str], subtotal: Decimal):
+def calculate_promo_discount(
+    promo_code: Optional[str],
+    subtotal: Decimal,
+    currency: str = "NGN",
+    usd_to_ngn_rate: Decimal = Decimal("833"),
+):
     """Calculate promo discount based on configured codes."""
     if not promo_code:
         return Decimal("0.00"), None
@@ -62,7 +69,12 @@ def calculate_promo_discount(promo_code: Optional[str], subtotal: Decimal):
         promo_meta["discount_percent"] = int(config["value"] * 100)
         promo_meta["discount_amount"] = float(discount)
     else:
-        discount = config["value"]
+        discount = _convert_currency(
+            config["value"],
+            "NGN",
+            currency,
+            usd_to_ngn_rate,
+        )
         promo_meta["discount_amount"] = float(discount)
 
     if discount > subtotal:
@@ -96,6 +108,52 @@ def _build_admin_recipients(admin_users: List[User]) -> List[Dict[str, str]]:
     return recipients
 
 
+def _normalize_currency(currency: Optional[str]) -> str:
+    normalized = (currency or "NGN").upper()
+    if normalized not in SUPPORTED_ORDER_CURRENCIES:
+        return "NGN"
+    return normalized
+
+
+async def _get_usd_to_ngn_rate(db: AsyncSession) -> Decimal:
+    result = await db.execute(
+        select(Setting).where(Setting.key == "exchange_rate_usd_to_ngn")
+    )
+    setting = result.scalar_one_or_none()
+    if not setting:
+        return Decimal("833")
+
+    try:
+        return Decimal(str(setting.value))
+    except Exception:
+        return Decimal("833")
+
+
+def _convert_currency(
+    amount: Decimal,
+    from_currency: str,
+    to_currency: str,
+    usd_to_ngn_rate: Decimal,
+) -> Decimal:
+    source = _normalize_currency(from_currency)
+    target = _normalize_currency(to_currency)
+
+    if source == target:
+        return amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+    if source == "USD" and target == "NGN":
+        return (amount * usd_to_ngn_rate).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+    if source == "NGN" and target == "USD":
+        return (amount / usd_to_ngn_rate).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+    return amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+def _minimum_order_amount_for_currency(currency: str, usd_to_ngn_rate: Decimal) -> Decimal:
+    return _convert_currency(MIN_ORDER_AMOUNT_NGN, "NGN", currency, usd_to_ngn_rate)
+
+
 def _resolve_product_image_url(product: Product, variant_details: Optional[Dict[str, str]]) -> Optional[str]:
     if variant_details and product.variations:
         variation_id = variant_details.get("variation_id")
@@ -113,6 +171,8 @@ def _resolve_product_image_url(product: Product, variant_details: Optional[Dict[
 
 
 def _resolve_order_currency(order: Order) -> str:
+    if getattr(order, "currency", None):
+        return _normalize_currency(order.currency)
     if not getattr(order, "payments", None):
         return "NGN"
     latest_payment = max(
@@ -304,6 +364,8 @@ async def review_order(
     For guest checkout, provide guest_address instead of shipping_address_id.
     """
     # Validate shipping address
+    checkout_currency = _normalize_currency(review_data.currency)
+    usd_to_ngn_rate = await _get_usd_to_ngn_rate(db)
     shipping_address = None
     guest_shipping_state = None
     guest_shipping_country = None
@@ -380,7 +442,13 @@ async def review_order(
                 detail=f"Insufficient stock for '{product.title}'. Available: {stock}"
             )
 
-        unit_price_decimal = _as_decimal(unit_price)
+        source_currency = _normalize_currency(product.currency)
+        unit_price_decimal = _convert_currency(
+            _as_decimal(unit_price),
+            source_currency,
+            checkout_currency,
+            usd_to_ngn_rate,
+        )
         item_subtotal = unit_price_decimal * Decimal(item.quantity)
         subtotal += item_subtotal
 
@@ -390,16 +458,18 @@ async def review_order(
             "variant_id": str(variant_id_for_response) if variant_id_for_response else None,
             "variant_details": variant_details,
             "unit_price": float(unit_price_decimal),
+            "currency": checkout_currency,
             "quantity": item.quantity,
             "subtotal": float(item_subtotal),
             "vendor_name": product.vendor.business_name if product.vendor else "Shopsoma"
         })
 
     # Minimum order enforcement
-    if subtotal < MIN_ORDER_AMOUNT_NGN:
+    minimum_order_amount = _minimum_order_amount_for_currency(checkout_currency, usd_to_ngn_rate)
+    if subtotal < minimum_order_amount:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Minimum order amount is ₦60,000. Please add more items before checkout."
+            detail=f"Minimum order amount is {checkout_currency} {minimum_order_amount} equivalent. Please add more items before checkout."
         )
 
     # Calculate shipping
@@ -444,16 +514,27 @@ async def review_order(
     if review_data.shipping_rate_id:
         selected_rate = next((r for r in shipping_rates if r.id == review_data.shipping_rate_id), None) or selected_rate
 
-    shipping_cost = _as_decimal(selected_rate.base_rate)
+    shipping_cost = _convert_currency(
+        _as_decimal(selected_rate.base_rate),
+        "NGN",
+        checkout_currency,
+        usd_to_ngn_rate,
+    )
 
     # Calculate discount (if promo code provided)
-    discount_amount, applied_promo = calculate_promo_discount(review_data.promo_code, subtotal)
+    discount_amount, applied_promo = calculate_promo_discount(
+        review_data.promo_code,
+        subtotal,
+        checkout_currency,
+        usd_to_ngn_rate,
+    )
 
     # Calculate totals
     tax_amount = (subtotal + shipping_cost) * TAX_RATE
     total_amount = subtotal + shipping_cost + tax_amount - discount_amount
 
     summary = OrderSummary(
+        currency=checkout_currency,
         subtotal=subtotal,
         shipping_cost=shipping_cost,
         tax_amount=tax_amount,
@@ -470,7 +551,7 @@ async def review_order(
             "id": str(selected_rate.id),
             "name": selected_rate.name,
             "description": selected_rate.description,
-            "cost": float(selected_rate.base_rate),
+            "cost": float(shipping_cost),
             "min_days": selected_rate.min_delivery_days,
             "max_days": selected_rate.max_delivery_days
         },
@@ -498,6 +579,9 @@ async def create_order(
     Works for both authenticated users and guest checkout.
     For guest checkout, provide guest_address and customer_email.
     """
+    checkout_currency = _normalize_currency(order_data.currency)
+    usd_to_ngn_rate = await _get_usd_to_ngn_rate(db)
+
     # Handle shipping address - either from ID or create from guest data
     shipping_address = None
     shipping_address_id = None
@@ -622,7 +706,13 @@ async def create_order(
                 detail=f"Insufficient stock for '{product.title}'"
             )
 
-        unit_price_decimal = _as_decimal(unit_price)
+        source_currency = _normalize_currency(product.currency)
+        unit_price_decimal = _convert_currency(
+            _as_decimal(unit_price),
+            source_currency,
+            checkout_currency,
+            usd_to_ngn_rate,
+        )
         item_subtotal = unit_price_decimal * Decimal(item_data.quantity)
         subtotal += item_subtotal
 
@@ -638,6 +728,7 @@ async def create_order(
             "product_title": product.title,
             "variant_details": variant_details,
             "unit_price": unit_price_decimal,
+            "currency": checkout_currency,
             "quantity": item_data.quantity,
             "subtotal": item_subtotal,
             "commission_rate": commission_rate,
@@ -653,10 +744,11 @@ async def create_order(
                 "quantity": item_data.quantity
             })
 
-    if subtotal < MIN_ORDER_AMOUNT_NGN:
+    minimum_order_amount = _minimum_order_amount_for_currency(checkout_currency, usd_to_ngn_rate)
+    if subtotal < minimum_order_amount:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Minimum order amount is ₦60,000. Please add more items before checkout."
+            detail=f"Minimum order amount is {checkout_currency} {minimum_order_amount} equivalent. Please add more items before checkout."
         )
 
     # Get shipping rate
@@ -696,10 +788,20 @@ async def create_order(
     if order_data.shipping_rate_id:
         selected_rate = next((r for r in shipping_rates if r.id == order_data.shipping_rate_id), None) or selected_rate
 
-    shipping_cost = _as_decimal(selected_rate.base_rate)
+    shipping_cost = _convert_currency(
+        _as_decimal(selected_rate.base_rate),
+        "NGN",
+        checkout_currency,
+        usd_to_ngn_rate,
+    )
 
     # Calculate discount
-    discount_amount, _ = calculate_promo_discount(order_data.promo_code, subtotal)
+    discount_amount, _ = calculate_promo_discount(
+        order_data.promo_code,
+        subtotal,
+        checkout_currency,
+        usd_to_ngn_rate,
+    )
 
     # Calculate totals
     tax_amount = (subtotal + shipping_cost) * TAX_RATE
@@ -718,6 +820,7 @@ async def create_order(
         customer_id=customer_id_for_order,
         shipping_address_id=shipping_address_id,
         billing_address_id=billing_address_id,
+        currency=checkout_currency,
         subtotal=subtotal,
         shipping_cost=shipping_cost,
         tax_amount=tax_amount,
@@ -929,6 +1032,7 @@ async def create_order(
                 'product_name': item.product_title,
                 'quantity': item.quantity,
                 'price': float(item.unit_price),
+                'currency': item.currency,
                 'subtotal': float(item.subtotal),
                 'size': item.variant_details.get('size') if item.variant_details else None,
                 'color': item.variant_details.get('color') if item.variant_details else None,

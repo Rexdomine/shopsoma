@@ -54,7 +54,7 @@ async def initialize_payment(
         )
 
     # Get order
-    order_query = select(Order).where(Order.id == payment_data.order_id)
+    order_query = select(Order).options(selectinload(Order.items)).where(Order.id == payment_data.order_id)
 
     # If authenticated, verify order ownership
     if current_user:
@@ -67,6 +67,13 @@ async def initialize_payment(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Order not found"
+        )
+
+    order_currency = (order.currency or "NGN").upper()
+    if payment_data.currency != order_currency:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"This order must be paid in {order_currency}.",
         )
 
     # Check if order is already paid
@@ -358,6 +365,7 @@ async def _verify_stripe_payment(
                         name=order.customer.full_name,
                         order_number=order.order_number,
                         amount=float(payment.amount),
+                        currency=payment.currency,
                         payment_method="Stripe",
                         reference=payment.transaction_id
                     )
@@ -467,6 +475,7 @@ async def _verify_paystack_payment(
                             name=order.customer.full_name,
                             order_number=order.order_number,
                             amount=float(payment.amount),
+                            currency=payment.currency,
                             payment_method="Paystack",
                             reference=payment.transaction_id
                         )

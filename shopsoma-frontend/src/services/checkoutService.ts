@@ -91,6 +91,7 @@ export interface OrderItem {
 
 export interface OrderReviewRequest {
   items: OrderItem[];
+  currency: 'NGN' | 'USD';
   shipping_address_id?: string;
   guest_address?: CreateAddressData;
   promo_code?: string;
@@ -98,6 +99,7 @@ export interface OrderReviewRequest {
 }
 
 export interface OrderSummary {
+  currency: 'NGN' | 'USD';
   subtotal: number;
   shipping_cost: number;
   tax_amount: number;
@@ -115,6 +117,7 @@ export interface OrderReview {
     variant_id?: string;
     variant_details?: Record<string, any>;
     unit_price: number;
+    currency: 'NGN' | 'USD';
     quantity: number;
     subtotal: number;
     vendor_name: string;
@@ -136,6 +139,7 @@ export interface OrderReview {
 
 export interface CreateOrderData {
   items: OrderItem[];
+  currency: 'NGN' | 'USD';
   shipping_address_id?: string;
   billing_address_id?: string;
   guest_address?: CreateAddressData;
