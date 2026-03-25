@@ -26,7 +26,8 @@ class VendorNotificationService:
         order_date: datetime,
         items: List[Dict[str, Any]],
         total_payout: float,
-        scheduled_pickup_date: datetime
+        scheduled_pickup_date: datetime,
+        currency: str = "NGN",
     ):
         """
         Send order placed notification to vendor
@@ -62,7 +63,8 @@ class VendorNotificationService:
                 order_date=order_date,
                 items=items,
                 total_payout=total_payout,
-                pickup_date=scheduled_pickup_date
+                pickup_date=scheduled_pickup_date,
+                currency=currency,
             )
 
             # Update notification email_sent status

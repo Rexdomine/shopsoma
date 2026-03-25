@@ -209,6 +209,36 @@ async def test_send_vendor_new_order_email(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_send_vendor_new_order_email_uses_order_currency(monkeypatch):
+    service = EmailService()
+    calls = _capture_email(monkeypatch, service)
+
+    result = await service.send_vendor_new_order_email(
+        email="vendor@example.com",
+        name="Vendor Store",
+        order_number="SHP-20250325-USD",
+        order_date=datetime(2025, 3, 25, 15, 0),
+        items=[
+            {
+                "product_title": "Ruffled silk-chiffon blouse",
+                "quantity": 1,
+                "vendor_payout": 255,
+                "currency": "USD",
+                "variant_details": {"color": "green"},
+            }
+        ],
+        total_payout=255,
+        pickup_date=datetime(2025, 3, 27, 15, 0),
+        currency="USD",
+    )
+
+    assert result is True
+    html = calls[0]["html_content"]
+    assert "$255.00" in html
+    assert "₦255.00" not in html
+
+
+@pytest.mark.asyncio
 async def test_send_vendor_payout_processed_email(monkeypatch):
     service = EmailService()
     calls = _capture_email(monkeypatch, service)
