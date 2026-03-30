@@ -5,6 +5,7 @@ import { Bookmark } from 'lucide-react';
 import { IMAGE_CONFIG } from '../../config/constants';
 import { useCurrencyStore } from '../../store/currencyStore';
 import { formatPriceWithConversion } from '../../utils/pricing';
+import { hasSolidColorHex } from '../../utils/colorDisplay';
 
 interface ProductCardProps {
   product: Product;
@@ -163,12 +164,16 @@ export default function ProductCard({
                         key={colorOption.color}
                         className="flex flex-col items-center"
                       >
-                        {colorOption.hex && (
+                        {hasSolidColorHex(colorOption.hex) ? (
                           <span
                             className="w-6 h-6 border border-gray-300"
-                            style={{ backgroundColor: colorOption.hex }}
+                            style={{ backgroundColor: colorOption.hex! }}
                             title={colorOption.color}
                           />
+                        ) : (
+                          <span className="rounded-full border border-gray-200 px-2 py-1 text-[10px] font-medium uppercase tracking-[0.08em] text-dark">
+                            {colorOption.color}
+                          </span>
                         )}
                       </div>
                     ))}
