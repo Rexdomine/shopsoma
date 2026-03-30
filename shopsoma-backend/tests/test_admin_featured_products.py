@@ -1,6 +1,7 @@
 import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
+import uuid
 
 
 @pytest.mark.asyncio
@@ -32,7 +33,6 @@ async def test_admin_cannot_feature_unapproved_product(
     db_session: AsyncSession,
 ):
     from app.models.product import Product, ProductStatus, ModerationStatus
-    import uuid
 
     product = Product(
         id=uuid.uuid4(),
@@ -54,3 +54,47 @@ async def test_admin_cannot_feature_unapproved_product(
     )
 
     assert response.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_admin_product_responses_include_currency(
+    client: AsyncClient,
+    admin_user,
+    vendor_user,
+    db_session: AsyncSession,
+):
+    from app.models.product import Product, ProductStatus, ModerationStatus
+
+    product = Product(
+        id=uuid.uuid4(),
+        vendor_id=vendor_user["vendor"].id,
+        title="USD Product",
+        description="USD product description",
+        base_price=300.00,
+        compare_at_price=350.00,
+        currency="USD",
+        total_stock=5,
+        status=ProductStatus.ACTIVE,
+        moderation_status=ModerationStatus.APPROVED,
+    )
+    db_session.add(product)
+    await db_session.commit()
+
+    list_response = await client.get(
+        "/api/v1/admin/products",
+        headers=admin_user["headers"],
+    )
+
+    assert list_response.status_code == 200
+    list_payload = list_response.json()
+    list_item = next(item for item in list_payload["items"] if item["id"] == str(product.id))
+    assert list_item["currency"] == "USD"
+
+    detail_response = await client.get(
+        f"/api/v1/admin/products/{product.id}",
+        headers=admin_user["headers"],
+    )
+
+    assert detail_response.status_code == 200
+    detail_payload = detail_response.json()
+    assert detail_payload["currency"] == "USD"
