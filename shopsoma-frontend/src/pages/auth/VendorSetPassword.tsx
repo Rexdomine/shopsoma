@@ -3,10 +3,12 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { Eye, EyeOff, Check, X, Lock } from 'lucide-react';
 import { ROUTES, STORAGE_KEYS } from '../../config/constants';
 import { vendorActivationService } from '../../services/vendorActivationService';
+import { useAuth } from '../../context/AuthContext';
 
 export default function VendorSetPassword() {
   const navigate = useNavigate();
   const location = useLocation();
+  const { refreshUser } = useAuth();
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -41,9 +43,10 @@ export default function VendorSetPassword() {
       // Store authentication tokens
       localStorage.setItem(STORAGE_KEYS.ACCESS_TOKEN, response.access_token);
       localStorage.setItem(STORAGE_KEYS.REFRESH_TOKEN, response.refresh_token);
+      await refreshUser();
 
-      // Navigate to brand info settings to complete onboarding
-      navigate(ROUTES.VENDOR_BRAND_INFO, { replace: true });
+      // Navigate to dashboard so first-time vendors see onboarding guidance
+      navigate(ROUTES.VENDOR_DASHBOARD, { replace: true });
     } catch (err: any) {
       setError(err?.response?.data?.detail || 'Failed to set password. Please try again.');
     } finally {

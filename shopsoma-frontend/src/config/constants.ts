@@ -34,6 +34,7 @@ export const STORAGE_KEYS = {
   ACCESS_TOKEN: 'shopsoma_access_token',
   REFRESH_TOKEN: 'shopsoma_refresh_token',
   USER: 'shopsoma_user',
+  VENDOR_ONBOARDING_WELCOME_SEEN: 'shopsoma_vendor_onboarding_welcome_seen',
   THEME: 'shopsoma_theme',
 } as const;
 

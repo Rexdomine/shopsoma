@@ -20,6 +20,7 @@ export default function VendorOnboardingGuard({ children }: VendorOnboardingGuar
 
   // Routes that are allowed during onboarding
   const allowedOnboardingRoutes = [
+    ROUTES.VENDOR_DASHBOARD,
     ROUTES.VENDOR_SETTINGS,
     ROUTES.VENDOR_BRAND_INFO,
     ROUTES.VENDOR_PAYOUT_INFO,
