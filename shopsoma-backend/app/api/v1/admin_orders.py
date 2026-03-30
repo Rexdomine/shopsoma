@@ -19,6 +19,7 @@ from app.models.vendor import Vendor
 from app.models.address import Address
 from app.models.vendor_pickup import VendorPickup, PickupStatus
 from app.models.product import Product
+from app.models.payment import Payment
 
 logger = logging.getLogger(__name__)
 from app.services.order_notification_service import OrderNotificationService
@@ -108,6 +109,20 @@ def build_address_info(address: Address) -> AddressInfo:
     except AttributeError as e:
         # Log detailed error for debugging
         raise ValueError(f"Error building address info for address {address.id}: Missing attribute {str(e)}") from e
+
+
+def resolve_order_currency(order: Order) -> str:
+    """Prefer the latest payment currency for admin display, then fall back to the order row."""
+    payments = list(getattr(order, "payments", []) or [])
+    if payments:
+        latest_payment = max(
+            payments,
+            key=lambda payment: payment.created_at or datetime.min,
+        )
+        if latest_payment.currency:
+            return latest_payment.currency.upper()
+
+    return (getattr(order, "currency", None) or "NGN").upper()
 
 
 # ============================================================================
@@ -209,6 +224,7 @@ async def list_orders(
     query = select(Order).options(
         selectinload(Order.customer),
         selectinload(Order.items).selectinload(OrderItem.vendor),
+        selectinload(Order.payments),
     )
 
     # Apply filters
@@ -262,6 +278,7 @@ async def list_orders(
     # Build response
     orders_data = []
     for order in orders:
+        display_currency = resolve_order_currency(order)
         # Count unique vendors and total items
         vendor_ids = set()
         item_count = 0
@@ -275,7 +292,7 @@ async def list_orders(
                 order_number=order.order_number,
                 customer=build_customer_info(order.customer),
                 total_amount=order.total_amount,
-                currency=order.currency or "NGN",
+                currency=display_currency,
                 payment_status=order.payment_status,
                 fulfillment_status=order.fulfillment_status,
                 created_at=order.created_at,
@@ -311,6 +328,7 @@ async def get_order_detail(
             selectinload(Order.billing_address),
             selectinload(Order.items).selectinload(OrderItem.vendor).selectinload(Vendor.user),
             selectinload(Order.items).selectinload(OrderItem.product).selectinload(Product.images),
+            selectinload(Order.payments),
             selectinload(Order.pickups),
         )
 
@@ -324,13 +342,14 @@ async def get_order_detail(
             )
 
         # Build response with detailed error tracking
+        display_currency = resolve_order_currency(order)
         return OrderDetail(
         id=order.id,
         order_number=order.order_number,
         customer=build_customer_info(order.customer),
         shipping_address=build_address_info(order.shipping_address) if order.shipping_address else None,
         billing_address=build_address_info(order.billing_address) if order.billing_address else None,
-        currency=order.currency or "NGN",
+        currency=display_currency,
         subtotal=order.subtotal,
         shipping_cost=order.shipping_cost,
         tax_amount=order.tax_amount,
@@ -361,7 +380,7 @@ async def get_order_detail(
                 ) if hasattr(item, 'product') and item.product else None,
                 variant_details=item.variant_details,
                 unit_price=item.unit_price,
-                currency=item.currency or order.currency or "NGN",
+                currency=display_currency,
                 quantity=item.quantity,
                 subtotal=item.subtotal,
                 commission_rate=item.commission_rate,
@@ -432,6 +451,7 @@ async def update_order_status(
         selectinload(Order.shipping_address),
         selectinload(Order.billing_address),
         selectinload(Order.items).selectinload(OrderItem.vendor),
+        selectinload(Order.payments),
         selectinload(Order.pickups),
     )
 

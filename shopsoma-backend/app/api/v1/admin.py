@@ -15,6 +15,7 @@ import os
 from app.core.database import get_db
 from app.api.dependencies import get_current_admin
 from app.models.product import Product, ProductVariant, ProductImage, ProductStatus, ModerationStatus
+from app.models.payment import Payment
 from app.models.user import User, UserRole
 from app.models.vendor import Vendor, KYCStatus
 from app.models.vendor_application import VendorApplication
@@ -23,6 +24,19 @@ from app.schemas.common import PaginatedResponse
 from app.schemas.product import ProductApprovalRequest, ProductRejectionRequest, ProductFeatureUpdate
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+
+
+def _resolve_admin_order_currency(order, payments=None) -> str:
+    payment_rows = list(payments or [])
+    if payment_rows:
+        latest_payment = max(
+            payment_rows,
+            key=lambda payment: payment.created_at or datetime.min,
+        )
+        if latest_payment.currency:
+            return latest_payment.currency.upper()
+
+    return (getattr(order, "currency", None) or "NGN").upper()
 
 
 @router.post("/seed-database")
@@ -2357,7 +2371,7 @@ async def list_orders(
     query = (
         select(Order, User)
         .join(User, Order.customer_id == User.id)
-        .options(selectinload(Order.items))
+        .options(selectinload(Order.items), selectinload(Order.payments))
     )
 
     # Apply filters
@@ -2408,6 +2422,7 @@ async def list_orders(
 
     orders_data = []
     for order, user in orders_with_users:
+        display_currency = _resolve_admin_order_currency(order, order.payments)
         vendor_ids = {item.vendor_id for item in order.items}
         item_count = sum(item.quantity for item in order.items)
 
@@ -2421,7 +2436,7 @@ async def list_orders(
                     "email": user.email,
                 },
                 "total_amount": float(order.total_amount),
-                "currency": order.currency or "NGN",
+                "currency": display_currency,
                 "payment_status": order.payment_status,
                 "fulfillment_status": order.fulfillment_status,
                 "created_at": order.created_at.isoformat() if order.created_at else None,
@@ -2535,6 +2550,7 @@ async def get_order(
         select(Order, User)
         .join(User, Order.customer_id == User.id)
         .where(Order.id == order_id)
+        .options(selectinload(Order.payments))
     )
     order_with_user = result.first()
 
@@ -2542,6 +2558,7 @@ async def get_order(
         raise HTTPException(status_code=404, detail="Order not found")
 
     order, user = order_with_user
+    display_currency = _resolve_admin_order_currency(order, order.payments)
 
     # Get order items
     items_result = await db.execute(
@@ -2562,7 +2579,7 @@ async def get_order(
             "full_name": user.full_name,
             "email": user.email,
         },
-        "currency": order.currency or "NGN",
+        "currency": display_currency,
         "total_amount": float(order.total_amount),
         "payment_status": order.payment_status,
         "fulfillment_status": order.fulfillment_status,
@@ -2573,7 +2590,7 @@ async def get_order(
                 "product_title": item.product_title,
                 "quantity": item.quantity,
                 "unit_price": float(item.unit_price),
-                "currency": item.currency or order.currency or "NGN",
+                "currency": display_currency,
                 "subtotal": float(item.subtotal),
                 "fulfillment_status": item.fulfillment_status,
                 "product_image_url": (
