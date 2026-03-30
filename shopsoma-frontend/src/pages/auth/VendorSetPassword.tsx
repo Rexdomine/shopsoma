@@ -42,8 +42,8 @@ export default function VendorSetPassword() {
       localStorage.setItem(STORAGE_KEYS.ACCESS_TOKEN, response.access_token);
       localStorage.setItem(STORAGE_KEYS.REFRESH_TOKEN, response.refresh_token);
 
-      // Navigate to brand info settings to complete onboarding
-      navigate(ROUTES.VENDOR_BRAND_INFO, { replace: true });
+      // Navigate to dashboard so first-time vendors see onboarding guidance
+      navigate(ROUTES.VENDOR_DASHBOARD, { replace: true });
     } catch (err: any) {
       setError(err?.response?.data?.detail || 'Failed to set password. Please try again.');
     } finally {

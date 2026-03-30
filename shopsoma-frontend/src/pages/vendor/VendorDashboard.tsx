@@ -1,14 +1,33 @@
-import { useEffect } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
-import { ROUTES } from '../../config/constants';
+import { ROUTES, STORAGE_KEYS } from '../../config/constants';
 import VendorSidebar from '../../components/vendor/VendorSidebar';
 import { useVendor } from '../../context/VendorContext';
+import VendorWelcomePopup from '../../components/vendor/VendorWelcomePopup';
 
 export default function VendorDashboard() {
   const { user } = useAuth();
   const navigate = useNavigate();
-  const { vendorProfile, isOnboarding, brandInfoCompleted, isLoading } = useVendor();
+  const { vendorProfile, isOnboarding, brandInfoCompleted, payoutInfoCompleted, isLoading } = useVendor();
+  const [showWelcomePopup, setShowWelcomePopup] = useState(false);
+
+  const onboardingRoute = useMemo(() => {
+    if (!brandInfoCompleted) {
+      return ROUTES.VENDOR_BRAND_INFO;
+    }
+
+    if (!payoutInfoCompleted) {
+      return ROUTES.VENDOR_PAYOUT_INFO;
+    }
+
+    return ROUTES.VENDOR_BRAND_INFO;
+  }, [brandInfoCompleted, payoutInfoCompleted]);
+
+  const onboardingStorageKey = useMemo(() => {
+    if (!vendorProfile?.id) return null;
+    return `${STORAGE_KEYS.VENDOR_ONBOARDING_WELCOME_SEEN}:${vendorProfile.id}`;
+  }, [vendorProfile?.id]);
 
   useEffect(() => {
     // Redirect if not a vendor
@@ -17,6 +36,27 @@ export default function VendorDashboard() {
       return;
     }
   }, [user, navigate]);
+
+  useEffect(() => {
+    if (isLoading || !vendorProfile || !isOnboarding || !onboardingStorageKey) {
+      return;
+    }
+
+    const hasSeenWelcome = window.localStorage.getItem(onboardingStorageKey) === 'true';
+    setShowWelcomePopup(!hasSeenWelcome);
+  }, [isLoading, vendorProfile, isOnboarding, onboardingStorageKey]);
+
+  const handleDismissWelcome = () => {
+    if (onboardingStorageKey) {
+      window.localStorage.setItem(onboardingStorageKey, 'true');
+    }
+    setShowWelcomePopup(false);
+  };
+
+  const handleCompleteProfile = () => {
+    handleDismissWelcome();
+    navigate(onboardingRoute);
+  };
 
   if (isLoading) {
     return (
@@ -34,6 +74,12 @@ export default function VendorDashboard() {
 
   return (
     <div className="min-h-screen bg-[var(--color-page-bg)] flex">
+      <VendorWelcomePopup
+        isOpen={showWelcomePopup}
+        onClose={handleDismissWelcome}
+        onCompleteProfile={handleCompleteProfile}
+      />
+
       <VendorSidebar
         disableMain={disableNav}
         pendingOrders={vendorProfile?.total_orders || 0}
@@ -55,6 +101,35 @@ export default function VendorDashboard() {
               <p className="text-yellow-700 text-sm mt-1">
                 Your vendor account is pending approval. You'll be notified once it's activated.
               </p>
+            </div>
+          )}
+
+          {vendorProfile && isOnboarding && (
+            <div className="mb-6 overflow-hidden rounded-[24px] border border-[#dbe8e3] bg-[linear-gradient(135deg,#f5fbf8_0%,#ffffff_58%,#edf7f4_100%)] shadow-sm">
+              <div className="flex flex-col gap-4 px-6 py-6 md:flex-row md:items-center md:justify-between">
+                <div className="max-w-2xl">
+                  <p className="mb-2 text-xs font-semibold uppercase tracking-[0.25em] text-[#105E53]/70">
+                    Vendor onboarding
+                  </p>
+                  <h2 className="text-2xl font-display text-[#12332c]">
+                    Complete your profile before you start uploading products.
+                  </h2>
+                  <p className="mt-2 text-sm leading-6 text-gray-600 font-ui">
+                    Finish your brand and payout setup to unlock products, collections, earnings, and the rest of your
+                    dashboard tools.
+                  </p>
+                </div>
+
+                <div className="flex shrink-0 flex-col gap-3 sm:flex-row">
+                  <button
+                    type="button"
+                    onClick={handleCompleteProfile}
+                    className="rounded-full bg-[#105E53] px-6 py-3 text-sm font-semibold tracking-[0.08em] text-white transition hover:bg-[#0c4c45]"
+                  >
+                    Complete Profile
+                  </button>
+                </div>
+              </div>
             </div>
           )}
 
