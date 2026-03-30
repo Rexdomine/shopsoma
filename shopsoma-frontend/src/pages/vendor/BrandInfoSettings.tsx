@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { ROUTES } from '../../config/constants';
 import VendorSidebar from '../../components/vendor/VendorSidebar';
 import { Check, Image as ImageIcon, ChevronDown, PauseCircle, Trash2 } from 'lucide-react';
@@ -72,6 +72,7 @@ function CustomSelect({
 
 export default function BrandInfoSettings() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { vendorProfile, updateProfile, isOnboarding, brandInfoCompleted } = useVendor();
   const { user } = useAuth();
   const initialized = useRef(false);
@@ -128,6 +129,14 @@ export default function BrandInfoSettings() {
     { label: 'Checking', value: 'Checking' },
     { label: 'Savings', value: 'Savings' },
   ], []);
+  const settingsTabRoutes = useMemo(
+    () => ({
+      brand: ROUTES.VENDOR_BRAND_INFO,
+      payout: ROUTES.VENDOR_PAYOUT_INFO,
+      security: ROUTES.VENDOR_SECURITY,
+    }),
+    []
+  );
 
   const nigerianBanks = useMemo<SelectOption[]>(() => [
     { label: 'Access Bank', value: 'Access Bank' },
@@ -172,6 +181,20 @@ export default function BrandInfoSettings() {
       fetchPaymentMethods();
     }
   }, [vendorProfile]);
+
+  useEffect(() => {
+    if (location.pathname === ROUTES.VENDOR_PAYOUT_INFO) {
+      setActiveTab('payout');
+      return;
+    }
+
+    if (location.pathname === ROUTES.VENDOR_SECURITY) {
+      setActiveTab('security');
+      return;
+    }
+
+    setActiveTab('brand');
+  }, [location.pathname]);
 
   // Initialize form with existing vendor data (only once on component mount)
   useEffect(() => {
@@ -558,7 +581,9 @@ export default function BrandInfoSettings() {
                       <button
                         key={tab.key}
                         type="button"
-                        onClick={() => setActiveTab(tab.key as typeof activeTab)}
+                        onClick={() =>
+                          navigate(settingsTabRoutes[tab.key as keyof typeof settingsTabRoutes])
+                        }
                         className={`block text-left ${
                           activeTab === tab.key
                             ? 'text-[#222] font-semibold'
