@@ -63,6 +63,7 @@ export interface OrderItemDetail {
   product_image_url?: string;
   variant_details?: Record<string, any>;
   unit_price: number;
+  currency: 'NGN' | 'USD';
   quantity: number;
   subtotal: number;
   commission_rate: number;
@@ -96,6 +97,7 @@ export interface OrderListItem {
   order_number: string;
   customer: CustomerInfo;
   total_amount: number;
+  currency: 'NGN' | 'USD';
   payment_status: PaymentStatus;
   fulfillment_status: FulfillmentStatus;
   created_at: string;
@@ -107,6 +109,7 @@ export interface OrderDetail {
   id: string;
   order_number: string;
   customer: CustomerInfo;
+  currency: 'NGN' | 'USD';
   shipping_address?: AddressInfo;
   billing_address?: AddressInfo;
   subtotal: number;

@@ -2421,6 +2421,7 @@ async def list_orders(
                     "email": user.email,
                 },
                 "total_amount": float(order.total_amount),
+                "currency": order.currency or "NGN",
                 "payment_status": order.payment_status,
                 "fulfillment_status": order.fulfillment_status,
                 "created_at": order.created_at.isoformat() if order.created_at else None,
@@ -2561,6 +2562,7 @@ async def get_order(
             "full_name": user.full_name,
             "email": user.email,
         },
+        "currency": order.currency or "NGN",
         "total_amount": float(order.total_amount),
         "payment_status": order.payment_status,
         "fulfillment_status": order.fulfillment_status,
@@ -2571,6 +2573,7 @@ async def get_order(
                 "product_title": item.product_title,
                 "quantity": item.quantity,
                 "unit_price": float(item.unit_price),
+                "currency": item.currency or order.currency or "NGN",
                 "subtotal": float(item.subtotal),
                 "fulfillment_status": item.fulfillment_status,
                 "product_image_url": (

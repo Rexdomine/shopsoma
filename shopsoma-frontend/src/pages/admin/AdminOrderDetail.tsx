@@ -60,8 +60,8 @@ export default function AdminOrderDetail() {
     rider_id: '',
   });
 
-  const formatDisplayPrice = (amount: number) => {
-    return formatPriceWithConversion(amount, 'NGN', currentCurrency, exchangeRates);
+  const formatDisplayPrice = (amount: number, sourceCurrency?: 'NGN' | 'USD') => {
+    return formatPriceWithConversion(amount, sourceCurrency || order?.currency || 'NGN', currentCurrency, exchangeRates);
   };
 
   // Load order details
@@ -360,28 +360,28 @@ export default function AdminOrderDetail() {
               <div className="space-y-3">
                 <div className="flex justify-between">
                   <span className="text-gray-600">Subtotal:</span>
-                  <span className="font-medium">{formatDisplayPrice(order.subtotal)}</span>
+                  <span className="font-medium">{formatDisplayPrice(order.subtotal, order.currency)}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-gray-600">Shipping:</span>
-                  <span className="font-medium">{formatDisplayPrice(order.shipping_cost)}</span>
+                  <span className="font-medium">{formatDisplayPrice(order.shipping_cost, order.currency)}</span>
                 </div>
                 {order.tax_amount > 0 && (
                   <div className="flex justify-between">
                     <span className="text-gray-600">Tax:</span>
-                    <span className="font-medium">{formatDisplayPrice(order.tax_amount)}</span>
+                    <span className="font-medium">{formatDisplayPrice(order.tax_amount, order.currency)}</span>
                   </div>
                 )}
                 {order.discount_amount > 0 && (
                   <div className="flex justify-between text-green-600">
                     <span>Discount:</span>
-                    <span className="font-medium">-{formatDisplayPrice(order.discount_amount)}</span>
+                    <span className="font-medium">-{formatDisplayPrice(order.discount_amount, order.currency)}</span>
                   </div>
                 )}
                 <div className="border-t pt-3 flex justify-between">
                   <span className="text-lg font-semibold">Total:</span>
                   <span className="text-lg font-bold text-[#105E53]">
-                    {formatDisplayPrice(order.total_amount)}
+                    {formatDisplayPrice(order.total_amount, order.currency)}
                   </span>
                 </div>
               </div>
@@ -429,9 +429,9 @@ export default function AdminOrderDetail() {
 
                     {/* Pricing */}
                     <div className="text-right">
-                      <div className="font-medium">{formatDisplayPrice(item.unit_price)}</div>
+                      <div className="font-medium">{formatDisplayPrice(item.unit_price, item.currency)}</div>
                       <div className="text-sm text-gray-500">Qty: {item.quantity}</div>
-                      <div className="text-sm font-medium mt-1">{formatDisplayPrice(item.subtotal)}</div>
+                      <div className="text-sm font-medium mt-1">{formatDisplayPrice(item.subtotal, item.currency)}</div>
                     </div>
                   </div>
                 ))}
