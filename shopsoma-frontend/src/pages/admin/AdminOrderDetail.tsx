@@ -637,6 +637,17 @@ export default function AdminOrderDetail() {
                 </button>
               </div>
               <div className="space-y-3 text-sm">
+                {order.shipping_address && (
+                  <div>
+                    <div className="text-gray-500">Recipient</div>
+                    <div className="font-medium text-gray-900">
+                      {order.shipping_address.full_name}
+                    </div>
+                    <div className="text-gray-600">
+                      {order.shipping_address.phone}
+                    </div>
+                  </div>
+                )}
                 <div>
                   <div className="text-gray-500">Delivery Provider</div>
                   <div className="font-medium text-gray-900">
@@ -659,13 +670,14 @@ export default function AdminOrderDetail() {
                 </div>
                 {order.shipping_address && (
                   <div>
-                    <div className="text-gray-500">Delivery Destination</div>
+                    <div className="text-gray-500">Delivery Address</div>
                     <div className="font-medium text-gray-900">
-                      {order.shipping_address.city}, {order.shipping_address.state}
+                      {order.shipping_address.street_address}
                     </div>
                     <div className="text-gray-600">
-                      {order.shipping_address.country}
+                      {order.shipping_address.city}, {order.shipping_address.state} {order.shipping_address.postal_code}
                     </div>
+                    <div className="text-gray-600">{order.shipping_address.country}</div>
                   </div>
                 )}
               </div>
@@ -685,21 +697,6 @@ export default function AdminOrderDetail() {
               </div>
             </div>
 
-            {/* Shipping Address */}
-            {order.shipping_address && (
-              <div className="bg-white rounded-lg shadow p-6">
-                <h2 className="text-lg font-semibold text-gray-900 mb-4">Shipping Address</h2>
-                <div className="text-sm space-y-1">
-                  <div className="font-medium">{order.shipping_address.full_name}</div>
-                  <div>{order.shipping_address.street_address}</div>
-                  <div>
-                    {order.shipping_address.city}, {order.shipping_address.state} {order.shipping_address.postal_code}
-                  </div>
-                  <div>{order.shipping_address.country}</div>
-                  <div className="text-gray-600 mt-2">{order.shipping_address.phone}</div>
-                </div>
-              </div>
-            )}
           </div>
         </div>
 
