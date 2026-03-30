@@ -627,6 +627,52 @@ export default function AdminOrderDetail() {
 
             {/* Customer Information */}
             <div className="bg-white rounded-lg shadow p-6">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-lg font-semibold text-gray-900">Delivery Details</h2>
+                <button
+                  onClick={() => setEditingShipping(true)}
+                  className="text-[#105E53] hover:text-[#0d4a41] text-sm"
+                >
+                  Edit
+                </button>
+              </div>
+              <div className="space-y-3 text-sm">
+                <div>
+                  <div className="text-gray-500">Delivery Provider</div>
+                  <div className="font-medium text-gray-900">
+                    {order.delivery_provider || 'Not assigned'}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-gray-500">Tracking Number</div>
+                  <div className="font-medium text-gray-900">
+                    {order.tracking_number || 'Not available'}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-gray-500">Estimated Delivery</div>
+                  <div className="font-medium text-gray-900">
+                    {order.estimated_delivery_date
+                      ? new Date(order.estimated_delivery_date).toLocaleDateString()
+                      : 'Not scheduled'}
+                  </div>
+                </div>
+                {order.shipping_address && (
+                  <div>
+                    <div className="text-gray-500">Delivery Destination</div>
+                    <div className="font-medium text-gray-900">
+                      {order.shipping_address.city}, {order.shipping_address.state}
+                    </div>
+                    <div className="text-gray-600">
+                      {order.shipping_address.country}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Customer Information */}
+            <div className="bg-white rounded-lg shadow p-6">
               <h2 className="text-lg font-semibold text-gray-900 mb-4">Customer</h2>
               <div className="space-y-2 text-sm">
                 <div className="font-medium">
