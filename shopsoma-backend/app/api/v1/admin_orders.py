@@ -20,6 +20,7 @@ from app.models.address import Address
 from app.models.vendor_pickup import VendorPickup, PickupStatus
 from app.models.product import Product
 from app.models.payment import Payment
+from app.models.setting import Setting
 
 logger = logging.getLogger(__name__)
 from app.services.order_notification_service import OrderNotificationService
@@ -123,6 +124,106 @@ def resolve_order_currency(order: Order) -> str:
             return latest_payment.currency.upper()
 
     return (getattr(order, "currency", None) or "NGN").upper()
+
+
+def _normalize_currency(currency: Optional[str]) -> str:
+    normalized = (currency or "NGN").upper()
+    return normalized if normalized in {"NGN", "USD"} else "NGN"
+
+
+async def _get_usd_to_ngn_rate(db: AsyncSession) -> Decimal:
+    result = await db.execute(
+        select(Setting).where(Setting.key == "exchange_rate_usd_to_ngn")
+    )
+    rate_setting = result.scalar_one_or_none()
+    if not rate_setting:
+        return Decimal("833")
+
+    try:
+        return Decimal(str(rate_setting.value))
+    except (ArithmeticError, ValueError, TypeError):
+        return Decimal("833")
+
+
+def _convert_currency(amount: Decimal, from_currency: str, to_currency: str, usd_to_ngn_rate: Decimal) -> Decimal:
+    source = _normalize_currency(from_currency)
+    target = _normalize_currency(to_currency)
+
+    if source == target:
+        return amount
+    if source == "USD" and target == "NGN":
+        return (amount * usd_to_ngn_rate).quantize(Decimal("0.01"))
+    if source == "NGN" and target == "USD":
+        return (amount / usd_to_ngn_rate).quantize(Decimal("0.01"))
+    return amount
+
+
+def _should_use_product_currency_for_legacy_item(item: OrderItem, display_currency: str) -> bool:
+    product = getattr(item, "product", None)
+    if not product or not getattr(product, "currency", None):
+        return False
+
+    product_currency = _normalize_currency(product.currency)
+    item_currency = _normalize_currency(getattr(item, "currency", None) or display_currency)
+    if product_currency == display_currency or item_currency != display_currency:
+        return False
+
+    product_base_price = getattr(product, "base_price", None)
+    if product_base_price is None:
+        return False
+
+    item_unit_price = Decimal(str(item.unit_price or "0"))
+    item_subtotal = Decimal(str(item.subtotal or "0"))
+    expected_subtotal = (Decimal(str(product_base_price)) * Decimal(item.quantity or 0)).quantize(Decimal("0.01"))
+
+    return (
+        item_unit_price.quantize(Decimal("0.01")) == Decimal(str(product_base_price)).quantize(Decimal("0.01"))
+        or item_subtotal.quantize(Decimal("0.01")) == expected_subtotal
+    )
+
+
+def _resolve_admin_item_amounts(item: OrderItem, display_currency: str, usd_to_ngn_rate: Decimal) -> tuple[Decimal, Decimal, str]:
+    source_currency = _normalize_currency(getattr(item, "currency", None) or display_currency)
+
+    if _should_use_product_currency_for_legacy_item(item, display_currency):
+        source_currency = _normalize_currency(item.product.currency)
+
+    unit_price = _convert_currency(
+        Decimal(str(item.unit_price or "0")),
+        source_currency,
+        display_currency,
+        usd_to_ngn_rate,
+    )
+    subtotal = _convert_currency(
+        Decimal(str(item.subtotal or "0")),
+        source_currency,
+        display_currency,
+        usd_to_ngn_rate,
+    )
+    return unit_price, subtotal, display_currency
+
+
+def _build_admin_order_item_detail(item: OrderItem, display_currency: str, usd_to_ngn_rate: Decimal) -> OrderItemDetail:
+    unit_price, subtotal, item_currency = _resolve_admin_item_amounts(item, display_currency, usd_to_ngn_rate)
+    return OrderItemDetail(
+        id=item.id,
+        product_id=item.product_id,
+        product_title=item.product_title,
+        product_image_url=(
+            next((img.thumbnail_url or img.image_url for img in item.product.images if img.is_primary), None)
+            or (item.product.images[0].thumbnail_url or item.product.images[0].image_url if item.product.images else None)
+        ) if hasattr(item, 'product') and item.product else None,
+        variant_details=item.variant_details,
+        unit_price=unit_price,
+        currency=item_currency,
+        quantity=item.quantity,
+        subtotal=subtotal,
+        commission_rate=item.commission_rate,
+        commission_amount=item.commission_amount,
+        vendor_payout=item.vendor_payout,
+        fulfillment_status=item.fulfillment_status,
+        vendor=build_vendor_info(item.vendor),
+    )
 
 
 # ============================================================================
@@ -343,6 +444,7 @@ async def get_order_detail(
 
         # Build response with detailed error tracking
         display_currency = resolve_order_currency(order)
+        usd_to_ngn_rate = await _get_usd_to_ngn_rate(db)
         return OrderDetail(
         id=order.id,
         order_number=order.order_number,
@@ -369,26 +471,7 @@ async def get_order_detail(
         cancelled_at=order.cancelled_at,
         cancellation_reason=order.cancellation_reason,
         items=[
-            OrderItemDetail(
-                id=item.id,
-                product_id=item.product_id,
-                product_title=item.product_title,
-                product_image_url=(
-                    # Get primary image or first image
-                    next((img.thumbnail_url or img.image_url for img in item.product.images if img.is_primary), None)
-                    or (item.product.images[0].thumbnail_url or item.product.images[0].image_url if item.product.images else None)
-                ) if hasattr(item, 'product') and item.product else None,
-                variant_details=item.variant_details,
-                unit_price=item.unit_price,
-                currency=display_currency,
-                quantity=item.quantity,
-                subtotal=item.subtotal,
-                commission_rate=item.commission_rate,
-                commission_amount=item.commission_amount,
-                vendor_payout=item.vendor_payout,
-                fulfillment_status=item.fulfillment_status,
-                vendor=build_vendor_info(item.vendor),
-            )
+            _build_admin_order_item_detail(item, display_currency, usd_to_ngn_rate)
             for item in order.items
         ],
         pickups=[

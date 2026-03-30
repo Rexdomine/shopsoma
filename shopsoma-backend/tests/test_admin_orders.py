@@ -94,6 +94,97 @@ async def _create_usd_order(db_session: AsyncSession, admin_user, customer_user,
     return order
 
 
+async def _create_legacy_misconverted_ngn_order(
+    db_session: AsyncSession,
+    customer_user,
+    vendor_user,
+):
+    from app.models.address import Address, AddressType
+    from app.models.order import FulfillmentStatus, Order, OrderItem, PaymentStatus
+    from app.models.payment import Payment, PaymentGateway, TransactionStatus
+    from app.models.product import ModerationStatus, Product, ProductStatus
+
+    shipping_address = Address(
+        id=uuid.uuid4(),
+        user_id=customer_user["user"].id,
+        address_type=AddressType.SHIPPING,
+        full_name="Legacy Customer",
+        phone_number="08011112222",
+        address_line1="34 Legacy Way",
+        city="Abuja",
+        state="FCT",
+        postal_code="900002",
+        country="Nigeria",
+        is_default=True,
+    )
+    db_session.add(shipping_address)
+    await db_session.flush()
+
+    product = Product(
+        id=uuid.uuid4(),
+        vendor_id=vendor_user["vendor"].id,
+        title="Legacy USD Product",
+        description="USD priced product saved incorrectly in NGN order items",
+        base_price=Decimal("300.00"),
+        currency="USD",
+        total_stock=5,
+        status=ProductStatus.ACTIVE,
+        moderation_status=ModerationStatus.APPROVED,
+    )
+    db_session.add(product)
+    await db_session.flush()
+
+    order = Order(
+        id=uuid.uuid4(),
+        order_number="SHP-ADMIN-LEGACY-NGN",
+        customer_id=customer_user["user"].id,
+        shipping_address_id=shipping_address.id,
+        billing_address_id=shipping_address.id,
+        currency="NGN",
+        subtotal=Decimal("300.00"),
+        shipping_cost=Decimal("0.00"),
+        tax_amount=Decimal("0.00"),
+        discount_amount=Decimal("0.00"),
+        total_amount=Decimal("300.00"),
+        payment_status=PaymentStatus.PAID,
+        fulfillment_status=FulfillmentStatus.ORDER_RECEIVED,
+    )
+    db_session.add(order)
+    await db_session.flush()
+
+    order_item = OrderItem(
+        id=uuid.uuid4(),
+        order_id=order.id,
+        product_id=product.id,
+        vendor_id=vendor_user["vendor"].id,
+        product_title=product.title,
+        unit_price=Decimal("300.00"),
+        currency="NGN",
+        quantity=1,
+        subtotal=Decimal("300.00"),
+        commission_rate=Decimal("15.00"),
+        commission_amount=Decimal("45.00"),
+        vendor_payout=Decimal("255.00"),
+        fulfillment_status=FulfillmentStatus.ORDER_RECEIVED,
+    )
+    db_session.add(order_item)
+
+    payment = Payment(
+        id=uuid.uuid4(),
+        order_id=order.id,
+        payment_gateway=PaymentGateway.PAYSTACK,
+        transaction_id=f"ps_{uuid.uuid4().hex}",
+        payment_method="card",
+        amount=Decimal("300.00"),
+        currency="NGN",
+        status=TransactionStatus.COMPLETED,
+    )
+    db_session.add(payment)
+    await db_session.commit()
+
+    return order
+
+
 @pytest.mark.asyncio
 async def test_admin_order_detail_includes_currency_fields(
     client: AsyncClient,
@@ -194,3 +285,30 @@ async def test_admin_order_status_update_returns_updated_usd_order(
     assert payload["currency"] == "USD"
     assert payload["fulfillment_status"] == "preparing_for_pickup"
     assert payload["items"][0]["currency"] == "USD"
+
+
+@pytest.mark.asyncio
+async def test_admin_order_detail_normalizes_legacy_usd_item_amounts_for_ngn_orders(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    admin_user,
+    customer_user,
+    vendor_user,
+):
+    order = await _create_legacy_misconverted_ngn_order(
+        db_session,
+        customer_user,
+        vendor_user,
+    )
+
+    response = await client.get(
+        f"/api/v1/admin/orders/{order.id}",
+        headers=admin_user["headers"],
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["currency"] == "NGN"
+    assert payload["items"][0]["currency"] == "NGN"
+    assert payload["items"][0]["unit_price"] == "249900.00"
+    assert payload["items"][0]["subtotal"] == "249900.00"
