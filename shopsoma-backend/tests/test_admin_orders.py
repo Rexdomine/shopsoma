@@ -3,11 +3,13 @@ from decimal import Decimal
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
 async def _create_usd_order(db_session: AsyncSession, admin_user, customer_user, vendor_user):
     from app.models.order import FulfillmentStatus, Order, OrderItem, PaymentStatus
+    from app.models.payment import Payment, PaymentGateway, TransactionStatus
     from app.models.product import ModerationStatus, Product, ProductStatus
 
     product = Product(
@@ -56,6 +58,18 @@ async def _create_usd_order(db_session: AsyncSession, admin_user, customer_user,
         fulfillment_status=FulfillmentStatus.ORDER_RECEIVED,
     )
     db_session.add(order_item)
+
+    payment = Payment(
+        id=uuid.uuid4(),
+        order_id=order.id,
+        payment_gateway=PaymentGateway.STRIPE,
+        transaction_id=f"pi_{uuid.uuid4().hex}",
+        payment_method="card",
+        amount=Decimal("326.21"),
+        currency="USD",
+        status=TransactionStatus.COMPLETED,
+    )
+    db_session.add(payment)
     await db_session.commit()
 
     return order
@@ -82,6 +96,35 @@ async def test_admin_order_detail_includes_currency_fields(
     assert payload["total_amount"] == 326.21
     assert payload["items"][0]["currency"] == "USD"
     assert payload["items"][0]["unit_price"] == 300.0
+
+
+@pytest.mark.asyncio
+async def test_admin_order_detail_prefers_payment_currency_for_legacy_orders(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    admin_user,
+    customer_user,
+    vendor_user,
+):
+    from app.models.order import OrderItem
+
+    order = await _create_usd_order(db_session, admin_user, customer_user, vendor_user)
+    order.currency = "NGN"
+    order_item = (
+        await db_session.execute(select(OrderItem).where(OrderItem.order_id == order.id))
+    ).scalar_one()
+    order_item.currency = "NGN"
+    await db_session.commit()
+
+    response = await client.get(
+        f"/api/v1/admin/orders/{order.id}",
+        headers=admin_user["headers"],
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["currency"] == "USD"
+    assert payload["items"][0]["currency"] == "USD"
 
 
 @pytest.mark.asyncio
