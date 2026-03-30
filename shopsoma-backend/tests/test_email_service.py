@@ -70,6 +70,49 @@ async def test_send_admin_order_notification_to_multiple_admins(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_send_admin_order_notification_formats_usd_amounts(monkeypatch):
+    service = EmailService()
+    calls = _capture_email(monkeypatch, service)
+
+    result = await service.send_admin_order_notification(
+        order_number="SHP-USD-ADMIN",
+        customer_name="USD Customer",
+        customer_email="customer@example.com",
+        order_date=datetime(2025, 3, 25, 15, 0),
+        items=[
+            {
+                "product_name": "Ruffled silk-chiffon blouse",
+                "quantity": 1,
+                "price": 300,
+                "currency": "USD",
+                "subtotal": 300,
+            }
+        ],
+        subtotal=300,
+        shipping=3.45,
+        tax=22.76,
+        total=326.21,
+        payment_status="paid",
+        shipping_address={
+            "full_name": "USD Customer",
+            "address_line_1": "1 Test Street",
+            "city": "Abuja",
+            "state": "FCT",
+            "postal_code": "900001",
+            "country": "Nigeria",
+            "phone_number": "0000000000",
+        },
+        recipients=[{"email": "admin@example.com", "name": "Admin"}],
+    )
+
+    assert result is True
+    html = calls[0]["html_content"]
+    assert "$300.00" in html
+    assert "$326.21" in html
+    assert "₦300.00" not in html
+
+
+@pytest.mark.asyncio
 async def test_send_order_confirmation_email_formats_usd_amounts(monkeypatch):
     service = EmailService()
     calls = _capture_email(monkeypatch, service)
