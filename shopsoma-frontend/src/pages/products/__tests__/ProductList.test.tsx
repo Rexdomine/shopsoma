@@ -1,14 +1,23 @@
 import type { ReactNode } from 'react';
 import { render, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import { vi } from 'vitest';
+import { describe, expect, it, beforeEach, vi } from 'vitest';
 import ProductList from '../ProductList';
 
-const getProductsMock = vi.fn();
+const { getProductsMock, getSubcategoriesMock } = vi.hoisted(() => ({
+  getProductsMock: vi.fn(),
+  getSubcategoriesMock: vi.fn(),
+}));
 
 vi.mock('../../../services/productService', () => ({
   productService: {
     getProducts: getProductsMock,
+  },
+}));
+
+vi.mock('../../../services/categoryService', () => ({
+  categoryService: {
+    getSubcategories: getSubcategoriesMock,
   },
 }));
 
@@ -26,9 +35,7 @@ vi.mock('../../../store/preferenceStore', () => ({
 }));
 
 vi.mock('../../../components/layout/Layout', () => ({
-  default: ({ children }: { children: ReactNode }) => (
-    <div>{children}</div>
-  ),
+  default: ({ children }: { children: ReactNode }) => <div>{children}</div>,
 }));
 
 vi.mock('../../../components/common/Loading', () => ({
@@ -45,8 +52,10 @@ vi.mock('../../../components/products/VendorShowcaseCard', () => ({
 
 describe('ProductList', () => {
   beforeEach(() => {
+    getProductsMock.mockReset();
+    getSubcategoriesMock.mockReset();
     getProductsMock.mockResolvedValue({ products: [] });
-    getProductsMock.mockClear();
+    getSubcategoriesMock.mockResolvedValue([]);
   });
 
   it('refetches when initialParams change', async () => {
