@@ -117,7 +117,7 @@ async def test_admin_order_detail_includes_currency_fields(
     assert payload["shipping_address"]["full_name"] == "USD Customer"
     assert payload["shipping_address"]["street_address"] == "12 River Trent Close"
     assert payload["items"][0]["currency"] == "USD"
-    assert payload["items"][0]["unit_price"] == 300.0
+    assert payload["items"][0]["unit_price"] == "300.00"
 
 
 @pytest.mark.asyncio
