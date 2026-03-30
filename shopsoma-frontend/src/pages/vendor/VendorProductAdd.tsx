@@ -19,6 +19,7 @@ import type { Currency } from '../../store/currencyStore';
 type SizeOption = 'XXXL' | 'XXL' | 'XL' | 'L' | 'M' | 'S' | 'XS' | 'XXS' | '4' | '6' | '8' | '10' | '12' | '14' | '16' | '18' | '20' | '22' | '32' | '34' | '36' | '38' | '40' | '42' | '44' | '46' | '48' | '50';
 type SizingSystem = 'US Sizing' | 'UK Sizing' | 'EU Sizing';
 type VariationMode = 'Size' | 'Color';
+type ColorMode = 'solid' | 'multi' | 'none';
 
 interface ProductImage {
   id: string;
@@ -41,7 +42,9 @@ interface DetailedVariation {
   hasDifferentPricing: boolean;
   price: string;
   salesPrice: string;
-  color: string;
+  colorMode: ColorMode;
+  colorLabel: string;
+  colorHex: string;
   colorStock: string;
   sizingSystem: SizingSystem;
   selectedSizes: SizeOption[];
@@ -69,6 +72,8 @@ export default function VendorProductAdd() {
   const [productDescription, setProductDescription] = useState('');
   const [materials, setMaterials] = useState('');
   const [collectionId, setCollectionId] = useState('');
+  const [colorMode, setColorMode] = useState<ColorMode>('solid');
+  const [colorLabel, setColorLabel] = useState('Black');
   const [color, setColor] = useState('#000000'); // Now stores hex value
   const [colorHex, setColorHex] = useState('#000000'); // Hex input field
   const [selectedSizes, setSelectedSizes] = useState<SizeOption[]>([]);
@@ -114,6 +119,8 @@ export default function VendorProductAdd() {
   const [variationHasDifferentPricing, setVariationHasDifferentPricing] = useState(false);
   const [variationPrice, setVariationPrice] = useState('');
   const [variationSalesPrice, setVariationSalesPrice] = useState('');
+  const [variationColorMode, setVariationColorMode] = useState<ColorMode>('solid');
+  const [variationColorLabel, setVariationColorLabel] = useState('');
   const [variationColor, setVariationColor] = useState('#000000');
   const [variationColorHex, setVariationColorHex] = useState('#000000');
   const [variationColorStock, setVariationColorStock] = useState('');
@@ -132,6 +139,11 @@ export default function VendorProductAdd() {
   const [showSizingDropdown, setShowSizingDropdown] = useState(false);
 
   const materialOptions = ['Leather', 'Cotton', 'Wire', 'Silk', 'Wool', 'Polyester', 'Denim'];
+  const colorModeOptions: Array<{ value: ColorMode; label: string }> = [
+    { value: 'solid', label: 'Solid Color' },
+    { value: 'multi', label: 'Multi-color / Pattern' },
+    { value: 'none', label: 'No Color' },
+  ];
 
   // E-commerce standard size mappings
   const SIZE_MAPPINGS: Record<SizingSystem, SizeOption[]> = {
@@ -234,8 +246,10 @@ export default function VendorProductAdd() {
       setVariationHasDifferentPricing(editingVariation.hasDifferentPricing);
       setVariationPrice(editingVariation.price);
       setVariationSalesPrice(editingVariation.salesPrice);
-      setVariationColor(editingVariation.color);
-      setVariationColorHex(editingVariation.color);
+      setVariationColorMode(editingVariation.colorMode);
+      setVariationColorLabel(editingVariation.colorLabel);
+      setVariationColor(editingVariation.colorHex);
+      setVariationColorHex(editingVariation.colorHex);
       setVariationColorStock(editingVariation.colorStock);
       setVariationSizingSystem(editingVariation.sizingSystem);
       setVariationSelectedSizes(editingVariation.selectedSizes);
@@ -248,6 +262,8 @@ export default function VendorProductAdd() {
       setVariationHasDifferentPricing(false);
       setVariationPrice('');
       setVariationSalesPrice('');
+      setVariationColorMode('solid');
+      setVariationColorLabel('');
       setVariationColor('#000000');
       setVariationColorHex('#000000');
       setVariationColorStock('');
@@ -264,10 +280,61 @@ export default function VendorProductAdd() {
       setVariationSizeStock({} as Record<SizeOption, string>);
       return;
     }
+    setVariationColorMode('solid');
+    setVariationColorLabel('');
     setVariationColor('#000000');
     setVariationColorHex('#000000');
     setVariationColorStock('');
   }, [variationType]);
+
+  useEffect(() => {
+    if (colorMode === 'solid') {
+      if (!colorLabel.trim()) {
+        setColorLabel('Black');
+      }
+      return;
+    }
+
+    if (colorMode === 'multi') {
+      if (!colorLabel.trim()) {
+        setColorLabel('Multi-color');
+      }
+      return;
+    }
+
+    setColorLabel('No color');
+  }, [colorMode, colorLabel]);
+
+  useEffect(() => {
+    if (variationType !== 'Color') {
+      return;
+    }
+
+    if (variationColorMode === 'solid') {
+      return;
+    }
+
+    if (variationColorMode === 'multi') {
+      if (!variationColorLabel.trim()) {
+        setVariationColorLabel('Multi-color');
+      }
+    } else {
+      setVariationColorLabel('No color');
+    }
+
+    setVariationColor('#000000');
+    setVariationColorHex('#000000');
+  }, [variationColorMode, variationColorLabel, variationType]);
+
+  const getResolvedColorLabel = (mode: ColorMode, label: string) => {
+    if (mode === 'none') {
+      return 'No color';
+    }
+    if (mode === 'multi') {
+      return label.trim() || 'Multi-color';
+    }
+    return label.trim();
+  };
 
   useEffect(() => {
     if (!madeToOrder) {
@@ -556,7 +623,7 @@ export default function VendorProductAdd() {
   // Validate and save variation
   const handleSaveVariation = () => {
     // Validation
-    if (!variationName.trim()) {
+    if (variationType === 'Size' && !variationName.trim()) {
       warning('Variation name is required');
       return;
     }
@@ -577,6 +644,13 @@ export default function VendorProductAdd() {
         }
       }
     } else {
+      const resolvedVariationColorLabel = getResolvedColorLabel(variationColorMode, variationColorLabel);
+
+      if (!resolvedVariationColorLabel) {
+        warning('Please provide a color label for this variation');
+        return;
+      }
+
       if (!madeToOrder && variationColorStock && (isNaN(parseInt(variationColorStock)) || parseInt(variationColorStock) < 0)) {
         warning('Invalid stock value for color');
         return;
@@ -604,12 +678,14 @@ export default function VendorProductAdd() {
 
     const newVariation: DetailedVariation = {
       id: editingVariation ? editingVariation.id : Date.now().toString(),
-      name: variationName,
+      name: variationType === 'Color' ? getResolvedColorLabel(variationColorMode, variationColorLabel) : variationName,
       type: variationType,
       hasDifferentPricing: variationHasDifferentPricing,
       price: variationPrice,
       salesPrice: variationSalesPrice,
-      color: variationColor,
+      colorMode: variationColorMode,
+      colorLabel: getResolvedColorLabel(variationColorMode, variationColorLabel),
+      colorHex: variationColorMode === 'solid' ? variationColorHex : '#000000',
       colorStock: variationColorStock,
       sizingSystem: variationSizingSystem,
       selectedSizes: variationSelectedSizes,
@@ -653,6 +729,13 @@ export default function VendorProductAdd() {
 
     if (madeToOrder && !estimatedProductionTime.trim()) {
       warning('Estimated production time is required for made-to-order items', 'Missing info');
+      return;
+    }
+
+    const resolvedSingleColorLabel = getResolvedColorLabel(colorMode, colorLabel);
+
+    if (!resolvedSingleColorLabel) {
+      warning('Please provide a color option for this product', 'Missing info');
       return;
     }
 
@@ -736,7 +819,8 @@ export default function VendorProductAdd() {
       if (productType === 'single') {
         payload.variants = selectedSizes.map((size) => ({
           size,
-          color_hex: colorHex || undefined,
+          color: resolvedSingleColorLabel,
+          color_hex: colorMode === 'solid' ? colorHex || undefined : undefined,
           price: basePrice,
           stock: shouldTrackStock ? parsedStockAmount : 0,
           is_available: shouldTrackStock ? parsedStockAmount > 0 : true,
@@ -762,9 +846,9 @@ export default function VendorProductAdd() {
           if (variation.type === 'Color') {
             const colorStock = shouldTrackStock ? parseInt(variation.colorStock || '0', 10) || 0 : 0;
             variationPayload.push({
-              title: variation.name,
-              type: 'color',
-              color_hex: variation.color || undefined,
+              title: variation.colorLabel,
+              type: variation.colorMode,
+              color_hex: variation.colorMode === 'solid' ? variation.colorHex || undefined : undefined,
               price: variationBasePrice,
               sale_price: variationCompareAtPrice,
               images: variation.images
@@ -774,8 +858,8 @@ export default function VendorProductAdd() {
               sizes: [],
             });
             variantPayload.push({
-              color: variation.name,
-              color_hex: variation.color || undefined,
+              color: variation.colorLabel,
+              color_hex: variation.colorMode === 'solid' ? variation.colorHex || undefined : undefined,
               price: variationBasePrice,
               stock: colorStock,
               is_available: shouldTrackStock ? colorStock > 0 : true,
@@ -1208,25 +1292,67 @@ export default function VendorProductAdd() {
                     </div>
                   </div>
 
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Color *
-                    </label>
-                    <div className="flex items-center gap-3">
-                      <input
-                        type="color"
-                        value={color}
-                        onChange={handleMainColorPickerChange}
-                        className="w-12 h-12 rounded-lg border border-gray-200 cursor-pointer"
-                      />
-                      <input
-                        type="text"
-                        value={colorHex}
-                        onChange={handleMainColorHexChange}
-                        placeholder="#000000"
-                        className="flex-1 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
-                      />
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Color Option *
+                      </label>
+                      <select
+                        value={colorMode}
+                        onChange={(e) => setColorMode(e.target.value as ColorMode)}
+                        className="w-full rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
+                      >
+                        {colorModeOptions.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
                     </div>
+
+                    {(colorMode === 'solid' || colorMode === 'multi') && (
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          Color Label *
+                        </label>
+                        <input
+                          type="text"
+                          value={colorLabel}
+                          onChange={(e) => setColorLabel(e.target.value)}
+                          placeholder={colorMode === 'solid' ? 'E.g., Black' : 'E.g., Multi-color / Ankara Print'}
+                          className="w-full rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
+                        />
+                      </div>
+                    )}
+
+                    {colorMode === 'solid' && (
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          Solid Color Swatch
+                        </label>
+                        <div className="flex items-center gap-3">
+                          <input
+                            type="color"
+                            value={color}
+                            onChange={handleMainColorPickerChange}
+                            className="w-12 h-12 rounded-lg border border-gray-200 cursor-pointer"
+                          />
+                          <input
+                            type="text"
+                            value={colorHex}
+                            onChange={handleMainColorHexChange}
+                            placeholder="#000000"
+                            className="flex-1 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    {colorMode === 'none' && (
+                      <p className="rounded-lg border border-dashed border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-500">
+                        Customers will see this item as <span className="font-medium text-gray-700">No color</span>.
+                      </p>
+                    )}
                   </div>
 
                   <div className="grid grid-cols-2 gap-4">
@@ -1494,12 +1620,22 @@ export default function VendorProductAdd() {
                         >
                           <div className="flex-1">
                             <div className="flex items-center gap-3">
-                              <div
-                                className="w-6 h-6 rounded-full border border-gray-300"
-                                style={{ backgroundColor: variation.color }}
-                              />
+                              {variation.type === 'Color' && variation.colorMode === 'solid' ? (
+                                <div
+                                  className="w-6 h-6 rounded-full border border-gray-300"
+                                  style={{ backgroundColor: variation.colorHex }}
+                                />
+                              ) : variation.type === 'Color' ? (
+                                <span className="rounded-full border border-gray-200 bg-gray-50 px-3 py-1 text-xs font-medium text-gray-600">
+                                  {variation.colorLabel}
+                                </span>
+                              ) : (
+                                <div className="w-6 h-6 rounded-full border border-dashed border-gray-300 bg-gray-50" />
+                              )}
                               <div>
-                                <p className="font-medium text-gray-900">{variation.name}</p>
+                                <p className="font-medium text-gray-900">
+                                  {variation.type === 'Color' ? variation.colorLabel : variation.name}
+                                </p>
                                 <p className="text-sm text-gray-500">
                                   {variation.type} • {variation.type === 'Size'
                                     ? `${variation.selectedSizes.join(', ')} • Stock: ${Object.values(variation.sizeStock).reduce((acc, val) => acc + (parseInt(val) || 0), 0)}`
@@ -1578,13 +1714,13 @@ export default function VendorProductAdd() {
                       {/* Variation Name */}
                       <div>
                         <label className="block text-sm font-medium text-gray-700 mb-2">
-                          Variation Name *
+                          {variationType === 'Color' ? 'Internal Variation Name' : 'Variation Name *'}
                         </label>
                         <input
                           type="text"
                           value={variationName}
                           onChange={(e) => setVariationName(e.target.value)}
-                          placeholder="E.g., Red Large"
+                          placeholder={variationType === 'Color' ? 'Optional internal name' : 'E.g., Red Large'}
                           className="w-full rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
                         />
                       </div>
@@ -1659,27 +1795,68 @@ export default function VendorProductAdd() {
                       </div>
 
                       {/* Color Selector */}
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-2">
-                          Color Selector
-                        </label>
-                        <div className="flex items-center gap-3">
-                            <input
-                              type="color"
-                              value={variationColor}
-                              onChange={handleColorPickerChange}
-                              disabled={variationType === 'Size'}
-                              className="w-12 h-12 rounded-lg border border-gray-200 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-                            />
+                      <div className="space-y-4">
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-2">
+                            Color Option
+                          </label>
+                          <select
+                            value={variationColorMode}
+                            onChange={(e) => setVariationColorMode(e.target.value as ColorMode)}
+                            disabled={variationType === 'Size'}
+                            className="w-full rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            {colorModeOptions.map((option) => (
+                              <option key={option.value} value={option.value}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        {variationType === 'Color' && variationColorMode !== 'none' && (
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                              Color Label *
+                            </label>
                             <input
                               type="text"
-                              value={variationColorHex}
-                              onChange={handleColorHexChange}
-                              placeholder="#000000"
-                              disabled={variationType === 'Size'}
-                              className="flex-1 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                              value={variationColorLabel}
+                              onChange={(e) => setVariationColorLabel(e.target.value)}
+                              placeholder={variationColorMode === 'solid' ? 'E.g., Black' : 'E.g., Multi-color / Mixed Print'}
+                              className="w-full rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
                             />
                           </div>
+                        )}
+
+                        {variationType === 'Color' && variationColorMode === 'solid' && (
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                              Solid Color Swatch
+                            </label>
+                            <div className="flex items-center gap-3">
+                              <input
+                                type="color"
+                                value={variationColor}
+                                onChange={handleColorPickerChange}
+                                className="w-12 h-12 rounded-lg border border-gray-200 cursor-pointer"
+                              />
+                              <input
+                                type="text"
+                                value={variationColorHex}
+                                onChange={handleColorHexChange}
+                                placeholder="#000000"
+                                className="flex-1 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
+                              />
+                            </div>
+                          </div>
+                        )}
+
+                        {variationType === 'Color' && variationColorMode === 'none' && (
+                          <p className="rounded-lg border border-dashed border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-500">
+                            Customers will see this option as <span className="font-medium text-gray-700">No color</span>.
+                          </p>
+                        )}
                       </div>
 
                       <div>

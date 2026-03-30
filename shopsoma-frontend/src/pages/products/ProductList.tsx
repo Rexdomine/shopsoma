@@ -11,6 +11,7 @@ import ProductCard from '../../components/products/ProductCard';
 import VendorShowcaseCard from '../../components/products/VendorShowcaseCard';
 import { useWishlistActions } from '../../hooks/useWishlistActions';
 import { usePreferenceStore } from '../../store/preferenceStore';
+import { hasSolidColorHex } from '../../utils/colorDisplay';
 
 const PAGE_SIZE = 12;
 
@@ -1382,7 +1383,11 @@ function FilterGroup({
           )}
           {options.map((option) => {
             const selectedColor = selected === option;
-            const showColorSwatch = type === 'color' && option !== 'All';
+            const meta = colorMeta?.[option];
+            const showColorSwatch =
+              type === 'color' &&
+              option !== 'All' &&
+              (hasSolidColorHex(meta?.hex) || option.toLowerCase() in COLOR_PRESETS);
             const swatchColor = showColorSwatch ? getColorValue(option) : undefined;
             const count =
               showColorSwatch && option !== 'All' ? colorMeta?.[option]?.count ?? 0 : 0;
@@ -1408,7 +1413,13 @@ function FilterGroup({
                       style={{ backgroundColor: swatchColor }}
                     />
                   )}
-                  <span>{option}</span>
+                  {!showColorSwatch && option !== 'All' ? (
+                    <span className="rounded-full border border-gray-200 px-2 py-1 text-xs font-medium text-gray-600">
+                      {option}
+                    </span>
+                  ) : (
+                    <span>{option}</span>
+                  )}
                 </div>
                 {showColorSwatch && count > 0 && (
                   <span className="text-xs text-gray-400">({count})</span>

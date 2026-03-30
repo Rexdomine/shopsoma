@@ -12,6 +12,7 @@ import AddToBagModal from '../../components/modals/AddToBagModal';
 import { useCartStore } from '../../store/cartStore';
 import { formatPriceWithConversion, formatPriceWithCurrency } from '../../utils/pricing';
 import { useCurrencyStore } from '../../store/currencyStore';
+import { hasSolidColorHex, normalizeColorValue } from '../../utils/colorDisplay';
 
 const FALLBACK_SIZE_GUIDE: SizeGuide = {
   gender: 'General Fit',
@@ -29,6 +30,7 @@ type ColorOption = {
   label: string;
   value: string;
   hex?: string | null;
+  isSolid: boolean;
 };
 
 const ShareOutlineIcon = (props: SVGProps<SVGSVGElement>) => (
@@ -124,7 +126,7 @@ export default function ProductDetail() {
 
   // Effect to switch images when color variation is selected
   useEffect(() => {
-    const normalizedColor = normalizeValue(selectedColor);
+    const normalizedColor = normalizeColorValue(selectedColor);
 
     if (!product || !normalizedColor) {
       // If no color selected, use default product images
@@ -136,9 +138,10 @@ export default function ProductDetail() {
 
     // Find the variation matching the selected color
     // Note: Variation titles are formatted as "Product Name (Color)", so we check if title contains the color
-    const selectedVariation = product.variations?.find((variation) =>
-      normalizeValue(variation.title).includes(normalizedColor)
-    );
+    const selectedVariation = product.variations?.find((variation) => {
+      const normalizedTitle = normalizeColorValue(variation.title);
+      return normalizedTitle === normalizedColor || normalizedTitle.includes(normalizedColor);
+    });
 
     if (selectedVariation && selectedVariation.images.length > 0) {
       // Switch to variation's first image
@@ -174,25 +177,24 @@ export default function ProductDetail() {
     }
   };
 
-  const normalizeValue = (value?: string | null) => value?.trim().toLowerCase() ?? '';
-
   const getColorOptions = (
     variants: ProductVariant[],
     sizeFilter?: string | null
   ): ColorOption[] => {
     const uniqueMap = new Map<string, ColorOption>();
-    const normalizedSize = normalizeValue(sizeFilter);
+    const normalizedSize = normalizeColorValue(sizeFilter);
 
     variants.forEach((variant) => {
       if (!variant.color) return;
-      if (normalizedSize && normalizeValue(variant.size) !== normalizedSize) return;
+      if (normalizedSize && normalizeColorValue(variant.size) !== normalizedSize) return;
 
-      const key = normalizeValue(variant.color);
+      const key = normalizeColorValue(variant.color);
       if (!uniqueMap.has(key)) {
         uniqueMap.set(key, {
           label: variant.color,
           value: variant.color,
           hex: variant.color_hex ?? null,
+          isSolid: hasSolidColorHex(variant.color_hex),
         });
       }
     });
@@ -204,11 +206,11 @@ export default function ProductDetail() {
     colorFilter?: string | null
   ): string[] => {
     const set = new Set<string>();
-    const normalizedColor = normalizeValue(colorFilter);
+    const normalizedColor = normalizeColorValue(colorFilter);
 
     variants.forEach((variant) => {
       if (!variant.size) return;
-      if (normalizedColor && normalizeValue(variant.color) !== normalizedColor) return;
+      if (normalizedColor && normalizeColorValue(variant.color) !== normalizedColor) return;
 
       set.add(variant.size);
     });
@@ -226,9 +228,9 @@ export default function ProductDetail() {
 
   useEffect(() => {
     if (!selectedColor || colorOptions.length === 0) return;
-    const normalizedSelected = normalizeValue(selectedColor);
+    const normalizedSelected = normalizeColorValue(selectedColor);
     const isValid = colorOptions.some(
-      (option) => normalizeValue(option.value) === normalizedSelected
+      (option) => normalizeColorValue(option.value) === normalizedSelected
     );
     if (!isValid) {
       setSelectedColor(null);
@@ -237,9 +239,9 @@ export default function ProductDetail() {
 
   useEffect(() => {
     if (!selectedSize || sizeOptions.length === 0) return;
-    const normalizedSelected = normalizeValue(selectedSize);
+    const normalizedSelected = normalizeColorValue(selectedSize);
     const isValid = sizeOptions.some(
-      (option) => normalizeValue(option) === normalizedSelected
+      (option) => normalizeColorValue(option) === normalizedSelected
     );
     if (!isValid) {
       setSelectedSize(null);
@@ -248,8 +250,8 @@ export default function ProductDetail() {
 
   const selectedVariant = useMemo(() => {
     const normalizeSelection = {
-      color: normalizeValue(selectedColor),
-      size: normalizeValue(selectedSize),
+      color: normalizeColorValue(selectedColor),
+      size: normalizeColorValue(selectedSize),
     };
 
     if (!product?.variants?.length) {
@@ -272,8 +274,8 @@ export default function ProductDetail() {
     const hasSizeSelection = Boolean(normalizeSelection.size);
 
     const strictMatch = variants.find((variant) => {
-      const variantColor = normalizeValue(variant.color);
-      const variantSize = normalizeValue(variant.size);
+      const variantColor = normalizeColorValue(variant.color);
+      const variantSize = normalizeColorValue(variant.size);
 
       const colorMatches = !hasColorSelection || variantColor === normalizeSelection.color;
       const sizeMatches = !hasSizeSelection || variantSize === normalizeSelection.size;
@@ -292,7 +294,7 @@ export default function ProductDetail() {
     if (hasColorSelection) {
       return (
         variants.find(
-          (variant) => normalizeValue(variant.color) === normalizeSelection.color
+          (variant) => normalizeColorValue(variant.color) === normalizeSelection.color
         ) ?? null
       );
     }
@@ -300,7 +302,7 @@ export default function ProductDetail() {
     if (hasSizeSelection) {
       return (
         variants.find(
-          (variant) => normalizeValue(variant.size) === normalizeSelection.size
+          (variant) => normalizeColorValue(variant.size) === normalizeSelection.size
         ) ?? null
       );
     }
@@ -826,16 +828,24 @@ export default function ProductDetail() {
                       key={option.value}
                       type="button"
                       onClick={() => setSelectedColor(option.value)}
-                      className={`w-11 h-11 border-2 transition-all ${
-                        selectedColor === option.value
-                          ? 'border-primary ring-2 ring-primary/25'
-                          : 'border-primary/30 hover:border-primary/60'
+                      className={`transition-all ${
+                        option.isSolid
+                          ? `w-11 h-11 border-2 ${
+                              selectedColor === option.value
+                                ? 'border-primary ring-2 ring-primary/25'
+                                : 'border-primary/30 hover:border-primary/60'
+                            }`
+                          : `rounded-full border px-4 py-2 text-sm font-medium ${
+                              selectedColor === option.value
+                                ? 'border-primary bg-primary text-white'
+                                : 'border-primary/30 text-primary hover:border-primary/60'
+                            }`
                       }`}
-                      style={{
-                        backgroundColor: option.hex ?? '#f5f5f5',
-                      }}
+                      style={option.isSolid ? { backgroundColor: option.hex ?? '#f5f5f5' } : undefined}
                       aria-label={`Select color ${option.label}`}
-                    />
+                    >
+                      {!option.isSolid && option.label}
+                    </button>
                   ))}
                 </div>
               </div>

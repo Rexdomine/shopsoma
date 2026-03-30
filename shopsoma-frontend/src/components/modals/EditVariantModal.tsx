@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { X } from 'lucide-react';
 import type { Product, ProductVariant } from '../../types';
 import { IMAGE_CONFIG } from '../../config/constants';
+import { hasSolidColorHex } from '../../utils/colorDisplay';
 
 interface EditVariantModalProps {
   open: boolean;
@@ -145,17 +146,25 @@ export default function EditVariantModal({
                     key={colorOption.color}
                     type="button"
                     onClick={() => setSelectedColor(colorOption.color)}
-                    className={`w-11 h-11 border-2 transition-all ${
-                      selectedColor === colorOption.color
-                        ? 'border-primary ring-2 ring-primary/20'
-                        : 'border-gray-300 hover:border-primary/60'
+                    className={`transition-all ${
+                      hasSolidColorHex(colorOption.hex)
+                        ? `w-11 h-11 border-2 ${
+                            selectedColor === colorOption.color
+                              ? 'border-primary ring-2 ring-primary/20'
+                              : 'border-gray-300 hover:border-primary/60'
+                          }`
+                        : `rounded-full border px-4 py-2 text-sm font-medium ${
+                            selectedColor === colorOption.color
+                              ? 'border-primary bg-primary text-white'
+                              : 'border-gray-300 text-gray-700 hover:border-primary/60'
+                          }`
                     }`}
-                    style={{
-                      backgroundColor: colorOption.hex ?? '#f5f5f5',
-                    }}
+                    style={hasSolidColorHex(colorOption.hex) ? { backgroundColor: colorOption.hex! } : undefined}
                     aria-label={`Select color ${colorOption.color}`}
                     title={colorOption.color}
-                  />
+                  >
+                    {!hasSolidColorHex(colorOption.hex) && colorOption.color}
+                  </button>
                 ))}
               </div>
               {selectedColor && (
