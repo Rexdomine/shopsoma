@@ -8,9 +8,26 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 
 async def _create_usd_order(db_session: AsyncSession, admin_user, customer_user, vendor_user):
+    from app.models.address import Address, AddressType
     from app.models.order import FulfillmentStatus, Order, OrderItem, PaymentStatus
     from app.models.payment import Payment, PaymentGateway, TransactionStatus
     from app.models.product import ModerationStatus, Product, ProductStatus
+
+    shipping_address = Address(
+        id=uuid.uuid4(),
+        user_id=customer_user["user"].id,
+        address_type=AddressType.SHIPPING,
+        full_name="USD Customer",
+        phone_number="08000000000",
+        address_line1="12 River Trent Close",
+        city="Abuja",
+        state="FCT",
+        postal_code="900001",
+        country="Nigeria",
+        is_default=True,
+    )
+    db_session.add(shipping_address)
+    await db_session.flush()
 
     product = Product(
         id=uuid.uuid4(),
@@ -30,6 +47,8 @@ async def _create_usd_order(db_session: AsyncSession, admin_user, customer_user,
         id=uuid.uuid4(),
         order_number="SHP-ADMIN-USD-TEST",
         customer_id=customer_user["user"].id,
+        shipping_address_id=shipping_address.id,
+        billing_address_id=shipping_address.id,
         currency="USD",
         subtotal=Decimal("300.00"),
         shipping_cost=Decimal("3.45"),
@@ -93,7 +112,10 @@ async def test_admin_order_detail_includes_currency_fields(
     assert response.status_code == 200
     payload = response.json()
     assert payload["currency"] == "USD"
-    assert payload["total_amount"] == 326.21
+    assert payload["total_amount"] == "326.21"
+    assert payload["subtotal"] == "300.00"
+    assert payload["shipping_address"]["full_name"] == "USD Customer"
+    assert payload["shipping_address"]["street_address"] == "12 River Trent Close"
     assert payload["items"][0]["currency"] == "USD"
     assert payload["items"][0]["unit_price"] == 300.0
 
