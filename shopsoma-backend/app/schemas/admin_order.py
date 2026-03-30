@@ -169,6 +169,7 @@ class OrderListItem(BaseModel):
     order_number: str
     customer: CustomerInfo
     total_amount: Decimal
+    currency: str
     payment_status: PaymentStatus
     fulfillment_status: FulfillmentStatus
     created_at: datetime
@@ -190,6 +191,7 @@ class OrderDetail(BaseModel):
     billing_address: Optional[AddressInfo]
 
     # Pricing
+    currency: str
     subtotal: Decimal
     shipping_cost: Decimal
     tax_amount: Decimal
