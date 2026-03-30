@@ -11,7 +11,6 @@ import {
   Settings,
   HelpCircle,
   LogOut,
-  ChevronRight,
   User as UserIcon,
   PanelLeftClose,
   PanelLeftOpen,
@@ -132,9 +131,6 @@ export default function AdminSidebar({ activeSection, activePrimary }: AdminSide
             <div className="flex-1">
               <p className="text-sm font-semibold text-gray-900 truncate">{user?.full_name || 'Admin'}</p>
               <p className="text-xs text-gray-500 truncate">{user?.email || 'admin@shopsoma.com'}</p>
-            </div>
-            <div className="h-8 w-8 rounded-full border border-gray-200 flex items-center justify-center text-gray-500">
-              <ChevronRight className="w-4 h-4" />
             </div>
           </button>
         ) : (
