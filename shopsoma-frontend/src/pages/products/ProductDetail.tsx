@@ -605,11 +605,11 @@ export default function ProductDetail() {
   return (
     <Layout>
     <section className="bg-[var(--color-page-bg)]">
-      <div className="grid grid-cols-1 lg:grid-cols-[auto_minmax(0,520px)] lg:gap-16 mb-16">
-        {/* LEFT COLUMN - IMAGES (Full bleed to left edge) */}
-        <div className="relative -mt-32 pt-32">
-          {/* Main Image - extends up into header area and flush to left */}
-          <div className="relative overflow-hidden bg-[#f5f7f8] aspect-[3/4] w-full lg:w-[calc(50vw+200px)] lg:max-w-[800px]">
+      <div className="mx-auto w-full max-w-[1440px] px-4 md:px-6 lg:px-8">
+        <div className="mb-16 grid grid-cols-1 items-start gap-8 lg:grid-cols-[minmax(0,1.15fr)_minmax(360px,460px)] lg:gap-12">
+          {/* LEFT COLUMN - IMAGES */}
+          <div className="w-full">
+            <div className="relative w-full overflow-hidden rounded-sm bg-[#f5f7f8] aspect-[4/5] max-h-[80vh]">
               <img
                 src={heroImage}
                 alt={product.title}
@@ -653,7 +653,7 @@ export default function ProductDetail() {
           </div>
 
           {/* RIGHT COLUMN - PRODUCT SUMMARY */}
-          <div className="space-y-8 lg:pt-12 px-4 sm:px-6 lg:px-0 lg:pr-12 lg:max-w-[520px] lg:ml-auto">
+          <div className="w-full self-start space-y-8 px-0 lg:max-w-[460px]">
             <div className="flex items-start justify-between gap-4">
               <div className="space-y-2 flex-1 min-w-0">
                 {/* Brand/Vendor Name */}
@@ -964,6 +964,7 @@ export default function ProductDetail() {
             </div>
           </div>
         )}
+      </div>
       </div>
     </section>
       {/* Size Guide Modal */}
