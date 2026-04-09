@@ -695,3 +695,26 @@ For every meaningful Shopsoma task, provide QA in this order:
 - Staging test steps
 - Expected staging result
 - Regression checks
+
+## Field Default, Validation, and Multi-Flow Safety
+
+When changing any form field default, fallback, auto-fill behavior, derived value, or clearing behavior, you must inspect every place that depends on that field before completing the task.
+
+Always review:
+- state initialization
+- controlled input behavior
+- useEffect/defaulting logic
+- validation logic
+- submit handler conditions
+- payload construction
+- edit-mode hydration
+- display/resolution helpers
+
+If the page supports multiple workflows or modes (for example: single product vs variable product), validation must be scoped to the correct flow.
+Do not require a field globally if it is only relevant to one mode.
+
+A form-related task is not complete until you verify:
+- the original bug is fixed
+- no sibling flow is broken
+- no new hidden submission blocker has been introduced
+- create and edit flows still work as expected
