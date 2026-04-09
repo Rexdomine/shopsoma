@@ -34,12 +34,21 @@ from app.schemas.vendor import (
     VendorEarningsSummary, VendorPayoutRequest,
     VendorAnalyticsSummary, VendorAnalyticsChartResponse, VendorAnalyticsStats
 )
-from app.schemas.product import ProductResponse
+from app.schemas.product import ProductResponse, ProductListResponse
 from app.models.product import ProductStatus, Variation
 from app.services.email_service import email_service
 
 router = APIRouter(prefix="/vendor", tags=["Vendors"])
 logger = logging.getLogger(__name__)
+
+VENDOR_PRODUCT_RELATIONSHIPS = (
+    selectinload(Product.variants),
+    selectinload(Product.variations).selectinload(Variation.size_stocks),
+    selectinload(Product.images),
+    selectinload(Product.vendor),
+    selectinload(Product.category),
+    selectinload(Product.collection),
+)
 
 
 async def _get_payout_hold_days(db: AsyncSession) -> int:
@@ -365,6 +374,62 @@ async def delete_vendor_asset(
 
 # ==================== VENDOR ORDERS ====================
 
+@router.get("/products", response_model=ProductListResponse)
+async def list_vendor_products(
+    vendor: Vendor = Depends(get_approved_vendor),
+    db: AsyncSession = Depends(get_db),
+    search: Optional[str] = Query(None, max_length=255),
+    status: Optional[str] = Query(None, pattern="^(draft|active|inactive|archived)$"),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    sort_by: str = Query(default="created_at", pattern="^(created_at|title|base_price|orders_count|views_count)$"),
+    sort_order: str = Query(default="desc", pattern="^(asc|desc)$"),
+):
+    """List the current vendor's products, including pending moderation items."""
+    filters = [
+        Product.vendor_id == vendor.id,
+        Product.status != ProductStatus.ARCHIVED,
+    ]
+
+    if search:
+        filters.append(
+            or_(
+                Product.title.ilike(f"%{search}%"),
+                Product.description.ilike(f"%{search}%"),
+            )
+        )
+
+    if status:
+        filters.append(Product.status == ProductStatus(status))
+
+    query = (
+        select(Product)
+        .options(*VENDOR_PRODUCT_RELATIONSHIPS)
+        .where(and_(*filters))
+    )
+
+    count_query = select(func.count()).select_from(Product).where(and_(*filters))
+    total_result = await db.execute(count_query)
+    total = total_result.scalar() or 0
+
+    sort_column = getattr(Product, sort_by)
+    if sort_order == "desc":
+        query = query.order_by(sort_column.desc())
+    else:
+        query = query.order_by(sort_column.asc())
+
+    offset = (page - 1) * page_size
+    result = await db.execute(query.offset(offset).limit(page_size))
+    products = result.scalars().all()
+
+    return ProductListResponse(
+        products=products,
+        total=total,
+        page=page,
+        page_size=page_size,
+        total_pages=(total + page_size - 1) // page_size,
+    )
+
 @router.get("/products/{product_id}", response_model=ProductResponse)
 async def get_vendor_product(
     product_id: UUID,
@@ -374,13 +439,7 @@ async def get_vendor_product(
     """Get vendor product details"""
     product_query = (
         select(Product)
-        .options(
-            selectinload(Product.variants),
-            selectinload(Product.variations).selectinload(Variation.size_stocks),
-            selectinload(Product.images),
-            selectinload(Product.category),
-            selectinload(Product.collection),
-        )
+        .options(*VENDOR_PRODUCT_RELATIONSHIPS)
         .where(
             and_(
                 Product.id == product_id,
