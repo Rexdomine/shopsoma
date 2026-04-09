@@ -613,43 +613,43 @@ export default function ProductDetail() {
               <img
                 src={heroImage}
                 alt={product.title}
-                className="h-full w-full object-cover"
+                className="h-full w-full object-cover object-top"
                 onError={(event) => {
                   event.currentTarget.src = placeholderImage;
                   event.currentTarget.onerror = null;
                 }}
               />
-
-              {/* Thumbnail Gallery - overlaid at bottom of main image */}
-              {shouldShowGallery && (
-                <div className="absolute bottom-6 left-6 right-6 overflow-x-auto overflow-y-hidden scrollbar-hide">
-                  <div className="flex min-w-max gap-2 pr-6">
-                    {galleryImages.map((image) => (
-                      <button
-                        key={image.id}
-                        type="button"
-                        onClick={() => setSelectedImage(image.image_url)}
-                        className={`h-20 w-16 flex-shrink-0 overflow-hidden border-2 transition-all duration-200 ${
-                          selectedImage === image.image_url
-                            ? 'border-white shadow-lg ring-1 ring-white/30'
-                            : 'border-white/50 shadow-md hover:border-white'
-                        }`}
-                      >
-                        <img
-                          src={image.image_url}
-                          alt={image.alt_text ?? product.title}
-                          className="h-full w-full object-cover"
-                          onError={(event) => {
-                            event.currentTarget.src = placeholderImage;
-                            event.currentTarget.onerror = null;
-                          }}
-                        />
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
             </div>
+
+            {/* Thumbnail Gallery */}
+            {shouldShowGallery && (
+              <div className="mt-4 overflow-x-auto overflow-y-hidden scrollbar-hide">
+                <div className="flex min-w-max gap-3 pr-6">
+                  {galleryImages.map((image) => (
+                    <button
+                      key={image.id}
+                      type="button"
+                      onClick={() => setSelectedImage(image.image_url)}
+                      className={`h-20 w-16 flex-shrink-0 overflow-hidden border-2 bg-[#f5f7f8] transition-all duration-200 ${
+                        selectedImage === image.image_url
+                          ? 'border-primary shadow-md'
+                          : 'border-primary/15 hover:border-primary/40'
+                      }`}
+                    >
+                      <img
+                        src={image.image_url}
+                        alt={image.alt_text ?? product.title}
+                        className="h-full w-full object-cover object-top"
+                        onError={(event) => {
+                          event.currentTarget.src = placeholderImage;
+                          event.currentTarget.onerror = null;
+                        }}
+                      />
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* RIGHT COLUMN - PRODUCT SUMMARY */}
