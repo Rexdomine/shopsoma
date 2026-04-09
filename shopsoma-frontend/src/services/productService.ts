@@ -95,7 +95,7 @@ export const productService = {
 
   // Get vendor product by ID (vendor only)
   async getVendorProduct(productId: string): Promise<Product> {
-    const response = await api.get(`/products/${productId}`, { timeout: 20000 });
+    const response = await api.get(`/vendor/products/${productId}`, { timeout: 20000 });
     return response.data;
   },
 
@@ -144,8 +144,9 @@ export const productService = {
     vendorId: string,
     params?: ProductListParams
   ): Promise<ProductListResponse> {
-    const response = await api.get('/products', {
-      params: { vendor_id: vendorId, ...params },
+    void vendorId;
+    const response = await api.get('/vendor/products', {
+      params,
     });
     return response.data;
   },
@@ -176,7 +177,7 @@ export const productService = {
   // Duplicate product (vendor only)
   async duplicateProduct(productId: string): Promise<Product> {
     // Fetch the original product
-    const original = await this.getProduct(productId);
+    const original = await this.getVendorProduct(productId);
 
     // Create a copy with modified title and reset certain fields
     const duplicateData: Partial<Product> = {
