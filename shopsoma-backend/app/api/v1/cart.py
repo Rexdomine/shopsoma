@@ -95,6 +95,47 @@ def resolve_variant_response(
     return None
 
 
+def resolve_cart_purchase_option(
+    product: Optional[Product],
+    variant_id: Optional[str],
+) -> Optional[dict]:
+    """Resolve the purchasable stock/price source for a cart item."""
+    if not product:
+        return None
+
+    variant_id_str = str(variant_id or "")
+    if variant_id_str.startswith("default-"):
+        if product.variants:
+            return None
+        return {
+            "normalized_variant_id": None,
+            "price": float(product.base_price),
+            "stock": int(product.total_stock or 0),
+            "is_available": True if product.made_to_order else int(product.total_stock or 0) > 0,
+        }
+
+    if not variant_id:
+        if product.variants:
+            return None
+        return {
+            "normalized_variant_id": None,
+            "price": float(product.base_price),
+            "stock": int(product.total_stock or 0),
+            "is_available": True if product.made_to_order else int(product.total_stock or 0) > 0,
+        }
+
+    variant_response = resolve_variant_response(product, variant_id)
+    if not variant_response:
+        return None
+
+    return {
+        "normalized_variant_id": variant_id,
+        "price": float(getattr(variant_response, "price", product.base_price)),
+        "stock": int(getattr(variant_response, "stock", 0) or 0),
+        "is_available": bool(getattr(variant_response, "is_available", False)),
+    }
+
+
 def cast_uuid(value: Optional[str]) -> Optional[uuid.UUID]:
     if not value:
         return None
@@ -239,31 +280,17 @@ async def add_to_cart(
         if not product:
             raise HTTPException(status_code=404, detail="Product not found")
 
-        # Get variant price
-        # Handle products without variants (variant_id format: "default-{product_id}")
-        variant_id_str = str(item_data.variant_id or "")
+        purchase_option = resolve_cart_purchase_option(product, item_data.variant_id)
         print(
-            f"[Cart API] add_to_cart: variant_id_str={variant_id_str}, product.variants count={len(product.variants) if product.variants else 0}, "
+            f"[Cart API] add_to_cart: variant_id={item_data.variant_id}, product.variants count={len(product.variants) if product.variants else 0}, "
             f"variations count={len(product.variations) if product.variations else 0}"
         )
 
-        if variant_id_str.startswith("default-"):
-            # Product has no variants, use base price
-            if not product.variants or len(product.variants) == 0:
-                variant = None
-                price = float(product.base_price)
-                # For products without variants, set variant_id to None in DB
-                item_data.variant_id = None
-                print(f"[Cart API] add_to_cart: Using default variant, price={price}")
-            else:
-                raise HTTPException(status_code=404, detail="Product variant not found")
-        else:
-            variant_response = resolve_variant_response(product, item_data.variant_id)
+        if not purchase_option:
+            raise HTTPException(status_code=404, detail="Product variant not found")
 
-            if not variant_response:
-                raise HTTPException(status_code=404, detail="Product variant not found")
-
-            price = float(getattr(variant_response, "price", product.base_price))
+        item_data.variant_id = purchase_option["normalized_variant_id"]
+        price = purchase_option["price"]
 
         # Check if item already exists (by product_id + variant_id + user/session)
         existing_query = select(CartItem).where(
@@ -279,9 +306,19 @@ async def add_to_cart(
         result = await db.execute(existing_query)
         existing_item = result.scalar_one_or_none()
 
+        requested_quantity = item_data.quantity + (existing_item.quantity if existing_item else 0)
+        if not product.made_to_order:
+            if not purchase_option["is_available"] or purchase_option["stock"] <= 0:
+                raise HTTPException(status_code=400, detail="Product is out of stock")
+            if requested_quantity > purchase_option["stock"]:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Insufficient stock. Available: {purchase_option['stock']}"
+                )
+
         if existing_item:
             # Update quantity
-            existing_item.quantity += item_data.quantity
+            existing_item.quantity = requested_quantity
             existing_item.updated_at = datetime.utcnow()
             await db.commit()
             refreshed_item = await fetch_cart_item_with_relations(db, str(existing_item.id))
@@ -341,7 +378,7 @@ async def update_cart_item(
             raise HTTPException(status_code=400, detail="Invalid cart item ID")
 
         # Find cart item
-        query = select(CartItem).where(CartItem.id == item_uuid)
+        query = select(CartItem).options(*CART_ITEM_LOAD_OPTIONS).where(CartItem.id == item_uuid)
         if user_uuid:
             query = query.where(CartItem.user_id == user_uuid)
         else:
@@ -352,6 +389,22 @@ async def update_cart_item(
 
         if not cart_item:
             raise HTTPException(status_code=404, detail="Cart item not found")
+
+        purchase_option = resolve_cart_purchase_option(
+            cart_item.product,
+            str(cart_item.variant_id) if cart_item.variant_id else None,
+        )
+        if not purchase_option:
+            raise HTTPException(status_code=404, detail="Product variant not found")
+
+        if not cart_item.product.made_to_order:
+            if not purchase_option["is_available"] or purchase_option["stock"] <= 0:
+                raise HTTPException(status_code=400, detail="Product is out of stock")
+            if update_data.quantity > purchase_option["stock"]:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Insufficient stock. Available: {purchase_option['stock']}"
+                )
 
         cart_item.quantity = update_data.quantity
         cart_item.updated_at = datetime.utcnow()

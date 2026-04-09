@@ -107,6 +107,23 @@ def _parse_decimal(value: Optional[str], field: str, row: int, errors: List[Dict
         return None
 
 
+def _sync_single_product_variant_inventory(product: Product) -> None:
+    """Keep legacy variant stock aligned with single-product total_stock."""
+    if product.product_type != ProductType.SINGLE:
+        return
+    if product.variations:
+        return
+    if not product.variants:
+        return
+
+    synced_stock = 0 if product.made_to_order else int(product.total_stock or 0)
+    is_available = True if product.made_to_order else synced_stock > 0
+
+    for variant in product.variants:
+        variant.stock = synced_stock
+        variant.is_available = is_available
+
+
 async def _get_category_by_slug(db: AsyncSession, slug: str) -> Optional[Category]:
     result = await db.execute(select(Category).where(Category.slug == slug, Category.is_active == True))
     return result.scalar_one_or_none()
@@ -770,6 +787,9 @@ async def update_product(
     # Reset moderation if content changed
     if any(field in update_data for field in ["title", "description"]):
         product.moderation_status = ModerationStatus.PENDING
+
+    if any(field in update_data for field in ["total_stock", "made_to_order"]):
+        _sync_single_product_variant_inventory(product)
 
     await db.commit()
 

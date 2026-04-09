@@ -508,6 +508,53 @@ class TestProductUpdate:
         assert float(data["base_price"]) == update_data["base_price"]
 
     @pytest.mark.asyncio
+    async def test_update_single_product_stock_syncs_legacy_variant_stock(
+        self,
+        client: AsyncClient,
+        vendor_user,
+        db_session: AsyncSession,
+    ):
+        """Editing single-product stock should update the storefront variant stock source too."""
+        from app.models.product import Product, ProductVariant, ProductStatus, ModerationStatus, ProductType
+        import uuid
+
+        product = Product(
+            id=uuid.uuid4(),
+            vendor_id=vendor_user["vendor"].id,
+            title="Single Stock Sync Product",
+            base_price=80.00,
+            total_stock=0,
+            status=ProductStatus.ACTIVE,
+            moderation_status=ModerationStatus.APPROVED,
+            product_type=ProductType.SINGLE,
+        )
+        db_session.add(product)
+        await db_session.flush()
+
+        variant = ProductVariant(
+            id=uuid.uuid4(),
+            product_id=product.id,
+            size="M",
+            price=80.00,
+            stock=0,
+            is_available=False,
+        )
+        db_session.add(variant)
+        await db_session.commit()
+
+        response = await client.put(
+            f"/api/v1/products/{product.id}",
+            json={"total_stock": 7},
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_stock"] == 7
+        assert data["variants"][0]["stock"] == 7
+        assert data["variants"][0]["is_available"] is True
+
+    @pytest.mark.asyncio
     async def test_update_product_unauthorized(self, client: AsyncClient, sample_product):
         """Test update without authentication"""
         update_data = {"title": "Updated Title"}
