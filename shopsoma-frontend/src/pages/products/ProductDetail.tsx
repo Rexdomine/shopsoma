@@ -604,16 +604,16 @@ export default function ProductDetail() {
 
   return (
     <Layout>
-    <section className="bg-[var(--color-page-bg)]">
+    <section className="w-full overflow-x-clip bg-[var(--color-page-bg)]">
       <div className="mx-auto w-full max-w-[1440px] px-4 md:px-6 lg:px-8">
         <div className="mb-16 grid grid-cols-1 items-start gap-8 lg:grid-cols-[minmax(0,1.15fr)_minmax(360px,460px)] lg:gap-12">
           {/* LEFT COLUMN - IMAGES */}
-          <div className="w-full">
-            <div className="relative w-full overflow-hidden rounded-sm bg-[#f5f7f8] aspect-[4/5] max-h-[80vh]">
+          <div className="relative w-full lg:ml-[calc(50%-50vw)]">
+            <div className="relative w-full aspect-[4/5] max-h-[80vh] overflow-hidden bg-[#f5f7f8]">
               <img
                 src={heroImage}
                 alt={product.title}
-                className="w-full h-full object-cover"
+                className="h-full w-full object-cover"
                 onError={(event) => {
                   event.currentTarget.src = placeholderImage;
                   event.currentTarget.onerror = null;
@@ -623,22 +623,22 @@ export default function ProductDetail() {
               {/* Thumbnail Gallery - overlaid at bottom of main image */}
               {shouldShowGallery && (
                 <div className="absolute bottom-6 left-6 right-6 overflow-x-auto overflow-y-hidden scrollbar-hide">
-                  <div className="flex gap-2 min-w-max pr-6">
+                  <div className="flex min-w-max gap-2 pr-6">
                     {galleryImages.map((image) => (
                       <button
                         key={image.id}
                         type="button"
                         onClick={() => setSelectedImage(image.image_url)}
-                        className={`overflow-hidden border-2 transition-all duration-200 w-16 h-20 flex-shrink-0 ${
+                        className={`h-20 w-16 flex-shrink-0 overflow-hidden border-2 transition-all duration-200 ${
                           selectedImage === image.image_url
                             ? 'border-white shadow-lg ring-1 ring-white/30'
-                            : 'border-white/50 hover:border-white shadow-md'
+                            : 'border-white/50 shadow-md hover:border-white'
                         }`}
                       >
                         <img
                           src={image.image_url}
                           alt={image.alt_text ?? product.title}
-                          className="w-full h-full object-cover"
+                          className="h-full w-full object-cover"
                           onError={(event) => {
                             event.currentTarget.src = placeholderImage;
                             event.currentTarget.onerror = null;
