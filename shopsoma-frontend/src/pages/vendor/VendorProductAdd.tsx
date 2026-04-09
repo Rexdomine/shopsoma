@@ -73,7 +73,7 @@ export default function VendorProductAdd() {
   const [materials, setMaterials] = useState('');
   const [collectionId, setCollectionId] = useState('');
   const [colorMode, setColorMode] = useState<ColorMode>('solid');
-  const [colorLabel, setColorLabel] = useState('Black');
+  const [colorLabel, setColorLabel] = useState('');
   const [color, setColor] = useState('#000000'); // Now stores hex value
   const [colorHex, setColorHex] = useState('#000000'); // Hex input field
   const [selectedSizes, setSelectedSizes] = useState<SizeOption[]>([]);
@@ -288,21 +288,14 @@ export default function VendorProductAdd() {
   }, [variationType]);
 
   useEffect(() => {
-    if (colorMode === 'solid') {
-      if (!colorLabel.trim()) {
-        setColorLabel('Black');
-      }
+    if (colorMode === 'none') {
+      setColorLabel('No color');
       return;
     }
 
-    if (colorMode === 'multi') {
-      if (!colorLabel.trim()) {
-        setColorLabel('Multi-color');
-      }
-      return;
+    if (colorLabel === 'No color') {
+      setColorLabel('');
     }
-
-    setColorLabel('No color');
   }, [colorMode, colorLabel]);
 
   useEffect(() => {
