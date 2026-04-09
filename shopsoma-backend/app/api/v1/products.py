@@ -11,7 +11,7 @@ from sqlalchemy import select, func, or_, and_
 from sqlalchemy.orm import selectinload
 
 from app.core.database import get_db
-from app.api.dependencies import get_current_user, get_current_vendor, get_current_admin, get_optional_user
+from app.api.dependencies import get_current_vendor, get_current_admin
 from app.models.user import User
 from app.models.category import Category
 from app.models.product import Product, ProductVariant, ProductImage, ProductStatus, ProductType, ModerationStatus, Variation, SizeStock, SizeEnum
@@ -21,7 +21,6 @@ from app.schemas.product import (
     ProductUpdate,
     ProductResponse,
     ProductListResponse,
-    ProductSearchParams,
     ProductVariantCreate,
     ProductVariantUpdate,
     ProductVariantResponse,
@@ -29,11 +28,6 @@ from app.schemas.product import (
     ProductImageUpdate,
     ProductImageResponse,
     ProductModerationUpdate,
-    VariationCreate,
-    VariationUpdate,
-    VariationResponse,
-    SizeStockCreate,
-    SizeStockResponse,
 )
 
 router = APIRouter(prefix="/products", tags=["products"])
@@ -543,36 +537,22 @@ async def list_products(
     page_size: int = Query(default=20, ge=1, le=100),
     sort_by: str = Query(default="created_at", pattern="^(created_at|title|base_price|orders_count|views_count)$"),
     sort_order: str = Query(default="desc", pattern="^(asc|desc)$"),
-    current_user: Optional[User] = Depends(get_optional_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
     List products with filters and pagination
 
-    - Public endpoint (shows only active/approved products to non-vendors)
-    - Vendors can see their own products regardless of status
-    - Admins can see all products
+    - Public storefront endpoint
+    - Returns only customer-visible products
     """
     # Build query
     query = select(Product).options(*PRODUCT_RELATIONSHIPS)
 
     # Apply filters
-    filters = []
-
-    # Non-vendors can only see active, approved products
-    if not current_user or current_user.role == "customer":
-        filters.append(Product.status == ProductStatus.ACTIVE)
-        filters.append(Product.moderation_status == ModerationStatus.APPROVED)
-    elif current_user.role == "vendor":
-        # Vendors see only their own products (excluding archived/deleted)
-        result = await db.execute(
-            select(Vendor.id).where(Vendor.user_id == current_user.id)
-        )
-        vendor_id_result = result.scalar_one_or_none()
-        if vendor_id_result:
-            filters.append(Product.vendor_id == vendor_id_result)
-            # Exclude archived products (soft-deleted)
-            filters.append(Product.status != ProductStatus.ARCHIVED)
+    filters = [
+        Product.status == ProductStatus.ACTIVE,
+        Product.moderation_status == ModerationStatus.APPROVED,
+    ]
 
     # Search
     if search:
@@ -592,7 +572,7 @@ async def list_products(
         )
 
     # Vendor filter
-    if vendor_id and (not current_user or current_user.role == "admin"):
+    if vendor_id:
         filters.append(Product.vendor_id == vendor_id)
 
     # Status filter
@@ -653,15 +633,13 @@ async def list_products(
 @router.get("/{product_id}", response_model=ProductResponse)
 async def get_product(
     product_id: UUID,
-    current_user: Optional[User] = Depends(get_optional_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
     Get a single product by ID
 
-    - Public endpoint (only active/approved products for non-vendors)
-    - Vendors can view their own products
-    - Admins can view all products
+    - Public storefront endpoint
+    - Returns only customer-visible products
     """
     query = select(Product).options(*PRODUCT_RELATIONSHIPS).where(Product.id == product_id)
 
@@ -674,25 +652,11 @@ async def get_product(
             detail="Product not found"
         )
 
-    # Permission check
-    if not current_user or current_user.role == "customer":
-        if product.status != ProductStatus.ACTIVE or product.moderation_status != ModerationStatus.APPROVED:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Product not found"
-            )
-    elif current_user.role == "vendor":
-        # Check if product belongs to vendor
-        result = await db.execute(
-            select(Vendor.id).where(Vendor.user_id == current_user.id)
+    if product.status != ProductStatus.ACTIVE or product.moderation_status != ModerationStatus.APPROVED:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Product not found"
         )
-        vendor_id = result.scalar_one_or_none()
-
-        if product.vendor_id != vendor_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Not authorized to view this product"
-            )
 
     # Increment views
     product.views_count += 1

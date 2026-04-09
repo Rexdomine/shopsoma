@@ -37,7 +37,7 @@ export default function VendorProductEdit() {
 
       try {
         setLoading(true);
-        const data = await productService.getProduct(id);
+        const data = await productService.getVendorProduct(id);
         setProduct(data);
 
         // Pre-populate form fields
