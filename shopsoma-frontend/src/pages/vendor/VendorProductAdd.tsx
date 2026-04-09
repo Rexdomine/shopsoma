@@ -725,9 +725,10 @@ export default function VendorProductAdd() {
       return;
     }
 
-    const resolvedSingleColorLabel = getResolvedColorLabel(colorMode, colorLabel);
+    const resolvedSingleColorLabel =
+      productType === 'single' ? getResolvedColorLabel(colorMode, colorLabel) : '';
 
-    if (!resolvedSingleColorLabel) {
+    if (productType === 'single' && !resolvedSingleColorLabel) {
       warning('Please provide a color option for this product', 'Missing info');
       return;
     }
