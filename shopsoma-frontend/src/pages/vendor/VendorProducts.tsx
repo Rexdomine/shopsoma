@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import type { SyntheticEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ROUTES } from '../../config/constants';
 import VendorSidebar from '../../components/vendor/VendorSidebar';
@@ -12,6 +13,7 @@ import { productService } from '../../services/productService';
 import type { Product } from '../../types';
 import { useCurrencyStore } from '../../store/currencyStore';
 import { formatPriceWithConversion } from '../../utils/pricing';
+import { getProductImageSource } from '../../utils/productImages';
 import { Eye, PencilLine, Shirt, Search, Loader2, ArrowUpDown, Filter, Trash2, Copy, Upload } from 'lucide-react';
 
 type GroupBy = 'all' | 'collections';
@@ -37,6 +39,7 @@ export default function VendorProducts() {
   const [productToDelete, setProductToDelete] = useState<Product | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [bulkUploadOpen, setBulkUploadOpen] = useState(false);
+  const [failedImageProductIds, setFailedImageProductIds] = useState<Set<string>>(() => new Set());
 
   useEffect(() => {
     fetchExchangeRate();
@@ -155,8 +158,38 @@ export default function VendorProducts() {
     return `Ready to Ship • ${qty} in stock`;
   };
 
-  const getImage = (p: Product) => {
-    return p.images?.[0]?.thumbnail_url || p.images?.[0]?.image_url || '';
+  const handleProductImageError = (
+    event: SyntheticEvent<HTMLImageElement>,
+    productId: string,
+    fallbackSrc?: string
+  ) => {
+    const image = event.currentTarget;
+    if (fallbackSrc && image.dataset.fallbackApplied !== 'true') {
+      image.dataset.fallbackApplied = 'true';
+      image.src = fallbackSrc;
+      return;
+    }
+    setFailedImageProductIds((current) => new Set(current).add(productId));
+  };
+
+  const renderProductThumbnail = (product: Product) => {
+    const image = getProductImageSource(product);
+    if (!image || failedImageProductIds.has(product.id)) {
+      return (
+        <div className="h-14 w-14 rounded-lg border border-gray-200 bg-gray-50 flex items-center justify-center text-gray-400">
+          <Shirt className="h-7 w-7" />
+        </div>
+      );
+    }
+
+    return (
+      <img
+        src={image.src}
+        alt={product.title}
+        className="h-14 w-14 rounded-lg object-cover border border-gray-200 bg-gray-50"
+        onError={(event) => handleProductImageError(event, product.id, image.fallbackSrc)}
+      />
+    );
   };
 
   const handleDeleteClick = (product: Product) => {
@@ -371,21 +404,10 @@ export default function VendorProducts() {
                     <tbody className="divide-y divide-gray-200">
                       {collectionProducts.map((product) => {
                         const stockLabel = getStockLabel(product);
-                        const img = getImage(product);
                         return (
                           <tr key={product.id} className="hover:bg-gray-50 transition">
                             <td className="px-6 py-4">
-                              {img ? (
-                                <img
-                                  src={img}
-                                  alt={product.title}
-                                  className="h-14 w-14 rounded-lg object-cover border border-gray-200"
-                                />
-                              ) : (
-                                <div className="h-14 w-14 rounded-lg border border-gray-200 bg-gray-50 flex items-center justify-center text-gray-400">
-                                  <Shirt className="h-7 w-7" />
-                                </div>
-                              )}
+                              {renderProductThumbnail(product)}
                             </td>
                             <td className="px-6 py-4">
                               <div className="text-sm font-medium text-gray-900">{product.title}</div>
@@ -486,21 +508,10 @@ export default function VendorProducts() {
                 <tbody className="divide-y divide-gray-200">
                   {filteredProducts.map((product) => {
                     const stockLabel = getStockLabel(product);
-                    const img = getImage(product);
                     return (
                       <tr key={product.id} className="hover:bg-gray-50 transition">
                         <td className="px-6 py-4">
-                          {img ? (
-                            <img
-                              src={img}
-                              alt={product.title}
-                              className="h-14 w-14 rounded-lg object-cover border border-gray-200"
-                            />
-                          ) : (
-                            <div className="h-14 w-14 rounded-lg border border-gray-200 bg-gray-50 flex items-center justify-center text-gray-400">
-                              <Shirt className="h-7 w-7" />
-                            </div>
-                          )}
+                          {renderProductThumbnail(product)}
                         </td>
                         <td className="px-6 py-4">
                           <div className="text-sm font-medium text-gray-900">{product.title}</div>
