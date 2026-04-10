@@ -718,3 +718,36 @@ A form-related task is not complete until you verify:
 - no sibling flow is broken
 - no new hidden submission blocker has been introduced
 - create and edit flows still work as expected
+
+## Debug Before Generalizing
+
+When a bug appears on one surface but not another, do not immediately extract or broaden a shared fix.
+
+First inspect the exact runtime data for the broken surface and confirm:
+- the actual object shape
+- the exact field path used at render time
+- why the working surface succeeds
+- why the broken surface fails
+
+Only after confirming the real runtime difference should shared logic be introduced or updated.
+
+Do not mark image/data rendering fixes complete until both:
+- the originally broken item is verified
+- one previously working item is rechecked for regression
+
+## No Shared Refactor Without Runtime Proof
+
+Do not convert a local fix into shared utility logic unless the runtime data shape has been verified across all affected surfaces.
+
+## Surface Consistency Rule
+
+When fixing data rendering bugs across multiple UI surfaces, do not assume a fix in one surface applies everywhere.
+Explicitly verify all independent render paths, including:
+- cards/lists
+- detail pages
+- dashboards
+- featured/spotlight sections
+- hover states
+- gallery/selected-image state
+
+Do not mark image/data rendering work complete until each surface is checked for its own render path.

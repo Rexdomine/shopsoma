@@ -52,6 +52,48 @@ interface DetailedVariation {
   images: ProductImage[];
 }
 
+interface ProductImageFramePreviewProps {
+  imageSrc?: string;
+  alt: string;
+  compact?: boolean;
+}
+
+function ProductImageFramePreview({
+  imageSrc,
+  alt,
+  compact = false,
+}: ProductImageFramePreviewProps) {
+  return (
+    <div className="rounded-2xl border border-[#105E53]/10 bg-white/80 p-4 shadow-sm">
+      <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-[#105E53]">
+        Preview how your image will appear on the product page
+      </p>
+      <div
+        className={`mt-3 mx-auto aspect-[4/5] w-full overflow-hidden rounded-sm border border-[#105E53]/15 bg-[#f5f7f8] shadow-inner ${
+          compact ? 'max-w-[132px]' : 'max-w-[190px]'
+        }`}
+      >
+        {imageSrc ? (
+          <img
+            src={imageSrc}
+            alt={alt}
+            className="h-full w-full object-contain object-center"
+          />
+        ) : (
+          <div className="flex h-full w-full items-center justify-center px-4 text-center">
+            <span className="font-serif text-xs leading-relaxed text-[#105E53]/55">
+              Upload an image to check product centering.
+            </span>
+          </div>
+        )}
+      </div>
+      <p className="mt-3 text-center text-[11px] leading-relaxed text-gray-500">
+        4:5 PDP frame with neutral background.
+      </p>
+    </div>
+  );
+}
+
 
 export default function VendorProductAdd() {
   const navigate = useNavigate();
@@ -1511,6 +1553,28 @@ export default function VendorProductAdd() {
                       ? 'Upload the main product images that shoppers will see first.'
                       : 'Variable products use variation images only. Add images inside each variation to avoid duplicate galleries.'}
                   </p>
+                  <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_220px]">
+                    <div className="rounded-2xl border border-[#105E53]/10 bg-[#105E53]/5 px-5 py-4 text-sm leading-relaxed text-gray-600">
+                      <p className="font-medium text-[#105E53]">
+                        For the best result on Shopsoma, use a portrait 4:5 image and keep the product centered in frame.
+                      </p>
+                      <div className="mt-4 space-y-1 text-xs">
+                        <p>Ratio: 4:5</p>
+                        <p>Recommended size: 1600 × 2000 px</p>
+                        <p>Minimum size: 1280 × 1600 px</p>
+                      </div>
+                      <div className="mt-4 border-t border-[#105E53]/10 pt-4 text-xs">
+                        <p className="font-medium text-[#105E53]">Important:</p>
+                        <p className="mt-1">
+                          Correct dimensions alone do not guarantee a perfect display. If the subject sits too far left, right, top, or bottom, the product page may look unbalanced.
+                        </p>
+                      </div>
+                    </div>
+                    <ProductImageFramePreview
+                      imageSrc={productType === 'single' ? currentVarImages[0]?.preview : undefined}
+                      alt="Product page image preview"
+                    />
+                  </div>
                 </div>
 
                 <div className="space-y-4">
@@ -1967,6 +2031,24 @@ export default function VendorProductAdd() {
                         <label className="block text-sm font-medium text-gray-700 mb-2">
                           Upload Images
                         </label>
+                        <div className="mb-4 grid gap-4 sm:grid-cols-[minmax(0,1fr)_168px]">
+                          <div className="rounded-2xl border border-[#105E53]/10 bg-[#105E53]/5 px-4 py-3 text-xs leading-relaxed text-gray-600">
+                            <p className="font-medium text-[#105E53]">
+                              Use a portrait 4:5 image and keep the product centered in frame.
+                            </p>
+                            <p className="mt-2">Ratio: 4:5</p>
+                            <p>Recommended size: 1600 × 2000 px</p>
+                            <p>Minimum size: 1280 × 1600 px</p>
+                            <p className="mt-3">
+                              Correct dimensions alone do not guarantee a perfect display. Check that the subject is not pushed too far left, right, top, or bottom.
+                            </p>
+                          </div>
+                          <ProductImageFramePreview
+                            imageSrc={variationImages[0]?.preview}
+                            alt="Variation product page image preview"
+                            compact
+                          />
+                        </div>
 
                         {/* Hidden file input */}
                         <input

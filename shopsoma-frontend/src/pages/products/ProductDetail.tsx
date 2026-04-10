@@ -10,9 +10,10 @@ import { IMAGE_CONFIG, STORAGE_KEYS } from '../../config/constants';
 import Layout from '../../components/layout/Layout';
 import AddToBagModal from '../../components/modals/AddToBagModal';
 import { useCartStore } from '../../store/cartStore';
-import { formatPriceWithConversion, formatPriceWithCurrency } from '../../utils/pricing';
+import { formatPriceWithConversion } from '../../utils/pricing';
 import { useCurrencyStore } from '../../store/currencyStore';
 import { hasSolidColorHex, normalizeColorValue } from '../../utils/colorDisplay';
+import { getProductImageSources, normalizeProductImageUrl } from '../../utils/productImages';
 
 const FALLBACK_SIZE_GUIDE: SizeGuide = {
   gender: 'General Fit',
@@ -31,6 +32,13 @@ type ColorOption = {
   value: string;
   hex?: string | null;
   isSolid: boolean;
+};
+
+type GalleryImage = {
+  id: string;
+  src: string;
+  fallbackSrc?: string;
+  altText?: string;
 };
 
 const ShareOutlineIcon = (props: SVGProps<SVGSVGElement>) => (
@@ -88,7 +96,7 @@ export default function ProductDetail() {
         setLoading(true);
         const data = await productService.getProduct(id);
         setProduct(data);
-        setSelectedImage(data.images?.[0]?.image_url ?? null);
+        setSelectedImage(getProductImageSources(data)[0]?.src ?? null);
 
         // Reset selections when product changes
         setSelectedColor(null);
@@ -130,8 +138,9 @@ export default function ProductDetail() {
 
     if (!product || !normalizedColor) {
       // If no color selected, use default product images
-      if (product?.images?.[0]?.image_url) {
-        setSelectedImage(product.images[0].image_url);
+      const defaultImage = product ? getProductImageSources(product)[0]?.src : null;
+      if (defaultImage) {
+        setSelectedImage(defaultImage);
       }
       return;
     }
@@ -145,11 +154,15 @@ export default function ProductDetail() {
 
     if (selectedVariation && selectedVariation.images.length > 0) {
       // Switch to variation's first image
-      setSelectedImage(selectedVariation.images[0]);
+      const variationImage = normalizeProductImageUrl(selectedVariation.images[0]);
+      if (variationImage) {
+        setSelectedImage(variationImage);
+      }
     } else {
       // Fallback to product's default images if variation has no images
-      if (product.images?.[0]?.image_url) {
-        setSelectedImage(product.images[0].image_url);
+      const defaultImage = getProductImageSources(product)[0]?.src;
+      if (defaultImage) {
+        setSelectedImage(defaultImage);
       }
     }
   }, [selectedColor, product]);
@@ -516,35 +529,30 @@ export default function ProductDetail() {
 
   const placeholderImage = IMAGE_CONFIG.PLACEHOLDER;
 
+  const handleProductImageError = (
+    event: React.SyntheticEvent<HTMLImageElement>,
+    fallbackSrc?: string
+  ) => {
+    const image = event.currentTarget;
+    if (fallbackSrc && image.dataset.fallbackApplied !== 'true') {
+      image.dataset.fallbackApplied = 'true';
+      image.src = fallbackSrc;
+      return;
+    }
+    image.src = placeholderImage;
+    image.onerror = null;
+  };
+
   // Get ALL images: product images + all variation images
-  const getDisplayImages = () => {
+  const getDisplayImages = (): GalleryImage[] => {
     if (!product) return [];
 
-    const allImages = [];
-
-    // Add product default images first
-    if (product.images && product.images.length > 0) {
-      allImages.push(...product.images);
-    }
-
-    // Add images from ALL variations
-    if (product.variations && product.variations.length > 0) {
-      product.variations.forEach((variation) => {
-        if (variation.images && variation.images.length > 0) {
-          // Map variation image URLs to ProductImage format for consistency
-          const variationImages = variation.images.map((url, index) => ({
-            id: `variation-${variation.id}-${index}`,
-            product_id: product.id,
-            image_url: url,
-            display_order: allImages.length + index,
-            is_primary: false,
-          }));
-          allImages.push(...variationImages);
-        }
-      });
-    }
-
-    return allImages;
+    return getProductImageSources(product).map((image, index) => ({
+      id: `${product.id}-gallery-${index}-${image.src}`,
+      src: image.src,
+      fallbackSrc: image.fallbackSrc,
+      altText: product.title,
+    }));
   };
 
   const galleryImages = getDisplayImages();
@@ -595,377 +603,359 @@ export default function ProductDetail() {
     );
   }
 
-  const heroImage = selectedImage ?? galleryImages[0]?.image_url ?? placeholderImage;
+  const heroImage = selectedImage ?? galleryImages[0]?.src ?? placeholderImage;
+  const heroFallbackImage = galleryImages.find((image) => image.src === heroImage)?.fallbackSrc;
 
   // Calculate savings percentage
   const savingsPercent = comparePrice && comparePrice > currentPrice
     ? Math.round(((comparePrice - currentPrice) / comparePrice) * 100)
     : 0;
+  const productInfoItems = [
+    product.description
+      ? {
+          title: 'Product Notes',
+          body: product.description,
+        }
+      : null,
+    product.fabric_composition
+      ? {
+          title: 'Fabric & Materials',
+          body: product.fabric_composition,
+        }
+      : null,
+    product.care_instructions
+      ? {
+          title: 'Product Care',
+          body: product.care_instructions,
+        }
+      : null,
+    product.made_to_order
+      ? {
+          title: 'Made To Order',
+          body: product.made_to_order_timeline
+            ? `Made to order. Estimated production timeline: ${product.made_to_order_timeline}.`
+            : 'Made to order.',
+        }
+      : null,
+    product.category_name || product.collection_name
+      ? {
+          title: 'Category',
+          body: [product.category_parent_name, product.category_name, product.collection_name]
+            .filter(Boolean)
+            .join(' / '),
+        }
+      : null,
+  ].filter((item): item is { title: string; body: string } => Boolean(item && item.body));
 
   return (
     <Layout>
-    <section className="w-full overflow-x-clip bg-[var(--color-page-bg)]">
-      <div className="mx-auto w-full max-w-[1440px] px-4 md:px-6 lg:px-8">
-        <div className="mb-16 grid grid-cols-1 items-start gap-8 lg:grid-cols-[minmax(0,1.15fr)_minmax(360px,460px)] lg:gap-12">
-          {/* LEFT COLUMN - IMAGES */}
-          <div className="relative w-full lg:ml-[calc(50%-50vw)]">
-            <div className="relative w-full aspect-[4/5] max-h-[80vh] overflow-hidden bg-[#f5f7f8]">
-              <img
-                src={heroImage}
-                alt={product.title}
-                className="h-full w-full object-cover object-top"
-                onError={(event) => {
-                  event.currentTarget.src = placeholderImage;
-                  event.currentTarget.onerror = null;
-                }}
-              />
+    <section className="w-full overflow-x-clip bg-[var(--color-page-bg)] text-primary">
+      <main className="mx-auto flex max-w-7xl flex-col gap-10 px-6 py-10 md:flex-row md:gap-12 lg:py-12">
+        <div className="md:w-1/2">
+          <div className="relative aspect-[4/5] w-full overflow-hidden bg-[#f5f7f8]">
+            <div className="flex h-full w-full items-center justify-center lg:justify-end">
+              <div className="h-full w-full">
+                <img
+                  src={heroImage}
+                  alt={product.title}
+                  className="h-full w-full object-contain object-center"
+                  onError={(event) => handleProductImageError(event, heroFallbackImage)}
+                />
+              </div>
+            </div>
+          </div>
+
+          {shouldShowGallery && (
+            <div className="mt-4 w-full overflow-x-auto overflow-y-hidden pb-1 scrollbar-hide">
+              <div className="flex min-w-max gap-3">
+                {galleryImages.map((image) => (
+                  <button
+                    key={image.id}
+                    type="button"
+                    onClick={() => setSelectedImage(image.src)}
+                    className={`h-20 w-16 flex-shrink-0 overflow-hidden border-2 bg-[#f5f7f8] p-0.5 transition-all duration-200 ${
+                      (selectedImage ?? galleryImages[0]?.src) === image.src
+                        ? 'border-primary shadow-md'
+                        : 'border-primary/20 hover:border-primary/50'
+                    }`}
+                    aria-label={`View ${product.title} image`}
+                  >
+                    <img
+                      src={image.src}
+                      alt={image.altText ?? product.title}
+                      className="h-full w-full object-cover object-center"
+                      onError={(event) => handleProductImageError(event, image.fallbackSrc)}
+                    />
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="mx-auto flex w-full max-w-md flex-col justify-center md:w-1/2">
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              {product.vendor_name && (
+                <p className="font-ui text-sm uppercase tracking-[0.25em] text-primary/60">
+                  {product.vendor_name}
+                </p>
+              )}
+              <h1 className="mt-2 text-3xl font-display font-medium leading-tight text-primary md:text-4xl">
+                {product.title}
+              </h1>
             </div>
 
-            {/* Thumbnail Gallery */}
-            {shouldShowGallery && (
-              <div className="mt-4 overflow-x-auto overflow-y-hidden scrollbar-hide">
-                <div className="flex min-w-max gap-3 pr-6">
-                  {galleryImages.map((image) => (
-                    <button
-                      key={image.id}
-                      type="button"
-                      onClick={() => setSelectedImage(image.image_url)}
-                      className={`h-20 w-16 flex-shrink-0 overflow-hidden border-2 bg-[#f5f7f8] transition-all duration-200 ${
-                        selectedImage === image.image_url
-                          ? 'border-primary shadow-md'
-                          : 'border-primary/15 hover:border-primary/40'
-                      }`}
-                    >
-                      <img
-                        src={image.image_url}
-                        alt={image.alt_text ?? product.title}
-                        className="h-full w-full object-cover object-top"
-                        onError={(event) => {
-                          event.currentTarget.src = placeholderImage;
-                          event.currentTarget.onerror = null;
-                        }}
-                      />
-                    </button>
-                  ))}
-                </div>
-              </div>
+            <div className="flex shrink-0 items-center gap-3 text-primary/60">
+              <button
+                type="button"
+                onClick={handleWishlistToggle}
+                disabled={wishlistLoading}
+                className={`transition hover:text-primary ${
+                  wishlistLoading ? 'cursor-not-allowed opacity-50' : ''
+                }`}
+                aria-label={isInWishlist ? 'Remove from wishlist' : 'Add to wishlist'}
+              >
+                <Bookmark
+                  className="h-5 w-5"
+                  strokeWidth={1.5}
+                  fill={isInWishlist ? 'currentColor' : 'none'}
+                />
+              </button>
+              <button
+                type="button"
+                onClick={handleShare}
+                className="transition hover:text-primary"
+                aria-label="Share product"
+              >
+                <ShareOutlineIcon className="h-5 w-5" />
+              </button>
+            </div>
+          </div>
+
+          <div className="mt-3 flex flex-wrap items-center gap-3 font-ui">
+            {comparePrice && comparePrice > currentPrice && (
+              <span className="text-base text-primary/40 line-through">
+                {formatPriceWithConversion(Number(comparePrice), product.currency, preferredCurrency, exchangeRates)}
+              </span>
+            )}
+            <span className="text-lg text-primary">
+              {formatPriceWithConversion(Number(currentPrice), product.currency, preferredCurrency, exchangeRates)}
+            </span>
+            {savingsPercent > 0 && (
+              <span className="bg-primary px-2.5 py-1 text-xs uppercase tracking-[0.18em] text-white">
+                {savingsPercent}% Off
+              </span>
             )}
           </div>
 
-          {/* RIGHT COLUMN - PRODUCT SUMMARY */}
-          <div className="w-full self-start space-y-8 px-0 lg:max-w-[460px]">
-            <div className="flex items-start justify-between gap-4">
-              <div className="space-y-2 flex-1 min-w-0">
-                {/* Brand/Vendor Name */}
-                {product.vendor_name && (
-                  <p className="text-xs font-ui uppercase tracking-[0.25em] text-primary">
-                    {product.vendor_name}
-                  </p>
-                )}
-
-                {/* Product Title */}
-                <h1 className="text-4xl lg:text-5xl font-display text-primary leading-tight -mt-2">
-                  {product.title}
-                </h1>
-              </div>
-
-              <div className="flex items-center gap-2 text-primary">
-                <button
-                  type="button"
-                  onClick={handleWishlistToggle}
-                  disabled={wishlistLoading}
-                  className={`h-12 w-12 flex items-center justify-center text-primary transition ${
-                    wishlistLoading ? 'opacity-50 cursor-not-allowed' : 'hover:text-primary-dark'
-                  }`}
-                  aria-label={isInWishlist ? 'Remove from wishlist' : 'Add to wishlist'}
-                >
-                  <Bookmark
-                    className="w-5 h-5"
-                    strokeWidth={1.75}
-                    fill={isInWishlist ? 'currentColor' : 'none'}
-                  />
-                </button>
-                <button
-                  type="button"
-                  onClick={handleShare}
-                  className="h-12 w-12 flex items-center justify-center text-primary hover:text-primary-dark transition"
-                  aria-label="Share product"
-                >
-                  <ShareOutlineIcon className="w-5 h-5" />
-                </button>
-              </div>
-            </div>
-
-            {/* Pricing Block */}
-            <div className="space-y-3 text-primary">
-              <div className="flex items-baseline gap-3">
-                {comparePrice && comparePrice > currentPrice && (
-                  <span className="text-xl font-ui text-primary/60 line-through">
-                    {formatPriceWithConversion(Number(comparePrice), product.currency, preferredCurrency, exchangeRates)}
-                  </span>
-                )}
-                <span className="text-2xl font-ui font-semibold text-primary">
-                  {formatPriceWithConversion(Number(currentPrice), product.currency, preferredCurrency, exchangeRates)}
-                </span>
-              </div>
-              {savingsPercent > 0 && (
-                <div className="inline-block bg-primary px-3 py-1">
-                  <span className="text-xs font-ui uppercase tracking-[0.15em] text-white font-semibold">
-                    {savingsPercent}% OFF
-                  </span>
-                </div>
-              )}
-            </div>
-
-            {/* Short Description */}
-            {product.description && (
-              <p className="text-base font-serif text-primary leading-relaxed">
-                {product.description}
-              </p>
-            )}
-
-            {/* Made to Order / Info Line */}
-            {product.made_to_order && (
-              <div className="flex items-center gap-2">
-                <svg className="w-4 h-4 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <circle cx="12" cy="12" r="10" strokeWidth="2"/>
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 16v-4m0-4h.01"/>
-                </svg>
-                <span className="text-xs font-ui uppercase tracking-[0.2em] text-primary">
-                  Made to Order{product.made_to_order_timeline && ` • ${product.made_to_order_timeline}`}
-                </span>
-              </div>
-            )}
-
-            {/* Size Selector and Quantity Row */}
+          <div className="mt-8 space-y-6">
             {sizeOptions.length > 0 && (
-              <div className="space-y-4 border-t border-primary/20 pt-8">
-                {/* Select Size Dropdown + Quantity Controls on same row */}
-                <div className="flex items-center justify-between gap-8">
-                  {/* Size Dropdown */}
-                  <div className="flex-1 relative" ref={sizeDropdownRef}>
-                    <button
-                      type="button"
-                      className="w-full text-left text-base font-ui text-primary flex items-center justify-between pb-2 border-b border-primary/30 hover:border-primary transition"
-                      onClick={() => setSizeMenuOpen((prev) => !prev)}
+              <div className="space-y-3">
+                <div className="relative border-b border-primary/25 pb-2" ref={sizeDropdownRef}>
+                  <button
+                    type="button"
+                    className="flex w-full cursor-pointer items-center justify-between bg-transparent pb-2 text-left font-ui text-sm text-primary/75 transition hover:text-primary"
+                    onClick={() => setSizeMenuOpen((prev) => !prev)}
+                  >
+                    <span>{selectedSize || 'Select Size'}</span>
+                    <svg
+                      className={`h-4 w-4 text-primary/50 transition-transform ${sizeMenuOpen ? 'rotate-180' : ''}`}
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
                     >
-                      <span>{selectedSize || 'Select Size'}</span>
-                      <svg
-                        className={`w-4 h-4 text-primary/70 transition-transform ${sizeMenuOpen ? 'rotate-180' : ''}`}
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
-                      >
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
-                      </svg>
-                    </button>
-                    {sizeMenuOpen && (
-                      <div className="absolute z-20 mt-1 w-full bg-white border border-primary/20 shadow-lg max-h-48 overflow-y-auto">
-                        {sizeOptions.map((size) => (
-                          <button
-                            key={size}
-                            type="button"
-                            onClick={() => {
-                              setSelectedSize(size);
-                              setSizeMenuOpen(false);
-                            }}
-                            className={`w-full text-left px-4 py-2.5 text-sm font-ui transition ${
-                              selectedSize === size
-                                ? 'bg-primary/5 text-primary font-semibold'
-                                : 'text-primary hover:bg-primary/5'
-                            }`}
-                          >
-                            {size}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Quantity Controls - clean, no border */}
-                  <div className="flex items-center gap-4">
-                    <button
-                      type="button"
-                      className="text-primary/70 hover:text-primary transition disabled:opacity-30"
-                      onClick={() => handleQuantityChange('decrement')}
-                      disabled={isOutOfStock || quantity <= 1}
-                    >
-                      <Minus className="w-5 h-5" />
-                    </button>
-                    <span className="text-lg font-ui text-primary min-w-[24px] text-center">{quantity}</span>
-                    <button
-                      type="button"
-                      className="text-primary/70 hover:text-primary transition disabled:opacity-30"
-                      onClick={() => handleQuantityChange('increment')}
-                      disabled={isOutOfStock || quantity >= maxQuantity}
-                    >
-                      <Plus className="w-5 h-5" />
-                    </button>
-                  </div>
-                </div>
-
-                {/* Find Your Size label */}
-                <p className="text-xs font-ui uppercase tracking-[0.2em] text-primary/70">
-                  Find your size
-                </p>
-              </div>
-            )}
-
-            {/* Color Selector */}
-            {colorOptions.length > 0 && (
-              <div className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <p className="text-base font-ui text-primary">Colors:</p>
-                  {selectedColor && (
-                    <p className="text-sm font-ui uppercase tracking-[0.2em] text-primary font-semibold">
-                      {selectedColor}
-                    </p>
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
+                    </svg>
+                  </button>
+                  {sizeMenuOpen && (
+                    <div className="absolute z-20 mt-1 max-h-48 w-full overflow-y-auto border border-primary/15 bg-white shadow-lg">
+                      {sizeOptions.map((size) => (
+                        <button
+                          key={size}
+                          type="button"
+                          onClick={() => {
+                            setSelectedSize(size);
+                            setSizeMenuOpen(false);
+                          }}
+                          className={`w-full px-4 py-2.5 text-left font-ui text-sm transition ${
+                            selectedSize === size
+                              ? 'bg-primary/5 font-semibold text-primary'
+                              : 'text-primary/75 hover:bg-primary/5 hover:text-primary'
+                          }`}
+                        >
+                          {size}
+                        </button>
+                      ))}
+                    </div>
                   )}
                 </div>
-                <div className="flex gap-3 flex-wrap">
+                {hasSizeGuide && (
+                  <button
+                    type="button"
+                    onClick={() => setSizeGuideOpen(true)}
+                    className="block font-ui text-xs uppercase tracking-[0.2em] text-primary/60 underline underline-offset-4 transition hover:text-primary"
+                  >
+                    Find your size
+                  </button>
+                )}
+              </div>
+            )}
+
+            {colorOptions.length > 0 && (
+              <div>
+                <div className="mb-3 flex items-center justify-between gap-4">
+                  <span className="font-ui text-sm uppercase tracking-[0.18em] text-primary/60">
+                    Colors:
+                  </span>
+                  {selectedColor && (
+                    <span className="font-ui text-xs font-bold uppercase tracking-[0.2em] text-primary">
+                      {selectedColor}
+                    </span>
+                  )}
+                </div>
+                <div className="flex flex-wrap gap-2">
                   {colorOptions.map((option) => (
                     <button
                       key={option.value}
                       type="button"
                       onClick={() => setSelectedColor(option.value)}
-                      className={`transition-all ${
+                      className={`transition ${
                         option.isSolid
-                          ? `w-11 h-11 border-2 ${
+                          ? `h-12 w-12 border-2 p-0.5 ${
                               selectedColor === option.value
-                                ? 'border-primary ring-2 ring-primary/25'
-                                : 'border-primary/30 hover:border-primary/60'
+                                ? 'border-primary'
+                                : 'border-primary/20 hover:border-primary/50'
                             }`
-                          : `rounded-full border px-4 py-2 text-sm font-medium ${
+                          : `border px-4 py-2 font-ui text-xs uppercase tracking-[0.12em] ${
                               selectedColor === option.value
                                 ? 'border-primary bg-primary text-white'
-                                : 'border-primary/30 text-primary hover:border-primary/60'
+                                : 'border-primary/20 text-primary hover:border-primary/50'
                             }`
                       }`}
-                      style={option.isSolid ? { backgroundColor: option.hex ?? '#f5f5f5' } : undefined}
                       aria-label={`Select color ${option.label}`}
                     >
-                      {!option.isSolid && option.label}
+                      {option.isSolid ? (
+                        <span
+                          className="block h-full w-full"
+                          style={{ backgroundColor: option.hex ?? '#f5f5f5' }}
+                        />
+                      ) : (
+                        option.label
+                      )}
                     </button>
                   ))}
                 </div>
               </div>
             )}
 
-            {/* Inventory Note */}
+            <div className="flex items-center justify-between gap-6 border-y border-primary/15 py-4">
+              <span className="font-ui text-xs uppercase tracking-[0.2em] text-primary/60">
+                Quantity
+              </span>
+              <div className="flex items-center gap-4">
+                <button
+                  type="button"
+                  className="text-primary/60 transition hover:text-primary disabled:opacity-30"
+                  onClick={() => handleQuantityChange('decrement')}
+                  disabled={isOutOfStock || quantity <= 1}
+                  aria-label="Decrease quantity"
+                >
+                  <Minus className="h-5 w-5" />
+                </button>
+                <span className="min-w-[24px] text-center font-ui text-base text-primary">{quantity}</span>
+                <button
+                  type="button"
+                  className="text-primary/60 transition hover:text-primary disabled:opacity-30"
+                  onClick={() => handleQuantityChange('increment')}
+                  disabled={isOutOfStock || quantity >= maxQuantity}
+                  aria-label="Increase quantity"
+                >
+                  <Plus className="h-5 w-5" />
+                </button>
+              </div>
+            </div>
+
+            {product.made_to_order && (
+              <p className="font-ui text-xs uppercase tracking-[0.2em] text-primary/70">
+                Made to Order{product.made_to_order_timeline && ` / ${product.made_to_order_timeline}`}
+              </p>
+            )}
+
             {usesInventoryTracking && !isOutOfStock && maxQuantity > 0 && maxQuantity <= 10 && (
-              <p className="text-xs font-ui uppercase tracking-[0.2em] text-primary">
+              <p className="font-ui text-xs uppercase tracking-[0.2em] text-red-500">
                 Only {maxQuantity} left in stock
               </p>
             )}
 
-            {/* Add to Bag Button */}
             <button
               type="button"
               disabled={missingSelection || isOutOfStock || quantity < 1}
-              className={`w-full py-4 text-sm font-ui uppercase tracking-[0.2em] transition-colors ${
+              className={`w-full py-4 font-ui text-sm uppercase tracking-[0.2em] transition-colors ${
                 missingSelection || isOutOfStock || quantity < 1
-                  ? 'bg-gray-300 text-primary/60 cursor-not-allowed'
+                  ? 'cursor-not-allowed bg-primary/15 text-primary/45'
                   : 'bg-primary text-white hover:bg-primary-dark'
               }`}
               onClick={handleAddToBag}
             >
-              Add to Bag
+              {isOutOfStock ? 'Out of Stock' : 'Add to Bag'}
             </button>
             {addToBagError && (
-              <p className="mt-3 text-sm text-red-600" role="alert">
+              <p className="text-sm text-red-600" role="alert">
                 {addToBagError}
               </p>
             )}
+
+            {product.description && (
+              <p className="font-ui text-sm leading-relaxed text-primary/70">
+                {product.description}
+              </p>
+            )}
           </div>
         </div>
+      </main>
 
-      {/* Content sections with max-width container */}
-      <div className="max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-8 text-primary">
-        {/* PRODUCT INFORMATION SECTION */}
-        <div className="mt-16 mb-16 pb-12 border-b border-primary/20">
-          <h2 className="text-2xl font-display text-primary mb-8">Product information</h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8">
-            {/* Sustainability */}
-            <div className="space-y-2">
-              <h3 className="text-xs font-ui uppercase tracking-[0.2em] text-primary">
-                Sustainability
-              </h3>
-              <p className="text-sm font-serif text-primary/80 leading-relaxed">
-                Crafted from sustainably sourced materials. Our artisans follow eco-friendly practices, ensuring minimal environmental impact while creating timeless pieces.
-              </p>
-            </div>
-
-            {/* Product Care */}
-            {product?.care_instructions && (
-              <div className="space-y-2">
-                <h3 className="text-xs font-ui uppercase tracking-[0.2em] text-primary">
-                  Product Care
-                </h3>
-                <p className="text-sm font-serif text-primary/80 leading-relaxed">
-                  {product.care_instructions}
-                </p>
-              </div>
-            )}
-
-            {/* Fabric Composition */}
-            {product?.fabric_composition && (
-              <div className="space-y-2">
-                <h3 className="text-xs font-ui uppercase tracking-[0.2em] text-primary">
-                  Fabric & Materials
-                </h3>
-                <p className="text-sm font-serif text-primary/80 leading-relaxed">
-                  {product.fabric_composition}
-                </p>
-              </div>
-            )}
-
-            {/* Delivery and Shipping */}
-            <div className="space-y-2">
-              <h3 className="text-xs font-ui uppercase tracking-[0.2em] text-primary">
-                Delivery and Shipping
-              </h3>
-              <p className="text-sm font-serif text-primary/80 leading-relaxed">
-                Free delivery on orders over {formatPriceWithCurrency(30000, preferredCurrency)}. Standard delivery within 5-7 business days. Express options available at checkout.
-              </p>
-            </div>
-
-            {/* Gifting */}
-            <div className="space-y-2">
-              <h3 className="text-xs font-ui uppercase tracking-[0.2em] text-primary">
-                Gifting
-              </h3>
-              <p className="text-sm font-serif text-primary/80 leading-relaxed">
-                Complimentary gift wrapping available. Add a personalized note at checkout to make your gift extra special.
-              </p>
-            </div>
-          </div>
-        </div>
-
-        {/* SHOP THE LOOK SECTION */}
-        {relatedProducts.length > 0 && (
-          <div className="mb-16">
-            <h2 className="text-2xl font-display text-primary mb-6">Shop The Look</h2>
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4 lg:gap-6">
-              {relatedProducts.slice(0, 4).map((related) => (
-                <ProductCard product={related} key={related.id} />
+      {productInfoItems.length > 0 && (
+        <section className="border-t border-primary/20">
+          <div className="mx-auto max-w-7xl px-6 py-12">
+            <h2 className="mb-8 text-2xl font-display text-primary">Product information</h2>
+            <div className="grid grid-cols-1 gap-x-16 gap-y-10 md:grid-cols-2">
+              {productInfoItems.map((item) => (
+                <div key={item.title} className="flex flex-col md:flex-row md:gap-8">
+                  <h3 className="mb-2 w-40 shrink-0 font-ui text-xs font-bold uppercase tracking-[0.2em] text-primary/70 md:mb-0">
+                    {item.title}
+                  </h3>
+                  <p className="font-ui text-sm leading-relaxed text-primary/60">
+                    {item.body}
+                  </p>
+                </div>
               ))}
             </div>
           </div>
-        )}
+        </section>
+      )}
 
-        {/* YOU MAY ALSO LIKE SECTION */}
-        {relatedProducts.length > 4 && (
-          <div className="mb-8">
-            <h2 className="text-2xl font-display text-primary mb-6">You May Also Like</h2>
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4 lg:gap-6">
-              {relatedProducts.slice(4, 8).map((related) => (
-                <ProductCard product={related} key={related.id} />
-              ))}
-            </div>
+      {relatedProducts.length > 0 && (
+        <section className="mx-auto max-w-7xl px-6 py-12">
+          <h2 className="mb-8 text-2xl font-display text-primary">Shop The Look</h2>
+          <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
+            {relatedProducts.slice(0, 4).map((related) => (
+              <ProductCard product={related} key={related.id} />
+            ))}
           </div>
-        )}
-      </div>
-      </div>
+        </section>
+      )}
+
+      {relatedProducts.length > 4 && (
+        <section className="mx-auto max-w-7xl px-6 pb-20">
+          <h2 className="mb-8 text-2xl font-display text-primary">You May Also Like</h2>
+          <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
+            {relatedProducts.slice(4, 8).map((related) => (
+              <ProductCard product={related} key={related.id} />
+            ))}
+          </div>
+        </section>
+      )}
     </section>
       {/* Size Guide Modal */}
       {sizeGuideOpen && hasSizeGuide && (
