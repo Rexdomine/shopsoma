@@ -103,6 +103,8 @@ jobs:
           VITE_API_BASE_URL: https://api.shopsoma.com/api/v1
 
       - name: Upload build artifacts
+        if: github.event_name == 'push'
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: frontend-build
