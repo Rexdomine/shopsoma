@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 import ipaddress
 import time
 
-from fastapi import Request, status
+from fastapi import HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -27,10 +27,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         self.window_seconds = window_seconds
         self.requests = defaultdict(list)
         self.last_cleanup = time.time()
-        self.trusted_proxy_ips = {
-            self._normalize_ip(proxy_ip)
+        self.trusted_proxy_networks = {
+            self._normalize_network(proxy_ip)
             for proxy_ip in (trusted_proxy_ips or [])
-            if self._normalize_ip(proxy_ip)
+            if self._normalize_network(proxy_ip)
         }
 
         # Endpoints to apply rate limiting
@@ -104,7 +104,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if not immediate_client_ip:
             return "unknown"
 
-        if immediate_client_ip not in self.trusted_proxy_ips:
+        if not self._is_trusted_proxy(immediate_client_ip):
             return immediate_client_ip
 
         forwarded_for = request.headers.get("x-forwarded-for")
@@ -134,6 +134,25 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             return ipaddress.ip_address(raw_ip.strip()).compressed
         except ValueError:
             return ""
+
+    @staticmethod
+    def _normalize_network(raw_network: str):
+        if not raw_network:
+            return None
+        try:
+            return ipaddress.ip_network(raw_network.strip(), strict=False)
+        except ValueError:
+            normalized_ip = RateLimitMiddleware._normalize_ip(raw_network)
+            if not normalized_ip:
+                return None
+            return ipaddress.ip_network(normalized_ip, strict=False)
+
+    def _is_trusted_proxy(self, raw_ip: str) -> bool:
+        normalized_ip = self._normalize_ip(raw_ip)
+        if not normalized_ip:
+            return False
+        candidate_ip = ipaddress.ip_address(normalized_ip)
+        return any(candidate_ip in trusted_network for trusted_network in self.trusted_proxy_networks)
 
     def _cleanup_old_requests(self):
         """Clean up old request records to prevent memory bloat"""
