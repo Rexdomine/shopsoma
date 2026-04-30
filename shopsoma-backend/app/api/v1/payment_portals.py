@@ -4,20 +4,20 @@ Payment Portal API endpoints for Paystack and Stripe customer portals
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.core.database import get_db
+from app.core.config import settings
 from app.api.dependencies import get_current_active_user
 from app.models.user import User
 from app.schemas.payment import CustomerPortalResponse
-import os
 import stripe
 import requests
 
 router = APIRouter()
 
 # Initialize Stripe
-stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
+stripe.api_key = settings.STRIPE_SECRET_KEY
 
 # Paystack configuration
-PAYSTACK_SECRET_KEY = os.getenv("PAYSTACK_SECRET_KEY")
+PAYSTACK_SECRET_KEY = settings.PAYSTACK_SECRET_KEY
 PAYSTACK_API_BASE = "https://api.paystack.co"
 
 
@@ -48,7 +48,7 @@ async def get_paystack_customer_portal(
         payload = {
             "email": current_user.email,
             "amount": 100,  # 1 NGN (100 kobo) - minimum for card authorization
-            "callback_url": os.getenv("FRONTEND_URL", "http://localhost:5173") + "/profile/payments?paystack=success",
+            "callback_url": settings.FRONTEND_BASE_URL + "/profile/payments?paystack=success",
             "metadata": {
                 "custom_fields": [
                     {
@@ -57,7 +57,7 @@ async def get_paystack_customer_portal(
                         "value": "Card Authorization"
                     }
                 ],
-                "cancel_action": os.getenv("FRONTEND_URL", "http://localhost:5173") + "/profile/payments"
+                "cancel_action": settings.FRONTEND_BASE_URL + "/profile/payments"
             },
             "channels": ["card"],
         }
@@ -145,7 +145,7 @@ async def get_stripe_customer_portal(
         # Create Stripe billing portal session
         session = stripe.billing_portal.Session.create(
             customer=stripe_customer_id,
-            return_url=os.getenv("FRONTEND_URL", "http://localhost:5173") + "/profile/payments",
+            return_url=settings.FRONTEND_BASE_URL + "/profile/payments",
         )
 
         return CustomerPortalResponse(

@@ -206,7 +206,7 @@ async def _initialize_paystack_payment(
         "amount": amount_in_kobo,
         "reference": reference,
         "currency": "NGN",
-        "callback_url": payment_data.callback_url or "http://localhost:5173/payment/verify",
+        "callback_url": payment_data.callback_url or f"{settings.FRONTEND_BASE_URL}/payment/verify",
         "metadata": {
             "order_id": str(order.id),
             "order_number": order.order_number,
@@ -531,6 +531,11 @@ async def paystack_webhook(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="No signature provided"
         )
+    if not PAYSTACK_SECRET_KEY:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Paystack webhook secret is not configured"
+        )
 
     # Compute HMAC hash
     computed_signature = hmac.new(
@@ -595,12 +600,27 @@ async def stripe_webhook(
     body = await request.body()
 
     try:
-        # Verify webhook signature (you need to set STRIPE_WEBHOOK_SECRET in settings)
-        # For now, we'll process without verification for testing
-        event = stripe.Event.construct_from(
-            await request.json(),
-            stripe.api_key
-        )
+        if settings.STRIPE_WEBHOOK_SECRET:
+            if not stripe_signature:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Missing Stripe signature"
+                )
+            event = stripe.Webhook.construct_event(
+                payload=body,
+                sig_header=stripe_signature,
+                secret=settings.STRIPE_WEBHOOK_SECRET,
+            )
+        elif settings.ENVIRONMENT.lower() in {"staging", "production"}:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Stripe webhook secret is not configured"
+            )
+        else:
+            event = stripe.Event.construct_from(
+                await request.json(),
+                stripe.api_key
+            )
 
         # Handle payment_intent.succeeded event
         if event.type == "payment_intent.succeeded":
@@ -656,6 +676,13 @@ async def stripe_webhook(
 
         return {"status": "success"}
 
+    except stripe.error.SignatureVerificationError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid Stripe signature"
+        )
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"Stripe webhook error: {str(e)}")
         raise HTTPException(

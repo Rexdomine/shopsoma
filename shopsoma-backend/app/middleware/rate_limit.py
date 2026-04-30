@@ -2,11 +2,14 @@
 Rate limiting middleware using in-memory storage
 Simple implementation without external dependencies
 """
-from fastapi import Request, HTTPException, status
-from starlette.middleware.base import BaseHTTPMiddleware
 from collections import defaultdict
 from datetime import datetime, timedelta
+import ipaddress
 import time
+
+from fastapi import Request, status
+from fastapi.responses import JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
@@ -18,18 +21,28 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     For production with multiple instances, consider using Redis.
     """
 
-    def __init__(self, app, rate_limit: int = 5, window_seconds: int = 60):
+    def __init__(self, app, rate_limit: int = 5, window_seconds: int = 60, trusted_proxy_ips=None):
         super().__init__(app)
         self.rate_limit = rate_limit
         self.window_seconds = window_seconds
         self.requests = defaultdict(list)
         self.last_cleanup = time.time()
+        self.trusted_proxy_ips = {
+            self._normalize_ip(proxy_ip)
+            for proxy_ip in (trusted_proxy_ips or [])
+            if self._normalize_ip(proxy_ip)
+        }
 
         # Endpoints to apply rate limiting
         self.protected_endpoints = [
             "/api/v1/auth/login",
             "/api/v1/auth/signup",
             "/api/v1/auth/magic-link/request",
+            "/api/v1/auth/password-reset/request",
+            "/api/v1/auth/password-reset/confirm",
+            "/api/v1/auth/claim-account/request",
+            "/api/v1/auth/claim-account",
+            "/api/v1/auth/verify-email",
             "/api/v1/users/me/change-password",
         ]
 
@@ -41,7 +54,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         # Get client IP
-        client_ip = request.client.host if request.client else "unknown"
+        client_ip = self._get_client_ip(request)
 
         # Cleanup old entries periodically (every 5 minutes)
         current_time = time.time()
@@ -59,9 +72,18 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         # Check if rate limit is exceeded
         if len(request_times) >= self.rate_limit:
-            raise HTTPException(
+            reset_timestamp = int((now + timedelta(seconds=self.window_seconds)).timestamp())
+            return JSONResponse(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail=f"Rate limit exceeded. Please try again in {self.window_seconds} seconds."
+                content={
+                    "detail": f"Rate limit exceeded. Please try again in {self.window_seconds} seconds."
+                },
+                headers={
+                    "X-RateLimit-Limit": str(self.rate_limit),
+                    "X-RateLimit-Remaining": "0",
+                    "X-RateLimit-Reset": str(reset_timestamp),
+                    "Retry-After": str(self.window_seconds),
+                },
             )
 
         # Add current request timestamp
@@ -76,6 +98,42 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         response.headers["X-RateLimit-Reset"] = str(int((now + timedelta(seconds=self.window_seconds)).timestamp()))
 
         return response
+
+    def _get_client_ip(self, request: Request) -> str:
+        immediate_client_ip = self._normalize_ip(request.client.host if request.client else None)
+        if not immediate_client_ip:
+            return "unknown"
+
+        if immediate_client_ip not in self.trusted_proxy_ips:
+            return immediate_client_ip
+
+        forwarded_for = request.headers.get("x-forwarded-for")
+        if forwarded_for:
+            forwarded_ip = self._extract_forwarded_for_client_ip(forwarded_for)
+            if forwarded_ip:
+                return forwarded_ip
+
+        real_ip = self._normalize_ip(request.headers.get("x-real-ip"))
+        if real_ip:
+            return real_ip
+
+        return immediate_client_ip
+
+    @staticmethod
+    def _extract_forwarded_for_client_ip(forwarded_for: str) -> str:
+        forwarded_chain = [part.strip() for part in forwarded_for.split(",") if part.strip()]
+        if not forwarded_chain:
+            return ""
+        return RateLimitMiddleware._normalize_ip(forwarded_chain[0]) or ""
+
+    @staticmethod
+    def _normalize_ip(raw_ip: str) -> str:
+        if not raw_ip:
+            return ""
+        try:
+            return ipaddress.ip_address(raw_ip.strip()).compressed
+        except ValueError:
+            return ""
 
     def _cleanup_old_requests(self):
         """Clean up old request records to prevent memory bloat"""
