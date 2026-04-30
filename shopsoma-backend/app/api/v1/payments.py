@@ -201,12 +201,14 @@ async def _initialize_paystack_payment(
     # Amount must be in kobo (multiply by 100)
     amount_in_kobo = int(order.total_amount * 100)
 
+    callback_url = f"{settings.FRONTEND_BASE_URL.rstrip('/')}/payment/verify"
+
     payload = {
         "email": payment_data.email,
         "amount": amount_in_kobo,
         "reference": reference,
         "currency": "NGN",
-        "callback_url": payment_data.callback_url or f"{settings.FRONTEND_BASE_URL}/payment/verify",
+        "callback_url": callback_url,
         "metadata": {
             "order_id": str(order.id),
             "order_number": order.order_number,

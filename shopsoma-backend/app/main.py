@@ -92,9 +92,6 @@ async def api_health_check():
     return {
         "status": "healthy",
         "version": "1.0.0",
-        "paystack_configured": bool(settings.PAYSTACK_SECRET_KEY),
-        "stripe_configured": bool(settings.STRIPE_SECRET_KEY),
-        "storage_backend": "local" if settings.USE_LOCAL_STORAGE else "object",
     }
 
 # Include routers
