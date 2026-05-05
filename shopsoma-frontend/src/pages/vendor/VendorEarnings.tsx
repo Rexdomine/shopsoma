@@ -214,6 +214,11 @@ export default function VendorEarnings() {
       </span>
     );
   };
+  const earningsDetailState = {
+    returnTo: ROUTES.VENDOR_EARNINGS,
+    returnLabel: 'Back to Earnings & Payouts',
+    activePrimary: 'earnings',
+  };
 
   return (
     <>
@@ -455,7 +460,7 @@ export default function VendorEarnings() {
                           type="button"
                           className="h-8 w-8 rounded-full border border-gray-200 flex items-center justify-center hover:bg-gray-100"
                           aria-label="View details"
-                          onClick={() => navigate(`${ROUTES.VENDOR_PRODUCTS}/${productRow.product_id}/view`)}
+                          onClick={() => navigate(`${ROUTES.VENDOR_PRODUCTS}/${productRow.product_id}/view`, { state: earningsDetailState })}
                         >
                           <Eye className="w-4 h-4 text-gray-600" />
                         </button>
@@ -490,7 +495,7 @@ export default function VendorEarnings() {
                           type="button"
                           className="h-8 w-8 rounded-full border border-gray-200 flex items-center justify-center hover:bg-gray-100"
                           aria-label="View details"
-                          onClick={() => navigate(ROUTES.VENDOR_ORDER_DETAIL.replace(':id', orderRow.id))}
+                          onClick={() => navigate(ROUTES.VENDOR_ORDER_DETAIL.replace(':id', orderRow.id), { state: earningsDetailState })}
                         >
                           <Eye className="w-4 h-4 text-gray-600" />
                         </button>

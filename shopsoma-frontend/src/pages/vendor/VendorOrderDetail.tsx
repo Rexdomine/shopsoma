@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowLeft,
   MapPin,
@@ -18,6 +18,8 @@ import { getVendorOrder, type VendorOrder, type VendorPickup } from '../../servi
 import { useToast } from '../../hooks/useToast';
 import ToastContainer from '../../components/ui/ToastContainer';
 import { useCurrency } from '../../hooks/useCurrency';
+
+type VendorSidebarPrimary = 'dashboard' | 'orders' | 'products' | 'collections' | 'marketing' | 'analytics' | 'earnings' | 'settings';
 
 function StatusPill({ label, tone = 'neutral' }: { label: string; tone?: 'success' | 'warning' | 'neutral' }) {
   const base = 'px-3 py-1 rounded-full text-xs font-semibold inline-flex items-center gap-2';
@@ -236,6 +238,7 @@ function ShippingStatusCard({ order, pickup }: { order: VendorOrder; pickup: Ven
 
 export default function VendorOrderDetail() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { id } = useParams<{ id: string }>();
   const { toasts, hideToast, error } = useToast();
   const { currentCurrency, setCurrency, formatBasePrice, getCurrencySymbol, fetchExchangeRate } = useCurrency();
@@ -244,6 +247,14 @@ export default function VendorOrderDetail() {
   const [loading, setLoading] = useState(true);
   const [isShippingModalOpen, setIsShippingModalOpen] = useState(false);
   const [isCurrencyDropdownOpen, setIsCurrencyDropdownOpen] = useState(false);
+  const navigationState = location.state as {
+    returnTo?: string;
+    returnLabel?: string;
+    activePrimary?: VendorSidebarPrimary;
+  } | null;
+  const returnTo = navigationState?.returnTo || ROUTES.VENDOR_ORDERS;
+  const returnLabel = navigationState?.returnLabel || 'Back to orders';
+  const activePrimary = navigationState?.activePrimary || 'orders';
 
   useEffect(() => {
     fetchExchangeRate();
@@ -335,7 +346,7 @@ export default function VendorOrderDetail() {
   if (loading) {
     return (
       <div className="flex min-h-screen bg-[var(--color-page-bg)]">
-        <VendorSidebar activePrimary="orders" />
+        <VendorSidebar activePrimary={activePrimary} />
         <div className="flex-1 flex items-center justify-center">
           <div className="flex items-center gap-3 text-gray-600">
             <Loader2 className="h-6 w-6 animate-spin" />
@@ -353,7 +364,7 @@ export default function VendorOrderDetail() {
 
   return (
     <div className="flex min-h-screen bg-[var(--color-page-bg)]">
-      <VendorSidebar activePrimary="orders" />
+      <VendorSidebar activePrimary={activePrimary} />
 
       <div className="flex-1">
         <div className="px-8 py-8 space-y-8">
@@ -362,9 +373,9 @@ export default function VendorOrderDetail() {
             <div className="flex items-start gap-4">
               <button
                 type="button"
-                onClick={() => navigate(ROUTES.VENDOR_ORDERS)}
+                onClick={() => navigate(returnTo)}
                 className="h-11 w-11 rounded-full border border-gray-200 bg-white flex items-center justify-center hover:bg-gray-100 transition"
-                aria-label="Back to orders"
+                aria-label={returnLabel}
               >
                 <ArrowLeft className="w-4 h-4 text-gray-700" />
               </button>

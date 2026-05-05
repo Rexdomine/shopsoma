@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { ArrowLeft, Edit2, Loader2, Shirt, Package, DollarSign, Tag, Calendar, Eye, Trash2, Copy } from 'lucide-react';
 import VendorSidebar from '../../components/vendor/VendorSidebar';
 import DeleteProductModal from '../../components/vendor/DeleteProductModal';
@@ -12,6 +12,8 @@ import CurrencySwitcher from '../../components/common/CurrencySwitcher';
 import { useCurrencyStore } from '../../store/currencyStore';
 import { formatPriceWithConversion } from '../../utils/pricing';
 
+type VendorSidebarPrimary = 'dashboard' | 'orders' | 'products' | 'collections' | 'marketing' | 'analytics' | 'earnings' | 'settings';
+
 function formatDate(dateStr: string) {
   const d = new Date(dateStr);
   const mm = String(d.getMonth() + 1).padStart(2, '0');
@@ -23,12 +25,21 @@ function formatDate(dateStr: string) {
 export default function VendorProductView() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
   const { toasts, hideToast, error, success } = useToast();
   const { currentCurrency, setCurrency, exchangeRates, fetchExchangeRate } = useCurrencyStore();
   const [product, setProduct] = useState<Product | null>(null);
   const [loading, setLoading] = useState(true);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const navigationState = location.state as {
+    returnTo?: string;
+    returnLabel?: string;
+    activePrimary?: VendorSidebarPrimary;
+  } | null;
+  const returnTo = navigationState?.returnTo || ROUTES.VENDOR_PRODUCTS;
+  const returnLabel = navigationState?.returnLabel || 'Back to Products';
+  const activePrimary = navigationState?.activePrimary || 'products';
 
   useEffect(() => {
     fetchExchangeRate();
@@ -128,7 +139,7 @@ export default function VendorProductView() {
     return (
       <div className="min-h-screen bg-[var(--color-page-bg)]">
         <div className="flex">
-          <VendorSidebar activePrimary="products" />
+          <VendorSidebar activePrimary={activePrimary} />
           <main className="flex-1 p-8">
             <div className="flex items-center justify-center py-20 text-gray-600 gap-3">
               <Loader2 className="h-6 w-6 animate-spin" />
@@ -175,7 +186,7 @@ export default function VendorProductView() {
         isDeleting={isDeleting}
       />
       <div className="flex">
-        <VendorSidebar activePrimary="products" />
+        <VendorSidebar activePrimary={activePrimary} />
 
         <main className="flex-1 p-8">
           {/* Header */}
@@ -183,9 +194,9 @@ export default function VendorProductView() {
             <div className="flex items-center gap-4">
               <button
                 type="button"
-                onClick={() => navigate(ROUTES.VENDOR_PRODUCTS)}
+                onClick={() => navigate(returnTo)}
                 className="p-2 rounded-lg border border-gray-300 bg-white hover:bg-gray-50 transition"
-                title="Back to products"
+                title={returnLabel}
               >
                 <ArrowLeft className="h-5 w-5 text-gray-600" />
               </button>
@@ -500,11 +511,11 @@ export default function VendorProductView() {
                   </button>
                   <button
                     type="button"
-                    onClick={() => navigate(ROUTES.VENDOR_PRODUCTS)}
+                    onClick={() => navigate(returnTo)}
                     className="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-gray-300 bg-white text-gray-700 px-4 py-2.5 text-sm font-medium hover:bg-gray-50 transition"
                   >
                     <ArrowLeft className="h-4 w-4" />
-                    Back to Products
+                    {returnLabel}
                   </button>
                 </div>
               </div>
