@@ -4,7 +4,7 @@ import { CalendarDays, ChevronDown } from 'lucide-react';
 import Layout from '../../components/layout/Layout';
 import { ROUTES } from '../../config/constants';
 import ProfileMenu from './ProfileMenu';
-import { useAuthStore } from '../../store/authStore';
+import { useAuth } from '../../context/AuthContext';
 import { userService } from '../../services/userService';
 import type { Order as UserOrder } from '../../services/userService';
 import type { ReturnRequest } from '../../services/userService';
@@ -20,7 +20,7 @@ export default function ProfileReturns() {
   const [toastVisible, setToastVisible] = useState(false);
   const [toastMessage, setToastMessage] = useState('Return submitted successfully');
   const [toastTone, setToastTone] = useState<'success' | 'error'>('success');
-  const { user, setUser } = useAuthStore();
+  const { user, updateUser } = useAuth();
   const [orders, setOrders] = useState<UserOrder[]>([]);
   const [ordersLoading, setOrdersLoading] = useState(false);
   const [selectedOrderNumber, setSelectedOrderNumber] = useState('');
@@ -109,7 +109,7 @@ export default function ProfileReturns() {
       try {
         const profile = await userService.getProfile();
         if (!isMounted) return;
-        setUser(profile);
+        updateUser(profile);
         applyProfile(profile);
       } catch (error) {
         console.error('Failed to load profile for return request', error);
@@ -121,7 +121,7 @@ export default function ProfileReturns() {
     return () => {
       isMounted = false;
     };
-  }, [user, setUser]);
+  }, [user, updateUser]);
 
   useEffect(() => {
     let isMounted = true;

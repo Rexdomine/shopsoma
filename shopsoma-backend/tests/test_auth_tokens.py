@@ -38,3 +38,40 @@ def test_customer_refresh_token_expiry_uses_long_duration() -> None:
     assert payload is not None
     expected = int(get_refresh_token_expires_delta("customer").total_seconds())
     assert _token_lifetime_seconds(payload) >= expected - 5
+
+
+async def test_refresh_accepts_json_body(client, customer_user) -> None:
+    user = customer_user["user"]
+    refresh_token = create_refresh_token({
+        "sub": str(user.id),
+        "email": user.email,
+        "role": user.role.value,
+    })
+
+    response = await client.post(
+        "/api/v1/auth/refresh",
+        json={"refresh_token": refresh_token},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["access_token"]
+    assert body["token_type"] == "bearer"
+    assert body["expires_in"] > 0
+
+
+async def test_refresh_still_accepts_query_token(client, customer_user) -> None:
+    user = customer_user["user"]
+    refresh_token = create_refresh_token({
+        "sub": str(user.id),
+        "email": user.email,
+        "role": user.role.value,
+    })
+
+    response = await client.post(
+        "/api/v1/auth/refresh",
+        params={"refresh_token": refresh_token},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["access_token"]
