@@ -559,6 +559,23 @@ export default function Checkout() {
     newAddress.state.trim() &&
     newAddress.country.trim()
   );
+  const missingAddressFields = [
+    !newAddress.full_name.trim() ? 'full name' : '',
+    !newAddress.address_line1.trim() ? 'street address' : '',
+    !newAddress.city.trim() ? 'city' : '',
+    !newAddress.state.trim() ? 'state' : '',
+    !newAddress.country.trim() ? 'country' : '',
+  ].filter(Boolean);
+  const phoneSaveGuidance = !newAddress.phone_number.trim()
+    ? 'Enter a phone number so delivery partners can reach you.'
+    : !isValidNigerianPhone(newAddress.phone_number)
+      ? 'Complete the phone number in Nigerian format, e.g. 08012345678.'
+      : '';
+  const addressSaveGuidance = phoneSaveGuidance || (
+    missingAddressFields.length
+      ? `Complete ${missingAddressFields.join(', ')} to save this address.`
+      : ''
+  );
   const hasSelectedAddress = !!selectedAddressId;
   const hasSelectedShipping = !!selectedShippingRateId;
   const canPurchase = step === 'payment' && hasEmail && hasSelectedAddress && hasSelectedShipping && orderReview;
@@ -870,7 +887,7 @@ export default function Checkout() {
                                 />
                               </div>
                               <div>
-                                <label className="text-xs text-gray-500">Phone</label>
+                                <label className="text-xs text-gray-500">Phone number <span className="text-red-500">*</span></label>
                                 <div className="flex items-center gap-2 border-b border-gray-300 focus-within:border-primary py-2">
                                   <span className="inline-flex items-center gap-2 text-xs font-ui text-gray-500">
                                     <span className="inline-flex h-4 w-6 overflow-hidden rounded-sm border border-gray-200">
@@ -892,6 +909,9 @@ export default function Checkout() {
                                     required
                                   />
                                 </div>
+                                <p className={`mt-1 text-xs ${phoneSaveGuidance ? 'text-amber-700' : 'text-gray-500'}`}>
+                                  {phoneSaveGuidance || 'Required for delivery updates. Use 08012345678 or 2348012345678.'}
+                                </p>
                               </div>
                               <div>
                                 <label className="text-xs text-gray-500">Street Address</label>
@@ -953,6 +973,11 @@ export default function Checkout() {
                                   Cancel
                                 </button>
                               </div>
+                              {!isAddressComplete && addressSaveGuidance && (
+                                <p className="text-xs text-amber-700">
+                                  {addressSaveGuidance}
+                                </p>
+                              )}
                             </div>
                           ) : !isGuestCheckout || addresses.length === 0 ? (
                             <button
