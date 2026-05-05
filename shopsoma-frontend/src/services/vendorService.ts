@@ -115,6 +115,8 @@ export interface VendorPayoutRequest {
   payment_method_id?: string;
 }
 
+export type VendorPayoutStatus = 'pending' | 'processing' | 'completed' | 'failed' | 'available' | 'paid_out';
+
 export interface VendorPayout {
   id: string;
   vendor_id: string;
@@ -123,7 +125,7 @@ export interface VendorPayout {
   total_sales: number;
   commission_amount: number;
   payout_amount: number;
-  status: string;
+  status: VendorPayoutStatus;
   processed_at: string | null;
   payment_reference: string | null;
   notes: string | null;
@@ -171,7 +173,7 @@ export interface VendorEarningsProductRow {
   quantity: number;
   commission_amount: number;
   vendor_payout: number;
-  payout_status?: string | null;
+  payout_status?: VendorPayoutStatus | null;
   status: string;
   delivered_at: string | null;
   withdraw_available?: boolean;
@@ -188,7 +190,7 @@ export interface VendorEarningsOrderRow {
   total_payout: number;
   status: string;
   delivered_at: string | null;
-  payout_status?: string | null;
+  payout_status?: VendorPayoutStatus | null;
   withdraw_available?: boolean;
   withdraw_days_left?: number | null;
   withdraw_available_at?: string | null;

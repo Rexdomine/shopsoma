@@ -1072,26 +1072,30 @@ async def get_vendor_earnings_items(
     if end_dt:
         delivered_filters.append(Order.delivered_at <= end_dt)
 
-    completed_payouts_result = await db.execute(
-        select(Payout.payout_period_start, Payout.payout_period_end).where(
-            and_(
-                Payout.vendor_id == vendor.id,
-                Payout.status == PayoutStatus.COMPLETED
-            )
+    payout_periods_result = await db.execute(
+        select(
+            Payout.payout_period_start,
+            Payout.payout_period_end,
+            Payout.status,
+            Payout.created_at,
         )
+        .where(Payout.vendor_id == vendor.id)
+        .order_by(desc(Payout.created_at))
     )
-    completed_periods = completed_payouts_result.all()
+    payout_periods = payout_periods_result.all()
 
-    def is_paid_out(delivered: Optional[datetime]) -> bool:
+    def resolve_payout_status(delivered: Optional[datetime]) -> str:
         if not delivered:
-            return False
+            return "available"
         delivered_date = delivered.date()
         if delivered_date + timedelta(days=hold_days) > today:
-            return False
-        return any(
-            period_start <= delivered_date <= period_end
-            for period_start, period_end in completed_periods
-        )
+            return "available"
+        for period_start, period_end, payout_status, _ in payout_periods:
+            if period_start <= delivered_date <= period_end:
+                if hasattr(payout_status, "value"):
+                    return payout_status.value
+                return str(payout_status)
+        return "available"
 
     if view == "products":
         query = select(
@@ -1144,7 +1148,7 @@ async def get_vendor_earnings_items(
                     first_image = item.product.images[0]
                     product_image_url = first_image.thumbnail_url or first_image.image_url
 
-            payout_status = "paid_out" if is_paid_out(delivered_at) else "available"
+            payout_status = resolve_payout_status(delivered_at)
             withdraw_available_at = None
             withdraw_days_left = None
             withdraw_available = False
@@ -1237,7 +1241,7 @@ async def get_vendor_earnings_items(
                 hold_days,
                 withdraw_days_left,
                 withdraw_available,
-                "paid_out" if is_paid_out(order.delivered_at) else "available",
+                resolve_payout_status(order.delivered_at),
             )
         items.append({
             "id": str(order.id),
@@ -1248,7 +1252,7 @@ async def get_vendor_earnings_items(
             "total_payout": float(total_payout),
             "status": order.fulfillment_status.value,
             "delivered_at": order.delivered_at.isoformat() if order.delivered_at else None,
-            "payout_status": "paid_out" if is_paid_out(order.delivered_at) else "available",
+            "payout_status": resolve_payout_status(order.delivered_at),
             "withdraw_available": withdraw_available,
             "withdraw_days_left": withdraw_days_left,
             "withdraw_available_at": withdraw_available_at.isoformat() if withdraw_available_at else None,
@@ -1513,7 +1517,7 @@ async def list_vendor_payouts(
     page_size: int = Query(20, ge=1, le=100, description="Items per page"),
     start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
     end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
-    status_filter: Optional[str] = Query(None, alias="status", description="Filter by payout status"),
+    status_filter: Optional[PayoutStatus] = Query(None, alias="status", description="Filter by payout status"),
     search: Optional[str] = Query(None, description="Search by payment reference or notes"),
     vendor: Vendor = Depends(get_approved_vendor),
     db: AsyncSession = Depends(get_db)
@@ -1833,7 +1837,7 @@ async def get_payout_summary(
         select(func.sum(Payout.payout_amount)).where(
             and_(
                 Payout.vendor_id == vendor.id,
-                Payout.status == "COMPLETED"
+                Payout.status == PayoutStatus.COMPLETED
             )
         )
     )
@@ -1864,7 +1868,7 @@ async def get_payout_summary(
         select(Payout).where(
             and_(
                 Payout.vendor_id == vendor.id,
-                Payout.status == "COMPLETED"
+                Payout.status == PayoutStatus.COMPLETED
             )
         ).order_by(desc(Payout.processed_at)).limit(1)
     )
