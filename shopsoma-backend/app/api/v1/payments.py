@@ -25,6 +25,7 @@ from app.schemas.payment import (
 )
 from app.api.dependencies import get_current_active_user, get_optional_user
 from app.services.email_service import email_service
+from app.services.account_claim import send_account_claim_email_if_guest
 from sqlalchemy.orm import selectinload
 
 router = APIRouter(prefix="/payments", tags=["Payments"])
@@ -336,6 +337,9 @@ async def _verify_stripe_payment(
                 detail="Payment record not found"
             )
 
+        was_completed = payment.status == TransactionStatus.COMPLETED
+        claim_customer = None
+
         # Update payment status based on intent status
         if intent.status == "succeeded":
             payment.status = TransactionStatus.COMPLETED
@@ -362,6 +366,8 @@ async def _verify_stripe_payment(
                 order = order_result.scalar_one_or_none()
 
                 if order and order.customer:
+                    if not was_completed:
+                        claim_customer = order.customer
                     await email_service.send_payment_receipt_email(
                         email=order.customer.email,
                         name=order.customer.full_name,
@@ -390,6 +396,9 @@ async def _verify_stripe_payment(
 
         await db.commit()
         await db.refresh(payment)
+
+        if claim_customer:
+            await send_account_claim_email_if_guest(claim_customer)
 
         return PaymentVerifyResponse(
             status=intent.status == "succeeded",
@@ -446,6 +455,9 @@ async def _verify_paystack_payment(
                     detail="Payment record not found"
                 )
 
+            was_completed = payment.status == TransactionStatus.COMPLETED
+            claim_customer = None
+
             # Update payment status
             if transaction_data["status"] == "success":
                 payment.status = TransactionStatus.COMPLETED
@@ -472,6 +484,8 @@ async def _verify_paystack_payment(
                     order = order_result.scalar_one_or_none()
 
                     if order and order.customer:
+                        if not was_completed:
+                            claim_customer = order.customer
                         await email_service.send_payment_receipt_email(
                             email=order.customer.email,
                             name=order.customer.full_name,
@@ -498,6 +512,9 @@ async def _verify_paystack_payment(
 
             await db.commit()
             await db.refresh(payment)
+
+            if claim_customer:
+                await send_account_claim_email_if_guest(claim_customer)
 
             return PaymentVerifyResponse(
                 status=True,
@@ -583,7 +600,17 @@ async def paystack_webhook(
                 )
             )
 
+            order_result = await db.execute(
+                select(Order)
+                .options(selectinload(Order.customer))
+                .where(Order.id == payment.order_id)
+            )
+            completed_order = order_result.scalar_one_or_none()
+
             await db.commit()
+
+            if completed_order and completed_order.customer:
+                await send_account_claim_email_if_guest(completed_order.customer)
 
     return {"status": "success"}
 
@@ -650,7 +677,17 @@ async def stripe_webhook(
                     )
                 )
 
+                order_result = await db.execute(
+                    select(Order)
+                    .options(selectinload(Order.customer))
+                    .where(Order.id == payment.order_id)
+                )
+                completed_order = order_result.scalar_one_or_none()
+
                 await db.commit()
+
+                if completed_order and completed_order.customer:
+                    await send_account_claim_email_if_guest(completed_order.customer)
 
         # Handle payment_intent.payment_failed event
         elif event.type == "payment_intent.payment_failed":

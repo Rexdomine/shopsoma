@@ -1,6 +1,6 @@
 """Order management endpoints"""
 from typing import Optional, List, Dict
-from fastapi import APIRouter, Depends, HTTPException, status, Query, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, and_, or_, func
 from sqlalchemy.orm import selectinload
@@ -32,7 +32,6 @@ from app.schemas.order import (
 from app.api.dependencies import get_current_active_user, get_optional_user
 from app.services.email_service import email_service
 from app.services.vendor_notification_service import VendorNotificationService
-from app.services.account_claim import queue_account_claim_email
 from app.core.config import settings
 
 router = APIRouter(prefix="/orders", tags=["Orders"])
@@ -562,7 +561,6 @@ async def review_order(
 @router.post("", response_model=OrderResponse, status_code=status.HTTP_201_CREATED)
 async def create_order(
     order_data: OrderCreate,
-    background_tasks: BackgroundTasks,
     current_user: Optional[User] = Depends(get_optional_user),
     db: AsyncSession = Depends(get_db)
 ):
@@ -637,9 +635,6 @@ async def create_order(
                 guest_user.full_name = order_data.guest_address.full_name
             if not guest_user.hashed_password:
                 guest_user.is_guest_created = True
-
-        if not guest_user.hashed_password:
-            queue_account_claim_email(guest_user, background_tasks)
 
         guest_addr = Address(
             user_id=guest_user.id,
