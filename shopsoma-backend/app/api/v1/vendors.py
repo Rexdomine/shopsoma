@@ -1090,11 +1090,21 @@ async def get_vendor_earnings_items(
         delivered_date = delivered.date()
         if delivered_date + timedelta(days=hold_days) > today:
             return "available"
+        matching_statuses = []
         for period_start, period_end, payout_status, _ in payout_periods:
             if period_start <= delivered_date <= period_end:
                 if hasattr(payout_status, "value"):
-                    return payout_status.value
-                return str(payout_status)
+                    matching_statuses.append(payout_status.value)
+                else:
+                    matching_statuses.append(str(payout_status))
+        for status_priority in (
+            PayoutStatus.COMPLETED.value,
+            PayoutStatus.PROCESSING.value,
+            PayoutStatus.PENDING.value,
+            PayoutStatus.FAILED.value,
+        ):
+            if status_priority in matching_statuses:
+                return status_priority
         return "available"
 
     if view == "products":
