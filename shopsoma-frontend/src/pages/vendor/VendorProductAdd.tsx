@@ -64,12 +64,17 @@ function ProductImageFramePreview({
   compact = false,
 }: ProductImageFramePreviewProps) {
   return (
-    <div className="rounded-2xl border border-[#105E53]/10 bg-white/80 p-4 shadow-sm">
-      <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-[#105E53]">
-        Preview how your image will appear on the product page
-      </p>
+    <div className="rounded-3xl border border-[#105E53]/10 bg-white/90 p-4 shadow-sm shadow-[#105E53]/5">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#105E53]">
+          PDP frame
+        </p>
+        <span className="rounded-full bg-[#105E53]/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-[#105E53]">
+          4:5
+        </span>
+      </div>
       <div
-        className={`mt-3 mx-auto aspect-[4/5] w-full overflow-hidden rounded-sm border border-[#105E53]/15 bg-[#f5f7f8] shadow-inner ${
+        className={`mt-4 mx-auto aspect-[4/5] w-full overflow-hidden rounded-2xl border border-[#105E53]/15 bg-[linear-gradient(135deg,#f8faf9_0%,#eef4f2_100%)] shadow-inner ${
           compact ? 'max-w-[132px]' : 'max-w-[190px]'
         }`}
       >
@@ -82,13 +87,13 @@ function ProductImageFramePreview({
         ) : (
           <div className="flex h-full w-full items-center justify-center px-4 text-center">
             <span className="font-serif text-xs leading-relaxed text-[#105E53]/55">
-              Upload an image to check product centering.
+              Your first upload previews here.
             </span>
           </div>
         )}
       </div>
       <p className="mt-3 text-center text-[11px] leading-relaxed text-gray-500">
-        4:5 PDP frame with neutral background.
+        Check product centering before publishing.
       </p>
     </div>
   );
@@ -1545,109 +1550,145 @@ export default function VendorProductAdd() {
             </div>
 
             <div className="space-y-6">
-              <div className="bg-white rounded-lg border border-gray-200 p-6">
-                <div className="mb-6">
-                  <h2 className="text-lg font-semibold text-gray-900">Product Images</h2>
-                  <p className="mt-2 text-sm text-gray-500">
-                    {productType === 'single'
-                      ? 'Upload the main product images that shoppers will see first.'
-                      : 'Variable products use variation images only. Add images inside each variation to avoid duplicate galleries.'}
-                  </p>
-                  <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_220px]">
-                    <div className="rounded-2xl border border-[#105E53]/10 bg-[#105E53]/5 px-5 py-4 text-sm leading-relaxed text-gray-600">
-                      <p className="font-medium text-[#105E53]">
-                        For the best result on Shopsoma, use a portrait 4:5 image and keep the product centered in frame.
+              <div className="overflow-hidden rounded-2xl border border-[#105E53]/10 bg-white shadow-sm shadow-[#105E53]/5">
+                <div className="border-b border-[#105E53]/10 bg-[linear-gradient(135deg,#f7faf8_0%,#eef5f2_100%)] px-6 py-5">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-[#105E53]">
+                        Product media
                       </p>
-                      <div className="mt-4 space-y-1 text-xs">
-                        <p>Ratio: 4:5</p>
-                        <p>Recommended size: 1600 × 2000 px</p>
-                        <p>Minimum size: 1280 × 1600 px</p>
+                      <h2 className="mt-2 text-lg font-semibold text-gray-950">Product Images</h2>
+                      <p className="mt-2 max-w-2xl text-sm leading-6 text-gray-600">
+                        {productType === 'single'
+                          ? 'Upload the main product images shoppers will see first. Use clean, centered photography so the PDP gallery feels editorial.'
+                          : 'Variable products use variation images only. Add media inside each variation to avoid duplicate galleries.'}
+                      </p>
+                    </div>
+                    <span className="inline-flex w-fit rounded-full border border-[#105E53]/15 bg-white/80 px-3 py-1 text-xs font-medium text-[#105E53]">
+                      4:5 recommended
+                    </span>
+                  </div>
+                </div>
+
+                <div className="p-6">
+                  <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_230px]">
+                    <div className="rounded-3xl border border-[#105E53]/10 bg-[#105E53]/5 p-5">
+                      <p className="text-sm font-semibold text-[#105E53]">
+                        Image standard
+                      </p>
+                      <p className="mt-2 text-sm leading-6 text-gray-600">
+                        Use a portrait 4:5 image and keep the product centered in frame.
+                      </p>
+                      <div className="mt-4 grid gap-2 text-xs text-gray-600 sm:grid-cols-3">
+                        <div className="rounded-2xl bg-white/80 p-3">
+                          <p className="font-semibold text-gray-900">Ratio</p>
+                          <p className="mt-1">4:5</p>
+                        </div>
+                        <div className="rounded-2xl bg-white/80 p-3">
+                          <p className="font-semibold text-gray-900">Recommended</p>
+                          <p className="mt-1">1600 × 2000 px</p>
+                        </div>
+                        <div className="rounded-2xl bg-white/80 p-3">
+                          <p className="font-semibold text-gray-900">Minimum</p>
+                          <p className="mt-1">1280 × 1600 px</p>
+                        </div>
                       </div>
-                      <div className="mt-4 border-t border-[#105E53]/10 pt-4 text-xs">
-                        <p className="font-medium text-[#105E53]">Important:</p>
-                        <p className="mt-1">
-                          Correct dimensions alone do not guarantee a perfect display. If the subject sits too far left, right, top, or bottom, the product page may look unbalanced.
-                        </p>
-                      </div>
+                      <p className="mt-4 border-t border-[#105E53]/10 pt-4 text-xs leading-5 text-gray-500">
+                        Correct dimensions alone do not guarantee a perfect display. Check that the product is not pushed too far left, right, top, or bottom.
+                      </p>
                     </div>
                     <ProductImageFramePreview
                       imageSrc={productType === 'single' ? currentVarImages[0]?.preview : undefined}
                       alt="Product page image preview"
                     />
                   </div>
-                </div>
 
-                <div className="space-y-4">
-                  {/* Hidden file input */}
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept="image/*"
-                    multiple
-                    className="hidden"
-                    onChange={handleImageUpload}
-                  />
+                  <div className="mt-6 space-y-4">
+                    {/* Hidden file input */}
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      className="hidden"
+                      onChange={handleImageUpload}
+                    />
 
-                  {/* Image grid */}
-                  {productType === 'single' && currentVarImages.length > 0 && (
-                    <div className="grid grid-cols-4 gap-3">
-                      {currentVarImages.map((image) => (
-                        <div key={image.id} className="relative group aspect-square">
-                          <img
-                            src={image.preview}
-                            alt="Product"
-                            className="w-full h-full object-cover rounded-lg"
-                          />
-                          {!image.uploaded && (
-                            <div className="absolute inset-0 bg-black/50 rounded-lg flex items-center justify-center">
-                              <div className="w-6 h-6 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                            </div>
-                          )}
-                          {image.uploaded && (
-                            <div className="absolute top-2 left-2 p-1 bg-green-500 rounded-full">
-                              <Check className="h-3 w-3 text-white" />
-                            </div>
-                          )}
-                          <button
-                            type="button"
-                            onClick={() => removeImage(image.id)}
-                            className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition flex items-center justify-center rounded-lg"
-                          >
-                            <Trash2 className="h-5 w-5 text-white" />
-                          </button>
+                    {/* Image grid */}
+                    {productType === 'single' && currentVarImages.length > 0 && (
+                      <div className="rounded-3xl border border-gray-200 bg-gray-50/70 p-3">
+                        <div className="mb-3 flex items-center justify-between px-1">
+                          <p className="text-sm font-medium text-gray-900">Uploaded gallery</p>
+                          <p className="text-xs text-gray-500">{currentVarImages.length} image{currentVarImages.length === 1 ? '' : 's'}</p>
                         </div>
-                      ))}
-                    </div>
-                  )}
+                        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4">
+                          {currentVarImages.map((image, index) => (
+                            <div key={image.id} className="relative group aspect-square overflow-hidden rounded-2xl bg-white shadow-sm">
+                              <img
+                                src={image.preview}
+                                alt="Product"
+                                className="w-full h-full object-cover transition duration-300 group-hover:scale-105"
+                              />
+                              {!image.uploaded && (
+                                <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
+                                  <div className="w-6 h-6 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                                </div>
+                              )}
+                              {index === 0 && image.uploaded && (
+                                <div className="absolute left-2 top-2 rounded-full bg-white/95 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#105E53] shadow-sm">
+                                  Cover
+                                </div>
+                              )}
+                              {image.uploaded && (
+                                <div className="absolute right-2 top-2 p-1 bg-green-500 rounded-full shadow-sm">
+                                  <Check className="h-3 w-3 text-white" />
+                                </div>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => removeImage(image.id)}
+                                className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition flex items-center justify-center"
+                              >
+                                <Trash2 className="h-5 w-5 text-white" />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
 
-                  {/* Upload button */}
-                  {productType === 'single' ? (
-                    <button
-                      type="button"
-                      onClick={() => fileInputRef.current?.click()}
-                      disabled={isUploading}
-                      className="w-full border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-[#105E53] hover:bg-[#105E53]/5 transition disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      {isUploading ? (
-                        <span className="inline-flex flex-col items-center gap-2">
-                          <div className="w-8 h-8 border-2 border-gray-400 border-t-[#105E53] rounded-full animate-spin mx-auto mb-2" />
-                          <p className="text-sm text-gray-600">Uploading... {Math.round(uploadProgress)}%</p>
-                        </span>
-                      ) : (
-                        <span className="inline-flex flex-col items-center gap-2">
-                          <Upload className="w-8 h-8 text-gray-400 mx-auto mb-2" />
-                          <p className="text-sm text-gray-600">Click to upload product images</p>
-                        </span>
-                      )}
-                    </button>
-                  ) : (
-                    <div className="w-full border-2 border-dashed border-gray-300 rounded-lg p-8 text-center bg-gray-50">
-                      <p className="text-sm font-medium text-gray-700">Featured image disabled for variable products</p>
-                      <p className="mt-2 text-sm text-gray-500">
-                        Upload images inside each variation. The product gallery will be generated from those variation images.
-                      </p>
-                    </div>
-                  )}
+                    {/* Upload button */}
+                    {productType === 'single' ? (
+                      <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        disabled={isUploading}
+                        className="w-full rounded-3xl border border-dashed border-[#105E53]/30 bg-white p-8 text-center shadow-sm transition hover:border-[#105E53] hover:bg-[#105E53]/5 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {isUploading ? (
+                          <span className="inline-flex flex-col items-center gap-2">
+                            <div className="w-8 h-8 border-2 border-gray-400 border-t-[#105E53] rounded-full animate-spin mx-auto mb-2" />
+                            <p className="text-sm text-gray-600">Uploading... {Math.round(uploadProgress)}%</p>
+                          </span>
+                        ) : (
+                          <span className="inline-flex flex-col items-center gap-2">
+                            <span className="flex h-12 w-12 items-center justify-center rounded-full bg-[#105E53] text-white shadow-sm">
+                              <Upload className="w-5 h-5" />
+                            </span>
+                            <span className="text-sm font-semibold text-gray-900">Upload product images</span>
+                            <span className="text-xs text-gray-500">JPG, PNG, WebP, or GIF. Add multiple angles for better buyer confidence.</span>
+                          </span>
+                        )}
+                      </button>
+                    ) : (
+                      <div className="w-full rounded-3xl border border-dashed border-gray-300 bg-gray-50 p-8 text-center">
+                        <p className="text-sm font-medium text-gray-700">Featured image disabled for variable products</p>
+                        <p className="mt-2 text-sm text-gray-500">
+                          Upload images inside each variation. The product gallery will be generated from those variation images.
+                        </p>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
 
@@ -2028,18 +2069,30 @@ export default function VendorProductAdd() {
 
                       {/* Upload Images */}
                       <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-2">
-                          Upload Images
-                        </label>
+                        <div className="mb-3 flex items-start justify-between gap-3">
+                          <div>
+                            <label className="block text-sm font-medium text-gray-800">
+                              Variation Images
+                            </label>
+                            <p className="mt-1 text-xs text-gray-500">
+                              These images become the shopper-facing gallery for this variation.
+                            </p>
+                          </div>
+                          <span className="rounded-full bg-[#105E53]/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#105E53]">
+                            4:5
+                          </span>
+                        </div>
                         <div className="mb-4 grid gap-4 sm:grid-cols-[minmax(0,1fr)_168px]">
-                          <div className="rounded-2xl border border-[#105E53]/10 bg-[#105E53]/5 px-4 py-3 text-xs leading-relaxed text-gray-600">
-                            <p className="font-medium text-[#105E53]">
+                          <div className="rounded-3xl border border-[#105E53]/10 bg-[#105E53]/5 p-4 text-xs leading-relaxed text-gray-600">
+                            <p className="font-semibold text-[#105E53]">
                               Use a portrait 4:5 image and keep the product centered in frame.
                             </p>
-                            <p className="mt-2">Ratio: 4:5</p>
-                            <p>Recommended size: 1600 × 2000 px</p>
-                            <p>Minimum size: 1280 × 1600 px</p>
-                            <p className="mt-3">
+                            <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                              <span className="rounded-2xl bg-white/80 px-3 py-2">Ratio: 4:5</span>
+                              <span className="rounded-2xl bg-white/80 px-3 py-2">1600 × 2000 px</span>
+                              <span className="rounded-2xl bg-white/80 px-3 py-2">Min 1280 × 1600 px</span>
+                            </div>
+                            <p className="mt-3 border-t border-[#105E53]/10 pt-3">
                               Correct dimensions alone do not guarantee a perfect display. Check that the subject is not pushed too far left, right, top, or bottom.
                             </p>
                           </div>
@@ -2062,33 +2115,44 @@ export default function VendorProductAdd() {
 
                         {/* Image grid */}
                         {variationImages.length > 0 && (
-                          <div className="grid grid-cols-4 gap-3 mb-3">
-                            {variationImages.map((image) => (
-                              <div key={image.id} className="relative group aspect-square">
-                                <img
-                                  src={image.preview}
-                                  alt="Variation"
-                                  className="w-full h-full object-cover rounded-lg"
-                                />
-                                {!image.uploaded && (
-                                  <div className="absolute inset-0 bg-black/50 rounded-lg flex items-center justify-center">
-                                    <div className="w-6 h-6 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                                  </div>
-                                )}
-                                {image.uploaded && (
-                                  <div className="absolute top-2 left-2 p-1 bg-green-500 rounded-full">
-                                    <Check className="h-3 w-3 text-white" />
-                                  </div>
-                                )}
-                                <button
-                                  type="button"
-                                  onClick={() => removeVariationImage(image.id)}
-                                  className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition flex items-center justify-center rounded-lg"
-                                >
-                                  <Trash2 className="h-5 w-5 text-white" />
-                                </button>
-                              </div>
-                            ))}
+                          <div className="mb-4 rounded-3xl border border-gray-200 bg-gray-50/70 p-3">
+                            <div className="mb-3 flex items-center justify-between px-1">
+                              <p className="text-sm font-medium text-gray-900">Variation gallery</p>
+                              <p className="text-xs text-gray-500">{variationImages.length} image{variationImages.length === 1 ? '' : 's'}</p>
+                            </div>
+                            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                              {variationImages.map((image, index) => (
+                                <div key={image.id} className="relative group aspect-square overflow-hidden rounded-2xl bg-white shadow-sm">
+                                  <img
+                                    src={image.preview}
+                                    alt="Variation"
+                                    className="w-full h-full object-cover transition duration-300 group-hover:scale-105"
+                                  />
+                                  {!image.uploaded && (
+                                    <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
+                                      <div className="w-6 h-6 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                                    </div>
+                                  )}
+                                  {index === 0 && image.uploaded && (
+                                    <div className="absolute left-2 top-2 rounded-full bg-white/95 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#105E53] shadow-sm">
+                                      Cover
+                                    </div>
+                                  )}
+                                  {image.uploaded && (
+                                    <div className="absolute right-2 top-2 p-1 bg-green-500 rounded-full shadow-sm">
+                                      <Check className="h-3 w-3 text-white" />
+                                    </div>
+                                  )}
+                                  <button
+                                    type="button"
+                                    onClick={() => removeVariationImage(image.id)}
+                                    className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition flex items-center justify-center"
+                                  >
+                                    <Trash2 className="h-5 w-5 text-white" />
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
                           </div>
                         )}
 
@@ -2097,7 +2161,7 @@ export default function VendorProductAdd() {
                           type="button"
                           onClick={() => variationFileInputRef.current?.click()}
                           disabled={isUploading}
-                          className="w-full border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-[#105E53] hover:bg-[#105E53]/5 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                          className="w-full rounded-3xl border border-dashed border-[#105E53]/30 bg-white p-8 text-center shadow-sm transition hover:border-[#105E53] hover:bg-[#105E53]/5 disabled:cursor-not-allowed disabled:opacity-50"
                         >
                           {isUploading ? (
                             <span className="inline-flex flex-col items-center gap-2">
@@ -2106,8 +2170,11 @@ export default function VendorProductAdd() {
                             </span>
                           ) : (
                             <span className="inline-flex flex-col items-center gap-2">
-                              <Upload className="w-8 h-8 text-gray-400 mx-auto mb-2" />
-                              <p className="text-sm text-gray-600">Click to upload variation images</p>
+                              <span className="flex h-12 w-12 items-center justify-center rounded-full bg-[#105E53] text-white shadow-sm">
+                                <Upload className="w-5 h-5" />
+                              </span>
+                              <span className="text-sm font-semibold text-gray-900">Upload variation images</span>
+                              <span className="text-xs text-gray-500">Add the best angles for this color or size option.</span>
                             </span>
                           )}
                         </button>
