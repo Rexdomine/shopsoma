@@ -791,7 +791,14 @@ export default function Checkout() {
                           <p className="text-xs text-gray-600">
                             <span className="font-semibold">Guest Checkout</span>
                             {' - '}You're checking out as a guest.
-                            <Link to="/signup" className="text-primary font-semibold hover:underline ml-1">
+                            <Link
+                              to={ROUTES.REGISTER}
+                              state={{
+                                from: { pathname: ROUTES.CHECKOUT },
+                                prefillEmail: email,
+                              }}
+                              className="text-primary font-semibold hover:underline ml-1"
+                            >
                               Create an account
                             </Link>
                             {' '}to save your address for faster checkout next time.
