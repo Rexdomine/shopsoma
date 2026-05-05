@@ -114,7 +114,11 @@ async def test_vendor_earnings_summary_and_items(
 
     products_response = await client.get(
         "/api/v1/vendor/earnings/items",
-        params={"view": "products", "start_date": "2025-01-01", "end_date": "2025-01-31"},
+        params={
+            "view": "products",
+            "start_date": "2025-01-01",
+            "end_date": "2025-01-31",
+        },
         headers=vendor_user["headers"],
     )
 
@@ -233,6 +237,103 @@ async def test_vendor_earnings_items_not_paid_out_before_hold(
     assert data["items"][0]["payout_status"] == "available"
     assert data["items"][0]["withdraw_available"] is False
     assert data["items"][0]["withdraw_days_left"] > 0
+
+
+@pytest.mark.asyncio
+async def test_vendor_earnings_items_reflect_processing_payout_status(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    vendor_user,
+    customer_user,
+):
+    from app.models.order import Order, OrderItem, PaymentStatus, FulfillmentStatus
+    from app.models.product import Product, ProductStatus
+    from app.models.app_setting import AppSetting
+    from app.models.payment import Payout, PayoutStatus
+
+    product = Product(
+        id=uuid4(),
+        vendor_id=vendor_user["vendor"].id,
+        title="Processing Payout Product",
+        base_price=Decimal("100.00"),
+        status=ProductStatus.ACTIVE,
+    )
+    db_session.add(product)
+
+    delivered_at = datetime.utcnow() - timedelta(days=20)
+    delivered_order = Order(
+        id=uuid4(),
+        order_number="SHP-PAYOUT-PROCESSING",
+        customer_id=customer_user["user"].id,
+        subtotal=Decimal("100.00"),
+        shipping_cost=Decimal("0.00"),
+        tax_amount=Decimal("0.00"),
+        discount_amount=Decimal("0.00"),
+        total_amount=Decimal("100.00"),
+        payment_status=PaymentStatus.PAID,
+        fulfillment_status=FulfillmentStatus.DELIVERED,
+        created_at=delivered_at,
+        delivered_at=delivered_at,
+    )
+    db_session.add(delivered_order)
+
+    delivered_item = OrderItem(
+        id=uuid4(),
+        order_id=delivered_order.id,
+        product_id=product.id,
+        vendor_id=vendor_user["vendor"].id,
+        product_title=product.title,
+        variant_details=None,
+        unit_price=Decimal("100.00"),
+        quantity=1,
+        subtotal=Decimal("100.00"),
+        commission_rate=Decimal("10.00"),
+        commission_amount=Decimal("10.00"),
+        vendor_payout=Decimal("90.00"),
+        fulfillment_status=FulfillmentStatus.DELIVERED,
+    )
+    db_session.add(delivered_item)
+
+    db_session.add(
+        AppSetting(
+            id=uuid4(),
+            key="payout_hold_days",
+            value="0",
+        )
+    )
+    db_session.add(
+        Payout(
+            id=uuid4(),
+            vendor_id=vendor_user["vendor"].id,
+            payout_period_start=delivered_at.date(),
+            payout_period_end=delivered_at.date(),
+            total_sales=Decimal("100.00"),
+            commission_amount=Decimal("10.00"),
+            payout_amount=Decimal("90.00"),
+            status=PayoutStatus.PROCESSING,
+        )
+    )
+    await db_session.commit()
+
+    params = {
+        "start_date": delivered_at.date().isoformat(),
+        "end_date": delivered_at.date().isoformat(),
+    }
+    products_response = await client.get(
+        "/api/v1/vendor/earnings/items",
+        params={"view": "products", **params},
+        headers=vendor_user["headers"],
+    )
+    orders_response = await client.get(
+        "/api/v1/vendor/earnings/items",
+        params={"view": "orders", **params},
+        headers=vendor_user["headers"],
+    )
+
+    assert products_response.status_code == 200
+    assert products_response.json()["items"][0]["payout_status"] == "processing"
+    assert orders_response.status_code == 200
+    assert orders_response.json()["items"][0]["payout_status"] == "processing"
 
 
 @pytest.mark.asyncio
