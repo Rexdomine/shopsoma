@@ -422,9 +422,37 @@ class EmailService:
         shipping: float,
         tax: float,
         total: float,
-        shipping_address: Dict[str, str]
+        shipping_address: Dict[str, str],
+        payment_status: Optional[str] = None,
     ) -> bool:
-        subject = f"Order Confirmation · {order_number}"
+        normalized_payment_status = (payment_status or "PAID").upper()
+        if normalized_payment_status == "FAILED":
+            subject = f"Payment Failed · {order_number}"
+            heading = "Payment Not Completed"
+            preheader = "Your Shopsoma payment did not go through."
+            intro = (
+                "We received your order details, but your payment did not go through. "
+                "Your order is not confirmed until payment is completed."
+            )
+            status_label = "Payment failed"
+            closing = "Please retry checkout or contact support if you were charged."
+        elif normalized_payment_status == "PENDING":
+            subject = f"Payment Pending · {order_number}"
+            heading = "Payment Pending"
+            preheader = "Your Shopsoma order is waiting for payment."
+            intro = (
+                "We received your order details, but payment is not complete yet. "
+                "Your order will be confirmed after payment succeeds."
+            )
+            status_label = "Payment pending"
+            closing = "If you already attempted payment, please complete verification or retry checkout."
+        else:
+            subject = f"Order Confirmation · {order_number}"
+            heading = "Order Confirmation"
+            preheader = "Your Shopsoma order has been received."
+            intro = "Thank you for placing your order with Shopsoma. Our artisans and logistics partners are preparing your pieces."
+            status_label = "Payment confirmed"
+            closing = "You can track your order anytime from your Shopsoma profile. Thank you for choosing African luxury."
         items_table = self._build_items_table(items)
         pricing_summary = self._build_pricing_summary(items, subtotal, shipping, tax, total)
         def _addr(key: str):
@@ -446,10 +474,11 @@ class EmailService:
 
         body_html = f"""
         <p style="font-size:16px;">Hi {name or 'there'},</p>
-        <p>Thank you for placing your order with Shopsoma. Our artisans and logistics partners are preparing your pieces.</p>
+        <p>{intro}</p>
         <div style="margin:24px 0;padding:20px;border:1px solid {BRAND_BORDER};border-radius:10px;background:{BRAND_LIGHT};">
             <p style="margin:0;"><strong>Order Number:</strong> {order_number}</p>
             <p style="margin:4px 0;"><strong>Order Date:</strong> {order_date.strftime('%d %B %Y · %I:%M %p')}</p>
+            <p style="margin:4px 0 0;"><strong>Payment Status:</strong> {status_label}</p>
         </div>
         <table style="width:100%;border-collapse:collapse;margin-bottom:24px;">
             <thead>
@@ -469,10 +498,10 @@ class EmailService:
             <p style="margin:0 0 8px;font-weight:600;">Shipping to</p>
             <p style="margin:0;color:#6B7280;">{address_lines}</p>
         </div>
-        <p style="margin-top:32px;">You can track your order anytime from your Shopsoma profile. Thank you for choosing African luxury.</p>
+        <p style="margin-top:32px;">{closing}</p>
         """
 
-        html_content = self._wrap_email("Order Confirmation", body_html, "Your Shopsoma order has been received.")
+        html_content = self._wrap_email(heading, body_html, preheader)
         return await self.send_email(email, name, subject, html_content)
 
     async def send_vendor_new_order_email(

@@ -1058,7 +1058,8 @@ async def create_order(
             shipping=float(loaded_order.shipping_cost),
             tax=float(loaded_order.tax_amount),
             total=float(loaded_order.total_amount),
-            shipping_address=shipping_addr_dict
+            shipping_address=shipping_addr_dict,
+            payment_status=loaded_order.payment_status.value,
         )
 
         # Send admin notification email to all admins

@@ -8,7 +8,9 @@ from app.services.email_service import EmailService
 def _capture_email(monkeypatch, service: EmailService):
     calls = []
 
-    async def fake_send_email(to_email, to_name, subject, html_content, template_params=None):
+    async def fake_send_email(
+        to_email, to_name, subject, html_content, template_params=None
+    ):
         calls.append(
             {
                 "to_email": to_email,
@@ -66,7 +68,10 @@ async def test_send_admin_order_notification_to_multiple_admins(monkeypatch):
     )
 
     assert result is True
-    assert [call["to_email"] for call in calls] == ["admin1@example.com", "admin2@example.com"]
+    assert [call["to_email"] for call in calls] == [
+        "admin1@example.com",
+        "admin2@example.com",
+    ]
 
 
 @pytest.mark.asyncio
@@ -147,14 +152,108 @@ async def test_send_order_confirmation_email_formats_usd_amounts(monkeypatch):
     )
 
     assert result is True
+    assert calls[0]["subject"] == "Order Confirmation · SHP-USD-TEST"
     html = calls[0]["html_content"]
+    assert "Our artisans and logistics partners are preparing your pieces" in html
+    assert "Payment Status:</strong> Payment confirmed" in html
     assert "$300.00" in html
     assert "$344.00" in html
     assert "₦300.00" not in html
 
 
 @pytest.mark.asyncio
-async def test_send_order_confirmation_email_separates_mixed_currency_totals(monkeypatch):
+async def test_send_order_confirmation_email_marks_pending_payment_clearly(monkeypatch):
+    service = EmailService()
+    calls = _capture_email(monkeypatch, service)
+
+    result = await service.send_order_confirmation_email(
+        email="customer@example.com",
+        name="Customer",
+        order_number="SHP-PENDING-TEST",
+        order_date=datetime(2025, 1, 1, 10, 0),
+        items=[
+            {
+                "product_name": "Silk Dress",
+                "quantity": 1,
+                "price": 300,
+                "currency": "USD",
+                "subtotal": 300,
+            }
+        ],
+        subtotal=300,
+        shipping=20,
+        tax=24,
+        total=344,
+        shipping_address={
+            "full_name": "Customer",
+            "address_line_1": "1 Test Street",
+            "city": "New York",
+            "state": "NY",
+            "postal_code": "10001",
+            "country": "USA",
+            "phone_number": "0000000000",
+        },
+        payment_status="PENDING",
+    )
+
+    assert result is True
+    assert calls[0]["subject"] == "Payment Pending · SHP-PENDING-TEST"
+    html = calls[0]["html_content"]
+    assert "Payment Pending" in html
+    assert "payment is not complete yet" in html
+    assert "Payment Status:</strong> Payment pending" in html
+    assert "Our artisans and logistics partners are preparing your pieces" not in html
+
+
+@pytest.mark.asyncio
+async def test_send_order_confirmation_email_marks_failed_payment_clearly(monkeypatch):
+    service = EmailService()
+    calls = _capture_email(monkeypatch, service)
+
+    result = await service.send_order_confirmation_email(
+        email="customer@example.com",
+        name="Customer",
+        order_number="SHP-FAILED-TEST",
+        order_date=datetime(2025, 1, 1, 10, 0),
+        items=[
+            {
+                "product_name": "Silk Dress",
+                "quantity": 1,
+                "price": 300,
+                "currency": "USD",
+                "subtotal": 300,
+            }
+        ],
+        subtotal=300,
+        shipping=20,
+        tax=24,
+        total=344,
+        shipping_address={
+            "full_name": "Customer",
+            "address_line_1": "1 Test Street",
+            "city": "New York",
+            "state": "NY",
+            "postal_code": "10001",
+            "country": "USA",
+            "phone_number": "0000000000",
+        },
+        payment_status="FAILED",
+    )
+
+    assert result is True
+    assert calls[0]["subject"] == "Payment Failed · SHP-FAILED-TEST"
+    html = calls[0]["html_content"]
+    assert "Payment Not Completed" in html
+    assert "payment did not go through" in html
+    assert "Your order is not confirmed until payment is completed" in html
+    assert "Payment Status:</strong> Payment failed" in html
+    assert "Our artisans and logistics partners are preparing your pieces" not in html
+
+
+@pytest.mark.asyncio
+async def test_send_order_confirmation_email_separates_mixed_currency_totals(
+    monkeypatch,
+):
     service = EmailService()
     calls = _capture_email(monkeypatch, service)
 
