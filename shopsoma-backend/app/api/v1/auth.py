@@ -4,7 +4,7 @@ Authentication endpoints
 from datetime import datetime, timedelta
 import logging
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
+from fastapi import APIRouter, Body, Depends, HTTPException, status, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from uuid import UUID
@@ -31,6 +31,7 @@ from app.schemas.auth import (
     UserCreate,
     UserLogin,
     Token,
+    RefreshTokenRequest,
     UserResponse,
     MagicLinkRequest,
     MagicLinkVerify,
@@ -458,7 +459,8 @@ async def confirm_password_reset(
 
 @router.post("/refresh", response_model=Token)
 async def refresh_access_token(
-    refresh_token: str,
+    refresh_data: Optional[RefreshTokenRequest] = Body(default=None),
+    refresh_token: Optional[str] = None,
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -466,7 +468,14 @@ async def refresh_access_token(
     """
     from app.core.security import decode_token
 
-    payload = decode_token(refresh_token)
+    token_value = refresh_data.refresh_token if refresh_data else refresh_token
+    if not token_value:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid refresh token"
+        )
+
+    payload = decode_token(token_value)
 
     if not payload or payload.get("type") != "refresh":
         raise HTTPException(
