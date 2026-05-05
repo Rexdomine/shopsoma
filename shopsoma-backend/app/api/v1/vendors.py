@@ -493,18 +493,16 @@ async def list_vendor_orders(
             )
         )
 
-    # Get total count
+    # Get total count after applying the same vendor/search/status filters.
     count_query = select(func.count()).select_from(
-        select(Order.id).join(OrderItem).where(
-            OrderItem.vendor_id == vendor.id
-        ).distinct().subquery()
+        query.order_by(None).subquery()
     )
     total_result = await db.execute(count_query)
     total = total_result.scalar() or 0
 
     # Pagination
     offset = (page - 1) * page_size
-    query = query.order_by(desc(Order.created_at)).offset(offset).limit(page_size)
+    query = query.order_by(desc(Order.created_at), desc(Order.id)).offset(offset).limit(page_size)
 
     # Execute with relationships loaded
     query = query.options(
