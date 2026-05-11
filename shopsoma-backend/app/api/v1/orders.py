@@ -32,6 +32,7 @@ from app.schemas.order import (
 from app.api.dependencies import get_current_active_user, get_optional_user
 from app.services.email_service import email_service
 from app.services.vendor_notification_service import VendorNotificationService
+from app.services.commission import get_vendor_commission_fraction
 from app.core.config import settings
 
 router = APIRouter(prefix="/orders", tags=["Orders"])
@@ -711,10 +712,10 @@ async def create_order(
         item_subtotal = unit_price_decimal * Decimal(item_data.quantity)
         subtotal += item_subtotal
 
-        # Calculate vendor commission (e.g., 15%)
-        commission_rate = Decimal("0.15")
-        commission_amount = item_subtotal * commission_rate
-        vendor_payout = item_subtotal - commission_amount
+        # Snapshot vendor commission at order creation so historical payouts stay stable.
+        commission_rate = get_vendor_commission_fraction(product.vendor)
+        commission_amount = (item_subtotal * commission_rate).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        vendor_payout = (item_subtotal - commission_amount).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
         order_items.append({
             "product_id": product.id,

@@ -55,6 +55,18 @@ class PayoutHoldSettingsUpdate(BaseModel):
     hold_days: int = Field(..., ge=0, le=3650)
 
 
+class CommissionSettings(BaseModel):
+    """Platform commission settings"""
+    commission_rate: float = Field(default=12.5, ge=0, le=100)
+    updated_at: Optional[datetime] = None
+
+
+class CommissionSettingsUpdate(BaseModel):
+    """Update platform commission settings"""
+    commission_rate: float = Field(..., ge=0, le=100)
+    apply_to_existing_vendors: bool = False
+
+
 class FeaturedRotationSettings(BaseModel):
     """Featured product rotation settings"""
     rotation_minutes: int = Field(default=10, ge=1, le=1440)

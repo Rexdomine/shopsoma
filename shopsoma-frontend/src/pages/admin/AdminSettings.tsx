@@ -17,11 +17,14 @@ import {
   updateShippingProviderSettings,
   getPayoutHoldSettings,
   updatePayoutHoldSettings,
+  getCommissionSettings,
+  updateCommissionSettings,
   getAdminFeaturedRotationSettings,
   updateFeaturedRotationSettings,
   syncRenderDatabase,
   type ExchangeRate,
   type PayoutHoldSettings,
+  type CommissionSettings,
   type FeaturedRotationSettings,
 } from '../../services/settingsService';
 import { useToast } from '../../hooks/useToast';
@@ -45,6 +48,11 @@ export default function AdminSettings() {
   const [payoutHoldInput, setPayoutHoldInput] = useState('');
   const [savingPayoutHold, setSavingPayoutHold] = useState(false);
   const [payoutHoldChanged, setPayoutHoldChanged] = useState(false);
+  const [commissionSettings, setCommissionSettings] = useState<CommissionSettings | null>(null);
+  const [commissionInput, setCommissionInput] = useState('');
+  const [savingCommission, setSavingCommission] = useState(false);
+  const [commissionChanged, setCommissionChanged] = useState(false);
+  const [applyCommissionToExisting, setApplyCommissionToExisting] = useState(false);
   const [featuredRotation, setFeaturedRotation] = useState<FeaturedRotationSettings | null>(null);
   const [featuredRotationInput, setFeaturedRotationInput] = useState('');
   const [savingFeaturedRotation, setSavingFeaturedRotation] = useState(false);
@@ -70,10 +78,11 @@ export default function AdminSettings() {
   const fetchSettings = async () => {
     try {
       setLoading(true);
-      const [rate, shipping, hold, rotation] = await Promise.all([
+      const [rate, shipping, hold, commission, rotation] = await Promise.all([
         getExchangeRate(),
         getShippingProviderSettings(),
         getPayoutHoldSettings(),
+        getCommissionSettings(),
         getAdminFeaturedRotationSettings(),
       ]);
       setExchangeRate(rate);
@@ -81,6 +90,9 @@ export default function AdminSettings() {
       setUseShipBubble(shipping.use_shipbubble);
       setPayoutHold(hold);
       setPayoutHoldInput(hold.hold_days.toString());
+      setCommissionSettings(commission);
+      setCommissionInput(commission.commission_rate.toString());
+      setApplyCommissionToExisting(false);
       setFeaturedRotation(rotation);
       setFeaturedRotationInput(rotation.rotation_minutes.toString());
     } catch (err: any) {
@@ -198,6 +210,48 @@ export default function AdminSettings() {
     if (payoutHold) {
       setPayoutHoldInput(payoutHold.hold_days.toString());
       setPayoutHoldChanged(false);
+    }
+  };
+
+  const handleCommissionChange = (value: string) => {
+    setCommissionInput(value);
+    const parsed = Number(value);
+    if (!Number.isNaN(parsed) && commissionSettings) {
+      setCommissionChanged(parsed !== commissionSettings.commission_rate);
+    }
+  };
+
+  const handleSaveCommission = async () => {
+    const parsed = Number(commissionInput);
+    if (Number.isNaN(parsed) || parsed < 0 || parsed > 100) {
+      error('Commission percentage must be between 0 and 100', 'Invalid Input');
+      return;
+    }
+
+    try {
+      setSavingCommission(true);
+      const updated = await updateCommissionSettings(parsed, applyCommissionToExisting);
+      setCommissionSettings(updated);
+      setCommissionInput(updated.commission_rate.toString());
+      setApplyCommissionToExisting(false);
+      setCommissionChanged(false);
+      success('Commission settings updated successfully', 'Success');
+    } catch (err: unknown) {
+      console.error('Failed to update commission settings:', err);
+      const detail = typeof err === 'object' && err !== null && 'response' in err
+        ? (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+        : undefined;
+      error(detail || 'Failed to update commission settings', 'Error');
+    } finally {
+      setSavingCommission(false);
+    }
+  };
+
+  const handleResetCommission = () => {
+    if (commissionSettings) {
+      setCommissionInput(commissionSettings.commission_rate.toString());
+      setApplyCommissionToExisting(false);
+      setCommissionChanged(false);
     }
   };
 
@@ -628,6 +682,133 @@ export default function AdminSettings() {
                   </div>
                 </div>
               )}
+            </div>
+          </div>
+
+          {/* Commission Settings Card */}
+          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+            <div className="border-b border-gray-200 px-6 py-4">
+              <div className="flex items-center gap-3">
+                <div className="h-10 w-10 rounded-xl bg-[#105E53] text-white flex items-center justify-center">
+                  <DollarSign className="w-5 h-5" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-semibold text-gray-900">Commission</h2>
+                  <p className="text-sm text-gray-600">Control default vendor commission for future order calculations</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="p-6 space-y-6">
+              <div>
+                <label htmlFor="commission-rate" className="block text-sm font-medium text-gray-700 mb-2">
+                  Default commission percentage
+                </label>
+                <div className="flex items-start gap-4">
+                  <div className="flex-1 max-w-md">
+                    <div className="relative">
+                      <input
+                        id="commission-rate"
+                        type="number"
+                        min="0"
+                        max="100"
+                        step="0.01"
+                        value={commissionInput}
+                        onChange={(event) => handleCommissionChange(event.target.value)}
+                        className="w-full pr-10 px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#105E53] focus:border-transparent text-gray-900"
+                        placeholder="Enter commission percentage"
+                      />
+                      <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 font-medium">
+                        %
+                      </span>
+                    </div>
+                    <p className="text-xs text-gray-500 mt-2">
+                      New orders snapshot the vendor commission at order creation. Old orders and payouts are not changed.
+                    </p>
+                    <label className="mt-4 flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                      <input
+                        type="checkbox"
+                        checked={applyCommissionToExisting}
+                        onChange={(event) => setApplyCommissionToExisting(event.target.checked)}
+                        className="mt-1 h-4 w-4 rounded border-amber-300 text-[#105E53] focus:ring-[#105E53]"
+                      />
+                      <span>
+                        Also update existing vendor commission rates for future orders. Leave unchecked to apply this only as the default for newly created vendors.
+                      </span>
+                    </label>
+                  </div>
+
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={handleResetCommission}
+                      disabled={(!commissionChanged && !applyCommissionToExisting) || savingCommission}
+                      className="px-4 py-2.5 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Reset
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleSaveCommission}
+                      disabled={(!commissionChanged && !applyCommissionToExisting) || savingCommission}
+                      className="px-4 py-2.5 bg-[#105E53] text-white rounded-lg text-sm font-medium hover:bg-[#0d4a42] transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                    >
+                      {savingCommission ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          Saving...
+                        </>
+                      ) : (
+                        <>
+                          <Save className="w-4 h-4" />
+                          Save Changes
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {commissionSettings && (
+                <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-medium text-gray-700">Current Default Commission</p>
+                      <p className="text-2xl font-semibold text-[#0B1D2C] mt-1">
+                        {commissionSettings.commission_rate.toLocaleString('en-US', {
+                          minimumFractionDigits: 0,
+                          maximumFractionDigits: 2
+                        })}%
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-xs text-gray-500">Last Updated</p>
+                      <p className="text-sm text-gray-700 mt-0.5">
+                        {commissionSettings.updated_at
+                          ? new Date(commissionSettings.updated_at).toLocaleString('en-US', {
+                              dateStyle: 'medium',
+                              timeStyle: 'short'
+                            })
+                          : 'Not set'}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                <div className="flex items-start gap-3">
+                  <AlertCircle className="w-5 h-5 text-blue-600 mt-0.5 flex-shrink-0" />
+                  <div>
+                    <p className="text-sm font-semibold text-blue-900 mb-1">About Commission</p>
+                    <ul className="text-sm text-blue-800 space-y-1">
+                      <li>• Vendor-level commission rates are used for new order item snapshots</li>
+                      <li>• Historical order and payout records keep their original commission math</li>
+                      <li>• Use the checkbox only when the new percentage should apply to existing vendors going forward</li>
+                    </ul>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
 
