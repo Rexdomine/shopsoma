@@ -40,8 +40,3 @@ async def get_default_commission_rate(db: AsyncSession) -> Decimal:
 def get_vendor_commission_rate(vendor: Optional[Vendor]) -> Decimal:
     """Get a vendor commission percentage, falling back to the platform default."""
     return normalize_commission_rate(vendor.commission_rate if vendor else None)
-
-
-def get_vendor_commission_fraction(vendor: Optional[Vendor]) -> Decimal:
-    """Get a vendor commission as a fraction for order-item math."""
-    return (get_vendor_commission_rate(vendor) / Decimal("100")).quantize(Decimal("0.0001"))

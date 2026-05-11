@@ -337,7 +337,7 @@ async def test_create_order_uses_vendor_commission_rate_snapshot(
     from app.models.shipping_rate import ShippingRate
     import uuid
 
-    vendor_user["vendor"].commission_rate = 20
+    vendor_user["vendor"].commission_rate = 12.5
 
     product = Product(
         id=uuid.uuid4(),
@@ -389,6 +389,6 @@ async def test_create_order_uses_vendor_commission_rate_snapshot(
     persisted_item = (
         await db_session.execute(select(OrderItem).where(OrderItem.order_id == data["id"]))
     ).scalar_one()
-    assert float(persisted_item.commission_rate) == 0.2
-    assert float(persisted_item.commission_amount) == 20000
-    assert float(persisted_item.vendor_payout) == 80000
+    assert float(persisted_item.commission_rate) == 12.5
+    assert float(persisted_item.commission_amount) == 12500
+    assert float(persisted_item.vendor_payout) == 87500
