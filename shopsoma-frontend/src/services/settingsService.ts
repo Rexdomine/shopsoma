@@ -39,6 +39,16 @@ export interface PayoutHoldUpdate {
   hold_days: number;
 }
 
+export interface CommissionSettings {
+  commission_rate: number;
+  updated_at?: string | null;
+}
+
+export interface CommissionUpdate {
+  commission_rate: number;
+  apply_to_existing_vendors?: boolean;
+}
+
 export interface FeaturedRotationSettings {
   rotation_minutes: number;
   updated_at?: string | null;
@@ -159,6 +169,31 @@ export const updatePayoutHoldSettings = async (
   const response = await api.put<PayoutHoldSettings>(
     '/settings/admin/payout-hold',
     { hold_days: holdDays }
+  );
+  return response.data;
+};
+
+/**
+ * Get commission settings (admin only)
+ */
+export const getCommissionSettings = async (): Promise<CommissionSettings> => {
+  const response = await api.get<CommissionSettings>('/settings/admin/commission');
+  return response.data;
+};
+
+/**
+ * Update commission settings (admin only)
+ */
+export const updateCommissionSettings = async (
+  commissionRate: number,
+  applyToExistingVendors: boolean = false
+): Promise<CommissionSettings> => {
+  const response = await api.put<CommissionSettings>(
+    '/settings/admin/commission',
+    {
+      commission_rate: commissionRate,
+      apply_to_existing_vendors: applyToExistingVendors,
+    }
   );
   return response.data;
 };

@@ -14,6 +14,7 @@ from app.models.user import User, UserRole
 from app.schemas.vendor_application import VendorApplicationCreate, VendorApplicationApproval
 from app.services.vendor_otp_service import VendorOTPService
 from app.services.email_service import EmailService
+from app.services.commission import get_default_commission_rate
 
 
 class VendorApplicationService:
@@ -157,6 +158,8 @@ class VendorApplicationService:
             db.add(new_user)
             await db.flush()
 
+        default_commission_rate = await get_default_commission_rate(db)
+
         # Create Vendor profile
         vendor = Vendor(
             user_id=new_user.id,
@@ -168,7 +171,8 @@ class VendorApplicationService:
             approved=True,  # Approved by admin, vendor can now activate their account
             is_onboarding=True,
             brand_info_completed=False,
-            payout_info_completed=False
+            payout_info_completed=False,
+            commission_rate=default_commission_rate
         )
         db.add(vendor)
         await db.flush()

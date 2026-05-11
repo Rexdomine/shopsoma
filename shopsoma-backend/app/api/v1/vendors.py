@@ -37,6 +37,7 @@ from app.schemas.vendor import (
 from app.schemas.product import ProductResponse, ProductListResponse
 from app.models.product import ProductStatus, Variation
 from app.services.email_service import email_service
+from app.services.commission import get_default_commission_rate
 
 router = APIRouter(prefix="/vendor", tags=["Vendors"])
 logger = logging.getLogger(__name__)
@@ -105,6 +106,8 @@ async def create_vendor_profile(
             detail="User already has a vendor profile"
         )
 
+    default_commission_rate = await get_default_commission_rate(db)
+
     # Create vendor
     vendor = Vendor(
         user_id=current_user.id,
@@ -117,7 +120,7 @@ async def create_vendor_profile(
         bank_account_name=vendor_data.bank_account_name,
         kyc_status=KYCStatus.PENDING,
         approved=False,
-        commission_rate=12.5  # Default 12.5%
+        commission_rate=default_commission_rate
     )
 
     db.add(vendor)

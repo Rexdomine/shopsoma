@@ -12,6 +12,7 @@ from app.models.product import Product, ProductVariant, ProductImage, ProductSta
 from app.models.user import User, UserRole
 from app.models.vendor import Vendor, KYCStatus
 from app.core.security import get_password_hash
+from app.services.commission import DEFAULT_COMMISSION_RATE
 
 router = APIRouter(prefix="/seed", tags=["seed"])
 
@@ -45,7 +46,7 @@ async def test_vendor_creation(db: AsyncSession = Depends(get_db)):
             business_description="A test vendor business",
             kyc_status=KYCStatus.APPROVED,
             approved=True,
-            commission_rate=12.5
+            commission_rate=DEFAULT_COMMISSION_RATE
         )
         db.add(vendor)
         await db.commit()
@@ -142,7 +143,7 @@ async def initialize_database(db: AsyncSession = Depends(get_db)):
             business_description="Premier African fashion marketplace featuring authentic designs",
             kyc_status=KYCStatus.APPROVED,
             approved=True,
-            commission_rate=12.5
+            commission_rate=DEFAULT_COMMISSION_RATE
         )
         db.add(vendor)
         await db.flush()
