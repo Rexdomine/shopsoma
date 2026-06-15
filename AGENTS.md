@@ -671,20 +671,32 @@ Vendor and admin views may access pending products according to role, but custom
 
 ## Shopsoma Development Workflow
 
-Shopsoma changes follow a local-first workflow:
+Shopsoma changes follow a PR-first, local-verified workflow:
 
-1. Implement and test locally first
-2. Verify the affected flow manually on the local environment
-3. Run relevant automated tests locally where applicable
-4. Push only after local verification passes
-5. Deploy to the staging branch/environment for live testing
-6. Validate the full user flow in staging before considering the task complete
+1. Start from the latest `origin/develop`
+2. Create a focused task branch (`feature/*`, `bugfix/*`, `hotfix/*`, `docs/*`, or `chore/*`)
+3. Implement and test locally first
+4. Verify the affected flow manually on the local environment
+5. Run relevant automated tests locally where applicable
+6. Commit with conventional commits
+7. Push the task branch and open a Pull Request targeting `develop`
+8. Deploy/validate through the staging branch/environment after merge where applicable
+9. Validate the full user flow in staging before considering production-facing work complete
+
+Hard GitHub rules:
+- Every feature, update, bug fix, documentation/process change, or production-facing task must have a GitHub PR for that exact task.
+- PRs must target `develop` only unless Rex explicitly changes the release process.
+- Do not push directly to `develop` or `main`.
+- Do not leave completed Shopsoma work only in the local workspace or only on an un-PR'd branch.
+- Nothing should be automatically merged; Rex/reviewers decide when a PR merges.
 
 Agents must optimize for this workflow:
 - prefer changes that are easy to verify locally
 - provide exact local run commands
 - provide a staging QA checklist for any meaningful feature or bug fix
 - clearly separate “locally verified” from “needs staging verification”
+- include the PR link, base branch, test evidence, and mergeability status in final handoffs
+- engage NightWing for independent QA/review before final software/product handoff
 
 ## Required QA Format
 
