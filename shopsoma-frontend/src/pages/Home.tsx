@@ -315,10 +315,10 @@ function FeaturedCollabSkeleton() {
 function CategoryStrip() {
   const categories = useMemo(
     () => [
-      { name: 'Gowns', image: '/images/gown-category-image.svg' },
-      { name: 'Hand stitched', image: '/images/demo-image-3.svg' },
-      { name: 'Strong Construction', image: '/images/strong-construction-category-image.svg' },
-      { name: 'Cotton', image: '/images/cotton-category-image.svg' },
+      { name: 'Dresses', image: '/images/gown-category-image.svg' },
+      { name: 'Occasion wear', image: '/images/demo-image-3.svg' },
+      { name: 'Workwear', image: '/images/strong-construction-category-image.svg' },
+      { name: 'Casual', image: '/images/cotton-category-image.svg' },
     ],
     []
   );
