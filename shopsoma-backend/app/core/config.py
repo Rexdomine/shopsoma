@@ -103,6 +103,14 @@ class Settings(BaseSettings):
     DHL_IMPORT_ACCOUNT_NUMBER: SecretStr = SecretStr("")
     DHL_REQUEST_TIMEOUT_SECONDS: float = Field(default=30.0, ge=1, le=60)
 
+    # Domestic DHL workflow safety gates
+    DHL_DOMESTIC_WORKFLOW_ENABLED: bool = False
+    DHL_DOMESTIC_QUOTE_ENFORCEMENT_ENABLED: bool = False
+    DHL_DOMESTIC_PROVIDER_CALLS_ENABLED: bool = False
+    DHL_DOMESTIC_QUOTE_TTL_SECONDS: int = Field(default=1800, ge=300, le=3600)
+    DHL_DOMESTIC_PAYMENT_WINDOW_SECONDS: int = Field(default=1800, ge=300, le=3600)
+    DHL_DOMESTIC_AUTH_GRACE_SECONDS: int = Field(default=900, ge=60, le=1800)
+
     @property
     def dhl_base_url(self) -> str:
         """Return the fixed official MyDHL API URL for the selected environment."""

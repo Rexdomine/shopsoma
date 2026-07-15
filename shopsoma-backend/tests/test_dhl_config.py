@@ -24,6 +24,55 @@ def test_dhl_is_disabled_and_unconfigured_by_default() -> None:
     assert config.dhl_configured is False
 
 
+def test_domestic_dhl_workflow_gates_are_inert_by_default() -> None:
+    config = make_settings()
+
+    assert (
+        config.DHL_DOMESTIC_WORKFLOW_ENABLED,
+        config.DHL_DOMESTIC_QUOTE_ENFORCEMENT_ENABLED,
+        config.DHL_DOMESTIC_PROVIDER_CALLS_ENABLED,
+    ) == (False, False, False)
+    assert (
+        config.DHL_DOMESTIC_QUOTE_TTL_SECONDS,
+        config.DHL_DOMESTIC_PAYMENT_WINDOW_SECONDS,
+        config.DHL_DOMESTIC_AUTH_GRACE_SECONDS,
+    ) == (1800, 1800, 900)
+
+
+@pytest.mark.parametrize(
+    ("field_name", "invalid_value"),
+    [
+        ("DHL_DOMESTIC_QUOTE_TTL_SECONDS", 299),
+        ("DHL_DOMESTIC_QUOTE_TTL_SECONDS", 3601),
+        ("DHL_DOMESTIC_PAYMENT_WINDOW_SECONDS", 299),
+        ("DHL_DOMESTIC_PAYMENT_WINDOW_SECONDS", 3601),
+        ("DHL_DOMESTIC_AUTH_GRACE_SECONDS", 59),
+        ("DHL_DOMESTIC_AUTH_GRACE_SECONDS", 1801),
+    ],
+)
+def test_domestic_dhl_timing_settings_reject_values_outside_safe_bounds(
+    field_name: str, invalid_value: int
+) -> None:
+    with pytest.raises(ValidationError, match=field_name):
+        make_settings(**{field_name: invalid_value})
+
+
+def test_domestic_dhl_timing_settings_accept_safe_boundaries() -> None:
+    config = make_settings(
+        **{
+            "DHL_DOMESTIC_QUOTE_TTL_SECONDS": 300,
+            "DHL_DOMESTIC_PAYMENT_WINDOW_SECONDS": 3600,
+            "DHL_DOMESTIC_AUTH_GRACE_SECONDS": 60,
+        }
+    )
+
+    assert (
+        config.DHL_DOMESTIC_QUOTE_TTL_SECONDS,
+        config.DHL_DOMESTIC_PAYMENT_WINDOW_SECONDS,
+        config.DHL_DOMESTIC_AUTH_GRACE_SECONDS,
+    ) == (300, 3600, 60)
+
+
 def test_dhl_production_environment_uses_fixed_official_url() -> None:
     config = make_settings(DHL_ENVIRONMENT="production")
 
