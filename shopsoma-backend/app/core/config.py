@@ -5,8 +5,8 @@ configuration from environment variables.
 """
 
 import re
-from typing import List, Optional
-from pydantic import AliasChoices, Field
+from typing import List, Literal, Optional
+from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings
 
 
@@ -32,7 +32,9 @@ class Settings(BaseSettings):
     REDIS_HOST: str = "localhost"
     REDIS_PORT: int = 6379
     REDIS_DB: int = 0
-    REDIS_URL: Optional[str] = Field(default=None, validation_alias=AliasChoices("REDIS_URL", "redis_url"))
+    REDIS_URL: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("REDIS_URL", "redis_url")
+    )
 
     # Email Settings
     SMTP_HOST: str = ""
@@ -90,6 +92,35 @@ class Settings(BaseSettings):
     # Docs: https://docs.shipbubble.com
     SHIPBUBBLE_API_KEY: str = ""
     SHIPBUBBLE_WEBHOOK_SECRET: str = ""  # For webhook signature verification
+
+    # DHL Express MyDHL API
+    # Docs: https://developer.dhl.com/api-reference/dhl-express-mydhl-api
+    DHL_ENABLED: bool = False
+    DHL_ENVIRONMENT: Literal["sandbox", "production"] = "sandbox"
+    DHL_API_USERNAME: SecretStr = SecretStr("")
+    DHL_API_PASSWORD: SecretStr = SecretStr("")
+    DHL_EXPORT_ACCOUNT_NUMBER: SecretStr = SecretStr("")
+    DHL_IMPORT_ACCOUNT_NUMBER: SecretStr = SecretStr("")
+    DHL_REQUEST_TIMEOUT_SECONDS: float = Field(default=30.0, ge=1, le=60)
+
+    @property
+    def dhl_base_url(self) -> str:
+        """Return the fixed official MyDHL API URL for the selected environment."""
+        if self.DHL_ENVIRONMENT == "production":
+            return "https://express.api.dhl.com/mydhlapi"
+        return "https://express.api.dhl.com/mydhlapi/test"
+
+    @property
+    def dhl_configured(self) -> bool:
+        """Return whether DHL is enabled with the minimum required configuration."""
+        return self.DHL_ENABLED and all(
+            secret.get_secret_value()
+            for secret in (
+                self.DHL_API_USERNAME,
+                self.DHL_API_PASSWORD,
+                self.DHL_EXPORT_ACCOUNT_NUMBER,
+            )
+        )
 
     @property
     def FRONTEND_URL(self) -> str:
@@ -153,6 +184,24 @@ class Settings(BaseSettings):
 
     def model_post_init(self, __context) -> None:
         environment = self.ENVIRONMENT.lower()
+
+        if self.DHL_ENABLED:
+            required_dhl_fields = {
+                "DHL_API_USERNAME": self.DHL_API_USERNAME,
+                "DHL_API_PASSWORD": self.DHL_API_PASSWORD,
+                "DHL_EXPORT_ACCOUNT_NUMBER": self.DHL_EXPORT_ACCOUNT_NUMBER,
+            }
+            missing_dhl_fields = [
+                field_name
+                for field_name, secret in required_dhl_fields.items()
+                if not secret.get_secret_value()
+            ]
+            if missing_dhl_fields:
+                missing = ", ".join(missing_dhl_fields)
+                raise ValueError(
+                    "DHL is enabled but required settings are missing: " + missing
+                )
+
         if not self.ASYNC_DATABASE_URL:
             self.ASYNC_DATABASE_URL = self._build_async_db_url(self.DATABASE_URL)
         if self.AWS_S3_BUCKET and not self.S3_BUCKET_NAME:
@@ -165,7 +214,11 @@ class Settings(BaseSettings):
             self.AWS_S3_ENDPOINT_URL = self.S3_ENDPOINT_URL
         if self.USE_LOCAL_STORAGE is None:
             self.USE_LOCAL_STORAGE = environment == "development"
-        if environment != "development" and self.USE_LOCAL_STORAGE and not self.ALLOW_LOCAL_STORAGE_IN_NON_DEV:
+        if (
+            environment != "development"
+            and self.USE_LOCAL_STORAGE
+            and not self.ALLOW_LOCAL_STORAGE_IN_NON_DEV
+        ):
             raise ValueError(
                 "USE_LOCAL_STORAGE cannot default to true outside development. "
                 "Set USE_LOCAL_STORAGE=false with object storage credentials, or "
@@ -173,7 +226,8 @@ class Settings(BaseSettings):
             )
         if not self.USE_LOCAL_STORAGE:
             missing_storage_fields = [
-                field_name for field_name, value in {
+                field_name
+                for field_name, value in {
                     "AWS_ACCESS_KEY_ID": self.AWS_ACCESS_KEY_ID,
                     "AWS_SECRET_ACCESS_KEY": self.AWS_SECRET_ACCESS_KEY,
                     "AWS_REGION": self.AWS_REGION,
