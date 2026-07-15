@@ -14,4 +14,11 @@ def test_migration_graph_has_exactly_one_head() -> None:
 
     heads = script.get_heads()
 
-    assert len(heads) == 1, f"Expected exactly one Alembic head, found: {heads}"
+    assert heads == ["7b87484b1b1f"]
+
+    merge_revision = script.get_revision(heads[0])
+    assert merge_revision is not None
+    assert merge_revision.down_revision == (
+        "f6a7b8c9d0e1",
+        "j6k7l8m9n0p1",
+    )
