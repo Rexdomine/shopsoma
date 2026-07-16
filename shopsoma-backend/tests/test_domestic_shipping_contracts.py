@@ -7,8 +7,12 @@ import pytest
 
 from app.services.fulfillment.contracts import (
     DomesticAddress,
+    FulfillmentCohortRef,
     HubRef,
+    PackageItemRef,
+    PackageRef,
     ParcelMeasurement,
+    SealRef,
 )
 from app.services.shipping.contracts import DomesticRate, DomesticRateRequest
 
@@ -38,11 +42,32 @@ def parcel(**overrides: object) -> ParcelMeasurement:
     return ParcelMeasurement(**values)
 
 
-def request(**overrides: object) -> DomesticRateRequest:
+def package(origin: HubRef | None = None, **overrides: object) -> PackageRef:
+    origin = origin or hub()
     values = {
-        "origin": hub(),
+        "package_id": uuid4(),
+        "package_version": 3,
+        "composition": (
+            PackageItemRef(
+                cohort=FulfillmentCohortRef(uuid4(), origin),
+                order_item_id=uuid4(),
+                quantity=1,
+            ),
+        ),
+        "measurement": parcel(),
+        "seal": SealRef("seal:opaque-3"),
+    }
+    values.update(overrides)
+    return PackageRef(**values)
+
+
+def request(**overrides: object) -> DomesticRateRequest:
+    origin = overrides.pop("origin", hub())
+    package_origin = origin if isinstance(origin, HubRef) else hub()
+    values = {
+        "origin": origin,
         "destination": destination(),
-        "parcels": (parcel(),),
+        "package": package(package_origin),
         "planned_ship_date": date(2026, 7, 20),
     }
     values.update(overrides)
@@ -53,6 +78,7 @@ def rate(**overrides: object) -> DomesticRate:
     values = {
         "rate_id": "rate:opaque-123",
         "service_id": "service.standard_1",
+        "package": package(),
         "total_amount": Decimal("12500.50"),
         "currency": "NGN",
         "carrier_transit_days": 2,
@@ -68,21 +94,22 @@ def test_request_fields_expose_only_hub_origin_and_no_vendor_origin_address() ->
     assert field_names == {
         "origin",
         "destination",
-        "parcels",
+        "package",
         "planned_ship_date",
         "content_type",
         "movement_direction",
     }
     assert not any("vendor" in name for name in field_names)
     assert "origin_address" not in field_names
+    assert "parcels" not in field_names
 
 
-def test_request_is_immutable_and_normalizes_parcels_to_tuple() -> None:
-    first, second = parcel(), parcel(weight_kg="2.5")
-    value = request(parcels=[first, second])
+def test_request_is_immutable_and_binds_the_audited_final_package() -> None:
+    value = request()
 
-    assert value.parcels == (first, second)
-    assert isinstance(value.parcels, tuple)
+    assert isinstance(value.package, PackageRef)
+    assert value.package.package_version == 3
+    assert value.package.seal == SealRef("seal:opaque-3")
     with pytest.raises(FrozenInstanceError):
         value.origin = hub()  # type: ignore[misc]
 
@@ -92,7 +119,7 @@ def test_request_reuses_fulfillment_contract_types() -> None:
 
     assert isinstance(value.origin, HubRef)
     assert isinstance(value.destination, DomesticAddress)
-    assert all(isinstance(item, ParcelMeasurement) for item in value.parcels)
+    assert isinstance(value.package, PackageRef)
 
 
 @pytest.mark.parametrize(
@@ -102,7 +129,7 @@ def test_request_reuses_fulfillment_contract_types() -> None:
         ("origin", destination(), "origin must be a HubRef"),
         ("destination", "Abuja", "destination must be a DomesticAddress"),
         ("destination", hub(), "destination must be a DomesticAddress"),
-        ("parcels", (object(),), "parcels must contain only ParcelMeasurement"),
+        ("package", object(), "package must be a PackageRef"),
     ],
 )
 def test_request_rejects_wrong_runtime_nested_types(
@@ -124,10 +151,11 @@ def test_destination_contract_fails_closed_for_international_shipping() -> None:
         )
 
 
-@pytest.mark.parametrize("parcels", [(), [], iter(())])
-def test_request_requires_at_least_one_parcel(parcels: object) -> None:
-    with pytest.raises(ValueError, match="at least one parcel"):
-        request(parcels=parcels)
+def test_request_rejects_a_final_package_from_a_different_hub() -> None:
+    origin = hub()
+
+    with pytest.raises(ValueError, match="package cohort hub must match origin"):
+        request(origin=origin, package=package(hub()))
 
 
 @pytest.mark.parametrize("content_type", ["document", "documents", "gift", ""])
@@ -189,6 +217,52 @@ def test_rate_is_provider_neutral_immutable_and_normalizes_exact_money() -> None
     assert "dhl" not in repr(value).lower()
     with pytest.raises(FrozenInstanceError):
         value.currency = "USD"  # type: ignore[misc]
+
+
+def test_rate_is_bound_to_the_exact_audited_package_version_and_seal() -> None:
+    quoted_package = package()
+    value = rate(package=quoted_package)
+
+    assert value.package is quoted_package
+    assert value.package.package_id == quoted_package.package_id
+    assert value.package.package_version == quoted_package.package_version
+    assert value.package.composition == quoted_package.composition
+    assert value.package.measurement == quoted_package.measurement
+    assert value.package.seal == quoted_package.seal
+
+
+def test_repack_and_reseal_cannot_reuse_a_rate_bound_to_the_prior_package() -> None:
+    origin = hub()
+    package_id = uuid4()
+    original_package = package(
+        origin,
+        package_id=package_id,
+        package_version=1,
+        measurement=parcel(weight_kg="1.25"),
+        seal=SealRef("seal:opaque-1"),
+    )
+    stale_rate = rate(package=original_package)
+    repacked_request = request(
+        origin=origin,
+        package=package(
+            origin,
+            package_id=package_id,
+            package_version=2,
+            measurement=parcel(weight_kg="1.50"),
+            seal=SealRef("seal:opaque-2"),
+        ),
+    )
+
+    assert stale_rate.package.package_id == repacked_request.package.package_id
+    assert stale_rate.package != repacked_request.package
+    assert stale_rate.package.package_version == 1
+    assert stale_rate.package.measurement.weight_kg == Decimal("1.25")
+    assert stale_rate.package.seal == SealRef("seal:opaque-1")
+
+
+def test_rate_rejects_an_unversioned_package_value() -> None:
+    with pytest.raises(TypeError, match="package must be a PackageRef"):
+        rate(package=parcel())
 
 
 @pytest.mark.parametrize(

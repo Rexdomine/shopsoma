@@ -1,7 +1,6 @@
 """Provider-neutral contracts for Nigerian hub-to-customer rate shopping."""
 
 import re
-from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
@@ -9,7 +8,7 @@ from decimal import Decimal, InvalidOperation
 from app.services.fulfillment.contracts import (
     DomesticAddress,
     HubRef,
-    ParcelMeasurement,
+    PackageRef,
 )
 
 _IDENTIFIER_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
@@ -53,7 +52,7 @@ class DomesticRateRequest:
 
     origin: HubRef
     destination: DomesticAddress
-    parcels: tuple[ParcelMeasurement, ...]
+    package: PackageRef
     planned_ship_date: date
     content_type: str = "merchandise"
     movement_direction: str = "outbound"
@@ -64,16 +63,10 @@ class DomesticRateRequest:
         if not isinstance(self.destination, DomesticAddress):
             raise TypeError("destination must be a DomesticAddress")
 
-        if isinstance(self.parcels, (str, bytes)) or not isinstance(
-            self.parcels, Iterable
-        ):
-            raise TypeError("parcels must be an iterable of ParcelMeasurement")
-        parcels = tuple(self.parcels)
-        if not parcels:
-            raise ValueError("parcels must contain at least one parcel")
-        if not all(isinstance(parcel, ParcelMeasurement) for parcel in parcels):
-            raise TypeError("parcels must contain only ParcelMeasurement values")
-        object.__setattr__(self, "parcels", parcels)
+        if not isinstance(self.package, PackageRef):
+            raise TypeError("package must be a PackageRef")
+        if any(item.cohort.hub != self.origin for item in self.package.composition):
+            raise ValueError("every package cohort hub must match origin")
 
         _require_date(self.planned_ship_date, "planned_ship_date")
         if self.content_type != "merchandise":
@@ -93,6 +86,7 @@ class DomesticRate:
 
     rate_id: str
     service_id: str
+    package: PackageRef
     total_amount: Decimal
     currency: str
     carrier_transit_days: int | None = None
@@ -101,6 +95,8 @@ class DomesticRate:
     def __post_init__(self) -> None:
         _require_identifier(self.rate_id, "rate_id")
         _require_identifier(self.service_id, "service_id")
+        if not isinstance(self.package, PackageRef):
+            raise TypeError("package must be a PackageRef")
         object.__setattr__(self, "total_amount", _decimal_money(self.total_amount))
 
         if not isinstance(self.currency, str):
