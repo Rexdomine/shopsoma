@@ -4,6 +4,8 @@ import pytest
 
 from app.services.fulfillment.transitions import (
     ActorSource,
+    CustomerCohortProgress,
+    CustomerMilestone,
     HubState,
     InboundState,
     OutboundState,
@@ -14,6 +16,7 @@ from app.services.fulfillment.transitions import (
     TransitionKind,
     TransitionRejected,
     VendorPreparationState,
+    derive_customer_milestone,
     iter_transition_edges,
     resolve_transition,
     validate_transition,
@@ -904,3 +907,276 @@ def test_new_transition_missing_proof_fails_closed_and_duplicate_is_replay_safe(
     decision = resolve_transition(context_for(rule, duplicate=True))
     assert decision.idempotent_replay is True
     assert decision.side_effect_required is False
+
+
+def customer_progress(**changes) -> CustomerCohortProgress:
+    values = {
+        "payment_state": PaymentAttemptState.CONFIRMED,
+        "vendor_state": VendorPreparationState.NOT_STARTED,
+        "inbound_state": InboundState.NOT_REQUESTED,
+        "hub_state": HubState.AWAITING_RECEIPT,
+        "outbound_state": OutboundState.NOT_READY,
+    }
+    values.update(changes)
+    return CustomerCohortProgress(**values)
+
+
+@pytest.mark.parametrize(
+    ("changes", "milestone"),
+    [
+        ({}, CustomerMilestone.PAYMENT_CONFIRMED),
+        (
+            {"vendor_state": VendorPreparationState.PREPARING},
+            CustomerMilestone.VENDOR_PREPARING,
+        ),
+        (
+            {
+                "vendor_state": VendorPreparationState.READY_FOR_INBOUND,
+                "inbound_state": InboundState.IN_TRANSIT,
+            },
+            CustomerMilestone.MOVING_TO_SHOPSOMA,
+        ),
+        (
+            {
+                "vendor_state": VendorPreparationState.READY_FOR_INBOUND,
+                "inbound_state": InboundState.RECEIVED_COMPLETE,
+                "hub_state": HubState.RECEIVED,
+            },
+            CustomerMilestone.RECEIVED_BY_SHOPSOMA,
+        ),
+        (
+            {
+                "vendor_state": VendorPreparationState.READY_FOR_INBOUND,
+                "inbound_state": InboundState.RECEIVED_COMPLETE,
+                "hub_state": HubState.QC_IN_PROGRESS,
+            },
+            CustomerMilestone.QUALITY_CHECK,
+        ),
+        (
+            {
+                "vendor_state": VendorPreparationState.READY_FOR_INBOUND,
+                "inbound_state": InboundState.RECEIVED_COMPLETE,
+                "hub_state": HubState.READY_FOR_DHL,
+                "outbound_state": OutboundState.AWAITING_COLLECTION,
+            },
+            CustomerMilestone.PACKED_READY,
+        ),
+        (
+            {
+                "vendor_state": VendorPreparationState.READY_FOR_INBOUND,
+                "inbound_state": InboundState.RECEIVED_COMPLETE,
+                "hub_state": HubState.READY_FOR_DHL,
+                "outbound_state": OutboundState.COLLECTED,
+            },
+            CustomerMilestone.DHL_COLLECTED,
+        ),
+        (
+            {
+                "vendor_state": VendorPreparationState.READY_FOR_INBOUND,
+                "inbound_state": InboundState.RECEIVED_COMPLETE,
+                "hub_state": HubState.READY_FOR_DHL,
+                "outbound_state": OutboundState.IN_TRANSIT,
+            },
+            CustomerMilestone.IN_TRANSIT,
+        ),
+        (
+            {
+                "vendor_state": VendorPreparationState.READY_FOR_INBOUND,
+                "inbound_state": InboundState.RECEIVED_COMPLETE,
+                "hub_state": HubState.READY_FOR_DHL,
+                "outbound_state": OutboundState.OUT_FOR_DELIVERY,
+            },
+            CustomerMilestone.OUT_FOR_DELIVERY,
+        ),
+        (
+            {
+                "vendor_state": VendorPreparationState.READY_FOR_INBOUND,
+                "inbound_state": InboundState.RECEIVED_COMPLETE,
+                "hub_state": HubState.READY_FOR_DHL,
+                "outbound_state": OutboundState.DELIVERED,
+            },
+            CustomerMilestone.DELIVERED,
+        ),
+    ],
+)
+def test_customer_snapshot_maps_to_honest_milestone(changes, milestone) -> None:
+    assert derive_customer_milestone([customer_progress(**changes)]) is milestone
+
+
+def test_inbound_movement_and_delay_never_illuminate_dhl_in_transit() -> None:
+    for inbound_state in (InboundState.IN_TRANSIT, InboundState.DELAYED):
+        progress = customer_progress(
+            vendor_state=VendorPreparationState.READY_FOR_INBOUND,
+            inbound_state=inbound_state,
+        )
+        assert (
+            derive_customer_milestone([progress])
+            is CustomerMilestone.MOVING_TO_SHOPSOMA
+        )
+
+
+def test_multiple_cohorts_use_the_slowest_non_cancelled_milestone() -> None:
+    received = customer_progress(
+        vendor_state=VendorPreparationState.READY_FOR_INBOUND,
+        inbound_state=InboundState.RECEIVED_COMPLETE,
+        hub_state=HubState.RECEIVED,
+    )
+    inbound = customer_progress(
+        vendor_state=VendorPreparationState.READY_FOR_INBOUND,
+        inbound_state=InboundState.IN_TRANSIT,
+    )
+    delivered = customer_progress(
+        vendor_state=VendorPreparationState.READY_FOR_INBOUND,
+        inbound_state=InboundState.RECEIVED_COMPLETE,
+        hub_state=HubState.READY_FOR_DHL,
+        outbound_state=OutboundState.DELIVERED,
+    )
+    outbound = customer_progress(
+        vendor_state=VendorPreparationState.READY_FOR_INBOUND,
+        inbound_state=InboundState.RECEIVED_COMPLETE,
+        hub_state=HubState.READY_FOR_DHL,
+        outbound_state=OutboundState.IN_TRANSIT,
+    )
+
+    assert (
+        derive_customer_milestone([received, inbound])
+        is CustomerMilestone.MOVING_TO_SHOPSOMA
+    )
+    assert (
+        derive_customer_milestone([delivered, outbound]) is CustomerMilestone.IN_TRANSIT
+    )
+
+
+def test_partial_receipt_remains_inbound_and_exposes_immutable_counts() -> None:
+    progress = customer_progress(
+        vendor_state=VendorPreparationState.READY_FOR_INBOUND,
+        inbound_state=InboundState.RECEIVED_PARTIAL,
+        received_units=2,
+        total_units=3,
+    )
+    assert derive_customer_milestone([progress]) is CustomerMilestone.MOVING_TO_SHOPSOMA
+    assert (progress.received_units, progress.total_units) == (2, 3)
+    with pytest.raises(FrozenInstanceError):
+        progress.received_units = 3  # type: ignore[misc]
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"payment_state": PaymentAttemptState.REFUND_PENDING},
+        {"payment_state": PaymentAttemptState.REFUNDED},
+        {"payment_state": PaymentAttemptState.RECONCILIATION_FAILED},
+        {"vendor_state": VendorPreparationState.BLOCKED},
+        {
+            "vendor_state": VendorPreparationState.READY_FOR_INBOUND,
+            "inbound_state": InboundState.LOST,
+        },
+        {
+            "vendor_state": VendorPreparationState.READY_FOR_INBOUND,
+            "inbound_state": InboundState.DAMAGED,
+        },
+        {
+            "vendor_state": VendorPreparationState.READY_FOR_INBOUND,
+            "inbound_state": InboundState.RECEIVED_COMPLETE,
+            "hub_state": HubState.QC_FAILED,
+        },
+        {
+            "vendor_state": VendorPreparationState.READY_FOR_INBOUND,
+            "inbound_state": InboundState.RECEIVED_COMPLETE,
+            "hub_state": HubState.REMEDIATION,
+        },
+        {
+            "vendor_state": VendorPreparationState.READY_FOR_INBOUND,
+            "inbound_state": InboundState.RECEIVED_COMPLETE,
+            "hub_state": HubState.READY_FOR_DHL,
+            "outbound_state": OutboundState.EXCEPTION,
+        },
+        {
+            "vendor_state": VendorPreparationState.READY_FOR_INBOUND,
+            "inbound_state": InboundState.RECEIVED_COMPLETE,
+            "hub_state": HubState.READY_FOR_DHL,
+            "outbound_state": OutboundState.RETURNING,
+        },
+        {
+            "vendor_state": VendorPreparationState.READY_FOR_INBOUND,
+            "inbound_state": InboundState.RECEIVED_COMPLETE,
+            "hub_state": HubState.READY_FOR_DHL,
+            "outbound_state": OutboundState.RETURNED,
+        },
+    ],
+)
+def test_exception_states_override_success_milestones(changes) -> None:
+    exception = customer_progress(**changes)
+    delivered = customer_progress(
+        vendor_state=VendorPreparationState.READY_FOR_INBOUND,
+        inbound_state=InboundState.RECEIVED_COMPLETE,
+        hub_state=HubState.READY_FOR_DHL,
+        outbound_state=OutboundState.DELIVERED,
+    )
+    assert (
+        derive_customer_milestone([exception, delivered]) is CustomerMilestone.EXCEPTION
+    )
+
+
+def test_cancelled_cohort_is_excluded_only_with_recorded_disposition() -> None:
+    active = customer_progress(vendor_state=VendorPreparationState.PREPARING)
+    cancelled = customer_progress(
+        payment_state=PaymentAttemptState.REFUNDED,
+        vendor_state=VendorPreparationState.CANCELLED,
+        cancelled=True,
+        cancellation_refund_disposition_recorded=True,
+    )
+    assert (
+        derive_customer_milestone([active, cancelled])
+        is CustomerMilestone.VENDOR_PREPARING
+    )
+
+    with pytest.raises(ValueError, match="cancellation refund and disposition"):
+        derive_customer_milestone(
+            [
+                customer_progress(
+                    vendor_state=VendorPreparationState.CANCELLED, cancelled=True
+                )
+            ]
+        )
+
+
+def test_customer_milestone_is_derived_and_cannot_be_mutated_or_transitioned() -> None:
+    progress = customer_progress()
+    with pytest.raises(FrozenInstanceError):
+        progress.payment_state = PaymentAttemptState.FAILED  # type: ignore[misc]
+
+    assert all(
+        not isinstance(rule.to_state, CustomerMilestone)
+        for rule, _ in iter_transition_edges()
+    )
+    assert "customer_milestone" not in {machine.value for machine in StateMachine}
+
+
+@pytest.mark.parametrize(
+    "progresses",
+    [
+        [],
+        [
+            customer_progress(
+                payment_state=PaymentAttemptState.PENDING,
+                vendor_state=VendorPreparationState.PREPARING,
+            )
+        ],
+        [
+            customer_progress(
+                inbound_state=InboundState.NOT_REQUESTED, hub_state=HubState.RECEIVED
+            )
+        ],
+        [
+            customer_progress(
+                vendor_state=VendorPreparationState.READY_FOR_INBOUND,
+                inbound_state=InboundState.IN_TRANSIT,
+                outbound_state=OutboundState.DELIVERED,
+            )
+        ],
+    ],
+)
+def test_empty_unpaid_or_impossible_customer_snapshots_fail_closed(progresses) -> None:
+    with pytest.raises(ValueError):
+        derive_customer_milestone(progresses)

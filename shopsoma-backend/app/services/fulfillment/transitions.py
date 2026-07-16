@@ -10,7 +10,7 @@ idempotency.
 from dataclasses import dataclass
 from enum import Enum
 from types import MappingProxyType
-from typing import Iterator, Mapping
+from typing import Iterable, Iterator, Mapping
 
 
 class StateMachine(str, Enum):
@@ -107,6 +107,22 @@ class OutboundState(str, Enum):
     CANCELLED = "cancelled"
 
 
+class CustomerMilestone(str, Enum):
+    """Customer-facing progress derived from authoritative fulfillment states."""
+
+    PAYMENT_CONFIRMED = "payment_confirmed"
+    VENDOR_PREPARING = "vendor_preparing"
+    MOVING_TO_SHOPSOMA = "moving_to_shopsoma"
+    RECEIVED_BY_SHOPSOMA = "received_by_shopsoma"
+    QUALITY_CHECK = "quality_check"
+    PACKED_READY = "packed_ready"
+    DHL_COLLECTED = "dhl_collected"
+    IN_TRANSIT = "in_transit"
+    OUT_FOR_DELIVERY = "out_for_delivery"
+    DELIVERED = "delivered"
+    EXCEPTION = "exception"
+
+
 class ActorSource(str, Enum):
     CUSTOMER = "customer"
     CHECKOUT = "checkout"
@@ -177,6 +193,21 @@ class TransitionDecision:
     side_effect_required: bool
     idempotent_replay: bool
     replay_metadata: Mapping[str, object] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerCohortProgress:
+    """Immutable aligned snapshot used only to derive customer-visible progress."""
+
+    payment_state: PaymentAttemptState
+    vendor_state: VendorPreparationState
+    inbound_state: InboundState
+    hub_state: HubState
+    outbound_state: OutboundState
+    cancelled: bool = False
+    cancellation_refund_disposition_recorded: bool = False
+    received_units: int | None = None
+    total_units: int | None = None
 
 
 class TransitionRejected(ValueError):
@@ -1017,6 +1048,205 @@ _TERMINAL_STATES = frozenset(
     }
 )
 
+_CUSTOMER_MILESTONE_ORDER = (
+    CustomerMilestone.PAYMENT_CONFIRMED,
+    CustomerMilestone.VENDOR_PREPARING,
+    CustomerMilestone.MOVING_TO_SHOPSOMA,
+    CustomerMilestone.RECEIVED_BY_SHOPSOMA,
+    CustomerMilestone.QUALITY_CHECK,
+    CustomerMilestone.PACKED_READY,
+    CustomerMilestone.DHL_COLLECTED,
+    CustomerMilestone.IN_TRANSIT,
+    CustomerMilestone.OUT_FOR_DELIVERY,
+    CustomerMilestone.DELIVERED,
+)
+_CUSTOMER_EXCEPTION_PAYMENT_STATES = frozenset(
+    {
+        PaymentAttemptState.VOID_PENDING,
+        PaymentAttemptState.REFUND_PENDING,
+        PaymentAttemptState.REFUNDED,
+        PaymentAttemptState.RECONCILIATION_FAILED,
+    }
+)
+_CUSTOMER_EXCEPTION_VENDOR_STATES = frozenset({VendorPreparationState.BLOCKED})
+_CUSTOMER_EXCEPTION_INBOUND_STATES = frozenset(
+    {InboundState.LOST, InboundState.DAMAGED}
+)
+_CUSTOMER_EXCEPTION_HUB_STATES = frozenset({HubState.QC_FAILED, HubState.REMEDIATION})
+_CUSTOMER_EXCEPTION_OUTBOUND_STATES = frozenset(
+    {OutboundState.EXCEPTION, OutboundState.RETURNING, OutboundState.RETURNED}
+)
+_CANCELLED_MACHINE_STATES = frozenset(
+    {
+        VendorPreparationState.CANCELLED,
+        InboundState.CANCELLED,
+        HubState.CANCELLED,
+        OutboundState.CANCELLED,
+    }
+)
+
+
+def _validate_customer_progress(progress: CustomerCohortProgress) -> None:
+    expected_types = (
+        (progress.payment_state, PaymentAttemptState),
+        (progress.vendor_state, VendorPreparationState),
+        (progress.inbound_state, InboundState),
+        (progress.hub_state, HubState),
+        (progress.outbound_state, OutboundState),
+    )
+    if any(not isinstance(value, enum_type) for value, enum_type in expected_types):
+        raise ValueError("customer progress must use authoritative state enums")
+
+    counts = (progress.received_units, progress.total_units)
+    if (counts[0] is None) != (counts[1] is None):
+        raise ValueError("received and total unit counts must be supplied together")
+    if counts[0] is not None:
+        received_units, total_units = counts
+        if (
+            isinstance(received_units, bool)
+            or isinstance(total_units, bool)
+            or not isinstance(received_units, int)
+            or not isinstance(total_units, int)
+            or received_units < 0
+            or total_units <= 0
+            or received_units > total_units
+        ):
+            raise ValueError("invalid partial receipt unit counts")
+    if progress.inbound_state is InboundState.RECEIVED_PARTIAL:
+        received_units = progress.received_units
+        total_units = progress.total_units
+        if (
+            received_units is None
+            or total_units is None
+            or not 0 < received_units < total_units
+        ):
+            raise ValueError("partial receipt requires incomplete positive unit counts")
+    if progress.inbound_state is InboundState.RECEIVED_COMPLETE and (
+        counts[0] is not None and counts[0] != counts[1]
+    ):
+        raise ValueError("complete receipt unit counts must reconcile")
+
+    machine_cancelled = any(
+        state in _CANCELLED_MACHINE_STATES
+        for state in (
+            progress.vendor_state,
+            progress.inbound_state,
+            progress.hub_state,
+            progress.outbound_state,
+        )
+    )
+    cancellation_represented = machine_cancelled or (
+        progress.payment_state is PaymentAttemptState.REFUNDED
+    )
+    if machine_cancelled and not progress.cancelled:
+        raise ValueError("cancelled machine state requires cancellation representation")
+    if progress.cancelled:
+        if not progress.cancellation_refund_disposition_recorded:
+            raise ValueError("cancellation refund and disposition must be recorded")
+        if not cancellation_represented:
+            raise ValueError("cancelled progress requires cancellation or refund state")
+    elif progress.cancellation_refund_disposition_recorded:
+        raise ValueError(
+            "cancellation refund and disposition cannot exist for active progress"
+        )
+
+    payment_is_exception = progress.payment_state in _CUSTOMER_EXCEPTION_PAYMENT_STATES
+    if (
+        progress.payment_state is not PaymentAttemptState.CONFIRMED
+        and not payment_is_exception
+    ):
+        raise ValueError("customer progress requires confirmed payment")
+
+    if (
+        progress.inbound_state is not InboundState.NOT_REQUESTED
+        and progress.vendor_state is not VendorPreparationState.READY_FOR_INBOUND
+    ):
+        raise ValueError("inbound progress requires a ready vendor cohort")
+    if (
+        progress.hub_state is not HubState.AWAITING_RECEIPT
+        and progress.inbound_state is not InboundState.RECEIVED_COMPLETE
+    ):
+        raise ValueError("hub progress requires complete inbound receipt")
+    if (
+        progress.outbound_state is not OutboundState.NOT_READY
+        and progress.hub_state is not HubState.READY_FOR_DHL
+    ):
+        raise ValueError("outbound progress requires a DHL-ready package")
+
+
+def _derive_cohort_milestone(progress: CustomerCohortProgress) -> CustomerMilestone:
+    if (
+        progress.payment_state in _CUSTOMER_EXCEPTION_PAYMENT_STATES
+        or progress.vendor_state in _CUSTOMER_EXCEPTION_VENDOR_STATES
+        or progress.inbound_state in _CUSTOMER_EXCEPTION_INBOUND_STATES
+        or progress.hub_state in _CUSTOMER_EXCEPTION_HUB_STATES
+        or progress.outbound_state in _CUSTOMER_EXCEPTION_OUTBOUND_STATES
+    ):
+        return CustomerMilestone.EXCEPTION
+
+    outbound_milestones = {
+        OutboundState.COLLECTED: CustomerMilestone.DHL_COLLECTED,
+        OutboundState.IN_TRANSIT: CustomerMilestone.IN_TRANSIT,
+        OutboundState.OUT_FOR_DELIVERY: CustomerMilestone.OUT_FOR_DELIVERY,
+        OutboundState.DELIVERED: CustomerMilestone.DELIVERED,
+    }
+    if progress.outbound_state in outbound_milestones:
+        return outbound_milestones[progress.outbound_state]
+    if progress.outbound_state is not OutboundState.NOT_READY:
+        return CustomerMilestone.PACKED_READY
+
+    if progress.hub_state in {
+        HubState.PACKED,
+        HubState.SEALED,
+        HubState.READY_FOR_DHL,
+    }:
+        return CustomerMilestone.PACKED_READY
+    if progress.hub_state in {
+        HubState.QC_PENDING,
+        HubState.QC_IN_PROGRESS,
+        HubState.QC_PASSED,
+        HubState.READY_TO_PACK,
+        HubState.UNSEALED,
+        HubState.REPACKED,
+    }:
+        return CustomerMilestone.QUALITY_CHECK
+    if progress.hub_state is HubState.RECEIVED:
+        return CustomerMilestone.RECEIVED_BY_SHOPSOMA
+    if progress.inbound_state is InboundState.RECEIVED_COMPLETE:
+        return CustomerMilestone.RECEIVED_BY_SHOPSOMA
+    if progress.inbound_state is not InboundState.NOT_REQUESTED:
+        return CustomerMilestone.MOVING_TO_SHOPSOMA
+    if progress.vendor_state is not VendorPreparationState.NOT_STARTED:
+        return CustomerMilestone.VENDOR_PREPARING
+    return CustomerMilestone.PAYMENT_CONFIRMED
+
+
+def derive_customer_milestone(
+    progresses: Iterable[CustomerCohortProgress],
+) -> CustomerMilestone:
+    """Derive the slowest active cohort milestone, with exceptions overriding success."""
+
+    snapshots = tuple(progresses)
+    if not snapshots:
+        raise ValueError("customer progress cannot be empty")
+
+    active_milestones = []
+    for progress in snapshots:
+        if not isinstance(progress, CustomerCohortProgress):
+            raise ValueError("invalid customer cohort progress snapshot")
+        _validate_customer_progress(progress)
+        if not progress.cancelled:
+            active_milestones.append(_derive_cohort_milestone(progress))
+
+    if not active_milestones:
+        raise ValueError("customer progress has no active cohorts")
+    if CustomerMilestone.EXCEPTION in active_milestones:
+        return CustomerMilestone.EXCEPTION
+    order = {
+        milestone: index for index, milestone in enumerate(_CUSTOMER_MILESTONE_ORDER)
+    }
+    return min(active_milestones, key=order.__getitem__)
+
 
 def iter_transition_edges() -> Iterator[tuple[TransitionRule, TransitionState]]:
     """Yield every concrete edge in deterministic policy order."""
@@ -1103,6 +1333,8 @@ def validate_transition(context: TransitionContext) -> TransitionDecision:
 
 __all__ = [
     "ActorSource",
+    "CustomerCohortProgress",
+    "CustomerMilestone",
     "HubState",
     "InboundState",
     "OutboundState",
@@ -1115,6 +1347,7 @@ __all__ = [
     "TransitionRejected",
     "TransitionRule",
     "VendorPreparationState",
+    "derive_customer_milestone",
     "iter_transition_edges",
     "resolve_transition",
     "validate_transition",
