@@ -418,3 +418,17 @@ def test_outbound_intent_rejects_wrong_runtime_values(
     values[field_name] = invalid
     with pytest.raises(TypeError, match=field_name):
         OutboundShipmentIntent(**values)
+
+
+def test_package_rejects_duplicate_composition_identity() -> None:
+    package = make_package()
+    duplicate = package.composition[0]
+
+    with pytest.raises(ValueError, match="duplicate.*composition"):
+        PackageRef(
+            package_id=package.package_id,
+            package_version=package.package_version,
+            composition=(duplicate, duplicate),
+            measurement=package.measurement,
+            seal=package.seal,
+        )

@@ -113,7 +113,7 @@ def test_policy_contains_every_authoritative_quote_payment_vendor_edge() -> None
             StateMachine.QUOTE,
             QuoteState.ACTIVE,
             "create_attempt",
-            PaymentAttemptState.ATTEMPT_CREATED,
+            QuoteState.ACTIVE,
         ),
         # Payment attempt.
         (
@@ -393,7 +393,9 @@ def test_quote_values_attempt_creation_and_refund_safety_are_authoritative() -> 
     create = _rule_for(StateMachine.QUOTE, "create_attempt")
     assert create.kind is TransitionKind.COMMAND
     assert create.from_states == (QuoteState.ACTIVE,)
-    assert create.to_state is PaymentAttemptState.ATTEMPT_CREATED
+    assert create.to_state is QuoteState.ACTIVE
+    assert create.creates_machine is StateMachine.PAYMENT_ATTEMPT
+    assert create.creates_state is PaymentAttemptState.ATTEMPT_CREATED
     assert create.authorized_sources == frozenset({ActorSource.CHECKOUT})
     assert create.required_guards == frozenset(
         {
@@ -1459,3 +1461,39 @@ def test_external_event_identity_rejects_empty_values(identity_field) -> None:
 
     with pytest.raises(TransitionRejected, match="external"):
         resolve_transition(context_for(rule, **{identity_field: ""}))
+
+
+def test_create_attempt_declares_child_aggregate_without_mutating_quote_state() -> None:
+    rule = _rule_for(StateMachine.QUOTE, "create_attempt")
+
+    assert rule.to_state is QuoteState.ACTIVE
+    assert rule.creates_machine is StateMachine.PAYMENT_ATTEMPT
+    assert rule.creates_state is PaymentAttemptState.ATTEMPT_CREATED
+
+
+@pytest.mark.parametrize("invalid", [" ", "\n", "café", "x" * 201])
+def test_idempotency_key_rejects_unbounded_or_unsafe_values(invalid) -> None:
+    rule = _rule_for(StateMachine.QUOTE, "cancel")
+
+    with pytest.raises(TransitionRejected, match="idempotency"):
+        resolve_transition(context_for(rule, idempotency_key=invalid))
+
+
+@pytest.mark.parametrize("invalid", [" ", "café", "x" * 201])
+def test_external_identity_rejects_unbounded_or_non_ascii_values(invalid) -> None:
+    rule = _rule_for(StateMachine.OUTBOUND, "carrier_out_for_delivery")
+
+    with pytest.raises(TransitionRejected, match="external"):
+        resolve_transition(context_for(rule, event_id=invalid))
+
+
+def test_transition_context_normalizes_guard_and_evidence_sets() -> None:
+    rule = _rule_for(StateMachine.QUOTE, "cancel")
+    context = context_for(
+        rule,
+        guards=set(rule.required_guards),  # type: ignore[arg-type]
+        evidence=set(rule.evidence_requirement),  # type: ignore[arg-type]
+    )
+
+    assert isinstance(context.guards, frozenset)
+    assert isinstance(context.evidence, frozenset)

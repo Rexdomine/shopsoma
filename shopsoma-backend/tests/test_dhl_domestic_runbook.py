@@ -202,3 +202,11 @@ def test_runbook_does_not_reactivate_superseded_vendor_origin_work() -> None:
     )
     for pattern in forbidden_active_instructions:
         assert re.search(pattern, text) is None, pattern
+
+
+def test_runbook_distinguishes_code_gates_from_sandbox_operational_control() -> None:
+    text = _normalized(_runbook())
+
+    assert "capability evaluator does not distinguish sandbox from production" in text
+    assert "sandbox isolation is an external deployment/secret-policy control" in text
+    assert "phase 2b adds the sandbox-only provider factory" in text

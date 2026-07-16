@@ -180,6 +180,8 @@ class TransitionRule:
     idempotency_required: bool = True
     compensation: str = "none_required"
     retry: str = "safe_with_same_idempotency_key"
+    creates_machine: StateMachine | None = None
+    creates_state: TransitionState | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -216,6 +218,10 @@ class TransitionContext:
     event_id: str | None = None
     duplicate: bool = False
     prior_result: PriorTransitionResult | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "guards", frozenset(self.guards))
+        object.__setattr__(self, "evidence", frozenset(self.evidence))
 
 
 @dataclass(frozen=True, slots=True)
@@ -367,11 +373,25 @@ def _rule(
     *,
     compensation: str = "none_required",
     retry: str = "safe_with_same_idempotency_key",
+    creates_machine: StateMachine | None = None,
+    creates_state: TransitionState | None = None,
 ) -> TransitionRule:
     if not isinstance(from_states, tuple):
         from_states = (from_states,)
     if not isinstance(actors, tuple):
         actors = (actors,)
+    expected_state_type = _STATE_TYPE_BY_MACHINE[machine]
+    if any(type(state) is not expected_state_type for state in from_states):
+        raise TypeError(f"from_states must belong to {machine.value}")
+    if type(to_state) is not expected_state_type:
+        raise TypeError(f"to_state must belong to {machine.value}")
+    if (creates_machine is None) != (creates_state is None):
+        raise TypeError("creates_machine and creates_state must be provided together")
+    if (
+        creates_machine is not None
+        and type(creates_state) is not _STATE_TYPE_BY_MACHINE[creates_machine]
+    ):
+        raise TypeError("creates_state must belong to creates_machine")
     return TransitionRule(
         machine=machine,
         from_states=from_states,
@@ -383,6 +403,8 @@ def _rule(
         evidence_requirement=frozenset(evidence),
         compensation=compensation,
         retry=retry,
+        creates_machine=creates_machine,
+        creates_state=creates_state,
     )
 
 
@@ -423,7 +445,7 @@ _POLICY = (
         StateMachine.QUOTE,
         QuoteState.ACTIVE,
         "create_attempt",
-        PaymentAttemptState.ATTEMPT_CREATED,
+        QuoteState.ACTIVE,
         ActorSource.CHECKOUT,
         (
             "quote_owner_session_verified",
@@ -435,6 +457,8 @@ _POLICY = (
         ("persisted_attempt_request",),
         compensation="attempt_failure_preserves_quote_active",
         retry="safe_with_same_idempotency_key_while_quote_active",
+        creates_machine=StateMachine.PAYMENT_ATTEMPT,
+        creates_state=PaymentAttemptState.ATTEMPT_CREATED,
     ),
     # Payment attempt lifecycle.
     _rule(
@@ -1416,13 +1440,18 @@ def iter_transition_edges() -> Iterator[tuple[TransitionRule, TransitionState]]:
             yield rule, from_state
 
 
-def _is_sanitized_external_identity(value: str | None) -> bool:
+def _is_sanitized_identifier(value: str | None) -> bool:
     return bool(
         isinstance(value, str)
-        and value
+        and 1 <= len(value) <= 200
+        and value.isascii()
         and value == value.strip()
         and all(character.isalnum() or character in "._:-/" for character in value)
     )
+
+
+def _is_sanitized_external_identity(value: str | None) -> bool:
+    return _is_sanitized_identifier(value)
 
 
 def resolve_transition(context: TransitionContext) -> TransitionDecision:
@@ -1479,8 +1508,12 @@ def resolve_transition(context: TransitionContext) -> TransitionDecision:
         raise TransitionRejected(
             f"missing required evidence: {', '.join(sorted(missing_evidence))}"
         )
-    if rule.idempotency_required and not context.idempotency_key:
-        raise TransitionRejected("idempotency key is required")
+    if rule.idempotency_required and not _is_sanitized_identifier(
+        context.idempotency_key
+    ):
+        raise TransitionRejected(
+            "idempotency key must be non-empty, bounded, and sanitized"
+        )
     if context.aggregate_version is None:
         raise TransitionRejected("aggregate version is required")
     if context.expected_version is None:

@@ -264,6 +264,11 @@ class PackageRef:
             raise ValueError("composition must contain at least one PackageItemRef")
         if not all(isinstance(item, PackageItemRef) for item in self.composition):
             raise TypeError("composition must contain only PackageItemRef values")
+        composition_identities = {
+            (item.cohort.id, item.order_item_id) for item in self.composition
+        }
+        if len(composition_identities) != len(self.composition):
+            raise ValueError("duplicate package composition identity")
         if not isinstance(self.measurement, ParcelMeasurement):
             raise TypeError("measurement must be a ParcelMeasurement")
         if not isinstance(self.seal, SealRef):
