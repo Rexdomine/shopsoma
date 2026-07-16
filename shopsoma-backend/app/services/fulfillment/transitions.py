@@ -211,6 +211,8 @@ class PriorTransitionResult:
     machine: StateMachine
     current_state: TransitionState
     action: str
+    aggregate_id: str
+    result_version: int
     external_source: str | None
     event_id: str | None
     idempotency_key: str
@@ -218,6 +220,10 @@ class PriorTransitionResult:
     replay_metadata: Mapping[str, object]
 
     def __post_init__(self) -> None:
+        if not _is_sanitized_identifier(self.aggregate_id):
+            raise TypeError("aggregate_id must be a sanitized identifier")
+        if type(self.result_version) is not int or self.result_version < 1:
+            raise TypeError("result_version must be a positive integer")
         if not isinstance(self.replay_metadata, Mapping):
             raise TypeError("replay_metadata must be a mapping")
         object.__setattr__(
@@ -233,6 +239,7 @@ class TransitionContext:
     current_state: TransitionState
     action: str
     actor: ActorSource
+    aggregate_id: str
     aggregate_version: int | None
     expected_version: int | None
     guards: frozenset[str]
@@ -810,7 +817,7 @@ _POLICY += (
     ),
     _rule(
         StateMachine.INBOUND,
-        InboundState.IN_TRANSIT,
+        (InboundState.IN_TRANSIT, InboundState.DELAYED),
         "partial_hub_receipt",
         InboundState.RECEIVED_PARTIAL,
         ActorSource.HUB_OPERATOR,
@@ -819,7 +826,11 @@ _POLICY += (
     ),
     _rule(
         StateMachine.INBOUND,
-        (InboundState.IN_TRANSIT, InboundState.RECEIVED_PARTIAL),
+        (
+            InboundState.IN_TRANSIT,
+            InboundState.RECEIVED_PARTIAL,
+            InboundState.DELAYED,
+        ),
         "complete_hub_receipt",
         InboundState.RECEIVED_COMPLETE,
         ActorSource.HUB_OPERATOR,
@@ -1298,6 +1309,11 @@ def _validate_customer_progress(progress: CustomerCohortProgress) -> None:
     )
     if any(not isinstance(value, enum_type) for value, enum_type in expected_types):
         raise ValueError("customer progress must use authoritative state enums")
+    if (
+        type(progress.cancelled) is not bool
+        or type(progress.cancellation_refund_disposition_recorded) is not bool
+    ):
+        raise ValueError("cancellation flags must be booleans")
 
     counts = (progress.received_units, progress.total_units)
     if (counts[0] is None) != (counts[1] is None):
@@ -1351,6 +1367,12 @@ def _validate_customer_progress(progress: CustomerCohortProgress) -> None:
         raise ValueError(
             "cancellation refund and disposition cannot exist for active progress"
         )
+
+    # Cancelled cohorts are excluded from customer milestone derivation. Once their
+    # cancellation/refund disposition is internally consistent, active-flow
+    # prerequisites no longer apply to their terminal snapshots.
+    if progress.cancelled:
+        return
 
     payment_is_exception = progress.payment_state in _CUSTOMER_EXCEPTION_PAYMENT_STATES
     if (
@@ -1489,6 +1511,23 @@ def _resolve_duplicate(
         raise TransitionRejected("durable prior transition result is required")
     if type(prior) is not PriorTransitionResult:
         raise TransitionRejected("prior result must be a PriorTransitionResult")
+    if prior.aggregate_id != context.aggregate_id:
+        raise TransitionRejected("durable prior result does not match aggregate")
+    if type(context.aggregate_version) is not int or context.aggregate_version < 0:
+        raise TransitionRejected("aggregate version is required")
+    if context.aggregate_version < prior.result_version:
+        raise TransitionRejected(
+            "durable prior result does not match request: "
+            "aggregate has not reached persisted result"
+        )
+    if (
+        context.aggregate_version == prior.result_version
+        and context.current_state != prior.to_state
+    ):
+        raise TransitionRejected(
+            "durable prior result does not match request: "
+            "aggregate has not reached persisted result"
+        )
 
     expected_state_type = _STATE_TYPE_BY_MACHINE[context.machine]
     if (
@@ -1567,6 +1606,12 @@ def resolve_transition(context: TransitionContext) -> TransitionDecision:
         raise TransitionRejected("machine must be a StateMachine")
     if type(context.actor) is not ActorSource:
         raise TransitionRejected("actor must be an ActorSource")
+    if type(context.duplicate) is not bool:
+        raise TransitionRejected("duplicate must be a boolean")
+    if not _is_sanitized_identifier(context.aggregate_id):
+        raise TransitionRejected(
+            "aggregate id must be non-empty, bounded, and sanitized"
+        )
 
     machine_rules = tuple(rule for rule in _POLICY if rule.machine == context.machine)
     if not any(rule.action == context.action for rule in machine_rules):
@@ -1627,9 +1672,9 @@ def resolve_transition(context: TransitionContext) -> TransitionDecision:
         raise TransitionRejected(
             "idempotency key must be non-empty, bounded, and sanitized"
         )
-    if context.aggregate_version is None:
+    if type(context.aggregate_version) is not int or context.aggregate_version < 0:
         raise TransitionRejected("aggregate version is required")
-    if context.expected_version is None:
+    if type(context.expected_version) is not int or context.expected_version < 0:
         raise TransitionRejected("expected aggregate version is required")
     if context.aggregate_version != context.expected_version:
         raise TransitionRejected("stale aggregate version")

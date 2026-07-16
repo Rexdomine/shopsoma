@@ -87,6 +87,7 @@ def context_for(rule, from_state=None, **changes):
         "current_state": from_state or rule.from_states[0],
         "action": rule.action,
         "actor": next(iter(rule.authorized_sources)),
+        "aggregate_id": "aggregate:opaque-7",
         "aggregate_version": 7,
         "expected_version": 7,
         "guards": rule.required_guards,
@@ -325,6 +326,7 @@ def test_policy_metadata_is_explicit_and_immutable() -> None:
         ({"guards": frozenset()}, "missing required guards"),
         ({"evidence": frozenset()}, "missing required evidence"),
         ({"idempotency_key": None}, "idempotency key"),
+        ({"aggregate_id": None}, "aggregate id"),
         ({"aggregate_version": None}, "aggregate version is required"),
         ({"expected_version": None}, "expected aggregate version is required"),
         ({"aggregate_version": 6}, "stale aggregate version"),
@@ -367,6 +369,8 @@ def test_duplicate_returns_replay_decision_after_aggregate_has_advanced() -> Non
         machine=rule.machine,
         current_state=from_state,
         action=rule.action,
+        aggregate_id="aggregate:opaque-7",
+        result_version=7,
         external_source="provider.test",
         event_id="evt-7",
         idempotency_key="event/order/7",
@@ -408,6 +412,44 @@ def test_terminal_carrier_event_duplicate_returns_durable_result() -> None:
     assert decision.idempotent_replay is True
     assert decision.side_effect_required is False
     assert decision.replay_metadata == {"provider_reference": "delivery-proof"}
+
+
+def test_duplicate_is_bound_to_aggregate_identity_and_persisted_result_version() -> (
+    None
+):
+    rule = _rule_for(StateMachine.OUTBOUND, "carrier_in_transit")
+    prior = prior_for(rule, result_version=7)
+
+    with pytest.raises(TransitionRejected, match="does not match aggregate"):
+        resolve_transition(
+            context_for(
+                rule,
+                rule.to_state,
+                aggregate_id="aggregate:other",
+                duplicate=True,
+                prior_result=prior,
+            )
+        )
+    with pytest.raises(TransitionRejected, match="has not reached persisted result"):
+        resolve_transition(
+            context_for(
+                rule,
+                rule.from_states[0],
+                aggregate_version=7,
+                duplicate=True,
+                prior_result=prior,
+            )
+        )
+    with pytest.raises(TransitionRejected, match="has not reached persisted result"):
+        resolve_transition(
+            context_for(
+                rule,
+                rule.to_state,
+                aggregate_version=6,
+                duplicate=True,
+                prior_result=prior,
+            )
+        )
 
 
 def test_quote_values_attempt_creation_and_refund_safety_are_authoritative() -> None:
@@ -567,7 +609,7 @@ NEW_RULES = (
     ),
     (
         StateMachine.INBOUND,
-        (InboundState.IN_TRANSIT,),
+        (InboundState.IN_TRANSIT, InboundState.DELAYED),
         "partial_hub_receipt",
         InboundState.RECEIVED_PARTIAL,
         TransitionKind.COMMAND,
@@ -575,7 +617,11 @@ NEW_RULES = (
     ),
     (
         StateMachine.INBOUND,
-        (InboundState.IN_TRANSIT, InboundState.RECEIVED_PARTIAL),
+        (
+            InboundState.IN_TRANSIT,
+            InboundState.RECEIVED_PARTIAL,
+            InboundState.DELAYED,
+        ),
         "complete_hub_receipt",
         InboundState.RECEIVED_COMPLETE,
         TransitionKind.COMMAND,
@@ -929,7 +975,7 @@ def test_policy_contains_exactly_every_new_authoritative_edge() -> None:
         in {StateMachine.INBOUND, StateMachine.HUB, StateMachine.OUTBOUND}
     }
     assert actual == EXPECTED_NEW_EDGES
-    assert len(actual) == 75
+    assert len(actual) == 77
 
 
 def test_existing_rules_have_accurate_explicit_transition_kinds() -> None:
@@ -983,6 +1029,8 @@ def prior_for(rule, from_state=None, **changes):
         "machine": rule.machine,
         "current_state": from_state or rule.from_states[0],
         "action": rule.action,
+        "aggregate_id": "aggregate:opaque-7",
+        "result_version": 7,
         "external_source": (
             "provider.test" if rule.kind is TransitionKind.EXTERNAL_EVENT else None
         ),
@@ -1017,6 +1065,8 @@ def test_duplicate_requires_exact_durable_prior_identity_match() -> None:
 
     mismatches = (
         {"machine": StateMachine.INBOUND},
+        {"aggregate_id": "aggregate:other"},
+        {"result_version": 8},
         {"current_state": OutboundState.IN_TRANSIT},
         {"to_state": OutboundState.COLLECTED},
         {"to_state": HubState.PACKED},
@@ -1034,7 +1084,12 @@ def test_duplicate_requires_exact_durable_prior_identity_match() -> None:
             )
 
     replay = resolve_transition(
-        context_for(rule, duplicate=True, prior_result=prior_for(rule))
+        context_for(
+            rule,
+            rule.to_state,
+            duplicate=True,
+            prior_result=prior_for(rule),
+        )
     )
     assert replay.to_state is OutboundState.IN_TRANSIT
     assert replay.replay_metadata == {"persisted": "result"}
@@ -1048,21 +1103,38 @@ def test_duplicate_rejects_duck_typed_prior_result_and_raw_enum_values() -> None
         machine=genuine.machine,
         current_state=genuine.current_state,
         action=genuine.action,
+        aggregate_id=genuine.aggregate_id,
+        result_version=genuine.result_version,
         external_source=genuine.external_source,
         event_id=genuine.event_id,
         idempotency_key=genuine.idempotency_key,
         to_state=genuine.to_state,
-        replay_metadata={"mutable": {"references": []}},
+        replay_metadata=genuine.replay_metadata,
     )
 
     with pytest.raises(TransitionRejected, match="PriorTransitionResult"):
         resolve_transition(
             context_for(rule, duplicate=True, prior_result=impostor)  # type: ignore[arg-type]
         )
-    with pytest.raises(TransitionRejected, match="machine must be a StateMachine"):
+    with pytest.raises(TransitionRejected, match="machine must be"):
         resolve_transition(context_for(rule, machine="outbound"))  # type: ignore[arg-type]
-    with pytest.raises(TransitionRejected, match="actor must be an ActorSource"):
+    with pytest.raises(TransitionRejected, match="actor must be"):
         resolve_transition(context_for(rule, actor="dhl_event"))  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("duplicate", ["false", "true", 0, 1, None])
+def test_duplicate_discriminator_requires_an_exact_boolean(duplicate) -> None:
+    rule = _rule_for(StateMachine.OUTBOUND, "carrier_in_transit")
+
+    with pytest.raises(TransitionRejected, match="duplicate must be a boolean"):
+        resolve_transition(
+            context_for(
+                rule,
+                rule.to_state,
+                duplicate=duplicate,
+                prior_result=prior_for(rule),
+            )
+        )
 
 
 def test_replay_metadata_rejects_mutable_scalar_subclasses_and_non_json_values() -> (
@@ -1240,7 +1312,12 @@ def test_new_transition_missing_proof_fails_closed_and_duplicate_is_replay_safe(
         resolve_transition(context_for(rule, duplicate=True))
 
     decision = resolve_transition(
-        context_for(rule, duplicate=True, prior_result=prior_for(rule))
+        context_for(
+            rule,
+            rule.to_state,
+            duplicate=True,
+            prior_result=prior_for(rule),
+        )
     )
     assert decision.idempotent_replay is True
     assert decision.side_effect_required is False
@@ -1484,6 +1561,39 @@ def test_cancelled_cohort_is_excluded_only_with_recorded_disposition() -> None:
                 )
             ]
         )
+
+
+def test_cancelled_vendor_and_inbound_states_bypass_active_flow_prerequisites() -> None:
+    active = customer_progress(vendor_state=VendorPreparationState.PREPARING)
+    cancelled = customer_progress(
+        vendor_state=VendorPreparationState.CANCELLED,
+        inbound_state=InboundState.CANCELLED,
+        cancelled=True,
+        cancellation_refund_disposition_recorded=True,
+    )
+
+    assert (
+        derive_customer_milestone([active, cancelled])
+        is CustomerMilestone.VENDOR_PREPARING
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("cancelled", "false"),
+        ("cancelled", 1),
+        ("cancelled", None),
+        ("cancellation_refund_disposition_recorded", "false"),
+        ("cancellation_refund_disposition_recorded", 1),
+        ("cancellation_refund_disposition_recorded", None),
+    ],
+)
+def test_cancellation_projection_flags_require_exact_booleans(field, value) -> None:
+    progress = customer_progress(**{field: value})
+
+    with pytest.raises(ValueError, match="cancellation flags must be booleans"):
+        derive_customer_milestone([progress])
 
 
 def test_customer_milestone_is_derived_and_cannot_be_mutated_or_transitioned() -> None:
