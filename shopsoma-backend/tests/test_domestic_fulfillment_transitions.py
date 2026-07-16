@@ -1444,3 +1444,18 @@ def test_customer_milestone_is_derived_and_cannot_be_mutated_or_transitioned() -
 def test_empty_unpaid_or_impossible_customer_snapshots_fail_closed(progresses) -> None:
     with pytest.raises(ValueError):
         derive_customer_milestone(progresses)
+
+
+def test_transition_rejects_state_enum_from_the_wrong_machine() -> None:
+    rule = _rule_for(StateMachine.OUTBOUND, "carrier_out_for_delivery")
+
+    with pytest.raises(TransitionRejected, match="state.*machine"):
+        resolve_transition(context_for(rule, InboundState.IN_TRANSIT))
+
+
+@pytest.mark.parametrize("identity_field", ["external_source", "event_id"])
+def test_external_event_identity_rejects_empty_values(identity_field) -> None:
+    rule = _rule_for(StateMachine.OUTBOUND, "carrier_out_for_delivery")
+
+    with pytest.raises(TransitionRejected, match="external"):
+        resolve_transition(context_for(rule, **{identity_field: ""}))

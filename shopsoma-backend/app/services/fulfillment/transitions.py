@@ -155,6 +155,17 @@ TransitionState = (
     | OutboundState
 )
 
+_STATE_TYPE_BY_MACHINE = MappingProxyType(
+    {
+        StateMachine.QUOTE: QuoteState,
+        StateMachine.PAYMENT_ATTEMPT: PaymentAttemptState,
+        StateMachine.VENDOR_PREPARATION: VendorPreparationState,
+        StateMachine.INBOUND: InboundState,
+        StateMachine.HUB: HubState,
+        StateMachine.OUTBOUND: OutboundState,
+    }
+)
+
 
 @dataclass(frozen=True, slots=True)
 class TransitionRule:
@@ -1408,6 +1419,7 @@ def iter_transition_edges() -> Iterator[tuple[TransitionRule, TransitionState]]:
 def _is_sanitized_external_identity(value: str | None) -> bool:
     return bool(
         isinstance(value, str)
+        and value
         and value == value.strip()
         and all(character.isalnum() or character in "._:-/" for character in value)
     )
@@ -1420,6 +1432,12 @@ def resolve_transition(context: TransitionContext) -> TransitionDecision:
     if not any(rule.action == context.action for rule in machine_rules):
         raise TransitionRejected(
             f"unknown action {context.action!r} for {context.machine.value}"
+        )
+    expected_state_type = _STATE_TYPE_BY_MACHINE[context.machine]
+    if type(context.current_state) is not expected_state_type:
+        raise TransitionRejected(
+            f"state {context.current_state!r} does not belong to "
+            f"machine {context.machine.value!r}"
         )
     if context.current_state in _TERMINAL_STATES:
         raise TransitionRejected(f"terminal state {context.current_state.value!r}")
