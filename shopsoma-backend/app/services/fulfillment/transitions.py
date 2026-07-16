@@ -1,8 +1,10 @@
-"""Pure transition policy for domestic quote, payment, and vendor preparation.
+"""Pure transition policy for domestic fulfillment state machines.
 
-The policy describes allowed edges and the evidence required to take them.  It does
-not mutate aggregates or perform side effects; callers remain responsible for
-persisting the returned decision with optimistic concurrency and idempotency.
+The policy covers quote, payment, vendor preparation, inbound transfer, hub processing,
+and DHL outbound lifecycles. It describes allowed edges and the evidence required to
+take them. It does not mutate aggregates or perform side effects; callers remain
+responsible for persisting the returned decision with optimistic concurrency and
+idempotency.
 """
 
 from dataclasses import dataclass
@@ -15,6 +17,16 @@ class StateMachine(str, Enum):
     QUOTE = "quote"
     PAYMENT_ATTEMPT = "payment_attempt"
     VENDOR_PREPARATION = "vendor_preparation"
+    INBOUND = "inbound"
+    HUB = "hub"
+    OUTBOUND = "outbound"
+
+
+class TransitionKind(str, Enum):
+    COMMAND = "command"
+    EXTERNAL_EVENT = "external_event"
+    DERIVED = "derived"
+    TIMER = "timer"
 
 
 class QuoteState(str, Enum):
@@ -48,6 +60,53 @@ class VendorPreparationState(str, Enum):
     CANCELLED = "cancelled"
 
 
+class InboundState(str, Enum):
+    NOT_REQUESTED = "not_requested"
+    PLANNED = "planned"
+    ACCEPTED_BY_PROVIDER = "accepted_by_provider"
+    HANDED_OVER = "handed_over"
+    IN_TRANSIT = "in_transit"
+    RECEIVED_PARTIAL = "received_partial"
+    RECEIVED_COMPLETE = "received_complete"
+    DELAYED = "delayed"
+    LOST = "lost"
+    DAMAGED = "damaged"
+    CANCELLED = "cancelled"
+
+
+class HubState(str, Enum):
+    AWAITING_RECEIPT = "awaiting_receipt"
+    RECEIVED = "received"
+    QC_PENDING = "qc_pending"
+    QC_IN_PROGRESS = "qc_in_progress"
+    QC_PASSED = "qc_passed"
+    QC_FAILED = "qc_failed"
+    REMEDIATION = "remediation"
+    READY_TO_PACK = "ready_to_pack"
+    PACKED = "packed"
+    SEALED = "sealed"
+    READY_FOR_DHL = "ready_for_dhl"
+    UNSEALED = "unsealed"
+    REPACKED = "repacked"
+    CANCELLED = "cancelled"
+
+
+class OutboundState(str, Enum):
+    NOT_READY = "not_ready"
+    INTENT_CREATED = "intent_created"
+    BOOKED = "booked"
+    LABEL_READY = "label_ready"
+    AWAITING_COLLECTION = "awaiting_collection"
+    COLLECTED = "collected"
+    IN_TRANSIT = "in_transit"
+    OUT_FOR_DELIVERY = "out_for_delivery"
+    DELIVERED = "delivered"
+    EXCEPTION = "exception"
+    RETURNING = "returning"
+    RETURNED = "returned"
+    CANCELLED = "cancelled"
+
+
 class ActorSource(str, Enum):
     CUSTOMER = "customer"
     CHECKOUT = "checkout"
@@ -58,10 +117,26 @@ class ActorSource(str, Enum):
     ORDER_SERVICE = "order_service"
     VENDOR = "vendor"
     OPERATIONS = "operations"
+    INBOUND_PROVIDER = "inbound_provider"
+    HUB_OPERATOR = "hub_operator"
+    HUB_SUPERVISOR = "hub_supervisor"
+    QC_ADMIN = "qc_admin"
+    HUB_SERVICE = "hub_service"
+    SHIPPING_POLICY = "shipping_policy"
+    SHIPMENT_INTENT_SERVICE = "shipment_intent_service"
+    SHIPMENT_SERVICE = "shipment_service"
+    DHL_ADAPTER = "dhl_adapter"
     DHL_EVENT = "dhl_event"
 
 
-TransitionState = QuoteState | PaymentAttemptState | VendorPreparationState
+TransitionState = (
+    QuoteState
+    | PaymentAttemptState
+    | VendorPreparationState
+    | InboundState
+    | HubState
+    | OutboundState
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,6 +145,7 @@ class TransitionRule:
     from_states: tuple[TransitionState, ...]
     action: str
     to_state: TransitionState
+    kind: TransitionKind
     authorized_sources: frozenset[ActorSource]
     required_guards: frozenset[str]
     evidence_requirement: frozenset[str]
@@ -107,6 +183,109 @@ class TransitionRejected(ValueError):
     """Raised when a requested transition is not authorized by the policy."""
 
 
+_TRANSITION_KINDS: Mapping[tuple[StateMachine, str], TransitionKind] = MappingProxyType(
+    {
+        # Existing quote, payment and vendor preparation rules.
+        (StateMachine.QUOTE, "expire"): TransitionKind.TIMER,
+        (StateMachine.QUOTE, "cancel"): TransitionKind.COMMAND,
+        (StateMachine.QUOTE, "consume"): TransitionKind.DERIVED,
+        (StateMachine.PAYMENT_ATTEMPT, "initialize"): TransitionKind.COMMAND,
+        (StateMachine.PAYMENT_ATTEMPT, "record_pending"): TransitionKind.EXTERNAL_EVENT,
+        (
+            StateMachine.PAYMENT_ATTEMPT,
+            "record_initialization_failure",
+        ): TransitionKind.EXTERNAL_EVENT,
+        (StateMachine.PAYMENT_ATTEMPT, "supersede"): TransitionKind.COMMAND,
+        (StateMachine.PAYMENT_ATTEMPT, "confirm"): TransitionKind.EXTERNAL_EVENT,
+        (StateMachine.PAYMENT_ATTEMPT, "record_failure"): TransitionKind.EXTERNAL_EVENT,
+        (StateMachine.PAYMENT_ATTEMPT, "expire_attempt"): TransitionKind.TIMER,
+        (StateMachine.PAYMENT_ATTEMPT, "start_late_reacquire"): TransitionKind.DERIVED,
+        (
+            StateMachine.PAYMENT_ATTEMPT,
+            "confirm_after_reacquire",
+        ): TransitionKind.DERIVED,
+        (StateMachine.PAYMENT_ATTEMPT, "request_void"): TransitionKind.COMMAND,
+        (StateMachine.PAYMENT_ATTEMPT, "request_refund"): TransitionKind.COMMAND,
+        (
+            StateMachine.PAYMENT_ATTEMPT,
+            "record_provider_refund",
+        ): TransitionKind.EXTERNAL_EVENT,
+        (
+            StateMachine.PAYMENT_ATTEMPT,
+            "mark_reconciliation_failed",
+        ): TransitionKind.DERIVED,
+        (StateMachine.PAYMENT_ATTEMPT, "retry_void"): TransitionKind.COMMAND,
+        (StateMachine.PAYMENT_ATTEMPT, "retry_refund"): TransitionKind.COMMAND,
+        (StateMachine.VENDOR_PREPARATION, "notify_vendor"): TransitionKind.DERIVED,
+        (StateMachine.VENDOR_PREPARATION, "start_preparing"): TransitionKind.COMMAND,
+        (
+            StateMachine.VENDOR_PREPARATION,
+            "mark_ready_for_inbound",
+        ): TransitionKind.COMMAND,
+        (StateMachine.VENDOR_PREPARATION, "block"): TransitionKind.COMMAND,
+        (StateMachine.VENDOR_PREPARATION, "resume_preparing"): TransitionKind.COMMAND,
+        (StateMachine.VENDOR_PREPARATION, "restore_ready"): TransitionKind.COMMAND,
+        (StateMachine.VENDOR_PREPARATION, "cancel"): TransitionKind.COMMAND,
+        # Inbound transfer rules.
+        **{
+            (StateMachine.INBOUND, action): kind
+            for action, kind in {
+                "plan_inbound": TransitionKind.COMMAND,
+                "provider_acceptance": TransitionKind.EXTERNAL_EVENT,
+                "vendor_handoff": TransitionKind.EXTERNAL_EVENT,
+                "movement_confirmed": TransitionKind.EXTERNAL_EVENT,
+                "partial_hub_receipt": TransitionKind.COMMAND,
+                "complete_hub_receipt": TransitionKind.COMMAND,
+                "cancel_before_handoff": TransitionKind.COMMAND,
+                "delay_reported": TransitionKind.EXTERNAL_EVENT,
+                "movement_resumed": TransitionKind.EXTERNAL_EVENT,
+                "loss_confirmed": TransitionKind.EXTERNAL_EVENT,
+                "damage_confirmed": TransitionKind.COMMAND,
+            }.items()
+        },
+        **{
+            (StateMachine.HUB, action): kind
+            for action, kind in {
+                "all_required_items_received": TransitionKind.DERIVED,
+                "queue_qc": TransitionKind.DERIVED,
+                "start_qc": TransitionKind.COMMAND,
+                "all_items_pass": TransitionKind.COMMAND,
+                "any_item_fails": TransitionKind.COMMAND,
+                "approve_remediation": TransitionKind.COMMAND,
+                "remediation_completed": TransitionKind.COMMAND,
+                "aggregate_ready_to_pack": TransitionKind.DERIVED,
+                "record_package_composition": TransitionKind.COMMAND,
+                "apply_seal": TransitionKind.COMMAND,
+                "outbound_checks_pass": TransitionKind.DERIVED,
+                "authorized_unseal": TransitionKind.COMMAND,
+                "record_repack": TransitionKind.COMMAND,
+                "apply_new_seal": TransitionKind.COMMAND,
+                "approved_cancellation": TransitionKind.COMMAND,
+            }.items()
+        },
+        **{
+            (StateMachine.OUTBOUND, action): kind
+            for action, kind in {
+                "package_ready": TransitionKind.DERIVED,
+                "create_shipment": TransitionKind.COMMAND,
+                "label_received": TransitionKind.EXTERNAL_EVENT,
+                "schedule_hub_collection": TransitionKind.COMMAND,
+                "dhl_acceptance_handoff": TransitionKind.EXTERNAL_EVENT,
+                "carrier_in_transit": TransitionKind.EXTERNAL_EVENT,
+                "carrier_out_for_delivery": TransitionKind.EXTERNAL_EVENT,
+                "carrier_delivered": TransitionKind.EXTERNAL_EVENT,
+                "carrier_exception": TransitionKind.EXTERNAL_EVENT,
+                "carrier_resumed": TransitionKind.EXTERNAL_EVENT,
+                "carrier_return_started": TransitionKind.EXTERNAL_EVENT,
+                "carrier_return_completed": TransitionKind.EXTERNAL_EVENT,
+                "cancel_unbooked_intent": TransitionKind.COMMAND,
+                "provider_cancellation_confirmed": TransitionKind.EXTERNAL_EVENT,
+            }.items()
+        },
+    }
+)
+
+
 def _rule(
     machine: StateMachine,
     from_states: TransitionState | tuple[TransitionState, ...],
@@ -128,6 +307,7 @@ def _rule(
         from_states=from_states,
         action=action,
         to_state=to_state,
+        kind=_TRANSITION_KINDS[(machine, action)],
         authorized_sources=frozenset(actors),
         required_guards=frozenset(guards),
         evidence_requirement=frozenset(evidence),
@@ -401,6 +581,424 @@ _POLICY = (
     ),
 )
 
+_POLICY += (
+    # Inbound transfer lifecycle.
+    _rule(
+        StateMachine.INBOUND,
+        InboundState.NOT_REQUESTED,
+        "plan_inbound",
+        InboundState.PLANNED,
+        ActorSource.OPERATIONS,
+        (
+            "payment_confirmed",
+            "vendor_ready",
+            "active_target_hub",
+            "route_provider_selected",
+            "unique_cohort_transfer",
+        ),
+        ("inbound_planning",),
+    ),
+    _rule(
+        StateMachine.INBOUND,
+        InboundState.PLANNED,
+        "provider_acceptance",
+        InboundState.ACCEPTED_BY_PROVIDER,
+        (ActorSource.INBOUND_PROVIDER, ActorSource.OPERATIONS),
+        ("provider_acceptance_verified",),
+        ("sanitized_provider_reference", "provider_acceptance"),
+    ),
+    _rule(
+        StateMachine.INBOUND,
+        InboundState.ACCEPTED_BY_PROVIDER,
+        "vendor_handoff",
+        InboundState.HANDED_OVER,
+        (ActorSource.INBOUND_PROVIDER, ActorSource.OPERATIONS),
+        ("handoff_parties_time_location_verified",),
+        ("handoff_receipt",),
+    ),
+    _rule(
+        StateMachine.INBOUND,
+        InboundState.HANDED_OVER,
+        "movement_confirmed",
+        InboundState.IN_TRANSIT,
+        ActorSource.INBOUND_PROVIDER,
+        ("provider_movement_verified",),
+        ("movement_event",),
+    ),
+    _rule(
+        StateMachine.INBOUND,
+        InboundState.IN_TRANSIT,
+        "partial_hub_receipt",
+        InboundState.RECEIVED_PARTIAL,
+        ActorSource.HUB_OPERATOR,
+        ("duplicate_safe_receipt",),
+        ("item_quantity_receipt_evidence",),
+    ),
+    _rule(
+        StateMachine.INBOUND,
+        (InboundState.IN_TRANSIT, InboundState.RECEIVED_PARTIAL),
+        "complete_hub_receipt",
+        InboundState.RECEIVED_COMPLETE,
+        ActorSource.HUB_OPERATOR,
+        ("all_noncancelled_quantities_received",),
+        ("complete_receipt_reconciliation",),
+    ),
+    _rule(
+        StateMachine.INBOUND,
+        (InboundState.PLANNED, InboundState.ACCEPTED_BY_PROVIDER),
+        "cancel_before_handoff",
+        InboundState.CANCELLED,
+        ActorSource.OPERATIONS,
+        ("no_handoff", "provider_cancelled_if_accepted"),
+        ("provider_cancellation_proof",),
+    ),
+    _rule(
+        StateMachine.INBOUND,
+        (
+            InboundState.HANDED_OVER,
+            InboundState.IN_TRANSIT,
+            InboundState.RECEIVED_PARTIAL,
+        ),
+        "delay_reported",
+        InboundState.DELAYED,
+        (ActorSource.INBOUND_PROVIDER, ActorSource.OPERATIONS),
+        ("delay_attested",),
+        ("delay_reason", "expected_recovery", "delay_owner"),
+    ),
+    _rule(
+        StateMachine.INBOUND,
+        InboundState.DELAYED,
+        "movement_resumed",
+        InboundState.IN_TRANSIT,
+        ActorSource.INBOUND_PROVIDER,
+        ("provider_movement_verified",),
+        ("movement_resumption_event",),
+    ),
+    _rule(
+        StateMachine.INBOUND,
+        (
+            InboundState.HANDED_OVER,
+            InboundState.IN_TRANSIT,
+            InboundState.RECEIVED_PARTIAL,
+            InboundState.DELAYED,
+        ),
+        "loss_confirmed",
+        InboundState.LOST,
+        (ActorSource.INBOUND_PROVIDER, ActorSource.OPERATIONS),
+        ("loss_investigation_complete",),
+        ("loss_investigation",),
+    ),
+    _rule(
+        StateMachine.INBOUND,
+        (
+            InboundState.HANDED_OVER,
+            InboundState.IN_TRANSIT,
+            InboundState.RECEIVED_PARTIAL,
+            InboundState.DELAYED,
+        ),
+        "damage_confirmed",
+        InboundState.DAMAGED,
+        (ActorSource.HUB_OPERATOR, ActorSource.OPERATIONS),
+        ("damaged_items_quarantined",),
+        ("condition_evidence", "quarantine_evidence"),
+    ),
+    # Hub processing lifecycle.
+    _rule(
+        StateMachine.HUB,
+        HubState.AWAITING_RECEIPT,
+        "all_required_items_received",
+        HubState.RECEIVED,
+        ActorSource.HUB_SERVICE,
+        ("all_noncancelled_items_reconciled",),
+        ("receipt_reconciliation",),
+    ),
+    _rule(
+        StateMachine.HUB,
+        HubState.RECEIVED,
+        "queue_qc",
+        HubState.QC_PENDING,
+        ActorSource.HUB_SERVICE,
+        ("receipt_complete",),
+        ("qc_queue_record",),
+    ),
+    _rule(
+        StateMachine.HUB,
+        HubState.QC_PENDING,
+        "start_qc",
+        HubState.QC_IN_PROGRESS,
+        ActorSource.HUB_OPERATOR,
+        ("qc_assignment_active",),
+        ("qc_assignment",),
+    ),
+    _rule(
+        StateMachine.HUB,
+        HubState.QC_IN_PROGRESS,
+        "all_items_pass",
+        HubState.QC_PASSED,
+        ActorSource.HUB_OPERATOR,
+        ("all_item_decisions_pass",),
+        ("qc_decisions", "qc_evidence"),
+    ),
+    _rule(
+        StateMachine.HUB,
+        HubState.QC_IN_PROGRESS,
+        "any_item_fails",
+        HubState.QC_FAILED,
+        ActorSource.HUB_OPERATOR,
+        ("at_least_one_item_failed", "failed_items_quarantined"),
+        ("qc_failure_reason", "qc_evidence"),
+    ),
+    _rule(
+        StateMachine.HUB,
+        HubState.QC_FAILED,
+        "approve_remediation",
+        HubState.REMEDIATION,
+        ActorSource.QC_ADMIN,
+        ("remediation_disposition_approved",),
+        ("remediation_owner", "remediation_action", "remediation_disposition"),
+    ),
+    _rule(
+        StateMachine.HUB,
+        HubState.REMEDIATION,
+        "remediation_completed",
+        HubState.QC_PENDING,
+        (ActorSource.HUB_OPERATOR, ActorSource.INBOUND_PROVIDER),
+        ("new_qc_version",),
+        ("replacement_or_rework_proof",),
+    ),
+    _rule(
+        StateMachine.HUB,
+        HubState.QC_PASSED,
+        "aggregate_ready_to_pack",
+        HubState.READY_TO_PACK,
+        ActorSource.HUB_SERVICE,
+        ("all_cohorts_qc_passed",),
+        ("cohort_qc_aggregation",),
+    ),
+    _rule(
+        StateMachine.HUB,
+        HubState.READY_TO_PACK,
+        "record_package_composition",
+        HubState.PACKED,
+        ActorSource.HUB_OPERATOR,
+        ("approved_items_only", "positive_final_metrics", "new_package_version"),
+        ("package_composition", "package_metrics"),
+    ),
+    _rule(
+        StateMachine.HUB,
+        HubState.PACKED,
+        "apply_seal",
+        HubState.SEALED,
+        ActorSource.HUB_OPERATOR,
+        ("unique_active_seal",),
+        ("seal_evidence",),
+    ),
+    _rule(
+        StateMachine.HUB,
+        HubState.SEALED,
+        "outbound_checks_pass",
+        HubState.READY_FOR_DHL,
+        ActorSource.SHIPPING_POLICY,
+        ("destination_valid", "package_valid", "rate_valid", "no_shipping_exception"),
+        ("outbound_check_result",),
+    ),
+    _rule(
+        StateMachine.HUB,
+        (HubState.SEALED, HubState.READY_FOR_DHL),
+        "authorized_unseal",
+        HubState.UNSEALED,
+        ActorSource.HUB_SUPERVISOR,
+        ("before_dhl_handoff", "shipment_intent_invalidated", "seal_retired"),
+        ("unseal_reason", "unseal_evidence"),
+    ),
+    _rule(
+        StateMachine.HUB,
+        HubState.UNSEALED,
+        "record_repack",
+        HubState.REPACKED,
+        ActorSource.HUB_OPERATOR,
+        ("revised_package_version",),
+        ("revised_composition", "revised_metrics", "repack_audit"),
+    ),
+    _rule(
+        StateMachine.HUB,
+        HubState.REPACKED,
+        "apply_new_seal",
+        HubState.SEALED,
+        ActorSource.HUB_OPERATOR,
+        ("new_package_version", "new_unique_seal"),
+        ("new_seal_evidence",),
+    ),
+    _rule(
+        StateMachine.HUB,
+        (
+            HubState.AWAITING_RECEIPT,
+            HubState.RECEIVED,
+            HubState.QC_PENDING,
+            HubState.QC_IN_PROGRESS,
+            HubState.QC_FAILED,
+            HubState.REMEDIATION,
+            HubState.QC_PASSED,
+            HubState.READY_TO_PACK,
+        ),
+        "approved_cancellation",
+        HubState.CANCELLED,
+        ActorSource.OPERATIONS,
+        ("cancellation_approved", "refund_and_disposition_recorded"),
+        ("cancellation_approval", "refund_disposition"),
+        compensation="preserve_refund_and_stock_disposition",
+    ),
+    # DHL outbound lifecycle.
+    _rule(
+        StateMachine.OUTBOUND,
+        OutboundState.NOT_READY,
+        "package_ready",
+        OutboundState.INTENT_CREATED,
+        ActorSource.SHIPMENT_INTENT_SERVICE,
+        (
+            "hub_ready_for_dhl",
+            "immutable_package_version",
+            "active_seal",
+            "server_hub_origin",
+            "unique_shipment_intent",
+        ),
+        ("shipment_intent",),
+    ),
+    _rule(
+        StateMachine.OUTBOUND,
+        OutboundState.INTENT_CREATED,
+        "create_shipment",
+        OutboundState.BOOKED,
+        ActorSource.SHIPMENT_SERVICE,
+        ("provider_gate_passed", "exact_package_version", "unique_provider_request"),
+        ("sanitized_provider_success",),
+    ),
+    _rule(
+        StateMachine.OUTBOUND,
+        OutboundState.BOOKED,
+        "label_received",
+        OutboundState.LABEL_READY,
+        ActorSource.DHL_ADAPTER,
+        ("matching_shipment",),
+        ("private_label_metadata",),
+    ),
+    _rule(
+        StateMachine.OUTBOUND,
+        OutboundState.LABEL_READY,
+        "schedule_hub_collection",
+        OutboundState.AWAITING_COLLECTION,
+        ActorSource.OPERATIONS,
+        ("dhl_collection_accepted",),
+        ("dhl_acceptance_proof",),
+    ),
+    _rule(
+        StateMachine.OUTBOUND,
+        OutboundState.AWAITING_COLLECTION,
+        "dhl_acceptance_handoff",
+        OutboundState.COLLECTED,
+        ActorSource.DHL_EVENT,
+        ("matching_shipment_package_seal",),
+        ("signed_handoff_or_dhl_event",),
+    ),
+    _rule(
+        StateMachine.OUTBOUND,
+        OutboundState.COLLECTED,
+        "carrier_in_transit",
+        OutboundState.IN_TRANSIT,
+        ActorSource.DHL_EVENT,
+        ("matching_dhl_shipment",),
+        ("dhl_movement_event",),
+    ),
+    _rule(
+        StateMachine.OUTBOUND,
+        OutboundState.IN_TRANSIT,
+        "carrier_out_for_delivery",
+        OutboundState.OUT_FOR_DELIVERY,
+        ActorSource.DHL_EVENT,
+        ("matching_dhl_shipment",),
+        ("dhl_out_for_delivery_event",),
+    ),
+    _rule(
+        StateMachine.OUTBOUND,
+        (OutboundState.OUT_FOR_DELIVERY, OutboundState.IN_TRANSIT),
+        "carrier_delivered",
+        OutboundState.DELIVERED,
+        ActorSource.DHL_EVENT,
+        ("matching_dhl_shipment",),
+        ("dhl_delivery_event",),
+    ),
+    _rule(
+        StateMachine.OUTBOUND,
+        (
+            OutboundState.BOOKED,
+            OutboundState.LABEL_READY,
+            OutboundState.AWAITING_COLLECTION,
+            OutboundState.COLLECTED,
+            OutboundState.IN_TRANSIT,
+            OutboundState.OUT_FOR_DELIVERY,
+        ),
+        "carrier_exception",
+        OutboundState.EXCEPTION,
+        ActorSource.DHL_EVENT,
+        ("matching_dhl_shipment",),
+        (
+            "carrier_exception_code",
+            "exception_owner",
+            "retryability",
+            "customer_safe_detail",
+        ),
+    ),
+    _rule(
+        StateMachine.OUTBOUND,
+        OutboundState.EXCEPTION,
+        "carrier_resumed",
+        OutboundState.IN_TRANSIT,
+        ActorSource.DHL_EVENT,
+        ("exception_retryable",),
+        ("dhl_resumption_event",),
+    ),
+    _rule(
+        StateMachine.OUTBOUND,
+        OutboundState.EXCEPTION,
+        "carrier_return_started",
+        OutboundState.RETURNING,
+        ActorSource.DHL_EVENT,
+        ("matching_dhl_shipment",),
+        ("dhl_return_start_event",),
+    ),
+    _rule(
+        StateMachine.OUTBOUND,
+        OutboundState.RETURNING,
+        "carrier_return_completed",
+        OutboundState.RETURNED,
+        ActorSource.DHL_EVENT,
+        ("shopsoma_hub_receipt_complete",),
+        ("dhl_return_event", "hub_return_receipt"),
+    ),
+    _rule(
+        StateMachine.OUTBOUND,
+        OutboundState.INTENT_CREATED,
+        "cancel_unbooked_intent",
+        OutboundState.CANCELLED,
+        ActorSource.OPERATIONS,
+        ("shipment_not_booked",),
+        ("intent_cancellation",),
+    ),
+    _rule(
+        StateMachine.OUTBOUND,
+        (
+            OutboundState.BOOKED,
+            OutboundState.LABEL_READY,
+            OutboundState.AWAITING_COLLECTION,
+        ),
+        "provider_cancellation_confirmed",
+        OutboundState.CANCELLED,
+        ActorSource.DHL_ADAPTER,
+        ("not_collected",),
+        ("provider_cancellation_proof",),
+    ),
+)
+
 _TERMINAL_STATES = frozenset(
     {
         QuoteState.CANCELLED,
@@ -408,6 +1006,14 @@ _TERMINAL_STATES = frozenset(
         PaymentAttemptState.SUPERSEDED,
         PaymentAttemptState.REFUNDED,
         VendorPreparationState.CANCELLED,
+        InboundState.RECEIVED_COMPLETE,
+        InboundState.CANCELLED,
+        InboundState.LOST,
+        InboundState.DAMAGED,
+        HubState.CANCELLED,
+        OutboundState.DELIVERED,
+        OutboundState.RETURNED,
+        OutboundState.CANCELLED,
     }
 )
 
@@ -497,11 +1103,15 @@ def validate_transition(context: TransitionContext) -> TransitionDecision:
 
 __all__ = [
     "ActorSource",
+    "HubState",
+    "InboundState",
+    "OutboundState",
     "PaymentAttemptState",
     "QuoteState",
     "StateMachine",
     "TransitionContext",
     "TransitionDecision",
+    "TransitionKind",
     "TransitionRejected",
     "TransitionRule",
     "VendorPreparationState",
