@@ -21,7 +21,7 @@ DHL never receives a vendor-origin quote, pickup, shipment, or handoff. No vendo
 
 ## Data ownership matrix
 
-- **Vendor readiness — vendor / ShopSoma order service:** paid-order notification, preparation acknowledgement, readiness checklist, blocked reason, and readiness timestamp. The vendor does not own carrier movement or hub QC truth.
+- **Vendor readiness — vendor / ShopSoma order service:** paid-order notification, preparation acknowledgement, readiness checklist, operations/SLA-policy block reason, and readiness timestamp. The vendor does not own block transitions, carrier movement, or hub QC truth.
 - **Independent inbound leg — operations / inbound provider:** provider identity, route, acceptance, vendor handoff, cost, tracking/reference, delay/loss/damage evidence, claims, and receipt destination. It remains distinct from DHL outbound data.
 - **Hub receipt and processing — ShopSoma hub roles/services:** item and quantity reconciliation; partial/complete receipt; custody timestamps; QC decisions and evidence; quarantine/remediation; package composition and immutable package version; final metric weight/dimensions; seal, unseal, and reseal audit; and custody through verified DHL handoff.
 - **DHL outbound — ShopSoma shipment services / DHL adapter and events:** hub-origin quote, service assumptions, shipment intent, booking, private label metadata, collection acceptance, verified handoff, DHL tracking events, exceptions, returns, and outbound claims. DHL outbound quote ownership starts only from final hub parcel facts.
@@ -35,12 +35,12 @@ Every write requires the actor, source event/command, idempotency key, aggregate
 
 - **Quote:** checkout creates an active server quote. The system timer may expire it; customer/operations may cancel it before confirmed payment; the payment worker consumes it on the first valid payment.
 - **Payment attempt:** checkout initializes persisted attempts. Only authenticated payment-gateway events or the payment worker confirm/fail them. Finance/operations own approved refund paths; the worker reconciles idempotent void/refund results.
-- **Vendor preparation:** the order service notifies the vendor only after verified payment. The vendor may acknowledge, prepare, declare readiness, or report a block; operations controls cancellation/remediation dispositions.
+- **Vendor preparation:** the order service notifies the vendor only after verified payment. The vendor may only acknowledge, start preparing, or mark ready. Only ShopSoma operations or the server SLA policy may place a block; only ShopSoma operations may resolve blocked to preparing or ready. Vendor reports may provide evidence for an operations decision but cannot execute either transition.
 - **Independent inbound:** operations plans the transfer only after payment and vendor readiness. The inbound provider/operations attest acceptance and vendor handoff; only the inbound provider attests movement. Hub operators record partial or complete receipt and condition evidence. This movement is never DHL `in transit`.
-- **Hub:** hub services derive receipt/QC queues and cohort readiness. Assigned hub operators perform QC, package recording, measurement, and sealing. QC admin owns failed-QC remediation; a hub supervisor alone authorizes pre-handoff unseal. Shipping policy derives DHL readiness only for a valid destination, final package/rate, active seal, and no shipping exception.
-- **DHL outbound:** shipment-intent/service actors create one hub-origin intent and booking. The DHL adapter supplies label/cancellation results. Operations schedules accepted hub collection. Only a verified DHL event records acceptance handoff, carrier movement, out-for-delivery, delivery, exception, and return movement. Carrier-only DHL movement starts after verified DHL handoff; operations cannot manually assert it.
+- **Hub:** hub services derive receipt/QC queues and cohort readiness. Assigned hub operators perform QC, package recording, measurement, and sealing. The audited package version, composition, and active seal are bound to quote, booking, label, handoff, and evidence; a changed composition or seal fails closed and requires a new audited version. QC admin owns failed-QC remediation; a hub supervisor alone authorizes pre-handoff unseal. Shipping policy derives DHL readiness only for a valid destination, final package/rate, active seal, and no shipping exception.
+- **DHL outbound:** shipment-intent/service actors create one hub-origin intent and booking. The DHL adapter supplies label/cancellation results. Operations schedules accepted hub collection. Only a verified DHL event records acceptance handoff, carrier movement, out-for-delivery, delivery, exception, and return movement. Completing a return is instead a ShopSoma hub command that requires both verified DHL return evidence and the ShopSoma hub return receipt. Carrier-only DHL movement starts after verified DHL handoff; operations cannot manually assert it.
 
-All transitions require optimistic concurrency, evidence, and an idempotency key. Duplicate delivery is a replay with no repeated side effect; illegal, stale, unsupported, or under-evidenced transitions fail closed.
+All transitions require optimistic concurrency, evidence, and an idempotency key. External events are unique by `(source, event_id)` as well as idempotency key. A duplicate must match the original machine, prior state, action, external identity, idempotency key, and destination, then return the matching durably persisted transition result with no repeated side effect. A duplicate without that durable result, or any illegal, stale, unsupported, mismatched, or under-evidenced transition, fails closed.
 
 ### Payment and quote timing
 
@@ -57,9 +57,36 @@ The three current gates default to `false` and prerequisites only narrow capabil
 - `DHL_DOMESTIC_QUOTE_ENFORCEMENT_ENABLED=false` — effective only when workflow is enabled.
 - `DHL_DOMESTIC_PROVIDER_CALLS_ENABLED=false` — effective only with workflow enabled, configured credentials, and sandbox environment policy.
 
-A **separate domestic checkout gate** is planned; do not overload these backend capability gates to expose checkout. Enable gates in dependency order and by explicit allowlisted cohort after each acceptance phase passes.
+A **separate domestic checkout gate** is planned; do not overload these backend capability gates to expose checkout. Delivery and activation are deliberately phased:
 
-Rollback disables new domestic checkout/provider initiation first. Disabling new domestic checkout **never rewrites v2 orders into an unsafe legacy flow**. Version and provider assignments are immutable: in-flight orders remain operable for receipt, QC, handoff, tracking, exception, refund, return, and reconciliation. Roll back reads or workers only when an equivalent safe operational path is proven; otherwise freeze new work and continue recovery for existing orders.
+1. Phase 2A — contracts, persistence, payment, hub operations, mock adapter, and UI; no live provider calls.
+2. Phase 2B — restricted sandbox connectivity and evidence; no production traffic or customer payment.
+3. Phase 2C — shadow, non-payment quote UAT only.
+4. Phase 3 — booking, labels, ShopSoma-hub collection handoff, and recovery.
+5. Phase 4 — carrier tracking and operational exceptions.
+6. Phase 5 — controlled payment-bearing customer pilot.
+7. Phase 6 — broader production activation.
+
+Apply the activation gates in this order, using explicit allowlisted cohorts and stopping unless each preceding acceptance phase passes:
+
+1. Keep every gate false.
+2. Enable the internal workflow with a fake provider.
+3. Establish restricted sandbox connectivity.
+4. Enable provider calls only for the restricted sandbox cohort.
+5. Run shadow quotes.
+6. Keep domestic checkout false throughout Phases 2A–4.
+7. Phase 5 is the first customer canary; do not permit customer or payment-bearing traffic earlier.
+
+Rollback reverses activation while preserving safe recovery:
+
+1. Disable new domestic checkout first.
+2. Disable the provider-call gate second.
+3. Preserve workflow, reads, and operations for in-flight v2 orders, including receipt, QC, handoff, tracking, exception, refund, return, and reconciliation. In-flight orders remain operable throughout rollback.
+4. Never route v2 orders into legacy unsafe creation; version and provider assignments remain immutable.
+5. Reconcile provider-side objects, including ambiguous quotes, bookings, labels, collections, cancellations, and returns.
+6. Only then pause the workflow when no in-flight order depends on it and an equivalent safe operational path is proven.
+
+If that final condition is not met, freeze new work and continue recovery for existing orders. Rollback never rewrites v2 orders into an unsafe legacy flow.
 
 ## Sandbox setup, secrets, and evidence
 

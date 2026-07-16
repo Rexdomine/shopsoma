@@ -74,6 +74,74 @@ def test_runbook_records_timing_authority_and_safe_rollout_contract() -> None:
         assert phrase in text
 
 
+def test_runbook_limits_vendor_transition_authority() -> None:
+    text = _normalized(_runbook())
+    assert "vendor may only acknowledge, start preparing, or mark ready" in text
+    assert "only shopsoma operations or the server sla policy may place a block" in text
+    assert "only shopsoma operations may resolve blocked to preparing or ready" in text
+    assert (
+        "vendor may acknowledge, prepare, declare readiness, or report a block"
+        not in text
+    )
+    assert (
+        re.search(r"vendor may[^.]{0,100}(?:report|place|set)[^.]{0,40}block", text)
+        is None
+    )
+
+
+def test_runbook_defines_numbered_delivery_phases_and_ordered_activation() -> None:
+    text = _normalized(_runbook())
+    phases = (
+        "1. phase 2a — contracts, persistence, payment, hub operations, mock adapter, and ui; no live provider calls",
+        "2. phase 2b — restricted sandbox connectivity and evidence; no production traffic or customer payment",
+        "3. phase 2c — shadow, non-payment quote uat only",
+        "4. phase 3 — booking, labels, shopsoma-hub collection handoff, and recovery",
+        "5. phase 4 — carrier tracking and operational exceptions",
+        "6. phase 5 — controlled payment-bearing customer pilot",
+        "7. phase 6 — broader production activation",
+    )
+    positions = [text.index(phase) for phase in phases]
+    assert positions == sorted(positions)
+
+    activation_steps = (
+        "1. keep every gate false",
+        "2. enable the internal workflow with a fake provider",
+        "3. establish restricted sandbox connectivity",
+        "4. enable provider calls only for the restricted sandbox cohort",
+        "5. run shadow quotes",
+        "6. keep domestic checkout false",
+        "7. phase 5 is the first customer canary",
+    )
+    positions = [text.index(step) for step in activation_steps]
+    assert positions == sorted(positions)
+
+
+def test_runbook_defines_reverse_order_rollback() -> None:
+    text = _normalized(_runbook())
+    rollback_steps = (
+        "1. disable new domestic checkout first",
+        "2. disable the provider-call gate second",
+        "3. preserve workflow, reads, and operations for in-flight v2 orders",
+        "4. never route v2 orders into legacy unsafe creation",
+        "5. reconcile provider-side objects",
+        "6. only then pause the workflow when no in-flight order depends on it",
+    )
+    positions = [text.index(step) for step in rollback_steps]
+    assert positions == sorted(positions)
+
+
+def test_runbook_records_event_replay_package_and_return_contracts() -> None:
+    text = _normalized(_runbook())
+    for phrase in (
+        "external events are unique by `(source, event_id)`",
+        "return the matching durably persisted transition result",
+        "audited package version, composition, and active seal",
+        "shopsoma hub command",
+        "verified dhl return evidence",
+    ):
+        assert phrase in text
+
+
 def test_runbook_uses_official_sources_and_fails_closed_on_domestic_assumptions() -> (
     None
 ):
