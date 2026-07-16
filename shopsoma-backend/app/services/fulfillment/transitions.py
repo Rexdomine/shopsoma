@@ -7,6 +7,7 @@ responsible for persisting the returned decision with optimistic concurrency and
 idempotency.
 """
 
+import math
 from dataclasses import dataclass
 from enum import Enum
 from types import MappingProxyType
@@ -184,6 +185,25 @@ class TransitionRule:
     creates_state: TransitionState | None = None
 
 
+def _freeze_replay_value(value: object) -> object:
+    """Copy replay metadata into recursively immutable JSON-like values."""
+
+    if isinstance(value, Mapping):
+        frozen = {}
+        for key, nested_value in value.items():
+            if type(key) is not str:
+                raise TypeError("replay metadata keys must be strings")
+            frozen[key] = _freeze_replay_value(nested_value)
+        return MappingProxyType(frozen)
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_replay_value(item) for item in value)
+    if type(value) in (str, int, bool) or value is None:
+        return value
+    if type(value) is float and math.isfinite(value):
+        return value
+    raise TypeError("replay metadata values must be finite JSON-like values")
+
+
 @dataclass(frozen=True, slots=True)
 class PriorTransitionResult:
     """Durably persisted result used to authenticate an idempotent replay."""
@@ -198,8 +218,12 @@ class PriorTransitionResult:
     replay_metadata: Mapping[str, object]
 
     def __post_init__(self) -> None:
+        if not isinstance(self.replay_metadata, Mapping):
+            raise TypeError("replay_metadata must be a mapping")
         object.__setattr__(
-            self, "replay_metadata", MappingProxyType(dict(self.replay_metadata))
+            self,
+            "replay_metadata",
+            _freeze_replay_value(self.replay_metadata),
         )
 
 
@@ -1454,8 +1478,95 @@ def _is_sanitized_external_identity(value: str | None) -> bool:
     return _is_sanitized_identifier(value)
 
 
+def _resolve_duplicate(
+    context: TransitionContext,
+    machine_rules: tuple[TransitionRule, ...],
+) -> TransitionDecision:
+    """Authenticate a durable replay before validating the aggregate's advanced state."""
+
+    prior = context.prior_result
+    if prior is None:
+        raise TransitionRejected("durable prior transition result is required")
+    if type(prior) is not PriorTransitionResult:
+        raise TransitionRejected("prior result must be a PriorTransitionResult")
+
+    expected_state_type = _STATE_TYPE_BY_MACHINE[context.machine]
+    if (
+        type(prior.machine) is not StateMachine
+        or prior.machine != context.machine
+        or type(prior.current_state) is not expected_state_type
+        or type(prior.to_state) is not expected_state_type
+    ):
+        raise TransitionRejected(
+            "durable prior transition result does not match request"
+        )
+
+    rule = next(
+        (
+            candidate
+            for candidate in machine_rules
+            if candidate.action == context.action
+            and prior.current_state in candidate.from_states
+            and candidate.to_state == prior.to_state
+        ),
+        None,
+    )
+    identity = (
+        context.machine,
+        context.action,
+        context.external_source,
+        context.event_id,
+        context.idempotency_key,
+    )
+    prior_identity = (
+        prior.machine,
+        prior.action,
+        prior.external_source,
+        prior.event_id,
+        prior.idempotency_key,
+    )
+    if rule is None or identity != prior_identity:
+        raise TransitionRejected(
+            "durable prior transition result does not match request"
+        )
+    if context.actor not in rule.authorized_sources:
+        raise TransitionRejected(f"unauthorized actor {context.actor.value!r}")
+    if rule.kind is TransitionKind.EXTERNAL_EVENT:
+        if context.external_source is None:
+            raise TransitionRejected("external source is required")
+        if context.event_id is None:
+            raise TransitionRejected("external event id is required")
+        if not _is_sanitized_external_identity(context.external_source):
+            raise TransitionRejected("external source must be sanitized")
+        if not _is_sanitized_external_identity(context.event_id):
+            raise TransitionRejected("external event id must be sanitized")
+    if rule.idempotency_required and not _is_sanitized_identifier(
+        context.idempotency_key
+    ):
+        raise TransitionRejected(
+            "idempotency key must be non-empty, bounded, and sanitized"
+        )
+
+    return TransitionDecision(
+        allowed=True,
+        rule=rule,
+        from_state=prior.current_state,
+        to_state=prior.to_state,
+        side_effect_required=False,
+        idempotent_replay=True,
+        replay_metadata=prior.replay_metadata,
+    )
+
+
 def resolve_transition(context: TransitionContext) -> TransitionDecision:
     """Resolve and validate a requested transition, rejecting failures closed."""
+
+    if type(context) is not TransitionContext:
+        raise TransitionRejected("context must be a TransitionContext")
+    if type(context.machine) is not StateMachine:
+        raise TransitionRejected("machine must be a StateMachine")
+    if type(context.actor) is not ActorSource:
+        raise TransitionRejected("actor must be an ActorSource")
 
     machine_rules = tuple(rule for rule in _POLICY if rule.machine == context.machine)
     if not any(rule.action == context.action for rule in machine_rules):
@@ -1468,6 +1579,8 @@ def resolve_transition(context: TransitionContext) -> TransitionDecision:
             f"state {context.current_state!r} does not belong to "
             f"machine {context.machine.value!r}"
         )
+    if context.duplicate:
+        return _resolve_duplicate(context, machine_rules)
     if context.current_state in _TERMINAL_STATES:
         raise TransitionRejected(f"terminal state {context.current_state.value!r}")
 
@@ -1521,42 +1634,14 @@ def resolve_transition(context: TransitionContext) -> TransitionDecision:
     if context.aggregate_version != context.expected_version:
         raise TransitionRejected("stale aggregate version")
 
-    replay_metadata: Mapping[str, object] | None = None
-    replay_to_state = rule.to_state
-    if context.duplicate:
-        prior = context.prior_result
-        if prior is None:
-            raise TransitionRejected("durable prior transition result is required")
-        identity = (
-            context.machine,
-            context.current_state,
-            context.action,
-            context.external_source,
-            context.event_id,
-            context.idempotency_key,
-        )
-        prior_identity = (
-            prior.machine,
-            prior.current_state,
-            prior.action,
-            prior.external_source,
-            prior.event_id,
-            prior.idempotency_key,
-        )
-        if identity != prior_identity or prior.to_state != rule.to_state:
-            raise TransitionRejected(
-                "durable prior transition result does not match request"
-            )
-        replay_metadata = prior.replay_metadata
-        replay_to_state = prior.to_state
     return TransitionDecision(
         allowed=True,
         rule=rule,
         from_state=context.current_state,
-        to_state=replay_to_state,
-        side_effect_required=not context.duplicate,
-        idempotent_replay=context.duplicate,
-        replay_metadata=replay_metadata,
+        to_state=rule.to_state,
+        side_effect_required=True,
+        idempotent_replay=False,
+        replay_metadata=None,
     )
 
 

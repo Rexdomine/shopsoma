@@ -1,4 +1,5 @@
 from dataclasses import FrozenInstanceError
+from types import SimpleNamespace
 
 import pytest
 
@@ -360,7 +361,7 @@ def test_terminal_states_reject_all_transitions() -> None:
         resolve_transition(context_for(rule, QuoteState.EXPIRED, action="cancel"))
 
 
-def test_duplicate_returns_replay_decision_without_another_side_effect() -> None:
+def test_duplicate_returns_replay_decision_after_aggregate_has_advanced() -> None:
     rule, from_state = next(edge for edge in EDGES if edge[0].action == "confirm")
     prior = PriorTransitionResult(
         machine=rule.machine,
@@ -374,13 +375,39 @@ def test_duplicate_returns_replay_decision_without_another_side_effect() -> None
     )
 
     decision = validate_transition(
-        context_for(rule, from_state, duplicate=True, prior_result=prior)
+        context_for(rule, rule.to_state, duplicate=True, prior_result=prior)
     )
 
     assert decision.allowed is True
+    assert decision.from_state is from_state
+    assert decision.to_state is rule.to_state
     assert decision.idempotent_replay is True
     assert decision.side_effect_required is False
     assert decision.replay_metadata == {"provider_reference": "safe-ref"}
+
+
+def test_terminal_carrier_event_duplicate_returns_durable_result() -> None:
+    rule = _rule_for(StateMachine.OUTBOUND, "carrier_delivered")
+    prior = prior_for(
+        rule,
+        from_state=OutboundState.OUT_FOR_DELIVERY,
+        replay_metadata={"provider_reference": "delivery-proof"},
+    )
+
+    decision = resolve_transition(
+        context_for(
+            rule,
+            OutboundState.DELIVERED,
+            duplicate=True,
+            prior_result=prior,
+        )
+    )
+
+    assert decision.from_state is OutboundState.OUT_FOR_DELIVERY
+    assert decision.to_state is OutboundState.DELIVERED
+    assert decision.idempotent_replay is True
+    assert decision.side_effect_required is False
+    assert decision.replay_metadata == {"provider_reference": "delivery-proof"}
 
 
 def test_quote_values_attempt_creation_and_refund_safety_are_authoritative() -> None:
@@ -991,6 +1018,8 @@ def test_duplicate_requires_exact_durable_prior_identity_match() -> None:
     mismatches = (
         {"machine": StateMachine.INBOUND},
         {"current_state": OutboundState.IN_TRANSIT},
+        {"to_state": OutboundState.COLLECTED},
+        {"to_state": HubState.PACKED},
         {"action": "carrier_delivered"},
         {"external_source": "other.provider"},
         {"event_id": "evt-other"},
@@ -1012,7 +1041,46 @@ def test_duplicate_requires_exact_durable_prior_identity_match() -> None:
     assert replay.side_effect_required is False
 
 
-def test_external_identity_pair_distinguishes_events_and_prior_result_is_immutable() -> (
+def test_duplicate_rejects_duck_typed_prior_result_and_raw_enum_values() -> None:
+    rule = _rule_for(StateMachine.OUTBOUND, "carrier_in_transit")
+    genuine = prior_for(rule)
+    impostor = SimpleNamespace(
+        machine=genuine.machine,
+        current_state=genuine.current_state,
+        action=genuine.action,
+        external_source=genuine.external_source,
+        event_id=genuine.event_id,
+        idempotency_key=genuine.idempotency_key,
+        to_state=genuine.to_state,
+        replay_metadata={"mutable": {"references": []}},
+    )
+
+    with pytest.raises(TransitionRejected, match="PriorTransitionResult"):
+        resolve_transition(
+            context_for(rule, duplicate=True, prior_result=impostor)  # type: ignore[arg-type]
+        )
+    with pytest.raises(TransitionRejected, match="machine must be a StateMachine"):
+        resolve_transition(context_for(rule, machine="outbound"))  # type: ignore[arg-type]
+    with pytest.raises(TransitionRejected, match="actor must be an ActorSource"):
+        resolve_transition(context_for(rule, actor="dhl_event"))  # type: ignore[arg-type]
+
+
+def test_replay_metadata_rejects_mutable_scalar_subclasses_and_non_json_values() -> (
+    None
+):
+    class MutableInt(int):
+        pass
+
+    mutable_number = MutableInt(7)
+    mutable_number.payload = []  # type: ignore[attr-defined]
+
+    rule = _rule_for(StateMachine.OUTBOUND, "carrier_in_transit")
+    for invalid in (mutable_number, float("nan"), float("inf"), {"not-json"}):
+        with pytest.raises(TypeError, match="replay metadata"):
+            prior_for(rule=rule, replay_metadata={"invalid": invalid})
+
+
+def test_external_identity_pair_distinguishes_events_and_prior_result_is_deeply_immutable() -> (
     None
 ):
     rule = _rule_for(StateMachine.OUTBOUND, "carrier_in_transit")
@@ -1022,11 +1090,22 @@ def test_external_identity_pair_distinguishes_events_and_prior_result_is_immutab
         second.external_source,
         second.event_id,
     )
-    prior = prior_for(rule)
+    source_metadata = {
+        "persisted": "result",
+        "provider": {"references": ["movement-1"]},
+    }
+    prior = prior_for(rule, replay_metadata=source_metadata)
+    source_metadata["provider"]["references"].append("tampered")
+
     with pytest.raises(FrozenInstanceError):
         prior.event_id = "changed"  # type: ignore[misc]
     with pytest.raises(TypeError):
         prior.replay_metadata["persisted"] = "changed"  # type: ignore[index]
+    with pytest.raises(TypeError):
+        prior.replay_metadata["provider"]["references"] = (  # type: ignore[index]
+            "changed",
+        )
+    assert prior.replay_metadata["provider"]["references"] == ("movement-1",)  # type: ignore[index]
 
 
 def test_vendor_sla_and_provider_fallback_authority_is_separated() -> None:
