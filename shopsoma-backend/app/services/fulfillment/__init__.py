@@ -1,6 +1,7 @@
 """Provider-neutral contracts for ShopSoma-owned fulfillment."""
 
 from app.services.fulfillment.contracts import (
+    CustodyActorType,
     CustodyEvent,
     DomesticAddress,
     FulfillmentCohortRef,
@@ -8,12 +9,16 @@ from app.services.fulfillment.contracts import (
     HubRef,
     InboundTransferRef,
     OutboundShipmentIntent,
+    PackageItemRef,
+    PackageRef,
     ParcelMeasurement,
     QcDecision,
+    ReceiptRef,
     SealRef,
 )
 
 __all__ = [
+    "CustodyActorType",
     "CustodyEvent",
     "DomesticAddress",
     "FulfillmentCohortRef",
@@ -21,7 +26,10 @@ __all__ = [
     "HubRef",
     "InboundTransferRef",
     "OutboundShipmentIntent",
+    "PackageItemRef",
+    "PackageRef",
     "ParcelMeasurement",
     "QcDecision",
+    "ReceiptRef",
     "SealRef",
 ]
