@@ -30,10 +30,10 @@ class TransitionKind(str, Enum):
 
 
 class QuoteState(str, Enum):
-    ACTIVE = "active"
-    EXPIRED = "expired"
-    CANCELLED = "cancelled"
-    CONSUMED = "consumed"
+    ACTIVE = "quote_active"
+    EXPIRED = "quote_expired"
+    CANCELLED = "quote_cancelled"
+    CONSUMED = "quote_consumed"
 
 
 class PaymentAttemptState(str, Enum):
@@ -133,6 +133,7 @@ class ActorSource(str, Enum):
     ORDER_SERVICE = "order_service"
     VENDOR = "vendor"
     OPERATIONS = "operations"
+    SLA_POLICY = "sla_policy"
     INBOUND_PROVIDER = "inbound_provider"
     HUB_OPERATOR = "hub_operator"
     HUB_SUPERVISOR = "hub_supervisor"
@@ -171,6 +172,25 @@ class TransitionRule:
 
 
 @dataclass(frozen=True, slots=True)
+class PriorTransitionResult:
+    """Durably persisted result used to authenticate an idempotent replay."""
+
+    machine: StateMachine
+    current_state: TransitionState
+    action: str
+    external_source: str | None
+    event_id: str | None
+    idempotency_key: str
+    to_state: TransitionState
+    replay_metadata: Mapping[str, object]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "replay_metadata", MappingProxyType(dict(self.replay_metadata))
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class TransitionContext:
     machine: StateMachine
     current_state: TransitionState
@@ -181,7 +201,10 @@ class TransitionContext:
     guards: frozenset[str]
     evidence: frozenset[str]
     idempotency_key: str | None
+    external_source: str | None = None
+    event_id: str | None = None
     duplicate: bool = False
+    prior_result: PriorTransitionResult | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -220,6 +243,7 @@ _TRANSITION_KINDS: Mapping[tuple[StateMachine, str], TransitionKind] = MappingPr
         (StateMachine.QUOTE, "expire"): TransitionKind.TIMER,
         (StateMachine.QUOTE, "cancel"): TransitionKind.COMMAND,
         (StateMachine.QUOTE, "consume"): TransitionKind.DERIVED,
+        (StateMachine.QUOTE, "create_attempt"): TransitionKind.COMMAND,
         (StateMachine.PAYMENT_ATTEMPT, "initialize"): TransitionKind.COMMAND,
         (StateMachine.PAYMENT_ATTEMPT, "record_pending"): TransitionKind.EXTERNAL_EVENT,
         (
@@ -264,6 +288,10 @@ _TRANSITION_KINDS: Mapping[tuple[StateMachine, str], TransitionKind] = MappingPr
                 "plan_inbound": TransitionKind.COMMAND,
                 "provider_acceptance": TransitionKind.EXTERNAL_EVENT,
                 "vendor_handoff": TransitionKind.EXTERNAL_EVENT,
+                "operations_attested_acceptance": TransitionKind.COMMAND,
+                "operations_attested_handoff": TransitionKind.COMMAND,
+                "operations_attested_delay": TransitionKind.COMMAND,
+                "operations_attested_loss": TransitionKind.COMMAND,
                 "movement_confirmed": TransitionKind.EXTERNAL_EVENT,
                 "partial_hub_receipt": TransitionKind.COMMAND,
                 "complete_hub_receipt": TransitionKind.COMMAND,
@@ -308,7 +336,7 @@ _TRANSITION_KINDS: Mapping[tuple[StateMachine, str], TransitionKind] = MappingPr
                 "carrier_exception": TransitionKind.EXTERNAL_EVENT,
                 "carrier_resumed": TransitionKind.EXTERNAL_EVENT,
                 "carrier_return_started": TransitionKind.EXTERNAL_EVENT,
-                "carrier_return_completed": TransitionKind.EXTERNAL_EVENT,
+                "carrier_return_completed": TransitionKind.COMMAND,
                 "cancel_unbooked_intent": TransitionKind.COMMAND,
                 "provider_cancellation_confirmed": TransitionKind.EXTERNAL_EVENT,
             }.items()
@@ -379,6 +407,23 @@ _POLICY = (
         ActorSource.PAYMENT_WORKER,
         ("first_valid_payment",),
         ("payment_confirmation",),
+    ),
+    _rule(
+        StateMachine.QUOTE,
+        QuoteState.ACTIVE,
+        "create_attempt",
+        PaymentAttemptState.ATTEMPT_CREATED,
+        ActorSource.CHECKOUT,
+        (
+            "quote_owner_session_verified",
+            "valid_unexpired_quote_version",
+            "before_quote_expiry_30m",
+            "reservations_held",
+            "no_active_payment_attempt",
+        ),
+        ("persisted_attempt_request",),
+        compensation="attempt_failure_preserves_quote_active",
+        retry="safe_with_same_idempotency_key_while_quote_active",
     ),
     # Payment attempt lifecycle.
     _rule(
@@ -488,8 +533,18 @@ _POLICY = (
         "request_refund",
         PaymentAttemptState.REFUND_PENDING,
         (ActorSource.OPERATIONS, ActorSource.FINANCE),
-        ("cancellation_approved",),
-        ("cancellation_approval",),
+        (
+            "cancellation_authorized",
+            "refund_items_calculated",
+            "fulfillment_stopped",
+            "item_disposition_recorded",
+        ),
+        (
+            "cancellation_approval",
+            "refund_item_calculation",
+            "fulfillment_stop",
+            "item_disposition",
+        ),
         compensation="verify_provider_refund",
     ),
     _rule(
@@ -572,7 +627,7 @@ _POLICY = (
         ),
         "block",
         VendorPreparationState.BLOCKED,
-        (ActorSource.VENDOR, ActorSource.OPERATIONS),
+        (ActorSource.OPERATIONS, ActorSource.SLA_POLICY),
         ("payment_confirmed",),
         ("block_reason",),
     ),
@@ -581,7 +636,7 @@ _POLICY = (
         VendorPreparationState.BLOCKED,
         "resume_preparing",
         VendorPreparationState.PREPARING,
-        (ActorSource.VENDOR, ActorSource.OPERATIONS),
+        ActorSource.OPERATIONS,
         ("remediation_approved",),
         ("remediation_record",),
     ),
@@ -590,7 +645,7 @@ _POLICY = (
         VendorPreparationState.BLOCKED,
         "restore_ready",
         VendorPreparationState.READY_FOR_INBOUND,
-        (ActorSource.VENDOR, ActorSource.OPERATIONS),
+        ActorSource.OPERATIONS,
         ("remediation_approved", "vendor_preparation_checklist_complete"),
         ("remediation_record", "preparation_checklist"),
     ),
@@ -634,7 +689,7 @@ _POLICY += (
         InboundState.PLANNED,
         "provider_acceptance",
         InboundState.ACCEPTED_BY_PROVIDER,
-        (ActorSource.INBOUND_PROVIDER, ActorSource.OPERATIONS),
+        ActorSource.INBOUND_PROVIDER,
         ("provider_acceptance_verified",),
         ("sanitized_provider_reference", "provider_acceptance"),
     ),
@@ -643,9 +698,47 @@ _POLICY += (
         InboundState.ACCEPTED_BY_PROVIDER,
         "vendor_handoff",
         InboundState.HANDED_OVER,
-        (ActorSource.INBOUND_PROVIDER, ActorSource.OPERATIONS),
+        ActorSource.INBOUND_PROVIDER,
         ("handoff_parties_time_location_verified",),
         ("handoff_receipt",),
+    ),
+    _rule(
+        StateMachine.INBOUND,
+        InboundState.PLANNED,
+        "operations_attested_acceptance",
+        InboundState.ACCEPTED_BY_PROVIDER,
+        ActorSource.OPERATIONS,
+        (
+            "attestation_source_recorded",
+            "attestation_reason_recorded",
+            "attestation_proof_verified",
+            "second_authorization",
+        ),
+        (
+            "attestation_source",
+            "attestation_reason",
+            "attestation_proof",
+            "second_authorization_evidence",
+        ),
+    ),
+    _rule(
+        StateMachine.INBOUND,
+        InboundState.ACCEPTED_BY_PROVIDER,
+        "operations_attested_handoff",
+        InboundState.HANDED_OVER,
+        ActorSource.OPERATIONS,
+        (
+            "attestation_source_recorded",
+            "attestation_reason_recorded",
+            "attestation_proof_verified",
+            "second_authorization",
+        ),
+        (
+            "attestation_source",
+            "attestation_reason",
+            "attestation_proof",
+            "second_authorization_evidence",
+        ),
     ),
     _rule(
         StateMachine.INBOUND,
@@ -692,9 +785,32 @@ _POLICY += (
         ),
         "delay_reported",
         InboundState.DELAYED,
-        (ActorSource.INBOUND_PROVIDER, ActorSource.OPERATIONS),
+        ActorSource.INBOUND_PROVIDER,
         ("delay_attested",),
         ("delay_reason", "expected_recovery", "delay_owner"),
+    ),
+    _rule(
+        StateMachine.INBOUND,
+        (
+            InboundState.HANDED_OVER,
+            InboundState.IN_TRANSIT,
+            InboundState.RECEIVED_PARTIAL,
+        ),
+        "operations_attested_delay",
+        InboundState.DELAYED,
+        ActorSource.OPERATIONS,
+        (
+            "attestation_source_recorded",
+            "attestation_reason_recorded",
+            "attestation_proof_verified",
+            "second_authorization",
+        ),
+        (
+            "attestation_source",
+            "attestation_reason",
+            "attestation_proof",
+            "second_authorization_evidence",
+        ),
     ),
     _rule(
         StateMachine.INBOUND,
@@ -715,9 +831,35 @@ _POLICY += (
         ),
         "loss_confirmed",
         InboundState.LOST,
-        (ActorSource.INBOUND_PROVIDER, ActorSource.OPERATIONS),
-        ("loss_investigation_complete",),
-        ("loss_investigation",),
+        ActorSource.INBOUND_PROVIDER,
+        ("shopsoma_loss_investigation_complete",),
+        ("shopsoma_loss_investigation",),
+    ),
+    _rule(
+        StateMachine.INBOUND,
+        (
+            InboundState.HANDED_OVER,
+            InboundState.IN_TRANSIT,
+            InboundState.RECEIVED_PARTIAL,
+            InboundState.DELAYED,
+        ),
+        "operations_attested_loss",
+        InboundState.LOST,
+        ActorSource.OPERATIONS,
+        (
+            "attestation_source_recorded",
+            "attestation_reason_recorded",
+            "attestation_proof_verified",
+            "second_authorization",
+            "shopsoma_loss_investigation_complete",
+        ),
+        (
+            "attestation_source",
+            "attestation_reason",
+            "attestation_proof",
+            "second_authorization_evidence",
+            "shopsoma_loss_investigation",
+        ),
     ),
     _rule(
         StateMachine.INBOUND,
@@ -793,7 +935,7 @@ _POLICY += (
         HubState.REMEDIATION,
         "remediation_completed",
         HubState.QC_PENDING,
-        (ActorSource.HUB_OPERATOR, ActorSource.INBOUND_PROVIDER),
+        ActorSource.HUB_OPERATOR,
         ("new_qc_version",),
         ("replacement_or_rework_proof",),
     ),
@@ -1002,8 +1144,8 @@ _POLICY += (
         OutboundState.RETURNING,
         "carrier_return_completed",
         OutboundState.RETURNED,
-        ActorSource.DHL_EVENT,
-        ("shopsoma_hub_receipt_complete",),
+        ActorSource.HUB_OPERATOR,
+        ("verified_dhl_return_event", "shopsoma_hub_receipt_complete"),
         ("dhl_return_event", "hub_return_receipt"),
     ),
     _rule(
@@ -1032,6 +1174,7 @@ _POLICY += (
 
 _TERMINAL_STATES = frozenset(
     {
+        QuoteState.EXPIRED,
         QuoteState.CANCELLED,
         QuoteState.CONSUMED,
         PaymentAttemptState.SUPERSEDED,
@@ -1159,7 +1302,11 @@ def _validate_customer_progress(progress: CustomerCohortProgress) -> None:
 
     if (
         progress.inbound_state is not InboundState.NOT_REQUESTED
-        and progress.vendor_state is not VendorPreparationState.READY_FOR_INBOUND
+        and progress.vendor_state
+        not in {
+            VendorPreparationState.READY_FOR_INBOUND,
+            VendorPreparationState.BLOCKED,
+        }
     ):
         raise ValueError("inbound progress requires a ready vendor cohort")
     if (
@@ -1258,6 +1405,14 @@ def iter_transition_edges() -> Iterator[tuple[TransitionRule, TransitionState]]:
             yield rule, from_state
 
 
+def _is_sanitized_external_identity(value: str | None) -> bool:
+    return bool(
+        isinstance(value, str)
+        and value == value.strip()
+        and all(character.isalnum() or character in "._:-/" for character in value)
+    )
+
+
 def resolve_transition(context: TransitionContext) -> TransitionDecision:
     """Resolve and validate a requested transition, rejecting failures closed."""
 
@@ -1286,6 +1441,16 @@ def resolve_transition(context: TransitionContext) -> TransitionDecision:
     if context.actor not in rule.authorized_sources:
         raise TransitionRejected(f"unauthorized actor {context.actor.value!r}")
 
+    if rule.kind is TransitionKind.EXTERNAL_EVENT:
+        if context.external_source is None:
+            raise TransitionRejected("external source is required")
+        if context.event_id is None:
+            raise TransitionRejected("external event id is required")
+        if not _is_sanitized_external_identity(context.external_source):
+            raise TransitionRejected("external source must be sanitized")
+        if not _is_sanitized_external_identity(context.event_id):
+            raise TransitionRejected("external event id must be sanitized")
+
     missing_guards = rule.required_guards - context.guards
     if missing_guards:
         raise TransitionRejected(
@@ -1306,19 +1471,38 @@ def resolve_transition(context: TransitionContext) -> TransitionDecision:
         raise TransitionRejected("stale aggregate version")
 
     replay_metadata: Mapping[str, object] | None = None
+    replay_to_state = rule.to_state
     if context.duplicate:
-        replay_metadata = MappingProxyType(
-            {
-                "idempotency_key": context.idempotency_key,
-                "aggregate_version": context.aggregate_version,
-                "action": context.action,
-            }
+        prior = context.prior_result
+        if prior is None:
+            raise TransitionRejected("durable prior transition result is required")
+        identity = (
+            context.machine,
+            context.current_state,
+            context.action,
+            context.external_source,
+            context.event_id,
+            context.idempotency_key,
         )
+        prior_identity = (
+            prior.machine,
+            prior.current_state,
+            prior.action,
+            prior.external_source,
+            prior.event_id,
+            prior.idempotency_key,
+        )
+        if identity != prior_identity or prior.to_state != rule.to_state:
+            raise TransitionRejected(
+                "durable prior transition result does not match request"
+            )
+        replay_metadata = prior.replay_metadata
+        replay_to_state = prior.to_state
     return TransitionDecision(
         allowed=True,
         rule=rule,
         from_state=context.current_state,
-        to_state=rule.to_state,
+        to_state=replay_to_state,
         side_effect_required=not context.duplicate,
         idempotent_replay=context.duplicate,
         replay_metadata=replay_metadata,
@@ -1339,6 +1523,7 @@ __all__ = [
     "InboundState",
     "OutboundState",
     "PaymentAttemptState",
+    "PriorTransitionResult",
     "QuoteState",
     "StateMachine",
     "TransitionContext",

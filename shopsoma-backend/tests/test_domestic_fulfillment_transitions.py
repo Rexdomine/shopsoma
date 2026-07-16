@@ -10,6 +10,7 @@ from app.services.fulfillment.transitions import (
     InboundState,
     OutboundState,
     PaymentAttemptState,
+    PriorTransitionResult,
     QuoteState,
     StateMachine,
     TransitionContext,
@@ -90,6 +91,10 @@ def context_for(rule, from_state=None, **changes):
         "guards": rule.required_guards,
         "evidence": rule.evidence_requirement,
         "idempotency_key": "event/order/7",
+        "external_source": (
+            "provider.test" if rule.kind is TransitionKind.EXTERNAL_EVENT else None
+        ),
+        "event_id": "evt-7" if rule.kind is TransitionKind.EXTERNAL_EVENT else None,
     }
     values.update(changes)
     return TransitionContext(**values)
@@ -104,6 +109,12 @@ def test_policy_contains_every_authoritative_quote_payment_vendor_edge() -> None
         (StateMachine.QUOTE, QuoteState.ACTIVE, "expire", QuoteState.EXPIRED),
         (StateMachine.QUOTE, QuoteState.ACTIVE, "cancel", QuoteState.CANCELLED),
         (StateMachine.QUOTE, QuoteState.ACTIVE, "consume", QuoteState.CONSUMED),
+        (
+            StateMachine.QUOTE,
+            QuoteState.ACTIVE,
+            "create_attempt",
+            PaymentAttemptState.ATTEMPT_CREATED,
+        ),
         # Payment attempt.
         (
             StateMachine.PAYMENT_ATTEMPT,
@@ -279,7 +290,7 @@ def test_policy_contains_every_authoritative_quote_payment_vendor_edge() -> None
     }
 
     assert actual == expected
-    assert len(actual) == 33
+    assert len(actual) == 34
 
 
 @pytest.mark.parametrize("rule,from_state", EDGES)
@@ -335,7 +346,7 @@ def test_unknown_action_and_illegal_state_transition_are_rejected() -> None:
     with pytest.raises(TransitionRejected, match="unknown action"):
         resolve_transition(context_for(rule, from_state, action="does_not_exist"))
 
-    with pytest.raises(TransitionRejected, match="illegal transition"):
+    with pytest.raises(TransitionRejected, match="terminal state"):
         resolve_transition(context_for(rule, QuoteState.EXPIRED, action="expire"))
 
 
@@ -345,20 +356,75 @@ def test_terminal_states_reject_all_transitions() -> None:
     with pytest.raises(TransitionRejected, match="terminal state"):
         resolve_transition(context_for(rule, QuoteState.CONSUMED, action="cancel"))
 
+    with pytest.raises(TransitionRejected, match="terminal state"):
+        resolve_transition(context_for(rule, QuoteState.EXPIRED, action="cancel"))
+
 
 def test_duplicate_returns_replay_decision_without_another_side_effect() -> None:
     rule, from_state = next(edge for edge in EDGES if edge[0].action == "confirm")
+    prior = PriorTransitionResult(
+        machine=rule.machine,
+        current_state=from_state,
+        action=rule.action,
+        external_source="provider.test",
+        event_id="evt-7",
+        idempotency_key="event/order/7",
+        to_state=rule.to_state,
+        replay_metadata={"provider_reference": "safe-ref"},
+    )
 
-    decision = validate_transition(context_for(rule, from_state, duplicate=True))
+    decision = validate_transition(
+        context_for(rule, from_state, duplicate=True, prior_result=prior)
+    )
 
     assert decision.allowed is True
     assert decision.idempotent_replay is True
     assert decision.side_effect_required is False
-    assert decision.replay_metadata == {
-        "idempotency_key": "event/order/7",
-        "aggregate_version": 7,
-        "action": "confirm",
-    }
+    assert decision.replay_metadata == {"provider_reference": "safe-ref"}
+
+
+def test_quote_values_attempt_creation_and_refund_safety_are_authoritative() -> None:
+    assert [state.value for state in QuoteState] == [
+        "quote_active",
+        "quote_expired",
+        "quote_cancelled",
+        "quote_consumed",
+    ]
+    create = _rule_for(StateMachine.QUOTE, "create_attempt")
+    assert create.kind is TransitionKind.COMMAND
+    assert create.from_states == (QuoteState.ACTIVE,)
+    assert create.to_state is PaymentAttemptState.ATTEMPT_CREATED
+    assert create.authorized_sources == frozenset({ActorSource.CHECKOUT})
+    assert create.required_guards == frozenset(
+        {
+            "quote_owner_session_verified",
+            "valid_unexpired_quote_version",
+            "before_quote_expiry_30m",
+            "reservations_held",
+            "no_active_payment_attempt",
+        }
+    )
+    assert create.evidence_requirement == frozenset({"persisted_attempt_request"})
+    assert "quote_active" in create.compensation
+    assert "same_idempotency_key" in create.retry
+
+    refund = _rule_for(StateMachine.PAYMENT_ATTEMPT, "request_refund")
+    assert refund.required_guards == frozenset(
+        {
+            "cancellation_authorized",
+            "refund_items_calculated",
+            "fulfillment_stopped",
+            "item_disposition_recorded",
+        }
+    )
+    assert refund.evidence_requirement == frozenset(
+        {
+            "cancellation_approval",
+            "refund_item_calculation",
+            "fulfillment_stop",
+            "item_disposition",
+        }
+    )
 
 
 def test_payment_void_and_refund_states_are_distinct() -> None:
@@ -411,7 +477,7 @@ NEW_RULES = (
         "provider_acceptance",
         InboundState.ACCEPTED_BY_PROVIDER,
         TransitionKind.EXTERNAL_EVENT,
-        (ActorSource.INBOUND_PROVIDER, ActorSource.OPERATIONS),
+        (ActorSource.INBOUND_PROVIDER,),
     ),
     (
         StateMachine.INBOUND,
@@ -419,7 +485,48 @@ NEW_RULES = (
         "vendor_handoff",
         InboundState.HANDED_OVER,
         TransitionKind.EXTERNAL_EVENT,
-        (ActorSource.INBOUND_PROVIDER, ActorSource.OPERATIONS),
+        (ActorSource.INBOUND_PROVIDER,),
+    ),
+    (
+        StateMachine.INBOUND,
+        (InboundState.PLANNED,),
+        "operations_attested_acceptance",
+        InboundState.ACCEPTED_BY_PROVIDER,
+        TransitionKind.COMMAND,
+        (ActorSource.OPERATIONS,),
+    ),
+    (
+        StateMachine.INBOUND,
+        (InboundState.ACCEPTED_BY_PROVIDER,),
+        "operations_attested_handoff",
+        InboundState.HANDED_OVER,
+        TransitionKind.COMMAND,
+        (ActorSource.OPERATIONS,),
+    ),
+    (
+        StateMachine.INBOUND,
+        (
+            InboundState.HANDED_OVER,
+            InboundState.IN_TRANSIT,
+            InboundState.RECEIVED_PARTIAL,
+        ),
+        "operations_attested_delay",
+        InboundState.DELAYED,
+        TransitionKind.COMMAND,
+        (ActorSource.OPERATIONS,),
+    ),
+    (
+        StateMachine.INBOUND,
+        (
+            InboundState.HANDED_OVER,
+            InboundState.IN_TRANSIT,
+            InboundState.RECEIVED_PARTIAL,
+            InboundState.DELAYED,
+        ),
+        "operations_attested_loss",
+        InboundState.LOST,
+        TransitionKind.COMMAND,
+        (ActorSource.OPERATIONS,),
     ),
     (
         StateMachine.INBOUND,
@@ -463,7 +570,7 @@ NEW_RULES = (
         "delay_reported",
         InboundState.DELAYED,
         TransitionKind.EXTERNAL_EVENT,
-        (ActorSource.INBOUND_PROVIDER, ActorSource.OPERATIONS),
+        (ActorSource.INBOUND_PROVIDER,),
     ),
     (
         StateMachine.INBOUND,
@@ -484,7 +591,7 @@ NEW_RULES = (
         "loss_confirmed",
         InboundState.LOST,
         TransitionKind.EXTERNAL_EVENT,
-        (ActorSource.INBOUND_PROVIDER, ActorSource.OPERATIONS),
+        (ActorSource.INBOUND_PROVIDER,),
     ),
     (
         StateMachine.INBOUND,
@@ -554,7 +661,7 @@ NEW_RULES = (
         "remediation_completed",
         HubState.QC_PENDING,
         TransitionKind.COMMAND,
-        (ActorSource.HUB_OPERATOR, ActorSource.INBOUND_PROVIDER),
+        (ActorSource.HUB_OPERATOR,),
     ),
     (
         StateMachine.HUB,
@@ -730,8 +837,8 @@ NEW_RULES = (
         (OutboundState.RETURNING,),
         "carrier_return_completed",
         OutboundState.RETURNED,
-        TransitionKind.EXTERNAL_EVENT,
-        (ActorSource.DHL_EVENT,),
+        TransitionKind.COMMAND,
+        (ActorSource.HUB_OPERATOR,),
     ),
     (
         StateMachine.OUTBOUND,
@@ -793,7 +900,7 @@ def test_policy_contains_exactly_every_new_authoritative_edge() -> None:
         in {StateMachine.INBOUND, StateMachine.HUB, StateMachine.OUTBOUND}
     }
     assert actual == EXPECTED_NEW_EDGES
-    assert len(actual) == 66
+    assert len(actual) == 75
 
 
 def test_existing_rules_have_accurate_explicit_transition_kinds() -> None:
@@ -839,6 +946,150 @@ def _rule_for(machine, action):
         rule
         for rule, _ in iter_transition_edges()
         if rule.machine == machine and rule.action == action
+    )
+
+
+def prior_for(rule, from_state=None, **changes):
+    values = {
+        "machine": rule.machine,
+        "current_state": from_state or rule.from_states[0],
+        "action": rule.action,
+        "external_source": (
+            "provider.test" if rule.kind is TransitionKind.EXTERNAL_EVENT else None
+        ),
+        "event_id": "evt-7" if rule.kind is TransitionKind.EXTERNAL_EVENT else None,
+        "idempotency_key": "event/order/7",
+        "to_state": rule.to_state,
+        "replay_metadata": {"persisted": "result"},
+    }
+    values.update(changes)
+    return PriorTransitionResult(**values)
+
+
+def test_every_external_event_requires_sanitized_source_and_event_identity() -> None:
+    external_rules = {
+        rule for rule, _ in EDGES if rule.kind is TransitionKind.EXTERNAL_EVENT
+    }
+    assert external_rules
+    for rule in external_rules:
+        with pytest.raises(TransitionRejected, match="external source"):
+            resolve_transition(context_for(rule, external_source=None))
+        with pytest.raises(TransitionRejected, match="event id"):
+            resolve_transition(context_for(rule, event_id=None))
+        with pytest.raises(TransitionRejected, match="sanitized"):
+            resolve_transition(context_for(rule, external_source=" provider.test "))
+
+
+def test_duplicate_requires_exact_durable_prior_identity_match() -> None:
+    rule = _rule_for(StateMachine.OUTBOUND, "carrier_in_transit")
+    context = context_for(rule, duplicate=True)
+    with pytest.raises(TransitionRejected, match="durable prior transition result"):
+        resolve_transition(context)
+
+    mismatches = (
+        {"machine": StateMachine.INBOUND},
+        {"current_state": OutboundState.IN_TRANSIT},
+        {"action": "carrier_delivered"},
+        {"external_source": "other.provider"},
+        {"event_id": "evt-other"},
+        {"idempotency_key": "other-key"},
+    )
+    for mismatch in mismatches:
+        with pytest.raises(TransitionRejected, match="does not match"):
+            resolve_transition(
+                context_for(
+                    rule, duplicate=True, prior_result=prior_for(rule, **mismatch)
+                )
+            )
+
+    replay = resolve_transition(
+        context_for(rule, duplicate=True, prior_result=prior_for(rule))
+    )
+    assert replay.to_state is OutboundState.IN_TRANSIT
+    assert replay.replay_metadata == {"persisted": "result"}
+    assert replay.side_effect_required is False
+
+
+def test_external_identity_pair_distinguishes_events_and_prior_result_is_immutable() -> (
+    None
+):
+    rule = _rule_for(StateMachine.OUTBOUND, "carrier_in_transit")
+    first = context_for(rule, external_source="dhl", event_id="movement-1")
+    second = context_for(rule, external_source="dhl", event_id="movement-2")
+    assert (first.external_source, first.event_id) != (
+        second.external_source,
+        second.event_id,
+    )
+    prior = prior_for(rule)
+    with pytest.raises(FrozenInstanceError):
+        prior.event_id = "changed"  # type: ignore[misc]
+    with pytest.raises(TypeError):
+        prior.replay_metadata["persisted"] = "changed"  # type: ignore[index]
+
+
+def test_vendor_sla_and_provider_fallback_authority_is_separated() -> None:
+    block = _rule_for(StateMachine.VENDOR_PREPARATION, "block")
+    assert block.authorized_sources == frozenset(
+        {ActorSource.OPERATIONS, ActorSource.SLA_POLICY}
+    )
+    for action in ("resume_preparing", "restore_ready"):
+        assert _rule_for(
+            StateMachine.VENDOR_PREPARATION, action
+        ).authorized_sources == frozenset({ActorSource.OPERATIONS})
+
+    for action in (
+        "provider_acceptance",
+        "vendor_handoff",
+        "delay_reported",
+        "loss_confirmed",
+    ):
+        assert _rule_for(StateMachine.INBOUND, action).authorized_sources == frozenset(
+            {ActorSource.INBOUND_PROVIDER}
+        )
+
+    fallback = {
+        "operations_attested_acceptance",
+        "operations_attested_handoff",
+        "operations_attested_delay",
+        "operations_attested_loss",
+    }
+    required = {
+        "attestation_source_recorded",
+        "attestation_reason_recorded",
+        "attestation_proof_verified",
+        "second_authorization",
+    }
+    evidence = {
+        "attestation_source",
+        "attestation_reason",
+        "attestation_proof",
+        "second_authorization_evidence",
+    }
+    for action in fallback:
+        rule = _rule_for(StateMachine.INBOUND, action)
+        assert rule.kind is TransitionKind.COMMAND
+        assert rule.authorized_sources == frozenset({ActorSource.OPERATIONS})
+        assert required <= rule.required_guards
+        assert evidence <= rule.evidence_requirement
+
+    for action in ("loss_confirmed", "operations_attested_loss"):
+        rule = _rule_for(StateMachine.INBOUND, action)
+        assert "shopsoma_loss_investigation_complete" in rule.required_guards
+        assert "shopsoma_loss_investigation" in rule.evidence_requirement
+
+
+def test_hub_and_return_completion_authority_is_local_and_evidence_backed() -> None:
+    remediation = _rule_for(StateMachine.HUB, "remediation_completed")
+    assert remediation.authorized_sources == frozenset({ActorSource.HUB_OPERATOR})
+
+    returned = _rule_for(StateMachine.OUTBOUND, "carrier_return_completed")
+    assert returned.kind is TransitionKind.COMMAND
+    assert returned.authorized_sources == frozenset({ActorSource.HUB_OPERATOR})
+    assert returned.required_guards == frozenset(
+        {"verified_dhl_return_event", "shopsoma_hub_receipt_complete"}
+    )
+    assert returned.evidence_requirement == frozenset(
+        {"dhl_return_event", "hub_return_receipt"}
     )
 
 
@@ -904,7 +1155,12 @@ def test_new_transition_missing_proof_fails_closed_and_duplicate_is_replay_safe(
     with pytest.raises(TransitionRejected, match="missing required evidence"):
         resolve_transition(context_for(rule, evidence=frozenset()))
 
-    decision = resolve_transition(context_for(rule, duplicate=True))
+    with pytest.raises(TransitionRejected, match="durable prior transition result"):
+        resolve_transition(context_for(rule, duplicate=True))
+
+    decision = resolve_transition(
+        context_for(rule, duplicate=True, prior_result=prior_for(rule))
+    )
     assert decision.idempotent_replay is True
     assert decision.side_effect_required is False
 
@@ -1013,6 +1269,14 @@ def test_inbound_movement_and_delay_never_illuminate_dhl_in_transit() -> None:
             derive_customer_milestone([progress])
             is CustomerMilestone.MOVING_TO_SHOPSOMA
         )
+
+
+def test_vendor_can_be_blocked_after_inbound_started_and_projects_exception() -> None:
+    progress = customer_progress(
+        vendor_state=VendorPreparationState.BLOCKED,
+        inbound_state=InboundState.IN_TRANSIT,
+    )
+    assert derive_customer_milestone([progress]) is CustomerMilestone.EXCEPTION
 
 
 def test_multiple_cohorts_use_the_slowest_non_cancelled_milestone() -> None:
