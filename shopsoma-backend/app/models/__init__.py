@@ -21,6 +21,12 @@ from app.models.vendor_otp import VendorOTP
 from app.models.vendor_application import VendorApplication
 from app.models.vendor_payment_method import VendorPaymentMethod
 from app.models.setting import Setting
+from app.models.fulfillment_hub import FulfillmentHub
+from app.models.product_logistics_profile import (
+    LogisticsProfileSource,
+    LogisticsVerificationStatus,
+    ProductLogisticsProfile,
+)
 
 __all__ = [
     "User",
@@ -53,4 +59,8 @@ __all__ = [
     "PickupStatus",
     "OrderType",
     "Setting",
+    "FulfillmentHub",
+    "LogisticsProfileSource",
+    "LogisticsVerificationStatus",
+    "ProductLogisticsProfile",
 ]
