@@ -104,6 +104,14 @@ class InboundTransfer(Base):
             name="uq_inbound_transfers_identity",
         ),
         UniqueConstraint(
+            "id",
+            "cohort_id",
+            "order_id",
+            "vendor_id",
+            "target_hub_id",
+            name="uq_inbound_transfers_hub_identity",
+        ),
+        UniqueConstraint(
             "replaces_transfer_id",
             name="uq_inbound_transfers_replaces_transfer_id",
         ),
@@ -166,6 +174,14 @@ class InboundTransferItemAllocation(Base):
         CheckConstraint(
             "allocated_quantity > 0",
             name="ck_inbound_transfer_items_quantity_positive",
+        ),
+        UniqueConstraint(
+            "transfer_id",
+            "order_item_id",
+            "cohort_id",
+            "order_id",
+            "vendor_id",
+            name="uq_inbound_transfer_items_identity",
         ),
     )
 
