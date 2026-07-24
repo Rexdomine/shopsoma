@@ -63,6 +63,8 @@ jobs:
           ACCESS_TOKEN_EXPIRE_MINUTES: 30
           REFRESH_TOKEN_EXPIRE_DAYS: 7
           ENVIRONMENT: test
+          USE_LOCAL_STORAGE: true
+          ALLOW_LOCAL_STORAGE_IN_NON_DEV: true
         run: |
           pytest tests/ -v --cov=app --cov-report=term-missing || echo "No tests found or tests failed"
 
