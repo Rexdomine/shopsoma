@@ -1,5 +1,5 @@
 """Order models"""
-from sqlalchemy import Column, String, DateTime, ForeignKey, Integer, Numeric, Text, Date, Enum as SQLEnum
+from sqlalchemy import Column, String, DateTime, ForeignKey, Integer, Numeric, Text, Date, Enum as SQLEnum, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -88,6 +88,11 @@ class Order(Base):
 class OrderItem(Base):
     """Order item model"""
     __tablename__ = "order_items"
+    __table_args__ = (
+        UniqueConstraint(
+            "id", "order_id", "vendor_id", name="uq_order_items_id_order_vendor"
+        ),
+    )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     order_id = Column(UUID(as_uuid=True), ForeignKey("orders.id", ondelete="CASCADE"), nullable=False, index=True)
