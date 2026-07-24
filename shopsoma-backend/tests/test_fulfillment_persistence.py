@@ -419,6 +419,7 @@ async def test_product_and_variant_deletes_cascade_profiles(db_session, sample_p
     await db_session.flush()
     product_profile_id = product_profile.id
     variant_profile_id = variant_profile.id
+    sample_product_id = sample_product.id
 
     await db_session.execute(
         delete(ProductVariant).where(ProductVariant.id == variant.id)
@@ -428,7 +429,7 @@ async def test_product_and_variant_deletes_cascade_profiles(db_session, sample_p
     assert await db_session.get(ProductLogisticsProfile, variant_profile_id) is None
     assert await db_session.get(ProductLogisticsProfile, product_profile_id) is not None
 
-    await db_session.execute(delete(Product).where(Product.id == sample_product.id))
+    await db_session.execute(delete(Product).where(Product.id == sample_product_id))
     await db_session.flush()
     db_session.expire_all()
     assert await db_session.get(ProductLogisticsProfile, product_profile_id) is None
