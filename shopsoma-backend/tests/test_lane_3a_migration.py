@@ -16,9 +16,11 @@ def _scripts() -> ScriptDirectory:
     return ScriptDirectory.from_config(config)
 
 
-def test_lane_3a_is_the_only_linear_alembic_head() -> None:
+def test_lane_3a_remains_in_the_single_linear_alembic_history() -> None:
     scripts = _scripts()
-    assert scripts.get_heads() == [REVISION]
+    heads = scripts.get_heads()
+    assert len(heads) == 1
+    assert REVISION in {revision.revision for revision in scripts.walk_revisions()}
     revision = scripts.get_revision(REVISION)
     assert revision is not None
     assert revision.down_revision == "7b87484b1b1f"

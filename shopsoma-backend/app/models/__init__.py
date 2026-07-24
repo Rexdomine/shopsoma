@@ -27,6 +27,15 @@ from app.models.product_logistics_profile import (
     LogisticsVerificationStatus,
     ProductLogisticsProfile,
 )
+from app.models.fulfillment_cohort import (
+    CohortItemAllocation,
+    FulfillmentCohort,
+    FulfillmentReadinessType,
+)
+from app.models.inbound_transfer import (
+    InboundTransfer,
+    InboundTransferItemAllocation,
+)
 
 __all__ = [
     "User",
@@ -63,4 +72,9 @@ __all__ = [
     "LogisticsProfileSource",
     "LogisticsVerificationStatus",
     "ProductLogisticsProfile",
+    "CohortItemAllocation",
+    "FulfillmentCohort",
+    "FulfillmentReadinessType",
+    "InboundTransfer",
+    "InboundTransferItemAllocation",
 ]
