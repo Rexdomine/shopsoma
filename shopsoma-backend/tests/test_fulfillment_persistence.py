@@ -243,10 +243,11 @@ async def test_product_and_canonical_variant_profiles_round_trip_decimal(
     variant_profile = _profile(sample_product.id, variant_id=variant.id)
     db_session.add_all([product_profile, variant_profile])
     await db_session.flush()
+    product_profile_id = product_profile.id
     db_session.expire(product_profile)
     loaded = await db_session.scalar(
         select(ProductLogisticsProfile).where(
-            ProductLogisticsProfile.id == product_profile.id
+            ProductLogisticsProfile.id == product_profile_id
         )
     )
 
@@ -416,16 +417,18 @@ async def test_product_and_variant_deletes_cascade_profiles(db_session, sample_p
     variant_profile = _profile(sample_product.id, variant_id=variant.id)
     db_session.add_all([product_profile, variant_profile])
     await db_session.flush()
+    product_profile_id = product_profile.id
+    variant_profile_id = variant_profile.id
 
     await db_session.execute(
         delete(ProductVariant).where(ProductVariant.id == variant.id)
     )
     await db_session.flush()
     db_session.expire_all()
-    assert await db_session.get(ProductLogisticsProfile, variant_profile.id) is None
-    assert await db_session.get(ProductLogisticsProfile, product_profile.id) is not None
+    assert await db_session.get(ProductLogisticsProfile, variant_profile_id) is None
+    assert await db_session.get(ProductLogisticsProfile, product_profile_id) is not None
 
     await db_session.execute(delete(Product).where(Product.id == sample_product.id))
     await db_session.flush()
     db_session.expire_all()
-    assert await db_session.get(ProductLogisticsProfile, product_profile.id) is None
+    assert await db_session.get(ProductLogisticsProfile, product_profile_id) is None

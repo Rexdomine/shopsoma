@@ -86,25 +86,25 @@ def upgrade() -> None:
             name="ck_fulfillment_hubs_code_canonical",
         ),
         sa.CheckConstraint(
-            "btrim(name) <> ''", name="ck_fulfillment_hubs_name_present"
+            "name ~ '[^[:space:]]'", name="ck_fulfillment_hubs_name_present"
         ),
         sa.CheckConstraint(
-            "btrim(contact_name) <> ''",
+            "contact_name ~ '[^[:space:]]'",
             name="ck_fulfillment_hubs_contact_name_present",
         ),
         sa.CheckConstraint(
-            "btrim(contact_phone) <> ''",
+            "contact_phone ~ '[^[:space:]]'",
             name="ck_fulfillment_hubs_contact_phone_present",
         ),
         sa.CheckConstraint(
-            "btrim(address_line1) <> ''",
+            "address_line1 ~ '[^[:space:]]'",
             name="ck_fulfillment_hubs_address_line1_present",
         ),
         sa.CheckConstraint(
-            "btrim(city) <> ''", name="ck_fulfillment_hubs_city_present"
+            "city ~ '[^[:space:]]'", name="ck_fulfillment_hubs_city_present"
         ),
         sa.CheckConstraint(
-            "btrim(state) <> ''", name="ck_fulfillment_hubs_state_present"
+            "state ~ '[^[:space:]]'", name="ck_fulfillment_hubs_state_present"
         ),
         sa.CheckConstraint(
             "country_code = 'NG'", name="ck_fulfillment_hubs_country_ng"

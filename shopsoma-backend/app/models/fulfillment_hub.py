@@ -31,21 +31,27 @@ class FulfillmentHub(Base):
             "code ~ '^[a-z0-9]+(-[a-z0-9]+)*$'",
             name="ck_fulfillment_hubs_code_canonical",
         ),
-        CheckConstraint("btrim(name) <> ''", name="ck_fulfillment_hubs_name_present"),
         CheckConstraint(
-            "btrim(contact_name) <> ''",
+            "name ~ '[^[:space:]]'", name="ck_fulfillment_hubs_name_present"
+        ),
+        CheckConstraint(
+            "contact_name ~ '[^[:space:]]'",
             name="ck_fulfillment_hubs_contact_name_present",
         ),
         CheckConstraint(
-            "btrim(contact_phone) <> ''",
+            "contact_phone ~ '[^[:space:]]'",
             name="ck_fulfillment_hubs_contact_phone_present",
         ),
         CheckConstraint(
-            "btrim(address_line1) <> ''",
+            "address_line1 ~ '[^[:space:]]'",
             name="ck_fulfillment_hubs_address_line1_present",
         ),
-        CheckConstraint("btrim(city) <> ''", name="ck_fulfillment_hubs_city_present"),
-        CheckConstraint("btrim(state) <> ''", name="ck_fulfillment_hubs_state_present"),
+        CheckConstraint(
+            "city ~ '[^[:space:]]'", name="ck_fulfillment_hubs_city_present"
+        ),
+        CheckConstraint(
+            "state ~ '[^[:space:]]'", name="ck_fulfillment_hubs_state_present"
+        ),
         CheckConstraint("country_code = 'NG'", name="ck_fulfillment_hubs_country_ng"),
         CheckConstraint(
             "timezone = 'Africa/Lagos'", name="ck_fulfillment_hubs_timezone_lagos"
