@@ -6,6 +6,7 @@ from decimal import Decimal
 import uuid
 
 import pytest
+import app.models as models
 from sqlalchemy import inspect, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker
@@ -746,8 +747,9 @@ async def _failed_cycle(db_session, graph):
     inspection = _inspection(graph, receipt, item, qc)
     db_session.add(inspection)
     await db_session.flush()
+    cycle_clock = await db_session.scalar(text("SELECT clock_timestamp()"))
     qc.state = "qc_failed"
-    qc.completed_at = NOW + timedelta(minutes=1)
+    qc.completed_at = cycle_clock
     await db_session.flush()
     remediation = _remediation(
         graph,
@@ -756,8 +758,9 @@ async def _failed_cycle(db_session, graph):
         inspection,
         state=RemediationState.COMPLETED,
         approved_by_id=graph["operator_id"],
-        approved_at=NOW + timedelta(minutes=2),
-        completed_at=NOW + timedelta(minutes=3),
+        created_at=cycle_clock,
+        approved_at=cycle_clock,
+        completed_at=cycle_clock,
     )
     db_session.add(remediation)
     await db_session.flush()
@@ -847,6 +850,7 @@ async def test_reinspection_rejects_unfinished_previous_or_remediation(
     inspection = _inspection(graph, receipt, item, prior)
     db_session.add(inspection)
     await db_session.flush()
+    remediation_clock = await db_session.scalar(text("SELECT clock_timestamp()"))
     remediation = _remediation(
         graph,
         receipt,
@@ -854,8 +858,9 @@ async def test_reinspection_rejects_unfinished_previous_or_remediation(
         inspection,
         state=RemediationState.COMPLETED,
         approved_by_id=graph["operator_id"],
-        approved_at=NOW + timedelta(minutes=1),
-        completed_at=NOW + timedelta(minutes=2),
+        created_at=remediation_clock,
+        approved_at=remediation_clock,
+        completed_at=remediation_clock,
     )
     db_session.add(remediation)
     await db_session.flush()
@@ -1034,3 +1039,324 @@ async def test_optimistic_versioning_for_all_mutable_hub_records(
             with pytest.raises(StaleDataError):
                 await stale.commit()
             await stale.rollback()
+
+
+async def _remediation_fixture(db_session, vendor_user, customer_user, *, add=True):
+    graph = await _graph(db_session, vendor_user, customer_user)
+    receipt = _receipt(graph)
+    item = _receipt_item(graph, receipt)
+    qc = _qc(graph, receipt)
+    db_session.add(receipt)
+    await db_session.flush()
+    db_session.add(item)
+    await db_session.flush()
+    db_session.add(qc)
+    await db_session.flush()
+    inspection = _inspection(graph, receipt, item, qc)
+    db_session.add(inspection)
+    await db_session.flush()
+    remediation = _remediation(graph, receipt, qc, inspection)
+    if add:
+        db_session.add(remediation)
+        await db_session.flush()
+    return graph, receipt, qc, inspection, remediation
+
+
+@pytest.mark.asyncio
+async def test_open_receipt_identity_is_frozen_but_completion_is_allowed(
+    db_session, vendor_user, customer_user
+):
+    graph = await _graph(db_session, vendor_user, customer_user)
+    other = await _graph(db_session, vendor_user, customer_user)
+    receipt = _receipt(graph)
+    db_session.add(receipt)
+    await db_session.flush()
+    await _rejects(
+        db_session,
+        statement="UPDATE hub_receipt_sessions SET idempotency_key=:key WHERE id=:id",
+        params={"id": receipt.id, "key": f"changed-{uuid.uuid4().hex}"},
+        match="identity is immutable",
+    )
+    await _rejects(
+        db_session,
+        statement="""
+        UPDATE hub_receipt_sessions SET inbound_transfer_id=:transfer,
+          cohort_id=:cohort, order_id=:order_id, vendor_id=:vendor,
+          hub_id=:hub, operator_id=:operator, started_at=:started
+        WHERE id=:id
+        """,
+        params={
+            "id": receipt.id,
+            "transfer": other["transfer"].id,
+            "cohort": other["cohort"].id,
+            "order_id": other["order"].id,
+            "vendor": other["vendor_id"],
+            "hub": other["hub"].id,
+            "operator": other["operator_id"],
+            "started": NOW + timedelta(seconds=1),
+        },
+        match="identity is immutable",
+    )
+    await db_session.execute(
+        text(
+            "UPDATE hub_receipt_sessions SET completed_at=:at, version=version+1, updated_at=:at WHERE id=:id"
+        ),
+        {"id": receipt.id, "at": NOW + timedelta(minutes=1)},
+    )
+
+
+@pytest.mark.asyncio
+async def test_remediation_identity_terms_and_forward_only_lifecycle(
+    db_session, vendor_user, customer_user
+):
+    graph, _receipt_row, _qc_row, _inspection_row, remediation = (
+        await _remediation_fixture(db_session, vendor_user, customer_user)
+    )
+    other, other_receipt, other_qc, other_inspection, _ = await _remediation_fixture(
+        db_session, vendor_user, customer_user, add=False
+    )
+    await _rejects(
+        db_session,
+        statement="""
+        UPDATE hub_remediations SET failed_inspection_id=:inspection,
+          qc_session_id=:qc, receipt_session_id=:receipt, order_id=:order_id,
+          vendor_id=:vendor, hub_id=:hub WHERE id=:id
+        """,
+        params={
+            "id": remediation.id,
+            "inspection": other_inspection.id,
+            "qc": other_qc.id,
+            "receipt": other_receipt.id,
+            "order_id": other["order"].id,
+            "vendor": other["vendor_id"],
+            "hub": other["hub"].id,
+        },
+        match="identity is immutable",
+    )
+    await db_session.execute(
+        text(
+            "UPDATE hub_remediations SET action='refund', disposition='refund', private_notes='proposal' WHERE id=:id"
+        ),
+        {"id": remediation.id},
+    )
+    approval_clock = await db_session.scalar(text("SELECT clock_timestamp()"))
+    for invalid_approved_at in (
+        remediation.created_at - timedelta(milliseconds=1),
+        approval_clock + timedelta(days=1),
+    ):
+        await _rejects(
+            db_session,
+            statement="UPDATE hub_remediations SET state='approved', approved_by_id=:actor, approved_at=:at WHERE id=:id",
+            params={
+                "id": remediation.id,
+                "actor": graph["operator_id"],
+                "at": invalid_approved_at,
+            },
+            match="approval timestamp",
+        )
+    approved_at = approval_clock
+    await db_session.execute(
+        text(
+            "UPDATE hub_remediations SET state='approved', approved_by_id=:actor, approved_at=:at WHERE id=:id"
+        ),
+        {"id": remediation.id, "actor": graph["operator_id"], "at": approved_at},
+    )
+    for assignment, extra in (
+        ("action='rework'", {}),
+        ("disposition='rework'", {}),
+        ("owner_id=:actor", {"actor": customer_user["user"].id}),
+        ("approved_by_id=:actor", {"actor": customer_user["user"].id}),
+        ("approved_at=:changed", {"changed": approved_at + timedelta(seconds=1)}),
+        ("state='pending_approval'", {}),
+        (
+            "state='completed', completed_at=:changed",
+            {"changed": approved_at + timedelta(milliseconds=1)},
+        ),
+    ):
+        await _rejects(
+            db_session,
+            statement=f"UPDATE hub_remediations SET {assignment} WHERE id=:id",
+            params={"id": remediation.id, **extra},
+        )
+    await db_session.execute(
+        text(
+            "UPDATE hub_remediations SET state='in_progress', private_notes='working' WHERE id=:id"
+        ),
+        {"id": remediation.id},
+    )
+    await _rejects(
+        db_session,
+        statement="UPDATE hub_remediations SET state='approved' WHERE id=:id",
+        params={"id": remediation.id},
+    )
+    completion_clock = await db_session.scalar(text("SELECT clock_timestamp()"))
+    await db_session.execute(
+        text(
+            "UPDATE hub_remediations SET state='completed', completed_at=:at WHERE id=:id"
+        ),
+        {"id": remediation.id, "at": completion_clock},
+    )
+    await _rejects(
+        db_session,
+        statement="UPDATE hub_remediations SET private_notes='rewrite' WHERE id=:id",
+        params={"id": remediation.id},
+        match="immutable",
+    )
+
+    (
+        cancelled_graph,
+        cancelled_receipt,
+        cancelled_qc,
+        cancelled_inspection,
+        cancelled,
+    ) = await _remediation_fixture(db_session, vendor_user, customer_user, add=False)
+    cancellation_clock = await db_session.scalar(text("SELECT clock_timestamp()"))
+    cancelled.state = RemediationState.CANCELLED
+    cancelled.approved_by_id = cancelled_graph["operator_id"]
+    cancelled.created_at = cancellation_clock
+    cancelled.approved_at = cancellation_clock
+    db_session.add(cancelled)
+    await db_session.flush()
+    await _rejects(
+        db_session,
+        statement="UPDATE hub_remediations SET private_notes='rewrite' WHERE id=:id",
+        params={"id": cancelled.id},
+        match="immutable",
+    )
+
+
+@pytest.mark.asyncio
+async def test_evidence_retention_changes_require_append_only_exact_previous_events(
+    db_session, vendor_user, customer_user
+):
+    assert hasattr(models, "HubEvidenceRetentionEvent")
+    graph = await _graph(db_session, vendor_user, customer_user)
+    receipt = _receipt(graph)
+    evidence = _evidence(graph, receipt, EvidencePurpose.HUB_RECEIPT)
+    db_session.add(receipt)
+    await db_session.flush()
+    db_session.add(evidence)
+    await db_session.flush()
+    original = evidence.retention_until
+    extended = original + timedelta(days=30)
+    for assignment in ("legal_hold=true", "retention_until=:retention"):
+        await _rejects(
+            db_session,
+            statement=f"UPDATE hub_evidence SET {assignment} WHERE id=:id",
+            params={"id": evidence.id, "retention": extended},
+            match="retention event",
+        )
+
+    hold_id = uuid.uuid4()
+    insert_event = """
+        INSERT INTO hub_evidence_retention_events
+          (id, evidence_id, actor_id, occurred_at, reason,
+           previous_legal_hold, resulting_legal_hold,
+           previous_retention_until, resulting_retention_until)
+        VALUES (:id, :evidence, :actor, :occurred, :reason,
+                :previous_hold, :resulting_hold, :previous, :resulting)
+    """
+    event_clock = await db_session.scalar(text("SELECT clock_timestamp()"))
+    for invalid_occurred in (
+        evidence.created_at - timedelta(milliseconds=1),
+        event_clock + timedelta(days=1),
+    ):
+        await _rejects(
+            db_session,
+            statement=insert_event,
+            params={
+                "id": uuid.uuid4(),
+                "evidence": evidence.id,
+                "actor": graph["operator_id"],
+                "occurred": invalid_occurred,
+                "reason": "invalid event timestamp",
+                "previous_hold": False,
+                "resulting_hold": True,
+                "previous": original,
+                "resulting": extended,
+            },
+            match="event timestamp",
+        )
+    hold_occurred = event_clock
+    await db_session.execute(
+        text(insert_event),
+        {
+            "id": hold_id,
+            "evidence": evidence.id,
+            "actor": graph["operator_id"],
+            "occurred": hold_occurred,
+            "reason": "Litigation hold requested",
+            "previous_hold": False,
+            "resulting_hold": True,
+            "previous": original,
+            "resulting": extended,
+        },
+    )
+    snapshot = (
+        await db_session.execute(
+            text("SELECT legal_hold, retention_until FROM hub_evidence WHERE id=:id"),
+            {"id": evidence.id},
+        )
+    ).one()
+    assert snapshot == (True, extended)
+    stale_clock = await db_session.scalar(text("SELECT clock_timestamp()"))
+    await _rejects(
+        db_session,
+        statement=insert_event,
+        params={
+            "id": uuid.uuid4(),
+            "evidence": evidence.id,
+            "actor": graph["operator_id"],
+            "occurred": stale_clock,
+            "reason": "stale request",
+            "previous_hold": False,
+            "resulting_hold": False,
+            "previous": original,
+            "resulting": original + timedelta(days=1),
+        },
+        match="previous state",
+    )
+    shortened = original + timedelta(days=1)
+    await _rejects(
+        db_session,
+        statement=insert_event,
+        params={
+            "id": uuid.uuid4(),
+            "evidence": evidence.id,
+            "actor": graph["operator_id"],
+            "occurred": hold_occurred,
+            "reason": "non-monotonic chronology",
+            "previous_hold": True,
+            "resulting_hold": False,
+            "previous": extended,
+            "resulting": shortened,
+        },
+        match="strictly increase",
+    )
+    release_clock = await db_session.scalar(text("SELECT clock_timestamp()"))
+    release_id = uuid.uuid4()
+    await db_session.execute(
+        text(insert_event),
+        {
+            "id": release_id,
+            "evidence": evidence.id,
+            "actor": graph["operator_id"],
+            "occurred": release_clock,
+            "reason": "Counsel released hold",
+            "previous_hold": True,
+            "resulting_hold": False,
+            "previous": extended,
+            "resulting": shortened,
+        },
+    )
+    for statement in (
+        "UPDATE hub_evidence_retention_events SET reason='rewrite' WHERE id=:id",
+        "DELETE FROM hub_evidence_retention_events WHERE id=:id",
+    ):
+        await _rejects(db_session, statement=statement, params={"id": release_id})
+    await _rejects(
+        db_session,
+        statement="UPDATE hub_evidence SET legal_hold=true, integrity_hash=:hash WHERE id=:id",
+        params={"id": evidence.id, "hash": "b" * 64},
+        match="audit records are immutable",
+    )

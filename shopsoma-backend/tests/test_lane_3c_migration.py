@@ -40,6 +40,7 @@ def test_lane_3c_migration_is_additive_symmetric_private_and_narrow() -> None:
         "hub_qc_sessions",
         "hub_qc_inspections",
         "hub_evidence",
+        "hub_evidence_retention_events",
         "hub_remediations",
     )
     assert source.count("op.create_table(") == len(tables)
@@ -50,6 +51,24 @@ def test_lane_3c_migration_is_additive_symmetric_private_and_narrow() -> None:
     assert "FOR UPDATE" in source
     assert "CREATE TRIGGER" in source
     assert "DROP TRIGGER IF EXISTS" in source
+    assert "validate_hub_evidence_retention_event" in source
+    assert "validate_hub_evidence_update" in source
+    assert "pg_trigger_depth()" in source
+    for required in (
+        "receipt session identity is immutable",
+        "approved remediation terms and audit are immutable",
+        "illegal remediation state transition",
+        "retention event previous state is stale",
+        "evidence policy changes require a retention event",
+        "hub_evidence_retention_events_update_restricted",
+        "tr_{table}_delete_restricted",
+        "retention_policy_updated_at",
+        "approval timestamp must follow creation and not be future-dated",
+        "completion timestamp must follow approval and not be future-dated",
+        "event timestamp must follow evidence creation and not be future-dated",
+        "retention event timestamps must strictly increase",
+    ):
+        assert required in source
     lowered = source.lower()
     for forbidden in (
         "dhl",

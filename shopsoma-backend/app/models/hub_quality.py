@@ -577,6 +577,9 @@ class HubEvidence(Base):
     byte_size = Column(Integer, nullable=False)
     retention_until = Column(DateTime(timezone=True), nullable=False)
     legal_hold = Column(Boolean, nullable=False, default=False, server_default="false")
+    retention_policy_updated_at = Column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
     created_by_id = Column(
         _UUID, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )
@@ -659,10 +662,46 @@ class HubEvidence(Base):
             "retention_until > created_at", name="ck_hub_evidence_retention_future"
         ),
         CheckConstraint(
+            "retention_policy_updated_at >= created_at",
+            name="ck_hub_evidence_policy_timestamp_order",
+        ),
+        CheckConstraint(
             "access_scope = 'hub_quality_private'",
             name="ck_hub_evidence_access_scope",
         ),
         UniqueConstraint("storage_reference", name="uq_hub_evidence_storage_reference"),
+    )
+
+
+class HubEvidenceRetentionEvent(Base):
+    """Append-only audit event that changes an evidence retention snapshot."""
+
+    __tablename__ = "hub_evidence_retention_events"
+
+    id = Column(_UUID, primary_key=True, default=uuid.uuid4)
+    evidence_id = Column(
+        _UUID, ForeignKey("hub_evidence.id", ondelete="RESTRICT"), nullable=False
+    )
+    actor_id = Column(
+        _UUID, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    occurred_at = Column(DateTime(timezone=True), nullable=False)
+    reason = Column(String(500), nullable=False)
+    previous_legal_hold = Column(Boolean, nullable=False)
+    resulting_legal_hold = Column(Boolean, nullable=False)
+    previous_retention_until = Column(DateTime(timezone=True), nullable=False)
+    resulting_retention_until = Column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(
+            "reason = btrim(reason) AND length(reason) > 0",
+            name="ck_hub_evidence_retention_events_reason_canonical",
+        ),
+        CheckConstraint(
+            "previous_legal_hold IS DISTINCT FROM resulting_legal_hold OR "
+            "previous_retention_until IS DISTINCT FROM resulting_retention_until",
+            name="ck_hub_evidence_retention_events_changes_policy",
+        ),
     )
 
 
@@ -786,6 +825,18 @@ CREATE FUNCTION reject_completed_hub_receipt_update() RETURNS trigger AS $$
 BEGIN
     IF OLD.completed_at IS NOT NULL THEN
         RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'completed receipt sessions are immutable';
+    END IF;
+    IF NEW.id IS DISTINCT FROM OLD.id
+       OR NEW.inbound_transfer_id IS DISTINCT FROM OLD.inbound_transfer_id
+       OR NEW.cohort_id IS DISTINCT FROM OLD.cohort_id
+       OR NEW.order_id IS DISTINCT FROM OLD.order_id
+       OR NEW.vendor_id IS DISTINCT FROM OLD.vendor_id
+       OR NEW.hub_id IS DISTINCT FROM OLD.hub_id
+       OR NEW.idempotency_key IS DISTINCT FROM OLD.idempotency_key
+       OR NEW.operator_id IS DISTINCT FROM OLD.operator_id
+       OR NEW.started_at IS DISTINCT FROM OLD.started_at
+       OR NEW.created_at IS DISTINCT FROM OLD.created_at THEN
+        RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'receipt session identity is immutable';
     END IF;
     RETURN NEW;
 END; $$ LANGUAGE plpgsql
@@ -967,11 +1018,55 @@ _REMEDIATION_INVARIANT_FUNCTION = DDL(
 CREATE FUNCTION validate_hub_remediation_invariants() RETURNS trigger AS $$
 DECLARE inspection_decision hub_qc_decision;
 BEGIN
+    IF NEW.approved_at IS NOT NULL AND (
+        NEW.approved_at < NEW.created_at OR NEW.approved_at > clock_timestamp()
+    ) THEN
+        RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'approval timestamp must follow creation and not be future-dated';
+    END IF;
+    IF NEW.completed_at IS NOT NULL AND (
+        NEW.approved_at IS NULL OR NEW.completed_at < NEW.approved_at
+        OR NEW.completed_at > clock_timestamp()
+    ) THEN
+        RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'completion timestamp must follow approval and not be future-dated';
+    END IF;
     IF TG_OP = 'UPDATE' THEN
-        IF OLD.completed_at IS NOT NULL OR EXISTS (
+        IF OLD.state IN ('completed', 'cancelled') OR EXISTS (
             SELECT 1 FROM hub_qc_sessions WHERE remediation_id = OLD.id
         ) THEN
-            RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'completed or consumed remediation is immutable';
+            RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'terminal or consumed remediation is immutable';
+        END IF;
+        IF NEW.id IS DISTINCT FROM OLD.id
+           OR NEW.failed_inspection_id IS DISTINCT FROM OLD.failed_inspection_id
+           OR NEW.qc_session_id IS DISTINCT FROM OLD.qc_session_id
+           OR NEW.receipt_session_id IS DISTINCT FROM OLD.receipt_session_id
+           OR NEW.order_id IS DISTINCT FROM OLD.order_id
+           OR NEW.vendor_id IS DISTINCT FROM OLD.vendor_id
+           OR NEW.hub_id IS DISTINCT FROM OLD.hub_id
+           OR NEW.created_at IS DISTINCT FROM OLD.created_at THEN
+            RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'remediation identity is immutable';
+        END IF;
+        IF NEW.state IS DISTINCT FROM OLD.state AND NOT (
+            (OLD.state = 'pending_approval' AND NEW.state = 'approved'
+             AND NEW.approved_by_id IS NOT NULL AND NEW.approved_at IS NOT NULL)
+            OR (OLD.state = 'approved' AND NEW.state = 'in_progress')
+            OR (OLD.state = 'in_progress' AND NEW.state = 'completed'
+                AND NEW.completed_at IS NOT NULL)
+        ) THEN
+            RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'illegal remediation state transition';
+        END IF;
+        IF OLD.state IN ('approved', 'in_progress') AND (
+            NEW.owner_id IS DISTINCT FROM OLD.owner_id
+            OR NEW.action IS DISTINCT FROM OLD.action
+            OR NEW.disposition IS DISTINCT FROM OLD.disposition
+            OR NEW.approved_by_id IS DISTINCT FROM OLD.approved_by_id
+            OR NEW.approved_at IS DISTINCT FROM OLD.approved_at
+        ) THEN
+            RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'approved remediation terms and audit are immutable';
+        END IF;
+        IF NEW.completed_at IS DISTINCT FROM OLD.completed_at
+           AND NOT (OLD.state = 'in_progress' AND NEW.state = 'completed'
+                    AND NEW.completed_at IS NOT NULL) THEN
+            RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'completion timestamp requires completion transition';
         END IF;
     END IF;
     SELECT decision INTO inspection_decision
@@ -989,6 +1084,89 @@ _REMEDIATION_INVARIANT_TRIGGER = DDL(
     """
 CREATE TRIGGER tr_hub_remediations_invariants BEFORE INSERT OR UPDATE ON hub_remediations
 FOR EACH ROW EXECUTE FUNCTION validate_hub_remediation_invariants()
+"""
+)
+_EVIDENCE_UPDATE_FUNCTION = DDL(
+    """
+CREATE OR REPLACE FUNCTION validate_hub_evidence_update() RETURNS trigger AS $$
+BEGIN
+    IF NEW.id IS DISTINCT FROM OLD.id
+       OR NEW.receipt_session_id IS DISTINCT FROM OLD.receipt_session_id
+       OR NEW.inspection_id IS DISTINCT FROM OLD.inspection_id
+       OR NEW.discrepancy_id IS DISTINCT FROM OLD.discrepancy_id
+       OR NEW.remediation_id IS DISTINCT FROM OLD.remediation_id
+       OR NEW.order_id IS DISTINCT FROM OLD.order_id
+       OR NEW.vendor_id IS DISTINCT FROM OLD.vendor_id
+       OR NEW.hub_id IS DISTINCT FROM OLD.hub_id
+       OR NEW.purpose IS DISTINCT FROM OLD.purpose
+       OR NEW.access_scope IS DISTINCT FROM OLD.access_scope
+       OR NEW.storage_reference IS DISTINCT FROM OLD.storage_reference
+       OR NEW.integrity_hash IS DISTINCT FROM OLD.integrity_hash
+       OR NEW.content_type IS DISTINCT FROM OLD.content_type
+       OR NEW.byte_size IS DISTINCT FROM OLD.byte_size
+       OR NEW.created_by_id IS DISTINCT FROM OLD.created_by_id
+       OR NEW.created_at IS DISTINCT FROM OLD.created_at
+       OR (NEW.legal_hold IS NOT DISTINCT FROM OLD.legal_hold
+           AND NEW.retention_until IS NOT DISTINCT FROM OLD.retention_until
+           AND NEW.retention_policy_updated_at IS NOT DISTINCT FROM OLD.retention_policy_updated_at) THEN
+        RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'hub quality audit records are immutable';
+    END IF;
+    IF pg_trigger_depth() <> 2 THEN
+        RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'evidence policy changes require a retention event';
+    END IF;
+    RETURN NEW;
+END; $$ LANGUAGE plpgsql
+"""
+)
+_EVIDENCE_UPDATE_TRIGGER = DDL(
+    """
+CREATE TRIGGER tr_hub_evidence_update_restricted BEFORE UPDATE ON hub_evidence
+FOR EACH ROW EXECUTE FUNCTION validate_hub_evidence_update()
+"""
+)
+_EVIDENCE_RETENTION_FUNCTION = DDL(
+    """
+CREATE OR REPLACE FUNCTION validate_hub_evidence_retention_event() RETURNS trigger AS $$
+DECLARE current_hold boolean; current_retention timestamptz; evidence_created timestamptz;
+        current_policy_updated_at timestamptz;
+BEGIN
+    SELECT legal_hold, retention_until, created_at, retention_policy_updated_at
+      INTO current_hold, current_retention, evidence_created, current_policy_updated_at
+      FROM hub_evidence WHERE id = NEW.evidence_id FOR UPDATE;
+    IF evidence_created IS NULL THEN
+        RAISE EXCEPTION USING ERRCODE = '23503', MESSAGE = 'retention event evidence does not exist';
+    END IF;
+    IF NEW.occurred_at < evidence_created OR NEW.occurred_at > clock_timestamp() THEN
+        RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'event timestamp must follow evidence creation and not be future-dated';
+    END IF;
+    IF NEW.occurred_at <= current_policy_updated_at THEN
+        RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'retention event timestamps must strictly increase';
+    END IF;
+    IF NEW.previous_legal_hold IS DISTINCT FROM current_hold
+       OR NEW.previous_retention_until IS DISTINCT FROM current_retention THEN
+        RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'retention event previous state is stale';
+    END IF;
+    IF NEW.resulting_legal_hold IS NOT DISTINCT FROM current_hold
+       AND NEW.resulting_retention_until IS NOT DISTINCT FROM current_retention THEN
+        RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'retention event must change policy';
+    END IF;
+    IF NEW.resulting_retention_until <= evidence_created THEN
+        RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'resulting retention must be after evidence creation';
+    END IF;
+    UPDATE hub_evidence
+       SET legal_hold = NEW.resulting_legal_hold,
+           retention_until = NEW.resulting_retention_until,
+           retention_policy_updated_at = NEW.occurred_at
+     WHERE id = NEW.evidence_id;
+    RETURN NEW;
+END; $$ LANGUAGE plpgsql
+"""
+)
+_EVIDENCE_RETENTION_TRIGGER = DDL(
+    """
+CREATE TRIGGER tr_hub_evidence_retention_events_apply
+BEFORE INSERT ON hub_evidence_retention_events
+FOR EACH ROW EXECUTE FUNCTION validate_hub_evidence_retention_event()
 """
 )
 _AUDIT_FUNCTION = DDL(
@@ -1028,15 +1206,31 @@ event.listen(HubRemediation.__table__, "after_create", _QC_LINEAGE_FUNCTION)
 event.listen(HubRemediation.__table__, "after_create", _QC_LINEAGE_TRIGGER)
 event.listen(HubReceiptSession.__table__, "after_create", _AUDIT_FUNCTION)
 event.listen(HubDiscrepancy.__table__, "after_create", _AUDIT_UPDATE_FUNCTION)
-for _table in (HubDiscrepancy.__table__, HubEvidence.__table__):
-    event.listen(
-        _table,
-        "after_create",
-        DDL(
-            f"CREATE TRIGGER tr_{_table.name}_update_restricted BEFORE UPDATE ON {_table.name} "
-            "FOR EACH ROW EXECUTE FUNCTION reject_hub_quality_audit_update()"
-        ),
-    )
+event.listen(HubEvidence.__table__, "after_create", _EVIDENCE_UPDATE_FUNCTION)
+event.listen(HubEvidence.__table__, "after_create", _EVIDENCE_UPDATE_TRIGGER)
+event.listen(
+    HubEvidenceRetentionEvent.__table__, "after_create", _EVIDENCE_RETENTION_FUNCTION
+)
+event.listen(
+    HubEvidenceRetentionEvent.__table__, "after_create", _EVIDENCE_RETENTION_TRIGGER
+)
+event.listen(
+    HubDiscrepancy.__table__,
+    "after_create",
+    DDL(
+        "CREATE TRIGGER tr_hub_discrepancies_update_restricted BEFORE UPDATE ON hub_discrepancies "
+        "FOR EACH ROW EXECUTE FUNCTION reject_hub_quality_audit_update()"
+    ),
+)
+event.listen(
+    HubEvidenceRetentionEvent.__table__,
+    "after_create",
+    DDL(
+        "CREATE TRIGGER tr_hub_evidence_retention_events_update_restricted "
+        "BEFORE UPDATE ON hub_evidence_retention_events FOR EACH ROW "
+        "EXECUTE FUNCTION reject_hub_quality_audit_update()"
+    ),
+)
 for _table in (
     HubReceiptSession.__table__,
     HubReceiptItem.__table__,
@@ -1044,6 +1238,7 @@ for _table in (
     HubQCSession.__table__,
     HubQCInspection.__table__,
     HubEvidence.__table__,
+    HubEvidenceRetentionEvent.__table__,
     HubRemediation.__table__,
 ):
     event.listen(
@@ -1055,6 +1250,16 @@ for _table in (
         ),
     )
 
+event.listen(
+    HubEvidenceRetentionEvent.__table__,
+    "after_drop",
+    DDL("DROP FUNCTION IF EXISTS validate_hub_evidence_retention_event() CASCADE"),
+)
+event.listen(
+    HubEvidence.__table__,
+    "after_drop",
+    DDL("DROP FUNCTION IF EXISTS validate_hub_evidence_update() CASCADE"),
+)
 event.listen(
     HubReceiptItem.__table__,
     "after_drop",

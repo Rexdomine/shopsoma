@@ -534,6 +534,12 @@ def upgrade() -> None:
         sa.Column("byte_size", sa.Integer(), nullable=False),
         sa.Column("retention_until", sa.DateTime(timezone=True), nullable=False),
         sa.Column("legal_hold", sa.Boolean(), server_default="false", nullable=False),
+        sa.Column(
+            "retention_policy_updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
         sa.Column("created_by_id", sa.UUID(), nullable=False),
         sa.Column(
             "created_at",
@@ -555,6 +561,10 @@ def upgrade() -> None:
         sa.CheckConstraint("byte_size > 0", name="ck_hub_evidence_byte_size_positive"),
         sa.CheckConstraint(
             "retention_until > created_at", name="ck_hub_evidence_retention_future"
+        ),
+        sa.CheckConstraint(
+            "retention_policy_updated_at >= created_at",
+            name="ck_hub_evidence_policy_timestamp_order",
         ),
         sa.CheckConstraint(
             "(purpose = 'hub_receipt' AND inspection_id IS NULL AND discrepancy_id IS NULL AND remediation_id IS NULL) OR (purpose = 'discrepancy' AND discrepancy_id IS NOT NULL AND inspection_id IS NULL AND remediation_id IS NULL) OR (purpose = 'qc_inspection' AND inspection_id IS NOT NULL AND discrepancy_id IS NULL AND remediation_id IS NULL) OR (purpose = 'remediation' AND remediation_id IS NOT NULL AND inspection_id IS NULL AND discrepancy_id IS NULL)",
@@ -600,6 +610,36 @@ def upgrade() -> None:
         sa.UniqueConstraint(
             "storage_reference", name="uq_hub_evidence_storage_reference"
         ),
+    )
+    op.create_table(
+        "hub_evidence_retention_events",
+        sa.Column("id", sa.UUID(), nullable=False),
+        sa.Column("evidence_id", sa.UUID(), nullable=False),
+        sa.Column("actor_id", sa.UUID(), nullable=False),
+        sa.Column("occurred_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("reason", sa.String(length=500), nullable=False),
+        sa.Column("previous_legal_hold", sa.Boolean(), nullable=False),
+        sa.Column("resulting_legal_hold", sa.Boolean(), nullable=False),
+        sa.Column(
+            "previous_retention_until", sa.DateTime(timezone=True), nullable=False
+        ),
+        sa.Column(
+            "resulting_retention_until", sa.DateTime(timezone=True), nullable=False
+        ),
+        sa.CheckConstraint(
+            "reason = btrim(reason) AND length(reason) > 0",
+            name="ck_hub_evidence_retention_events_reason_canonical",
+        ),
+        sa.CheckConstraint(
+            "previous_legal_hold IS DISTINCT FROM resulting_legal_hold OR "
+            "previous_retention_until IS DISTINCT FROM resulting_retention_until",
+            name="ck_hub_evidence_retention_events_changes_policy",
+        ),
+        sa.ForeignKeyConstraint(["actor_id"], ["users.id"], ondelete="RESTRICT"),
+        sa.ForeignKeyConstraint(
+            ["evidence_id"], ["hub_evidence.id"], ondelete="RESTRICT"
+        ),
+        sa.PrimaryKeyConstraint("id"),
     )
     op.create_table(
         "hub_remediations",
@@ -745,6 +785,19 @@ def upgrade() -> None:
             IF OLD.completed_at IS NOT NULL THEN
                 RAISE EXCEPTION USING ERRCODE = '23514',
                     MESSAGE = 'completed receipt sessions are immutable';
+            END IF;
+            IF NEW.id IS DISTINCT FROM OLD.id
+               OR NEW.inbound_transfer_id IS DISTINCT FROM OLD.inbound_transfer_id
+               OR NEW.cohort_id IS DISTINCT FROM OLD.cohort_id
+               OR NEW.order_id IS DISTINCT FROM OLD.order_id
+               OR NEW.vendor_id IS DISTINCT FROM OLD.vendor_id
+               OR NEW.hub_id IS DISTINCT FROM OLD.hub_id
+               OR NEW.idempotency_key IS DISTINCT FROM OLD.idempotency_key
+               OR NEW.operator_id IS DISTINCT FROM OLD.operator_id
+               OR NEW.started_at IS DISTINCT FROM OLD.started_at
+               OR NEW.created_at IS DISTINCT FROM OLD.created_at THEN
+                RAISE EXCEPTION USING ERRCODE = '23514',
+                    MESSAGE = 'receipt session identity is immutable';
             END IF;
             RETURN NEW;
         END; $$ LANGUAGE plpgsql
@@ -944,12 +997,62 @@ def upgrade() -> None:
         CREATE FUNCTION validate_hub_remediation_invariants() RETURNS trigger AS $$
         DECLARE inspection_decision hub_qc_decision;
         BEGIN
+            IF NEW.approved_at IS NOT NULL AND (
+                NEW.approved_at < NEW.created_at OR NEW.approved_at > clock_timestamp()
+            ) THEN
+                RAISE EXCEPTION USING ERRCODE = '23514',
+                    MESSAGE = 'approval timestamp must follow creation and not be future-dated';
+            END IF;
+            IF NEW.completed_at IS NOT NULL AND (
+                NEW.approved_at IS NULL OR NEW.completed_at < NEW.approved_at
+                OR NEW.completed_at > clock_timestamp()
+            ) THEN
+                RAISE EXCEPTION USING ERRCODE = '23514',
+                    MESSAGE = 'completion timestamp must follow approval and not be future-dated';
+            END IF;
             IF TG_OP = 'UPDATE' THEN
-                IF OLD.completed_at IS NOT NULL OR EXISTS (
+                IF OLD.state IN ('completed', 'cancelled') OR EXISTS (
                     SELECT 1 FROM hub_qc_sessions WHERE remediation_id = OLD.id
                 ) THEN
                     RAISE EXCEPTION USING ERRCODE = '23514',
-                        MESSAGE = 'completed or consumed remediation is immutable';
+                        MESSAGE = 'terminal or consumed remediation is immutable';
+                END IF;
+                IF NEW.id IS DISTINCT FROM OLD.id
+                   OR NEW.failed_inspection_id IS DISTINCT FROM OLD.failed_inspection_id
+                   OR NEW.qc_session_id IS DISTINCT FROM OLD.qc_session_id
+                   OR NEW.receipt_session_id IS DISTINCT FROM OLD.receipt_session_id
+                   OR NEW.order_id IS DISTINCT FROM OLD.order_id
+                   OR NEW.vendor_id IS DISTINCT FROM OLD.vendor_id
+                   OR NEW.hub_id IS DISTINCT FROM OLD.hub_id
+                   OR NEW.created_at IS DISTINCT FROM OLD.created_at THEN
+                    RAISE EXCEPTION USING ERRCODE = '23514',
+                        MESSAGE = 'remediation identity is immutable';
+                END IF;
+                IF NEW.state IS DISTINCT FROM OLD.state AND NOT (
+                    (OLD.state = 'pending_approval' AND NEW.state = 'approved'
+                     AND NEW.approved_by_id IS NOT NULL AND NEW.approved_at IS NOT NULL)
+                    OR (OLD.state = 'approved' AND NEW.state = 'in_progress')
+                    OR (OLD.state = 'in_progress' AND NEW.state = 'completed'
+                        AND NEW.completed_at IS NOT NULL)
+                ) THEN
+                    RAISE EXCEPTION USING ERRCODE = '23514',
+                        MESSAGE = 'illegal remediation state transition';
+                END IF;
+                IF OLD.state IN ('approved', 'in_progress') AND (
+                    NEW.owner_id IS DISTINCT FROM OLD.owner_id
+                    OR NEW.action IS DISTINCT FROM OLD.action
+                    OR NEW.disposition IS DISTINCT FROM OLD.disposition
+                    OR NEW.approved_by_id IS DISTINCT FROM OLD.approved_by_id
+                    OR NEW.approved_at IS DISTINCT FROM OLD.approved_at
+                ) THEN
+                    RAISE EXCEPTION USING ERRCODE = '23514',
+                        MESSAGE = 'approved remediation terms and audit are immutable';
+                END IF;
+                IF NEW.completed_at IS DISTINCT FROM OLD.completed_at
+                   AND NOT (OLD.state = 'in_progress' AND NEW.state = 'completed'
+                            AND NEW.completed_at IS NOT NULL) THEN
+                    RAISE EXCEPTION USING ERRCODE = '23514',
+                        MESSAGE = 'completion timestamp requires completion transition';
                 END IF;
             END IF;
             SELECT decision INTO inspection_decision
@@ -971,6 +1074,94 @@ def upgrade() -> None:
     )
     op.execute(
         """
+        CREATE OR REPLACE FUNCTION validate_hub_evidence_update() RETURNS trigger AS $$
+        BEGIN
+            IF NEW.id IS DISTINCT FROM OLD.id
+               OR NEW.receipt_session_id IS DISTINCT FROM OLD.receipt_session_id
+               OR NEW.inspection_id IS DISTINCT FROM OLD.inspection_id
+               OR NEW.discrepancy_id IS DISTINCT FROM OLD.discrepancy_id
+               OR NEW.remediation_id IS DISTINCT FROM OLD.remediation_id
+               OR NEW.order_id IS DISTINCT FROM OLD.order_id
+               OR NEW.vendor_id IS DISTINCT FROM OLD.vendor_id
+               OR NEW.hub_id IS DISTINCT FROM OLD.hub_id
+               OR NEW.purpose IS DISTINCT FROM OLD.purpose
+               OR NEW.access_scope IS DISTINCT FROM OLD.access_scope
+               OR NEW.storage_reference IS DISTINCT FROM OLD.storage_reference
+               OR NEW.integrity_hash IS DISTINCT FROM OLD.integrity_hash
+               OR NEW.content_type IS DISTINCT FROM OLD.content_type
+               OR NEW.byte_size IS DISTINCT FROM OLD.byte_size
+               OR NEW.created_by_id IS DISTINCT FROM OLD.created_by_id
+               OR NEW.created_at IS DISTINCT FROM OLD.created_at
+               OR (NEW.legal_hold IS NOT DISTINCT FROM OLD.legal_hold
+                   AND NEW.retention_until IS NOT DISTINCT FROM OLD.retention_until
+                   AND NEW.retention_policy_updated_at IS NOT DISTINCT FROM OLD.retention_policy_updated_at) THEN
+                RAISE EXCEPTION USING ERRCODE = '23514',
+                    MESSAGE = 'hub quality audit records are immutable';
+            END IF;
+            IF pg_trigger_depth() <> 2 THEN
+                RAISE EXCEPTION USING ERRCODE = '23514',
+                    MESSAGE = 'evidence policy changes require a retention event';
+            END IF;
+            RETURN NEW;
+        END; $$ LANGUAGE plpgsql
+        """
+    )
+    op.execute(
+        """CREATE TRIGGER tr_hub_evidence_update_restricted
+        BEFORE UPDATE ON hub_evidence
+        FOR EACH ROW EXECUTE FUNCTION validate_hub_evidence_update()"""
+    )
+    op.execute(
+        """
+        CREATE OR REPLACE FUNCTION validate_hub_evidence_retention_event() RETURNS trigger AS $$
+        DECLARE current_hold boolean; current_retention timestamptz; evidence_created timestamptz;
+                current_policy_updated_at timestamptz;
+        BEGIN
+            SELECT legal_hold, retention_until, created_at, retention_policy_updated_at
+              INTO current_hold, current_retention, evidence_created, current_policy_updated_at
+              FROM hub_evidence WHERE id = NEW.evidence_id FOR UPDATE;
+            IF evidence_created IS NULL THEN
+                RAISE EXCEPTION USING ERRCODE = '23503',
+                    MESSAGE = 'retention event evidence does not exist';
+            END IF;
+            IF NEW.occurred_at < evidence_created OR NEW.occurred_at > clock_timestamp() THEN
+                RAISE EXCEPTION USING ERRCODE = '23514',
+                    MESSAGE = 'event timestamp must follow evidence creation and not be future-dated';
+            END IF;
+            IF NEW.occurred_at <= current_policy_updated_at THEN
+                RAISE EXCEPTION USING ERRCODE = '23514',
+                    MESSAGE = 'retention event timestamps must strictly increase';
+            END IF;
+            IF NEW.previous_legal_hold IS DISTINCT FROM current_hold
+               OR NEW.previous_retention_until IS DISTINCT FROM current_retention THEN
+                RAISE EXCEPTION USING ERRCODE = '23514',
+                    MESSAGE = 'retention event previous state is stale';
+            END IF;
+            IF NEW.resulting_legal_hold IS NOT DISTINCT FROM current_hold
+               AND NEW.resulting_retention_until IS NOT DISTINCT FROM current_retention THEN
+                RAISE EXCEPTION USING ERRCODE = '23514',
+                    MESSAGE = 'retention event must change policy';
+            END IF;
+            IF NEW.resulting_retention_until <= evidence_created THEN
+                RAISE EXCEPTION USING ERRCODE = '23514',
+                    MESSAGE = 'resulting retention must be after evidence creation';
+            END IF;
+            UPDATE hub_evidence
+               SET legal_hold = NEW.resulting_legal_hold,
+                   retention_until = NEW.resulting_retention_until,
+                   retention_policy_updated_at = NEW.occurred_at
+             WHERE id = NEW.evidence_id;
+            RETURN NEW;
+        END; $$ LANGUAGE plpgsql
+        """
+    )
+    op.execute(
+        """CREATE TRIGGER tr_hub_evidence_retention_events_apply
+        BEFORE INSERT ON hub_evidence_retention_events
+        FOR EACH ROW EXECUTE FUNCTION validate_hub_evidence_retention_event()"""
+    )
+    op.execute(
+        """
         CREATE FUNCTION reject_hub_quality_audit_delete() RETURNS trigger AS $$
         BEGIN
             RAISE EXCEPTION USING ERRCODE = '23503',
@@ -987,11 +1178,16 @@ def upgrade() -> None:
         END; $$ LANGUAGE plpgsql
     """
     )
-    for table in ("hub_discrepancies", "hub_evidence"):
-        op.execute(
-            f"CREATE TRIGGER tr_{table}_update_restricted BEFORE UPDATE ON {table} "
-            "FOR EACH ROW EXECUTE FUNCTION reject_hub_quality_audit_update()"
-        )
+    op.execute(
+        "CREATE TRIGGER tr_hub_discrepancies_update_restricted "
+        "BEFORE UPDATE ON hub_discrepancies "
+        "FOR EACH ROW EXECUTE FUNCTION reject_hub_quality_audit_update()"
+    )
+    op.execute(
+        "CREATE TRIGGER tr_hub_evidence_retention_events_update_restricted "
+        "BEFORE UPDATE ON hub_evidence_retention_events "
+        "FOR EACH ROW EXECUTE FUNCTION reject_hub_quality_audit_update()"
+    )
     for table in (
         "hub_receipt_sessions",
         "hub_receipt_items",
@@ -999,6 +1195,7 @@ def upgrade() -> None:
         "hub_qc_sessions",
         "hub_qc_inspections",
         "hub_evidence",
+        "hub_evidence_retention_events",
         "hub_remediations",
     ):
         op.execute(
@@ -1010,8 +1207,21 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     # ### commands auto generated by Alembic - please adjust! ###
-    for table in ("hub_discrepancies", "hub_evidence"):
-        op.execute(f"DROP TRIGGER IF EXISTS tr_{table}_update_restricted ON {table}")
+    op.execute(
+        "DROP TRIGGER IF EXISTS tr_hub_discrepancies_update_restricted "
+        "ON hub_discrepancies"
+    )
+    op.execute(
+        "DROP TRIGGER IF EXISTS tr_hub_evidence_update_restricted ON hub_evidence"
+    )
+    op.execute(
+        "DROP TRIGGER IF EXISTS tr_hub_evidence_retention_events_apply "
+        "ON hub_evidence_retention_events"
+    )
+    op.execute(
+        "DROP TRIGGER IF EXISTS tr_hub_evidence_retention_events_update_restricted "
+        "ON hub_evidence_retention_events"
+    )
     for table in (
         "hub_receipt_sessions",
         "hub_receipt_items",
@@ -1019,6 +1229,7 @@ def downgrade() -> None:
         "hub_qc_sessions",
         "hub_qc_inspections",
         "hub_evidence",
+        "hub_evidence_retention_events",
         "hub_remediations",
     ):
         op.execute(f"DROP TRIGGER IF EXISTS tr_{table}_delete_restricted ON {table}")
@@ -1052,6 +1263,7 @@ def downgrade() -> None:
         type_="foreignkey",
     )
     op.drop_table("hub_remediations")
+    op.drop_table("hub_evidence_retention_events")
     op.drop_table("hub_evidence")
     op.drop_table("hub_qc_inspections")
     op.drop_table("hub_discrepancies")
@@ -1068,6 +1280,8 @@ def downgrade() -> None:
     )
     op.execute("DROP FUNCTION IF EXISTS reject_hub_quality_audit_delete()")
     op.execute("DROP FUNCTION IF EXISTS reject_hub_quality_audit_update()")
+    op.execute("DROP FUNCTION IF EXISTS validate_hub_evidence_retention_event()")
+    op.execute("DROP FUNCTION IF EXISTS validate_hub_evidence_update()")
     op.execute("DROP FUNCTION IF EXISTS reject_completed_hub_receipt_update()")
     op.execute("DROP FUNCTION IF EXISTS reject_completed_hub_qc_update()")
     op.execute("DROP FUNCTION IF EXISTS validate_hub_qc_reinspection_lineage()")
