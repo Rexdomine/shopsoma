@@ -322,6 +322,12 @@ async def test_receipt_item_allocation_quantity_identity_and_scan_invariants(
     )
     db_session.add(item)
     await db_session.flush()
+    await _rejects(
+        db_session,
+        statement="UPDATE hub_receipt_items SET scan_identity='scan-renamed' WHERE id=:id",
+        params={"id": item.id},
+        match="aggregate identity is immutable",
+    )
     receipt.completed_at = NOW + timedelta(minutes=1)
     await db_session.flush()
     await _rejects(
@@ -1091,12 +1097,21 @@ async def test_completed_qc_immutability_transition_and_all_audit_deletes(
     evidence = _evidence(graph, receipt, EvidencePurpose.HUB_RECEIPT)
     db_session.add(evidence)
     await db_session.flush()
-    await _rejects(
-        db_session,
-        statement="UPDATE hub_qc_inspections SET decision='pass' WHERE id=:id",
-        params={"id": inspection.id},
-        match="remediated inspection decisions are immutable",
-    )
+    for assignment in (
+        "decision='rejected'",
+        "reason_code='rewritten'",
+        "quarantine_disposition='return_to_vendor'",
+        "inspected_quantity=1",
+        "inspected_at=clock_timestamp()",
+        "private_notes='rewritten'",
+        "version=version+1",
+    ):
+        await _rejects(
+            db_session,
+            statement=f"UPDATE hub_qc_inspections SET {assignment} WHERE id=:id",
+            params={"id": inspection.id},
+            match="remediated inspections are immutable",
+        )
     await _rejects(
         db_session,
         statement="UPDATE hub_discrepancies SET private_notes='rewrite' WHERE id=:id",
@@ -1167,7 +1182,6 @@ async def test_optimistic_versioning_for_all_mutable_hub_records(
     db_session.add(inspection)
     await db_session.flush()
     remediation = _remediation(graph, receipt, qc, inspection)
-    db_session.add(remediation)
     await db_session.commit()
     assert all(
         inspect(model).version_id_col is model.__table__.c.version
@@ -1185,7 +1199,6 @@ async def test_optimistic_versioning_for_all_mutable_hub_records(
         ),
         (HubQCSession, qc.id, "state", "qc_pending", "qc_in_progress"),
         (HubQCInspection, inspection.id, "private_notes", "first", "stale"),
-        (HubRemediation, remediation.id, "private_notes", "first", "stale"),
     )
     for model, row_id, attr, first_value, stale_value in changes:
         async with sessions() as first, sessions() as stale:
@@ -1198,6 +1211,19 @@ async def test_optimistic_versioning_for_all_mutable_hub_records(
             with pytest.raises(StaleDataError):
                 await stale.commit()
             await stale.rollback()
+
+    db_session.add(remediation)
+    await db_session.commit()
+    async with sessions() as first, sessions() as stale:
+        current = await first.get(HubRemediation, remediation.id)
+        outdated = await stale.get(HubRemediation, remediation.id)
+        current.private_notes = "first"
+        outdated.private_notes = "stale"
+        await first.commit()
+        assert current.version == 2
+        with pytest.raises(StaleDataError):
+            await stale.commit()
+        await stale.rollback()
 
 
 async def _remediation_fixture(db_session, vendor_user, customer_user, *, add=True):

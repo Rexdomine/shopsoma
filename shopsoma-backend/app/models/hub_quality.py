@@ -869,6 +869,7 @@ BEGIN
         OR NEW.vendor_id IS DISTINCT FROM OLD.vendor_id
         OR NEW.hub_id IS DISTINCT FROM OLD.hub_id
         OR NEW.order_item_id IS DISTINCT FROM OLD.order_item_id
+        OR NEW.scan_identity IS DISTINCT FROM OLD.scan_identity
     ) THEN
         RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'receipt item aggregate identity is immutable';
     END IF;
@@ -1044,10 +1045,10 @@ BEGIN
         IF qc_completed IS NOT NULL THEN
             RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'inspections in completed QC sessions are immutable';
         END IF;
-        IF TG_OP = 'UPDATE' AND NEW.decision IS DISTINCT FROM OLD.decision AND EXISTS (
+        IF TG_OP = 'UPDATE' AND EXISTS (
             SELECT 1 FROM hub_remediations WHERE failed_inspection_id = OLD.id
         ) THEN
-            RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'remediated inspection decisions are immutable';
+            RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'remediated inspections are immutable';
         END IF;
     END IF;
     RETURN NEW;

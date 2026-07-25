@@ -72,6 +72,8 @@ def test_lane_3c_migration_is_additive_symmetric_private_and_narrow() -> None:
         "BEFORE INSERT OR UPDATE ON hub_receipt_sessions",
         "BEFORE INSERT OR UPDATE ON hub_qc_sessions",
         "received quantity cannot drop below inspected quantity",
+        "NEW.scan_identity IS DISTINCT FROM OLD.scan_identity",
+        "remediated inspections are immutable",
         "QC completion requires a terminal state",
         "QC completion requires a completed receipt session",
         "passed QC completion requires all receipt items to pass",
