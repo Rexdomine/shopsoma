@@ -911,16 +911,21 @@ def upgrade() -> None:
         CREATE FUNCTION validate_hub_qc_reinspection_lineage() RETURNS trigger AS $$
         DECLARE previous_sequence integer; previous_state varchar; previous_completed timestamptz;
                 remediation_session uuid; remediation_receipt uuid; remediation_state hub_remediation_state;
+                remediation_completed timestamptz;
         BEGIN
             IF NEW.sequence > 1 THEN
-                SELECT qc_session_id, receipt_session_id, state
-                  INTO remediation_session, remediation_receipt, remediation_state
+                SELECT qc_session_id, receipt_session_id, state, completed_at
+                  INTO remediation_session, remediation_receipt, remediation_state, remediation_completed
                   FROM hub_remediations WHERE id = NEW.remediation_id FOR UPDATE;
                 IF remediation_session IS DISTINCT FROM NEW.previous_session_id
                    OR remediation_receipt IS DISTINCT FROM NEW.receipt_session_id
                    OR remediation_state IS DISTINCT FROM 'completed' THEN
                     RAISE EXCEPTION USING ERRCODE = '23514',
                         MESSAGE = 'reinspection requires completed remediation for the previous QC session';
+                END IF;
+                IF remediation_completed IS NULL OR NEW.started_at < remediation_completed THEN
+                    RAISE EXCEPTION USING ERRCODE = '23514',
+                        MESSAGE = 'reinspection must start after remediation completion';
                 END IF;
                 SELECT sequence, state, completed_at
                   INTO previous_sequence, previous_state, previous_completed
@@ -972,7 +977,8 @@ def upgrade() -> None:
                    OR NEW.hub_id IS DISTINCT FROM OLD.hub_id
                    OR NEW.sequence IS DISTINCT FROM OLD.sequence
                    OR NEW.previous_session_id IS DISTINCT FROM OLD.previous_session_id
-                   OR NEW.remediation_id IS DISTINCT FROM OLD.remediation_id THEN
+                   OR NEW.remediation_id IS DISTINCT FROM OLD.remediation_id
+                   OR NEW.started_at IS DISTINCT FROM OLD.started_at THEN
                     RAISE EXCEPTION USING ERRCODE = '23514',
                         MESSAGE = 'QC session aggregate lineage is immutable';
                 END IF;
@@ -1067,6 +1073,10 @@ def upgrade() -> None:
         DECLARE inspection_decision hub_qc_decision; parent_qc_state varchar;
                 parent_qc_completed timestamptz;
         BEGIN
+            IF TG_OP = 'INSERT' AND NEW.state IS DISTINCT FROM 'pending_approval' THEN
+                RAISE EXCEPTION USING ERRCODE = '23514',
+                    MESSAGE = 'remediations must start pending';
+            END IF;
             IF NEW.approved_at IS NOT NULL AND (
                 NEW.approved_at < NEW.created_at OR NEW.approved_at > clock_timestamp()
             ) THEN
@@ -1132,6 +1142,10 @@ def upgrade() -> None:
                 IF parent_qc_state IS DISTINCT FROM 'qc_failed' OR parent_qc_completed IS NULL THEN
                     RAISE EXCEPTION USING ERRCODE = '23514',
                         MESSAGE = 'remediation approval requires a completed failed QC session';
+                END IF;
+                IF NEW.approved_at < parent_qc_completed THEN
+                    RAISE EXCEPTION USING ERRCODE = '23514',
+                        MESSAGE = 'remediation approval must follow QC completion';
                 END IF;
             END IF;
             SELECT decision INTO inspection_decision

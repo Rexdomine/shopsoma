@@ -971,14 +971,27 @@ async def _failed_cycle(db_session, graph):
         receipt,
         qc,
         inspection,
-        state=RemediationState.COMPLETED,
-        approved_by_id=graph["operator_id"],
         created_at=cycle_clock,
-        approved_at=cycle_clock,
-        completed_at=cycle_clock,
     )
     db_session.add(remediation)
     await db_session.flush()
+    await db_session.execute(
+        text(
+            "UPDATE hub_remediations SET state='approved', approved_by_id=:actor, approved_at=:at WHERE id=:id"
+        ),
+        {"id": remediation.id, "actor": graph["operator_id"], "at": cycle_clock},
+    )
+    await db_session.execute(
+        text("UPDATE hub_remediations SET state='in_progress' WHERE id=:id"),
+        {"id": remediation.id},
+    )
+    await db_session.execute(
+        text(
+            "UPDATE hub_remediations SET state='completed', completed_at=:at WHERE id=:id"
+        ),
+        {"id": remediation.id, "at": cycle_clock},
+    )
+    await db_session.refresh(remediation)
     return receipt, item, qc, inspection, remediation
 
 
@@ -989,6 +1002,18 @@ async def test_reinspection_requires_exact_completed_failed_remediated_lineage(
     graph = await _graph(db_session, vendor_user, customer_user)
     receipt, _item, prior, _inspection_row, remediation = await _failed_cycle(
         db_session, graph
+    )
+    await _rejects(
+        db_session,
+        _qc(
+            graph,
+            receipt,
+            sequence=2,
+            previous_session_id=prior.id,
+            remediation_id=remediation.id,
+            started_at=remediation.completed_at - timedelta(microseconds=1),
+        ),
+        match="reinspection must start after remediation completion",
     )
     valid = _qc(
         graph,
@@ -1005,6 +1030,15 @@ async def test_reinspection_requires_exact_completed_failed_remediated_lineage(
         db_session,
         statement="UPDATE hub_qc_sessions SET remediation_id=:replacement WHERE id=:id",
         params={"id": valid.id, "replacement": uuid.uuid4()},
+        match="aggregate lineage is immutable",
+    )
+    await _rejects(
+        db_session,
+        statement="UPDATE hub_qc_sessions SET started_at=:replacement WHERE id=:id",
+        params={
+            "id": valid.id,
+            "replacement": valid.started_at + timedelta(microseconds=1),
+        },
         match="aggregate lineage is immutable",
     )
     await _rejects(
@@ -1099,6 +1133,7 @@ async def test_reinspection_defends_against_legacy_unfinished_previous_qc(
             sequence=2,
             previous_session_id=prior.id,
             remediation_id=remediation.id,
+            started_at=remediation_clock + timedelta(microseconds=1),
         ),
         match="completed failed previous QC session",
     )
@@ -1341,26 +1376,70 @@ async def test_pending_remediation_can_cancel_and_then_freezes(
 
 
 @pytest.mark.asyncio
+async def test_remediation_must_start_pending_and_approval_follows_qc_completion(
+    db_session, vendor_user, customer_user
+):
+    graph, receipt, qc, _inspection_row, remediation = await _remediation_fixture(
+        db_session, vendor_user, customer_user, add=False
+    )
+    creation_clock = await db_session.scalar(text("SELECT clock_timestamp()"))
+    remediation.created_at = creation_clock
+    remediation.state = RemediationState.APPROVED
+    remediation.approved_by_id = graph["operator_id"]
+    remediation.approved_at = creation_clock
+    await _rejects(db_session, remediation, match="remediations must start pending")
+
+    remediation.state = RemediationState.PENDING_APPROVAL
+    remediation.approved_by_id = None
+    remediation.approved_at = None
+    db_session.add(remediation)
+    await db_session.flush()
+    parent_completion = await db_session.scalar(text("SELECT clock_timestamp()"))
+    receipt.completed_at = parent_completion
+    await db_session.flush()
+    qc.state = "qc_failed"
+    qc.completed_at = parent_completion
+    await db_session.flush()
+    await _rejects(
+        db_session,
+        statement="UPDATE hub_remediations SET state='approved', approved_by_id=:actor, approved_at=:at WHERE id=:id",
+        params={
+            "id": remediation.id,
+            "actor": graph["operator_id"],
+            "at": creation_clock,
+        },
+        match="remediation approval must follow QC completion",
+    )
+
+
+@pytest.mark.asyncio
 async def test_noncompleted_remediation_rejects_completion_timestamp(
     db_session, vendor_user, customer_user
 ):
     graph, receipt, qc, _inspection_row, remediation = await _remediation_fixture(
         db_session, vendor_user, customer_user, add=False
     )
-    completion_clock = await db_session.scalar(text("SELECT clock_timestamp()"))
-    receipt.completed_at = completion_clock
+    db_session.add(remediation)
+    await db_session.flush()
+    parent_completion = await db_session.scalar(text("SELECT clock_timestamp()"))
+    receipt.completed_at = parent_completion
     await db_session.flush()
     qc.state = "qc_failed"
-    qc.completed_at = completion_clock
+    qc.completed_at = parent_completion
     await db_session.flush()
-    remediation.state = RemediationState.APPROVED
-    remediation.approved_by_id = graph["operator_id"]
-    remediation.approved_at = completion_clock
-    remediation.completed_at = completion_clock
+    approval_clock = await db_session.scalar(text("SELECT clock_timestamp()"))
     await _rejects(
         db_session,
-        remediation,
-        match="ck_hub_remediations_completed_timestamp",
+        statement=(
+            "UPDATE hub_remediations SET state='approved', approved_by_id=:actor, "
+            "approved_at=:at, completed_at=:at WHERE id=:id"
+        ),
+        params={
+            "id": remediation.id,
+            "actor": graph["operator_id"],
+            "at": approval_clock,
+        },
+        match="completion timestamp requires completion transition",
     )
 
 
@@ -1475,7 +1554,7 @@ async def test_remediation_identity_terms_and_forward_only_lifecycle(
         ),
         {"id": qc_row.id},
     )
-    approved_at = approval_clock
+    approved_at = await db_session.scalar(text("SELECT clock_timestamp()"))
     await db_session.execute(
         text(
             "UPDATE hub_remediations SET state='approved', approved_by_id=:actor, approved_at=:at WHERE id=:id"
