@@ -197,6 +197,15 @@ _TRANSFER_QUANTITY_FUNCTION = DDL(
     RETURNS trigger AS $$
     DECLARE cohort_quantity integer;
     BEGIN
+        PERFORM id FROM inbound_transfers WHERE id = NEW.transfer_id FOR UPDATE;
+        IF EXISTS (
+            SELECT 1 FROM hub_receipt_sessions
+            WHERE inbound_transfer_id = NEW.transfer_id AND completed_at IS NOT NULL
+        ) THEN
+            RAISE EXCEPTION USING
+                ERRCODE = '23514',
+                MESSAGE = 'inbound transfer allocations are frozen after receipt completion';
+        END IF;
         SELECT allocated_quantity INTO cohort_quantity
         FROM cohort_item_allocations
         WHERE cohort_id = NEW.cohort_id AND order_item_id = NEW.order_item_id

@@ -590,6 +590,135 @@ async def test_discrepancy_insert_serializes_before_quantity_update(
 
 
 @pytest.mark.asyncio
+async def test_receipt_completion_requires_reconciled_contents(
+    db_session, vendor_user, customer_user
+):
+    graph = await _graph(db_session, vendor_user, customer_user)
+    receipt = _receipt(graph)
+    db_session.add(receipt)
+    await db_session.flush()
+    await _rejects(
+        db_session,
+        statement=(
+            "UPDATE hub_receipt_sessions SET completed_at=clock_timestamp() "
+            "WHERE id=:id"
+        ),
+        params={"id": receipt.id},
+        match="receipt completion requires receipt items",
+    )
+
+
+@pytest.mark.asyncio
+async def test_receipt_completion_serializes_allocation_append(
+    db_session, vendor_user, customer_user
+):
+    graph = await _graph(db_session, vendor_user, customer_user)
+    receipt = _receipt(graph)
+    item = _receipt_item(graph, receipt)
+    db_session.add(receipt)
+    await db_session.flush()
+    db_session.add(item)
+    await db_session.commit()
+
+    sessions = async_sessionmaker(bind=db_session.bind, expire_on_commit=False)
+    started = asyncio.Event()
+
+    async def append_allocation():
+        async with sessions() as session:
+            started.set()
+            try:
+                await session.execute(
+                    text(
+                        """
+                        INSERT INTO inbound_transfer_item_allocations
+                          (transfer_id, order_item_id, cohort_id, order_id, vendor_id,
+                           allocated_quantity, created_at, updated_at)
+                        VALUES
+                          (:transfer, :item, :cohort, :order_id, :vendor,
+                           1, clock_timestamp(), clock_timestamp())
+                        """
+                    ),
+                    {
+                        "transfer": graph["transfer"].id,
+                        "item": uuid.uuid4(),
+                        "cohort": graph["cohort"].id,
+                        "order_id": graph["order"].id,
+                        "vendor": graph["vendor_id"],
+                    },
+                )
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                raise
+
+    async with sessions() as completion_session:
+        await completion_session.execute(
+            text(
+                "UPDATE hub_receipt_sessions SET completed_at=clock_timestamp() "
+                "WHERE id=:id"
+            ),
+            {"id": receipt.id},
+        )
+        append_task = asyncio.create_task(append_allocation())
+        await started.wait()
+        await asyncio.sleep(0.2)
+        assert not append_task.done()
+        await completion_session.commit()
+
+    with pytest.raises(
+        IntegrityError,
+        match="inbound transfer allocations are frozen after receipt completion",
+    ):
+        await asyncio.wait_for(append_task, timeout=5)
+
+
+@pytest.mark.asyncio
+async def test_qc_completion_requires_inspection_chronology(
+    db_session, vendor_user, customer_user
+):
+    graph = await _graph(db_session, vendor_user, customer_user)
+    receipt = _receipt(graph)
+    item = _receipt_item(graph, receipt)
+    qc = _qc(graph, receipt)
+    db_session.add(receipt)
+    await db_session.flush()
+    db_session.add_all([item, qc])
+    await db_session.flush()
+    receipt_completion = await db_session.scalar(text("SELECT clock_timestamp()"))
+    receipt.completed_at = receipt_completion
+    await db_session.flush()
+
+    future_inspection = _inspection(
+        graph,
+        receipt,
+        item,
+        qc,
+        inspected_at=receipt_completion + timedelta(days=1),
+    )
+    await _rejects(
+        db_session,
+        future_inspection,
+        match="inspection timestamp must fall within the active QC session",
+    )
+
+    inspection_time = await db_session.scalar(text("SELECT clock_timestamp()"))
+    db_session.add(_inspection(graph, receipt, item, qc, inspected_at=inspection_time))
+    await db_session.flush()
+    await _rejects(
+        db_session,
+        statement=(
+            "UPDATE hub_qc_sessions SET state='qc_passed', completed_at=:at "
+            "WHERE id=:id"
+        ),
+        params={
+            "id": qc.id,
+            "at": inspection_time - timedelta(microseconds=1),
+        },
+        match="QC completion requires inspection timestamps within the session",
+    )
+
+
+@pytest.mark.asyncio
 async def test_discrepancy_insert_rejects_completed_receipt(
     db_session, vendor_user, customer_user
 ):
@@ -1700,6 +1829,8 @@ async def test_open_receipt_identity_is_frozen_but_completion_is_allowed(
         },
         match="identity is immutable",
     )
+    db_session.add(_receipt_item(graph, receipt))
+    await db_session.flush()
     completion_clock = await db_session.scalar(text("SELECT clock_timestamp()"))
     await db_session.execute(
         text(

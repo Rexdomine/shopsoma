@@ -819,6 +819,28 @@ def upgrade() -> None:
                 RAISE EXCEPTION USING ERRCODE = '23514',
                     MESSAGE = 'receipt session identity is immutable';
             END IF;
+            IF OLD.completed_at IS NULL AND NEW.completed_at IS NOT NULL THEN
+                PERFORM 1 FROM inbound_transfers
+                WHERE id = NEW.inbound_transfer_id FOR UPDATE;
+                IF NOT EXISTS (
+                    SELECT 1 FROM hub_receipt_items WHERE receipt_session_id = NEW.id
+                ) THEN
+                    RAISE EXCEPTION USING ERRCODE = '23514',
+                        MESSAGE = 'receipt completion requires receipt items';
+                END IF;
+                IF EXISTS (
+                    SELECT 1 FROM inbound_transfer_item_allocations allocation
+                    WHERE allocation.transfer_id = NEW.inbound_transfer_id
+                      AND NOT EXISTS (
+                          SELECT 1 FROM hub_receipt_items item
+                          WHERE item.receipt_session_id = NEW.id
+                            AND item.order_item_id = allocation.order_item_id
+                      )
+                ) THEN
+                    RAISE EXCEPTION USING ERRCODE = '23514',
+                        MESSAGE = 'receipt completion requires every transfer allocation to be reconciled';
+                END IF;
+            END IF;
             RETURN NEW;
         END; $$ LANGUAGE plpgsql
         """
@@ -827,6 +849,33 @@ def upgrade() -> None:
         """CREATE TRIGGER tr_hub_receipt_sessions_completed_immutable
         BEFORE INSERT OR UPDATE ON hub_receipt_sessions
         FOR EACH ROW EXECUTE FUNCTION reject_completed_hub_receipt_update()"""
+    )
+    op.execute(
+        """
+        CREATE OR REPLACE FUNCTION validate_inbound_transfer_item_quantity()
+        RETURNS trigger AS $$
+        DECLARE cohort_quantity integer;
+        BEGIN
+            PERFORM id FROM inbound_transfers WHERE id = NEW.transfer_id FOR UPDATE;
+            IF EXISTS (
+                SELECT 1 FROM hub_receipt_sessions
+                WHERE inbound_transfer_id = NEW.transfer_id AND completed_at IS NOT NULL
+            ) THEN
+                RAISE EXCEPTION USING ERRCODE = '23514',
+                    MESSAGE = 'inbound transfer allocations are frozen after receipt completion';
+            END IF;
+            SELECT allocated_quantity INTO cohort_quantity
+            FROM cohort_item_allocations
+            WHERE cohort_id = NEW.cohort_id AND order_item_id = NEW.order_item_id
+            FOR UPDATE;
+            IF NEW.allocated_quantity > cohort_quantity THEN
+                RAISE EXCEPTION USING ERRCODE = '23514',
+                    MESSAGE = 'inbound transfer allocation exceeds cohort allocation';
+            END IF;
+            RETURN NEW;
+        END;
+        $$ LANGUAGE plpgsql
+        """
     )
     op.execute(
         """
@@ -971,7 +1020,7 @@ def upgrade() -> None:
     op.execute(
         """
         CREATE FUNCTION reject_completed_hub_qc_update() RETURNS trigger AS $$
-        DECLARE qc_completed timestamptz; receipt_completed timestamptz;
+        DECLARE qc_completed timestamptz; qc_started timestamptz; receipt_completed timestamptz;
         BEGIN
             IF TG_TABLE_NAME = 'hub_qc_sessions' THEN
                 IF TG_OP = 'INSERT' THEN
@@ -1044,6 +1093,14 @@ def upgrade() -> None:
                         RAISE EXCEPTION USING ERRCODE = '23514',
                             MESSAGE = 'QC completion must follow receipt completion';
                     END IF;
+                    IF EXISTS (
+                        SELECT 1 FROM hub_qc_inspections
+                        WHERE qc_session_id = NEW.id
+                          AND (inspected_at < NEW.started_at OR inspected_at > NEW.completed_at)
+                    ) THEN
+                        RAISE EXCEPTION USING ERRCODE = '23514',
+                            MESSAGE = 'QC completion requires inspection timestamps within the session';
+                    END IF;
                     IF NEW.state = 'qc_passed' AND (
                         NOT EXISTS (
                             SELECT 1 FROM hub_receipt_items
@@ -1086,11 +1143,15 @@ def upgrade() -> None:
                     RAISE EXCEPTION USING ERRCODE = '23514',
                         MESSAGE = 'QC inspection aggregate identity is immutable';
                 END IF;
-                SELECT completed_at INTO qc_completed FROM hub_qc_sessions
-                 WHERE id = NEW.qc_session_id FOR UPDATE;
+                SELECT started_at, completed_at INTO qc_started, qc_completed FROM hub_qc_sessions
+                WHERE id = NEW.qc_session_id FOR UPDATE;
                 IF qc_completed IS NOT NULL THEN
                     RAISE EXCEPTION USING ERRCODE = '23514',
                         MESSAGE = 'inspections in completed QC sessions are immutable';
+                END IF;
+                IF NEW.inspected_at < qc_started OR NEW.inspected_at > clock_timestamp() THEN
+                    RAISE EXCEPTION USING ERRCODE = '23514',
+                        MESSAGE = 'inspection timestamp must fall within the active QC session';
                 END IF;
                 IF TG_OP = 'UPDATE' AND EXISTS (
                     SELECT 1 FROM hub_remediations
@@ -1368,6 +1429,26 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # Restore the pre-lane-3C allocation guard before dropping hub tables.
+    op.execute(
+        """
+        CREATE OR REPLACE FUNCTION validate_inbound_transfer_item_quantity()
+        RETURNS trigger AS $$
+        DECLARE cohort_quantity integer;
+        BEGIN
+            SELECT allocated_quantity INTO cohort_quantity
+            FROM cohort_item_allocations
+            WHERE cohort_id = NEW.cohort_id AND order_item_id = NEW.order_item_id
+            FOR UPDATE;
+            IF NEW.allocated_quantity > cohort_quantity THEN
+                RAISE EXCEPTION USING ERRCODE = '23514',
+                    MESSAGE = 'inbound transfer allocation exceeds cohort allocation';
+            END IF;
+            RETURN NEW;
+        END;
+        $$ LANGUAGE plpgsql
+        """
+    )
     # ### commands auto generated by Alembic - please adjust! ###
     op.execute(
         "DROP TRIGGER IF EXISTS tr_hub_discrepancies_receipt_open "
