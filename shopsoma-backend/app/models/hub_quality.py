@@ -778,8 +778,8 @@ class HubRemediation(Base):
             name="ck_hub_remediations_disposition_required",
         ),
         CheckConstraint(
-            "(state = 'pending_approval' AND approved_at IS NULL AND approved_by_id IS NULL) OR "
-            "(state <> 'pending_approval' AND approved_at IS NOT NULL AND approved_by_id IS NOT NULL)",
+            "(state IN ('pending_approval', 'cancelled') AND approved_at IS NULL AND approved_by_id IS NULL) OR "
+            "(state NOT IN ('pending_approval', 'cancelled') AND approved_at IS NOT NULL AND approved_by_id IS NOT NULL)",
             name="ck_hub_remediations_approval_audit",
         ),
         CheckConstraint(
@@ -1103,6 +1103,7 @@ BEGIN
         IF NEW.state IS DISTINCT FROM OLD.state AND NOT (
             (OLD.state = 'pending_approval' AND NEW.state = 'approved'
              AND NEW.approved_by_id IS NOT NULL AND NEW.approved_at IS NOT NULL)
+            OR (OLD.state = 'pending_approval' AND NEW.state = 'cancelled')
             OR (OLD.state = 'approved' AND NEW.state = 'in_progress')
             OR (OLD.state = 'in_progress' AND NEW.state = 'completed'
                 AND NEW.completed_at IS NOT NULL)
@@ -1238,6 +1239,26 @@ BEGIN
 END; $$ LANGUAGE plpgsql
 """
 )
+_DISCREPANCY_INSERT_FUNCTION = DDL(
+    """
+CREATE FUNCTION validate_hub_discrepancy_insert() RETURNS trigger AS $$
+DECLARE receipt_completed timestamptz;
+BEGIN
+    SELECT completed_at INTO receipt_completed FROM hub_receipt_sessions
+    WHERE id = NEW.receipt_session_id FOR UPDATE;
+    IF receipt_completed IS NOT NULL THEN
+        RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'completed receipt sessions are immutable';
+    END IF;
+    RETURN NEW;
+END; $$ LANGUAGE plpgsql
+"""
+)
+_DISCREPANCY_INSERT_TRIGGER = DDL(
+    """
+CREATE TRIGGER tr_hub_discrepancies_receipt_open BEFORE INSERT ON hub_discrepancies
+FOR EACH ROW EXECUTE FUNCTION validate_hub_discrepancy_insert()
+"""
+)
 _AUDIT_UPDATE_FUNCTION = DDL(
     """
 CREATE FUNCTION reject_hub_quality_audit_update() RETURNS trigger AS $$
@@ -1266,6 +1287,8 @@ event.listen(HubRemediation.__table__, "after_create", _REMEDIATION_INVARIANT_TR
 event.listen(HubRemediation.__table__, "after_create", _QC_LINEAGE_FUNCTION)
 event.listen(HubRemediation.__table__, "after_create", _QC_LINEAGE_TRIGGER)
 event.listen(HubReceiptSession.__table__, "after_create", _AUDIT_FUNCTION)
+event.listen(HubDiscrepancy.__table__, "after_create", _DISCREPANCY_INSERT_FUNCTION)
+event.listen(HubDiscrepancy.__table__, "after_create", _DISCREPANCY_INSERT_TRIGGER)
 event.listen(HubDiscrepancy.__table__, "after_create", _AUDIT_UPDATE_FUNCTION)
 event.listen(HubEvidence.__table__, "after_create", _EVIDENCE_UPDATE_FUNCTION)
 event.listen(HubEvidence.__table__, "after_create", _EVIDENCE_UPDATE_TRIGGER)
@@ -1350,6 +1373,11 @@ event.listen(
     HubReceiptSession.__table__,
     "after_drop",
     DDL("DROP FUNCTION IF EXISTS reject_completed_hub_receipt_update() CASCADE"),
+)
+event.listen(
+    HubDiscrepancy.__table__,
+    "after_drop",
+    DDL("DROP FUNCTION IF EXISTS validate_hub_discrepancy_insert() CASCADE"),
 )
 event.listen(
     HubDiscrepancy.__table__,

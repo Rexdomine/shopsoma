@@ -384,6 +384,26 @@ async def test_receipt_item_allocation_quantity_identity_and_scan_invariants(
 
 
 @pytest.mark.asyncio
+async def test_discrepancy_insert_rejects_completed_receipt(
+    db_session, vendor_user, customer_user
+):
+    graph = await _graph(db_session, vendor_user, customer_user)
+    receipt = _receipt(graph)
+    item = _receipt_item(graph, receipt)
+    db_session.add(receipt)
+    await db_session.flush()
+    db_session.add(item)
+    await db_session.flush()
+    receipt.completed_at = await db_session.scalar(text("SELECT clock_timestamp()"))
+    await db_session.flush()
+    await _rejects(
+        db_session,
+        _discrepancy(graph, receipt, item, DiscrepancyType.DAMAGE),
+        match="completed receipt sessions are immutable",
+    )
+
+
+@pytest.mark.asyncio
 async def test_discrepancy_types_semantics_and_composite_identity(
     db_session, vendor_user, customer_user
 ):
@@ -1248,6 +1268,25 @@ async def _remediation_fixture(db_session, vendor_user, customer_user, *, add=Tr
 
 
 @pytest.mark.asyncio
+async def test_pending_remediation_can_cancel_and_then_freezes(
+    db_session, vendor_user, customer_user
+):
+    _graph_row, _receipt_row, _qc_row, _inspection_row, remediation = (
+        await _remediation_fixture(db_session, vendor_user, customer_user)
+    )
+    await db_session.execute(
+        text("UPDATE hub_remediations SET state='cancelled' WHERE id=:id"),
+        {"id": remediation.id},
+    )
+    await _rejects(
+        db_session,
+        statement="UPDATE hub_remediations SET private_notes='rewrite' WHERE id=:id",
+        params={"id": remediation.id},
+        match="terminal or consumed remediation is immutable",
+    )
+
+
+@pytest.mark.asyncio
 async def test_open_receipt_identity_is_frozen_but_completion_is_allowed(
     db_session, vendor_user, customer_user
 ):
@@ -1413,13 +1452,12 @@ async def test_remediation_identity_terms_and_forward_only_lifecycle(
         cancelled_inspection,
         cancelled,
     ) = await _remediation_fixture(db_session, vendor_user, customer_user, add=False)
-    cancellation_clock = await db_session.scalar(text("SELECT clock_timestamp()"))
-    cancelled.state = RemediationState.CANCELLED
-    cancelled.approved_by_id = cancelled_graph["operator_id"]
-    cancelled.created_at = cancellation_clock
-    cancelled.approved_at = cancellation_clock
     db_session.add(cancelled)
     await db_session.flush()
+    await db_session.execute(
+        text("UPDATE hub_remediations SET state='cancelled' WHERE id=:id"),
+        {"id": cancelled.id},
+    )
     await _rejects(
         db_session,
         statement="UPDATE hub_remediations SET private_notes='rewrite' WHERE id=:id",
