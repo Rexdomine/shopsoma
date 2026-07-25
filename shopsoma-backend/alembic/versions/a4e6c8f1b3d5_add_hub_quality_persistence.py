@@ -812,6 +812,7 @@ def upgrade() -> None:
         """
         CREATE FUNCTION validate_hub_receipt_item_quantity() RETURNS trigger AS $$
         DECLARE allocated integer; already_received integer; receipt_completed timestamptz;
+                max_inspected integer;
         BEGIN
             IF TG_OP = 'UPDATE' AND (
                 NEW.id IS DISTINCT FROM OLD.id
@@ -849,6 +850,14 @@ def upgrade() -> None:
             IF already_received + NEW.received_quantity > allocated THEN
                 RAISE EXCEPTION USING ERRCODE = '23514',
                     MESSAGE = 'cumulative received quantity exceeds transfer allocation';
+            END IF;
+            IF TG_OP = 'UPDATE' THEN
+                SELECT COALESCE(MAX(inspected_quantity), 0) INTO max_inspected
+                FROM hub_qc_inspections WHERE receipt_item_id = NEW.id;
+                IF NEW.received_quantity < max_inspected THEN
+                    RAISE EXCEPTION USING ERRCODE = '23514',
+                        MESSAGE = 'received quantity cannot drop below inspected quantity';
+                END IF;
             END IF;
             RETURN NEW;
         END; $$ LANGUAGE plpgsql
@@ -928,7 +937,7 @@ def upgrade() -> None:
     op.execute(
         """
         CREATE FUNCTION reject_completed_hub_qc_update() RETURNS trigger AS $$
-        DECLARE qc_completed timestamptz;
+        DECLARE qc_completed timestamptz; receipt_completed timestamptz;
         BEGIN
             IF TG_TABLE_NAME = 'hub_qc_sessions' THEN
                 IF NEW.id IS DISTINCT FROM OLD.id
@@ -948,6 +957,43 @@ def upgrade() -> None:
                     RAISE EXCEPTION USING ERRCODE = '23514',
                         MESSAGE = 'completed QC sessions are immutable';
                 END IF;
+                IF OLD.completed_at IS NULL AND NEW.completed_at IS NOT NULL THEN
+                    IF NEW.state NOT IN ('qc_passed', 'qc_failed') THEN
+                        RAISE EXCEPTION USING ERRCODE = '23514',
+                            MESSAGE = 'QC completion requires a terminal state';
+                    END IF;
+                    SELECT completed_at INTO receipt_completed FROM hub_receipt_sessions
+                    WHERE id = NEW.receipt_session_id FOR UPDATE;
+                    IF receipt_completed IS NULL THEN
+                        RAISE EXCEPTION USING ERRCODE = '23514',
+                            MESSAGE = 'QC completion requires a completed receipt session';
+                    END IF;
+                    IF NEW.state = 'qc_passed' AND (
+                        NOT EXISTS (
+                            SELECT 1 FROM hub_receipt_items
+                            WHERE receipt_session_id = NEW.receipt_session_id
+                        ) OR EXISTS (
+                            SELECT 1 FROM hub_receipt_items item
+                            WHERE item.receipt_session_id = NEW.receipt_session_id
+                              AND NOT EXISTS (
+                                  SELECT 1 FROM hub_qc_inspections inspection
+                                  WHERE inspection.qc_session_id = NEW.id
+                                    AND inspection.receipt_item_id = item.id
+                                    AND inspection.decision = 'pass'
+                              )
+                        )
+                    ) THEN
+                        RAISE EXCEPTION USING ERRCODE = '23514',
+                            MESSAGE = 'passed QC completion requires all receipt items to pass';
+                    END IF;
+                    IF NEW.state = 'qc_failed' AND NOT EXISTS (
+                        SELECT 1 FROM hub_qc_inspections
+                        WHERE qc_session_id = NEW.id AND decision IN ('fail', 'rejected')
+                    ) THEN
+                        RAISE EXCEPTION USING ERRCODE = '23514',
+                            MESSAGE = 'failed QC completion requires a failed or rejected inspection';
+                    END IF;
+                END IF;
             ELSE
                 IF TG_OP = 'UPDATE' AND (
                     NEW.id IS DISTINCT FROM OLD.id
@@ -964,18 +1010,18 @@ def upgrade() -> None:
                     RAISE EXCEPTION USING ERRCODE = '23514',
                         MESSAGE = 'QC inspection aggregate identity is immutable';
                 END IF;
+                SELECT completed_at INTO qc_completed FROM hub_qc_sessions
+                 WHERE id = NEW.qc_session_id FOR UPDATE;
+                IF qc_completed IS NOT NULL THEN
+                    RAISE EXCEPTION USING ERRCODE = '23514',
+                        MESSAGE = 'inspections in completed QC sessions are immutable';
+                END IF;
                 IF TG_OP = 'UPDATE' AND NEW.decision IS DISTINCT FROM OLD.decision AND EXISTS (
                     SELECT 1 FROM hub_remediations
                     WHERE failed_inspection_id = OLD.id
                 ) THEN
                     RAISE EXCEPTION USING ERRCODE = '23514',
                         MESSAGE = 'remediated inspection decisions are immutable';
-                END IF;
-                SELECT completed_at INTO qc_completed FROM hub_qc_sessions
-                 WHERE id = NEW.qc_session_id FOR UPDATE;
-                IF qc_completed IS NOT NULL THEN
-                    RAISE EXCEPTION USING ERRCODE = '23514',
-                        MESSAGE = 'inspections in completed QC sessions are immutable';
                 END IF;
             END IF;
             RETURN NEW;
@@ -995,7 +1041,8 @@ def upgrade() -> None:
     op.execute(
         """
         CREATE FUNCTION validate_hub_remediation_invariants() RETURNS trigger AS $$
-        DECLARE inspection_decision hub_qc_decision;
+        DECLARE inspection_decision hub_qc_decision; parent_qc_state varchar;
+                parent_qc_completed timestamptz;
         BEGIN
             IF NEW.approved_at IS NOT NULL AND (
                 NEW.approved_at < NEW.created_at OR NEW.approved_at > clock_timestamp()
@@ -1055,10 +1102,17 @@ def upgrade() -> None:
                         MESSAGE = 'completion timestamp requires completion transition';
                 END IF;
             END IF;
+            SELECT state, completed_at INTO parent_qc_state, parent_qc_completed
+            FROM hub_qc_sessions WHERE id = NEW.qc_session_id FOR UPDATE;
+            IF NEW.state IN ('approved', 'in_progress', 'completed') THEN
+                IF parent_qc_state IS DISTINCT FROM 'qc_failed' OR parent_qc_completed IS NULL THEN
+                    RAISE EXCEPTION USING ERRCODE = '23514',
+                        MESSAGE = 'remediation approval requires a completed failed QC session';
+                END IF;
+            END IF;
             SELECT decision INTO inspection_decision
             FROM hub_qc_inspections
-            WHERE id = NEW.failed_inspection_id AND qc_session_id = NEW.qc_session_id
-            FOR UPDATE;
+            WHERE id = NEW.failed_inspection_id AND qc_session_id = NEW.qc_session_id;
             IF inspection_decision IS NULL OR inspection_decision NOT IN ('fail', 'rejected') THEN
                 RAISE EXCEPTION USING ERRCODE = '23514',
                     MESSAGE = 'remediation requires a failed or rejected inspection';

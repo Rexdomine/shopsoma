@@ -67,6 +67,12 @@ def test_lane_3c_migration_is_additive_symmetric_private_and_narrow() -> None:
         "completion timestamp must follow approval and not be future-dated",
         "event timestamp must follow evidence creation and not be future-dated",
         "retention event timestamps must strictly increase",
+        "received quantity cannot drop below inspected quantity",
+        "QC completion requires a terminal state",
+        "QC completion requires a completed receipt session",
+        "passed QC completion requires all receipt items to pass",
+        "failed QC completion requires a failed or rejected inspection",
+        "remediation approval requires a completed failed QC session",
     ):
         assert required in source
     lowered = source.lower()

@@ -614,6 +614,118 @@ async def test_evidence_purpose_subject_privacy_retention_and_aggregate_binding(
 
 
 @pytest.mark.asyncio
+async def test_receipt_quantity_cannot_drop_below_existing_inspection(
+    db_session, vendor_user, customer_user
+):
+    graph = await _graph(db_session, vendor_user, customer_user)
+    receipt = _receipt(graph)
+    item = _receipt_item(graph, receipt)
+    qc = _qc(graph, receipt)
+    db_session.add(receipt)
+    await db_session.flush()
+    db_session.add(item)
+    await db_session.flush()
+    db_session.add(qc)
+    await db_session.flush()
+    inspection = _inspection(graph, receipt, item, qc)
+    db_session.add(inspection)
+    await db_session.flush()
+
+    await _rejects(
+        db_session,
+        statement="UPDATE hub_receipt_items SET received_quantity=:quantity WHERE id=:id",
+        params={"id": item.id, "quantity": inspection.inspected_quantity - 1},
+        match="below inspected quantity",
+    )
+
+
+@pytest.mark.asyncio
+async def test_qc_completion_requires_terminal_outcome_matching_inspections(
+    db_session, vendor_user, customer_user
+):
+    graph = await _graph(db_session, vendor_user, customer_user)
+    receipt = _receipt(graph)
+    item = _receipt_item(graph, receipt)
+    qc = _qc(graph, receipt)
+    db_session.add(receipt)
+    await db_session.flush()
+    db_session.add(item)
+    await db_session.flush()
+    db_session.add(qc)
+    await db_session.flush()
+
+    await _rejects(
+        db_session,
+        statement="UPDATE hub_qc_sessions SET completed_at=clock_timestamp() WHERE id=:id",
+        params={"id": qc.id},
+        match="terminal state",
+    )
+    db_session.add(
+        _inspection(
+            graph,
+            receipt,
+            item,
+            qc,
+            decision=QCDecision.PASS,
+            reason_code=None,
+            quarantine_disposition=QuarantineDisposition.NOT_APPLICABLE,
+        )
+    )
+    await db_session.flush()
+    await _rejects(
+        db_session,
+        statement="UPDATE hub_qc_sessions SET state='qc_passed', completed_at=clock_timestamp() WHERE id=:id",
+        params={"id": qc.id},
+        match="completed receipt session",
+    )
+    receipt.completed_at = await db_session.scalar(text("SELECT clock_timestamp()"))
+    await db_session.flush()
+    await _rejects(
+        db_session,
+        statement="UPDATE hub_qc_sessions SET state='qc_failed', completed_at=clock_timestamp() WHERE id=:id",
+        params={"id": qc.id},
+        match="failed or rejected inspection",
+    )
+    await db_session.execute(
+        text(
+            "UPDATE hub_qc_sessions SET state='qc_passed', completed_at=clock_timestamp() WHERE id=:id"
+        ),
+        {"id": qc.id},
+    )
+
+    failing_graph = await _graph(db_session, vendor_user, customer_user)
+    failing_receipt = _receipt(failing_graph)
+    failing_item = _receipt_item(failing_graph, failing_receipt)
+    failing_qc = _qc(failing_graph, failing_receipt)
+    db_session.add(failing_receipt)
+    await db_session.flush()
+    db_session.add(failing_item)
+    await db_session.flush()
+    db_session.add(failing_qc)
+    await db_session.flush()
+    db_session.add(
+        _inspection(failing_graph, failing_receipt, failing_item, failing_qc)
+    )
+    await db_session.flush()
+    failing_receipt.completed_at = await db_session.scalar(
+        text("SELECT clock_timestamp()")
+    )
+    await db_session.flush()
+    await _rejects(
+        db_session,
+        statement="UPDATE hub_qc_sessions SET state='qc_passed', completed_at=clock_timestamp() WHERE id=:id",
+        params={"id": failing_qc.id},
+        match="all receipt items to pass",
+    )
+    await db_session.execute(
+        text(
+            "UPDATE hub_qc_sessions SET state='qc_failed', completed_at=clock_timestamp() WHERE id=:id"
+        ),
+        {"id": failing_qc.id},
+    )
+
+
+@pytest.mark.asyncio
 async def test_qc_completion_serializes_against_concurrent_inspection_insert(
     db_session, vendor_user, customer_user
 ):
@@ -626,6 +738,10 @@ async def test_qc_completion_serializes_against_concurrent_inspection_insert(
     db_session.add(item)
     await db_session.flush()
     db_session.add(qc)
+    await db_session.flush()
+    db_session.add(_inspection(graph, receipt, item, qc))
+    await db_session.flush()
+    receipt.completed_at = await db_session.scalar(text("SELECT clock_timestamp()"))
     await db_session.commit()
 
     sessions = async_sessionmaker(bind=db_session.bind, expire_on_commit=False)
@@ -633,9 +749,9 @@ async def test_qc_completion_serializes_against_concurrent_inspection_insert(
     await completing.execute(
         text(
             "UPDATE hub_qc_sessions "
-            "SET state='qc_failed', completed_at=:completed WHERE id=:id"
+            "SET state='qc_failed', completed_at=clock_timestamp() WHERE id=:id"
         ),
-        {"id": qc.id, "completed": NOW + timedelta(minutes=1)},
+        {"id": qc.id},
     )
 
     async def insert_inspection():
@@ -748,6 +864,8 @@ async def _failed_cycle(db_session, graph):
     db_session.add(inspection)
     await db_session.flush()
     cycle_clock = await db_session.scalar(text("SELECT clock_timestamp()"))
+    receipt.completed_at = cycle_clock
+    await db_session.flush()
     qc.state = "qc_failed"
     qc.completed_at = cycle_clock
     await db_session.flush()
@@ -834,7 +952,7 @@ async def test_reinspection_requires_exact_completed_failed_remediated_lineage(
 
 
 @pytest.mark.asyncio
-async def test_reinspection_rejects_unfinished_previous_or_remediation(
+async def test_reinspection_defends_against_legacy_unfinished_previous_qc(
     db_session, vendor_user, customer_user
 ):
     graph = await _graph(db_session, vendor_user, customer_user)
@@ -862,8 +980,20 @@ async def test_reinspection_rejects_unfinished_previous_or_remediation(
         approved_at=remediation_clock,
         completed_at=remediation_clock,
     )
-    db_session.add(remediation)
-    await db_session.flush()
+    await db_session.execute(
+        text(
+            "ALTER TABLE hub_remediations DISABLE TRIGGER tr_hub_remediations_invariants"
+        )
+    )
+    try:
+        db_session.add(remediation)
+        await db_session.flush()
+    finally:
+        await db_session.execute(
+            text(
+                "ALTER TABLE hub_remediations ENABLE TRIGGER tr_hub_remediations_invariants"
+            )
+        )
     await _rejects(
         db_session,
         _qc(
@@ -873,9 +1003,14 @@ async def test_reinspection_rejects_unfinished_previous_or_remediation(
             previous_session_id=prior.id,
             remediation_id=remediation.id,
         ),
-        match="completed failed",
+        match="completed failed previous QC session",
     )
 
+
+@pytest.mark.asyncio
+async def test_reinspection_rejects_unfinished_remediation(
+    db_session, vendor_user, customer_user
+):
     pending_graph = await _graph(db_session, vendor_user, customer_user)
     pending_receipt = _receipt(pending_graph)
     pending_item = _receipt_item(pending_graph, pending_receipt)
@@ -891,7 +1026,10 @@ async def test_reinspection_rejects_unfinished_previous_or_remediation(
     )
     db_session.add(pending_inspection)
     await db_session.flush()
-    pending_prior.completed_at = NOW + timedelta(minutes=1)
+    completion_clock = await db_session.scalar(text("SELECT clock_timestamp()"))
+    pending_receipt.completed_at = completion_clock
+    await db_session.flush()
+    pending_prior.completed_at = completion_clock
     await db_session.flush()
     pending_remediation = _remediation(
         pending_graph, pending_receipt, pending_prior, pending_inspection
@@ -953,8 +1091,11 @@ async def test_completed_qc_immutability_transition_and_all_audit_deletes(
         params={"id": evidence.id, "hash": "b" * 64},
         match="audit records are immutable",
     )
+    completion_clock = await db_session.scalar(text("SELECT clock_timestamp()"))
+    receipt.completed_at = completion_clock
+    await db_session.flush()
     qc.state = "qc_failed"
-    qc.completed_at = NOW + timedelta(minutes=1)
+    qc.completed_at = completion_clock
     await db_session.flush()  # transition into completion is allowed
     await _rejects(
         db_session,
@@ -1109,7 +1250,7 @@ async def test_open_receipt_identity_is_frozen_but_completion_is_allowed(
 async def test_remediation_identity_terms_and_forward_only_lifecycle(
     db_session, vendor_user, customer_user
 ):
-    graph, _receipt_row, _qc_row, _inspection_row, remediation = (
+    graph, receipt_row, qc_row, _inspection_row, remediation = (
         await _remediation_fixture(db_session, vendor_user, customer_user)
     )
     other, other_receipt, other_qc, other_inspection, _ = await _remediation_fixture(
@@ -1154,6 +1295,24 @@ async def test_remediation_identity_terms_and_forward_only_lifecycle(
             },
             match="approval timestamp",
         )
+    await _rejects(
+        db_session,
+        statement="UPDATE hub_remediations SET state='approved', approved_by_id=:actor, approved_at=:at WHERE id=:id",
+        params={
+            "id": remediation.id,
+            "actor": graph["operator_id"],
+            "at": approval_clock,
+        },
+        match="completed failed QC session",
+    )
+    receipt_row.completed_at = await db_session.scalar(text("SELECT clock_timestamp()"))
+    await db_session.flush()
+    await db_session.execute(
+        text(
+            "UPDATE hub_qc_sessions SET state='qc_failed', completed_at=clock_timestamp() WHERE id=:id"
+        ),
+        {"id": qc_row.id},
+    )
     approved_at = approval_clock
     await db_session.execute(
         text(
