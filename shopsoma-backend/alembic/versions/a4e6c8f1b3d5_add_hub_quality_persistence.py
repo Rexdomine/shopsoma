@@ -117,7 +117,7 @@ def upgrade() -> None:
         sa.Column("previous_session_id", sa.UUID(), nullable=True),
         sa.Column("remediation_id", sa.UUID(), nullable=True),
         sa.Column("state", sa.String(length=30), nullable=False),
-        sa.Column("started_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("started_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("version", sa.Integer(), server_default="1", nullable=False),
         sa.Column(
@@ -1039,6 +1039,10 @@ def upgrade() -> None:
                     IF receipt_completed IS NULL THEN
                         RAISE EXCEPTION USING ERRCODE = '23514',
                             MESSAGE = 'QC completion requires a completed receipt session';
+                    END IF;
+                    IF NEW.completed_at < receipt_completed THEN
+                        RAISE EXCEPTION USING ERRCODE = '23514',
+                            MESSAGE = 'QC completion must follow receipt completion';
                     END IF;
                     IF NEW.state = 'qc_passed' AND (
                         NOT EXISTS (

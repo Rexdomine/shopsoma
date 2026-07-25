@@ -358,7 +358,7 @@ class HubQCSession(Base):
     previous_session_id = Column(_UUID, nullable=True)
     remediation_id = Column(_UUID, nullable=True)
     state = Column(String(30), nullable=False)
-    started_at = Column(DateTime(timezone=True), nullable=True)
+    started_at = Column(DateTime(timezone=True), nullable=False)
     completed_at = Column(DateTime(timezone=True), nullable=True)
     version = Column(Integer, nullable=False, default=1, server_default="1")
     created_at, updated_at = _timestamps()
@@ -1049,6 +1049,9 @@ BEGIN
             WHERE id = NEW.receipt_session_id FOR UPDATE;
             IF receipt_completed IS NULL THEN
                 RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'QC completion requires a completed receipt session';
+            END IF;
+            IF NEW.completed_at < receipt_completed THEN
+                RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'QC completion must follow receipt completion';
             END IF;
             IF NEW.state = 'qc_passed' AND (
                 NOT EXISTS (

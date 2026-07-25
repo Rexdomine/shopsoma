@@ -442,6 +442,11 @@ async def test_qc_state_machine_rejects_terminal_without_completion_and_regressi
             _qc(graph, receipt, state=unreachable_state),
             match="QC sessions must start pending or in progress",
         )
+    await _rejects(
+        db_session,
+        _qc(graph, receipt, started_at=None),
+        match="started_at",
+    )
     db_session.add(item)
     await db_session.flush()
     db_session.add(qc)
@@ -458,7 +463,8 @@ async def test_qc_state_machine_rejects_terminal_without_completion_and_regressi
         )
     )
     await db_session.flush()
-    receipt.completed_at = await db_session.scalar(text("SELECT clock_timestamp()"))
+    receipt_completion = await db_session.scalar(text("SELECT clock_timestamp()"))
+    receipt.completed_at = receipt_completion
     await db_session.flush()
 
     await _rejects(
@@ -472,6 +478,18 @@ async def test_qc_state_machine_rejects_terminal_without_completion_and_regressi
         statement="UPDATE hub_qc_sessions SET state='qc_pending' WHERE id=:id",
         params={"id": qc.id},
         match="illegal QC state transition",
+    )
+    await _rejects(
+        db_session,
+        statement=(
+            "UPDATE hub_qc_sessions SET state='qc_passed', completed_at=:at "
+            "WHERE id=:id"
+        ),
+        params={
+            "id": qc.id,
+            "at": receipt_completion - timedelta(microseconds=1),
+        },
+        match="QC completion must follow receipt completion",
     )
 
     completion_clock = await db_session.scalar(text("SELECT clock_timestamp()"))

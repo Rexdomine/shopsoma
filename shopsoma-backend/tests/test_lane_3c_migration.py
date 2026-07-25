@@ -93,6 +93,8 @@ def test_lane_3c_migration_is_additive_symmetric_private_and_narrow() -> None:
         "illegal QC state transition",
         "terminal QC state requires completion",
         "QC sessions must start pending or in progress",
+        'sa.Column("started_at", sa.DateTime(timezone=True), nullable=False)',
+        "QC completion must follow receipt completion",
         "state IN ('qc_pending', 'qc_in_progress', 'qc_passed', 'qc_failed')",
         "receipt quantity is frozen after discrepancy",
         "WHERE id = NEW.receipt_item_id AND receipt_session_id = NEW.receipt_session_id",
