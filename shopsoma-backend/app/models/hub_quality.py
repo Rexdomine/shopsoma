@@ -791,7 +791,8 @@ class HubRemediation(Base):
             name="ck_hub_remediations_time_order",
         ),
         CheckConstraint(
-            "state <> 'completed' OR completed_at IS NOT NULL",
+            "(state = 'completed' AND completed_at IS NOT NULL) OR "
+            "(state <> 'completed' AND completed_at IS NULL)",
             name="ck_hub_remediations_completed_timestamp",
         ),
         CheckConstraint("version >= 1", name="ck_hub_remediations_version_positive"),
@@ -828,6 +829,9 @@ BEGIN
             RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'receipt sessions must start incomplete';
         END IF;
         RETURN NEW;
+    END IF;
+    IF NEW.completed_at IS NOT NULL AND NEW.completed_at > clock_timestamp() THEN
+        RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'receipt completion timestamp cannot be future-dated';
     END IF;
     IF OLD.completed_at IS NOT NULL THEN
         RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'completed receipt sessions are immutable';
@@ -976,6 +980,9 @@ BEGIN
                 RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'QC sessions must start incomplete';
             END IF;
             RETURN NEW;
+        END IF;
+        IF NEW.completed_at IS NOT NULL AND NEW.completed_at > clock_timestamp() THEN
+            RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'QC completion timestamp cannot be future-dated';
         END IF;
         IF NEW.id IS DISTINCT FROM OLD.id
            OR NEW.receipt_session_id IS DISTINCT FROM OLD.receipt_session_id

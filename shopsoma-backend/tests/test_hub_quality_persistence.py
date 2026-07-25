@@ -328,7 +328,7 @@ async def test_receipt_item_allocation_quantity_identity_and_scan_invariants(
         params={"id": item.id},
         match="aggregate identity is immutable",
     )
-    receipt.completed_at = NOW + timedelta(minutes=1)
+    receipt.completed_at = await db_session.scalar(text("SELECT clock_timestamp()"))
     await db_session.flush()
     await _rejects(
         db_session,
@@ -655,6 +655,59 @@ async def test_receipt_and_qc_sessions_must_start_incomplete(
     qc = _qc(qc_graph, qc_receipt)
     qc.completed_at = await db_session.scalar(text("SELECT clock_timestamp()"))
     await _rejects(db_session, qc, match="QC sessions must start incomplete")
+
+
+@pytest.mark.asyncio
+async def test_receipt_and_qc_completion_timestamps_cannot_be_future_dated(
+    db_session, vendor_user, customer_user
+):
+    receipt_graph = await _graph(db_session, vendor_user, customer_user)
+    receipt = _receipt(receipt_graph)
+    receipt_item = _receipt_item(receipt_graph, receipt)
+    db_session.add(receipt)
+    await db_session.flush()
+    db_session.add(receipt_item)
+    await db_session.flush()
+    future_clock = await db_session.scalar(
+        text("SELECT clock_timestamp() + interval '1 day'")
+    )
+    await _rejects(
+        db_session,
+        statement="UPDATE hub_receipt_sessions SET completed_at=:at WHERE id=:id",
+        params={"id": receipt.id, "at": future_clock},
+        match="receipt completion timestamp cannot be future-dated",
+    )
+
+    qc_graph = await _graph(db_session, vendor_user, customer_user)
+    qc_receipt = _receipt(qc_graph)
+    qc_item = _receipt_item(qc_graph, qc_receipt)
+    qc = _qc(qc_graph, qc_receipt)
+    db_session.add(qc_receipt)
+    await db_session.flush()
+    db_session.add(qc_item)
+    await db_session.flush()
+    db_session.add(qc)
+    await db_session.flush()
+    db_session.add(
+        _inspection(
+            qc_graph,
+            qc_receipt,
+            qc_item,
+            qc,
+            decision=QCDecision.PASS,
+            reason_code=None,
+            quarantine_disposition=QuarantineDisposition.NOT_APPLICABLE,
+        )
+    )
+    await db_session.flush()
+    qc_receipt.completed_at = await db_session.scalar(text("SELECT clock_timestamp()"))
+    await db_session.flush()
+    await _rejects(
+        db_session,
+        statement="UPDATE hub_qc_sessions SET state='qc_passed', completed_at=:at WHERE id=:id",
+        params={"id": qc.id, "at": future_clock},
+        match="QC completion timestamp cannot be future-dated",
+    )
 
 
 @pytest.mark.asyncio
@@ -1209,13 +1262,14 @@ async def test_optimistic_versioning_for_all_mutable_hub_records(
     )
 
     sessions = async_sessionmaker(bind=db_session.bind, expire_on_commit=False)
+    completion_clock = await db_session.scalar(text("SELECT clock_timestamp()"))
     changes = (
         (
             HubReceiptSession,
             receipt.id,
             "completed_at",
-            NOW + timedelta(minutes=1),
-            NOW + timedelta(minutes=2),
+            completion_clock,
+            completion_clock,
         ),
         (HubQCSession, qc.id, "state", "qc_pending", "qc_in_progress"),
         (HubQCInspection, inspection.id, "private_notes", "first", "stale"),
@@ -1287,6 +1341,30 @@ async def test_pending_remediation_can_cancel_and_then_freezes(
 
 
 @pytest.mark.asyncio
+async def test_noncompleted_remediation_rejects_completion_timestamp(
+    db_session, vendor_user, customer_user
+):
+    graph, receipt, qc, _inspection_row, remediation = await _remediation_fixture(
+        db_session, vendor_user, customer_user, add=False
+    )
+    completion_clock = await db_session.scalar(text("SELECT clock_timestamp()"))
+    receipt.completed_at = completion_clock
+    await db_session.flush()
+    qc.state = "qc_failed"
+    qc.completed_at = completion_clock
+    await db_session.flush()
+    remediation.state = RemediationState.APPROVED
+    remediation.approved_by_id = graph["operator_id"]
+    remediation.approved_at = completion_clock
+    remediation.completed_at = completion_clock
+    await _rejects(
+        db_session,
+        remediation,
+        match="ck_hub_remediations_completed_timestamp",
+    )
+
+
+@pytest.mark.asyncio
 async def test_open_receipt_identity_is_frozen_but_completion_is_allowed(
     db_session, vendor_user, customer_user
 ):
@@ -1321,11 +1399,12 @@ async def test_open_receipt_identity_is_frozen_but_completion_is_allowed(
         },
         match="identity is immutable",
     )
+    completion_clock = await db_session.scalar(text("SELECT clock_timestamp()"))
     await db_session.execute(
         text(
             "UPDATE hub_receipt_sessions SET completed_at=:at, version=version+1, updated_at=:at WHERE id=:id"
         ),
-        {"id": receipt.id, "at": NOW + timedelta(minutes=1)},
+        {"id": receipt.id, "at": completion_clock},
     )
 
 
