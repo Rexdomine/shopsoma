@@ -614,6 +614,24 @@ async def test_evidence_purpose_subject_privacy_retention_and_aggregate_binding(
 
 
 @pytest.mark.asyncio
+async def test_receipt_and_qc_sessions_must_start_incomplete(
+    db_session, vendor_user, customer_user
+):
+    receipt_graph = await _graph(db_session, vendor_user, customer_user)
+    receipt = _receipt(receipt_graph)
+    receipt.completed_at = await db_session.scalar(text("SELECT clock_timestamp()"))
+    await _rejects(db_session, receipt, match="receipt sessions must start incomplete")
+
+    qc_graph = await _graph(db_session, vendor_user, customer_user)
+    qc_receipt = _receipt(qc_graph)
+    db_session.add(qc_receipt)
+    await db_session.flush()
+    qc = _qc(qc_graph, qc_receipt)
+    qc.completed_at = await db_session.scalar(text("SELECT clock_timestamp()"))
+    await _rejects(db_session, qc, match="QC sessions must start incomplete")
+
+
+@pytest.mark.asyncio
 async def test_receipt_quantity_cannot_drop_below_existing_inspection(
     db_session, vendor_user, customer_user
 ):

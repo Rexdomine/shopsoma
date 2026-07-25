@@ -782,6 +782,13 @@ def upgrade() -> None:
         """
         CREATE FUNCTION reject_completed_hub_receipt_update() RETURNS trigger AS $$
         BEGIN
+            IF TG_OP = 'INSERT' THEN
+                IF NEW.completed_at IS NOT NULL THEN
+                    RAISE EXCEPTION USING ERRCODE = '23514',
+                        MESSAGE = 'receipt sessions must start incomplete';
+                END IF;
+                RETURN NEW;
+            END IF;
             IF OLD.completed_at IS NOT NULL THEN
                 RAISE EXCEPTION USING ERRCODE = '23514',
                     MESSAGE = 'completed receipt sessions are immutable';
@@ -805,7 +812,7 @@ def upgrade() -> None:
     )
     op.execute(
         """CREATE TRIGGER tr_hub_receipt_sessions_completed_immutable
-        BEFORE UPDATE ON hub_receipt_sessions
+        BEFORE INSERT OR UPDATE ON hub_receipt_sessions
         FOR EACH ROW EXECUTE FUNCTION reject_completed_hub_receipt_update()"""
     )
     op.execute(
@@ -940,6 +947,13 @@ def upgrade() -> None:
         DECLARE qc_completed timestamptz; receipt_completed timestamptz;
         BEGIN
             IF TG_TABLE_NAME = 'hub_qc_sessions' THEN
+                IF TG_OP = 'INSERT' THEN
+                    IF NEW.completed_at IS NOT NULL THEN
+                        RAISE EXCEPTION USING ERRCODE = '23514',
+                            MESSAGE = 'QC sessions must start incomplete';
+                    END IF;
+                    RETURN NEW;
+                END IF;
                 IF NEW.id IS DISTINCT FROM OLD.id
                    OR NEW.receipt_session_id IS DISTINCT FROM OLD.receipt_session_id
                    OR NEW.inbound_transfer_id IS DISTINCT FROM OLD.inbound_transfer_id
@@ -1030,7 +1044,7 @@ def upgrade() -> None:
     )
     op.execute(
         """CREATE TRIGGER tr_hub_qc_sessions_completed_immutable
-        BEFORE UPDATE ON hub_qc_sessions
+        BEFORE INSERT OR UPDATE ON hub_qc_sessions
         FOR EACH ROW EXECUTE FUNCTION reject_completed_hub_qc_update()"""
     )
     op.execute(
