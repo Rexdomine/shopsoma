@@ -1036,6 +1036,16 @@ def upgrade() -> None:
                         RAISE EXCEPTION USING ERRCODE = '23514',
                             MESSAGE = 'QC sessions must start pending or in progress';
                     END IF;
+                    SELECT completed_at INTO receipt_completed FROM hub_receipt_sessions
+                    WHERE id = NEW.receipt_session_id FOR UPDATE;
+                    IF receipt_completed IS NULL THEN
+                        RAISE EXCEPTION USING ERRCODE = '23514',
+                            MESSAGE = 'QC sessions require a completed receipt session';
+                    END IF;
+                    IF NEW.started_at < receipt_completed THEN
+                        RAISE EXCEPTION USING ERRCODE = '23514',
+                            MESSAGE = 'QC start must follow receipt completion';
+                    END IF;
                     RETURN NEW;
                 END IF;
                 IF OLD.completed_at IS NOT NULL THEN
@@ -1108,6 +1118,7 @@ def upgrade() -> None:
                         ) OR EXISTS (
                             SELECT 1 FROM hub_receipt_items item
                             WHERE item.receipt_session_id = NEW.receipt_session_id
+                              AND item.received_quantity > 0
                               AND NOT EXISTS (
                                   SELECT 1 FROM hub_qc_inspections inspection
                                   WHERE inspection.qc_session_id = NEW.id
