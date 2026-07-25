@@ -410,8 +410,7 @@ class HubQCSession(Base):
             name="ck_hub_qc_sessions_command_identity_canonical",
         ),
         CheckConstraint(
-            "state IN ('qc_pending', 'qc_in_progress', 'qc_passed', 'qc_failed', "
-            "'remediation', 'cancelled')",
+            "state IN ('qc_pending', 'qc_in_progress', 'qc_passed', 'qc_failed')",
             name="ck_hub_qc_sessions_state",
         ),
         CheckConstraint(
@@ -1002,6 +1001,9 @@ BEGIN
             END IF;
             IF NEW.state IN ('qc_passed', 'qc_failed') THEN
                 RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'terminal QC state requires completion';
+            END IF;
+            IF NEW.state NOT IN ('qc_pending', 'qc_in_progress') THEN
+                RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'QC sessions must start pending or in progress';
             END IF;
             RETURN NEW;
         END IF;

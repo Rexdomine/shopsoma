@@ -436,6 +436,12 @@ async def test_qc_state_machine_rejects_terminal_without_completion_and_regressi
         _qc(graph, receipt, state="qc_failed"),
         match="terminal QC state requires completion",
     )
+    for unreachable_state in ("remediation", "cancelled"):
+        await _rejects(
+            db_session,
+            _qc(graph, receipt, state=unreachable_state),
+            match="QC sessions must start pending or in progress",
+        )
     db_session.add(item)
     await db_session.flush()
     db_session.add(qc)
