@@ -111,6 +111,8 @@ def upgrade() -> None:
         sa.Column("vendor_id", sa.UUID(), nullable=False),
         sa.Column("hub_id", sa.UUID(), nullable=False),
         sa.Column("operator_id", sa.UUID(), nullable=False),
+        sa.Column("source_command", sa.String(length=100), nullable=False),
+        sa.Column("idempotency_key", sa.String(length=200), nullable=False),
         sa.Column("sequence", sa.Integer(), nullable=False),
         sa.Column("previous_session_id", sa.UUID(), nullable=True),
         sa.Column("remediation_id", sa.UUID(), nullable=True),
@@ -144,6 +146,11 @@ def upgrade() -> None:
         ),
         sa.CheckConstraint(
             "sequence >= 1", name="ck_hub_qc_sessions_sequence_positive"
+        ),
+        sa.CheckConstraint(
+            "source_command = btrim(source_command) AND length(source_command) > 0 AND "
+            "idempotency_key = btrim(idempotency_key) AND length(idempotency_key) > 0",
+            name="ck_hub_qc_sessions_command_identity_canonical",
         ),
         sa.CheckConstraint(
             "state IN ('qc_pending', 'qc_in_progress', 'qc_passed', 'qc_failed', "
@@ -188,6 +195,9 @@ def upgrade() -> None:
             name="uq_hub_qc_sessions_identity",
         ),
         sa.UniqueConstraint("previous_session_id", name="uq_hub_qc_sessions_previous"),
+        sa.UniqueConstraint(
+            "hub_id", "idempotency_key", name="uq_hub_qc_sessions_idempotency"
+        ),
         sa.UniqueConstraint(
             "receipt_session_id", "sequence", name="uq_hub_qc_sessions_sequence"
         ),
@@ -864,6 +874,14 @@ def upgrade() -> None:
                     MESSAGE = 'cumulative received quantity exceeds transfer allocation';
             END IF;
             IF TG_OP = 'UPDATE' THEN
+                IF (NEW.expected_quantity IS DISTINCT FROM OLD.expected_quantity
+                    OR NEW.received_quantity IS DISTINCT FROM OLD.received_quantity)
+                   AND EXISTS (
+                       SELECT 1 FROM hub_discrepancies WHERE receipt_item_id = OLD.id
+                   ) THEN
+                    RAISE EXCEPTION USING ERRCODE = '23514',
+                        MESSAGE = 'receipt quantity is frozen after discrepancy';
+                END IF;
                 SELECT COALESCE(MAX(inspected_quantity), 0) INTO max_inspected
                 FROM hub_qc_inspections WHERE receipt_item_id = NEW.id;
                 IF NEW.received_quantity < max_inspected THEN
@@ -962,7 +980,15 @@ def upgrade() -> None:
                         RAISE EXCEPTION USING ERRCODE = '23514',
                             MESSAGE = 'QC sessions must start incomplete';
                     END IF;
+                    IF NEW.state IN ('qc_passed', 'qc_failed') THEN
+                        RAISE EXCEPTION USING ERRCODE = '23514',
+                            MESSAGE = 'terminal QC state requires completion';
+                    END IF;
                     RETURN NEW;
+                END IF;
+                IF OLD.completed_at IS NOT NULL THEN
+                    RAISE EXCEPTION USING ERRCODE = '23514',
+                        MESSAGE = 'completed QC sessions are immutable';
                 END IF;
                 IF NEW.completed_at IS NOT NULL AND NEW.completed_at > clock_timestamp() THEN
                     RAISE EXCEPTION USING ERRCODE = '23514',
@@ -975,6 +1001,9 @@ def upgrade() -> None:
                    OR NEW.order_id IS DISTINCT FROM OLD.order_id
                    OR NEW.vendor_id IS DISTINCT FROM OLD.vendor_id
                    OR NEW.hub_id IS DISTINCT FROM OLD.hub_id
+                   OR NEW.operator_id IS DISTINCT FROM OLD.operator_id
+                   OR NEW.source_command IS DISTINCT FROM OLD.source_command
+                   OR NEW.idempotency_key IS DISTINCT FROM OLD.idempotency_key
                    OR NEW.sequence IS DISTINCT FROM OLD.sequence
                    OR NEW.previous_session_id IS DISTINCT FROM OLD.previous_session_id
                    OR NEW.remediation_id IS DISTINCT FROM OLD.remediation_id
@@ -982,9 +1011,20 @@ def upgrade() -> None:
                     RAISE EXCEPTION USING ERRCODE = '23514',
                         MESSAGE = 'QC session aggregate lineage is immutable';
                 END IF;
-                IF OLD.completed_at IS NOT NULL THEN
+                IF NEW.state IS DISTINCT FROM OLD.state AND NOT (
+                    (OLD.state = 'qc_pending' AND NEW.state = 'qc_in_progress') OR
+                    (OLD.state = 'qc_in_progress' AND NEW.state IN ('qc_passed', 'qc_failed'))
+                ) THEN
                     RAISE EXCEPTION USING ERRCODE = '23514',
-                        MESSAGE = 'completed QC sessions are immutable';
+                        MESSAGE = 'illegal QC state transition';
+                END IF;
+                IF NEW.state IN ('qc_passed', 'qc_failed') AND NEW.completed_at IS NULL THEN
+                    RAISE EXCEPTION USING ERRCODE = '23514',
+                        MESSAGE = 'terminal QC state requires completion';
+                END IF;
+                IF NEW.state NOT IN ('qc_passed', 'qc_failed') AND NEW.completed_at IS NOT NULL THEN
+                    RAISE EXCEPTION USING ERRCODE = '23514',
+                        MESSAGE = 'QC completion requires a terminal state';
                 END IF;
                 IF OLD.completed_at IS NULL AND NEW.completed_at IS NOT NULL THEN
                     IF NEW.state NOT IN ('qc_passed', 'qc_failed') THEN
@@ -1266,6 +1306,9 @@ def upgrade() -> None:
         CREATE FUNCTION validate_hub_discrepancy_insert() RETURNS trigger AS $$
         DECLARE receipt_completed timestamptz;
         BEGIN
+            PERFORM 1 FROM hub_receipt_items
+            WHERE id = NEW.receipt_item_id AND receipt_session_id = NEW.receipt_session_id
+            FOR UPDATE;
             SELECT completed_at INTO receipt_completed FROM hub_receipt_sessions
             WHERE id = NEW.receipt_session_id FOR UPDATE;
             IF receipt_completed IS NOT NULL THEN
