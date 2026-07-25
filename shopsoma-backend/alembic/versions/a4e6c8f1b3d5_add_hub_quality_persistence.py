@@ -980,9 +980,13 @@ def upgrade() -> None:
                 remediation_completed timestamptz;
         BEGIN
             IF NEW.sequence > 1 THEN
+                PERFORM 1 FROM hub_remediations
+                 WHERE qc_session_id = NEW.previous_session_id
+                 ORDER BY id
+                 FOR UPDATE;
                 SELECT qc_session_id, receipt_session_id, state, completed_at
                   INTO remediation_session, remediation_receipt, remediation_state, remediation_completed
-                  FROM hub_remediations WHERE id = NEW.remediation_id FOR UPDATE;
+                  FROM hub_remediations WHERE id = NEW.remediation_id;
                 IF remediation_session IS DISTINCT FROM NEW.previous_session_id
                    OR remediation_receipt IS DISTINCT FROM NEW.receipt_session_id
                    OR remediation_state IS DISTINCT FROM 'completed' THEN
@@ -1004,8 +1008,24 @@ def upgrade() -> None:
                         MESSAGE = 'reinspection must follow the immediately previous QC sequence';
                 END IF;
                 IF previous_state <> 'qc_failed' OR previous_completed IS NULL THEN
-                    RAISE EXCEPTION USING ERRCODE = '23514',
-                        MESSAGE = 'reinspection requires a completed failed previous QC session';
+                    RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'reinspection requires a completed failed previous QC session';
+                END IF;
+                IF EXISTS (
+                    SELECT 1
+                      FROM hub_qc_inspections AS inspection
+                      LEFT JOIN hub_remediations AS remediation
+                        ON remediation.failed_inspection_id = inspection.id
+                       AND remediation.qc_session_id = inspection.qc_session_id
+                     WHERE inspection.qc_session_id = NEW.previous_session_id
+                       AND inspection.decision IN ('fail', 'rejected')
+                       AND (
+                           remediation.id IS NULL
+                           OR remediation.state <> 'completed'
+                           OR remediation.completed_at IS NULL
+                           OR remediation.completed_at > NEW.started_at
+                       )
+                ) THEN
+                    RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'every failed inspection requires completed remediation before reinspection';
                 END IF;
             END IF;
             RETURN NEW;

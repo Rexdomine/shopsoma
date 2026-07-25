@@ -1564,6 +1564,203 @@ async def _failed_cycle(db_session, graph):
     return receipt, item, qc, inspection, remediation
 
 
+async def _complete_remediation(db_session, remediation, actor_id):
+    transition_clock = await db_session.scalar(text("SELECT clock_timestamp()"))
+    await db_session.execute(
+        text(
+            "UPDATE hub_remediations SET state='approved', "
+            "approved_by_id=:actor, approved_at=:at WHERE id=:id"
+        ),
+        {"id": remediation.id, "actor": actor_id, "at": transition_clock},
+    )
+    await db_session.execute(
+        text("UPDATE hub_remediations SET state='in_progress' WHERE id=:id"),
+        {"id": remediation.id},
+    )
+    await db_session.execute(
+        text(
+            "UPDATE hub_remediations SET state='completed', "
+            "completed_at=:at WHERE id=:id"
+        ),
+        {"id": remediation.id, "at": transition_clock},
+    )
+    await db_session.refresh(remediation)
+    return transition_clock
+
+
+@pytest.mark.asyncio
+async def test_reinspection_requires_completed_remediation_for_every_failed_inspection(
+    db_session, vendor_user, customer_user
+):
+    graph = await _graph(db_session, vendor_user, customer_user)
+    second_product = Product(
+        vendor_id=graph["vendor_id"],
+        title="Second failed hub item",
+        base_price=Decimal("10"),
+    )
+    db_session.add(second_product)
+    await db_session.flush()
+    second_order_item = OrderItem(
+        order_id=graph["order"].id,
+        product_id=second_product.id,
+        vendor_id=graph["vendor_id"],
+        product_title="Second failed hub item",
+        unit_price=Decimal("10"),
+        quantity=1,
+        subtotal=Decimal("10"),
+        commission_rate=Decimal("10"),
+        commission_amount=Decimal("1"),
+        vendor_payout=Decimal("9"),
+    )
+    db_session.add(second_order_item)
+    await db_session.flush()
+    db_session.add_all(
+        [
+            CohortItemAllocation(
+                cohort_id=graph["cohort"].id,
+                order_item_id=second_order_item.id,
+                order_id=graph["order"].id,
+                vendor_id=graph["vendor_id"],
+                allocated_quantity=1,
+            ),
+            InboundTransferItemAllocation(
+                transfer_id=graph["transfer"].id,
+                order_item_id=second_order_item.id,
+                cohort_id=graph["cohort"].id,
+                order_id=graph["order"].id,
+                vendor_id=graph["vendor_id"],
+                allocated_quantity=1,
+            ),
+        ]
+    )
+    await db_session.flush()
+
+    receipt = _receipt(graph)
+    first_item = _receipt_item(graph, receipt)
+    second_item = HubReceiptItem(
+        id=uuid.uuid4(),
+        receipt_session_id=receipt.id,
+        inbound_transfer_id=graph["transfer"].id,
+        cohort_id=graph["cohort"].id,
+        order_id=graph["order"].id,
+        vendor_id=graph["vendor_id"],
+        hub_id=graph["hub"].id,
+        order_item_id=second_order_item.id,
+        expected_quantity=1,
+        received_quantity=1,
+        scan_identity=f"scan-{uuid.uuid4().hex}",
+    )
+    db_session.add(receipt)
+    await db_session.flush()
+    db_session.add_all([first_item, second_item])
+    await db_session.flush()
+    await _complete_receipt(db_session, receipt)
+    prior = await _start_qc(db_session, graph, receipt)
+    first_failure = _inspection(graph, receipt, first_item, prior)
+    second_failure = _inspection(
+        graph,
+        receipt,
+        second_item,
+        prior,
+        order_item_id=second_order_item.id,
+        decision=QCDecision.REJECTED,
+    )
+    db_session.add_all([first_failure, second_failure])
+    await db_session.flush()
+    prior_completed = await db_session.scalar(text("SELECT clock_timestamp()"))
+    prior.state = "qc_failed"
+    prior.completed_at = prior_completed
+    await db_session.flush()
+
+    completed = _remediation(
+        graph,
+        receipt,
+        prior,
+        first_failure,
+        created_at=prior_completed,
+    )
+    unresolved = _remediation(
+        graph,
+        receipt,
+        prior,
+        second_failure,
+        created_at=prior_completed,
+    )
+    db_session.add_all([completed, unresolved])
+    await db_session.flush()
+    first_completion = await _complete_remediation(
+        db_session, completed, graph["operator_id"]
+    )
+
+    await _rejects(
+        db_session,
+        _qc(
+            graph,
+            receipt,
+            sequence=2,
+            previous_session_id=prior.id,
+            remediation_id=completed.id,
+            started_at=first_completion,
+        ),
+        match="every failed inspection requires completed remediation",
+    )
+
+    await db_session.commit()
+    sessions = async_sessionmaker(bind=db_session.bind, expire_on_commit=False)
+    completing = sessions()
+    second_completion = await completing.scalar(text("SELECT clock_timestamp()"))
+    await completing.execute(
+        text(
+            "UPDATE hub_remediations SET state='approved', "
+            "approved_by_id=:actor, approved_at=:at WHERE id=:id"
+        ),
+        {
+            "id": unresolved.id,
+            "actor": graph["operator_id"],
+            "at": second_completion,
+        },
+    )
+    await completing.execute(
+        text("UPDATE hub_remediations SET state='in_progress' WHERE id=:id"),
+        {"id": unresolved.id},
+    )
+    await completing.execute(
+        text(
+            "UPDATE hub_remediations SET state='completed', "
+            "completed_at=:at WHERE id=:id"
+        ),
+        {"id": unresolved.id, "at": second_completion},
+    )
+
+    async def insert_reinspection():
+        async with sessions() as concurrent:
+            concurrent.add(
+                _qc(
+                    graph,
+                    receipt,
+                    sequence=2,
+                    previous_session_id=prior.id,
+                    remediation_id=completed.id,
+                    started_at=second_completion,
+                )
+            )
+            try:
+                await concurrent.flush()
+            except IntegrityError as exc:
+                await concurrent.rollback()
+                return str(exc)
+            await concurrent.rollback()
+            return None
+
+    insert_task = asyncio.create_task(insert_reinspection())
+    await asyncio.sleep(0.1)
+    assert not insert_task.done(), "reinspection did not wait for all remediations"
+    await completing.commit()
+    rejection = await asyncio.wait_for(insert_task, timeout=2)
+    await completing.close()
+    assert rejection is None
+
+
 @pytest.mark.asyncio
 async def test_reinspection_requires_exact_completed_failed_remediated_lineage(
     db_session, vendor_user, customer_user

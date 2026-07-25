@@ -2,6 +2,7 @@
 
 import os
 from pathlib import Path
+import re
 import subprocess
 import uuid
 
@@ -88,6 +89,9 @@ def test_lane_3c_migration_is_additive_symmetric_private_and_narrow() -> None:
         "remediations must start pending",
         "remediation approval must follow QC completion",
         "reinspection must start after remediation completion",
+        "PERFORM 1 FROM hub_remediations",
+        "remediation.failed_inspection_id = inspection.id",
+        "every failed inspection requires completed remediation before reinspection",
         "NEW.started_at IS DISTINCT FROM OLD.started_at",
         'sa.Column("source_command", sa.String(length=100), nullable=False)',
         'sa.Column("idempotency_key", sa.String(length=200), nullable=False)',
@@ -128,6 +132,25 @@ def test_lane_3c_migration_is_additive_symmetric_private_and_narrow() -> None:
         "custody_event",
     ):
         assert forbidden not in lowered
+
+
+def test_reinspection_lineage_trigger_has_exact_model_migration_parity() -> None:
+    revision = _scripts().get_revision(REVISION)
+    assert revision is not None
+    migration_source = Path(revision.path).read_text()
+    model_source = (BACKEND_ROOT / "app/models/hub_quality.py").read_text()
+    marker = (
+        "CREATE FUNCTION validate_hub_qc_reinspection_lineage() RETURNS trigger AS $$"
+    )
+
+    def trigger_tokens(source: str) -> list[str]:
+        body = source.split(marker, 1)[1].split("END; $$ LANGUAGE plpgsql", 1)[0]
+        return re.findall(
+            r"'[^']*'|[A-Za-z_][A-Za-z0-9_]*|<>|<=|>=|:=|[(),.;=<>]",
+            body,
+        )
+
+    assert trigger_tokens(model_source) == trigger_tokens(migration_source)
 
 
 def test_lane_3c_real_hermetic_postgresql_migration_cycle() -> None:
