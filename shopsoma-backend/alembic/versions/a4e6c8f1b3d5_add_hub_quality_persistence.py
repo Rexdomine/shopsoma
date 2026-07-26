@@ -47,13 +47,13 @@ def upgrade() -> None:
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=sa.text("statement_timestamp()"),
             nullable=False,
         ),
         sa.Column(
             "updated_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=sa.text("statement_timestamp()"),
             nullable=False,
         ),
         sa.CheckConstraint(
@@ -123,13 +123,13 @@ def upgrade() -> None:
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=sa.text("statement_timestamp()"),
             nullable=False,
         ),
         sa.Column(
             "updated_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=sa.text("statement_timestamp()"),
             nullable=False,
         ),
         sa.CheckConstraint(
@@ -223,13 +223,13 @@ def upgrade() -> None:
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=sa.text("statement_timestamp()"),
             nullable=False,
         ),
         sa.Column(
             "updated_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=sa.text("statement_timestamp()"),
             nullable=False,
         ),
         sa.CheckConstraint(
@@ -344,7 +344,7 @@ def upgrade() -> None:
         sa.Column(
             "recorded_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=sa.text("statement_timestamp()"),
             nullable=False,
         ),
         sa.CheckConstraint(
@@ -431,20 +431,20 @@ def upgrade() -> None:
         sa.Column(
             "inspected_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=sa.text("statement_timestamp()"),
             nullable=False,
         ),
         sa.Column("version", sa.Integer(), server_default="1", nullable=False),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=sa.text("statement_timestamp()"),
             nullable=False,
         ),
         sa.Column(
             "updated_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=sa.text("statement_timestamp()"),
             nullable=False,
         ),
         sa.CheckConstraint(
@@ -546,14 +546,14 @@ def upgrade() -> None:
         sa.Column(
             "retention_policy_updated_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=sa.text("statement_timestamp()"),
             nullable=False,
         ),
         sa.Column("created_by_id", sa.UUID(), nullable=False),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=sa.text("statement_timestamp()"),
             nullable=False,
         ),
         sa.CheckConstraint(
@@ -680,7 +680,6 @@ def upgrade() -> None:
                 "approved",
                 "in_progress",
                 "completed",
-                "cancelled",
                 name="hub_remediation_state",
             ),
             nullable=False,
@@ -706,13 +705,13 @@ def upgrade() -> None:
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=sa.text("statement_timestamp()"),
             nullable=False,
         ),
         sa.Column(
             "updated_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=sa.text("statement_timestamp()"),
             nullable=False,
         ),
         sa.CheckConstraint(
@@ -720,7 +719,7 @@ def upgrade() -> None:
             name="ck_hub_remediations_disposition_required",
         ),
         sa.CheckConstraint(
-            "(state IN ('pending_approval', 'cancelled') AND approved_at IS NULL AND approved_by_id IS NULL) OR (state NOT IN ('pending_approval', 'cancelled') AND approved_at IS NOT NULL AND approved_by_id IS NOT NULL)",
+            "(state = 'pending_approval' AND approved_at IS NULL AND approved_by_id IS NULL) OR (state <> 'pending_approval' AND approved_at IS NOT NULL AND approved_by_id IS NOT NULL)",
             name="ck_hub_remediations_approval_audit",
         ),
         sa.CheckConstraint(
@@ -792,6 +791,9 @@ def upgrade() -> None:
         CREATE FUNCTION reject_completed_hub_receipt_update() RETURNS trigger AS $$
         BEGIN
             IF TG_OP = 'INSERT' THEN
+                IF NEW.started_at > clock_timestamp() THEN
+                    RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'receipt start timestamp cannot be future-dated';
+                END IF;
                 IF NEW.completed_at IS NOT NULL THEN
                     RAISE EXCEPTION USING ERRCODE = '23514',
                         MESSAGE = 'receipt sessions must start incomplete';
@@ -893,6 +895,7 @@ def upgrade() -> None:
                 OR NEW.hub_id IS DISTINCT FROM OLD.hub_id
                 OR NEW.order_item_id IS DISTINCT FROM OLD.order_item_id
                 OR NEW.scan_identity IS DISTINCT FROM OLD.scan_identity
+                OR NEW.created_at IS DISTINCT FROM OLD.created_at
             ) THEN
                 RAISE EXCEPTION USING ERRCODE = '23514',
                     MESSAGE = 'receipt item aggregate identity is immutable';
@@ -1040,10 +1043,14 @@ def upgrade() -> None:
     op.execute(
         """
         CREATE FUNCTION reject_completed_hub_qc_update() RETURNS trigger AS $$
-        DECLARE qc_completed timestamptz; qc_started timestamptz; receipt_completed timestamptz;
+        DECLARE qc_completed timestamptz; qc_started timestamptz; qc_state varchar;
+                receipt_completed timestamptz;
         BEGIN
             IF TG_TABLE_NAME = 'hub_qc_sessions' THEN
                 IF TG_OP = 'INSERT' THEN
+                    IF NEW.started_at > clock_timestamp() THEN
+                        RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'QC start timestamp cannot be future-dated';
+                    END IF;
                     IF NEW.completed_at IS NOT NULL THEN
                         RAISE EXCEPTION USING ERRCODE = '23514',
                             MESSAGE = 'QC sessions must start incomplete';
@@ -1089,7 +1096,8 @@ def upgrade() -> None:
                    OR NEW.sequence IS DISTINCT FROM OLD.sequence
                    OR NEW.previous_session_id IS DISTINCT FROM OLD.previous_session_id
                    OR NEW.remediation_id IS DISTINCT FROM OLD.remediation_id
-                   OR NEW.started_at IS DISTINCT FROM OLD.started_at THEN
+                   OR NEW.started_at IS DISTINCT FROM OLD.started_at
+                   OR NEW.created_at IS DISTINCT FROM OLD.created_at THEN
                     RAISE EXCEPTION USING ERRCODE = '23514',
                         MESSAGE = 'QC session aggregate lineage is immutable';
                 END IF;
@@ -1131,6 +1139,18 @@ def upgrade() -> None:
                         RAISE EXCEPTION USING ERRCODE = '23514',
                             MESSAGE = 'QC completion requires inspection timestamps within the session';
                     END IF;
+                    IF EXISTS (
+                        SELECT 1 FROM hub_qc_inspections inspection
+                        WHERE inspection.qc_session_id = NEW.id
+                          AND NOT EXISTS (
+                              SELECT 1 FROM hub_evidence evidence
+                              WHERE evidence.purpose = 'qc_inspection'
+                                AND evidence.inspection_id = inspection.id
+                          )
+                    ) THEN
+                        RAISE EXCEPTION USING ERRCODE = '23514',
+                            MESSAGE = 'QC completion requires evidence for every inspection';
+                    END IF;
                     IF NEW.state = 'qc_passed' AND (
                         NOT EXISTS (
                             SELECT 1 FROM hub_receipt_items
@@ -1170,15 +1190,18 @@ def upgrade() -> None:
                     OR NEW.hub_id IS DISTINCT FROM OLD.hub_id
                     OR NEW.receipt_item_id IS DISTINCT FROM OLD.receipt_item_id
                     OR NEW.order_item_id IS DISTINCT FROM OLD.order_item_id
+                    OR NEW.created_at IS DISTINCT FROM OLD.created_at
                 ) THEN
                     RAISE EXCEPTION USING ERRCODE = '23514',
                         MESSAGE = 'QC inspection aggregate identity is immutable';
                 END IF;
-                SELECT started_at, completed_at INTO qc_started, qc_completed FROM hub_qc_sessions
+                SELECT state, started_at, completed_at INTO qc_state, qc_started, qc_completed FROM hub_qc_sessions
                 WHERE id = NEW.qc_session_id FOR UPDATE;
                 IF qc_completed IS NOT NULL THEN
-                    RAISE EXCEPTION USING ERRCODE = '23514',
-                        MESSAGE = 'inspections in completed QC sessions are immutable';
+                    RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'inspections in completed QC sessions are immutable';
+                END IF;
+                IF qc_state IS DISTINCT FROM 'qc_in_progress' THEN
+                    RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'inspections require QC in progress';
                 END IF;
                 IF NEW.inspected_at < qc_started OR NEW.inspected_at > clock_timestamp() THEN
                     RAISE EXCEPTION USING ERRCODE = '23514',
@@ -1209,7 +1232,8 @@ def upgrade() -> None:
     op.execute(
         """
         CREATE FUNCTION validate_hub_remediation_invariants() RETURNS trigger AS $$
-        DECLARE inspection_decision hub_qc_decision; parent_qc_state varchar;
+        DECLARE inspection_decision hub_qc_decision; inspection_time timestamptz;
+                parent_qc_state varchar;
                 parent_qc_completed timestamptz;
         BEGIN
             IF TG_OP = 'INSERT' AND NEW.state IS DISTINCT FROM 'pending_approval' THEN
@@ -1230,7 +1254,7 @@ def upgrade() -> None:
                     MESSAGE = 'completion timestamp must follow approval and not be future-dated';
             END IF;
             IF TG_OP = 'UPDATE' THEN
-                IF OLD.state IN ('completed', 'cancelled') OR EXISTS (
+                IF OLD.state = 'completed' OR EXISTS (
                     SELECT 1 FROM hub_qc_sessions WHERE remediation_id = OLD.id
                 ) THEN
                     RAISE EXCEPTION USING ERRCODE = '23514',
@@ -1250,7 +1274,6 @@ def upgrade() -> None:
                 IF NEW.state IS DISTINCT FROM OLD.state AND NOT (
                     (OLD.state = 'pending_approval' AND NEW.state = 'approved'
                      AND NEW.approved_by_id IS NOT NULL AND NEW.approved_at IS NOT NULL)
-                    OR (OLD.state = 'pending_approval' AND NEW.state = 'cancelled')
                     OR (OLD.state = 'approved' AND NEW.state = 'in_progress')
                     OR (OLD.state = 'in_progress' AND NEW.state = 'completed'
                         AND NEW.completed_at IS NOT NULL)
@@ -1277,6 +1300,14 @@ def upgrade() -> None:
             END IF;
             SELECT state, completed_at INTO parent_qc_state, parent_qc_completed
             FROM hub_qc_sessions WHERE id = NEW.qc_session_id FOR UPDATE;
+            IF TG_OP = 'UPDATE'
+               AND OLD.state = 'in_progress' AND NEW.state = 'completed'
+               AND NOT EXISTS (
+                   SELECT 1 FROM hub_evidence
+                   WHERE purpose = 'remediation' AND remediation_id = NEW.id
+               ) THEN
+                RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'remediation completion requires evidence';
+            END IF;
             IF NEW.state IN ('approved', 'in_progress', 'completed') THEN
                 IF parent_qc_state IS DISTINCT FROM 'qc_failed' OR parent_qc_completed IS NULL THEN
                     RAISE EXCEPTION USING ERRCODE = '23514',
@@ -1287,12 +1318,16 @@ def upgrade() -> None:
                         MESSAGE = 'remediation approval must follow QC completion';
                 END IF;
             END IF;
-            SELECT decision INTO inspection_decision
+            SELECT decision, inspected_at INTO inspection_decision, inspection_time
             FROM hub_qc_inspections
             WHERE id = NEW.failed_inspection_id AND qc_session_id = NEW.qc_session_id;
             IF inspection_decision IS NULL OR inspection_decision NOT IN ('fail', 'rejected') THEN
                 RAISE EXCEPTION USING ERRCODE = '23514',
                     MESSAGE = 'remediation requires a failed or rejected inspection';
+            END IF;
+            IF NEW.created_at < inspection_time OR NEW.created_at > clock_timestamp() THEN
+                RAISE EXCEPTION USING ERRCODE = '23514',
+                    MESSAGE = 'remediation creation must follow inspection and not be future-dated';
             END IF;
             RETURN NEW;
         END; $$ LANGUAGE plpgsql
@@ -1403,16 +1438,20 @@ def upgrade() -> None:
     op.execute(
         """
         CREATE FUNCTION validate_hub_discrepancy_insert() RETURNS trigger AS $$
-        DECLARE receipt_completed timestamptz;
+        DECLARE receipt_completed timestamptz; receipt_started timestamptz;
         BEGIN
             PERFORM 1 FROM hub_receipt_items
             WHERE id = NEW.receipt_item_id AND receipt_session_id = NEW.receipt_session_id
             FOR UPDATE;
-            SELECT completed_at INTO receipt_completed FROM hub_receipt_sessions
+            SELECT started_at, completed_at INTO receipt_started, receipt_completed FROM hub_receipt_sessions
             WHERE id = NEW.receipt_session_id FOR UPDATE;
             IF receipt_completed IS NOT NULL THEN
                 RAISE EXCEPTION USING ERRCODE = '23514',
                     MESSAGE = 'completed receipt sessions are immutable';
+            END IF;
+            IF NEW.recorded_at < receipt_started OR NEW.recorded_at > clock_timestamp() THEN
+                RAISE EXCEPTION USING ERRCODE = '23514',
+                    MESSAGE = 'discrepancy timestamp must fall within the open receipt session';
             END IF;
             RETURN NEW;
         END; $$ LANGUAGE plpgsql

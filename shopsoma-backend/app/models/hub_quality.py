@@ -69,7 +69,6 @@ class RemediationState(str, enum.Enum):
     APPROVED = "approved"
     IN_PROGRESS = "in_progress"
     COMPLETED = "completed"
-    CANCELLED = "cancelled"
 
 
 _UUID = UUID(as_uuid=True)
@@ -81,14 +80,14 @@ def _timestamps():
             "created_at",
             DateTime(timezone=True),
             nullable=False,
-            server_default=func.now(),
+            server_default=func.statement_timestamp(),
         ),
         Column(
             "updated_at",
             DateTime(timezone=True),
             nullable=False,
-            server_default=func.now(),
-            onupdate=func.now(),
+            server_default=func.statement_timestamp(),
+            onupdate=func.statement_timestamp(),
         ),
     )
 
@@ -285,7 +284,9 @@ class HubDiscrepancy(Base):
         _UUID, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )
     recorded_at = Column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.statement_timestamp(),
     )
 
     __table_args__ = (
@@ -484,7 +485,9 @@ class HubQCInspection(Base):
         server_default=QuarantineDisposition.NOT_APPLICABLE.value,
     )
     inspected_at = Column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.statement_timestamp(),
     )
     version = Column(Integer, nullable=False, default=1, server_default="1")
     created_at, updated_at = _timestamps()
@@ -587,13 +590,17 @@ class HubEvidence(Base):
     retention_until = Column(DateTime(timezone=True), nullable=False)
     legal_hold = Column(Boolean, nullable=False, default=False, server_default="false")
     retention_policy_updated_at = Column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.statement_timestamp(),
     )
     created_by_id = Column(
         _UUID, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )
     created_at = Column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.statement_timestamp(),
     )
 
     __table_args__ = (
@@ -787,8 +794,8 @@ class HubRemediation(Base):
             name="ck_hub_remediations_disposition_required",
         ),
         CheckConstraint(
-            "(state IN ('pending_approval', 'cancelled') AND approved_at IS NULL AND approved_by_id IS NULL) OR "
-            "(state NOT IN ('pending_approval', 'cancelled') AND approved_at IS NOT NULL AND approved_by_id IS NOT NULL)",
+            "(state = 'pending_approval' AND approved_at IS NULL AND approved_by_id IS NULL) OR "
+            "(state <> 'pending_approval' AND approved_at IS NOT NULL AND approved_by_id IS NOT NULL)",
             name="ck_hub_remediations_approval_audit",
         ),
         CheckConstraint(
@@ -834,6 +841,9 @@ _RECEIPT_IMMUTABILITY_FUNCTION = DDL(
 CREATE FUNCTION reject_completed_hub_receipt_update() RETURNS trigger AS $$
 BEGIN
     IF TG_OP = 'INSERT' THEN
+        IF NEW.started_at > clock_timestamp() THEN
+            RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'receipt start timestamp cannot be future-dated';
+        END IF;
         IF NEW.completed_at IS NOT NULL THEN
             RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'receipt sessions must start incomplete';
         END IF;
@@ -903,6 +913,7 @@ BEGIN
         OR NEW.hub_id IS DISTINCT FROM OLD.hub_id
         OR NEW.order_item_id IS DISTINCT FROM OLD.order_item_id
         OR NEW.scan_identity IS DISTINCT FROM OLD.scan_identity
+        OR NEW.created_at IS DISTINCT FROM OLD.created_at
     ) THEN
         RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'receipt item aggregate identity is immutable';
     END IF;
@@ -1033,10 +1044,14 @@ FOR EACH ROW EXECUTE FUNCTION validate_hub_qc_reinspection_lineage()
 _QC_IMMUTABILITY_FUNCTION = DDL(
     """
 CREATE FUNCTION reject_completed_hub_qc_update() RETURNS trigger AS $$
-DECLARE qc_completed timestamptz; qc_started timestamptz; receipt_completed timestamptz;
+DECLARE qc_completed timestamptz; qc_started timestamptz; qc_state varchar;
+        receipt_completed timestamptz;
 BEGIN
     IF TG_TABLE_NAME = 'hub_qc_sessions' THEN
         IF TG_OP = 'INSERT' THEN
+            IF NEW.started_at > clock_timestamp() THEN
+                RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'QC start timestamp cannot be future-dated';
+            END IF;
             IF NEW.completed_at IS NOT NULL THEN
                 RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'QC sessions must start incomplete';
             END IF;
@@ -1075,7 +1090,8 @@ BEGIN
            OR NEW.sequence IS DISTINCT FROM OLD.sequence
            OR NEW.previous_session_id IS DISTINCT FROM OLD.previous_session_id
            OR NEW.remediation_id IS DISTINCT FROM OLD.remediation_id
-           OR NEW.started_at IS DISTINCT FROM OLD.started_at THEN
+           OR NEW.started_at IS DISTINCT FROM OLD.started_at
+           OR NEW.created_at IS DISTINCT FROM OLD.created_at THEN
             RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'QC session aggregate lineage is immutable';
         END IF;
         IF NEW.state IS DISTINCT FROM OLD.state AND NOT (
@@ -1108,6 +1124,17 @@ BEGIN
                   AND (inspected_at < NEW.started_at OR inspected_at > NEW.completed_at)
             ) THEN
                 RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'QC completion requires inspection timestamps within the session';
+            END IF;
+            IF EXISTS (
+                SELECT 1 FROM hub_qc_inspections inspection
+                WHERE inspection.qc_session_id = NEW.id
+                  AND NOT EXISTS (
+                      SELECT 1 FROM hub_evidence evidence
+                      WHERE evidence.purpose = 'qc_inspection'
+                        AND evidence.inspection_id = inspection.id
+                  )
+            ) THEN
+                RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'QC completion requires evidence for every inspection';
             END IF;
             IF NEW.state = 'qc_passed' AND (
                 NOT EXISTS (
@@ -1146,13 +1173,17 @@ BEGIN
             OR NEW.hub_id IS DISTINCT FROM OLD.hub_id
             OR NEW.receipt_item_id IS DISTINCT FROM OLD.receipt_item_id
             OR NEW.order_item_id IS DISTINCT FROM OLD.order_item_id
+            OR NEW.created_at IS DISTINCT FROM OLD.created_at
         ) THEN
             RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'QC inspection aggregate identity is immutable';
         END IF;
-        SELECT started_at, completed_at INTO qc_started, qc_completed FROM hub_qc_sessions
+        SELECT state, started_at, completed_at INTO qc_state, qc_started, qc_completed FROM hub_qc_sessions
         WHERE id = NEW.qc_session_id FOR UPDATE;
         IF qc_completed IS NOT NULL THEN
             RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'inspections in completed QC sessions are immutable';
+        END IF;
+        IF qc_state IS DISTINCT FROM 'qc_in_progress' THEN
+            RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'inspections require QC in progress';
         END IF;
         IF NEW.inspected_at < qc_started OR NEW.inspected_at > clock_timestamp() THEN
             RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'inspection timestamp must fall within the active QC session';
@@ -1182,7 +1213,8 @@ FOR EACH ROW EXECUTE FUNCTION reject_completed_hub_qc_update()
 _REMEDIATION_INVARIANT_FUNCTION = DDL(
     """
 CREATE FUNCTION validate_hub_remediation_invariants() RETURNS trigger AS $$
-DECLARE inspection_decision hub_qc_decision; parent_qc_state varchar;
+DECLARE inspection_decision hub_qc_decision; inspection_time timestamptz;
+        parent_qc_state varchar;
         parent_qc_completed timestamptz;
 BEGIN
     IF TG_OP = 'INSERT' AND NEW.state IS DISTINCT FROM 'pending_approval' THEN
@@ -1200,7 +1232,7 @@ BEGIN
         RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'completion timestamp must follow approval and not be future-dated';
     END IF;
     IF TG_OP = 'UPDATE' THEN
-        IF OLD.state IN ('completed', 'cancelled') OR EXISTS (
+        IF OLD.state = 'completed' OR EXISTS (
             SELECT 1 FROM hub_qc_sessions WHERE remediation_id = OLD.id
         ) THEN
             RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'terminal or consumed remediation is immutable';
@@ -1218,7 +1250,6 @@ BEGIN
         IF NEW.state IS DISTINCT FROM OLD.state AND NOT (
             (OLD.state = 'pending_approval' AND NEW.state = 'approved'
              AND NEW.approved_by_id IS NOT NULL AND NEW.approved_at IS NOT NULL)
-            OR (OLD.state = 'pending_approval' AND NEW.state = 'cancelled')
             OR (OLD.state = 'approved' AND NEW.state = 'in_progress')
             OR (OLD.state = 'in_progress' AND NEW.state = 'completed'
                 AND NEW.completed_at IS NOT NULL)
@@ -1242,6 +1273,14 @@ BEGIN
     END IF;
     SELECT state, completed_at INTO parent_qc_state, parent_qc_completed
     FROM hub_qc_sessions WHERE id = NEW.qc_session_id FOR UPDATE;
+    IF TG_OP = 'UPDATE'
+       AND OLD.state = 'in_progress' AND NEW.state = 'completed'
+       AND NOT EXISTS (
+           SELECT 1 FROM hub_evidence
+           WHERE purpose = 'remediation' AND remediation_id = NEW.id
+       ) THEN
+        RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'remediation completion requires evidence';
+    END IF;
     IF NEW.state IN ('approved', 'in_progress', 'completed') THEN
         IF parent_qc_state IS DISTINCT FROM 'qc_failed' OR parent_qc_completed IS NULL THEN
             RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'remediation approval requires a completed failed QC session';
@@ -1250,11 +1289,14 @@ BEGIN
             RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'remediation approval must follow QC completion';
         END IF;
     END IF;
-    SELECT decision INTO inspection_decision
+    SELECT decision, inspected_at INTO inspection_decision, inspection_time
     FROM hub_qc_inspections
     WHERE id = NEW.failed_inspection_id AND qc_session_id = NEW.qc_session_id;
     IF inspection_decision IS NULL OR inspection_decision NOT IN ('fail', 'rejected') THEN
         RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'remediation requires a failed or rejected inspection';
+    END IF;
+    IF NEW.created_at < inspection_time OR NEW.created_at > clock_timestamp() THEN
+        RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'remediation creation must follow inspection and not be future-dated';
     END IF;
     RETURN NEW;
 END; $$ LANGUAGE plpgsql
@@ -1360,15 +1402,18 @@ END; $$ LANGUAGE plpgsql
 _DISCREPANCY_INSERT_FUNCTION = DDL(
     """
 CREATE FUNCTION validate_hub_discrepancy_insert() RETURNS trigger AS $$
-DECLARE receipt_completed timestamptz;
+DECLARE receipt_completed timestamptz; receipt_started timestamptz;
 BEGIN
     PERFORM 1 FROM hub_receipt_items
     WHERE id = NEW.receipt_item_id AND receipt_session_id = NEW.receipt_session_id
     FOR UPDATE;
-    SELECT completed_at INTO receipt_completed FROM hub_receipt_sessions
+    SELECT started_at, completed_at INTO receipt_started, receipt_completed FROM hub_receipt_sessions
     WHERE id = NEW.receipt_session_id FOR UPDATE;
     IF receipt_completed IS NOT NULL THEN
         RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'completed receipt sessions are immutable';
+    END IF;
+    IF NEW.recorded_at < receipt_started OR NEW.recorded_at > clock_timestamp() THEN
+        RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'discrepancy timestamp must fall within the open receipt session';
     END IF;
     RETURN NEW;
 END; $$ LANGUAGE plpgsql

@@ -82,7 +82,9 @@ def test_lane_3c_migration_is_additive_symmetric_private_and_narrow() -> None:
         "remediated inspections are immutable",
         "validate_hub_discrepancy_insert",
         "tr_hub_discrepancies_receipt_open",
-        "OLD.state = 'pending_approval' AND NEW.state = 'cancelled'",
+        "QC completion requires evidence for every inspection",
+        "remediation completion requires evidence",
+        "inspections require QC in progress",
         "receipt completion timestamp cannot be future-dated",
         "QC completion timestamp cannot be future-dated",
         "state <> 'completed' AND completed_at IS NULL",
@@ -134,23 +136,78 @@ def test_lane_3c_migration_is_additive_symmetric_private_and_narrow() -> None:
         assert forbidden not in lowered
 
 
-def test_reinspection_lineage_trigger_has_exact_model_migration_parity() -> None:
+def test_hub_timestamp_triggers_have_exact_model_migration_parity() -> None:
     revision = _scripts().get_revision(REVISION)
     assert revision is not None
     migration_source = Path(revision.path).read_text()
     model_source = (BACKEND_ROOT / "app/models/hub_quality.py").read_text()
-    marker = (
-        "CREATE FUNCTION validate_hub_qc_reinspection_lineage() RETURNS trigger AS $$"
+    functions = (
+        "reject_completed_hub_receipt_update",
+        "reject_completed_hub_qc_update",
+        "validate_hub_discrepancy_insert",
+        "validate_hub_remediation_invariants",
+        "validate_hub_qc_reinspection_lineage",
     )
 
-    def trigger_tokens(source: str) -> list[str]:
+    def trigger_tokens(source: str, function: str) -> list[str]:
+        marker = f"CREATE FUNCTION {function}() RETURNS trigger AS $$"
         body = source.split(marker, 1)[1].split("END; $$ LANGUAGE plpgsql", 1)[0]
         return re.findall(
             r"'[^']*'|[A-Za-z_][A-Za-z0-9_]*|<>|<=|>=|:=|[(),.;=<>]",
             body,
         )
 
-    assert trigger_tokens(model_source) == trigger_tokens(migration_source)
+    for function in functions:
+        assert trigger_tokens(model_source, function) == trigger_tokens(
+            migration_source, function
+        )
+
+
+def test_hub_timestamp_defaults_have_exact_model_migration_parity() -> None:
+    revision = _scripts().get_revision(REVISION)
+    assert revision is not None
+    migration_source = Path(revision.path).read_text()
+    from app.models.hub_quality import (
+        HubDiscrepancy,
+        HubEvidence,
+        HubQCInspection,
+        HubQCSession,
+        HubReceiptItem,
+        HubReceiptSession,
+        HubRemediation,
+    )
+
+    surfaces = {
+        "hub_receipt_sessions": (HubReceiptSession, ("created_at", "updated_at")),
+        "hub_receipt_items": (HubReceiptItem, ("created_at", "updated_at")),
+        "hub_discrepancies": (HubDiscrepancy, ("recorded_at",)),
+        "hub_qc_sessions": (HubQCSession, ("created_at", "updated_at")),
+        "hub_qc_inspections": (
+            HubQCInspection,
+            ("inspected_at", "created_at", "updated_at"),
+        ),
+        "hub_evidence": (
+            HubEvidence,
+            ("retention_policy_updated_at", "created_at"),
+        ),
+        "hub_remediations": (HubRemediation, ("created_at", "updated_at")),
+    }
+    for table, (model, columns) in surfaces.items():
+        table_source = migration_source.split(
+            f'op.create_table(\n        "{table}"', 1
+        )[1]
+        table_source = table_source.split("\n    )", 1)[0]
+        for column in columns:
+            assert (
+                str(model.__table__.c[column].server_default.arg)
+                == "statement_timestamp()"
+            )
+            column_pattern = re.compile(
+                rf'sa\.Column\(\s*"{column}".*?'
+                r'server_default=sa\.text\("statement_timestamp\(\)"\).*?\),',
+                re.DOTALL,
+            )
+            assert column_pattern.search(table_source), (table, column)
 
 
 def test_lane_3c_real_hermetic_postgresql_migration_cycle() -> None:
