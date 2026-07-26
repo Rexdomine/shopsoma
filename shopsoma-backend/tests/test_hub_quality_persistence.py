@@ -1257,6 +1257,90 @@ async def test_evidence_purpose_subject_privacy_retention_and_aggregate_binding(
 
 
 @pytest.mark.asyncio
+async def test_evidence_insert_rejects_future_and_pre_subject_timestamps(
+    db_session, vendor_user, customer_user
+):
+    graph = await _graph(db_session, vendor_user, customer_user)
+    receipt = _receipt(graph)
+    item = _receipt_item(graph, receipt)
+    db_session.add(receipt)
+    await db_session.flush()
+    db_session.add(item)
+    await db_session.flush()
+    await _complete_receipt(db_session, receipt)
+    qc = await _start_qc(db_session, graph, receipt)
+    inspection = _inspection(graph, receipt, item, qc)
+    db_session.add(inspection)
+    await db_session.flush()
+
+    database_now = await db_session.scalar(text("SELECT clock_timestamp()"))
+    future = database_now + timedelta(days=1)
+    await _rejects(
+        db_session,
+        _evidence(
+            graph,
+            receipt,
+            EvidencePurpose.QC_INSPECTION,
+            inspection_id=inspection.id,
+            created_at=future,
+            retention_policy_updated_at=future,
+            retention_until=future + timedelta(days=30),
+        ),
+        match="evidence timestamps cannot be future-dated",
+    )
+    await _rejects(
+        db_session,
+        _evidence(
+            graph,
+            receipt,
+            EvidencePurpose.QC_INSPECTION,
+            inspection_id=inspection.id,
+            created_at=database_now,
+            retention_policy_updated_at=future,
+            retention_until=future + timedelta(days=30),
+        ),
+        match="evidence timestamps cannot be future-dated",
+    )
+
+    before_inspection = inspection.inspected_at - timedelta(microseconds=1)
+    await _rejects(
+        db_session,
+        _evidence(
+            graph,
+            receipt,
+            EvidencePurpose.QC_INSPECTION,
+            inspection_id=inspection.id,
+            created_at=before_inspection,
+            retention_policy_updated_at=before_inspection,
+            retention_until=database_now + timedelta(days=30),
+        ),
+        match="evidence cannot predate its subject",
+    )
+
+    evidence_time = await db_session.scalar(text("SELECT clock_timestamp()"))
+    await _attach_evidence(
+        db_session,
+        graph,
+        receipt,
+        EvidencePurpose.QC_INSPECTION,
+        inspection_id=inspection.id,
+        created_at=evidence_time,
+        retention_policy_updated_at=evidence_time,
+        retention_until=evidence_time + timedelta(days=30),
+    )
+    assert inspection.inspected_at < evidence_time
+    await _rejects(
+        db_session,
+        statement=(
+            "UPDATE hub_qc_sessions SET state='qc_passed', completed_at=:at "
+            "WHERE id=:id"
+        ),
+        params={"id": qc.id, "at": evidence_time - timedelta(microseconds=1)},
+        match="QC completion requires evidence for every inspection",
+    )
+
+
+@pytest.mark.asyncio
 async def test_receipt_and_qc_sessions_must_start_incomplete(
     db_session, vendor_user, customer_user
 ):
@@ -1777,24 +1861,25 @@ async def _failed_cycle(db_session, graph):
         EvidencePurpose.REMEDIATION,
         remediation_id=remediation.id,
     )
+    completion_clock = await db_session.scalar(text("SELECT clock_timestamp()"))
     await db_session.execute(
         text(
             "UPDATE hub_remediations SET state='completed', completed_at=:at WHERE id=:id"
         ),
-        {"id": remediation.id, "at": cycle_clock},
+        {"id": remediation.id, "at": completion_clock},
     )
     await db_session.refresh(remediation)
     return receipt, item, qc, inspection, remediation
 
 
 async def _complete_remediation(db_session, graph, receipt, remediation, actor_id):
-    transition_clock = await db_session.scalar(text("SELECT clock_timestamp()"))
+    approval_clock = await db_session.scalar(text("SELECT clock_timestamp()"))
     await db_session.execute(
         text(
             "UPDATE hub_remediations SET state='approved', "
             "approved_by_id=:actor, approved_at=:at WHERE id=:id"
         ),
-        {"id": remediation.id, "actor": actor_id, "at": transition_clock},
+        {"id": remediation.id, "actor": actor_id, "at": approval_clock},
     )
     await db_session.execute(
         text("UPDATE hub_remediations SET state='in_progress' WHERE id=:id"),
@@ -1807,15 +1892,16 @@ async def _complete_remediation(db_session, graph, receipt, remediation, actor_i
         EvidencePurpose.REMEDIATION,
         remediation_id=remediation.id,
     )
+    completion_clock = await db_session.scalar(text("SELECT clock_timestamp()"))
     await db_session.execute(
         text(
             "UPDATE hub_remediations SET state='completed', "
             "completed_at=:at WHERE id=:id"
         ),
-        {"id": remediation.id, "at": transition_clock},
+        {"id": remediation.id, "at": completion_clock},
     )
     await db_session.refresh(remediation)
-    return transition_clock
+    return completion_clock
 
 
 @pytest.mark.asyncio
@@ -2623,6 +2709,26 @@ async def test_remediation_completion_requires_remediation_evidence(
         params={"id": remediation.id, "at": transition_clock},
         match="remediation completion requires evidence",
     )
+    evidence_time = await db_session.scalar(text("SELECT clock_timestamp()"))
+    await _attach_evidence(
+        db_session,
+        graph,
+        receipt,
+        EvidencePurpose.REMEDIATION,
+        remediation_id=remediation.id,
+        created_at=evidence_time,
+        retention_policy_updated_at=evidence_time,
+        retention_until=evidence_time + timedelta(days=30),
+    )
+    await _rejects(
+        db_session,
+        statement=(
+            "UPDATE hub_remediations SET state='completed', completed_at=:at "
+            "WHERE id=:id"
+        ),
+        params={"id": remediation.id, "at": evidence_time - timedelta(microseconds=1)},
+        match="remediation completion requires evidence",
+    )
 
 
 @pytest.mark.asyncio
@@ -2835,7 +2941,6 @@ async def test_remediation_identity_terms_and_forward_only_lifecycle(
         statement="UPDATE hub_remediations SET state='approved' WHERE id=:id",
         params={"id": remediation.id},
     )
-    completion_clock = await db_session.scalar(text("SELECT clock_timestamp()"))
     await _attach_evidence(
         db_session,
         graph,
@@ -2843,6 +2948,7 @@ async def test_remediation_identity_terms_and_forward_only_lifecycle(
         EvidencePurpose.REMEDIATION,
         remediation_id=remediation.id,
     )
+    completion_clock = await db_session.scalar(text("SELECT clock_timestamp()"))
     await db_session.execute(
         text(
             "UPDATE hub_remediations SET state='completed', completed_at=:at WHERE id=:id"

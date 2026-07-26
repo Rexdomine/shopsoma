@@ -53,6 +53,7 @@ def test_lane_3c_migration_is_additive_symmetric_private_and_narrow() -> None:
     assert "CREATE TRIGGER" in source
     assert "DROP TRIGGER IF EXISTS" in source
     assert "validate_hub_evidence_retention_event" in source
+    assert "validate_hub_evidence_insert" in source
     assert "validate_hub_evidence_update" in source
     assert "pg_trigger_depth()" in source
     for required in (
@@ -67,6 +68,8 @@ def test_lane_3c_migration_is_additive_symmetric_private_and_narrow() -> None:
         "approval timestamp must follow creation and not be future-dated",
         "completion timestamp must follow approval and not be future-dated",
         "event timestamp must follow evidence creation and not be future-dated",
+        "evidence timestamps cannot be future-dated",
+        "evidence cannot predate its subject",
         "retention event timestamps must strictly increase",
         "receipt sessions must start incomplete",
         "receipt completion requires receipt items",
@@ -147,10 +150,15 @@ def test_hub_timestamp_triggers_have_exact_model_migration_parity() -> None:
         "validate_hub_discrepancy_insert",
         "validate_hub_remediation_invariants",
         "validate_hub_qc_reinspection_lineage",
+        "validate_hub_evidence_insert",
     )
 
     def trigger_tokens(source: str, function: str) -> list[str]:
-        marker = f"CREATE FUNCTION {function}() RETURNS trigger AS $$"
+        markers = (
+            f"CREATE FUNCTION {function}() RETURNS trigger AS $$",
+            f"CREATE OR REPLACE FUNCTION {function}() RETURNS trigger AS $$",
+        )
+        marker = next(candidate for candidate in markers if candidate in source)
         body = source.split(marker, 1)[1].split("END; $$ LANGUAGE plpgsql", 1)[0]
         return re.findall(
             r"'[^']*'|[A-Za-z_][A-Za-z0-9_]*|<>|<=|>=|:=|[(),.;=<>]",

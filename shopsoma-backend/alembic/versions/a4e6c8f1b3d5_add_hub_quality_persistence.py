@@ -1146,6 +1146,8 @@ def upgrade() -> None:
                               SELECT 1 FROM hub_evidence evidence
                               WHERE evidence.purpose = 'qc_inspection'
                                 AND evidence.inspection_id = inspection.id
+                                AND evidence.created_at >= inspection.inspected_at
+                                AND evidence.created_at <= NEW.completed_at
                           )
                     ) THEN
                         RAISE EXCEPTION USING ERRCODE = '23514',
@@ -1305,6 +1307,7 @@ def upgrade() -> None:
                AND NOT EXISTS (
                    SELECT 1 FROM hub_evidence
                    WHERE purpose = 'remediation' AND remediation_id = NEW.id
+                     AND created_at >= NEW.created_at AND created_at <= NEW.completed_at
                ) THEN
                 RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'remediation completion requires evidence';
             END IF;
@@ -1337,6 +1340,42 @@ def upgrade() -> None:
         """CREATE TRIGGER tr_hub_remediations_invariants
         BEFORE INSERT OR UPDATE ON hub_remediations
         FOR EACH ROW EXECUTE FUNCTION validate_hub_remediation_invariants()"""
+    )
+    op.execute(
+        """
+        CREATE OR REPLACE FUNCTION validate_hub_evidence_insert() RETURNS trigger AS $$
+        DECLARE subject_at timestamptz;
+        BEGIN
+            IF NEW.created_at > clock_timestamp()
+               OR NEW.retention_policy_updated_at > clock_timestamp() THEN
+                RAISE EXCEPTION USING ERRCODE = '23514',
+                    MESSAGE = 'evidence timestamps cannot be future-dated';
+            END IF;
+            IF NEW.purpose = 'hub_receipt' THEN
+                SELECT started_at INTO subject_at FROM hub_receipt_sessions
+                WHERE id = NEW.receipt_session_id FOR KEY SHARE;
+            ELSIF NEW.purpose = 'discrepancy' THEN
+                SELECT recorded_at INTO subject_at FROM hub_discrepancies
+                WHERE id = NEW.discrepancy_id FOR KEY SHARE;
+            ELSIF NEW.purpose = 'qc_inspection' THEN
+                SELECT inspected_at INTO subject_at FROM hub_qc_inspections
+                WHERE id = NEW.inspection_id FOR KEY SHARE;
+            ELSIF NEW.purpose = 'remediation' THEN
+                SELECT created_at INTO subject_at FROM hub_remediations
+                WHERE id = NEW.remediation_id FOR KEY SHARE;
+            END IF;
+            IF subject_at IS NOT NULL AND NEW.created_at < subject_at THEN
+                RAISE EXCEPTION USING ERRCODE = '23514',
+                    MESSAGE = 'evidence cannot predate its subject';
+            END IF;
+            RETURN NEW;
+        END; $$ LANGUAGE plpgsql
+        """
+    )
+    op.execute(
+        """CREATE TRIGGER tr_hub_evidence_insert_valid
+        BEFORE INSERT ON hub_evidence
+        FOR EACH ROW EXECUTE FUNCTION validate_hub_evidence_insert()"""
     )
     op.execute(
         """
@@ -1528,6 +1567,7 @@ def downgrade() -> None:
         "DROP TRIGGER IF EXISTS tr_hub_discrepancies_update_restricted "
         "ON hub_discrepancies"
     )
+    op.execute("DROP TRIGGER IF EXISTS tr_hub_evidence_insert_valid ON hub_evidence")
     op.execute(
         "DROP TRIGGER IF EXISTS tr_hub_evidence_update_restricted ON hub_evidence"
     )
@@ -1600,6 +1640,7 @@ def downgrade() -> None:
     op.execute("DROP FUNCTION IF EXISTS validate_hub_discrepancy_insert()")
     op.execute("DROP FUNCTION IF EXISTS validate_hub_evidence_retention_event()")
     op.execute("DROP FUNCTION IF EXISTS validate_hub_evidence_update()")
+    op.execute("DROP FUNCTION IF EXISTS validate_hub_evidence_insert()")
     op.execute("DROP FUNCTION IF EXISTS reject_completed_hub_receipt_update()")
     op.execute("DROP FUNCTION IF EXISTS reject_completed_hub_qc_update()")
     op.execute("DROP FUNCTION IF EXISTS validate_hub_qc_reinspection_lineage()")
