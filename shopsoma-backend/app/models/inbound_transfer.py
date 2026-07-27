@@ -104,6 +104,14 @@ class InboundTransfer(Base):
             name="uq_inbound_transfers_identity",
         ),
         UniqueConstraint(
+            "id",
+            "cohort_id",
+            "order_id",
+            "vendor_id",
+            "target_hub_id",
+            name="uq_inbound_transfers_hub_identity",
+        ),
+        UniqueConstraint(
             "replaces_transfer_id",
             name="uq_inbound_transfers_replaces_transfer_id",
         ),
@@ -167,6 +175,14 @@ class InboundTransferItemAllocation(Base):
             "allocated_quantity > 0",
             name="ck_inbound_transfer_items_quantity_positive",
         ),
+        UniqueConstraint(
+            "transfer_id",
+            "order_item_id",
+            "cohort_id",
+            "order_id",
+            "vendor_id",
+            name="uq_inbound_transfer_items_identity",
+        ),
     )
 
 
@@ -181,6 +197,15 @@ _TRANSFER_QUANTITY_FUNCTION = DDL(
     RETURNS trigger AS $$
     DECLARE cohort_quantity integer;
     BEGIN
+        PERFORM id FROM inbound_transfers WHERE id = NEW.transfer_id FOR UPDATE;
+        IF EXISTS (
+            SELECT 1 FROM hub_receipt_sessions
+            WHERE inbound_transfer_id = NEW.transfer_id AND completed_at IS NOT NULL
+        ) THEN
+            RAISE EXCEPTION USING
+                ERRCODE = '23514',
+                MESSAGE = 'inbound transfer allocations are frozen after receipt completion';
+        END IF;
         SELECT allocated_quantity INTO cohort_quantity
         FROM cohort_item_allocations
         WHERE cohort_id = NEW.cohort_id AND order_item_id = NEW.order_item_id

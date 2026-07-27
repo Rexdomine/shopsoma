@@ -1,4 +1,5 @@
 """Database models"""
+
 from app.models.user import User
 from app.models.vendor import Vendor
 from app.models.category import Category
@@ -16,7 +17,12 @@ from app.models.promo_code import PromoCode
 from app.models.wishlist import Wishlist
 from app.models.manage_preference import ManagePreference
 from app.models.vendor_asset import VendorAsset
-from app.models.vendor_pickup import VendorPickup, VendorNotification, PickupStatus, OrderType
+from app.models.vendor_pickup import (
+    VendorPickup,
+    VendorNotification,
+    PickupStatus,
+    OrderType,
+)
 from app.models.vendor_otp import VendorOTP
 from app.models.vendor_application import VendorApplication
 from app.models.vendor_payment_method import VendorPaymentMethod
@@ -35,6 +41,22 @@ from app.models.fulfillment_cohort import (
 from app.models.inbound_transfer import (
     InboundTransfer,
     InboundTransferItemAllocation,
+)
+from app.models.hub_quality import (
+    DiscrepancyType,
+    EvidencePurpose,
+    HubDiscrepancy,
+    HubEvidence,
+    HubEvidenceRetentionEvent,
+    HubQCInspection,
+    HubQCSession,
+    HubReceiptItem,
+    HubReceiptSession,
+    HubRemediation,
+    QCDecision,
+    QuarantineDisposition,
+    RemediationAction,
+    RemediationState,
 )
 
 __all__ = [
@@ -77,4 +99,18 @@ __all__ = [
     "FulfillmentReadinessType",
     "InboundTransfer",
     "InboundTransferItemAllocation",
+    "DiscrepancyType",
+    "EvidencePurpose",
+    "HubDiscrepancy",
+    "HubEvidence",
+    "HubEvidenceRetentionEvent",
+    "HubQCInspection",
+    "HubQCSession",
+    "HubReceiptItem",
+    "HubReceiptSession",
+    "HubRemediation",
+    "QCDecision",
+    "QuarantineDisposition",
+    "RemediationAction",
+    "RemediationState",
 ]
