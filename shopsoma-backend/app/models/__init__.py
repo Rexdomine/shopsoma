@@ -58,6 +58,16 @@ from app.models.hub_quality import (
     RemediationAction,
     RemediationState,
 )
+from app.models.package_custody import (
+    CustodyEvent,
+    CustodyStream,
+    HubPackage,
+    HubPackageItem,
+    HubPackageSeal,
+    HubPackageVersion,
+    OutboundShipmentIntent,
+    OutboundShipmentIntentInvalidation,
+)
 
 __all__ = [
     "User",
@@ -113,4 +123,12 @@ __all__ = [
     "QuarantineDisposition",
     "RemediationAction",
     "RemediationState",
+    "HubPackage",
+    "HubPackageVersion",
+    "HubPackageItem",
+    "HubPackageSeal",
+    "CustodyStream",
+    "CustodyEvent",
+    "OutboundShipmentIntent",
+    "OutboundShipmentIntentInvalidation",
 ]
