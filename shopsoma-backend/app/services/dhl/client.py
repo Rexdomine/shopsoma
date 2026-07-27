@@ -11,6 +11,11 @@ from app.core.config import Settings, settings
 
 logger = logging.getLogger(__name__)
 
+# HTTPX's INFO request log includes the complete URL, including path and query
+# values that may contain private carrier references. Keep transport diagnostics
+# at WARNING or above; DHLClient emits its own path-free request/response logs.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
 
 class DHLConfigurationError(RuntimeError):
     """Raised when the DHL client is used without a complete enabled config."""

@@ -204,9 +204,17 @@ def test_runbook_does_not_reactivate_superseded_vendor_origin_work() -> None:
         assert re.search(pattern, text) is None, pattern
 
 
-def test_runbook_distinguishes_code_gates_from_sandbox_operational_control() -> None:
+def test_runbook_records_code_enforced_phase_2b_sandbox_isolation() -> None:
     text = _normalized(_runbook())
 
-    assert "capability evaluator does not distinguish sandbox from production" in text
-    assert "sandbox isolation is an external deployment/secret-policy control" in text
-    assert "phase 2b adds the sandbox-only provider factory" in text
+    assert (
+        "domestic provider calls are effective only in the sandbox environment" in text
+    )
+    assert "phase 2b sandbox isolation is enforced in code" in text
+    assert "production fails closed" in text
+    assert (
+        "capability evaluator does not distinguish sandbox from production" not in text
+    )
+    assert (
+        "sandbox isolation is an external deployment/secret-policy control" not in text
+    )
