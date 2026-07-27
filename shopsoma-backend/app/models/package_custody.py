@@ -131,7 +131,8 @@ class HubPackageVersion(Base):
         ),
         CheckConstraint(
             "(version = 1 AND reason IS NULL) OR "
-            "(version > 1 AND reason = btrim(reason) AND length(reason) > 0)",
+            "(version > 1 AND reason IS NOT NULL AND reason = btrim(reason) "
+            "AND length(reason) > 0)",
             name="ck_hub_package_versions_reason",
         ),
         UniqueConstraint(
@@ -400,14 +401,16 @@ class CustodyEvent(Base):
             name="ck_custody_events_canonical",
         ),
         CheckConstraint(
-            "(event_type = 'correction' AND correction_reason = btrim(correction_reason) "
+            "(event_type = 'correction' AND correction_reason IS NOT NULL "
+            "AND correction_reason = btrim(correction_reason) "
             "AND length(correction_reason) > 0) OR "
             "(event_type <> 'correction' AND correction_reason IS NULL)",
             name="ck_custody_events_correction",
         ),
         CheckConstraint(
             "(evidence_ref IS NULL AND evidence_hash IS NULL) OR "
-            "(evidence_ref = btrim(evidence_ref) AND length(evidence_ref) > 0 "
+            "(evidence_ref IS NOT NULL AND evidence_hash IS NOT NULL "
+            "AND evidence_ref = btrim(evidence_ref) AND length(evidence_ref) > 0 "
             "AND evidence_ref NOT LIKE '%://%' AND evidence_ref NOT LIKE '/%' "
             "AND evidence_ref NOT LIKE '%..%' AND evidence_hash ~ '^[0-9a-f]{64}$')",
             name="ck_custody_events_private_evidence",
@@ -1017,13 +1020,14 @@ FOR EACH ROW EXECUTE FUNCTION reject_package_immutable_mutation()
     """,
     """
 CREATE FUNCTION validate_outbound_intent_invalidation_insert() RETURNS trigger AS $$
-DECLARE package_id_value uuid; intent_created_at timestamptz;
+DECLARE package_id_value uuid; seal_id_value uuid; intent_created_at timestamptz;
 BEGIN
-    SELECT package_id,created_at INTO package_id_value,intent_created_at
+    SELECT package_id,seal_id,created_at INTO package_id_value,seal_id_value,intent_created_at
       FROM outbound_shipment_intents WHERE id=NEW.intent_id;
     IF NOT FOUND THEN
         RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='outbound intent does not exist';
     END IF;
+    PERFORM 1 FROM hub_package_seals WHERE id=seal_id_value FOR UPDATE;
     PERFORM 1 FROM hub_packages WHERE id=package_id_value FOR UPDATE;
     IF NEW.invalidated_at < intent_created_at OR NEW.invalidated_at > clock_timestamp()
        OR NEW.created_at < NEW.invalidated_at OR NEW.created_at > clock_timestamp() THEN

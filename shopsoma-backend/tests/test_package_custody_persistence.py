@@ -590,6 +590,43 @@ async def test_custody_events_form_immutable_exact_private_chain(
     )
     db_session.add(first)
     await db_session.flush()
+    correction_kwargs = dict(
+        stream_id=stream.id,
+        version=2,
+        previous_event_id=first.id,
+        cohort_id=graph["cohort"].id,
+        order_id=graph["order"].id,
+        vendor_id=graph["vendor_id"],
+        hub_id=graph["hub"].id,
+        event_type="correction",
+        actor_type="user",
+        actor_id=str(graph["operator_id"]),
+        source_system="shopsoma_hub",
+        source_command="record_custody",
+        occurred_at=await db_session.scalar(text("SELECT clock_timestamp()")),
+        location="Lagos Hub",
+        package_id=aggregate.id,
+        package_version=1,
+        seal_id=seal.id,
+    )
+    await _HUB._rejects(
+        db_session,
+        CustodyEvent(
+            **correction_kwargs,
+            idempotency_key=f"missing-reason-{uuid.uuid4().hex}",
+        ),
+        match="ck_custody_events_correction",
+    )
+    await _HUB._rejects(
+        db_session,
+        CustodyEvent(
+            **correction_kwargs,
+            idempotency_key=f"partial-evidence-{uuid.uuid4().hex}",
+            correction_reason="correct actor metadata",
+            evidence_ref="private/custody/partial.jpg",
+        ),
+        match="ck_custody_events_private_evidence",
+    )
     await _HUB._rejects(
         db_session,
         CustodyEvent(
@@ -1130,6 +1167,22 @@ async def test_successor_package_version_must_follow_predecessor_closeout(
             reason="authorized correction",
         ),
         match="successor package version must follow predecessor closeout",
+    )
+    await _HUB._rejects(
+        db_session,
+        HubPackageVersion(
+            package_id=aggregate.id,
+            version=2,
+            order_id=graph["order"].id,
+            hub_id=graph["hub"].id,
+            weight_kg="1",
+            length_cm="1",
+            width_cm="1",
+            height_cm="1",
+            packed_by_id=graph["operator_id"],
+            packed_at=retirement_at,
+        ),
+        match="ck_hub_package_versions_reason",
     )
 
 
