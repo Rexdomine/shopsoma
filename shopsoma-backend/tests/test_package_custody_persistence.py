@@ -426,11 +426,22 @@ async def test_item_and_custody_stream_creation_cannot_be_future_dated(
     db_session, vendor_user, customer_user
 ):
     from datetime import timedelta
-    from app.models.package_custody import CustodyStream, HubPackageItem
+    from app.models.package_custody import CustodyStream, HubPackageItem, HubPackageSeal
 
     graph = await _passed_graph(db_session, vendor_user, customer_user)
     aggregate, _version, _item = await _packing_package(
         db_session, graph, add_item=False
+    )
+    await _HUB._rejects(
+        db_session,
+        HubPackageSeal(
+            package_id=aggregate.id,
+            package_version=1,
+            opaque_value=f"seal-before-composition-{uuid.uuid4().hex}",
+            applied_by_id=graph["operator_id"],
+            applied_at=await db_session.scalar(text("SELECT clock_timestamp()")),
+        ),
+        match="seal application must follow completed composition",
     )
     future = await db_session.scalar(text("SELECT clock_timestamp()")) + timedelta(
         days=1
@@ -530,7 +541,7 @@ async def test_seal_intent_invalidation_and_repack_are_ordered_and_immutable(
             "retired_by_id=:actor, retirement_reason='reverse dated' WHERE id=:id"
         ),
         params={"id": seal.id, "actor": graph["operator_id"]},
-        match="seal retirement must follow outbound intent invalidation",
+        match="seal retirement must follow package terminal chronology",
     )
     retirement_at = await db_session.scalar(text("SELECT clock_timestamp()"))
     await db_session.execute(
@@ -1094,7 +1105,10 @@ async def test_seal_retirement_must_follow_bound_custody_events(
     )
     db_session.add(packed)
     await db_session.flush()
-    sealed_at = seal.applied_at + timedelta(microseconds=1)
+    ready_time = await db_session.scalar(
+        text("SELECT ready_at FROM hub_packages WHERE id=:id"), {"id": aggregate.id}
+    )
+    sealed_at = ready_time + timedelta(microseconds=1)
     sealed = CustodyEvent(
         stream_id=stream.id,
         version=2,
@@ -1120,10 +1134,10 @@ async def test_seal_retirement_must_follow_bound_custody_events(
     await _HUB._rejects(
         db_session,
         statement=(
-            "UPDATE hub_package_seals SET retired_at=applied_at, retired_by_id=:actor, "
+            "UPDATE hub_package_seals SET retired_at=:at, retired_by_id=:actor, "
             "retirement_reason='backdated' WHERE id=:id"
         ),
-        params={"id": seal.id, "actor": graph["operator_id"]},
+        params={"id": seal.id, "actor": graph["operator_id"], "at": ready_time},
         match="seal retirement must follow bound custody evidence",
     )
 

@@ -715,6 +715,9 @@ BEGIN
        OR package.order_id<>NEW.order_id OR package.hub_id<>NEW.hub_id THEN
         RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='package items require the current packing version';
     END IF;
+    IF EXISTS (SELECT 1 FROM hub_package_seals WHERE package_id=NEW.package_id AND retired_at IS NULL) THEN
+        RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='package composition cannot change after seal application';
+    END IF;
     SELECT packed_at INTO packed_at_value FROM hub_package_versions
      WHERE package_id=NEW.package_id AND version=NEW.package_version;
     SELECT max(s.completed_at) INTO qc_completed FROM hub_qc_sessions s
@@ -765,7 +768,7 @@ FOR EACH ROW EXECUTE FUNCTION reject_package_immutable_mutation()
     """,
     """
 CREATE FUNCTION validate_hub_package_seal_insert() RETURNS trigger AS $$
-DECLARE package hub_packages%%ROWTYPE; packed_at_value timestamptz;
+DECLARE package hub_packages%%ROWTYPE; packed_at_value timestamptz; composition_time timestamptz; composition_count integer;
 BEGIN
     SELECT * INTO package FROM hub_packages WHERE id=NEW.package_id FOR UPDATE;
     SELECT packed_at INTO packed_at_value FROM hub_package_versions
@@ -775,6 +778,11 @@ BEGIN
     END IF;
     IF NEW.applied_at < packed_at_value OR NEW.applied_at > clock_timestamp() THEN
         RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='seal timestamp violates package chronology';
+    END IF;
+    SELECT count(*),max(created_at) INTO composition_count,composition_time
+      FROM hub_package_items WHERE package_id=NEW.package_id AND package_version=NEW.package_version;
+    IF composition_count=0 OR NEW.applied_at < composition_time THEN
+        RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='seal application must follow completed composition';
     END IF;
     IF NEW.retired_at IS NOT NULL OR NEW.retired_by_id IS NOT NULL OR NEW.retirement_reason IS NOT NULL THEN
         RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='seals must start active';
@@ -789,12 +797,13 @@ FOR EACH ROW EXECUTE FUNCTION validate_hub_package_seal_insert()
     """,
     """
 CREATE FUNCTION validate_hub_package_seal_mutation() RETURNS trigger AS $$
-DECLARE intent_boundary timestamptz; custody_boundary timestamptz;
+DECLARE intent_boundary timestamptz; custody_boundary timestamptz; package_boundary timestamptz;
 BEGIN
     IF TG_OP='DELETE' THEN
         RAISE EXCEPTION USING ERRCODE='23503', MESSAGE='seals are audit records and cannot be deleted';
     END IF;
-    PERFORM 1 FROM hub_packages WHERE id=OLD.package_id FOR UPDATE;
+    SELECT GREATEST(OLD.applied_at,COALESCE(sealed_at,OLD.applied_at),COALESCE(ready_at,OLD.applied_at))
+      INTO package_boundary FROM hub_packages WHERE id=OLD.package_id FOR UPDATE;
     IF OLD.retired_at IS NOT NULL OR NEW.id IS DISTINCT FROM OLD.id
        OR NEW.package_id IS DISTINCT FROM OLD.package_id
        OR NEW.package_version IS DISTINCT FROM OLD.package_version
@@ -811,6 +820,9 @@ BEGIN
          AND NOT EXISTS (SELECT 1 FROM outbound_shipment_intent_invalidations x WHERE x.intent_id=i.id)
     ) THEN
         RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='active outbound intent must be invalidated before seal retirement';
+    END IF;
+    IF NEW.retired_at < package_boundary THEN
+        RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='seal retirement must follow package terminal chronology';
     END IF;
     SELECT max(GREATEST(i.created_at, x.invalidated_at)) INTO intent_boundary
       FROM outbound_shipment_intents i
@@ -1029,6 +1041,13 @@ BEGIN
     END IF;
     PERFORM 1 FROM hub_package_seals WHERE id=seal_id_value FOR UPDATE;
     PERFORM 1 FROM hub_packages WHERE id=package_id_value FOR UPDATE;
+    IF EXISTS (
+        SELECT 1 FROM custody_events e JOIN outbound_shipment_intents i
+          ON i.package_id=e.package_id AND i.package_version=e.package_version
+         WHERE i.id=NEW.intent_id AND e.event_type IN ('released','tendered','provider_accepted')
+    ) THEN
+        RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='outbound intent cannot invalidate after custody handoff';
+    END IF;
     IF NEW.invalidated_at < intent_created_at OR NEW.invalidated_at > clock_timestamp()
        OR NEW.created_at < NEW.invalidated_at OR NEW.created_at > clock_timestamp() THEN
         RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='outbound intent invalidation chronology is invalid';
