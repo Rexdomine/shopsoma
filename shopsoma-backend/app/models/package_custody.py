@@ -613,7 +613,7 @@ FOR EACH ROW EXECUTE FUNCTION validate_hub_package_write()
     """,
     """
 CREATE FUNCTION validate_hub_package_version_insert() RETURNS trigger AS $$
-DECLARE package hub_packages%%ROWTYPE; qc_completed timestamptz;
+DECLARE package hub_packages%%ROWTYPE; qc_completed timestamptz; predecessor_boundary timestamptz;
 BEGIN
     SELECT * INTO package FROM hub_packages WHERE id=NEW.package_id FOR UPDATE;
     IF NOT FOUND OR package.order_id<>NEW.order_id OR package.hub_id<>NEW.hub_id
@@ -637,6 +637,18 @@ BEGIN
          WHERE package_id=NEW.package_id AND version=NEW.version-1
     ) THEN
         RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='package version predecessor is missing';
+    ELSE
+        SELECT GREATEST(
+            predecessor.packed_at,
+            predecessor.created_at,
+            COALESCE((SELECT max(seal.retired_at) FROM hub_package_seals seal
+                       WHERE seal.package_id=NEW.package_id
+                         AND seal.package_version=NEW.version-1), predecessor.created_at)
+        ) INTO predecessor_boundary FROM hub_package_versions predecessor
+         WHERE predecessor.package_id=NEW.package_id AND predecessor.version=NEW.version-1;
+        IF NEW.packed_at < predecessor_boundary THEN
+            RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='successor package version must follow predecessor closeout';
+        END IF;
     END IF;
     RETURN NEW;
 END; $$ LANGUAGE plpgsql
@@ -661,7 +673,6 @@ FOR EACH ROW EXECUTE FUNCTION reject_package_immutable_mutation()
 CREATE FUNCTION validate_hub_package_item_insert() RETURNS trigger AS $$
 DECLARE package hub_packages%%ROWTYPE; packed_at_value timestamptz; qc_completed timestamptz; passed_quantity bigint; consumed_quantity bigint;
 BEGIN
-    PERFORM pg_advisory_xact_lock(hashtextextended('hub_package_item_writes', 0));
     SELECT * INTO package FROM hub_packages WHERE id=NEW.package_id FOR UPDATE;
     IF NOT FOUND OR package.state<>'packing' OR package.current_version<>NEW.package_version
        OR package.order_id<>NEW.order_id OR package.hub_id<>NEW.hub_id THEN
@@ -741,7 +752,7 @@ FOR EACH ROW EXECUTE FUNCTION validate_hub_package_seal_insert()
     """,
     """
 CREATE FUNCTION validate_hub_package_seal_mutation() RETURNS trigger AS $$
-DECLARE intent_boundary timestamptz;
+DECLARE intent_boundary timestamptz; custody_boundary timestamptz;
 BEGIN
     IF TG_OP='DELETE' THEN
         RAISE EXCEPTION USING ERRCODE='23503', MESSAGE='seals are audit records and cannot be deleted';
@@ -771,6 +782,10 @@ BEGIN
        AND i.seal_id=OLD.id;
     IF intent_boundary IS NOT NULL AND NEW.retired_at < intent_boundary THEN
         RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='seal retirement must follow outbound intent invalidation';
+    END IF;
+    SELECT max(occurred_at) INTO custody_boundary FROM custody_events WHERE seal_id=OLD.id;
+    IF custody_boundary IS NOT NULL AND NEW.retired_at < custody_boundary THEN
+        RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='seal retirement must follow bound custody evidence';
     END IF;
     RETURN NEW;
 END; $$ LANGUAGE plpgsql
@@ -880,11 +895,21 @@ BEGIN
        OR NEW.created_at < NEW.recorded_at OR NEW.created_at > clock_timestamp() THEN
         RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='custody event chronology is invalid';
     END IF;
+    IF NEW.event_type<>'packed' THEN
+        SELECT applied_at,retired_at INTO seal_applied,seal_retired
+          FROM hub_package_seals WHERE id=NEW.seal_id
+           AND package_id=NEW.package_id AND package_version=NEW.package_version
+         FOR UPDATE;
+        IF NOT FOUND THEN
+            RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='custody seal interval is invalid';
+        END IF;
+    END IF;
     SELECT p.state,p.current_version,v.packed_at
       INTO package_state,current_package_version,packed_time
       FROM hub_packages p JOIN hub_package_versions v
         ON v.package_id=p.id AND v.version=NEW.package_version
-     WHERE p.id=NEW.package_id AND p.order_id=NEW.order_id AND p.hub_id=NEW.hub_id;
+     WHERE p.id=NEW.package_id AND p.order_id=NEW.order_id AND p.hub_id=NEW.hub_id
+     FOR UPDATE OF p;
     IF NOT FOUND OR current_package_version<>NEW.package_version
        OR NEW.occurred_at < packed_time
        OR NOT EXISTS (
@@ -898,10 +923,7 @@ BEGIN
         IF package_state NOT IN ('sealed','ready') THEN
             RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='custody event requires sealed package truth';
         END IF;
-        SELECT applied_at,retired_at INTO seal_applied,seal_retired
-          FROM hub_package_seals WHERE id=NEW.seal_id
-           AND package_id=NEW.package_id AND package_version=NEW.package_version;
-        IF NOT FOUND OR NEW.occurred_at < seal_applied
+        IF NEW.occurred_at < seal_applied
            OR (seal_retired IS NOT NULL AND NEW.occurred_at > seal_retired) THEN
             RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='custody seal interval is invalid';
         END IF;

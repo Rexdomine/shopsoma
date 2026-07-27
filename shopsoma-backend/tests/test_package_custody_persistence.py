@@ -1008,3 +1008,116 @@ async def test_terminal_package_cannot_commit_without_active_current_seal(
                 {"id": seal.id, "at": retired_at, "actor": graph["operator_id"]},
             )
             await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+
+@pytest.mark.asyncio
+async def test_seal_retirement_must_follow_bound_custody_events(
+    db_session, vendor_user, customer_user
+):
+    from datetime import timedelta
+    from app.models.package_custody import CustodyEvent, CustodyStream
+
+    graph = await _passed_graph(db_session, vendor_user, customer_user)
+    aggregate, version, _item, seal = await _ready_package(db_session, graph)
+    stream = CustodyStream(
+        cohort_id=graph["cohort"].id,
+        order_id=graph["order"].id,
+        vendor_id=graph["vendor_id"],
+        hub_id=graph["hub"].id,
+    )
+    db_session.add(stream)
+    await db_session.flush()
+    packed = CustodyEvent(
+        stream_id=stream.id,
+        version=1,
+        cohort_id=graph["cohort"].id,
+        order_id=graph["order"].id,
+        vendor_id=graph["vendor_id"],
+        hub_id=graph["hub"].id,
+        event_type="packed",
+        actor_type="user",
+        actor_id=str(graph["operator_id"]),
+        source_system="shopsoma_hub",
+        source_command="record_custody",
+        idempotency_key=f"packed-{uuid.uuid4().hex}",
+        occurred_at=version.packed_at,
+        location="Lagos Hub",
+        package_id=aggregate.id,
+        package_version=1,
+    )
+    db_session.add(packed)
+    await db_session.flush()
+    sealed_at = seal.applied_at + timedelta(microseconds=1)
+    sealed = CustodyEvent(
+        stream_id=stream.id,
+        version=2,
+        previous_event_id=packed.id,
+        cohort_id=graph["cohort"].id,
+        order_id=graph["order"].id,
+        vendor_id=graph["vendor_id"],
+        hub_id=graph["hub"].id,
+        event_type="sealed",
+        actor_type="user",
+        actor_id=str(graph["operator_id"]),
+        source_system="shopsoma_hub",
+        source_command="record_custody",
+        idempotency_key=f"sealed-{uuid.uuid4().hex}",
+        occurred_at=sealed_at,
+        location="Lagos Hub",
+        package_id=aggregate.id,
+        package_version=1,
+        seal_id=seal.id,
+    )
+    db_session.add(sealed)
+    await db_session.flush()
+    await _HUB._rejects(
+        db_session,
+        statement=(
+            "UPDATE hub_package_seals SET retired_at=applied_at, retired_by_id=:actor, "
+            "retirement_reason='backdated' WHERE id=:id"
+        ),
+        params={"id": seal.id, "actor": graph["operator_id"]},
+        match="seal retirement must follow bound custody evidence",
+    )
+
+
+@pytest.mark.asyncio
+async def test_successor_package_version_must_follow_predecessor_closeout(
+    db_session, vendor_user, customer_user
+):
+    from app.models.package_custody import HubPackageVersion
+
+    graph = await _passed_graph(db_session, vendor_user, customer_user)
+    aggregate, version, _item, seal = await _ready_package(db_session, graph)
+    retirement_at = await db_session.scalar(text("SELECT clock_timestamp()"))
+    await db_session.execute(
+        text(
+            "UPDATE hub_package_seals SET retired_at=:at, retired_by_id=:actor, "
+            "retirement_reason='authorized repack' WHERE id=:id"
+        ),
+        {"id": seal.id, "at": retirement_at, "actor": graph["operator_id"]},
+    )
+    await db_session.execute(
+        text(
+            "UPDATE hub_packages SET state='packing', current_version=2, sealed_at=NULL, "
+            "ready_at=NULL, row_version=4 WHERE id=:id"
+        ),
+        {"id": aggregate.id},
+    )
+    await _HUB._rejects(
+        db_session,
+        HubPackageVersion(
+            package_id=aggregate.id,
+            version=2,
+            order_id=graph["order"].id,
+            hub_id=graph["hub"].id,
+            weight_kg="1",
+            length_cm="1",
+            width_cm="1",
+            height_cm="1",
+            packed_by_id=graph["operator_id"],
+            packed_at=version.packed_at,
+            reason="authorized correction",
+        ),
+        match="successor package version must follow predecessor closeout",
+    )
