@@ -457,6 +457,8 @@ async def test_item_and_custody_stream_creation_cannot_be_future_dated(
             order_id=graph["order"].id,
             vendor_id=graph["vendor_id"],
             hub_id=graph["hub"].id,
+            package_id=aggregate.id,
+            package_version=1,
             created_at=future,
         ),
         match="custody stream cannot be future-dated",
@@ -560,6 +562,8 @@ async def test_custody_events_form_immutable_exact_private_chain(
         order_id=graph["order"].id,
         vendor_id=graph["vendor_id"],
         hub_id=graph["hub"].id,
+        package_id=aggregate.id,
+        package_version=1,
     )
     db_session.add(stream)
     await db_session.flush()
@@ -711,6 +715,8 @@ async def test_concurrent_custody_writers_cannot_fork_chain(
         order_id=graph["order"].id,
         vendor_id=graph["vendor_id"],
         hub_id=graph["hub"].id,
+        package_id=aggregate.id,
+        package_version=1,
     )
     db_session.add(stream)
     await db_session.flush()
@@ -916,6 +922,8 @@ async def test_custody_rejects_direct_terminal_lifecycle_and_seal_interval_viola
         order_id=graph["order"].id,
         vendor_id=graph["vendor_id"],
         hub_id=graph["hub"].id,
+        package_id=aggregate.id,
+        package_version=1,
     )
     db_session.add(stream)
     await db_session.flush()
@@ -1024,6 +1032,8 @@ async def test_seal_retirement_must_follow_bound_custody_events(
         order_id=graph["order"].id,
         vendor_id=graph["vendor_id"],
         hub_id=graph["hub"].id,
+        package_id=aggregate.id,
+        package_version=1,
     )
     db_session.add(stream)
     await db_session.flush()
@@ -1120,4 +1130,118 @@ async def test_successor_package_version_must_follow_predecessor_closeout(
             reason="authorized correction",
         ),
         match="successor package version must follow predecessor closeout",
+    )
+
+
+@pytest.mark.asyncio
+async def test_custody_streams_are_independent_per_physical_package_version(
+    db_session, vendor_user, customer_user
+):
+    from app.models.package_custody import CustodyEvent, CustodyStream
+
+    graph = await _passed_graph(db_session, vendor_user, customer_user, quantity=2)
+    identities = []
+    for _ in range(2):
+        aggregate, version, _item = await _packing_package(db_session, graph)
+        stream = CustodyStream(
+            cohort_id=graph["cohort"].id,
+            order_id=graph["order"].id,
+            vendor_id=graph["vendor_id"],
+            hub_id=graph["hub"].id,
+            package_id=aggregate.id,
+            package_version=1,
+        )
+        db_session.add(stream)
+        await db_session.flush()
+        db_session.add(
+            CustodyEvent(
+                stream_id=stream.id,
+                version=1,
+                cohort_id=graph["cohort"].id,
+                order_id=graph["order"].id,
+                vendor_id=graph["vendor_id"],
+                hub_id=graph["hub"].id,
+                event_type="packed",
+                actor_type="user",
+                actor_id=str(graph["operator_id"]),
+                source_system="shopsoma_hub",
+                source_command="record_custody",
+                idempotency_key=f"split-{uuid.uuid4().hex}",
+                occurred_at=version.packed_at,
+                location="Lagos Hub",
+                package_id=aggregate.id,
+                package_version=1,
+            )
+        )
+        await db_session.flush()
+        identities.append((aggregate.id, stream.id))
+    assert len({identity[0] for identity in identities}) == 2
+    assert len({identity[1] for identity in identities}) == 2
+
+
+@pytest.mark.asyncio
+async def test_package_cannot_repack_after_custody_release(
+    db_session, vendor_user, customer_user
+):
+    from datetime import timedelta
+    from app.models.package_custody import CustodyEvent, CustodyStream
+
+    graph = await _passed_graph(db_session, vendor_user, customer_user)
+    aggregate, version, _item, seal = await _ready_package(db_session, graph)
+    stream = CustodyStream(
+        cohort_id=graph["cohort"].id,
+        order_id=graph["order"].id,
+        vendor_id=graph["vendor_id"],
+        hub_id=graph["hub"].id,
+        package_id=aggregate.id,
+        package_version=1,
+    )
+    db_session.add(stream)
+    await db_session.flush()
+    previous = None
+    occurred = version.packed_at
+    for position, event_type in enumerate(
+        ("packed", "sealed", "staged", "released"), 1
+    ):
+        if event_type != "packed":
+            occurred = max(occurred + timedelta(microseconds=1), seal.applied_at)
+        event = CustodyEvent(
+            stream_id=stream.id,
+            version=position,
+            previous_event_id=None if previous is None else previous.id,
+            cohort_id=graph["cohort"].id,
+            order_id=graph["order"].id,
+            vendor_id=graph["vendor_id"],
+            hub_id=graph["hub"].id,
+            event_type=event_type,
+            actor_type="user",
+            actor_id=str(graph["operator_id"]),
+            source_system="shopsoma_hub",
+            source_command="record_custody",
+            idempotency_key=f"handoff-{event_type}-{uuid.uuid4().hex}",
+            occurred_at=occurred,
+            location="Lagos Hub",
+            package_id=aggregate.id,
+            package_version=1,
+            seal_id=None if event_type == "packed" else seal.id,
+        )
+        db_session.add(event)
+        await db_session.flush()
+        previous = event
+    retirement_at = await db_session.scalar(text("SELECT clock_timestamp()"))
+    await db_session.execute(
+        text(
+            "UPDATE hub_package_seals SET retired_at=:at, retired_by_id=:actor, "
+            "retirement_reason='attempted repack' WHERE id=:id"
+        ),
+        {"id": seal.id, "at": retirement_at, "actor": graph["operator_id"]},
+    )
+    await _HUB._rejects(
+        db_session,
+        statement=(
+            "UPDATE hub_packages SET state='packing', current_version=2, "
+            "sealed_at=NULL, ready_at=NULL, row_version=4 WHERE id=:id"
+        ),
+        params={"id": aggregate.id},
+        match="package cannot repack after custody handoff",
     )

@@ -244,7 +244,7 @@ class HubPackageSeal(Base):
 
 
 class CustodyStream(Base):
-    """Stable serialization anchor for one cohort/vendor/order/hub custody chain."""
+    """Stable serialization anchor for one physical package-version custody chain."""
 
     __tablename__ = "custody_streams"
 
@@ -255,6 +255,8 @@ class CustodyStream(Base):
     hub_id = Column(
         _UUID, ForeignKey("fulfillment_hubs.id", ondelete="RESTRICT"), nullable=False
     )
+    package_id = Column(_UUID, nullable=False)
+    package_version = Column(Integer, nullable=False)
     next_version = Column(Integer, nullable=False, default=1, server_default="1")
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=_NOW)
 
@@ -269,12 +271,25 @@ class CustodyStream(Base):
             name="fk_custody_streams_cohort_identity",
             ondelete="RESTRICT",
         ),
+        ForeignKeyConstraint(
+            ["package_id", "package_version", "order_id", "hub_id"],
+            [
+                "hub_package_versions.package_id",
+                "hub_package_versions.version",
+                "hub_package_versions.order_id",
+                "hub_package_versions.hub_id",
+            ],
+            name="fk_custody_streams_package_version_identity",
+            ondelete="RESTRICT",
+        ),
         CheckConstraint("next_version > 0", name="ck_custody_streams_next"),
         UniqueConstraint(
             "cohort_id",
             "order_id",
             "vendor_id",
             "hub_id",
+            "package_id",
+            "package_version",
             name="uq_custody_streams_subject",
         ),
         UniqueConstraint(
@@ -283,6 +298,8 @@ class CustodyStream(Base):
             "order_id",
             "vendor_id",
             "hub_id",
+            "package_id",
+            "package_version",
             name="uq_custody_streams_identity",
         ),
     )
@@ -323,13 +340,23 @@ class CustodyEvent(Base):
 
     __table_args__ = (
         ForeignKeyConstraint(
-            ["stream_id", "cohort_id", "order_id", "vendor_id", "hub_id"],
+            [
+                "stream_id",
+                "cohort_id",
+                "order_id",
+                "vendor_id",
+                "hub_id",
+                "package_id",
+                "package_version",
+            ],
             [
                 "custody_streams.id",
                 "custody_streams.cohort_id",
                 "custody_streams.order_id",
                 "custody_streams.vendor_id",
                 "custody_streams.hub_id",
+                "custody_streams.package_id",
+                "custody_streams.package_version",
             ],
             name="fk_custody_events_stream_identity",
             ondelete="RESTRICT",
@@ -600,6 +627,13 @@ BEGIN
         ) THEN
             RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='active outbound intent must be invalidated before repack';
         END IF;
+        IF EXISTS (
+            SELECT 1 FROM custody_events e
+             WHERE e.package_id=OLD.id AND e.package_version=OLD.current_version
+               AND e.event_type IN ('released','tendered','provider_accepted')
+        ) THEN
+            RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='package cannot repack after custody handoff';
+        END IF;
     ELSE
         RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='illegal package state transition';
     END IF;
@@ -844,7 +878,10 @@ BEGIN
     END IF;
     IF NEW.id IS DISTINCT FROM OLD.id OR NEW.cohort_id IS DISTINCT FROM OLD.cohort_id
        OR NEW.order_id IS DISTINCT FROM OLD.order_id OR NEW.vendor_id IS DISTINCT FROM OLD.vendor_id
-       OR NEW.hub_id IS DISTINCT FROM OLD.hub_id OR NEW.created_at IS DISTINCT FROM OLD.created_at
+       OR NEW.hub_id IS DISTINCT FROM OLD.hub_id
+       OR NEW.package_id IS DISTINCT FROM OLD.package_id
+       OR NEW.package_version IS DISTINCT FROM OLD.package_version
+       OR NEW.created_at IS DISTINCT FROM OLD.created_at
        OR NEW.next_version<>OLD.next_version+1 OR pg_trigger_depth() < 2 THEN
         RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='custody stream may advance only through an event insert';
     END IF;
@@ -862,7 +899,8 @@ DECLARE stream custody_streams%%ROWTYPE; tip_id uuid; tip_time timestamptz; prio
 BEGIN
     SELECT * INTO stream FROM custody_streams WHERE id=NEW.stream_id FOR UPDATE;
     IF NOT FOUND OR stream.cohort_id<>NEW.cohort_id OR stream.order_id<>NEW.order_id
-       OR stream.vendor_id<>NEW.vendor_id OR stream.hub_id<>NEW.hub_id THEN
+       OR stream.vendor_id<>NEW.vendor_id OR stream.hub_id<>NEW.hub_id
+       OR stream.package_id<>NEW.package_id OR stream.package_version<>NEW.package_version THEN
         RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='custody event aggregate identity is invalid';
     END IF;
     SELECT id, occurred_at INTO tip_id, tip_time FROM custody_events
