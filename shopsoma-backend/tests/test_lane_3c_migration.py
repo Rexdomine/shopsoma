@@ -24,9 +24,9 @@ def _scripts() -> ScriptDirectory:
     return ScriptDirectory.from_config(config)
 
 
-def test_lane_3c_is_only_linear_head() -> None:
+def test_lane_3c_has_linear_lane_3d_child() -> None:
     scripts = _scripts()
-    assert scripts.get_heads() == [REVISION]
+    assert scripts.get_heads() == ["b5f7d9a2c4e6"]
     assert scripts.get_revision(REVISION).down_revision == PARENT
 
 

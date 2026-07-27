@@ -14,9 +14,13 @@ def test_migration_graph_has_exactly_one_head() -> None:
 
     heads = script.get_heads()
 
-    assert heads == ["a4e6c8f1b3d5"]
+    assert heads == ["b5f7d9a2c4e6"]
 
-    lane_3c_revision = script.get_revision(heads[0])
+    lane_3d_revision = script.get_revision(heads[0])
+    assert lane_3d_revision is not None
+    assert lane_3d_revision.down_revision == "a4e6c8f1b3d5"
+
+    lane_3c_revision = script.get_revision("a4e6c8f1b3d5")
     assert lane_3c_revision is not None
     assert lane_3c_revision.down_revision == "9d3e5f7a1b2c"
 
