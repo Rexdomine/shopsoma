@@ -236,6 +236,40 @@ class TestImageEndpoints:
         assert "Maximum 10 images" in response.json()["detail"]
 
     @pytest.mark.asyncio
+    async def test_batch_upload_rejects_invalid_shared_folder(
+        self, client: AsyncClient, vendor_user
+    ):
+        files = [("files", ("test.jpg", io.BytesIO(b"not-read"), "image/jpeg"))]
+
+        response = await client.post(
+            "/api/v1/images/upload/batch",
+            params={"folder": "../other-vendor"},
+            files=files,
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 400
+        assert response.json()["detail"] == "Invalid storage folder"
+
+    @pytest.mark.asyncio
+    async def test_batch_upload_keeps_invalid_file_as_per_file_failure(
+        self, client: AsyncClient, vendor_user
+    ):
+        files = [("files", ("bad.pdf", io.BytesIO(b"bad"), "application/pdf"))]
+
+        response = await client.post(
+            "/api/v1/images/upload/batch", files=files, headers=vendor_user["headers"]
+        )
+
+        assert response.status_code == 200
+        assert response.json() == {
+            "images": [],
+            "total": 1,
+            "success": 0,
+            "failed": 1,
+        }
+
+    @pytest.mark.asyncio
     async def test_generate_signed_url(self, client: AsyncClient, vendor_user):
         """Local storage fails closed instead of pretending to sign a public URL."""
         request_data = {"s3_key": "products/2025/11/test.jpg", "expiration": 3600}

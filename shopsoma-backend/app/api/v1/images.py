@@ -118,6 +118,7 @@ async def upload_images_batch(
             status_code=400, detail="Maximum 10 images per batch upload"
         )
 
+    storage_folder = _vendor_storage_folder(current_user, folder)
     uploaded_images = []
     success_count = 0
     failed_count = 0
@@ -126,7 +127,7 @@ async def upload_images_batch(
         try:
             result = await image_service.upload_image(
                 file=file,
-                folder=_vendor_storage_folder(current_user, folder),
+                folder=storage_folder,
                 generate_variants=generate_variants,
             )
 
