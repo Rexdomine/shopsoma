@@ -27,6 +27,8 @@ def domestic_shipping_capabilities(
         provider_calls_enabled=(
             workflow_enabled
             and settings.DHL_DOMESTIC_PROVIDER_CALLS_ENABLED
+            and settings.DHL_ENVIRONMENT == "sandbox"
             and settings.dhl_configured
+            and bool(settings.dhl_domestic_sandbox_cohort_ids)
         ),
     )

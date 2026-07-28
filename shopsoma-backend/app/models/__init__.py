@@ -68,6 +68,11 @@ from app.models.package_custody import (
     OutboundShipmentIntent,
     OutboundShipmentIntentInvalidation,
 )
+from app.models.domestic_rate_quote import (
+    DomesticRateAttempt,
+    DomesticRateOffer,
+    DomesticRateResponse,
+)
 
 __all__ = [
     "User",
@@ -131,4 +136,7 @@ __all__ = [
     "CustodyEvent",
     "OutboundShipmentIntent",
     "OutboundShipmentIntentInvalidation",
+    "DomesticRateAttempt",
+    "DomesticRateResponse",
+    "DomesticRateOffer",
 ]

@@ -24,10 +24,13 @@ def _scripts() -> ScriptDirectory:
     return ScriptDirectory.from_config(config)
 
 
-def test_lane_3c_has_linear_lane_3d_child() -> None:
+def test_lane_3c_has_linear_lane_3d_and_phase_2b_descendants() -> None:
     scripts = _scripts()
-    assert scripts.get_heads() == ["b5f7d9a2c4e6"]
+    assert scripts.get_heads() == ["d7b9f1c3e5a8"]
     assert scripts.get_revision(REVISION).down_revision == PARENT
+    assert scripts.get_revision("b5f7d9a2c4e6").down_revision == REVISION
+    assert scripts.get_revision("c6a8e0f2b4d7").down_revision == "b5f7d9a2c4e6"
+    assert scripts.get_revision("d7b9f1c3e5a8").down_revision == "c6a8e0f2b4d7"
 
 
 def test_lane_3c_migration_is_additive_symmetric_private_and_narrow() -> None:

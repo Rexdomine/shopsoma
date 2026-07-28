@@ -55,7 +55,8 @@ The three current gates default to `false` and prerequisites only narrow capabil
 
 - `DHL_DOMESTIC_WORKFLOW_ENABLED=false` — enables provider-neutral v2 workflow handling, not provider calls by itself.
 - `DHL_DOMESTIC_QUOTE_ENFORCEMENT_ENABLED=false` — effective only when workflow is enabled.
-- `DHL_DOMESTIC_PROVIDER_CALLS_ENABLED=false` — effective only with workflow enabled and configured credentials. **The current capability evaluator does not distinguish sandbox from production.** Until Phase 2B adds the sandbox-only provider factory, sandbox isolation is an external deployment/secret-policy control: only test credentials may exist in the restricted environment, and production credentials/endpoints are prohibited.
+- `DHL_DOMESTIC_PROVIDER_CALLS_ENABLED=false` — effective only with workflow enabled, configured credentials, and `DHL_ENVIRONMENT=sandbox`. Domestic provider calls are effective only in the sandbox environment: Phase 2B sandbox isolation is enforced in code by the capability evaluator, and production fails closed even when every gate is enabled and DHL is fully configured.
+- `DHL_DOMESTIC_SANDBOX_COHORT_IDS=` — comma-separated canonical UUIDs for synthetic, explicitly approved sandbox-only fulfillment cohorts. An empty, malformed, duplicate, or non-matching allowlist fails closed before transport.
 
 A **separate domestic checkout gate** is planned; do not overload these backend capability gates to expose checkout. Delivery and activation are deliberately phased:
 
@@ -105,6 +106,7 @@ DHL_REQUEST_TIMEOUT_SECONDS
 DHL_DOMESTIC_WORKFLOW_ENABLED
 DHL_DOMESTIC_QUOTE_ENFORCEMENT_ENABLED
 DHL_DOMESTIC_PROVIDER_CALLS_ENABLED
+DHL_DOMESTIC_SANDBOX_COHORT_IDS
 ```
 
 Use synthetic Nigerian addresses and non-customer contact details approved for testing. Do not log request/response bodies. Store sanitized acceptance evidence outside Git; redact credentials, authorization headers, account numbers, personal data, labels, barcodes, full addresses, phones, emails, and provider references before sharing.

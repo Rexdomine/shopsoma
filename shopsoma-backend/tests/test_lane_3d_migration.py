@@ -53,10 +53,12 @@ def _literal_assignment(name: str):
     raise AssertionError(f"missing static migration assignment {name}")
 
 
-def test_lane_3d_is_linear_head() -> None:
+def test_lane_3d_has_linear_phase_2b_child() -> None:
     graph = scripts()
-    assert graph.get_heads() == [REVISION]
+    assert graph.get_heads() == ["d7b9f1c3e5a8"]
     assert graph.get_revision(REVISION).down_revision == PARENT
+    assert graph.get_revision("c6a8e0f2b4d7").down_revision == REVISION
+    assert graph.get_revision("d7b9f1c3e5a8").down_revision == "c6a8e0f2b4d7"
 
 
 def test_lane_3d_schema_and_guard_contract() -> None:
@@ -120,7 +122,51 @@ def test_lane_3d_trigger_bodies_have_exact_model_migration_parity() -> None:
         statement.replace("%%", "%").strip()
         for statement in PACKAGE_CUSTODY_TRIGGER_DDLS
     )
-    assert _literal_assignment("_TRIGGER_DDLS") == expected_triggers
+    historical_triggers = _literal_assignment("_TRIGGER_DDLS")
+    current_intent_trigger = next(
+        statement
+        for statement in expected_triggers
+        if statement.startswith("CREATE FUNCTION validate_outbound_intent_insert()")
+    )
+    historical_without_evolved_intent = tuple(
+        statement
+        for statement in historical_triggers
+        if not statement.startswith("CREATE FUNCTION validate_outbound_intent_insert()")
+    )
+    current_without_evolved_intent = tuple(
+        statement
+        for statement in expected_triggers
+        if statement != current_intent_trigger
+    )
+    assert historical_without_evolved_intent == current_without_evolved_intent
+
+    domestic_revision = scripts().get_revision("c6a8e0f2b4d7")
+    assert domestic_revision is not None
+    domestic_tree = ast.parse(Path(domestic_revision.path).read_text())
+
+    def domestic_literal(name: str):
+        for node in domestic_tree.body:
+            if isinstance(node, ast.Assign) and any(
+                isinstance(target, ast.Name) and target.id == name
+                for target in node.targets
+            ):
+                return ast.literal_eval(node.value)
+        raise AssertionError(name)
+
+    historical_intent_trigger = next(
+        statement
+        for statement in historical_triggers
+        if statement.startswith("CREATE FUNCTION validate_outbound_intent_insert()")
+    )
+    assert historical_intent_trigger.replace(
+        "CREATE FUNCTION", "CREATE OR REPLACE FUNCTION", 1
+    ) == domestic_literal("_RESTORE_OUTBOUND_INTENT_INSERT_DDL")
+    assert (
+        current_intent_trigger.replace(
+            "CREATE FUNCTION", "CREATE OR REPLACE FUNCTION", 1
+        )
+        == domestic_literal("_DESTINATION_SNAPSHOT_UPGRADE_DDLS")[-1]
+    )
     assert _literal_assignment("_DROP_FUNCTION_DDLS") == tuple(
         PACKAGE_CUSTODY_DROP_DDLS
     )
@@ -167,7 +213,29 @@ def test_lane_3d_tables_and_indexes_have_exact_model_migration_parity() -> None:
         for table in tables
         for index in sorted(table.indexes, key=lambda candidate: candidate.name or "")
     )
-    assert _literal_assignment("_CREATE_TABLE_SQL") == expected_tables
+    historical_tables = _literal_assignment("_CREATE_TABLE_SQL")
+    evolved_prefix = "CREATE TABLE outbound_shipment_intents"
+    assert tuple(
+        statement
+        for statement in historical_tables
+        if not statement.startswith(evolved_prefix)
+    ) == tuple(
+        statement
+        for statement in expected_tables
+        if not statement.startswith(evolved_prefix)
+    )
+    historical_intent = next(
+        statement
+        for statement in historical_tables
+        if statement.startswith(evolved_prefix)
+    )
+    current_intent = next(
+        statement
+        for statement in expected_tables
+        if statement.startswith(evolved_prefix)
+    )
+    assert "destination_snapshot_hash" not in historical_intent
+    assert "destination_snapshot_hash" in current_intent
     assert _literal_assignment("_CREATE_INDEX_SQL") == expected_indexes
 
 

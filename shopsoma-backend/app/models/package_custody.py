@@ -12,6 +12,7 @@ from sqlalchemy import (
     Column,
     DateTime,
     DDL,
+    FetchedValue,
     ForeignKey,
     ForeignKeyConstraint,
     Index,
@@ -450,6 +451,9 @@ class OutboundShipmentIntent(Base):
     destination_state = Column(String(120), nullable=False)
     destination_postal_code = Column(String(20), nullable=False)
     destination_country_code = Column(String(2), nullable=False, server_default="NG")
+    destination_snapshot_hash = Column(
+        String(64), nullable=False, server_default=FetchedValue()
+    )
     source_command = Column(String(100), nullable=False)
     idempotency_key = Column(String(200), nullable=False)
     created_by_id = Column(
@@ -477,6 +481,10 @@ class OutboundShipmentIntent(Base):
         CheckConstraint(
             "destination_country_code = 'NG'",
             name="ck_outbound_intents_country_ng",
+        ),
+        CheckConstraint(
+            "destination_snapshot_hash ~ '^[0-9a-f]{64}$'",
+            name="ck_outbound_intents_destination_snapshot_hash",
         ),
         CheckConstraint(
             "destination_name = btrim(destination_name) AND length(destination_name) > 0 "
@@ -1017,6 +1025,15 @@ BEGIN
     ) THEN
         RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='package already has an active outbound intent';
     END IF;
+    NEW.destination_snapshot_hash := encode(
+        sha256(convert_to(jsonb_build_array(
+            'destination-snapshot-v1', NEW.destination_name, NEW.destination_phone,
+            NEW.destination_address_line1, NEW.destination_address_line2,
+            NEW.destination_city, NEW.destination_state, NEW.destination_postal_code,
+            NEW.destination_country_code
+        )::text, 'UTF8')),
+        'hex'
+    );
     RETURN NEW;
 END; $$ LANGUAGE plpgsql
     """,

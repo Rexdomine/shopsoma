@@ -77,6 +77,7 @@ def test_provider_calls_require_workflow_gate_and_configured_dhl() -> None:
         "DHL_API_USERNAME": "dummy-api-user",
         "DHL_API_PASSWORD": "dummy-api-password",
         "DHL_EXPORT_ACCOUNT_NUMBER": "123456789",
+        "DHL_DOMESTIC_SANDBOX_COHORT_IDS": "22222222-2222-4222-8222-222222222222",
     }
     without_workflow = domestic_shipping_capabilities(
         make_settings(
@@ -96,13 +97,32 @@ def test_provider_calls_require_workflow_gate_and_configured_dhl() -> None:
     assert enabled.provider_calls_enabled is True
 
 
+def test_provider_calls_fail_closed_in_production_with_all_gates_and_config() -> None:
+    capabilities = domestic_shipping_capabilities(
+        make_settings(
+            DHL_ENABLED=True,
+            DHL_ENVIRONMENT="production",
+            DHL_API_USERNAME="dummy-api-user",
+            DHL_API_PASSWORD="dummy-api-password",
+            DHL_EXPORT_ACCOUNT_NUMBER="dummy-account-number",
+            DHL_DOMESTIC_WORKFLOW_ENABLED=True,
+            DHL_DOMESTIC_QUOTE_ENFORCEMENT_ENABLED=True,
+            DHL_DOMESTIC_PROVIDER_CALLS_ENABLED=True,
+        )
+    )
+
+    assert capabilities.workflow_enabled is True
+    assert capabilities.quote_enforcement_enabled is True
+    assert capabilities.provider_calls_enabled is False
+
+
 def test_capability_output_contains_only_booleans_and_no_dhl_details() -> None:
     capabilities = domestic_shipping_capabilities(
         make_settings(
             DHL_ENABLED=True,
             DHL_API_USERNAME="dummy-api-user",
             DHL_API_PASSWORD="dummy-api-password",
-            DHL_EXPORT_ACCOUNT_NUMBER="123456789",
+            DHL_EXPORT_ACCOUNT_NUMBER="dummy-account-number",
             DHL_ENVIRONMENT="production",
             DHL_DOMESTIC_WORKFLOW_ENABLED=True,
             DHL_DOMESTIC_PROVIDER_CALLS_ENABLED=True,
