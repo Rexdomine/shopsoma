@@ -366,7 +366,7 @@ async def test_exact_post_rates_request_uses_resolved_hub_managed_account_and_me
         assert str(request.url) == "https://express.api.dhl.com/mydhlapi/test/rates"
         body = json.loads(request.content)
         assert body == {
-            "plannedShippingDate": "2026-07-28",
+            "plannedShippingDateAndTime": "2026-07-28T12:00:00GMT+01:00",
             "unitOfMeasurement": "metric",
             "isCustomsDeclarable": False,
             "accounts": [{"typeCode": "shipper", "number": DUMMY_ACCOUNT}],
@@ -405,7 +405,9 @@ async def test_exact_post_rates_request_uses_resolved_hub_managed_account_and_me
                 }
             ],
         }
-        return httpx.Response(200, json={"products": [product()]})
+        return httpx.Response(
+            200, json={"products": [product(code="ABC123", service_code="XYZ")]}
+        )
 
     adapter = create_sandbox_domestic_rate_adapter(
         config=config(),
@@ -420,6 +422,8 @@ async def test_exact_post_rates_request_uses_resolved_hub_managed_account_and_me
     assert result.offers[0].rate.package is request_value.package
     assert result.offers[0].rate.total_amount == Decimal("12500.5000")
     assert result.offers[0].rate.currency == "NGN"
+    assert result.offers[0].provider_product_code == "ABC123"
+    assert result.offers[0].provider_service_code == "XYZ"
 
 
 @pytest.mark.asyncio
@@ -591,7 +595,9 @@ async def test_malformed_top_level_or_product_schema_is_rejected(
             ],
         },
         product(code="bad/code"),
+        product(code="TOOLONG"),
         product(service_code="bad service"),
+        product(service_code="LONG"),
         product(label=" control\nlabel"),
         product(label="x" * 201),
         product(transit_days=0),

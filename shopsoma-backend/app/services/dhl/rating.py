@@ -24,8 +24,9 @@ MYDHL_TEST_BASE_URL = "https://express.api.dhl.com/mydhlapi/test"
 ADAPTER_VERSION = "dhl-rates-v1"
 SCHEMA_VERSION = "mydhl-rates-v1"
 ACCOUNT_ALIAS = "export-primary"
-_CODE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,49}\Z")
-_SERVICE_CODE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,99}\Z")
+_PRODUCT_CODE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,5}\Z")
+_LOCAL_PRODUCT_CODE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,2}\Z")
+_INTERNAL_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,99}\Z")
 _CURRENCY = re.compile(r"[A-Z]{3}\Z")
 _SUPPORTED_CURRENCIES = frozenset({"NGN", "USD"})
 _PRICE_TYPE_PRIORITY = ("BILLC", "PULCL", "BASEC")
@@ -202,7 +203,12 @@ class DHLDomesticRateAdapter:
     ) -> dict[str, object]:
         measurement = request.package.measurement
         return {
-            "plannedShippingDate": request.planned_ship_date.isoformat(),
+            # The provider-neutral contract intentionally stores a date only. MyDHL's
+            # POST /rates schema requires a local tender time and GMT offset, so use a
+            # stable midday Lagos timestamp rather than the wall clock at call time.
+            "plannedShippingDateAndTime": (
+                f"{request.planned_ship_date.isoformat()}T12:00:00GMT+01:00"
+            ),
             "unitOfMeasurement": "metric",
             "isCustomsDeclarable": False,
             "accounts": [{"typeCode": "shipper", "number": self._account}],
@@ -286,8 +292,10 @@ class DHLDomesticRateAdapter:
         try:
             if not isinstance(product, dict):
                 raise ValueError
-            product_code = self._code(product.get("productCode"), _CODE)
-            service_code = self._code(product.get("localProductCode"), _SERVICE_CODE)
+            product_code = self._code(product.get("productCode"), _PRODUCT_CODE)
+            service_code = self._code(
+                product.get("localProductCode"), _LOCAL_PRODUCT_CODE
+            )
             label = self._label(product.get("productName"))
             amount, currency = self._money(product.get("totalPrice"))
             transit_days, delivery_date = self._delivery(
@@ -456,7 +464,7 @@ def create_sandbox_domestic_rate_adapter(
         raise DHLRateAdapterError("rate identity key is invalid")
     if (
         not isinstance(identity_key_version, str)
-        or _SERVICE_CODE.fullmatch(identity_key_version) is None
+        or _INTERNAL_IDENTIFIER.fullmatch(identity_key_version) is None
     ):
         raise DHLRateAdapterError("rate identity key version is invalid")
     return DHLDomesticRateAdapter(

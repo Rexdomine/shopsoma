@@ -497,9 +497,10 @@ BEGIN
     IF NEW.completion_txid IS DISTINCT FROM response_completion_txid THEN
         RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='rate response offer set is immutable';
     END IF;
-    IF NEW.delivery_date IS NOT NULL AND NEW.delivery_date<planned
+    IF NEW.delivery_date IS NOT NULL AND NEW.delivery_date<=planned
        OR NEW.transit_days IS NOT NULL AND NEW.delivery_date IS NOT NULL
-          AND NEW.delivery_date>planned+NEW.transit_days+7 THEN
+          AND (NEW.delivery_date<planned+NEW.transit_days
+               OR NEW.delivery_date>planned+NEW.transit_days+7) THEN
         RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='rate offer delivery facts are invalid';
     END IF;
     RETURN NEW;

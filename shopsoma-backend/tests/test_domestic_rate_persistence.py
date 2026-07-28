@@ -543,7 +543,17 @@ async def test_response_offer_shapes_money_ttl_and_append_only_guards(
         transit_days=1,
         delivery_date=attempt.planned_ship_date + timedelta(days=1),
     )
-    db_session.add(offer)
+    bounded_slack_offer = DomesticRateOffer(
+        response_id=response.id,
+        provider_product_code="N",
+        provider_service_code="SLACK",
+        service_label="Bounded delivery slack",
+        total_amount=Decimal("1235.0000"),
+        currency="NGN",
+        transit_days=1,
+        delivery_date=attempt.planned_ship_date + timedelta(days=8),
+    )
+    db_session.add_all((offer, bounded_slack_offer))
     await db_session.flush()
     await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
 
@@ -564,6 +574,32 @@ async def test_response_offer_shapes_money_ttl_and_append_only_guards(
         {"id": uuid.uuid4(), "response": response.id},
         "ck_domestic_rate_offers",
     )
+    await _rejects(
+        db_session,
+        "INSERT INTO domestic_rate_offers (id,response_id,provider_product_code,provider_service_code,service_label,total_amount,currency,transit_days,delivery_date) VALUES (:id,:response,'X','EARLY','Early delivery',1,'NGN',7,:delivery)",
+        {
+            "id": uuid.uuid4(),
+            "response": response.id,
+            "delivery": attempt.planned_ship_date + timedelta(days=1),
+        },
+        "rate offer delivery facts are invalid",
+    )
+    for service_code, transit_days, delivery_days in (
+        ("SAME", None, 0),
+        ("LATE", 1, 9),
+    ):
+        await _rejects(
+            db_session,
+            "INSERT INTO domestic_rate_offers (id,response_id,provider_product_code,provider_service_code,service_label,total_amount,currency,transit_days,delivery_date) VALUES (:id,:response,'X',:service,'Invalid delivery',1,'NGN',:transit,:delivery)",
+            {
+                "id": uuid.uuid4(),
+                "response": response.id,
+                "service": service_code,
+                "transit": transit_days,
+                "delivery": attempt.planned_ship_date + timedelta(days=delivery_days),
+            },
+            "rate offer delivery facts are invalid",
+        )
 
 
 @pytest.mark.asyncio
