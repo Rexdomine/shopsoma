@@ -5,6 +5,7 @@ Image upload and management endpoints
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, status, Query
 from typing import List
 from datetime import datetime, timedelta
+from pathlib import PurePosixPath
 
 from app.schemas.image import (
     ImageUploadResponse,
@@ -20,6 +21,23 @@ from app.api.dependencies import get_current_user, get_current_vendor
 from app.models.user import User
 
 router = APIRouter(prefix="/images", tags=["Images"])
+
+
+def _vendor_storage_folder(current_user: User, folder: str) -> str:
+    requested = PurePosixPath(folder)
+    if (
+        requested.is_absolute()
+        or not requested.parts
+        or any(part in {"", ".", ".."} for part in requested.parts)
+    ):
+        raise HTTPException(status_code=400, detail="Invalid storage folder")
+    return str(PurePosixPath("vendors", str(current_user.id), *requested.parts))
+
+
+def _require_vendor_image_key(current_user: User, s3_key: str) -> None:
+    parts = PurePosixPath(s3_key).parts
+    if len(parts) < 3 or parts[:2] != ("vendors", str(current_user.id)):
+        raise HTTPException(status_code=403, detail="Image does not belong to vendor")
 
 
 @router.post(
@@ -50,7 +68,9 @@ async def upload_image(
     """
     try:
         result = await image_service.upload_image(
-            file=file, folder=folder, generate_variants=generate_variants
+            file=file,
+            folder=_vendor_storage_folder(current_user, folder),
+            generate_variants=generate_variants,
         )
 
         return ImageUploadResponse(
@@ -98,7 +118,9 @@ async def upload_images_batch(
     for file in files:
         try:
             result = await image_service.upload_image(
-                file=file, folder=folder, generate_variants=generate_variants
+                file=file,
+                folder=_vendor_storage_folder(current_user, folder),
+                generate_variants=generate_variants,
             )
 
             uploaded_images.append(
@@ -167,8 +189,7 @@ async def delete_image(s3_key: str, current_user: User = Depends(get_current_ven
 
     **Permissions:** Vendor only (own images)
     """
-    # TODO: Add ownership verification
-    # Check if image belongs to current user's products
+    _require_vendor_image_key(current_user, s3_key)
 
     success = await image_service.delete_image(s3_key)
 
@@ -197,7 +218,8 @@ async def delete_images_batch(
             status_code=400, detail="Maximum 100 images per batch delete"
         )
 
-    # TODO: Add ownership verification for all keys
+    for s3_key in s3_keys:
+        _require_vendor_image_key(current_user, s3_key)
 
     result = await image_service.delete_images(s3_keys)
 
@@ -245,6 +267,12 @@ async def health_check():
     **Public endpoint**
     """
     if image_service.use_local_storage:
+        if not image_service.local_storage_is_healthy():
+            return {
+                "status": "unhealthy",
+                "service": "image-storage",
+                "backend": "local",
+            }
         return {
             "status": "healthy",
             "service": "image-storage",

@@ -5,6 +5,7 @@ Supports both local file storage (development) and S3 (production)
 """
 
 import io
+import tempfile
 import uuid
 import hashlib
 import unicodedata
@@ -475,6 +476,19 @@ class ImageService:
             return True
         except ClientError as e:
             logger.error(f"Failed to delete image: {str(e)}")
+            return False
+
+    def local_storage_is_healthy(self) -> bool:
+        """Probe that the configured local upload directory is writable."""
+        if not self.use_local_storage:
+            return False
+        try:
+            self.upload_dir.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(dir=self.upload_dir) as probe:
+                probe.write(b"ok")
+                probe.flush()
+            return True
+        except OSError:
             return False
 
     async def delete_images(self, s3_keys: List[str]) -> dict:

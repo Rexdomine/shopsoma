@@ -211,6 +211,7 @@ class TestImageEndpoints:
         assert data["thumbnail"].startswith("/uploads/")
         assert data["medium"].startswith("/uploads/")
         assert data["large"].startswith("/uploads/")
+        assert data["s3_key"].startswith(f"vendors/{vendor_user['user'].id}/")
         assert (tmp_path / data["s3_key"]).is_file()
 
     @pytest.mark.asyncio
@@ -256,7 +257,7 @@ class TestImageEndpoints:
     ):
         """Test image deletion from local storage."""
         monkeypatch.setattr(image_service, "upload_dir", tmp_path)
-        s3_key = "products/2025/11/test.jpg"
+        s3_key = f"vendors/{vendor_user['user'].id}/products/2025/11/test.jpg"
         image_path = tmp_path / s3_key
         image_path.parent.mkdir(parents=True)
         image_path.write_bytes(b"test-image")
@@ -270,6 +271,27 @@ class TestImageEndpoints:
         assert not image_path.exists()
 
     @pytest.mark.asyncio
+    async def test_delete_image_rejects_another_vendor_key(
+        self,
+        client: AsyncClient,
+        vendor_user,
+        tmp_path,
+        monkeypatch,
+    ):
+        monkeypatch.setattr(image_service, "upload_dir", tmp_path)
+        s3_key = "vendors/00000000-0000-0000-0000-000000000000/products/test.jpg"
+        image_path = tmp_path / s3_key
+        image_path.parent.mkdir(parents=True)
+        image_path.write_bytes(b"other-vendor-image")
+
+        response = await client.delete(
+            f"/api/v1/images/{s3_key}", headers=vendor_user["headers"]
+        )
+
+        assert response.status_code == 403
+        assert image_path.is_file()
+
+    @pytest.mark.asyncio
     async def test_image_health_check(self, client: AsyncClient):
         """Test local image service health without object-storage probes."""
         response = await client.get("/api/v1/images/health")
@@ -279,6 +301,19 @@ class TestImageEndpoints:
         assert data["status"] == "healthy"
         assert data["backend"] == "local"
         assert "bucket" not in data
+
+    @pytest.mark.asyncio
+    async def test_image_health_check_reports_unavailable_local_storage(
+        self, client: AsyncClient, tmp_path, monkeypatch
+    ):
+        unavailable = tmp_path / "not-a-directory"
+        unavailable.write_text("occupied")
+        monkeypatch.setattr(image_service, "upload_dir", unavailable)
+
+        response = await client.get("/api/v1/images/health")
+
+        assert response.status_code == 200
+        assert response.json()["status"] == "unhealthy"
 
 
 class TestURLGeneration:
