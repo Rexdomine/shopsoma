@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from httpx import ASGITransport, AsyncClient
 import pytest
 from fastapi import FastAPI
@@ -51,8 +53,16 @@ def test_settings_reject_local_storage_outside_development_without_override():
     with pytest.raises(ValueError, match="USE_LOCAL_STORAGE"):
         Settings(
             SECRET_KEY="test-secret",
-            DATABASE_URL="postgresql://user:password@localhost:5432/shopsoma_db",
+            DATABASE_URL="postgresql://user:***@localhost:5432/shopsoma_db",
             ENVIRONMENT="staging",
             USE_LOCAL_STORAGE=True,
             ALLOW_LOCAL_STORAGE_IN_NON_DEV=False,
         )
+
+
+def test_backend_ci_uses_supported_python_runtime():
+    workflow = (
+        Path(__file__).resolve().parents[2] / ".github" / "workflows" / "ci.yml"
+    ).read_text()
+
+    assert "python-version: '3.11'" in workflow
