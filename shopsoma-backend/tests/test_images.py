@@ -392,6 +392,33 @@ class TestImageEndpoints:
         assert other_path.is_file()
 
     @pytest.mark.asyncio
+    async def test_batch_delete_rejects_nul_key_before_deleting_owned_file(
+        self,
+        client: AsyncClient,
+        vendor_user,
+        tmp_path,
+        monkeypatch,
+    ):
+        """Path validation rejects the whole batch before local deletion."""
+        monkeypatch.setattr(image_service, "upload_dir", tmp_path)
+        vendor_id = vendor_user["user"].id
+        owned_key = f"vendors/{vendor_id}/products/owned.jpg"
+        nul_key = f"vendors/{vendor_id}/products/invalid\0.jpg"
+        owned_path = tmp_path / owned_key
+        owned_path.parent.mkdir(parents=True, exist_ok=True)
+        owned_path.write_bytes(b"owned-image")
+
+        response = await client.post(
+            "/api/v1/images/delete/batch",
+            json=[owned_key, nul_key],
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 400
+        assert response.json()["detail"] == "Invalid image key"
+        assert owned_path.is_file()
+
+    @pytest.mark.asyncio
     async def test_delete_image(
         self,
         client: AsyncClient,

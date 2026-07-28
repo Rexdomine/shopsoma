@@ -446,6 +446,24 @@ class ImageService:
             logger.error(f"Failed to generate presigned URL: {str(e)}")
             raise HTTPException(status_code=500, detail="Failed to generate signed URL")
 
+    def _resolve_local_image_path(self, s3_key: str) -> Path:
+        """Resolve a local image key while keeping it inside the upload root."""
+        try:
+            upload_root = self.upload_dir.resolve()
+            image_path = (upload_root / s3_key).resolve()
+            image_path.relative_to(upload_root)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid image key")
+        return image_path
+
+    def _delete_local_image(self, s3_key: str, image_path: Path) -> bool:
+        """Delete one already-validated local image path."""
+        if not image_path.is_file():
+            return False
+        image_path.unlink()
+        logger.info(f"Deleted local image: {s3_key}")
+        return True
+
     async def delete_image(self, s3_key: str) -> bool:
         """
         Delete image from S3
@@ -457,18 +475,8 @@ class ImageService:
             True if successful
         """
         if self.use_local_storage:
-            upload_root = self.upload_dir.resolve()
-            image_path = (upload_root / s3_key).resolve()
-            try:
-                image_path.relative_to(upload_root)
-            except ValueError:
-                raise HTTPException(status_code=400, detail="Invalid image key")
-
-            if not image_path.is_file():
-                return False
-            image_path.unlink()
-            logger.info(f"Deleted local image: {s3_key}")
-            return True
+            image_path = self._resolve_local_image_path(s3_key)
+            return self._delete_local_image(s3_key, image_path)
 
         try:
             self.s3_client.delete_object(Bucket=self.bucket_name, Key=s3_key)
@@ -506,9 +514,20 @@ class ImageService:
 
         if self.use_local_storage:
             deleted = 0
+            local_images = []
             for s3_key in s3_keys:
                 try:
-                    if await self.delete_image(s3_key):
+                    image_path = self._resolve_local_image_path(s3_key)
+                except OSError as e:
+                    logger.error(f"Failed to validate local image {s3_key}: {str(e)}")
+                    image_path = None
+                local_images.append((s3_key, image_path))
+
+            for s3_key, image_path in local_images:
+                if image_path is None:
+                    continue
+                try:
+                    if self._delete_local_image(s3_key, image_path):
                         deleted += 1
                 except OSError as e:
                     logger.error(f"Failed to delete local image {s3_key}: {str(e)}")
