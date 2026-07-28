@@ -4,6 +4,7 @@ Unit tests for image upload and storage
 
 import pytest
 import io
+from pathlib import Path
 from PIL import Image
 from httpx import AsyncClient
 from unittest.mock import Mock, patch
@@ -282,6 +283,113 @@ class TestImageEndpoints:
 
         assert response.status_code == 503
         assert response.json()["detail"] == "Signed URLs require object storage"
+
+    @pytest.mark.asyncio
+    async def test_batch_delete_images_from_local_storage(
+        self,
+        client: AsyncClient,
+        vendor_user,
+        tmp_path,
+        monkeypatch,
+    ):
+        """Batch deletion removes vendor-owned files from local storage."""
+        monkeypatch.setattr(image_service, "upload_dir", tmp_path)
+        vendor_id = vendor_user["user"].id
+        s3_keys = [
+            f"vendors/{vendor_id}/products/2025/11/first.jpg",
+            f"vendors/{vendor_id}/products/2025/11/second.jpg",
+        ]
+        image_paths = [tmp_path / s3_key for s3_key in s3_keys]
+        for image_path in image_paths:
+            image_path.parent.mkdir(parents=True, exist_ok=True)
+            image_path.write_bytes(b"test-image")
+
+        response = await client.post(
+            "/api/v1/images/delete/batch",
+            json=s3_keys,
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 200
+        assert response.json() == {
+            "deleted": 2,
+            "failed": 0,
+            "total": 2,
+            "message": "Deleted 2 images, 0 failed",
+        }
+        assert all(not image_path.exists() for image_path in image_paths)
+
+    @pytest.mark.asyncio
+    async def test_batch_delete_counts_local_filesystem_failure_and_continues(
+        self,
+        client: AsyncClient,
+        vendor_user,
+        tmp_path,
+        monkeypatch,
+    ):
+        """One local unlink failure does not hide or stop later batch results."""
+        monkeypatch.setattr(image_service, "upload_dir", tmp_path)
+        vendor_id = vendor_user["user"].id
+        failed_key = f"vendors/{vendor_id}/products/failed.jpg"
+        deleted_key = f"vendors/{vendor_id}/products/deleted.jpg"
+        failed_path = tmp_path / failed_key
+        deleted_path = tmp_path / deleted_key
+        for image_path in (failed_path, deleted_path):
+            image_path.parent.mkdir(parents=True, exist_ok=True)
+            image_path.write_bytes(b"test-image")
+
+        original_unlink = Path.unlink
+
+        def unlink_with_one_failure(path: Path, *args, **kwargs):
+            if path == failed_path:
+                raise OSError("simulated local delete failure")
+            return original_unlink(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "unlink", unlink_with_one_failure)
+
+        response = await client.post(
+            "/api/v1/images/delete/batch",
+            json=[failed_key, deleted_key],
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 200
+        assert response.json() == {
+            "deleted": 1,
+            "failed": 1,
+            "total": 2,
+            "message": "Deleted 1 images, 1 failed",
+        }
+        assert failed_path.is_file()
+        assert not deleted_path.exists()
+
+    @pytest.mark.asyncio
+    async def test_batch_delete_rejects_another_vendor_before_deleting_owned_file(
+        self,
+        client: AsyncClient,
+        vendor_user,
+        tmp_path,
+        monkeypatch,
+    ):
+        """Ownership validation rejects the whole batch before local deletion."""
+        monkeypatch.setattr(image_service, "upload_dir", tmp_path)
+        owned_key = f"vendors/{vendor_user['user'].id}/products/owned.jpg"
+        other_key = "vendors/00000000-0000-0000-0000-000000000000/products/other.jpg"
+        owned_path = tmp_path / owned_key
+        other_path = tmp_path / other_key
+        for image_path in (owned_path, other_path):
+            image_path.parent.mkdir(parents=True, exist_ok=True)
+            image_path.write_bytes(b"test-image")
+
+        response = await client.post(
+            "/api/v1/images/delete/batch",
+            json=[owned_key, other_key],
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 403
+        assert owned_path.is_file()
+        assert other_path.is_file()
 
     @pytest.mark.asyncio
     async def test_delete_image(

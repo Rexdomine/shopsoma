@@ -493,16 +493,29 @@ class ImageService:
 
     async def delete_images(self, s3_keys: List[str]) -> dict:
         """
-        Delete multiple images from S3
+        Delete multiple images from the configured storage backend.
 
         Args:
-            s3_keys: List of S3 object keys
+            s3_keys: List of storage object keys
 
         Returns:
             Dict with success/failure counts
         """
         if not s3_keys:
             return {"deleted": 0, "failed": 0}
+
+        if self.use_local_storage:
+            deleted = 0
+            for s3_key in s3_keys:
+                try:
+                    if await self.delete_image(s3_key):
+                        deleted += 1
+                except OSError as e:
+                    logger.error(f"Failed to delete local image {s3_key}: {str(e)}")
+
+            failed = len(s3_keys) - deleted
+            logger.info(f"Batch delete: {deleted} succeeded, {failed} failed")
+            return {"deleted": deleted, "failed": failed}
 
         objects = [{"Key": key} for key in s3_keys]
 
