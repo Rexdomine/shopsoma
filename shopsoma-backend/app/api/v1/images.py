@@ -7,6 +7,9 @@ from typing import List
 from datetime import datetime, timedelta
 from pathlib import PurePosixPath
 
+from sqlalchemy import or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.schemas.image import (
     ImageUploadResponse,
     ImageBatchUploadResponse,
@@ -18,7 +21,10 @@ from app.schemas.image import (
 )
 from app.services.image_service import image_service
 from app.api.dependencies import get_current_user, get_current_vendor
+from app.core.database import get_db
+from app.models.product import Product, ProductImage
 from app.models.user import User
+from app.models.vendor import Vendor
 
 router = APIRouter(prefix="/images", tags=["Images"])
 
@@ -34,10 +40,38 @@ def _vendor_storage_folder(current_user: User, folder: str) -> str:
     return str(PurePosixPath("vendors", str(current_user.id), *requested.parts))
 
 
-def _require_vendor_image_key(current_user: User, s3_key: str) -> None:
-    parts = PurePosixPath(s3_key).parts
-    if len(parts) < 3 or parts[:2] != ("vendors", str(current_user.id)):
-        raise HTTPException(status_code=403, detail="Image does not belong to vendor")
+async def _require_vendor_image_key(
+    current_user: User, s3_key: str, db: AsyncSession
+) -> None:
+    raw_parts = s3_key.split("/")
+    requested = PurePosixPath(s3_key)
+    parts = requested.parts
+    if requested.is_absolute() or any(part in {"", ".", ".."} for part in raw_parts):
+        raise HTTPException(status_code=400, detail="Invalid image key")
+
+    if len(parts) >= 3 and parts[:2] == ("vendors", str(current_user.id)):
+        return
+
+    if parts[0] == "products":
+        public_url = image_service._get_public_url(s3_key)
+        stored_urls = (s3_key, f"/uploads/{s3_key}", public_url)
+        result = await db.execute(
+            select(ProductImage.id)
+            .join(Product, ProductImage.product_id == Product.id)
+            .join(Vendor, Product.vendor_id == Vendor.id)
+            .where(
+                Vendor.user_id == current_user.id,
+                or_(
+                    ProductImage.image_url.in_(stored_urls),
+                    ProductImage.thumbnail_url.in_(stored_urls),
+                ),
+            )
+            .limit(1)
+        )
+        if result.scalar_one_or_none() is not None:
+            return
+
+    raise HTTPException(status_code=403, detail="Image does not belong to vendor")
 
 
 @router.post(
@@ -181,7 +215,11 @@ async def generate_signed_url(
 
 
 @router.delete("/{s3_key:path}", response_model=ImageDeleteResponse)
-async def delete_image(s3_key: str, current_user: User = Depends(get_current_vendor)):
+async def delete_image(
+    s3_key: str,
+    current_user: User = Depends(get_current_vendor),
+    db: AsyncSession = Depends(get_db),
+):
     """
     Delete an image from storage
 
@@ -189,7 +227,7 @@ async def delete_image(s3_key: str, current_user: User = Depends(get_current_ven
 
     **Permissions:** Vendor only (own images)
     """
-    _require_vendor_image_key(current_user, s3_key)
+    await _require_vendor_image_key(current_user, s3_key, db)
 
     success = await image_service.delete_image(s3_key)
 
@@ -203,7 +241,9 @@ async def delete_image(s3_key: str, current_user: User = Depends(get_current_ven
 
 @router.post("/delete/batch", response_model=ImageBatchDeleteResponse)
 async def delete_images_batch(
-    s3_keys: List[str], current_user: User = Depends(get_current_vendor)
+    s3_keys: List[str],
+    current_user: User = Depends(get_current_vendor),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Delete multiple images in a single request
@@ -219,7 +259,7 @@ async def delete_images_batch(
         )
 
     for s3_key in s3_keys:
-        _require_vendor_image_key(current_user, s3_key)
+        await _require_vendor_image_key(current_user, s3_key, db)
 
     result = await image_service.delete_images(s3_keys)
 

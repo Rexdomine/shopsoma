@@ -7,8 +7,10 @@ import io
 from PIL import Image
 from httpx import AsyncClient
 from unittest.mock import Mock, patch
-from fastapi import UploadFile
+from fastapi import HTTPException, UploadFile
 
+from app.api.v1.images import _require_vendor_image_key
+from app.models.product import ProductImage
 from app.services.image_service import image_service
 
 
@@ -283,6 +285,74 @@ class TestImageEndpoints:
         image_path = tmp_path / s3_key
         image_path.parent.mkdir(parents=True)
         image_path.write_bytes(b"other-vendor-image")
+
+        response = await client.delete(
+            f"/api/v1/images/{s3_key}", headers=vendor_user["headers"]
+        )
+
+        assert response.status_code == 403
+        assert image_path.is_file()
+
+    @pytest.mark.asyncio
+    async def test_delete_image_rejects_vendor_key_with_traversal(
+        self, vendor_user, db_session
+    ):
+        s3_key = (
+            f"vendors/{vendor_user['user'].id}/../"
+            "00000000-0000-0000-0000-000000000000/products/test.jpg"
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await _require_vendor_image_key(vendor_user["user"], s3_key, db_session)
+
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.detail == "Invalid image key"
+
+    @pytest.mark.asyncio
+    async def test_delete_image_allows_owned_legacy_key(
+        self,
+        client: AsyncClient,
+        vendor_user,
+        sample_product,
+        db_session,
+        tmp_path,
+        monkeypatch,
+    ):
+        monkeypatch.setattr(image_service, "upload_dir", tmp_path)
+        s3_key = "products/2025/11/legacy.jpg"
+        image_path = tmp_path / s3_key
+        image_path.parent.mkdir(parents=True)
+        image_path.write_bytes(b"legacy-vendor-image")
+        db_session.add(
+            ProductImage(
+                product_id=sample_product.id,
+                image_url=f"/uploads/{s3_key}",
+                display_order=0,
+            )
+        )
+        await db_session.commit()
+
+        response = await client.delete(
+            f"/api/v1/images/{s3_key}", headers=vendor_user["headers"]
+        )
+
+        assert response.status_code == 200
+        assert response.json()["success"] is True
+        assert not image_path.exists()
+
+    @pytest.mark.asyncio
+    async def test_delete_image_rejects_unowned_legacy_key(
+        self,
+        client: AsyncClient,
+        vendor_user,
+        tmp_path,
+        monkeypatch,
+    ):
+        monkeypatch.setattr(image_service, "upload_dir", tmp_path)
+        s3_key = "products/2025/11/unowned.jpg"
+        image_path = tmp_path / s3_key
+        image_path.parent.mkdir(parents=True)
+        image_path.write_bytes(b"unowned-legacy-image")
 
         response = await client.delete(
             f"/api/v1/images/{s3_key}", headers=vendor_user["headers"]
