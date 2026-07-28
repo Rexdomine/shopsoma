@@ -27,6 +27,8 @@ ACCOUNT_ALIAS = "export-primary"
 _CODE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,49}\Z")
 _SERVICE_CODE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,99}\Z")
 _CURRENCY = re.compile(r"[A-Z]{3}\Z")
+_SUPPORTED_CURRENCIES = frozenset({"NGN", "USD"})
+_PRICE_TYPE_PRIORITY = ("BILLC", "PULCL", "BASEC")
 
 
 class DHLRateAdapterError(RuntimeError):
@@ -343,33 +345,56 @@ class DHLDomesticRateAdapter:
 
     @staticmethod
     def _money(value: object) -> tuple[Decimal, str]:
-        if (
-            not isinstance(value, list)
-            or len(value) != 1
-            or not isinstance(value[0], dict)
-        ):
+        if not isinstance(value, list) or not value:
             raise ValueError
-        entry = value[0]
-        raw_amount = entry.get("price")
-        currency = entry.get("priceCurrency")
-        if not isinstance(raw_amount, str):
+
+        parsed: list[tuple[str | None, Decimal, str]] = []
+        for entry in value:
+            if not isinstance(entry, dict):
+                raise ValueError
+            currency_type = entry.get("currencyType")
+            if currency_type is not None and currency_type not in _PRICE_TYPE_PRIORITY:
+                raise ValueError
+            raw_amount = entry.get("price")
+            currency = entry.get("priceCurrency")
+            if isinstance(raw_amount, bool) or not isinstance(
+                raw_amount, (str, int, float)
+            ):
+                raise ValueError
+            amount = Decimal(str(raw_amount))
+            exponent = amount.as_tuple().exponent
+            if (
+                not amount.is_finite()
+                or amount <= 0
+                or amount > Decimal("99999999999999.9999")
+                or not isinstance(exponent, int)
+                or max(0, -exponent) > 4
+            ):
+                raise ValueError
+            if not isinstance(currency, str) or _CURRENCY.fullmatch(currency) is None:
+                raise ValueError
+            parsed.append((currency_type, amount, currency))
+
+        for currency_type in _PRICE_TYPE_PRIORITY:
+            candidates = [
+                entry
+                for entry in parsed
+                if entry[0] == currency_type and entry[2] in _SUPPORTED_CURRENCIES
+            ]
+            if candidates:
+                if len(candidates) != 1:
+                    raise ValueError
+                _, amount, currency = candidates[0]
+                return amount, currency
+
+        untyped = [
+            entry
+            for entry in parsed
+            if entry[0] is None and entry[2] in _SUPPORTED_CURRENCIES
+        ]
+        if len(untyped) != 1:
             raise ValueError
-        amount = Decimal(raw_amount)
-        exponent = amount.as_tuple().exponent
-        if (
-            not amount.is_finite()
-            or amount <= 0
-            or amount > Decimal("99999999999999.9999")
-            or not isinstance(exponent, int)
-            or max(0, -exponent) > 4
-        ):
-            raise ValueError
-        if (
-            not isinstance(currency, str)
-            or _CURRENCY.fullmatch(currency) is None
-            or currency != "NGN"
-        ):
-            raise ValueError
+        _, amount, currency = untyped[0]
         return amount, currency
 
     @staticmethod
@@ -380,17 +405,17 @@ class DHLDomesticRateAdapter:
             return None, None
         if not isinstance(value, dict):
             raise ValueError
-        unknown = set(value) - {"totalTransitDays", "estimatedDeliveryDateAndTime"}
-        if unknown:
-            raise ValueError
         transit = value.get("totalTransitDays")
         raw_delivery = value.get("estimatedDeliveryDateAndTime")
-        if transit is not None and (
-            not isinstance(transit, int)
-            or isinstance(transit, bool)
-            or not 1 <= transit <= 365
-        ):
-            raise ValueError
+        if transit is not None:
+            if (
+                isinstance(transit, bool)
+                or not isinstance(transit, (int, float))
+                or int(transit) != transit
+                or not 1 <= transit <= 365
+            ):
+                raise ValueError
+            transit = int(transit)
         delivery = None
         if raw_delivery is not None:
             if not isinstance(raw_delivery, str):
@@ -405,7 +430,8 @@ class DHLDomesticRateAdapter:
             if delivery <= planned_ship_date:
                 raise ValueError
         if transit is not None and delivery is not None:
-            if (delivery - planned_ship_date).days != transit:
+            calendar_days = (delivery - planned_ship_date).days
+            if calendar_days < transit or calendar_days > transit + 7:
                 raise ValueError
         return transit, delivery
 

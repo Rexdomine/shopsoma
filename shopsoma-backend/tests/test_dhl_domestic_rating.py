@@ -128,7 +128,7 @@ def product(
     code: str = "N",
     service_code: str | None = None,
     label: str = "Domestic Express",
-    amount: str = "12500.5000",
+    amount: object = "12500.5000",
     currency: str = "NGN",
     transit_days: int | None = 2,
     delivery_date: str | None = "2026-07-30",
@@ -472,6 +472,64 @@ async def test_n_is_preferred_only_when_returned_and_other_services_are_one_to_o
 
 
 @pytest.mark.asyncio
+async def test_multiple_prices_select_supported_billing_currency_and_numeric_amount() -> (
+    None
+):
+    rated_product = product()
+    rated_product["totalPrice"] = [
+        {"currencyType": "PULCL", "price": 12500.50, "priceCurrency": "NGN"},
+        {"currencyType": "BILLC", "price": 8.75, "priceCurrency": "USD"},
+        {"currencyType": "BASEC", "price": 7.25, "priceCurrency": "EUR"},
+    ]
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"products": [rated_product]})
+
+    adapter = create_sandbox_domestic_rate_adapter(
+        config=config(),
+        transport=httpx.MockTransport(handler),
+        identity_key=IDENTITY_KEY,
+        identity_key_version="test-key-v1",
+    )
+    result = await adapter.rate(resolved_hub(), rate_request())
+
+    assert result.offers[0].rate.total_amount == Decimal("8.75")
+    assert result.offers[0].rate.currency == "USD"
+
+
+@pytest.mark.asyncio
+async def test_delivery_accepts_standard_metadata_and_business_day_slack() -> None:
+    rated_product = product(transit_days=2, delivery_date="2026-08-03T23:59:00")
+    capabilities = rated_product["deliveryCapabilities"]
+    assert isinstance(capabilities, dict)
+    capabilities.update(
+        {
+            "totalTransitDays": 2.0,
+            "deliveryTypeCode": "QDDC",
+            "destinationServiceAreaCode": "ABV",
+            "destinationFacilityAreaCode": "AB1",
+            "deliveryAdditionalDays": 0,
+            "deliveryDayOfWeek": 1,
+        }
+    )
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"products": [rated_product]})
+
+    adapter = create_sandbox_domestic_rate_adapter(
+        config=config(),
+        transport=httpx.MockTransport(handler),
+        identity_key=IDENTITY_KEY,
+        identity_key_version="test-key-v1",
+    )
+    result = await adapter.rate(resolved_hub(), rate_request())
+
+    rate = result.offers[0].rate
+    assert rate.carrier_transit_days == 2
+    assert rate.estimated_carrier_delivery_date == date(2026, 8, 3)
+
+
+@pytest.mark.asyncio
 async def test_no_synthetic_n_and_empty_products_is_typed_no_service() -> None:
     responses = iter([{"products": [product("P", "P1")]}, {"products": []}])
 
@@ -515,7 +573,7 @@ async def test_malformed_top_level_or_product_schema_is_rejected(
 @pytest.mark.parametrize(
     "bad_product",
     [
-        product(amount=1),
+        product(amount=True),
         product(amount="0"),
         product(amount="-1"),
         product(amount="NaN"),
@@ -523,7 +581,6 @@ async def test_malformed_top_level_or_product_schema_is_rejected(
         product(amount="1.00001"),
         product(amount="100000000000000.0000"),
         product(currency="ngn"),
-        product(currency="USD"),
         product(currency="ZZZ"),
         {**product(), "totalPrice": []},
         {
@@ -542,6 +599,8 @@ async def test_malformed_top_level_or_product_schema_is_rejected(
         product(transit_days=True),
         product(delivery_date="2026-07-27"),
         product(delivery_date="not-a-date"),
+        product(transit_days=3, delivery_date="2026-07-30"),
+        product(transit_days=2, delivery_date="2026-08-07"),
     ],
 )
 async def test_strict_product_validation_rejects_ambiguous_unsafe_or_impossible_values(
