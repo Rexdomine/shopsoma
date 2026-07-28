@@ -55,10 +55,13 @@ class DomesticAddress:
     state: str
     postal_code: str | None = None
     country_code: str = "NG"
+    line2: str | None = None
 
     def __post_init__(self) -> None:
         for name in ("contact_name", "phone", "line1", "city", "state"):
             _require_non_empty(getattr(self, name), name)
+        if self.line2 is not None:
+            _require_non_empty(self.line2, "line2")
         if self.postal_code is not None:
             _require_non_empty(self.postal_code, "postal_code")
         if self.country_code != "NG":

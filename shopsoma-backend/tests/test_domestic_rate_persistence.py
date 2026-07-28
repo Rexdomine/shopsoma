@@ -68,6 +68,8 @@ def test_rate_models_are_bounded_normalized_and_private() -> None:
         "schema_version",
         "canonicalization_version",
         "claimed_at",
+        "claim_ttl_seconds",
+        "claim_expires_at",
         "call_started_at",
         "result_recorded_at",
         "classification",
@@ -370,6 +372,177 @@ async def test_attempt_lifecycle_is_one_way_and_identity_is_immutable(
         {"id": attempt.id},
         "rate evidence is append-only",
     )
+
+
+@pytest.mark.asyncio
+async def test_expired_pending_claim_can_be_truthfully_abandoned_and_reacquired(
+    db_session, vendor_user, customer_user
+) -> None:
+    graph, package, seal, intent = await _subject(
+        db_session, vendor_user, customer_user
+    )
+    claimed = await db_session.scalar(text("SELECT clock_timestamp()"))
+    attempt = _attempt(
+        graph,
+        package,
+        seal,
+        intent,
+        claimed,
+        claim_ttl_seconds=1,
+        idempotency_key=f"recover-rate-{uuid.uuid4().hex}",
+    )
+    db_session.add(attempt)
+    await db_session.flush()
+    await db_session.refresh(attempt)
+    assert attempt.claim_ttl_seconds == 1
+    assert attempt.claim_expires_at == attempt.claimed_at + timedelta(seconds=1)
+
+    await _rejects(
+        db_session,
+        "UPDATE domestic_rate_attempts SET classification='abandoned', "
+        "failure_code='claim_expired' WHERE id=:id",
+        {"id": attempt.id},
+        "rate attempt claim has not expired",
+    )
+    await db_session.execute(
+        text(
+            "UPDATE domestic_rate_attempts SET call_started_at=clock_timestamp() "
+            "WHERE id=:id"
+        ),
+        {"id": attempt.id},
+    )
+    await db_session.execute(text("SELECT pg_sleep(1.05)"))
+    await db_session.execute(
+        text(
+            "UPDATE domestic_rate_attempts SET classification='abandoned', "
+            "failure_code='claim_expired' WHERE id=:id"
+        ),
+        {"id": attempt.id},
+    )
+    await db_session.refresh(attempt)
+    assert attempt.classification == "abandoned"
+    assert attempt.result_recorded_at is not None
+    assert attempt.completion_txid is not None
+    active = await db_session.scalar(
+        text(
+            "SELECT active_attempt_id FROM outbound_intent_rate_guards WHERE intent_id=:id"
+        ),
+        {"id": intent.id},
+    )
+    assert active is None
+
+    retry = _attempt(
+        graph,
+        package,
+        seal,
+        intent,
+        claimed,
+        idempotency_key=f"retry-rate-{uuid.uuid4().hex}",
+    )
+    db_session.add(retry)
+    await db_session.flush()
+    await db_session.refresh(retry)
+    assert retry.claimed_at > attempt.claimed_at
+    assert retry.claim_expires_at == retry.claimed_at + timedelta(seconds=300)
+    active = await db_session.scalar(
+        text(
+            "SELECT active_attempt_id FROM outbound_intent_rate_guards WHERE intent_id=:id"
+        ),
+        {"id": intent.id},
+    )
+    assert active == retry.id
+    await _rejects(
+        db_session,
+        "UPDATE domestic_rate_attempts SET classification='failure', "
+        "failure_code='late_result' WHERE id=:id",
+        {"id": attempt.id},
+        "completed rate attempt is immutable",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ttl", (0, 901))
+async def test_claim_lease_duration_is_bounded_by_the_database(
+    db_session, vendor_user, customer_user, ttl
+) -> None:
+    graph, package, seal, intent = await _subject(
+        db_session, vendor_user, customer_user
+    )
+    claimed = await db_session.scalar(text("SELECT clock_timestamp()"))
+    attempt = _attempt(
+        graph,
+        package,
+        seal,
+        intent,
+        claimed,
+        claim_ttl_seconds=ttl,
+    )
+    with pytest.raises(IntegrityError, match="rate attempt claim duration is invalid"):
+        async with db_session.begin_nested():
+            db_session.add(attempt)
+            await db_session.flush()
+
+
+@pytest.mark.asyncio
+async def test_expired_claim_rejects_late_call_and_terminal_results_until_abandoned(
+    db_session, vendor_user, customer_user
+) -> None:
+    graph, package, seal, intent = await _subject(
+        db_session, vendor_user, customer_user
+    )
+    claimed = await db_session.scalar(text("SELECT clock_timestamp()"))
+    attempt = _attempt(
+        graph,
+        package,
+        seal,
+        intent,
+        claimed,
+        claim_ttl_seconds=1,
+    )
+    db_session.add(attempt)
+    await db_session.flush()
+    await db_session.execute(text("SELECT pg_sleep(1.05)"))
+
+    await _rejects(
+        db_session,
+        "UPDATE domestic_rate_attempts SET call_started_at=clock_timestamp() "
+        "WHERE id=:id",
+        {"id": attempt.id},
+        "rate attempt claim has expired",
+    )
+    for classification, failure_code in (
+        ("success", None),
+        ("no_service", None),
+        ("failure", "timeout"),
+    ):
+        await _rejects(
+            db_session,
+            "UPDATE domestic_rate_attempts SET classification=:classification, "
+            "failure_code=:failure_code WHERE id=:id",
+            {
+                "id": attempt.id,
+                "classification": classification,
+                "failure_code": failure_code,
+            },
+            "rate attempt claim has expired",
+        )
+    active = await db_session.scalar(
+        text(
+            "SELECT active_attempt_id FROM outbound_intent_rate_guards WHERE intent_id=:id"
+        ),
+        {"id": intent.id},
+    )
+    assert active == attempt.id
+
+    await db_session.execute(
+        text(
+            "UPDATE domestic_rate_attempts SET classification='abandoned', "
+            "failure_code='claim_expired' WHERE id=:id"
+        ),
+        {"id": attempt.id},
+    )
+    await db_session.refresh(attempt)
+    assert attempt.classification == "abandoned"
 
 
 @pytest.mark.asyncio

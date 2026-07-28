@@ -1,6 +1,7 @@
 """Static parity and real PostgreSQL lifecycle for domestic rate evidence."""
 
 import ast
+import hashlib
 import importlib.util
 import os
 from pathlib import Path
@@ -13,12 +14,13 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.engine import make_url
-from sqlalchemy.schema import CreateIndex, CreateTable
 
 
 ROOT = Path(__file__).resolve().parents[1]
-REVISION = "c6a8e0f2b4d7"
-PARENT = "b5f7d9a2c4e6"
+REVISION = "d7b9f1c3e5a8"
+PARENT = "c6a8e0f2b4d7"
+FOUNDATION_PARENT = "b5f7d9a2c4e6"
+FOUNDATION_SHA256 = "afa3d9dcc4fc6c29d5f0044888cf7ae368df9ed50f00986bdd1ed2c0d6650a1e"
 TABLES = (
     "outbound_intent_rate_guards",
     "domestic_rate_attempts",
@@ -33,14 +35,14 @@ def _scripts() -> ScriptDirectory:
     return ScriptDirectory.from_config(config)
 
 
-def _source() -> str:
-    revision = _scripts().get_revision(REVISION)
+def _source(revision_id: str = REVISION) -> str:
+    revision = _scripts().get_revision(revision_id)
     assert revision is not None
     return Path(revision.path).read_text()
 
 
-def _literal(name: str):
-    tree = ast.parse(_source())
+def _literal(name: str, revision_id: str = REVISION):
+    tree = ast.parse(_source(revision_id))
     for node in tree.body:
         if isinstance(node, ast.Assign) and any(
             isinstance(target, ast.Name) and target.id == name
@@ -54,87 +56,64 @@ def test_domestic_rate_migration_is_the_single_linear_static_head() -> None:
     graph = _scripts()
     assert graph.get_heads() == [REVISION]
     assert graph.get_revision(REVISION).down_revision == PARENT
+    assert graph.get_revision(PARENT).down_revision == FOUNDATION_PARENT
+    foundation = _source(PARENT).encode()
+    assert hashlib.sha256(foundation).hexdigest() == FOUNDATION_SHA256
     source = _source()
     assert "Base.metadata" not in source
     assert "app.models" not in source
     assert "op.create_table" not in source
     for table in TABLES:
-        assert f"CREATE TABLE {table}" in "\n".join(_literal("_CREATE_TABLE_SQL"))
-        assert f'op.drop_table("{table}")' in source
+        assert f"CREATE TABLE {table}" in "\n".join(
+            _literal("_CREATE_TABLE_SQL", PARENT)
+        )
 
 
-def test_domestic_rate_tables_indexes_and_triggers_have_exact_static_parity() -> None:
+def test_domestic_rate_lease_checks_and_functions_have_exact_model_parity() -> None:
     from app.models.domestic_rate_quote import (
-        DOMESTIC_RATE_DROP_DDLS,
         DOMESTIC_RATE_TRIGGER_DDLS,
         DomesticRateAttempt,
-        DomesticRateOffer,
-        DomesticRateResponse,
-        OutboundIntentRateGuard,
     )
 
-    tables = (
-        OutboundIntentRateGuard.__table__,
-        DomesticRateAttempt.__table__,
-        DomesticRateResponse.__table__,
-        DomesticRateOffer.__table__,
-    )
-    dialect = postgresql.dialect()
-    assert _literal("_CREATE_TABLE_SQL") == tuple(
-        str(CreateTable(table).compile(dialect=dialect)).strip() for table in tables
-    )
-    assert _literal("_CREATE_INDEX_SQL") == tuple(
-        str(CreateIndex(index).compile(dialect=dialect)).strip()
-        for table in tables
-        for index in sorted(table.indexes, key=lambda item: item.name or "")
-    )
-    assert _literal("_TRIGGER_DDLS") == tuple(
-        statement.replace("%%", "%").strip() for statement in DOMESTIC_RATE_TRIGGER_DDLS
-    )
-    assert _literal("_DROP_FUNCTION_DDLS") == DOMESTIC_RATE_DROP_DDLS
-    from app.models.package_custody import PACKAGE_CUSTODY_TRIGGER_DDLS
-
-    original_invalidation = next(
-        statement.replace("%%", "%").strip()
-        for statement in PACKAGE_CUSTODY_TRIGGER_DDLS
-        if statement.strip().startswith(
-            "CREATE FUNCTION validate_outbound_intent_invalidation_insert()"
-        )
-    )
-    assert _literal(
-        "_RESTORE_OUTBOUND_INVALIDATION_DDL"
-    ) == original_invalidation.replace(
-        "CREATE FUNCTION", "CREATE OR REPLACE FUNCTION", 1
-    )
-
-    current_intent_insert = next(
-        statement.replace("%%", "%").strip()
-        for statement in PACKAGE_CUSTODY_TRIGGER_DDLS
-        if statement.strip().startswith(
-            "CREATE FUNCTION validate_outbound_intent_insert()"
-        )
-    )
-    snapshot_upgrade = _literal("_DESTINATION_SNAPSHOT_UPGRADE_DDLS")
+    constraints = {
+        constraint.name: str(constraint.sqltext.compile(dialect=postgresql.dialect()))
+        for constraint in DomesticRateAttempt.__table__.constraints
+        if constraint.name
+        in {
+            "ck_domestic_rate_attempts_classification",
+            "ck_domestic_rate_attempts_lifecycle",
+        }
+    }
     assert (
-        current_intent_insert.replace(
-            "CREATE FUNCTION", "CREATE OR REPLACE FUNCTION", 1
-        )
-        == snapshot_upgrade[-1]
+        _literal("_NEW_CLASSIFICATION_CHECK")
+        == constraints["ck_domestic_rate_attempts_classification"]
     )
-    assert "ADD COLUMN destination_snapshot_hash VARCHAR(64)" in snapshot_upgrade[0]
-    assert "UPDATE outbound_shipment_intents" in snapshot_upgrade[1]
-    assert "sha256" in snapshot_upgrade[1]
-    assert "SET NOT NULL" in snapshot_upgrade[3]
-    assert "destination_snapshot_hash" not in _literal(
-        "_RESTORE_OUTBOUND_INTENT_INSERT_DDL"
+    assert (
+        _literal("_NEW_LIFECYCLE_CHECK")
+        == constraints["ck_domestic_rate_attempts_lifecycle"]
     )
+
+    names = (
+        "validate_domestic_rate_attempt_insert",
+        "validate_domestic_rate_attempt_mutation",
+        "validate_domestic_rate_attempt_response_shape",
+    )
+    model_functions = tuple(
+        statement.replace("%%", "%")
+        .strip()
+        .replace("CREATE FUNCTION", "CREATE OR REPLACE FUNCTION", 1)
+        for statement in DOMESTIC_RATE_TRIGGER_DDLS
+        if any(f"CREATE FUNCTION {name}" in statement for name in names)
+    )
+    assert _literal("_NEW_FUNCTION_DDLS") == model_functions
 
 
 def test_domestic_rate_migration_contains_only_normalized_safe_evidence() -> None:
     sql = "\n".join(
-        _literal("_CREATE_TABLE_SQL")
-        + _literal("_CREATE_INDEX_SQL")
-        + _literal("_TRIGGER_DDLS")
+        _literal("_CREATE_TABLE_SQL", PARENT)
+        + _literal("_CREATE_INDEX_SQL", PARENT)
+        + _literal("_TRIGGER_DDLS", PARENT)
+        + _literal("_NEW_FUNCTION_DDLS")
     ).lower()
     for required in (
         "on delete restrict",
@@ -146,6 +125,8 @@ def test_domestic_rate_migration_contains_only_normalized_safe_evidence() -> Non
         "success response requires at least one offer",
         "no-service response cannot contain offers",
         "expires_at = received_at + ttl_seconds * interval '1 second'",
+        "claim_expires_at := claimed_at_value + new.claim_ttl_seconds",
+        "classification_value in ('pending','failure','abandoned')",
     ):
         assert required in sql
     for forbidden in (
@@ -210,10 +191,11 @@ def test_domestic_rate_real_upgrade_downgrade_upgrade_cycle() -> None:
             finally:
                 target.dispose()
 
-        migrate("upgrade", PARENT)
+        migrate("upgrade", FOUNDATION_PARENT)
 
-        def assert_tables(present: bool) -> None:
+        def assert_tables(present: bool, leases: bool = False) -> None:
             target = create_engine(database_url)
+            attempt_columns: set[str] = set()
             try:
                 with target.connect() as connection:
                     names = set(inspect(connection).get_table_names())
@@ -232,18 +214,31 @@ def test_domestic_rate_real_upgrade_downgrade_upgrade_cycle() -> None:
                             )
                         ).scalars()
                     )
+                    if present:
+                        attempt_columns = {
+                            column["name"]
+                            for column in inspect(connection).get_columns(
+                                "domestic_rate_attempts"
+                            )
+                        }
                 assert all((table in names) is present for table in TABLES)
                 assert bool(functions) is present
                 assert ("destination_snapshot_hash" in intent_columns) is present
+                if present:
+                    assert ("claim_ttl_seconds" in attempt_columns) is leases
+                    assert ("claim_expires_at" in attempt_columns) is leases
             finally:
                 target.dispose()
 
-        migrate("upgrade", REVISION)
-        assert_tables(True)
-        migrate("downgrade", PARENT)
         assert_tables(False)
+        migrate("upgrade", PARENT)
+        assert_tables(True, leases=False)
         migrate("upgrade", REVISION)
-        assert_tables(True)
+        assert_tables(True, leases=True)
+        migrate("downgrade", PARENT)
+        assert_tables(True, leases=False)
+        migrate("upgrade", REVISION)
+        assert_tables(True, leases=True)
     finally:
         with admin.connect() as connection:
             connection.execute(

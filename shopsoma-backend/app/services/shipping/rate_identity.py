@@ -10,7 +10,7 @@ from typing import Any
 
 from app.services.shipping.contracts import DomesticRateRequest
 
-CANONICAL_RATE_VERSION = "rate-canonical-v1"
+CANONICAL_RATE_VERSION = "rate-canonical-v2"
 
 
 def _decimal_string(value: Decimal) -> str:
@@ -24,6 +24,7 @@ def _address(value: Any) -> dict[str, Any]:
         "contact_name": value.contact_name,
         "country_code": value.country_code,
         "line1": value.line1,
+        "line2": value.line2,
         "phone": value.phone,
         "postal_code": value.postal_code,
         "state": value.state,
@@ -39,6 +40,7 @@ def _hub(value: Any) -> dict[str, Any]:
         "hub_version": value.hub_version,
         "intent_id": str(value.intent_id),
         "line1": value.line1,
+        "line2": value.line2,
         "order_id": str(value.order_id),
         "package_id": str(value.package_id),
         "package_version": value.package_version,

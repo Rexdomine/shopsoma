@@ -15,6 +15,7 @@ from sqlalchemy import (
     DDL,
     Date,
     DateTime,
+    FetchedValue,
     ForeignKey,
     ForeignKeyConstraint,
     Index,
@@ -85,6 +86,10 @@ class DomesticRateAttempt(Base):
     schema_version = Column(String(50), nullable=False)
     canonicalization_version = Column(String(50), nullable=False)
     claimed_at = Column(DateTime(timezone=True), nullable=False)
+    claim_ttl_seconds = Column(Integer, nullable=False, server_default="300")
+    claim_expires_at = Column(
+        DateTime(timezone=True), nullable=False, server_default=FetchedValue()
+    )
     call_started_at = Column(DateTime(timezone=True))
     result_recorded_at = Column(DateTime(timezone=True))
     classification = Column(String(20), nullable=False)
@@ -135,13 +140,16 @@ class DomesticRateAttempt(Base):
             name="ck_domestic_rate_attempts_identifiers",
         ),
         CheckConstraint(
-            "classification IN ('pending', 'success', 'no_service', 'failure')",
+            "classification IN ('pending', 'success', 'no_service', 'failure', 'abandoned')",
             name="ck_domestic_rate_attempts_classification",
         ),
         CheckConstraint(
-            "(call_started_at IS NULL OR call_started_at >= claimed_at) "
+            "claim_ttl_seconds BETWEEN 1 AND 900 "
+            "AND claim_expires_at = claimed_at + claim_ttl_seconds * interval '1 second' "
+            "AND (call_started_at IS NULL OR call_started_at >= claimed_at) "
             "AND (result_recorded_at IS NULL OR "
-            "(call_started_at IS NOT NULL AND result_recorded_at >= call_started_at)) "
+            "(call_started_at IS NOT NULL AND result_recorded_at >= call_started_at) OR "
+            "(classification = 'abandoned' AND result_recorded_at >= claimed_at)) "
             "AND ((classification = 'pending' AND result_recorded_at IS NULL "
             "AND failure_code IS NULL AND completion_txid IS NULL) OR "
             "(classification IN ('success', 'no_service') "
@@ -149,6 +157,9 @@ class DomesticRateAttempt(Base):
             "AND completion_txid IS NOT NULL) OR "
             "(classification = 'failure' AND result_recorded_at IS NOT NULL "
             "AND failure_code IS NOT NULL AND failure_code ~ '^[!-~]+$' "
+            "AND completion_txid IS NOT NULL) OR "
+            "(classification = 'abandoned' AND result_recorded_at IS NOT NULL "
+            "AND failure_code = 'claim_expired' "
             "AND completion_txid IS NOT NULL))",
             name="ck_domestic_rate_attempts_lifecycle",
         ),
@@ -310,15 +321,16 @@ END; $$ LANGUAGE plpgsql
     """,
     """
 CREATE FUNCTION validate_domestic_rate_attempt_insert() RETURNS trigger AS $$
-DECLARE intent outbound_shipment_intents%%ROWTYPE; package hub_packages%%ROWTYPE; hub fulfillment_hubs%%ROWTYPE; guard_invalidated boolean;
+DECLARE intent outbound_shipment_intents%%ROWTYPE; package hub_packages%%ROWTYPE; hub fulfillment_hubs%%ROWTYPE; guard_invalidated boolean; claimed_at_value timestamptz;
 BEGIN
     IF NEW.classification<>'pending' OR NEW.call_started_at IS NOT NULL
        OR NEW.result_recorded_at IS NOT NULL OR NEW.failure_code IS NOT NULL
        OR NEW.completion_txid IS NOT NULL THEN
         RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='rate attempt must begin pending with no call or result';
     END IF;
-    NEW.claimed_at := statement_timestamp();
-    NEW.created_at := statement_timestamp();
+    IF NEW.claim_ttl_seconds IS NULL OR NEW.claim_ttl_seconds NOT BETWEEN 1 AND 900 THEN
+        RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='rate attempt claim duration is invalid';
+    END IF;
     PERFORM 1 FROM hub_package_seals WHERE id=NEW.seal_id AND package_id=NEW.package_id
       AND package_version=NEW.package_version AND retired_at IS NULL FOR UPDATE;
     IF NOT FOUND THEN
@@ -348,8 +360,11 @@ BEGIN
        OR hub.country_code<>'NG' THEN
         RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='rate attempt requires exact active hub version';
     END IF;
-    IF NEW.claimed_at<intent.created_at OR NEW.claimed_at>clock_timestamp()
-       OR NEW.created_at<NEW.claimed_at OR NEW.created_at>clock_timestamp() THEN
+    claimed_at_value := clock_timestamp();
+    NEW.claimed_at := claimed_at_value;
+    NEW.claim_expires_at := claimed_at_value + NEW.claim_ttl_seconds * interval '1 second';
+    NEW.created_at := claimed_at_value;
+    IF NEW.claimed_at<intent.created_at THEN
         RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='rate attempt chronology is invalid';
     END IF;
     RETURN NEW;
@@ -362,6 +377,7 @@ FOR EACH ROW EXECUTE FUNCTION validate_domestic_rate_attempt_insert()
     """,
     """
 CREATE FUNCTION validate_domestic_rate_attempt_mutation() RETURNS trigger AS $$
+DECLARE event_at timestamptz;
 BEGIN
     IF TG_OP='DELETE' THEN
         RAISE EXCEPTION USING ERRCODE='23503', MESSAGE='rate evidence is append-only';
@@ -379,17 +395,28 @@ BEGIN
        OR NEW.planned_ship_date IS DISTINCT FROM OLD.planned_ship_date
        OR NEW.adapter_version IS DISTINCT FROM OLD.adapter_version OR NEW.schema_version IS DISTINCT FROM OLD.schema_version
        OR NEW.canonicalization_version IS DISTINCT FROM OLD.canonicalization_version
-       OR NEW.claimed_at IS DISTINCT FROM OLD.claimed_at OR NEW.created_at IS DISTINCT FROM OLD.created_at THEN
+       OR NEW.claimed_at IS DISTINCT FROM OLD.claimed_at
+       OR NEW.claim_ttl_seconds IS DISTINCT FROM OLD.claim_ttl_seconds
+       OR NEW.claim_expires_at IS DISTINCT FROM OLD.claim_expires_at
+       OR NEW.created_at IS DISTINCT FROM OLD.created_at THEN
         RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='rate attempt identity is immutable';
     END IF;
     IF OLD.classification<>'pending' THEN
         RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='completed rate attempt is immutable';
     END IF;
+    event_at := clock_timestamp();
     IF NEW.classification='pending' THEN
         IF NEW.completion_txid IS NOT NULL THEN
             RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='pending rate attempt cannot have a completion transaction';
         END IF;
     ELSE
+        IF NEW.classification='abandoned' THEN
+            IF event_at<OLD.claim_expires_at THEN
+                RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='rate attempt claim has not expired';
+            END IF;
+        ELSIF event_at>=OLD.claim_expires_at THEN
+            RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='rate attempt claim has expired';
+        END IF;
         NEW.completion_txid := txid_current();
         UPDATE outbound_intent_rate_guards SET active_attempt_id=NULL
           WHERE intent_id=OLD.intent_id AND active_attempt_id=OLD.id;
@@ -400,10 +427,13 @@ BEGIN
     IF OLD.call_started_at IS NOT NULL AND NEW.call_started_at IS DISTINCT FROM OLD.call_started_at THEN
         RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='rate attempt call timestamp is immutable once set';
     ELSIF OLD.call_started_at IS NULL AND NEW.call_started_at IS NOT NULL THEN
-        NEW.call_started_at := statement_timestamp();
+        IF event_at>=OLD.claim_expires_at THEN
+            RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='rate attempt claim has expired';
+        END IF;
+        NEW.call_started_at := event_at;
     END IF;
     IF NEW.classification<>'pending' THEN
-        NEW.result_recorded_at := statement_timestamp();
+        NEW.result_recorded_at := event_at;
     END IF;
     RETURN NEW;
 END; $$ LANGUAGE plpgsql
@@ -429,8 +459,8 @@ BEGIN
       WHERE attempt_id=attempt_id_value;
     IF classification_value IN ('success','no_service') AND response_count<>1 THEN
         RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='terminal rate attempt requires exactly one response';
-    ELSIF classification_value IN ('pending','failure') AND response_count<>0 THEN
-        RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='pending or failed rate attempt cannot have a response';
+    ELSIF classification_value IN ('pending','failure','abandoned') AND response_count<>0 THEN
+        RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='non-result rate attempt cannot have a response';
     END IF;
     RETURN NULL;
 END; $$ LANGUAGE plpgsql

@@ -64,6 +64,9 @@ def config(**overrides: object) -> Settings:
 
 
 def resolved_hub(**overrides: object) -> DHLResolvedHub:
+    authoritative_request = overrides.pop("request", rate_request())
+    if not isinstance(authoritative_request, DomesticRateRequest):
+        raise TypeError("request override must be DomesticRateRequest")
     values = {
         "hub": HubRef(HUB_ID),
         "hub_version": 4,
@@ -72,9 +75,12 @@ def resolved_hub(**overrides: object) -> DHLResolvedHub:
         "seal_id": SEAL_ID,
         "package_id": PACKAGE_ID,
         "package_version": 3,
+        "destination": authoritative_request.destination,
+        "package": authoritative_request.package,
         "contact_name": "ShopSoma Hub",
         "phone": "+2348000000000",
         "line1": "10 Synthetic Hub Road",
+        "line2": None,
         "city": "Lagos",
         "state": "Lagos",
         "postal_code": "100001",
@@ -177,7 +183,7 @@ def test_fingerprint_is_versioned_keyed_deterministic_and_composition_sorted() -
     second = fingerprint(reversed_request)
 
     assert first == second
-    assert CANONICAL_RATE_VERSION == "rate-canonical-v1"
+    assert CANONICAL_RATE_VERSION == "rate-canonical-v2"
     assert len(first) == 64
     assert fingerprint(request, secret_key=b"different-key") != first
     assert fingerprint(request, key_version="test-key-v2") != first
@@ -200,6 +206,10 @@ def test_fingerprint_preserves_exact_decimal_strings_and_changes_for_bound_field
     mutations = [
         replace(request, planned_ship_date=date(2026, 7, 29)),
         replace(request, destination=replace(request.destination, city="Kano")),
+        replace(
+            request,
+            destination=replace(request.destination, line2="Apartment 2"),
+        ),
         replace(request, package=replace(request.package, package_version=4)),
         replace(request, package=replace(request.package, seal=SealRef("other-seal"))),
     ]
@@ -207,12 +217,11 @@ def test_fingerprint_preserves_exact_decimal_strings_and_changes_for_bound_field
     assert fingerprint(request, provider="other") != base
     assert fingerprint(request, account_alias="other-account") != base
     assert fingerprint(request, resolved_hub=resolved_hub(city="Ikeja")) != base
+    assert fingerprint(request, resolved_hub=resolved_hub(line2="Unit B")) != base
     assert fingerprint(request, resolved_hub=resolved_hub(hub_version=5)) != base
     assert fingerprint(request, resolved_hub=resolved_hub(intent_id=uuid4())) != base
     assert fingerprint(request, resolved_hub=resolved_hub(order_id=uuid4())) != base
     assert fingerprint(request, resolved_hub=resolved_hub(seal_id=uuid4())) != base
-    assert fingerprint(request, resolved_hub=resolved_hub(package_id=uuid4())) != base
-    assert fingerprint(request, resolved_hub=resolved_hub(package_version=4)) != base
 
 
 def test_adapter_constructor_does_not_accept_an_injected_client() -> None:
@@ -350,8 +359,64 @@ async def test_resolved_subject_package_must_match_request_before_transport(
         identity_key=b"k" * 32,
         identity_key_version="hmac-v1",
     )
-    with pytest.raises(DHLRateAdapterError, match="authoritative package"):
+    with pytest.raises(DHLRateAdapterError, match="authoritative shipment subject"):
         await adapter.rate(resolved_hub(), replace(request_value, package=mismatched))
+    assert called is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mismatch_kind", ["destination", "measurement", "composition", "seal"]
+)
+async def test_complete_authoritative_subject_must_match_before_transport(
+    mismatch_kind: str,
+) -> None:
+    called = False
+
+    async def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal called
+        called = True
+        return httpx.Response(200, json={"products": []})
+
+    authoritative = rate_request()
+    if mismatch_kind == "destination":
+        candidate = replace(
+            authoritative,
+            destination=replace(authoritative.destination, city="Kano"),
+        )
+    elif mismatch_kind == "measurement":
+        candidate = replace(
+            authoritative,
+            package=replace(
+                authoritative.package,
+                measurement=replace(
+                    authoritative.package.measurement,
+                    weight_kg=Decimal("2.000"),
+                ),
+            ),
+        )
+    elif mismatch_kind == "composition":
+        candidate = replace(
+            authoritative,
+            package=replace(
+                authoritative.package,
+                composition=authoritative.package.composition[:-1],
+            ),
+        )
+    else:
+        candidate = replace(
+            authoritative,
+            package=replace(authoritative.package, seal=SealRef("different-seal")),
+        )
+
+    adapter = create_sandbox_domestic_rate_adapter(
+        config=config(),
+        transport=httpx.MockTransport(handler),
+        identity_key=IDENTITY_KEY,
+        identity_key_version="test-key-v1",
+    )
+    with pytest.raises(DHLRateAdapterError, match="authoritative shipment subject"):
+        await adapter.rate(resolved_hub(request=authoritative), candidate)
     assert called is False
 
 
@@ -438,7 +503,7 @@ async def test_post_rates_uses_required_empty_postcode_without_contact_wrappers(
         identity_key_version="test-key-v1",
     )
     result = await adapter.rate(
-        resolved_hub(postal_code=None),
+        resolved_hub(request=request_value, postal_code=None),
         request_value,
     )
     assert result.result_kind == "no_service"
@@ -451,7 +516,8 @@ async def test_post_rates_maps_persisted_street_addresses_across_three_provider_
     request_value = rate_request(
         destination=replace(
             rate_request().destination,
-            line1="R" * 91,
+            line1="R" * 46,
+            line2="S" * 45,
         )
     )
 
@@ -461,8 +527,8 @@ async def test_post_rates_maps_persisted_street_addresses_across_three_provider_
         assert parties["shipperDetails"]["addressLine2"] == "H" * 45
         assert "addressLine3" not in parties["shipperDetails"]
         assert parties["receiverDetails"]["addressLine1"] == "R" * 45
-        assert parties["receiverDetails"]["addressLine2"] == "R" * 45
-        assert parties["receiverDetails"]["addressLine3"] == "R"
+        assert parties["receiverDetails"]["addressLine2"] == "R"
+        assert parties["receiverDetails"]["addressLine3"] == "S" * 45
         return httpx.Response(200, json={"products": []})
 
     adapter = create_sandbox_domestic_rate_adapter(
@@ -471,7 +537,10 @@ async def test_post_rates_maps_persisted_street_addresses_across_three_provider_
         identity_key=IDENTITY_KEY,
         identity_key_version="test-key-v1",
     )
-    result = await adapter.rate(resolved_hub(line1="H" * 90), request_value)
+    result = await adapter.rate(
+        resolved_hub(request=request_value, line1="H" * 45, line2="H" * 45),
+        request_value,
+    )
     assert result.result_kind == "no_service"
 
 
@@ -527,7 +596,9 @@ async def test_post_rates_rejects_values_outside_provider_request_schema_before_
         identity_key_version="test-key-v1",
     )
     with pytest.raises(DHLRateAdapterError, match="domestic rate request is invalid"):
-        await adapter.rate(resolved_hub(**hub_overrides), request_value)
+        await adapter.rate(
+            resolved_hub(request=request_value, **hub_overrides), request_value
+        )
     assert called is False
 
 

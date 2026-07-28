@@ -15,7 +15,7 @@ import httpx
 
 from app.core.config import Settings
 from app.services.dhl.client import DHLAPIError, DHLClient
-from app.services.fulfillment.contracts import HubRef
+from app.services.fulfillment.contracts import DomesticAddress, HubRef, PackageRef
 from app.services.shipping.capabilities import domestic_shipping_capabilities
 from app.services.shipping.contracts import DomesticRate, DomesticRateRequest
 from app.services.shipping.rate_identity import canonical_rate_fingerprint
@@ -58,9 +58,12 @@ class DHLResolvedHub:
     seal_id: UUID
     package_id: UUID
     package_version: int
+    destination: DomesticAddress
+    package: PackageRef
     contact_name: str
     phone: str
     line1: str
+    line2: str | None
     city: str
     state: str
     postal_code: str | None = None
@@ -91,12 +94,25 @@ class DHLResolvedHub:
             or self.package_version <= 0
         ):
             raise ValueError("resolved package version is invalid")
+        if not isinstance(self.destination, DomesticAddress) or not isinstance(
+            self.package, PackageRef
+        ):
+            raise TypeError("resolved rate subject facts are invalid")
+        if (
+            self.package.package_id != self.package_id
+            or self.package.package_version != self.package_version
+        ):
+            raise ValueError("resolved package facts do not match their identity")
         if self.country_code != "NG":
             raise ValueError("resolved hub must be Nigerian")
         for field_name in ("contact_name", "phone", "line1", "city", "state"):
             value = getattr(self, field_name)
             if not isinstance(value, str) or not value.strip():
                 raise ValueError("resolved hub field is invalid")
+        if self.line2 is not None and (
+            not isinstance(self.line2, str) or not self.line2.strip()
+        ):
+            raise ValueError("resolved hub field is invalid")
         if self.postal_code is not None and (
             not isinstance(self.postal_code, str) or not self.postal_code.strip()
         ):
@@ -162,11 +178,11 @@ class DHLDomesticRateAdapter:
         if resolved_hub.hub != request.origin:
             raise DHLRateAdapterError("resolved hub does not match request origin")
         if (
-            resolved_hub.package_id != request.package.package_id
-            or resolved_hub.package_version != request.package.package_version
+            resolved_hub.package != request.package
+            or resolved_hub.destination != request.destination
         ):
             raise DHLRateAdapterError(
-                "rate request must match the authoritative package identity"
+                "rate request must match the authoritative shipment subject"
             )
         if (
             resolved_hub.country_code != "NG"
@@ -247,10 +263,17 @@ class DHLDomesticRateAdapter:
     @classmethod
     def _party(cls, value: object) -> dict[str, object]:
         postal_code = getattr(value, "postal_code")
-        street = cls._provider_text(getattr(value, "line1"), 1, 135)
+        street_parts = [cls._provider_text(getattr(value, "line1"), 1, 135)]
+        line2 = getattr(value, "line2")
+        if line2 is not None:
+            street_parts.append(cls._provider_text(line2, 1, 135))
         address_lines = [
-            street[index : index + 45] for index in range(0, len(street), 45)
+            part[index : index + 45]
+            for part in street_parts
+            for index in range(0, len(part), 45)
         ]
+        if len(address_lines) > 3:
+            raise ValueError
         party: dict[str, object] = {
             "postalCode": (
                 "" if postal_code is None else cls._provider_text(postal_code, 0, 12)
