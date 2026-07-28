@@ -264,6 +264,21 @@ def test_adapter_public_boundary_has_no_caller_overrides() -> None:
     }
 
 
+@pytest.mark.parametrize("length", [51, 100])
+def test_factory_rejects_identity_key_versions_wider_than_persistence(
+    length: int,
+) -> None:
+    with pytest.raises(DHLRateAdapterError, match="identity key version is invalid"):
+        create_sandbox_domestic_rate_adapter(
+            config=config(),
+            transport=httpx.MockTransport(
+                lambda _request: httpx.Response(200, json={"products": []})
+            ),
+            identity_key=IDENTITY_KEY,
+            identity_key_version="v" * length,
+        )
+
+
 @pytest.mark.parametrize(
     "overrides",
     [
@@ -517,18 +532,18 @@ async def test_post_rates_maps_persisted_street_addresses_across_three_provider_
         destination=replace(
             rate_request().destination,
             line1="R" * 46,
-            line2="S" * 45,
+            line2="S" * 46,
         )
     )
 
     async def handler(request: httpx.Request) -> httpx.Response:
         parties = json.loads(request.content)["customerDetails"]
         assert parties["shipperDetails"]["addressLine1"] == "H" * 45
-        assert parties["shipperDetails"]["addressLine2"] == "H" * 45
-        assert "addressLine3" not in parties["shipperDetails"]
+        assert parties["shipperDetails"]["addressLine2"] == ", " + "H" * 43
+        assert parties["shipperDetails"]["addressLine3"] == "H" * 2
         assert parties["receiverDetails"]["addressLine1"] == "R" * 45
-        assert parties["receiverDetails"]["addressLine2"] == "R"
-        assert parties["receiverDetails"]["addressLine3"] == "S" * 45
+        assert parties["receiverDetails"]["addressLine2"] == "R, " + "S" * 42
+        assert parties["receiverDetails"]["addressLine3"] == "S" * 4
         return httpx.Response(200, json={"products": []})
 
     adapter = create_sandbox_domestic_rate_adapter(
@@ -556,6 +571,17 @@ async def test_post_rates_maps_persisted_street_addresses_across_three_provider_
             {},
             rate_request(
                 destination=replace(rate_request().destination, line1="x" * 136)
+            ),
+            {},
+        ),
+        (
+            {},
+            rate_request(
+                destination=replace(
+                    rate_request().destination,
+                    line1="x" * 90,
+                    line2="y" * 44,
+                )
             ),
             {},
         ),

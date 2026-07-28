@@ -263,17 +263,14 @@ class DHLDomesticRateAdapter:
     @classmethod
     def _party(cls, value: object) -> dict[str, object]:
         postal_code = getattr(value, "postal_code")
-        street_parts = [cls._provider_text(getattr(value, "line1"), 1, 135)]
+        street = cls._provider_text(getattr(value, "line1"), 1, 135)
         line2 = getattr(value, "line2")
         if line2 is not None:
-            street_parts.append(cls._provider_text(line2, 1, 135))
+            street = f"{street}, {cls._provider_text(line2, 1, 135)}"
+        street = cls._provider_text(street, 1, 135)
         address_lines = [
-            part[index : index + 45]
-            for part in street_parts
-            for index in range(0, len(part), 45)
+            street[index : index + 45] for index in range(0, len(street), 45)
         ]
-        if len(address_lines) > 3:
-            raise ValueError
         party: dict[str, object] = {
             "postalCode": (
                 "" if postal_code is None else cls._provider_text(postal_code, 0, 12)
@@ -533,6 +530,7 @@ def create_sandbox_domestic_rate_adapter(
         raise DHLRateAdapterError("rate identity key is invalid")
     if (
         not isinstance(identity_key_version, str)
+        or len(identity_key_version) > 50
         or _INTERNAL_IDENTIFIER.fullmatch(identity_key_version) is None
     ):
         raise DHLRateAdapterError("rate identity key version is invalid")
