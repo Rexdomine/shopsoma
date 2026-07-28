@@ -372,30 +372,18 @@ async def test_exact_post_rates_request_uses_resolved_hub_managed_account_and_me
             "accounts": [{"typeCode": "shipper", "number": DUMMY_ACCOUNT}],
             "customerDetails": {
                 "shipperDetails": {
-                    "postalAddress": {
-                        "addressLine1": "10 Synthetic Hub Road",
-                        "cityName": "Lagos",
-                        "provinceCode": "Lagos",
-                        "postalCode": "100001",
-                        "countryCode": "NG",
-                    },
-                    "contactInformation": {
-                        "fullName": "ShopSoma Hub",
-                        "phone": "+2348000000000",
-                    },
+                    "addressLine1": "10 Synthetic Hub Road",
+                    "cityName": "Lagos",
+                    "provinceCode": "Lagos",
+                    "postalCode": "100001",
+                    "countryCode": "NG",
                 },
                 "receiverDetails": {
-                    "postalAddress": {
-                        "addressLine1": "20 Synthetic Customer Street",
-                        "cityName": "Abuja",
-                        "provinceCode": "FCT",
-                        "postalCode": "900001",
-                        "countryCode": "NG",
-                    },
-                    "contactInformation": {
-                        "fullName": "Ada Customer",
-                        "phone": "+2348111111111",
-                    },
+                    "addressLine1": "20 Synthetic Customer Street",
+                    "cityName": "Abuja",
+                    "provinceCode": "FCT",
+                    "postalCode": "900001",
+                    "countryCode": "NG",
                 },
             },
             "packages": [
@@ -424,6 +412,92 @@ async def test_exact_post_rates_request_uses_resolved_hub_managed_account_and_me
     assert result.offers[0].rate.currency == "NGN"
     assert result.offers[0].provider_product_code == "ABC123"
     assert result.offers[0].provider_service_code == "XYZ"
+
+
+@pytest.mark.asyncio
+async def test_post_rates_uses_required_empty_postcode_without_contact_wrappers() -> (
+    None
+):
+    request_value = rate_request(
+        destination=replace(rate_request().destination, postal_code=None)
+    )
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        parties = body["customerDetails"]
+        assert parties["shipperDetails"]["postalCode"] == ""
+        assert parties["receiverDetails"]["postalCode"] == ""
+        assert "postalAddress" not in parties["shipperDetails"]
+        assert "contactInformation" not in parties["receiverDetails"]
+        return httpx.Response(200, json={"products": []})
+
+    adapter = create_sandbox_domestic_rate_adapter(
+        config=config(),
+        transport=httpx.MockTransport(handler),
+        identity_key=IDENTITY_KEY,
+        identity_key_version="test-key-v1",
+    )
+    result = await adapter.rate(
+        resolved_hub(postal_code=None),
+        request_value,
+    )
+    assert result.result_kind == "no_service"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("hub_overrides", "request_value", "config_overrides"),
+    [
+        ({"line1": "x" * 46}, rate_request(), {}),
+        ({"city": "x" * 46}, rate_request(), {}),
+        ({"state": "x"}, rate_request(), {}),
+        ({"postal_code": "x" * 13}, rate_request(), {}),
+        (
+            {},
+            rate_request(
+                destination=replace(rate_request().destination, line1="x" * 46)
+            ),
+            {},
+        ),
+        ({}, rate_request(), {"DHL_EXPORT_ACCOUNT_NUMBER": "1" * 13}),
+        (
+            {},
+            rate_request(
+                package=replace(
+                    rate_request().package,
+                    measurement=ParcelMeasurement(
+                        weight_kg=Decimal("1.0001"),
+                        length_cm=Decimal("30"),
+                        width_cm=Decimal("20"),
+                        height_cm=Decimal("10"),
+                    ),
+                )
+            ),
+            {},
+        ),
+    ],
+)
+async def test_post_rates_rejects_values_outside_provider_request_schema_before_transport(
+    hub_overrides: dict[str, object],
+    request_value: DomesticRateRequest,
+    config_overrides: dict[str, object],
+) -> None:
+    called = False
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal called
+        called = True
+        return httpx.Response(200, json={"products": []})
+
+    adapter = create_sandbox_domestic_rate_adapter(
+        config=config(**config_overrides),
+        transport=httpx.MockTransport(handler),
+        identity_key=IDENTITY_KEY,
+        identity_key_version="test-key-v1",
+    )
+    with pytest.raises(DHLRateAdapterError, match="domestic rate request is invalid"):
+        await adapter.rate(resolved_hub(**hub_overrides), request_value)
+    assert called is False
 
 
 @pytest.mark.asyncio

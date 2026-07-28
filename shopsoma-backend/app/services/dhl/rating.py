@@ -202,6 +202,26 @@ class DHLDomesticRateAdapter:
         self, resolved_hub: DHLResolvedHub, request: DomesticRateRequest
     ) -> dict[str, object]:
         measurement = request.package.measurement
+        try:
+            account = self._provider_text(self._account, 1, 12)
+            weight = self._provider_measurement(
+                measurement.weight_kg, Decimal("999999999999")
+            )
+            dimensions = {
+                "length": self._provider_measurement(
+                    measurement.length_cm, Decimal("9999999")
+                ),
+                "width": self._provider_measurement(
+                    measurement.width_cm, Decimal("9999999")
+                ),
+                "height": self._provider_measurement(
+                    measurement.height_cm, Decimal("9999999")
+                ),
+            }
+            shipper = self._party(resolved_hub)
+            receiver = self._party(request.destination)
+        except (TypeError, ValueError, InvalidOperation, OverflowError):
+            raise DHLRateAdapterError("domestic rate request is invalid") from None
         return {
             # The provider-neutral contract intentionally stores a date only. MyDHL's
             # POST /rates schema requires a local tender time and GMT offset, so use a
@@ -211,41 +231,57 @@ class DHLDomesticRateAdapter:
             ),
             "unitOfMeasurement": "metric",
             "isCustomsDeclarable": False,
-            "accounts": [{"typeCode": "shipper", "number": self._account}],
+            "accounts": [{"typeCode": "shipper", "number": account}],
             "customerDetails": {
-                "shipperDetails": self._party(resolved_hub),
-                "receiverDetails": self._party(request.destination),
+                "shipperDetails": shipper,
+                "receiverDetails": receiver,
             },
             "packages": [
                 {
-                    "weight": float(measurement.weight_kg),
-                    "dimensions": {
-                        "length": float(measurement.length_cm),
-                        "width": float(measurement.width_cm),
-                        "height": float(measurement.height_cm),
-                    },
+                    "weight": weight,
+                    "dimensions": dimensions,
                 }
             ],
         }
 
-    @staticmethod
-    def _party(value: object) -> dict[str, object]:
-        postal_address: dict[str, object] = {
-            "addressLine1": getattr(value, "line1"),
-            "cityName": getattr(value, "city"),
-            "provinceCode": getattr(value, "state"),
-            "countryCode": getattr(value, "country_code"),
-        }
+    @classmethod
+    def _party(cls, value: object) -> dict[str, object]:
         postal_code = getattr(value, "postal_code")
-        if postal_code is not None:
-            postal_address["postalCode"] = postal_code
         return {
-            "postalAddress": postal_address,
-            "contactInformation": {
-                "fullName": getattr(value, "contact_name"),
-                "phone": getattr(value, "phone"),
-            },
+            "postalCode": (
+                "" if postal_code is None else cls._provider_text(postal_code, 0, 12)
+            ),
+            "cityName": cls._provider_text(getattr(value, "city"), 1, 45),
+            "countryCode": cls._provider_text(getattr(value, "country_code"), 2, 2),
+            "provinceCode": cls._provider_text(getattr(value, "state"), 2, 35),
+            "addressLine1": cls._provider_text(getattr(value, "line1"), 1, 45),
         }
+
+    @staticmethod
+    def _provider_text(value: object, minimum: int, maximum: int) -> str:
+        if (
+            not isinstance(value, str)
+            or not minimum <= len(value) <= maximum
+            or value != value.strip()
+            or not value.isprintable()
+        ):
+            raise ValueError
+        return value
+
+    @staticmethod
+    def _provider_measurement(value: object, maximum: Decimal) -> float:
+        if not isinstance(value, Decimal):
+            raise TypeError
+        exponent = value.as_tuple().exponent
+        if (
+            not value.is_finite()
+            or value < Decimal("0.001")
+            or value > maximum
+            or not isinstance(exponent, int)
+            or max(0, -exponent) > 3
+        ):
+            raise ValueError
+        return float(value)
 
     def _parse_response(
         self,
