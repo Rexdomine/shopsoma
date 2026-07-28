@@ -177,7 +177,7 @@ def _attempt(graph, package, seal, intent, claimed_at, **overrides):
         "origin_hub_id": graph["hub"].id,
         "hub_version": graph["hub"].version,
         "destination_country_code": "NG",
-        "destination_snapshot_hash": "a" * 64,
+        "destination_snapshot_hash": intent.destination_snapshot_hash,
         "provider": "dhl",
         "environment": "sandbox",
         "account_alias": "dhl-ng-sandbox",
@@ -264,6 +264,41 @@ async def test_idempotency_key_rejects_non_identifier_ascii(
     claimed = await db_session.scalar(text("SELECT clock_timestamp()"))
     attempt = _attempt(graph, package, seal, intent, claimed, idempotency_key=value)
     with pytest.raises(IntegrityError, match="ck_domestic_rate_attempts_identifiers"):
+        async with db_session.begin_nested():
+            db_session.add(attempt)
+            await db_session.flush()
+
+
+@pytest.mark.asyncio
+async def test_attempt_rejects_destination_snapshot_not_derived_from_intent(
+    db_session, vendor_user, customer_user
+) -> None:
+    graph, package, seal, intent = await _subject(
+        db_session, vendor_user, customer_user
+    )
+    assert intent.destination_snapshot_hash is not None
+    assert len(intent.destination_snapshot_hash) == 64
+    expected_hash = await db_session.scalar(
+        text(
+            "SELECT encode(sha256(convert_to(jsonb_build_array("
+            "'destination-snapshot-v1', destination_name, destination_phone, "
+            "destination_address_line1, destination_address_line2, destination_city, "
+            "destination_state, destination_postal_code, destination_country_code"
+            ")::text, 'UTF8')), 'hex') FROM outbound_shipment_intents WHERE id=:id"
+        ),
+        {"id": intent.id},
+    )
+    assert intent.destination_snapshot_hash == expected_hash
+    claimed = await db_session.scalar(text("SELECT clock_timestamp()"))
+    attempt = _attempt(
+        graph,
+        package,
+        seal,
+        intent,
+        claimed,
+        destination_snapshot_hash="f" * 64,
+    )
+    with pytest.raises(IntegrityError, match="rate attempt subject binding is invalid"):
         async with db_session.begin_nested():
             db_session.add(attempt)
             await db_session.flush()

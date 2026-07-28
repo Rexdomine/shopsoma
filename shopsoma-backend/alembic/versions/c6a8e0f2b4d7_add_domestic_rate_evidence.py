@@ -11,6 +11,82 @@ down_revision = "b5f7d9a2c4e6"
 branch_labels = None
 depends_on = None
 
+_DESTINATION_SNAPSHOT_UPGRADE_DDLS = (
+    "ALTER TABLE outbound_shipment_intents "
+    "ADD COLUMN destination_snapshot_hash VARCHAR(64)",
+    """UPDATE outbound_shipment_intents
+SET destination_snapshot_hash = encode(
+    sha256(convert_to(jsonb_build_array(
+        'destination-snapshot-v1', destination_name, destination_phone,
+        destination_address_line1, destination_address_line2,
+        destination_city, destination_state, destination_postal_code,
+        destination_country_code
+    )::text, 'UTF8')),
+    'hex'
+)""",
+    "ALTER TABLE outbound_shipment_intents "
+    "ADD CONSTRAINT ck_outbound_intents_destination_snapshot_hash "
+    "CHECK (destination_snapshot_hash ~ '^[0-9a-f]{64}$')",
+    "ALTER TABLE outbound_shipment_intents "
+    "ALTER COLUMN destination_snapshot_hash SET NOT NULL",
+    """CREATE OR REPLACE FUNCTION validate_outbound_intent_insert() RETURNS trigger AS $$
+DECLARE package hub_packages%ROWTYPE;
+BEGIN
+    PERFORM 1 FROM hub_package_seals WHERE id=NEW.seal_id
+      AND package_id=NEW.package_id AND package_version=NEW.package_version
+      AND retired_at IS NULL FOR UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='outbound intent requires exact current ready package and active seal';
+    END IF;
+    SELECT * INTO package FROM hub_packages WHERE id=NEW.package_id FOR UPDATE;
+    IF NOT FOUND OR package.state<>'ready' OR package.current_version<>NEW.package_version
+       OR package.order_id<>NEW.order_id OR package.hub_id<>NEW.origin_hub_id
+       OR NEW.created_at < package.ready_at OR NEW.created_at > clock_timestamp() THEN
+        RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='outbound intent requires exact current ready package and active seal';
+    END IF;
+    IF EXISTS (
+        SELECT 1 FROM outbound_shipment_intents i WHERE i.package_id=NEW.package_id
+         AND NOT EXISTS (SELECT 1 FROM outbound_shipment_intent_invalidations x WHERE x.intent_id=i.id)
+    ) THEN
+        RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='package already has an active outbound intent';
+    END IF;
+    NEW.destination_snapshot_hash := encode(
+        sha256(convert_to(jsonb_build_array(
+            'destination-snapshot-v1', NEW.destination_name, NEW.destination_phone,
+            NEW.destination_address_line1, NEW.destination_address_line2,
+            NEW.destination_city, NEW.destination_state, NEW.destination_postal_code,
+            NEW.destination_country_code
+        )::text, 'UTF8')),
+        'hex'
+    );
+    RETURN NEW;
+END; $$ LANGUAGE plpgsql""",
+)
+
+_RESTORE_OUTBOUND_INTENT_INSERT_DDL = """CREATE OR REPLACE FUNCTION validate_outbound_intent_insert() RETURNS trigger AS $$
+DECLARE package hub_packages%ROWTYPE;
+BEGIN
+    PERFORM 1 FROM hub_package_seals WHERE id=NEW.seal_id
+      AND package_id=NEW.package_id AND package_version=NEW.package_version
+      AND retired_at IS NULL FOR UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='outbound intent requires exact current ready package and active seal';
+    END IF;
+    SELECT * INTO package FROM hub_packages WHERE id=NEW.package_id FOR UPDATE;
+    IF NOT FOUND OR package.state<>'ready' OR package.current_version<>NEW.package_version
+       OR package.order_id<>NEW.order_id OR package.hub_id<>NEW.origin_hub_id
+       OR NEW.created_at < package.ready_at OR NEW.created_at > clock_timestamp() THEN
+        RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='outbound intent requires exact current ready package and active seal';
+    END IF;
+    IF EXISTS (
+        SELECT 1 FROM outbound_shipment_intents i WHERE i.package_id=NEW.package_id
+         AND NOT EXISTS (SELECT 1 FROM outbound_shipment_intent_invalidations x WHERE x.intent_id=i.id)
+    ) THEN
+        RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='package already has an active outbound intent';
+    END IF;
+    RETURN NEW;
+END; $$ LANGUAGE plpgsql"""
+
 _CREATE_TABLE_SQL = (
     "CREATE TABLE outbound_intent_rate_guards (\n\tintent_id UUID NOT NULL, \n\tis_invalidated BOOLEAN DEFAULT 'false' NOT NULL, \n\tactive_attempt_id UUID, \n\tPRIMARY KEY (intent_id), \n\tFOREIGN KEY(intent_id) REFERENCES outbound_shipment_intents (id) ON DELETE CASCADE\n)",
     "CREATE TABLE domestic_rate_attempts (\n\tid UUID NOT NULL, \n\tintent_id UUID NOT NULL, \n\torder_id UUID NOT NULL, \n\tpackage_id UUID NOT NULL, \n\tpackage_version INTEGER NOT NULL, \n\tseal_id UUID NOT NULL, \n\torigin_hub_id UUID NOT NULL, \n\thub_version INTEGER NOT NULL, \n\tdestination_country_code VARCHAR(2) NOT NULL, \n\tdestination_snapshot_hash VARCHAR(64) NOT NULL, \n\tprovider VARCHAR(20) NOT NULL, \n\tenvironment VARCHAR(20) NOT NULL, \n\taccount_alias VARCHAR(100) NOT NULL, \n\tidempotency_key VARCHAR(200) NOT NULL, \n\trequest_fingerprint VARCHAR(64) NOT NULL, \n\tfingerprint_key_version VARCHAR(50) NOT NULL, \n\tplanned_ship_date DATE NOT NULL, \n\tadapter_version VARCHAR(50) NOT NULL, \n\tschema_version VARCHAR(50) NOT NULL, \n\tcanonicalization_version VARCHAR(50) NOT NULL, \n\tclaimed_at TIMESTAMP WITH TIME ZONE NOT NULL, \n\tcall_started_at TIMESTAMP WITH TIME ZONE, \n\tresult_recorded_at TIMESTAMP WITH TIME ZONE, \n\tclassification VARCHAR(20) NOT NULL, \n\tfailure_code VARCHAR(100), \n\tcompletion_txid BIGINT, \n\tcreated_at TIMESTAMP WITH TIME ZONE DEFAULT statement_timestamp() NOT NULL, \n\tPRIMARY KEY (id), \n\tCONSTRAINT fk_domestic_rate_attempts_package_version FOREIGN KEY(package_id, package_version) REFERENCES hub_package_versions (package_id, version) ON DELETE RESTRICT, \n\tCONSTRAINT fk_domestic_rate_attempts_seal_binding FOREIGN KEY(seal_id, package_id, package_version) REFERENCES hub_package_seals (id, package_id, package_version) ON DELETE RESTRICT, \n\tCONSTRAINT ck_domestic_rate_attempts_lane CHECK (provider = 'dhl' AND environment = 'sandbox' AND destination_country_code = 'NG'), \n\tCONSTRAINT ck_domestic_rate_attempts_versions CHECK (package_version > 0 AND hub_version > 0), \n\tCONSTRAINT ck_domestic_rate_attempts_hashes CHECK (destination_snapshot_hash ~ '^[0-9a-f]{64}$' AND request_fingerprint ~ '^[0-9a-f]{64}$'), \n\tCONSTRAINT ck_domestic_rate_attempts_identifiers CHECK (account_alias ~ '^[A-Za-z0-9][A-Za-z0-9._:-]*$' AND idempotency_key ~ '^[!-~]+$' AND fingerprint_key_version ~ '^[A-Za-z0-9][A-Za-z0-9._:-]*$' AND adapter_version ~ '^[A-Za-z0-9][A-Za-z0-9._:-]*$' AND schema_version ~ '^[A-Za-z0-9][A-Za-z0-9._:-]*$' AND canonicalization_version ~ '^[A-Za-z0-9][A-Za-z0-9._:-]*$'), \n\tCONSTRAINT ck_domestic_rate_attempts_classification CHECK (classification IN ('pending', 'success', 'no_service', 'failure')), \n\tCONSTRAINT ck_domestic_rate_attempts_lifecycle CHECK ((call_started_at IS NULL OR call_started_at >= claimed_at) AND (result_recorded_at IS NULL OR (call_started_at IS NOT NULL AND result_recorded_at >= call_started_at)) AND ((classification = 'pending' AND result_recorded_at IS NULL AND failure_code IS NULL AND completion_txid IS NULL) OR (classification IN ('success', 'no_service') AND result_recorded_at IS NOT NULL AND failure_code IS NULL AND completion_txid IS NOT NULL) OR (classification = 'failure' AND result_recorded_at IS NOT NULL AND failure_code IS NOT NULL AND failure_code ~ '^[!-~]+$' AND completion_txid IS NOT NULL))), \n\tCONSTRAINT uq_domestic_rate_attempts_idempotency UNIQUE (provider, environment, account_alias, idempotency_key), \n\tFOREIGN KEY(intent_id) REFERENCES outbound_shipment_intents (id) ON DELETE RESTRICT, \n\tFOREIGN KEY(order_id) REFERENCES orders (id) ON DELETE RESTRICT, \n\tFOREIGN KEY(origin_hub_id) REFERENCES fulfillment_hubs (id) ON DELETE RESTRICT\n)",
@@ -26,7 +102,7 @@ _TRIGGER_DDLS = (
     "CREATE FUNCTION validate_outbound_intent_rate_guard_write() RETURNS trigger AS $$\nBEGIN\n    IF pg_trigger_depth() <= 1 THEN\n        RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='rate subject guard is server-maintained';\n    END IF;\n    IF TG_OP='DELETE' OR (TG_OP='UPDATE' AND (\n       NEW.intent_id IS DISTINCT FROM OLD.intent_id\n       OR (OLD.is_invalidated AND NOT NEW.is_invalidated))) THEN\n        RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='rate subject guard is append-only';\n    END IF;\n    RETURN NEW;\nEND; $$ LANGUAGE plpgsql",
     "CREATE TRIGGER tr_outbound_intent_rate_guards_write\nBEFORE INSERT OR UPDATE OR DELETE ON outbound_intent_rate_guards\nFOR EACH ROW EXECUTE FUNCTION validate_outbound_intent_rate_guard_write()",
     "CREATE OR REPLACE FUNCTION validate_outbound_intent_invalidation_insert() RETURNS trigger AS $$\nDECLARE package_id_value uuid; seal_id_value uuid; intent_created_at timestamptz;\nBEGIN\n    SELECT package_id,seal_id,created_at INTO package_id_value,seal_id_value,intent_created_at\n      FROM outbound_shipment_intents WHERE id=NEW.intent_id;\n    IF NOT FOUND THEN\n        RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='outbound intent does not exist';\n    END IF;\n    PERFORM 1 FROM hub_package_seals WHERE id=seal_id_value FOR UPDATE;\n    PERFORM 1 FROM hub_packages WHERE id=package_id_value FOR UPDATE;\n    INSERT INTO outbound_intent_rate_guards(intent_id,is_invalidated)\n      VALUES (NEW.intent_id,false) ON CONFLICT (intent_id) DO NOTHING;\n    UPDATE outbound_intent_rate_guards SET is_invalidated=true\n      WHERE intent_id=NEW.intent_id AND active_attempt_id IS NULL;\n    IF NOT FOUND THEN\n        RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='active rate attempt must complete before intent invalidation';\n    END IF;\n    IF EXISTS (\n        SELECT 1 FROM custody_events e JOIN outbound_shipment_intents i\n          ON i.package_id=e.package_id AND i.package_version=e.package_version\n         WHERE i.id=NEW.intent_id AND e.event_type IN ('released','tendered','provider_accepted')\n    ) THEN\n        RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='outbound intent cannot invalidate after custody handoff';\n    END IF;\n    IF NEW.invalidated_at < intent_created_at OR NEW.invalidated_at > clock_timestamp()\n       OR NEW.created_at < NEW.invalidated_at OR NEW.created_at > clock_timestamp() THEN\n        RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='outbound intent invalidation chronology is invalid';\n    END IF;\n    RETURN NEW;\nEND; $$ LANGUAGE plpgsql",
-    "CREATE FUNCTION validate_domestic_rate_attempt_insert() RETURNS trigger AS $$\nDECLARE intent outbound_shipment_intents%ROWTYPE; package hub_packages%ROWTYPE; hub fulfillment_hubs%ROWTYPE; guard_invalidated boolean;\nBEGIN\n    IF NEW.classification<>'pending' OR NEW.call_started_at IS NOT NULL\n       OR NEW.result_recorded_at IS NOT NULL OR NEW.failure_code IS NOT NULL\n       OR NEW.completion_txid IS NOT NULL THEN\n        RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='rate attempt must begin pending with no call or result';\n    END IF;\n    NEW.claimed_at := statement_timestamp();\n    NEW.created_at := statement_timestamp();\n    PERFORM 1 FROM hub_package_seals WHERE id=NEW.seal_id AND package_id=NEW.package_id\n      AND package_version=NEW.package_version AND retired_at IS NULL FOR UPDATE;\n    IF NOT FOUND THEN\n        RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='rate attempt requires the active bound seal';\n    END IF;\n    SELECT * INTO package FROM hub_packages WHERE id=NEW.package_id FOR UPDATE;\n    IF NOT FOUND OR package.state<>'ready' OR package.current_version<>NEW.package_version\n       OR package.order_id<>NEW.order_id OR package.hub_id<>NEW.origin_hub_id THEN\n        RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='rate attempt requires exact current ready package truth';\n    END IF;\n    INSERT INTO outbound_intent_rate_guards(intent_id,is_invalidated)\n      VALUES (NEW.intent_id,false) ON CONFLICT (intent_id) DO NOTHING;\n    UPDATE outbound_intent_rate_guards SET active_attempt_id=NEW.id\n      WHERE intent_id=NEW.intent_id AND NOT is_invalidated AND active_attempt_id IS NULL\n      RETURNING is_invalidated INTO guard_invalidated;\n    SELECT * INTO intent FROM outbound_shipment_intents WHERE id=NEW.intent_id FOR KEY SHARE;\n    IF NOT FOUND OR guard_invalidated IS DISTINCT FROM false OR intent.order_id<>NEW.order_id\n       OR intent.package_id<>NEW.package_id OR intent.package_version<>NEW.package_version\n       OR intent.seal_id<>NEW.seal_id OR intent.origin_hub_id<>NEW.origin_hub_id\n       OR intent.destination_country_code<>NEW.destination_country_code\n       OR EXISTS (SELECT 1 FROM outbound_shipment_intent_invalidations WHERE intent_id=intent.id) THEN\n        RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='rate attempt subject binding is invalid';\n    END IF;\n    SELECT * INTO hub FROM fulfillment_hubs WHERE id=NEW.origin_hub_id FOR KEY SHARE;\n    IF NOT FOUND OR NOT hub.is_active OR hub.version<>NEW.hub_version\n       OR hub.country_code<>'NG' THEN\n        RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='rate attempt requires exact active hub version';\n    END IF;\n    IF NEW.claimed_at<intent.created_at OR NEW.claimed_at>clock_timestamp()\n       OR NEW.created_at<NEW.claimed_at OR NEW.created_at>clock_timestamp() THEN\n        RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='rate attempt chronology is invalid';\n    END IF;\n    RETURN NEW;\nEND; $$ LANGUAGE plpgsql",
+    "CREATE FUNCTION validate_domestic_rate_attempt_insert() RETURNS trigger AS $$\nDECLARE intent outbound_shipment_intents%ROWTYPE; package hub_packages%ROWTYPE; hub fulfillment_hubs%ROWTYPE; guard_invalidated boolean;\nBEGIN\n    IF NEW.classification<>'pending' OR NEW.call_started_at IS NOT NULL\n       OR NEW.result_recorded_at IS NOT NULL OR NEW.failure_code IS NOT NULL\n       OR NEW.completion_txid IS NOT NULL THEN\n        RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='rate attempt must begin pending with no call or result';\n    END IF;\n    NEW.claimed_at := statement_timestamp();\n    NEW.created_at := statement_timestamp();\n    PERFORM 1 FROM hub_package_seals WHERE id=NEW.seal_id AND package_id=NEW.package_id\n      AND package_version=NEW.package_version AND retired_at IS NULL FOR UPDATE;\n    IF NOT FOUND THEN\n        RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='rate attempt requires the active bound seal';\n    END IF;\n    SELECT * INTO package FROM hub_packages WHERE id=NEW.package_id FOR UPDATE;\n    IF NOT FOUND OR package.state<>'ready' OR package.current_version<>NEW.package_version\n       OR package.order_id<>NEW.order_id OR package.hub_id<>NEW.origin_hub_id THEN\n        RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='rate attempt requires exact current ready package truth';\n    END IF;\n    INSERT INTO outbound_intent_rate_guards(intent_id,is_invalidated)\n      VALUES (NEW.intent_id,false) ON CONFLICT (intent_id) DO NOTHING;\n    UPDATE outbound_intent_rate_guards SET active_attempt_id=NEW.id\n      WHERE intent_id=NEW.intent_id AND NOT is_invalidated AND active_attempt_id IS NULL\n      RETURNING is_invalidated INTO guard_invalidated;\n    SELECT * INTO intent FROM outbound_shipment_intents WHERE id=NEW.intent_id FOR KEY SHARE;\n    IF NOT FOUND OR guard_invalidated IS DISTINCT FROM false OR intent.order_id<>NEW.order_id\n       OR intent.package_id<>NEW.package_id OR intent.package_version<>NEW.package_version\n       OR intent.seal_id<>NEW.seal_id OR intent.origin_hub_id<>NEW.origin_hub_id\n       OR intent.destination_country_code<>NEW.destination_country_code\n       OR intent.destination_snapshot_hash<>NEW.destination_snapshot_hash\n       OR EXISTS (SELECT 1 FROM outbound_shipment_intent_invalidations WHERE intent_id=intent.id) THEN\n        RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='rate attempt subject binding is invalid';\n    END IF;\n    SELECT * INTO hub FROM fulfillment_hubs WHERE id=NEW.origin_hub_id FOR KEY SHARE;\n    IF NOT FOUND OR NOT hub.is_active OR hub.version<>NEW.hub_version\n       OR hub.country_code<>'NG' THEN\n        RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='rate attempt requires exact active hub version';\n    END IF;\n    IF NEW.claimed_at<intent.created_at OR NEW.claimed_at>clock_timestamp()\n       OR NEW.created_at<NEW.claimed_at OR NEW.created_at>clock_timestamp() THEN\n        RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='rate attempt chronology is invalid';\n    END IF;\n    RETURN NEW;\nEND; $$ LANGUAGE plpgsql",
     "CREATE TRIGGER tr_domestic_rate_attempts_insert\nBEFORE INSERT ON domestic_rate_attempts\nFOR EACH ROW EXECUTE FUNCTION validate_domestic_rate_attempt_insert()",
     "CREATE FUNCTION validate_domestic_rate_attempt_mutation() RETURNS trigger AS $$\nBEGIN\n    IF TG_OP='DELETE' THEN\n        RAISE EXCEPTION USING ERRCODE='23503', MESSAGE='rate evidence is append-only';\n    END IF;\n    IF NEW.id IS DISTINCT FROM OLD.id OR NEW.intent_id IS DISTINCT FROM OLD.intent_id\n       OR NEW.order_id IS DISTINCT FROM OLD.order_id OR NEW.package_id IS DISTINCT FROM OLD.package_id\n       OR NEW.package_version IS DISTINCT FROM OLD.package_version OR NEW.seal_id IS DISTINCT FROM OLD.seal_id\n       OR NEW.origin_hub_id IS DISTINCT FROM OLD.origin_hub_id OR NEW.hub_version IS DISTINCT FROM OLD.hub_version\n       OR NEW.destination_country_code IS DISTINCT FROM OLD.destination_country_code\n       OR NEW.destination_snapshot_hash IS DISTINCT FROM OLD.destination_snapshot_hash\n       OR NEW.provider IS DISTINCT FROM OLD.provider OR NEW.environment IS DISTINCT FROM OLD.environment\n       OR NEW.account_alias IS DISTINCT FROM OLD.account_alias OR NEW.idempotency_key IS DISTINCT FROM OLD.idempotency_key\n       OR NEW.request_fingerprint IS DISTINCT FROM OLD.request_fingerprint\n       OR NEW.fingerprint_key_version IS DISTINCT FROM OLD.fingerprint_key_version\n       OR NEW.planned_ship_date IS DISTINCT FROM OLD.planned_ship_date\n       OR NEW.adapter_version IS DISTINCT FROM OLD.adapter_version OR NEW.schema_version IS DISTINCT FROM OLD.schema_version\n       OR NEW.canonicalization_version IS DISTINCT FROM OLD.canonicalization_version\n       OR NEW.claimed_at IS DISTINCT FROM OLD.claimed_at OR NEW.created_at IS DISTINCT FROM OLD.created_at THEN\n        RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='rate attempt identity is immutable';\n    END IF;\n    IF OLD.classification<>'pending' THEN\n        RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='completed rate attempt is immutable';\n    END IF;\n    IF NEW.classification='pending' THEN\n        IF NEW.completion_txid IS NOT NULL THEN\n            RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='pending rate attempt cannot have a completion transaction';\n        END IF;\n    ELSE\n        NEW.completion_txid := txid_current();\n        UPDATE outbound_intent_rate_guards SET active_attempt_id=NULL\n          WHERE intent_id=OLD.intent_id AND active_attempt_id=OLD.id;\n        IF NOT FOUND THEN\n            RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='rate attempt does not own the active subject claim';\n        END IF;\n    END IF;\n    IF OLD.call_started_at IS NOT NULL AND NEW.call_started_at IS DISTINCT FROM OLD.call_started_at THEN\n        RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='rate attempt call timestamp is immutable once set';\n    ELSIF OLD.call_started_at IS NULL AND NEW.call_started_at IS NOT NULL THEN\n        NEW.call_started_at := statement_timestamp();\n    END IF;\n    IF NEW.classification<>'pending' THEN\n        NEW.result_recorded_at := statement_timestamp();\n    END IF;\n    RETURN NEW;\nEND; $$ LANGUAGE plpgsql",
     "CREATE TRIGGER tr_domestic_rate_attempts_mutation\nBEFORE UPDATE OR DELETE ON domestic_rate_attempts\nFOR EACH ROW EXECUTE FUNCTION validate_domestic_rate_attempt_mutation()",
@@ -58,6 +134,8 @@ _RESTORE_OUTBOUND_INVALIDATION_DDL = "CREATE OR REPLACE FUNCTION validate_outbou
 
 
 def upgrade() -> None:
+    for statement in _DESTINATION_SNAPSHOT_UPGRADE_DDLS:
+        op.execute(statement)
     for statement in _CREATE_TABLE_SQL:
         op.execute(statement)
     for statement in _CREATE_INDEX_SQL:
@@ -74,3 +152,11 @@ def downgrade() -> None:
     op.drop_table("domestic_rate_responses")
     op.drop_table("domestic_rate_attempts")
     op.drop_table("outbound_intent_rate_guards")
+    op.execute(_RESTORE_OUTBOUND_INTENT_INSERT_DDL)
+    op.execute(
+        "ALTER TABLE outbound_shipment_intents "
+        "DROP CONSTRAINT ck_outbound_intents_destination_snapshot_hash"
+    )
+    op.execute(
+        "ALTER TABLE outbound_shipment_intents " "DROP COLUMN destination_snapshot_hash"
+    )

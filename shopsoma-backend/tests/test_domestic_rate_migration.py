@@ -107,6 +107,28 @@ def test_domestic_rate_tables_indexes_and_triggers_have_exact_static_parity() ->
         "CREATE FUNCTION", "CREATE OR REPLACE FUNCTION", 1
     )
 
+    current_intent_insert = next(
+        statement.replace("%%", "%").strip()
+        for statement in PACKAGE_CUSTODY_TRIGGER_DDLS
+        if statement.strip().startswith(
+            "CREATE FUNCTION validate_outbound_intent_insert()"
+        )
+    )
+    snapshot_upgrade = _literal("_DESTINATION_SNAPSHOT_UPGRADE_DDLS")
+    assert (
+        current_intent_insert.replace(
+            "CREATE FUNCTION", "CREATE OR REPLACE FUNCTION", 1
+        )
+        == snapshot_upgrade[-1]
+    )
+    assert "ADD COLUMN destination_snapshot_hash VARCHAR(64)" in snapshot_upgrade[0]
+    assert "UPDATE outbound_shipment_intents" in snapshot_upgrade[1]
+    assert "sha256" in snapshot_upgrade[1]
+    assert "SET NOT NULL" in snapshot_upgrade[3]
+    assert "destination_snapshot_hash" not in _literal(
+        "_RESTORE_OUTBOUND_INTENT_INSERT_DDL"
+    )
+
 
 def test_domestic_rate_migration_contains_only_normalized_safe_evidence() -> None:
     sql = "\n".join(
@@ -195,6 +217,12 @@ def test_domestic_rate_real_upgrade_downgrade_upgrade_cycle() -> None:
             try:
                 with target.connect() as connection:
                     names = set(inspect(connection).get_table_names())
+                    intent_columns = {
+                        column["name"]
+                        for column in inspect(connection).get_columns(
+                            "outbound_shipment_intents"
+                        )
+                    }
                     functions = set(
                         connection.execute(
                             text(
@@ -206,6 +234,7 @@ def test_domestic_rate_real_upgrade_downgrade_upgrade_cycle() -> None:
                     )
                 assert all((table in names) is present for table in TABLES)
                 assert bool(functions) is present
+                assert ("destination_snapshot_hash" in intent_columns) is present
             finally:
                 target.dispose()
 

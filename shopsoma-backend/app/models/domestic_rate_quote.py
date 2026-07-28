@@ -339,6 +339,7 @@ BEGIN
        OR intent.package_id<>NEW.package_id OR intent.package_version<>NEW.package_version
        OR intent.seal_id<>NEW.seal_id OR intent.origin_hub_id<>NEW.origin_hub_id
        OR intent.destination_country_code<>NEW.destination_country_code
+       OR intent.destination_snapshot_hash<>NEW.destination_snapshot_hash
        OR EXISTS (SELECT 1 FROM outbound_shipment_intent_invalidations WHERE intent_id=intent.id) THEN
         RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='rate attempt subject binding is invalid';
     END IF;
