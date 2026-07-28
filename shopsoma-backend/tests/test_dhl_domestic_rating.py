@@ -445,17 +445,48 @@ async def test_post_rates_uses_required_empty_postcode_without_contact_wrappers(
 
 
 @pytest.mark.asyncio
+async def test_post_rates_maps_persisted_street_addresses_across_three_provider_lines() -> (
+    None
+):
+    request_value = rate_request(
+        destination=replace(
+            rate_request().destination,
+            line1="R" * 91,
+        )
+    )
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        parties = json.loads(request.content)["customerDetails"]
+        assert parties["shipperDetails"]["addressLine1"] == "H" * 45
+        assert parties["shipperDetails"]["addressLine2"] == "H" * 45
+        assert "addressLine3" not in parties["shipperDetails"]
+        assert parties["receiverDetails"]["addressLine1"] == "R" * 45
+        assert parties["receiverDetails"]["addressLine2"] == "R" * 45
+        assert parties["receiverDetails"]["addressLine3"] == "R"
+        return httpx.Response(200, json={"products": []})
+
+    adapter = create_sandbox_domestic_rate_adapter(
+        config=config(),
+        transport=httpx.MockTransport(handler),
+        identity_key=IDENTITY_KEY,
+        identity_key_version="test-key-v1",
+    )
+    result = await adapter.rate(resolved_hub(line1="H" * 90), request_value)
+    assert result.result_kind == "no_service"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("hub_overrides", "request_value", "config_overrides"),
     [
-        ({"line1": "x" * 46}, rate_request(), {}),
+        ({"line1": "x" * 136}, rate_request(), {}),
         ({"city": "x" * 46}, rate_request(), {}),
         ({"state": "x"}, rate_request(), {}),
         ({"postal_code": "x" * 13}, rate_request(), {}),
         (
             {},
             rate_request(
-                destination=replace(rate_request().destination, line1="x" * 46)
+                destination=replace(rate_request().destination, line1="x" * 136)
             ),
             {},
         ),
@@ -697,6 +728,36 @@ async def test_strict_product_validation_rejects_ambiguous_unsafe_or_impossible_
     )
     with pytest.raises(DHLRateAdapterError, match="invalid rate response"):
         await adapter.rate(resolved_hub(), rate_request())
+
+
+@pytest.mark.asyncio
+async def test_service_code_pair_encoding_is_unambiguous_for_delimiter_characters() -> (
+    None
+):
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "products": [
+                    product(code="A:B", service_code="C", label="First"),
+                    product(code="A", service_code="B:C", label="Second"),
+                ]
+            },
+        )
+
+    adapter = create_sandbox_domestic_rate_adapter(
+        config=config(),
+        transport=httpx.MockTransport(handler),
+        identity_key=IDENTITY_KEY,
+        identity_key_version="test-key-v1",
+    )
+    result = await adapter.rate(resolved_hub(), rate_request())
+
+    assert len(result.offers) == 2
+    service_ids = {offer.rate.service_id for offer in result.offers}
+    rate_ids = {offer.rate.rate_id for offer in result.offers}
+    assert service_ids == {"dhl:3:A:B:1:C", "dhl:1:A:3:B:C"}
+    assert len(rate_ids) == 2
 
 
 @pytest.mark.asyncio

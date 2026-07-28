@@ -1,4 +1,6 @@
+import asyncio
 import base64
+import logging
 
 import httpx
 import pytest
@@ -28,6 +30,42 @@ def make_settings(**overrides) -> Settings:
     }
     values.update(overrides)
     return Settings(**values)
+
+
+@pytest.mark.asyncio
+async def test_dhl_httpx_log_suppression_does_not_hide_unrelated_httpx_diagnostics(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    dhl_started = asyncio.Event()
+    release_dhl = asyncio.Event()
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "express.api.dhl.com":
+            dhl_started.set()
+            await release_dhl.wait()
+        return httpx.Response(200, json={"ok": True}, request=request)
+
+    caplog.set_level(logging.INFO, logger="httpx")
+    client = DHLClient(
+        config=make_settings(),
+        transport=httpx.MockTransport(handler),
+    )
+    dhl_task = asyncio.create_task(client.request_json("GET", "/rates"))
+    await dhl_started.wait()
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(handler)
+        ) as unrelated:
+            await unrelated.get("https://unrelated.example/health")
+    finally:
+        release_dhl.set()
+    await dhl_task
+
+    httpx_messages = [
+        record.getMessage() for record in caplog.records if record.name == "httpx"
+    ]
+    assert all("express.api.dhl.com" not in message for message in httpx_messages)
+    assert any("unrelated.example/health" in message for message in httpx_messages)
 
 
 @pytest.mark.asyncio

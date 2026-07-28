@@ -247,15 +247,22 @@ class DHLDomesticRateAdapter:
     @classmethod
     def _party(cls, value: object) -> dict[str, object]:
         postal_code = getattr(value, "postal_code")
-        return {
+        street = cls._provider_text(getattr(value, "line1"), 1, 135)
+        address_lines = [
+            street[index : index + 45] for index in range(0, len(street), 45)
+        ]
+        party: dict[str, object] = {
             "postalCode": (
                 "" if postal_code is None else cls._provider_text(postal_code, 0, 12)
             ),
             "cityName": cls._provider_text(getattr(value, "city"), 1, 45),
             "countryCode": cls._provider_text(getattr(value, "country_code"), 2, 2),
             "provinceCode": cls._provider_text(getattr(value, "state"), 2, 35),
-            "addressLine1": cls._provider_text(getattr(value, "line1"), 1, 45),
         }
+        party.update(
+            {f"addressLine{index}": line for index, line in enumerate(address_lines, 1)}
+        )
+        return party
 
     @staticmethod
     def _provider_text(value: object, minimum: int, maximum: int) -> str:
@@ -351,7 +358,10 @@ class DHLDomesticRateAdapter:
             key_version=self._identity_key_version,
             secret_key=self._identity_key,
         )
-        service_identity = f"{product_code}:{service_code}".encode("ascii")
+        service_key = (
+            f"{len(product_code)}:{product_code}:{len(service_code)}:{service_code}"
+        )
+        service_identity = service_key.encode("ascii")
         digest = hmac.new(
             self._identity_key,
             fingerprint.encode("ascii") + b":" + service_identity,
@@ -359,7 +369,7 @@ class DHLDomesticRateAdapter:
         ).hexdigest()
         rate = DomesticRate(
             rate_id=f"dhlrate:{digest}",
-            service_id=f"dhl:{product_code}:{service_code}",
+            service_id=f"dhl:{service_key}",
             package=request.package,
             total_amount=amount,
             currency=currency,

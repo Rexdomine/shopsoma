@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from contextvars import ContextVar
 from typing import Any, Mapping, Optional
 
 import httpx
@@ -12,9 +13,31 @@ from app.core.config import Settings, settings
 logger = logging.getLogger(__name__)
 
 # HTTPX's INFO request log includes the complete URL, including path and query
-# values that may contain private carrier references. Keep transport diagnostics
-# at WARNING or above; DHLClient emits its own path-free request/response logs.
-logging.getLogger("httpx").setLevel(logging.WARNING)
+# values that may contain private carrier references. Suppress only records made
+# inside this client's async context; unrelated concurrent HTTPX callers retain
+# their configured diagnostics.
+_httpx_logger = logging.getLogger("httpx")
+_dhl_httpx_log_context: ContextVar[bool] = getattr(
+    _httpx_logger,
+    "_shopsoma_dhl_log_context",
+    ContextVar("dhl_httpx_log", default=False),
+)
+setattr(_httpx_logger, "_shopsoma_dhl_log_context", _dhl_httpx_log_context)
+
+
+class _DHLHTTPXLogFilter(logging.Filter):
+    _shopsoma_dhl_filter = True
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        del record
+        return not _dhl_httpx_log_context.get()
+
+
+if not any(
+    getattr(existing, "_shopsoma_dhl_filter", False)
+    for existing in _httpx_logger.filters
+):
+    _httpx_logger.addFilter(_DHLHTTPXLogFilter())
 
 
 class DHLConfigurationError(RuntimeError):
@@ -87,26 +110,30 @@ class DHLClient:
 
         logger.info("DHL API request started: method=%s", method.upper())
 
+        log_context_token = _dhl_httpx_log_context.set(True)
         try:
-            async with httpx.AsyncClient(
-                base_url=self._base_url,
-                auth=httpx.BasicAuth(self._username, self._password),
-                headers=request_headers,
-                timeout=self._timeout_seconds,
-                transport=self._transport,
-            ) as client:
-                response = await client.request(
-                    method.upper(),
-                    normalized_path,
-                    json=dict(json) if json is not None else None,
-                    params=params,
-                )
-        except httpx.TimeoutException as exc:
-            logger.warning("DHL API request timed out: method=%s", method.upper())
-            raise DHLAPIError("DHL API request timed out", retryable=True) from exc
-        except httpx.RequestError as exc:
-            logger.warning("DHL API transport failure: method=%s", method.upper())
-            raise DHLAPIError("DHL API is unavailable", retryable=True) from exc
+            try:
+                async with httpx.AsyncClient(
+                    base_url=self._base_url,
+                    auth=httpx.BasicAuth(self._username, self._password),
+                    headers=request_headers,
+                    timeout=self._timeout_seconds,
+                    transport=self._transport,
+                ) as client:
+                    response = await client.request(
+                        method.upper(),
+                        normalized_path,
+                        json=dict(json) if json is not None else None,
+                        params=params,
+                    )
+            except httpx.TimeoutException as exc:
+                logger.warning("DHL API request timed out: method=%s", method.upper())
+                raise DHLAPIError("DHL API request timed out", retryable=True) from exc
+            except httpx.RequestError as exc:
+                logger.warning("DHL API transport failure: method=%s", method.upper())
+                raise DHLAPIError("DHL API is unavailable", retryable=True) from exc
+        finally:
+            _dhl_httpx_log_context.reset(log_context_token)
 
         request_reference = response.headers.get("Message-Reference")
         if response.status_code >= 400:
