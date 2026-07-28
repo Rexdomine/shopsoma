@@ -154,28 +154,29 @@ class DHLDomesticRateAdapter:
         self._identity_key = identity_key
         self._identity_key_version = identity_key_version
         self._account = config.DHL_EXPORT_ACCOUNT_NUMBER.get_secret_value()
-        self._sandbox_cohort_ids = config.dhl_domestic_sandbox_cohort_ids
         self._guard_sandbox()
         self._client = DHLClient(config=config, transport=transport)
 
-    def _guard_sandbox(self) -> None:
+    def _guard_sandbox(self) -> frozenset[UUID]:
         if self._config.DHL_ENVIRONMENT != "sandbox":
             raise DHLRateAdapterError("domestic DHL rates require sandbox environment")
         if self._config.dhl_base_url != MYDHL_TEST_BASE_URL:
             raise DHLRateAdapterError(
                 "domestic DHL rates require the fixed MyDHL test base"
             )
-        if not self._sandbox_cohort_ids:
+        sandbox_cohort_ids = self._config.dhl_domestic_sandbox_cohort_ids
+        if not sandbox_cohort_ids:
             raise DHLRateAdapterError(
                 "domestic DHL rates require a restricted synthetic sandbox cohort"
             )
         if not domestic_shipping_capabilities(self._config).provider_calls_enabled:
             raise DHLRateAdapterError("domestic DHL provider calls are disabled")
+        return sandbox_cohort_ids
 
     def validate_request(
         self, resolved_hub: DHLResolvedHub, request: DomesticRateRequest
     ) -> None:
-        self._guard_sandbox()
+        sandbox_cohort_ids = self._guard_sandbox()
         if not isinstance(resolved_hub, DHLResolvedHub):
             raise DHLRateAdapterError("resolved hub is invalid")
         if not isinstance(request, DomesticRateRequest):
@@ -191,7 +192,7 @@ class DHLDomesticRateAdapter:
             )
         request_cohort_ids = {item.cohort.id for item in request.package.composition}
         if not request_cohort_ids or not request_cohort_ids.issubset(
-            self._sandbox_cohort_ids
+            sandbox_cohort_ids
         ):
             raise DHLRateAdapterError(
                 "domestic DHL rates require a restricted synthetic sandbox cohort"

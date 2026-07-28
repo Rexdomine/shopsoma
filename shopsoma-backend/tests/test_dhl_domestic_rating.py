@@ -387,6 +387,29 @@ async def test_adapter_rejects_non_allowlisted_or_invalid_sandbox_cohorts_before
 
 
 @pytest.mark.asyncio
+async def test_adapter_rechecks_sandbox_cohort_allowlist_on_every_call() -> None:
+    called = False
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal called
+        called = True
+        return httpx.Response(200, json={"products": []})
+
+    cfg = config()
+    adapter = create_sandbox_domestic_rate_adapter(
+        config=cfg,
+        transport=httpx.MockTransport(handler),
+        identity_key=IDENTITY_KEY,
+        identity_key_version="test-key-v1",
+    )
+    object.__setattr__(cfg, "DHL_DOMESTIC_SANDBOX_COHORT_IDS", str(COHORT_A))
+
+    with pytest.raises(DHLRateAdapterError, match="synthetic sandbox cohort"):
+        await adapter.rate(resolved_hub(), rate_request())
+    assert called is False
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("field", "value"),
     [("package_id", uuid4()), ("package_version", 4)],
