@@ -78,6 +78,9 @@ class DomesticRateAttempt(Base):
     provider = Column(String(20), nullable=False)
     environment = Column(String(20), nullable=False)
     account_alias = Column(String(100), nullable=False)
+    initiating_actor_type = Column(String(30), nullable=False)
+    initiating_actor_id = Column(String(200), nullable=False)
+    source_command = Column(String(100), nullable=False)
     idempotency_key = Column(String(200), nullable=False)
     request_fingerprint = Column(String(64), nullable=False)
     fingerprint_key_version = Column(String(50), nullable=False)
@@ -132,6 +135,9 @@ class DomesticRateAttempt(Base):
         ),
         CheckConstraint(
             "account_alias ~ '^[A-Za-z0-9][A-Za-z0-9._:-]*$' "
+            "AND initiating_actor_type ~ '^[A-Za-z0-9][A-Za-z0-9._:-]*$' "
+            "AND initiating_actor_id ~ '^[!-~]+$' "
+            "AND source_command ~ '^[A-Za-z0-9][A-Za-z0-9._:-]*$' "
             "AND idempotency_key ~ '^[!-~]+$' "
             "AND fingerprint_key_version ~ '^[A-Za-z0-9][A-Za-z0-9._:-]*$' "
             "AND adapter_version ~ '^[A-Za-z0-9][A-Za-z0-9._:-]*$' "
@@ -389,7 +395,11 @@ BEGIN
        OR NEW.destination_country_code IS DISTINCT FROM OLD.destination_country_code
        OR NEW.destination_snapshot_hash IS DISTINCT FROM OLD.destination_snapshot_hash
        OR NEW.provider IS DISTINCT FROM OLD.provider OR NEW.environment IS DISTINCT FROM OLD.environment
-       OR NEW.account_alias IS DISTINCT FROM OLD.account_alias OR NEW.idempotency_key IS DISTINCT FROM OLD.idempotency_key
+       OR NEW.account_alias IS DISTINCT FROM OLD.account_alias
+       OR NEW.initiating_actor_type IS DISTINCT FROM OLD.initiating_actor_type
+       OR NEW.initiating_actor_id IS DISTINCT FROM OLD.initiating_actor_id
+       OR NEW.source_command IS DISTINCT FROM OLD.source_command
+       OR NEW.idempotency_key IS DISTINCT FROM OLD.idempotency_key
        OR NEW.request_fingerprint IS DISTINCT FROM OLD.request_fingerprint
        OR NEW.fingerprint_key_version IS DISTINCT FROM OLD.fingerprint_key_version
        OR NEW.planned_ship_date IS DISTINCT FROM OLD.planned_ship_date

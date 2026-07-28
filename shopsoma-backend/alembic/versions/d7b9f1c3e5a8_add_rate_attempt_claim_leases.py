@@ -112,7 +112,11 @@ BEGIN
        OR NEW.destination_country_code IS DISTINCT FROM OLD.destination_country_code
        OR NEW.destination_snapshot_hash IS DISTINCT FROM OLD.destination_snapshot_hash
        OR NEW.provider IS DISTINCT FROM OLD.provider OR NEW.environment IS DISTINCT FROM OLD.environment
-       OR NEW.account_alias IS DISTINCT FROM OLD.account_alias OR NEW.idempotency_key IS DISTINCT FROM OLD.idempotency_key
+       OR NEW.account_alias IS DISTINCT FROM OLD.account_alias
+       OR NEW.initiating_actor_type IS DISTINCT FROM OLD.initiating_actor_type
+       OR NEW.initiating_actor_id IS DISTINCT FROM OLD.initiating_actor_id
+       OR NEW.source_command IS DISTINCT FROM OLD.source_command
+       OR NEW.idempotency_key IS DISTINCT FROM OLD.idempotency_key
        OR NEW.request_fingerprint IS DISTINCT FROM OLD.request_fingerprint
        OR NEW.fingerprint_key_version IS DISTINCT FROM OLD.fingerprint_key_version
        OR NEW.planned_ship_date IS DISTINCT FROM OLD.planned_ship_date
@@ -240,7 +244,11 @@ BEGIN
        OR NEW.destination_country_code IS DISTINCT FROM OLD.destination_country_code
        OR NEW.destination_snapshot_hash IS DISTINCT FROM OLD.destination_snapshot_hash
        OR NEW.provider IS DISTINCT FROM OLD.provider OR NEW.environment IS DISTINCT FROM OLD.environment
-       OR NEW.account_alias IS DISTINCT FROM OLD.account_alias OR NEW.idempotency_key IS DISTINCT FROM OLD.idempotency_key
+       OR NEW.account_alias IS DISTINCT FROM OLD.account_alias
+       OR NEW.initiating_actor_type IS DISTINCT FROM OLD.initiating_actor_type
+       OR NEW.initiating_actor_id IS DISTINCT FROM OLD.initiating_actor_id
+       OR NEW.source_command IS DISTINCT FROM OLD.source_command
+       OR NEW.idempotency_key IS DISTINCT FROM OLD.idempotency_key
        OR NEW.request_fingerprint IS DISTINCT FROM OLD.request_fingerprint
        OR NEW.fingerprint_key_version IS DISTINCT FROM OLD.fingerprint_key_version
        OR NEW.planned_ship_date IS DISTINCT FROM OLD.planned_ship_date

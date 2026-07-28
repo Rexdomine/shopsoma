@@ -6,6 +6,8 @@ configuration from environment variables.
 
 import re
 from typing import List, Literal, Optional
+from uuid import UUID
+
 from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings
 
@@ -107,6 +109,7 @@ class Settings(BaseSettings):
     DHL_DOMESTIC_WORKFLOW_ENABLED: bool = False
     DHL_DOMESTIC_QUOTE_ENFORCEMENT_ENABLED: bool = False
     DHL_DOMESTIC_PROVIDER_CALLS_ENABLED: bool = False
+    DHL_DOMESTIC_SANDBOX_COHORT_IDS: str = ""
     DHL_DOMESTIC_QUOTE_TTL_SECONDS: int = Field(default=1800, ge=300, le=3600)
     DHL_DOMESTIC_PAYMENT_WINDOW_SECONDS: int = Field(default=1800, ge=300, le=3600)
     DHL_DOMESTIC_AUTH_GRACE_SECONDS: int = Field(default=900, ge=60, le=1800)
@@ -129,6 +132,24 @@ class Settings(BaseSettings):
                 self.DHL_EXPORT_ACCOUNT_NUMBER,
             )
         )
+
+    @property
+    def dhl_domestic_sandbox_cohort_ids(self) -> frozenset[UUID]:
+        """Return a strict allowlist; malformed or duplicate values fail closed."""
+        raw_values = self.DHL_DOMESTIC_SANDBOX_COHORT_IDS.split(",")
+        if not raw_values or any(
+            value != value.strip() or not value for value in raw_values
+        ):
+            return frozenset()
+        try:
+            cohort_ids = tuple(UUID(value) for value in raw_values)
+        except ValueError:
+            return frozenset()
+        if any(str(cohort_id) != raw for cohort_id, raw in zip(cohort_ids, raw_values)):
+            return frozenset()
+        if len(set(cohort_ids)) != len(cohort_ids):
+            return frozenset()
+        return frozenset(cohort_ids)
 
     @property
     def FRONTEND_URL(self) -> str:

@@ -57,6 +57,7 @@ def config(**overrides: object) -> Settings:
         "DHL_EXPORT_ACCOUNT_NUMBER": DUMMY_ACCOUNT,
         "DHL_DOMESTIC_WORKFLOW_ENABLED": True,
         "DHL_DOMESTIC_PROVIDER_CALLS_ENABLED": True,
+        "DHL_DOMESTIC_SANDBOX_COHORT_IDS": f"{COHORT_A},{COHORT_B}",
         "_env_file": None,
     }
     values.update(overrides)
@@ -348,6 +349,41 @@ def test_adapter_factory_requires_effective_domestic_provider_capability(
             identity_key=IDENTITY_KEY,
             identity_key_version="test-key-v1",
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "allowed_cohorts",
+    ["", str(COHORT_A), f"{COHORT_A},not-a-uuid"],
+)
+async def test_adapter_rejects_non_allowlisted_or_invalid_sandbox_cohorts_before_transport(
+    allowed_cohorts: str,
+) -> None:
+    called = False
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal called
+        called = True
+        return httpx.Response(200, json={"products": []})
+
+    if "not-a-uuid" in allowed_cohorts or not allowed_cohorts:
+        with pytest.raises(DHLRateAdapterError, match="synthetic sandbox cohort"):
+            create_sandbox_domestic_rate_adapter(
+                config=config(DHL_DOMESTIC_SANDBOX_COHORT_IDS=allowed_cohorts),
+                transport=httpx.MockTransport(handler),
+                identity_key=IDENTITY_KEY,
+                identity_key_version="test-key-v1",
+            )
+    else:
+        adapter = create_sandbox_domestic_rate_adapter(
+            config=config(DHL_DOMESTIC_SANDBOX_COHORT_IDS=allowed_cohorts),
+            transport=httpx.MockTransport(handler),
+            identity_key=IDENTITY_KEY,
+            identity_key_version="test-key-v1",
+        )
+        with pytest.raises(DHLRateAdapterError, match="synthetic sandbox cohort"):
+            await adapter.rate(resolved_hub(), rate_request())
+    assert called is False
 
 
 @pytest.mark.asyncio
@@ -651,9 +687,7 @@ async def test_call_rechecks_sandbox_guards_before_transport() -> None:
 
 
 @pytest.mark.asyncio
-async def test_n_is_preferred_only_when_returned_and_other_services_are_one_to_one() -> (
-    None
-):
+async def test_provider_products_are_returned_in_neutral_deterministic_order() -> None:
     async def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
@@ -673,8 +707,8 @@ async def test_n_is_preferred_only_when_returned_and_other_services_are_one_to_o
         identity_key_version="test-key-v1",
     )
     result = await adapter.rate(resolved_hub(), rate_request())
-    assert [offer.provider_product_code for offer in result.offers] == ["N", "D", "P"]
-    assert [offer.provider_service_code for offer in result.offers] == ["N", "D1", "P1"]
+    assert [offer.provider_product_code for offer in result.offers] == ["D", "N", "P"]
+    assert [offer.provider_service_code for offer in result.offers] == ["D1", "N", "P1"]
 
 
 @pytest.mark.asyncio

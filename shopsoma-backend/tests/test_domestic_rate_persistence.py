@@ -60,6 +60,9 @@ def test_rate_models_are_bounded_normalized_and_private() -> None:
         "provider",
         "environment",
         "account_alias",
+        "initiating_actor_type",
+        "initiating_actor_id",
+        "source_command",
         "idempotency_key",
         "request_fingerprint",
         "fingerprint_key_version",
@@ -183,6 +186,9 @@ def _attempt(graph, package, seal, intent, claimed_at, **overrides):
         "provider": "dhl",
         "environment": "sandbox",
         "account_alias": "dhl-ng-sandbox",
+        "initiating_actor_type": "system",
+        "initiating_actor_id": "dhl-rate-worker",
+        "source_command": "rate_outbound_intent",
         "idempotency_key": f"rate-{uuid.uuid4().hex}",
         "request_fingerprint": "b" * 64,
         "fingerprint_key_version": "rate-fingerprint-v1",
@@ -272,6 +278,29 @@ async def test_idempotency_key_rejects_non_identifier_ascii(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("initiating_actor_type", "system worker"),
+        ("initiating_actor_id", "worker\n1"),
+        ("source_command", "rate outbound"),
+    ),
+)
+async def test_attempt_attribution_rejects_noncanonical_values(
+    db_session, vendor_user, customer_user, field, value
+) -> None:
+    graph, package, seal, intent = await _subject(
+        db_session, vendor_user, customer_user
+    )
+    claimed = await db_session.scalar(text("SELECT clock_timestamp()"))
+    attempt = _attempt(graph, package, seal, intent, claimed, **{field: value})
+    with pytest.raises(IntegrityError, match="ck_domestic_rate_attempts_identifiers"):
+        async with db_session.begin_nested():
+            db_session.add(attempt)
+            await db_session.flush()
+
+
+@pytest.mark.asyncio
 async def test_attempt_rejects_destination_snapshot_not_derived_from_intent(
     db_session, vendor_user, customer_user
 ) -> None:
@@ -344,6 +373,12 @@ async def test_attempt_lifecycle_is_one_way_and_identity_is_immutable(
     await _rejects(
         db_session,
         "UPDATE domestic_rate_attempts SET account_alias='other-alias' WHERE id=:id",
+        {"id": attempt.id},
+        "rate attempt identity is immutable",
+    )
+    await _rejects(
+        db_session,
+        "UPDATE domestic_rate_attempts SET source_command='other-command' WHERE id=:id",
         {"id": attempt.id},
         "rate attempt identity is immutable",
     )

@@ -77,6 +77,7 @@ def test_provider_calls_require_workflow_gate_and_configured_dhl() -> None:
         "DHL_API_USERNAME": "dummy-api-user",
         "DHL_API_PASSWORD": "dummy-api-password",
         "DHL_EXPORT_ACCOUNT_NUMBER": "123456789",
+        "DHL_DOMESTIC_SANDBOX_COHORT_IDS": "22222222-2222-4222-8222-222222222222",
     }
     without_workflow = domestic_shipping_capabilities(
         make_settings(

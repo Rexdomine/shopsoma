@@ -10,7 +10,7 @@ import uuid
 
 from alembic.config import Config
 from alembic.script import ScriptDirectory
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import CheckConstraint, create_engine, inspect, text
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.engine import make_url
 
@@ -89,15 +89,35 @@ def test_domestic_rate_lease_checks_and_functions_have_exact_model_parity() -> N
         DomesticRateAttempt,
     )
 
-    constraints = {
+    all_constraints = {
         constraint.name: str(constraint.sqltext.compile(dialect=postgresql.dialect()))
         for constraint in DomesticRateAttempt.__table__.constraints
-        if constraint.name
-        in {
+        if isinstance(constraint, CheckConstraint) and constraint.name
+    }
+    constraints = {
+        name: all_constraints[name]
+        for name in (
             "ck_domestic_rate_attempts_classification",
             "ck_domestic_rate_attempts_lifecycle",
-        }
+        )
     }
+    parent_attempt_table = next(
+        statement
+        for statement in _literal("_CREATE_TABLE_SQL", PARENT)
+        if statement.startswith("CREATE TABLE domestic_rate_attempts")
+    )
+    for column_sql in (
+        "initiating_actor_type VARCHAR(30) NOT NULL",
+        "initiating_actor_id VARCHAR(200) NOT NULL",
+        "source_command VARCHAR(100) NOT NULL",
+    ):
+        assert column_sql in parent_attempt_table
+    assert (
+        "CONSTRAINT ck_domestic_rate_attempts_identifiers CHECK ("
+        + all_constraints["ck_domestic_rate_attempts_identifiers"]
+        + ")"
+        in parent_attempt_table
+    )
     assert (
         _literal("_NEW_CLASSIFICATION_CHECK")
         == constraints["ck_domestic_rate_attempts_classification"]
@@ -135,6 +155,9 @@ def test_domestic_rate_migration_contains_only_normalized_safe_evidence() -> Non
         "environment = 'sandbox'",
         "provider = 'dhl'",
         "destination_country_code = 'ng'",
+        "initiating_actor_type",
+        "initiating_actor_id",
+        "source_command",
         "rate evidence is append-only",
         "success response requires at least one offer",
         "no-service response cannot contain offers",
