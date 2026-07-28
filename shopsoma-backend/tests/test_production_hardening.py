@@ -18,9 +18,9 @@ async def test_api_health_does_not_expose_key_preview():
     assert response.status_code == 200
     payload = response.json()
     assert "paystack_key_preview" not in payload
-    assert "paystack_configured" in payload
-    assert "stripe_configured" in payload
-    assert payload["storage_backend"] in {"local", "object"}
+    assert "paystack_configured" not in payload
+    assert "stripe_configured" not in payload
+    assert "storage_backend" not in payload
 
 
 @pytest.mark.asyncio
@@ -54,4 +54,5 @@ def test_settings_reject_local_storage_outside_development_without_override():
             DATABASE_URL="postgresql://user:password@localhost:5432/shopsoma_db",
             ENVIRONMENT="staging",
             USE_LOCAL_STORAGE=True,
+            ALLOW_LOCAL_STORAGE_IN_NON_DEV=False,
         )

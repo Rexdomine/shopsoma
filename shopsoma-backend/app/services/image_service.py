@@ -3,13 +3,13 @@ Image storage and processing service
 Handles S3 uploads, compression, resizing, and signed URLs
 Supports both local file storage (development) and S3 (production)
 """
+
 import io
-import os
 import uuid
 import hashlib
 import unicodedata
 from typing import Optional, Tuple, List
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from PIL import Image
 import boto3
@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 
 class ImageSize:
     """Image size configurations"""
+
     THUMBNAIL = "thumbnail"
     MEDIUM = "medium"
     LARGE = "large"
@@ -37,12 +38,12 @@ class ImageService:
     def __init__(self):
         """Initialize image service (S3 or local storage)"""
         # Parse size configurations
-        self.thumbnail_size = tuple(map(int, settings.THUMBNAIL_SIZE.split(',')))
-        self.medium_size = tuple(map(int, settings.MEDIUM_SIZE.split(',')))
-        self.large_size = tuple(map(int, settings.LARGE_SIZE.split(',')))
+        self.thumbnail_size = tuple(map(int, settings.THUMBNAIL_SIZE.split(",")))
+        self.medium_size = tuple(map(int, settings.MEDIUM_SIZE.split(",")))
+        self.large_size = tuple(map(int, settings.LARGE_SIZE.split(",")))
 
         # Parse allowed types
-        self.allowed_types = settings.ALLOWED_IMAGE_TYPES.split(',')
+        self.allowed_types = settings.ALLOWED_IMAGE_TYPES.split(",")
         self.max_size_bytes = settings.MAX_IMAGE_SIZE_MB * 1024 * 1024
 
         # Check if using local storage
@@ -56,21 +57,20 @@ class ImageService:
         else:
             # Initialize S3 client
             s3_config = BotoConfig(
-                signature_version='s3v4',
-                region_name=settings.AWS_REGION
+                signature_version="s3v4", region_name=settings.AWS_REGION
             )
 
             s3_kwargs = {
-                'aws_access_key_id': settings.AWS_ACCESS_KEY_ID,
-                'aws_secret_access_key': settings.AWS_SECRET_ACCESS_KEY,
-                'config': s3_config
+                "aws_access_key_id": settings.AWS_ACCESS_KEY_ID,
+                "aws_secret_access_key": settings.AWS_SECRET_ACCESS_KEY,
+                "config": s3_config,
             }
 
             # Add endpoint URL if using CloudFlare R2 or MinIO
             if settings.S3_ENDPOINT_URL:
-                s3_kwargs['endpoint_url'] = settings.S3_ENDPOINT_URL
+                s3_kwargs["endpoint_url"] = settings.S3_ENDPOINT_URL
 
-            self.s3_client = boto3.client('s3', **s3_kwargs)
+            self.s3_client = boto3.client("s3", **s3_kwargs)
             self.bucket_name = settings.S3_BUCKET_NAME
             logger.info(f"Using S3 storage: {self.bucket_name}")
 
@@ -88,7 +88,7 @@ class ImageService:
         if file.content_type not in self.allowed_types:
             raise HTTPException(
                 status_code=400,
-                detail=f"Invalid image type. Allowed types: {', '.join(self.allowed_types)}"
+                detail=f"Invalid image type. Allowed types: {', '.join(self.allowed_types)}",
             )
 
         # Check file size
@@ -99,7 +99,7 @@ class ImageService:
         if file_size > self.max_size_bytes:
             raise HTTPException(
                 status_code=400,
-                detail=f"Image too large. Maximum size: {settings.MAX_IMAGE_SIZE_MB}MB"
+                detail=f"Image too large. Maximum size: {settings.MAX_IMAGE_SIZE_MB}MB",
             )
 
     def _sanitize_filename(self, filename: str) -> str:
@@ -113,18 +113,22 @@ class ImageService:
             ASCII-only filename safe for S3 metadata
         """
         # Normalize unicode characters to ASCII equivalents
-        ascii_filename = unicodedata.normalize('NFKD', filename)
-        ascii_filename = ascii_filename.encode('ascii', 'ignore').decode('ascii')
+        ascii_filename = unicodedata.normalize("NFKD", filename)
+        ascii_filename = ascii_filename.encode("ascii", "ignore").decode("ascii")
 
         # Replace any remaining non-alphanumeric characters (except . - _) with underscore
-        ascii_filename = ''.join(c if c.isalnum() or c in '.-_ ' else '_' for c in ascii_filename)
+        ascii_filename = "".join(
+            c if c.isalnum() or c in ".-_ " else "_" for c in ascii_filename
+        )
 
         # Replace spaces with underscores
-        ascii_filename = ascii_filename.replace(' ', '_')
+        ascii_filename = ascii_filename.replace(" ", "_")
 
         return ascii_filename
 
-    def _generate_unique_filename(self, original_filename: str, size: str = "original") -> str:
+    def _generate_unique_filename(
+        self, original_filename: str, size: str = "original"
+    ) -> str:
         """
         Generate unique filename with hash
 
@@ -135,9 +139,9 @@ class ImageService:
         Returns:
             Unique filename
         """
-        timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
+        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
         unique_id = str(uuid.uuid4())[:8]
-        ext = original_filename.rsplit('.', 1)[-1].lower()
+        ext = original_filename.rsplit(".", 1)[-1].lower()
 
         # Create hash from original filename + timestamp
         hash_input = f"{original_filename}{timestamp}{unique_id}"
@@ -159,14 +163,14 @@ class ImageService:
         Returns:
             S3 key path
         """
-        year_month = datetime.utcnow().strftime('%Y/%m')
+        year_month = datetime.utcnow().strftime("%Y/%m")
         return f"{folder}/{year_month}/{filename}"
 
     def _compress_and_resize(
         self,
         image_data: bytes,
         target_size: Optional[Tuple[int, int]] = None,
-        quality: int = 85
+        quality: int = 85,
     ) -> Tuple[bytes, str]:
         """
         Compress and resize image
@@ -183,12 +187,12 @@ class ImageService:
         image = Image.open(io.BytesIO(image_data))
 
         # Convert RGBA to RGB if needed (for JPEG)
-        if image.mode == 'RGBA':
-            background = Image.new('RGB', image.size, (255, 255, 255))
+        if image.mode == "RGBA":
+            background = Image.new("RGB", image.size, (255, 255, 255))
             background.paste(image, mask=image.split()[3])
             image = background
-        elif image.mode not in ('RGB', 'L'):
-            image = image.convert('RGB')
+        elif image.mode not in ("RGB", "L"):
+            image = image.convert("RGB")
 
         # Resize if target size specified
         if target_size:
@@ -197,13 +201,13 @@ class ImageService:
 
         # Save to bytes
         output = io.BytesIO()
-        format = 'JPEG' if image.format not in ('PNG', 'WEBP', 'GIF') else image.format
+        format = "JPEG" if image.format not in ("PNG", "WEBP", "GIF") else image.format
 
-        if format == 'JPEG':
+        if format == "JPEG":
             image.save(output, format=format, quality=quality, optimize=True)
-        elif format == 'PNG':
+        elif format == "PNG":
             image.save(output, format=format, optimize=True)
-        elif format == 'WEBP':
+        elif format == "WEBP":
             image.save(output, format=format, quality=quality)
         else:
             image.save(output, format=format)
@@ -211,10 +215,7 @@ class ImageService:
         return output.getvalue(), format.lower()
 
     async def upload_image(
-        self,
-        file: UploadFile,
-        folder: str = "products",
-        generate_variants: bool = True
+        self, file: UploadFile, folder: str = "products", generate_variants: bool = True
     ) -> dict:
         """
         Upload image to storage (S3 or local) with multiple size variants
@@ -238,8 +239,6 @@ class ImageService:
         sanitized_filename = self._sanitize_filename(original_filename)
         base_filename = self._generate_unique_filename(original_filename)
 
-        results = {}
-
         try:
             if self.use_local_storage:
                 # Upload to local filesystem
@@ -248,7 +247,7 @@ class ImageService:
                     original_filename=original_filename,
                     base_filename=base_filename,
                     folder=folder,
-                    generate_variants=generate_variants
+                    generate_variants=generate_variants,
                 )
             else:
                 # Upload to S3
@@ -258,14 +257,13 @@ class ImageService:
                     sanitized_filename=sanitized_filename,
                     base_filename=base_filename,
                     folder=folder,
-                    generate_variants=generate_variants
+                    generate_variants=generate_variants,
                 )
 
         except Exception as e:
             logger.error(f"Image upload error: {str(e)}")
             raise HTTPException(
-                status_code=500,
-                detail=f"Failed to upload image: {str(e)}"
+                status_code=500, detail=f"Failed to upload image: {str(e)}"
             )
 
     async def _upload_local(
@@ -274,51 +272,49 @@ class ImageService:
         original_filename: str,
         base_filename: str,
         folder: str,
-        generate_variants: bool
+        generate_variants: bool,
     ) -> dict:
         """Upload image to local filesystem"""
         results = {}
 
         # Create folder structure
-        year_month = datetime.utcnow().strftime('%Y/%m')
+        year_month = datetime.utcnow().strftime("%Y/%m")
         folder_path = self.upload_dir / folder / year_month
         folder_path.mkdir(parents=True, exist_ok=True)
 
         # Upload original
         original_path = folder_path / base_filename
         compressed_data, format_type = self._compress_and_resize(
-            image_data,
-            target_size=None,
-            quality=settings.IMAGE_QUALITY
+            image_data, target_size=None, quality=settings.IMAGE_QUALITY
         )
 
-        with open(original_path, 'wb') as f:
+        with open(original_path, "wb") as f:
             f.write(compressed_data)
 
         # Generate URL path (relative to uploads directory)
         original_key = f"{folder}/{year_month}/{base_filename}"
-        results['original'] = f"/uploads/{original_key}"
-        results['s3_key'] = original_key
+        results["original"] = f"/uploads/{original_key}"
+        results["s3_key"] = original_key
 
         # Generate and save variants
         if generate_variants:
             variants = [
                 (ImageSize.THUMBNAIL, self.thumbnail_size),
                 (ImageSize.MEDIUM, self.medium_size),
-                (ImageSize.LARGE, self.large_size)
+                (ImageSize.LARGE, self.large_size),
             ]
 
             for size_name, size_tuple in variants:
-                variant_filename = self._generate_unique_filename(original_filename, size_name)
+                variant_filename = self._generate_unique_filename(
+                    original_filename, size_name
+                )
                 variant_path = folder_path / variant_filename
 
                 variant_data, variant_format = self._compress_and_resize(
-                    image_data,
-                    target_size=size_tuple,
-                    quality=settings.IMAGE_QUALITY
+                    image_data, target_size=size_tuple, quality=settings.IMAGE_QUALITY
                 )
 
-                with open(variant_path, 'wb') as f:
+                with open(variant_path, "wb") as f:
                     f.write(variant_data)
 
                 variant_key = f"{folder}/{year_month}/{variant_filename}"
@@ -334,7 +330,7 @@ class ImageService:
         sanitized_filename: str,
         base_filename: str,
         folder: str,
-        generate_variants: bool
+        generate_variants: bool,
     ) -> dict:
         """Upload image to S3"""
         results = {}
@@ -345,7 +341,7 @@ class ImageService:
             compressed_data, format_type = self._compress_and_resize(
                 image_data,
                 target_size=None,  # Keep original size
-                quality=settings.IMAGE_QUALITY
+                quality=settings.IMAGE_QUALITY,
             )
 
             self.s3_client.put_object(
@@ -355,30 +351,32 @@ class ImageService:
                 ContentType=f"image/{format_type}",
                 CacheControl="max-age=31536000",  # 1 year
                 Metadata={
-                    'original-filename': sanitized_filename,
-                    'uploaded-at': datetime.utcnow().isoformat()
-                }
+                    "original-filename": sanitized_filename,
+                    "uploaded-at": datetime.utcnow().isoformat(),
+                },
             )
 
-            results['original'] = self._get_public_url(original_key)
-            results['s3_key'] = original_key
+            results["original"] = self._get_public_url(original_key)
+            results["s3_key"] = original_key
 
             # Generate and upload variants
             if generate_variants:
                 variants = [
                     (ImageSize.THUMBNAIL, self.thumbnail_size),
                     (ImageSize.MEDIUM, self.medium_size),
-                    (ImageSize.LARGE, self.large_size)
+                    (ImageSize.LARGE, self.large_size),
                 ]
 
                 for size_name, size_tuple in variants:
-                    variant_filename = self._generate_unique_filename(original_filename, size_name)
+                    variant_filename = self._generate_unique_filename(
+                        original_filename, size_name
+                    )
                     variant_key = self._get_s3_key(variant_filename, folder)
 
                     variant_data, variant_format = self._compress_and_resize(
                         image_data,
                         target_size=size_tuple,
-                        quality=settings.IMAGE_QUALITY
+                        quality=settings.IMAGE_QUALITY,
                     )
 
                     self.s3_client.put_object(
@@ -387,10 +385,7 @@ class ImageService:
                         Body=variant_data,
                         ContentType=f"image/{variant_format}",
                         CacheControl="max-age=31536000",
-                        Metadata={
-                            'variant': size_name,
-                            'original-key': original_key
-                        }
+                        Metadata={"variant": size_name, "original-key": original_key},
                     )
 
                     results[size_name] = self._get_public_url(variant_key)
@@ -400,10 +395,7 @@ class ImageService:
 
         except ClientError as e:
             logger.error(f"S3 upload error: {str(e)}")
-            raise HTTPException(
-                status_code=500,
-                detail="Failed to upload image to S3"
-            )
+            raise HTTPException(status_code=500, detail="Failed to upload image to S3")
 
     def _get_public_url(self, s3_key: str) -> str:
         """
@@ -425,11 +417,7 @@ class ImageService:
             # Use standard S3 URL
             return f"https://{settings.S3_BUCKET_NAME}.s3.{settings.AWS_REGION}.amazonaws.com/{s3_key}"
 
-    def generate_presigned_url(
-        self,
-        s3_key: str,
-        expiration: int = 3600
-    ) -> str:
+    def generate_presigned_url(self, s3_key: str, expiration: int = 3600) -> str:
         """
         Generate presigned URL for private objects
 
@@ -440,22 +428,22 @@ class ImageService:
         Returns:
             Presigned URL
         """
+        if self.use_local_storage:
+            raise HTTPException(
+                status_code=503,
+                detail="Signed URLs require object storage",
+            )
+
         try:
             url = self.s3_client.generate_presigned_url(
-                'get_object',
-                Params={
-                    'Bucket': self.bucket_name,
-                    'Key': s3_key
-                },
-                ExpiresIn=expiration
+                "get_object",
+                Params={"Bucket": self.bucket_name, "Key": s3_key},
+                ExpiresIn=expiration,
             )
             return url
         except ClientError as e:
             logger.error(f"Failed to generate presigned URL: {str(e)}")
-            raise HTTPException(
-                status_code=500,
-                detail="Failed to generate signed URL"
-            )
+            raise HTTPException(status_code=500, detail="Failed to generate signed URL")
 
     async def delete_image(self, s3_key: str) -> bool:
         """
@@ -467,11 +455,22 @@ class ImageService:
         Returns:
             True if successful
         """
+        if self.use_local_storage:
+            upload_root = self.upload_dir.resolve()
+            image_path = (upload_root / s3_key).resolve()
+            try:
+                image_path.relative_to(upload_root)
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid image key")
+
+            if not image_path.is_file():
+                return False
+            image_path.unlink()
+            logger.info(f"Deleted local image: {s3_key}")
+            return True
+
         try:
-            self.s3_client.delete_object(
-                Bucket=self.bucket_name,
-                Key=s3_key
-            )
+            self.s3_client.delete_object(Bucket=self.bucket_name, Key=s3_key)
             logger.info(f"Deleted image: {s3_key}")
             return True
         except ClientError as e:
@@ -491,16 +490,15 @@ class ImageService:
         if not s3_keys:
             return {"deleted": 0, "failed": 0}
 
-        objects = [{'Key': key} for key in s3_keys]
+        objects = [{"Key": key} for key in s3_keys]
 
         try:
             response = self.s3_client.delete_objects(
-                Bucket=self.bucket_name,
-                Delete={'Objects': objects}
+                Bucket=self.bucket_name, Delete={"Objects": objects}
             )
 
-            deleted = len(response.get('Deleted', []))
-            failed = len(response.get('Errors', []))
+            deleted = len(response.get("Deleted", []))
+            failed = len(response.get("Errors", []))
 
             logger.info(f"Batch delete: {deleted} succeeded, {failed} failed")
             return {"deleted": deleted, "failed": failed}
@@ -520,20 +518,17 @@ class ImageService:
             Dict with image info or None if not found
         """
         try:
-            response = self.s3_client.head_object(
-                Bucket=self.bucket_name,
-                Key=s3_key
-            )
+            response = self.s3_client.head_object(Bucket=self.bucket_name, Key=s3_key)
 
             return {
-                'size': response['ContentLength'],
-                'content_type': response['ContentType'],
-                'last_modified': response['LastModified'],
-                'etag': response['ETag'],
-                'metadata': response.get('Metadata', {})
+                "size": response["ContentLength"],
+                "content_type": response["ContentType"],
+                "last_modified": response["LastModified"],
+                "etag": response["ETag"],
+                "metadata": response.get("Metadata", {}),
             }
         except ClientError as e:
-            if e.response['Error']['Code'] == '404':
+            if e.response["Error"]["Code"] == "404":
                 return None
             logger.error(f"Failed to get image info: {str(e)}")
             return None
