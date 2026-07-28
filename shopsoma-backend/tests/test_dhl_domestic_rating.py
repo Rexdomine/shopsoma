@@ -410,6 +410,39 @@ async def test_adapter_rechecks_sandbox_cohort_allowlist_on_every_call() -> None
 
 
 @pytest.mark.asyncio
+async def test_resolved_subject_rejects_decimal_scale_changes_before_transport() -> (
+    None
+):
+    called = False
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal called
+        called = True
+        return httpx.Response(200, json={"products": []})
+
+    authoritative = rate_request()
+    altered_measurement = replace(
+        authoritative.package.measurement,
+        weight_kg=Decimal("1.2500"),
+    )
+    altered_package = replace(
+        authoritative.package,
+        measurement=altered_measurement,
+    )
+    altered_request = replace(authoritative, package=altered_package)
+    adapter = create_sandbox_domestic_rate_adapter(
+        config=config(),
+        transport=httpx.MockTransport(handler),
+        identity_key=IDENTITY_KEY,
+        identity_key_version="test-key-v1",
+    )
+
+    with pytest.raises(DHLRateAdapterError, match="authoritative shipment subject"):
+        await adapter.rate(resolved_hub(request=authoritative), altered_request)
+    assert called is False
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("field", "value"),
     [("package_id", uuid4()), ("package_version", 4)],

@@ -173,6 +173,20 @@ class DHLDomesticRateAdapter:
             raise DHLRateAdapterError("domestic DHL provider calls are disabled")
         return sandbox_cohort_ids
 
+    @staticmethod
+    def _package_matches_authoritative(
+        authoritative: PackageRef, candidate: PackageRef
+    ) -> bool:
+        if authoritative != candidate:
+            return False
+        authoritative_measurement = authoritative.measurement
+        candidate_measurement = candidate.measurement
+        return all(
+            getattr(authoritative_measurement, field_name).as_tuple()
+            == getattr(candidate_measurement, field_name).as_tuple()
+            for field_name in ("weight_kg", "length_cm", "width_cm", "height_cm")
+        )
+
     def validate_request(
         self, resolved_hub: DHLResolvedHub, request: DomesticRateRequest
     ) -> None:
@@ -184,7 +198,9 @@ class DHLDomesticRateAdapter:
         if resolved_hub.hub != request.origin:
             raise DHLRateAdapterError("resolved hub does not match request origin")
         if (
-            resolved_hub.package != request.package
+            not self._package_matches_authoritative(
+                resolved_hub.package, request.package
+            )
             or resolved_hub.destination != request.destination
         ):
             raise DHLRateAdapterError(
