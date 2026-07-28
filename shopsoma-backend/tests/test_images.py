@@ -294,22 +294,20 @@ class TestImageEndpoints:
         assert image_path.is_file()
 
     @pytest.mark.asyncio
-    async def test_delete_image_rejects_vendor_key_with_traversal(
-        self, vendor_user, db_session
-    ):
+    async def test_delete_image_rejects_vendor_key_with_traversal(self, vendor_user):
         s3_key = (
             f"vendors/{vendor_user['user'].id}/../"
             "00000000-0000-0000-0000-000000000000/products/test.jpg"
         )
 
         with pytest.raises(HTTPException) as exc_info:
-            await _require_vendor_image_key(vendor_user["user"], s3_key, db_session)
+            _require_vendor_image_key(vendor_user["user"], s3_key)
 
         assert exc_info.value.status_code == 400
         assert exc_info.value.detail == "Invalid image key"
 
     @pytest.mark.asyncio
-    async def test_delete_image_allows_owned_legacy_key(
+    async def test_delete_image_rejects_legacy_key_claimed_by_product_url(
         self,
         client: AsyncClient,
         vendor_user,
@@ -336,9 +334,8 @@ class TestImageEndpoints:
             f"/api/v1/images/{s3_key}", headers=vendor_user["headers"]
         )
 
-        assert response.status_code == 200
-        assert response.json()["success"] is True
-        assert not image_path.exists()
+        assert response.status_code == 403
+        assert image_path.is_file()
 
     @pytest.mark.asyncio
     async def test_delete_image_rejects_unowned_legacy_key(
