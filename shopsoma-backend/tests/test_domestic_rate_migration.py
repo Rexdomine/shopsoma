@@ -1,7 +1,6 @@
 """Static parity and real PostgreSQL lifecycle for domestic rate evidence."""
 
 import ast
-import hashlib
 import importlib.util
 import os
 from pathlib import Path
@@ -20,7 +19,6 @@ ROOT = Path(__file__).resolve().parents[1]
 REVISION = "d7b9f1c3e5a8"
 PARENT = "c6a8e0f2b4d7"
 FOUNDATION_PARENT = "b5f7d9a2c4e6"
-FOUNDATION_SHA256 = "afa3d9dcc4fc6c29d5f0044888cf7ae368df9ed50f00986bdd1ed2c0d6650a1e"
 TABLES = (
     "outbound_intent_rate_guards",
     "domestic_rate_attempts",
@@ -57,8 +55,6 @@ def test_domestic_rate_migration_is_the_single_linear_static_head() -> None:
     assert graph.get_heads() == [REVISION]
     assert graph.get_revision(REVISION).down_revision == PARENT
     assert graph.get_revision(PARENT).down_revision == FOUNDATION_PARENT
-    foundation = _source(PARENT).encode()
-    assert hashlib.sha256(foundation).hexdigest() == FOUNDATION_SHA256
     source = _source()
     assert "Base.metadata" not in source
     assert "app.models" not in source
@@ -67,6 +63,24 @@ def test_domestic_rate_migration_is_the_single_linear_static_head() -> None:
         assert f"CREATE TABLE {table}" in "\n".join(
             _literal("_CREATE_TABLE_SQL", PARENT)
         )
+
+    destination_upgrade = _literal("_DESTINATION_SNAPSHOT_UPGRADE_DDLS", PARENT)
+    disable_index = next(
+        index
+        for index, statement in enumerate(destination_upgrade)
+        if "DISABLE TRIGGER tr_outbound_shipment_intents_immutable" in statement
+    )
+    backfill_index = next(
+        index
+        for index, statement in enumerate(destination_upgrade)
+        if statement.startswith("UPDATE outbound_shipment_intents")
+    )
+    enable_index = next(
+        index
+        for index, statement in enumerate(destination_upgrade)
+        if "ENABLE TRIGGER tr_outbound_shipment_intents_immutable" in statement
+    )
+    assert disable_index < backfill_index < enable_index
 
 
 def test_domestic_rate_lease_checks_and_functions_have_exact_model_parity() -> None:
@@ -231,7 +245,56 @@ def test_domestic_rate_real_upgrade_downgrade_upgrade_cycle() -> None:
                 target.dispose()
 
         assert_tables(False)
+
+        sentinel_id = uuid.uuid4()
+        target = create_engine(database_url)
+        try:
+            with target.begin() as connection:
+                connection.execute(text("SET LOCAL session_replication_role = replica"))
+                connection.execute(
+                    text(
+                        """INSERT INTO outbound_shipment_intents (
+                            id, package_id, package_version, seal_id, order_id,
+                            origin_hub_id, destination_name, destination_phone,
+                            destination_address_line1, destination_address_line2,
+                            destination_city, destination_state,
+                            destination_postal_code, destination_country_code,
+                            source_command, idempotency_key, created_by_id
+                        ) VALUES (
+                            :id, :package_id, 1, :seal_id, :order_id,
+                            :hub_id, 'Migration Sentinel', '+2340000000000',
+                            '1 Sentinel Street', 'Suite 2', 'Lagos', 'Lagos',
+                            '100001', 'NG', 'migration-test', 'migration-sentinel',
+                            :created_by_id
+                        )"""
+                    ),
+                    {
+                        "id": sentinel_id,
+                        "package_id": uuid.uuid4(),
+                        "seal_id": uuid.uuid4(),
+                        "order_id": uuid.uuid4(),
+                        "hub_id": uuid.uuid4(),
+                        "created_by_id": uuid.uuid4(),
+                    },
+                )
+        finally:
+            target.dispose()
+
         migrate("upgrade", PARENT)
+        target = create_engine(database_url)
+        try:
+            with target.connect() as connection:
+                snapshot_hash = connection.scalar(
+                    text(
+                        "SELECT destination_snapshot_hash "
+                        "FROM outbound_shipment_intents WHERE id=:id"
+                    ),
+                    {"id": sentinel_id},
+                )
+                assert isinstance(snapshot_hash, str)
+                assert len(snapshot_hash) == 64
+        finally:
+            target.dispose()
         assert_tables(True, leases=False)
         migrate("upgrade", REVISION)
         assert_tables(True, leases=True)

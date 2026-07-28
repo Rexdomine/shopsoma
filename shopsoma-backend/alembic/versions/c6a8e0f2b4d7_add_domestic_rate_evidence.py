@@ -14,6 +14,8 @@ depends_on = None
 _DESTINATION_SNAPSHOT_UPGRADE_DDLS = (
     "ALTER TABLE outbound_shipment_intents "
     "ADD COLUMN destination_snapshot_hash VARCHAR(64)",
+    "ALTER TABLE outbound_shipment_intents "
+    "DISABLE TRIGGER tr_outbound_shipment_intents_immutable",
     """UPDATE outbound_shipment_intents
 SET destination_snapshot_hash = encode(
     sha256(convert_to(jsonb_build_array(
@@ -24,6 +26,8 @@ SET destination_snapshot_hash = encode(
     )::text, 'UTF8')),
     'hex'
 )""",
+    "ALTER TABLE outbound_shipment_intents "
+    "ENABLE TRIGGER tr_outbound_shipment_intents_immutable",
     "ALTER TABLE outbound_shipment_intents "
     "ADD CONSTRAINT ck_outbound_intents_destination_snapshot_hash "
     "CHECK (destination_snapshot_hash ~ '^[0-9a-f]{64}$')",
