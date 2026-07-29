@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     DATABASE_URL: str
     DATABASE_ECHO: bool = False
     ASYNC_DATABASE_URL: Optional[str] = None
+    RENDER_DATABASE_URL: str = ""
 
     # Redis Settings
     REDIS_HOST: str = "localhost"
