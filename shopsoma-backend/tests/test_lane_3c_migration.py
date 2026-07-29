@@ -1,16 +1,17 @@
 """Migration graph, source contract, and real cycle for Lane 2A-3C persistence."""
 
+import importlib.util
 import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import uuid
 
-import pytest
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, text
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.engine import make_url
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
@@ -224,23 +225,30 @@ def test_hub_timestamp_defaults_have_exact_model_migration_parity() -> None:
 
 def test_lane_3c_real_hermetic_postgresql_migration_cycle() -> None:
     """Exercise both directions on a fresh database that is always destroyed."""
-    admin_url = "postgresql://shopsoma@127.0.0.1:55432/postgres"
+    config_spec = importlib.util.spec_from_file_location(
+        "lane3c_test_config", BACKEND_ROOT / "tests/conftest.py"
+    )
+    assert config_spec is not None and config_spec.loader is not None
+    test_config = importlib.util.module_from_spec(config_spec)
+    config_spec.loader.exec_module(test_config)
+
+    base_url = make_url(test_config.TEST_DATABASE_URL)
+    sync_driver = base_url.drivername.split("+", 1)[0]
+    admin_url = base_url.set(drivername=sync_driver, database="postgres")
     database = f"lane3c_cycle_{uuid.uuid4().hex}"
+    database_url = base_url.set(
+        drivername=sync_driver, database=database
+    ).render_as_string(hide_password=False)
     admin = create_engine(admin_url, isolation_level="AUTOCOMMIT")
     try:
-        try:
-            with admin.connect() as connection:
-                connection.execute(text(f'CREATE DATABASE "{database}"'))
-        except OperationalError as exc:
-            pytest.skip(f"local PostgreSQL is unavailable: {exc}")
-
-        database_url = f"postgresql://shopsoma@127.0.0.1:55432/{database}"
+        with admin.connect() as connection:
+            connection.execute(text(f'CREATE DATABASE "{database}"'))
         env = os.environ.copy()
-        env.update(DATABASE_URL=database_url, SECRET_KEY="***")
+        env.update(DATABASE_URL=database_url, SECRET_KEY="lane3c-migration-test-secret")
 
         def migrate(command: str, revision: str) -> None:
             result = subprocess.run(
-                [str(BACKEND_ROOT / ".venv/bin/alembic"), command, revision],
+                [sys.executable, "-m", "alembic", command, revision],
                 cwd=BACKEND_ROOT,
                 env=env,
                 capture_output=True,

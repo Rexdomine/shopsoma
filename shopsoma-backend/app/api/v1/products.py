@@ -14,6 +14,7 @@ from app.core.database import get_db
 from app.api.dependencies import get_current_vendor, get_current_admin
 from app.models.user import User
 from app.models.category import Category
+from app.models.collection import Collection
 from app.models.product import Product, ProductVariant, ProductImage, ProductStatus, ProductType, ModerationStatus, Variation, SizeStock, SizeEnum
 from app.models.vendor import Vendor
 from app.schemas.product import (
@@ -132,8 +133,6 @@ async def _get_category_by_slug(db: AsyncSession, slug: str) -> Optional[Categor
 async def _get_collection_by_name(
     db: AsyncSession, vendor_id: UUID, name: str
 ) -> Optional["Collection"]:
-    from app.models.collection import Collection
-
     result = await db.execute(
         select(Collection).where(
             Collection.vendor_id == vendor_id,

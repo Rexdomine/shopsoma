@@ -5,7 +5,7 @@ from typing import Optional, List
 from uuid import UUID
 from fastapi import APIRouter, HTTPException, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, or_, delete
+from sqlalchemy import select, func, or_, delete, update
 from sqlalchemy.orm import selectinload
 from datetime import datetime
 from decimal import Decimal
@@ -1908,6 +1908,8 @@ async def list_categories(
 
     Requires admin role
     """
+    from app.models.category import Category as ProductCategory
+
     result = await db.execute(select(ProductCategory).order_by(ProductCategory.display_order))
     categories = result.scalars().all()
 
@@ -3419,6 +3421,7 @@ async def export_orders(
     """
     import csv
     from io import StringIO
+    from app.models.order import Order
 
     # Get all orders
     result = await db.execute(select(Order))

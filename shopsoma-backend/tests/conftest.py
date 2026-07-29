@@ -7,7 +7,7 @@ import os
 from typing import AsyncGenerator, Generator
 from httpx import AsyncClient, ASGITransport
 from sqlalchemy import create_engine, text
-from sqlalchemy.engine import make_url
+from sqlalchemy.engine import URL, make_url
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy.pool import NullPool
 

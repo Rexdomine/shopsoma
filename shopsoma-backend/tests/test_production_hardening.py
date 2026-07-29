@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from httpx import ASGITransport, AsyncClient
 import pytest
 from fastapi import FastAPI
@@ -18,9 +20,9 @@ async def test_api_health_does_not_expose_key_preview():
     assert response.status_code == 200
     payload = response.json()
     assert "paystack_key_preview" not in payload
-    assert "paystack_configured" in payload
-    assert "stripe_configured" in payload
-    assert payload["storage_backend"] in {"local", "object"}
+    assert "paystack_configured" not in payload
+    assert "stripe_configured" not in payload
+    assert "storage_backend" not in payload
 
 
 @pytest.mark.asyncio
@@ -51,7 +53,16 @@ def test_settings_reject_local_storage_outside_development_without_override():
     with pytest.raises(ValueError, match="USE_LOCAL_STORAGE"):
         Settings(
             SECRET_KEY="test-secret",
-            DATABASE_URL="postgresql://user:password@localhost:5432/shopsoma_db",
+            DATABASE_URL="postgresql://user:***@localhost:5432/shopsoma_db",
             ENVIRONMENT="staging",
             USE_LOCAL_STORAGE=True,
+            ALLOW_LOCAL_STORAGE_IN_NON_DEV=False,
         )
+
+
+def test_backend_ci_uses_supported_python_runtime():
+    workflow = (
+        Path(__file__).resolve().parents[2] / ".github" / "workflows" / "ci.yml"
+    ).read_text()
+
+    assert "python-version: '3.11'" in workflow

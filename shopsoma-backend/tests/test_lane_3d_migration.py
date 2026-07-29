@@ -5,6 +5,7 @@ import importlib.util
 import os
 from pathlib import Path
 import subprocess
+import sys
 import uuid
 
 from alembic.config import Config
@@ -265,7 +266,7 @@ def test_lane_3d_real_hermetic_postgresql_migration_cycle() -> None:
 
         def migrate(command: str, revision: str) -> None:
             result = subprocess.run(
-                [str(ROOT / ".venv/bin/alembic"), command, revision],
+                [sys.executable, "-m", "alembic", command, revision],
                 cwd=ROOT,
                 env=env,
                 capture_output=True,
