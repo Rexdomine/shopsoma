@@ -136,6 +136,7 @@ class CustomerShippingQuote(Base):
             "id", "intent_id", name="uq_customer_shipping_quotes_intent_identity"
         ),
         Index("ix_customer_shipping_quotes_order", "order_id", "created_at"),
+        Index("ix_customer_shipping_quotes_intent", "intent_id", "created_at"),
         Index("ix_customer_shipping_quotes_expiry", "expires_at"),
     )
 
@@ -278,6 +279,7 @@ CREATE FUNCTION validate_customer_shipping_quote_write() RETURNS trigger AS $$
 DECLARE
     intent outbound_shipment_intents%%ROWTYPE;
     order_customer uuid;
+    order_currency text;
     package_state text;
     seal_retired_at timestamptz;
     response domestic_rate_responses%%ROWTYPE;
@@ -294,9 +296,13 @@ BEGIN
     NEW.row_version := 1;
     NEW.creation_txid := txid_current();
 
-    SELECT customer_id INTO order_customer FROM orders WHERE id=NEW.order_id FOR UPDATE;
+    SELECT customer_id, currency INTO order_customer, order_currency
+    FROM orders WHERE id=NEW.order_id FOR UPDATE;
     IF order_customer IS NULL OR order_customer IS DISTINCT FROM NEW.customer_id THEN
         RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='quote ownership does not match order';
+    END IF;
+    IF order_currency IS DISTINCT FROM NEW.currency THEN
+        RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='quote currency does not match order';
     END IF;
     IF NEW.initiating_actor_type='customer'
        AND NEW.initiating_actor_id IS DISTINCT FROM NEW.customer_id::text THEN
@@ -536,13 +542,17 @@ BEGIN
        AND EXISTS (SELECT 1 FROM customer_shipping_quotes WHERE order_id=OLD.id) THEN
         RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='order ownership is frozen by customer shipping quote';
     END IF;
+    IF NEW.currency IS DISTINCT FROM OLD.currency
+       AND EXISTS (SELECT 1 FROM customer_shipping_quotes WHERE order_id=OLD.id) THEN
+        RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='order currency is frozen by customer shipping quote';
+    END IF;
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 """,
     """
 CREATE TRIGGER orders_protect_customer_shipping_quote_owner
-BEFORE UPDATE OF customer_id ON orders
+BEFORE UPDATE OF customer_id, currency ON orders
 FOR EACH ROW EXECUTE FUNCTION protect_customer_shipping_quote_order_owner();
 """,
 )

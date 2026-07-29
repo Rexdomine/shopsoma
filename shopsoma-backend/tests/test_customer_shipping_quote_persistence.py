@@ -131,6 +131,7 @@ def test_quote_models_expose_database_enforced_immutable_contracts() -> None:
         assert table in ddl
     for invariant in (
         "quote ownership does not match order",
+        "quote currency does not match order",
         "quote subject does not match outbound intent",
         "quote cannot use an invalidated outbound intent",
         "quote successor subject must match predecessor",
@@ -144,6 +145,7 @@ def test_quote_models_expose_database_enforced_immutable_contracts() -> None:
         "quote selection owner does not match quote",
         "quote is expired or superseded",
         "quote selection records are immutable audit",
+        "order currency is frozen by customer shipping quote",
     ):
         assert invariant in ddl
     for model in (
@@ -157,6 +159,15 @@ def test_quote_models_expose_database_enforced_immutable_contracts() -> None:
             if constraint.name is not None
         }
         assert constraint_names
+    intent_index = next(
+        index
+        for index in CustomerShippingQuote.__table__.indexes
+        if index.name == "ix_customer_shipping_quotes_intent"
+    )
+    assert tuple(column.name for column in intent_index.columns) == (
+        "intent_id",
+        "created_at",
+    )
 
 
 async def _rejects(session, statement: str, params: dict, match: str) -> None:
@@ -234,6 +245,16 @@ async def test_quote_database_rejects_cross_customer_and_invalid_identifiers(
     )
 
     quote_params["customer_id"] = customer_user["user"].id
+    quote_params["initiating_actor_id"] = str(customer_user["user"].id)
+    quote_params["currency"] = "USD"
+    await _rejects(
+        db_session,
+        f"INSERT INTO customer_shipping_quotes ({columns}) VALUES ({values})",
+        quote_params,
+        "quote currency does not match order",
+    )
+
+    quote_params["currency"] = "NGN"
     quote_params["initiating_actor_id"] = str(vendor_user["user"].id)
     await _rejects(
         db_session,
@@ -461,6 +482,12 @@ async def test_multi_option_quote_is_database_timestamped_selectable_and_immutab
         "UPDATE orders SET customer_id=:other WHERE id=:order_id",
         {"other": vendor_user["user"].id, "order_id": graph["order"].id},
         "order ownership is frozen by customer shipping quote",
+    )
+    await _rejects(
+        db_session,
+        "UPDATE orders SET currency='USD' WHERE id=:order_id",
+        {"order_id": graph["order"].id},
+        "order currency is frozen by customer shipping quote",
     )
 
     from app.models.customer_shipping_quote import CustomerShippingQuoteSelection
