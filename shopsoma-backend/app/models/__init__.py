@@ -73,6 +73,11 @@ from app.models.domestic_rate_quote import (
     DomesticRateOffer,
     DomesticRateResponse,
 )
+from app.models.customer_shipping_quote import (
+    CustomerShippingQuote,
+    CustomerShippingQuoteOption,
+    CustomerShippingQuoteSelection,
+)
 
 __all__ = [
     "User",
@@ -139,4 +144,7 @@ __all__ = [
     "DomesticRateAttempt",
     "DomesticRateResponse",
     "DomesticRateOffer",
+    "CustomerShippingQuote",
+    "CustomerShippingQuoteOption",
+    "CustomerShippingQuoteSelection",
 ]
