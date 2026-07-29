@@ -58,6 +58,7 @@ OPTION_COLUMNS = {
 SELECTION_COLUMNS = {
     "id",
     "quote_id",
+    "intent_id",
     "option_id",
     "customer_id",
     "selected_by_id",
@@ -133,6 +134,8 @@ def test_quote_models_expose_database_enforced_immutable_contracts() -> None:
         "quote subject does not match outbound intent",
         "quote cannot use an invalidated outbound intent",
         "quote successor subject must match predecessor",
+        "quote must supersede the current subject leaf",
+        "selected quote cannot be superseded",
         "quote records are immutable audit",
         "quote option must match quote currency",
         "source rate offer does not match quote subject",
@@ -464,6 +467,7 @@ async def test_multi_option_quote_is_database_timestamped_selectable_and_immutab
 
     selection = CustomerShippingQuoteSelection(
         quote_id=quote.id,
+        intent_id=intent.id,
         option_id=economy.id,
         customer_id=customer_user["user"].id,
         selected_by_id=vendor_user["user"].id,
@@ -477,6 +481,7 @@ async def test_multi_option_quote_is_database_timestamped_selectable_and_immutab
 
     selection = CustomerShippingQuoteSelection(
         quote_id=quote.id,
+        intent_id=intent.id,
         option_id=express.id,
         customer_id=customer_user["user"].id,
         selected_by_id=customer_user["user"].id,
@@ -560,6 +565,7 @@ async def test_quote_replay_shape_and_cross_quote_selection_fail_closed(
         intent,
         customer_user["user"].id,
         idempotency_key=replay_key,
+        supersedes_quote_id=first.id,
     )
     with pytest.raises(
         IntegrityError, match="uq_customer_shipping_quotes_customer_replay"
@@ -568,7 +574,14 @@ async def test_quote_replay_shape_and_cross_quote_selection_fail_closed(
             db_session.add(duplicate)
             await db_session.flush()
 
-    second = _quote(graph, package, seal, intent, customer_user["user"].id)
+    second = _quote(
+        graph,
+        package,
+        seal,
+        intent,
+        customer_user["user"].id,
+        supersedes_quote_id=first.id,
+    )
     db_session.add(second)
     await db_session.flush()
     second_option = _option(second.id, "second")
@@ -579,12 +592,13 @@ async def test_quote_replay_shape_and_cross_quote_selection_fail_closed(
     await _rejects(
         db_session,
         "INSERT INTO customer_shipping_quote_selections "
-        "(id, quote_id, option_id, customer_id, selected_by_id, "
+        "(id, quote_id, intent_id, option_id, customer_id, selected_by_id, "
         "source_command, idempotency_key) "
-        "VALUES (:id, :quote, :option, :customer, :customer, 'select_quote', :key)",
+        "VALUES (:id, :quote, :intent, :option, :customer, :customer, 'select_quote', :key)",
         {
             "id": uuid.uuid4(),
             "quote": first.id,
+            "intent": intent.id,
             "option": second_option.id,
             "customer": customer_user["user"].id,
             "key": f"selection-{uuid.uuid4().hex}",
@@ -675,11 +689,12 @@ async def test_invalidated_quote_cannot_be_selected(
     await _rejects(
         db_session,
         "INSERT INTO customer_shipping_quote_selections "
-        "(id,quote_id,option_id,customer_id,selected_by_id,source_command,idempotency_key) "
-        "VALUES (:id,:quote,:option,:customer,:customer,'select_quote',:key)",
+        "(id,quote_id,intent_id,option_id,customer_id,selected_by_id,source_command,idempotency_key) "
+        "VALUES (:id,:quote,:intent,:option,:customer,:customer,'select_quote',:key)",
         {
             "id": uuid.uuid4(),
             "quote": quote.id,
+            "intent": intent.id,
             "option": option.id,
             "customer": customer_user["user"].id,
             "key": f"invalid-selection-{uuid.uuid4().hex}",
@@ -851,12 +866,13 @@ async def test_expired_or_superseded_quote_cannot_be_selected(
     await _rejects(
         db_session,
         "INSERT INTO customer_shipping_quote_selections "
-        "(id, quote_id, option_id, customer_id, selected_by_id, "
+        "(id, quote_id, intent_id, option_id, customer_id, selected_by_id, "
         "source_command, idempotency_key) "
-        "VALUES (:id, :quote, :option, :customer, :customer, 'select_quote', :key)",
+        "VALUES (:id, :quote, :intent, :option, :customer, :customer, 'select_quote', :key)",
         {
             "id": uuid.uuid4(),
             "quote": expired.id,
+            "intent": intent.id,
             "option": expired_option.id,
             "customer": customer_user["user"].id,
             "key": f"expired-{uuid.uuid4().hex}",
@@ -864,7 +880,14 @@ async def test_expired_or_superseded_quote_cannot_be_selected(
         "quote is expired or superseded",
     )
 
-    current = _quote(graph, package, seal, intent, customer_user["user"].id)
+    current = _quote(
+        graph,
+        package,
+        seal,
+        intent,
+        customer_user["user"].id,
+        supersedes_quote_id=expired.id,
+    )
     db_session.add(current)
     await db_session.flush()
     current_option = _option(current.id, "current")
@@ -886,12 +909,13 @@ async def test_expired_or_superseded_quote_cannot_be_selected(
     await _rejects(
         db_session,
         "INSERT INTO customer_shipping_quote_selections "
-        "(id, quote_id, option_id, customer_id, selected_by_id, "
+        "(id, quote_id, intent_id, option_id, customer_id, selected_by_id, "
         "source_command, idempotency_key) "
-        "VALUES (:id, :quote, :option, :customer, :customer, 'select_quote', :key)",
+        "VALUES (:id, :quote, :intent, :option, :customer, :customer, 'select_quote', :key)",
         {
             "id": uuid.uuid4(),
             "quote": current.id,
+            "intent": intent.id,
             "option": current_option.id,
             "customer": customer_user["user"].id,
             "key": f"superseded-{uuid.uuid4().hex}",
@@ -1031,13 +1055,14 @@ async def test_selection_rechecks_expiry_after_waiting_for_subject_lock(
                 await selector.execute(
                     text(
                         "INSERT INTO customer_shipping_quote_selections "
-                        "(id,quote_id,option_id,customer_id,selected_by_id,"
+                        "(id,quote_id,intent_id,option_id,customer_id,selected_by_id,"
                         "source_command,idempotency_key) VALUES "
-                        "(:id,:quote,:option,:customer,:customer,'select_quote',:key)"
+                        "(:id,:quote,:intent,:option,:customer,:customer,'select_quote',:key)"
                     ),
                     {
                         "id": uuid.uuid4(),
                         "quote": quote.id,
+                        "intent": intent.id,
                         "option": option.id,
                         "customer": customer_user["user"].id,
                         "key": f"expiry-race-{uuid.uuid4().hex}",
@@ -1117,3 +1142,243 @@ async def test_competing_quote_refreshes_allow_exactly_one_successor(
         {"quote": original.id},
     )
     assert successor_count == 1
+
+
+@pytest.mark.asyncio
+async def test_same_subject_rejects_a_second_root_and_requires_leaf_supersession(
+    db_session, vendor_user, customer_user
+) -> None:
+    domestic = _domestic_helpers()
+    graph, package, seal, intent = await domestic._subject(
+        db_session, vendor_user, customer_user
+    )
+    customer_id = customer_user["user"].id
+    root = _quote(graph, package, seal, intent, customer_id)
+    db_session.add(root)
+    await db_session.flush()
+    db_session.add(_option(root.id, "root"))
+    await db_session.flush()
+    await _force_deferred_checks(db_session)
+
+    independent_root = _quote(graph, package, seal, intent, customer_id)
+    with pytest.raises(
+        DBAPIError, match="quote must supersede the current subject leaf"
+    ):
+        async with db_session.begin_nested():
+            db_session.add(independent_root)
+            await db_session.flush()
+
+    successor = _quote(
+        graph, package, seal, intent, customer_id, supersedes_quote_id=root.id
+    )
+    db_session.add(successor)
+    await db_session.flush()
+    db_session.add(_option(successor.id, "successor"))
+    await db_session.flush()
+    await _force_deferred_checks(db_session)
+
+    stale_branch = _quote(
+        graph, package, seal, intent, customer_id, supersedes_quote_id=root.id
+    )
+    with pytest.raises(
+        DBAPIError,
+        match="quote must supersede the current subject leaf|uq_customer_shipping_quotes_single_successor",
+    ):
+        async with db_session.begin_nested():
+            db_session.add(stale_branch)
+            await db_session.flush()
+
+
+@pytest.mark.asyncio
+async def test_selection_intent_is_database_bound_to_its_quote(
+    db_session, vendor_user, customer_user
+) -> None:
+    domestic = _domestic_helpers()
+    graph, package, seal, intent = await domestic._subject(
+        db_session, vendor_user, customer_user
+    )
+    _graph2, _package2, _seal2, other_intent = await domestic._subject(
+        db_session, vendor_user, customer_user
+    )
+    customer_id = customer_user["user"].id
+    quote = _quote(graph, package, seal, intent, customer_id)
+    db_session.add(quote)
+    await db_session.flush()
+    option = _option(quote.id, "bound")
+    db_session.add(option)
+    await db_session.flush()
+    await _force_deferred_checks(db_session)
+
+    await _rejects(
+        db_session,
+        "INSERT INTO customer_shipping_quote_selections "
+        "(id,quote_id,intent_id,option_id,customer_id,selected_by_id,source_command,idempotency_key) "
+        "VALUES (:id,:quote,:wrong_intent,:option,:customer,:customer,'select_quote',:key)",
+        {
+            "id": uuid.uuid4(),
+            "quote": quote.id,
+            "wrong_intent": other_intent.id,
+            "option": option.id,
+            "customer": customer_id,
+            "key": f"wrong-intent-{uuid.uuid4().hex}",
+        },
+        "quote selection owner does not match quote|fk_customer_shipping_quote_selections_intent",
+    )
+
+
+@pytest.mark.asyncio
+async def test_concurrent_double_selection_commits_once_per_subject_intent(
+    db_session, vendor_user, customer_user
+) -> None:
+    """The closest legal double-select shape is two options on one current quote."""
+    domestic = _domestic_helpers()
+    graph, package, seal, intent = await domestic._subject(
+        db_session, vendor_user, customer_user
+    )
+    customer_id = customer_user["user"].id
+    quote = _quote(graph, package, seal, intent, customer_id)
+    db_session.add(quote)
+    await db_session.flush()
+    options = [_option(quote.id, "first"), _option(quote.id, "second")]
+    db_session.add_all(options)
+    await db_session.commit()
+    sessions = async_sessionmaker(db_session.bind, expire_on_commit=False)
+
+    async def select(option_id) -> str:
+        async with sessions() as session:
+            try:
+                await session.execute(
+                    text(
+                        "INSERT INTO customer_shipping_quote_selections "
+                        "(id,quote_id,intent_id,option_id,customer_id,selected_by_id,"
+                        "source_command,idempotency_key) VALUES "
+                        "(:id,:quote,:intent,:option,:customer,:customer,'select_quote',:key)"
+                    ),
+                    {
+                        "id": uuid.uuid4(),
+                        "quote": quote.id,
+                        "intent": intent.id,
+                        "option": option_id,
+                        "customer": customer_id,
+                        "key": f"concurrent-selection-{uuid.uuid4().hex}",
+                    },
+                )
+                await session.commit()
+                return "committed"
+            except IntegrityError as exc:
+                await session.rollback()
+                assert "uq_customer_shipping_quote_selections_" in str(exc.orig)
+                return "rejected"
+
+    results = await asyncio.wait_for(
+        asyncio.gather(*(select(option.id) for option in options)), timeout=15
+    )
+    assert sorted(results) == ["committed", "rejected"]
+    assert (
+        await db_session.scalar(
+            text(
+                "SELECT count(*) FROM customer_shipping_quote_selections "
+                "WHERE intent_id=:intent"
+            ),
+            {"intent": intent.id},
+        )
+        == 1
+    )
+
+
+@pytest.mark.asyncio
+async def test_selection_winning_refresh_race_freezes_selected_predecessor(
+    db_session, vendor_user, customer_user
+) -> None:
+    domestic = _domestic_helpers()
+    graph, package, seal, intent = await domestic._subject(
+        db_session, vendor_user, customer_user
+    )
+    customer_id = customer_user["user"].id
+    quote = _quote(graph, package, seal, intent, customer_id)
+    db_session.add(quote)
+    await db_session.flush()
+    option = _option(quote.id, "race")
+    db_session.add(option)
+    await db_session.commit()
+    sessions = async_sessionmaker(db_session.bind, expire_on_commit=False)
+
+    async def wait_for_lock(observer, pid: int) -> None:
+        for _ in range(100):
+            if await observer.scalar(
+                text(
+                    "SELECT wait_event_type='Lock' FROM pg_stat_activity WHERE pid=:pid"
+                ),
+                {"pid": pid},
+            ):
+                return
+            await asyncio.sleep(0.02)
+        pytest.fail(f"backend {pid} did not block in refresh-selection race")
+
+    async def select(session) -> str:
+        await session.execute(
+            text(
+                "INSERT INTO customer_shipping_quote_selections "
+                "(id,quote_id,intent_id,option_id,customer_id,selected_by_id,"
+                "source_command,idempotency_key) VALUES "
+                "(:id,:quote,:intent,:option,:customer,:customer,'select_quote',:key)"
+            ),
+            {
+                "id": uuid.uuid4(),
+                "quote": quote.id,
+                "intent": intent.id,
+                "option": option.id,
+                "customer": customer_id,
+                "key": f"selection-wins-{uuid.uuid4().hex}",
+            },
+        )
+        await session.commit()
+        return "selected"
+
+    async def refresh(session) -> str:
+        try:
+            successor = _quote(
+                graph,
+                package,
+                seal,
+                intent,
+                customer_id,
+                supersedes_quote_id=quote.id,
+            )
+            session.add(successor)
+            await session.flush()
+            session.add(_option(successor.id, "stale-refresh"))
+            await session.commit()
+            return "refreshed"
+        except DBAPIError as exc:
+            await session.rollback()
+            return str(exc.orig)
+
+    async with sessions() as blocker, sessions() as selector, sessions() as refresher:
+        await blocker.execute(
+            text("SELECT 1 FROM outbound_shipment_intents WHERE id=:id FOR UPDATE"),
+            {"id": intent.id},
+        )
+        selector_pid = await selector.scalar(text("SELECT pg_backend_pid()"))
+        refresher_pid = await refresher.scalar(text("SELECT pg_backend_pid()"))
+        selection_task = asyncio.create_task(select(selector))
+        await wait_for_lock(db_session, selector_pid)
+        refresh_task = asyncio.create_task(refresh(refresher))
+        await wait_for_lock(db_session, refresher_pid)
+        await blocker.commit()
+        results = await asyncio.wait_for(
+            asyncio.gather(selection_task, refresh_task), timeout=15
+        )
+
+    assert results[0] == "selected"
+    assert "selected quote cannot be superseded" in results[1]
+    assert (
+        await db_session.scalar(
+            text(
+                "SELECT count(*) FROM customer_shipping_quotes "
+                "WHERE supersedes_quote_id=:quote"
+            ),
+            {"quote": quote.id},
+        )
+        == 0
+    )

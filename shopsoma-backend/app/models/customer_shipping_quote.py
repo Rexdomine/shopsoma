@@ -132,6 +132,9 @@ class CustomerShippingQuote(Base):
             name="uq_customer_shipping_quotes_single_successor",
         ),
         UniqueConstraint("id", "customer_id", name="uq_customer_shipping_quotes_owner"),
+        UniqueConstraint(
+            "id", "intent_id", name="uq_customer_shipping_quotes_intent_identity"
+        ),
         Index("ix_customer_shipping_quotes_order", "order_id", "created_at"),
         Index("ix_customer_shipping_quotes_expiry", "expires_at"),
     )
@@ -213,6 +216,7 @@ class CustomerShippingQuoteSelection(Base):
 
     id = _id_column()
     quote_id = Column(_UUID, nullable=False)
+    intent_id = Column(_UUID, nullable=False)
     option_id = Column(_UUID, nullable=False)
     customer_id = Column(_UUID, nullable=False)
     selected_by_id = Column(
@@ -233,6 +237,12 @@ class CustomerShippingQuoteSelection(Base):
             ondelete="RESTRICT",
         ),
         ForeignKeyConstraint(
+            ["quote_id", "intent_id"],
+            ["customer_shipping_quotes.id", "customer_shipping_quotes.intent_id"],
+            name="fk_customer_shipping_quote_selections_intent",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
             ["option_id", "quote_id"],
             [
                 "customer_shipping_quote_options.id",
@@ -249,6 +259,9 @@ class CustomerShippingQuoteSelection(Base):
         ),
         UniqueConstraint(
             "quote_id", name="uq_customer_shipping_quote_selections_quote"
+        ),
+        UniqueConstraint(
+            "intent_id", name="uq_customer_shipping_quote_selections_intent"
         ),
         UniqueConstraint(
             "customer_id",
@@ -320,6 +333,13 @@ BEGIN
         RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='quote chronology precedes outbound intent';
     END IF;
 
+    -- The intent row is the authoritative subject-global serialization point.
+    IF NEW.supersedes_quote_id IS NULL AND EXISTS (
+        SELECT 1 FROM customer_shipping_quotes WHERE intent_id=NEW.intent_id
+    ) THEN
+        RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='quote must supersede the current subject leaf';
+    END IF;
+
     IF NEW.source_rate_response_id IS NOT NULL THEN
         SELECT * INTO response FROM domestic_rate_responses WHERE id=NEW.source_rate_response_id;
         IF NOT FOUND OR response.result_kind <> 'success'
@@ -353,6 +373,12 @@ BEGIN
         END IF;
         IF EXISTS (SELECT 1 FROM customer_shipping_quote_selections WHERE quote_id=predecessor.id) THEN
             RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='selected quote cannot be superseded';
+        END IF;
+        IF EXISTS (
+            SELECT 1 FROM customer_shipping_quotes
+             WHERE intent_id=NEW.intent_id AND supersedes_quote_id=predecessor.id
+        ) THEN
+            RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='quote must supersede the current subject leaf';
         END IF;
     END IF;
     RETURN NEW;
@@ -434,6 +460,7 @@ BEGIN
     END IF;
     SELECT * INTO quote FROM customer_shipping_quotes WHERE id=NEW.quote_id;
     IF NOT FOUND OR quote.customer_id IS DISTINCT FROM NEW.customer_id
+       OR quote.intent_id IS DISTINCT FROM NEW.intent_id
        OR NEW.selected_by_id IS DISTINCT FROM NEW.customer_id THEN
         RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='quote selection owner does not match quote';
     END IF;
