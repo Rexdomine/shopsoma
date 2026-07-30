@@ -1,7 +1,7 @@
 """Regressions for exact-head review findings on PR 117."""
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import importlib.util
 import json
 from pathlib import Path
@@ -85,6 +85,68 @@ async def _present_payment_lease(session, lease_token: uuid.UUID) -> None:
         text("SELECT set_config('shopsoma.payment_lease_token', :token, true)"),
         {"token": str(lease_token)},
     )
+
+
+async def _split_package_item_across_cohorts(session, graph, quote) -> None:
+    """Represent one order item as two cohort-keyed rows in one package version."""
+
+    from app.models.fulfillment_cohort import CohortItemAllocation, FulfillmentCohort
+    from app.models.package_custody import HubPackageItem
+
+    second_cohort = FulfillmentCohort(
+        order_id=graph["order"].id,
+        vendor_id=graph["vendor_id"],
+        readiness_type=graph["cohort"].readiness_type,
+        ready_from=graph["cohort"].ready_from + timedelta(seconds=1),
+        ready_through=graph["cohort"].ready_through + timedelta(seconds=1),
+    )
+    session.add(second_cohort)
+    await session.flush()
+
+    await session.execute(text("SET LOCAL session_replication_role = replica"))
+    await session.execute(
+        text(
+            "UPDATE cohort_item_allocations SET allocated_quantity = 2 "
+            "WHERE cohort_id = :cohort_id AND order_item_id = :order_item_id"
+        ),
+        {"cohort_id": graph["cohort"].id, "order_item_id": graph["item"].id},
+    )
+    await session.execute(
+        text(
+            "UPDATE hub_package_items SET quantity = 2 "
+            "WHERE package_id = :package_id AND package_version = :package_version "
+            "AND cohort_id = :cohort_id AND order_item_id = :order_item_id"
+        ),
+        {
+            "package_id": quote.package_id,
+            "package_version": quote.package_version,
+            "cohort_id": graph["cohort"].id,
+            "order_item_id": graph["item"].id,
+        },
+    )
+    session.add_all(
+        [
+            CohortItemAllocation(
+                cohort_id=second_cohort.id,
+                order_item_id=graph["item"].id,
+                order_id=graph["order"].id,
+                vendor_id=graph["vendor_id"],
+                allocated_quantity=1,
+            ),
+            HubPackageItem(
+                package_id=quote.package_id,
+                package_version=quote.package_version,
+                order_id=graph["order"].id,
+                hub_id=graph["hub"].id,
+                cohort_id=second_cohort.id,
+                vendor_id=graph["vendor_id"],
+                order_item_id=graph["item"].id,
+                quantity=1,
+            ),
+        ]
+    )
+    await session.flush()
+    await session.execute(text("SET LOCAL session_replication_role = origin"))
 
 
 @pytest.mark.asyncio
@@ -758,10 +820,13 @@ async def test_full_order_payment_attempts_serialize_across_package_selections(
     )
     db_session.add(first_attempt)
     await db_session.flush()
-    db_session.add(
-        PaymentAttemptReservation(
-            attempt_id=first_attempt.id, reservation_id=first_reservation.id
-        )
+    db_session.add_all(
+        [
+            PaymentAttemptReservation(
+                attempt_id=first_attempt.id, reservation_id=reservation.id
+            )
+            for reservation in (first_reservation, second_reservation)
+        ]
     )
     await db_session.flush()
     await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
@@ -810,10 +875,13 @@ async def test_full_order_payment_attempts_serialize_across_package_selections(
     )
     db_session.add(retry)
     await db_session.flush()
-    db_session.add(
-        PaymentAttemptReservation(
-            attempt_id=retry.id, reservation_id=second_reservation.id
-        )
+    db_session.add_all(
+        [
+            PaymentAttemptReservation(
+                attempt_id=retry.id, reservation_id=reservation.id
+            )
+            for reservation in (first_reservation, second_reservation)
+        ]
     )
     await db_session.flush()
     await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
@@ -1072,3 +1140,127 @@ async def test_payment_attempt_requires_exact_quoted_package_composition(
         DBAPIError, match="payment attempt must cover exact quoted package composition"
     ):
         await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+
+@pytest.mark.asyncio
+async def test_order_total_payment_attempt_requires_every_selected_package_reservation(
+    db_session, vendor_user, customer_user
+) -> None:
+    lane = _lane_helpers()
+    graph, intent, quote, option, selection, sku = await lane._checkout_subject(
+        db_session, vendor_user, customer_user, stock=3
+    )
+    alternate = await _alternate_selection(
+        db_session, lane, graph, customer_user["user"].id
+    )
+    alternate_intent, alternate_quote, alternate_option, alternate_selection = alternate
+    first = lane._reservation(
+        graph, intent, quote, option, selection, customer_user["user"].id, sku
+    )
+    second = lane._reservation(
+        graph,
+        alternate_intent,
+        alternate_quote,
+        alternate_option,
+        alternate_selection,
+        customer_user["user"].id,
+        sku,
+    )
+    db_session.add_all([first, second])
+    await db_session.flush()
+
+    with pytest.raises(
+        DBAPIError, match="payment attempt must cover the exact active reservation set"
+    ):
+        async with db_session.begin_nested():
+            attempt = lane._payment_attempt(
+                graph, intent, quote, option, selection, customer_user["user"].id
+            )
+            db_session.add(attempt)
+            await db_session.flush()
+            db_session.add(
+                PaymentAttemptReservation(
+                    attempt_id=attempt.id, reservation_id=first.id
+                )
+            )
+            await db_session.flush()
+            await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+
+@pytest.mark.asyncio
+async def test_order_total_payment_attempt_accepts_all_selected_package_reservations(
+    db_session, vendor_user, customer_user
+) -> None:
+    lane = _lane_helpers()
+    graph, intent, quote, option, selection, sku = await lane._checkout_subject(
+        db_session, vendor_user, customer_user, stock=3
+    )
+    alternate = await _alternate_selection(
+        db_session, lane, graph, customer_user["user"].id
+    )
+    alternate_intent, alternate_quote, alternate_option, alternate_selection = alternate
+    reservations = [
+        lane._reservation(
+            graph, intent, quote, option, selection, customer_user["user"].id, sku
+        ),
+        lane._reservation(
+            graph,
+            alternate_intent,
+            alternate_quote,
+            alternate_option,
+            alternate_selection,
+            customer_user["user"].id,
+            sku,
+        ),
+    ]
+    db_session.add_all(reservations)
+    await db_session.flush()
+    attempt = lane._payment_attempt(
+        graph, intent, quote, option, selection, customer_user["user"].id
+    )
+    db_session.add(attempt)
+    await db_session.flush()
+    db_session.add_all(
+        [
+            PaymentAttemptReservation(
+                attempt_id=attempt.id, reservation_id=reservation.id
+            )
+            for reservation in reservations
+        ]
+    )
+    await db_session.flush()
+    await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+
+@pytest.mark.asyncio
+async def test_cohort_split_package_quantity_is_aggregated_for_reservation_and_attempt(
+    db_session, vendor_user, customer_user
+) -> None:
+    lane = _lane_helpers()
+    graph, intent, quote, option, selection, sku = await lane._checkout_subject(
+        db_session, vendor_user, customer_user, stock=3
+    )
+    await _split_package_item_across_cohorts(db_session, graph, quote)
+    reservation = lane._reservation(
+        graph,
+        intent,
+        quote,
+        option,
+        selection,
+        customer_user["user"].id,
+        sku,
+        quantity=3,
+        line_amount=graph["item"].unit_price * 3,
+    )
+    db_session.add(reservation)
+    await db_session.flush()
+    attempt = lane._payment_attempt(
+        graph, intent, quote, option, selection, customer_user["user"].id
+    )
+    db_session.add(attempt)
+    await db_session.flush()
+    db_session.add(
+        PaymentAttemptReservation(attempt_id=attempt.id, reservation_id=reservation.id)
+    )
+    await db_session.flush()
+    await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))

@@ -441,12 +441,12 @@ BEGIN
                        WHERE successor.supersedes_quote_id = NEW.quote_id) THEN
             RAISE EXCEPTION 'stock reservation subject binding is invalid';
         END IF;
-        SELECT quantity INTO package_item_quantity
+        SELECT COALESCE(sum(quantity), 0) INTO package_item_quantity
           FROM hub_package_items
          WHERE package_id = quote_package
            AND package_version = quote_package_version
            AND order_item_id = NEW.order_item_id;
-        IF NOT FOUND THEN
+        IF package_item_quantity = 0 THEN
             RAISE EXCEPTION 'stock reservation is not in quoted package composition';
         END IF;
         NEW.expires_at := LEAST(
@@ -817,7 +817,7 @@ BEGIN
         END IF;
         SELECT min(expires_at) INTO earliest_reservation_expiry
           FROM stock_reservations
-         WHERE quote_selection_id = NEW.quote_selection_id
+         WHERE order_id = NEW.order_id
            AND state = 'active' AND expires_at > now_at;
         IF earliest_reservation_expiry IS NULL THEN
             RAISE EXCEPTION 'payment attempt requires active reservations';
@@ -1017,7 +1017,7 @@ BEGIN
                 SELECT 1 FROM payment_attempt_reservations WHERE attempt_id = OLD.id
             ) OR EXISTS (
                 SELECT 1 FROM stock_reservations sr
-                WHERE sr.quote_selection_id = OLD.quote_selection_id
+                WHERE sr.order_id = OLD.order_id
                   AND sr.state = 'active' AND sr.expires_at > now_at
                   AND NOT EXISTS (
                       SELECT 1 FROM payment_attempt_reservations ar
@@ -1076,9 +1076,7 @@ FOR EACH ROW EXECUTE FUNCTION validate_payment_attempt_membership_write();
 CREATE FUNCTION validate_payment_attempt_exact_reservations() RETURNS trigger AS $$
 DECLARE
     target_attempt uuid;
-    attempt_subject uuid;
-    attempt_package uuid;
-    attempt_package_version integer;
+    attempt_order uuid;
     missing_count bigint;
     extra_count bigint;
     composition_mismatch_count bigint;
@@ -1088,14 +1086,12 @@ BEGIN
     ELSE
         target_attempt := NEW.attempt_id;
     END IF;
-    SELECT pa.quote_selection_id, q.package_id, q.package_version
-      INTO attempt_subject, attempt_package, attempt_package_version
+    SELECT pa.order_id INTO attempt_order
       FROM payment_attempts pa
-      JOIN customer_shipping_quotes q ON q.id = pa.quote_id
      WHERE pa.id = target_attempt;
     SELECT count(*) INTO missing_count
       FROM stock_reservations sr
-     WHERE sr.quote_selection_id = attempt_subject
+     WHERE sr.order_id = attempt_order
        AND sr.state = 'active' AND sr.expires_at > statement_timestamp()
        AND NOT EXISTS (
            SELECT 1 FROM payment_attempt_reservations ar
@@ -1105,7 +1101,7 @@ BEGIN
       FROM payment_attempt_reservations ar
       JOIN stock_reservations sr ON sr.id = ar.reservation_id
      WHERE ar.attempt_id = target_attempt
-       AND (sr.quote_selection_id <> attempt_subject OR sr.state <> 'active'
+       AND (sr.order_id <> attempt_order OR sr.state <> 'active'
             OR sr.expires_at <= statement_timestamp());
     IF missing_count <> 0 OR extra_count <> 0 OR NOT EXISTS (
         SELECT 1 FROM payment_attempt_reservations WHERE attempt_id = target_attempt
@@ -1113,28 +1109,33 @@ BEGIN
         RAISE EXCEPTION 'payment attempt must cover the exact active reservation set';
     END IF;
     SELECT count(*) INTO composition_mismatch_count
-      FROM hub_package_items hpi
-     WHERE hpi.package_id = attempt_package
-       AND hpi.package_version = attempt_package_version
-       AND hpi.quantity <> COALESCE((
-           SELECT sum(sr.quantity)
-             FROM payment_attempt_reservations ar
-             JOIN stock_reservations sr ON sr.id = ar.reservation_id
-            WHERE ar.attempt_id = target_attempt
-              AND sr.order_item_id = hpi.order_item_id
-       ), 0);
-    IF composition_mismatch_count <> 0 OR EXISTS (
-        SELECT 1
-          FROM payment_attempt_reservations ar
-          JOIN stock_reservations sr ON sr.id = ar.reservation_id
-         WHERE ar.attempt_id = target_attempt
-           AND NOT EXISTS (
-               SELECT 1 FROM hub_package_items hpi
-                WHERE hpi.package_id = attempt_package
-                  AND hpi.package_version = attempt_package_version
-                  AND hpi.order_item_id = sr.order_item_id
-           )
-    ) THEN
+      FROM (
+          SELECT q.package_id, q.package_version, sr.order_item_id,
+                 sum(sr.quantity) AS reserved_quantity
+            FROM payment_attempt_reservations ar
+            JOIN stock_reservations sr ON sr.id = ar.reservation_id
+            JOIN customer_shipping_quotes q ON q.id = sr.quote_id
+           WHERE ar.attempt_id = target_attempt
+           GROUP BY q.package_id, q.package_version, sr.order_item_id
+      ) reserved
+      FULL OUTER JOIN (
+          SELECT hpi.package_id, hpi.package_version, hpi.order_item_id,
+                 sum(hpi.quantity) AS package_quantity
+            FROM hub_package_items hpi
+            JOIN (
+                SELECT DISTINCT q.package_id, q.package_version
+                  FROM payment_attempt_reservations ar
+                  JOIN stock_reservations sr ON sr.id = ar.reservation_id
+                  JOIN customer_shipping_quotes q ON q.id = sr.quote_id
+                 WHERE ar.attempt_id = target_attempt
+            ) selected_packages
+              ON selected_packages.package_id = hpi.package_id
+             AND selected_packages.package_version = hpi.package_version
+           GROUP BY hpi.package_id, hpi.package_version, hpi.order_item_id
+      ) composed
+        USING (package_id, package_version, order_item_id)
+     WHERE reserved.reserved_quantity IS DISTINCT FROM composed.package_quantity;
+    IF composition_mismatch_count <> 0 THEN
         RAISE EXCEPTION 'payment attempt must cover exact quoted package composition';
     END IF;
     RETURN NULL;
