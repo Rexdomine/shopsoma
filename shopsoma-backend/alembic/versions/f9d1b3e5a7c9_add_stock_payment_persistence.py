@@ -114,7 +114,7 @@ CREATE TABLE payment_attempts (
 """
     )
     op.execute(
-        "CREATE UNIQUE INDEX uq_payment_attempts_active_subject ON payment_attempts(quote_selection_id) WHERE state IN ('pending','call_started')"
+        "CREATE UNIQUE INDEX uq_payment_attempts_active_subject ON payment_attempts(order_id) WHERE state IN ('pending','call_started')"
     )
     op.execute(
         "CREATE INDEX ix_payment_attempts_subject ON payment_attempts(quote_selection_id,created_at)"

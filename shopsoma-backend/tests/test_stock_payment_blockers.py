@@ -222,7 +222,7 @@ async def test_payment_amount_rejects_postgresql_nan(
 
 
 @pytest.mark.asyncio
-async def test_verification_resamples_database_clock_after_reservation_lock_wait(
+async def test_verification_honors_authorization_grace_after_reservation_lock_wait(
     db_session, vendor_user, customer_user
 ) -> None:
     *_, reservation, attempt = await _attempt_subject(
@@ -286,9 +286,13 @@ async def test_verification_resamples_database_clock_after_reservation_lock_wait
         assert not verification_task.done(), "verification bypassed reservation lock"
         await asyncio.sleep(1.0)
         await locker.commit()
-        with pytest.raises(DBAPIError, match="requires live reservations"):
-            await asyncio.wait_for(verification_task, timeout=2)
-        await verifier.rollback()
+        await asyncio.wait_for(verification_task, timeout=2)
+        await verifier.commit()
+        state = await db_session.scalar(
+            text("SELECT state FROM payment_attempts WHERE id=:id"),
+            {"id": attempt.id},
+        )
+        assert state == "verified"
     finally:
         await locker.close()
         await verifier.close()

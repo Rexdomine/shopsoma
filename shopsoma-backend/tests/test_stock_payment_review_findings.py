@@ -28,6 +28,58 @@ def _lane_helpers():
     return module
 
 
+async def _alternate_selection(session, lane, graph, customer_id, *, quantity: int = 1):
+    """Create a second package/intent/selection for the same order."""
+
+    from app.models.customer_shipping_quote import CustomerShippingQuoteSelection
+    from app.models.package_custody import OutboundShipmentIntent
+
+    quote_helpers = lane._load_helpers(
+        "test_customer_shipping_quote_persistence.py",
+        f"stock_payment_alternate_quote_helpers_{uuid.uuid4().hex}",
+    )
+    custody = quote_helpers._custody_helpers()
+    package, _version, _item, seal = await custody._ready_package(
+        session, graph, quantity=quantity
+    )
+    intent = OutboundShipmentIntent(
+        package_id=package.id,
+        package_version=1,
+        seal_id=seal.id,
+        order_id=graph["order"].id,
+        origin_hub_id=graph["hub"].id,
+        destination_name="Payment Customer",
+        destination_phone="+234****0000",
+        destination_address_line1="1 Payment Street",
+        destination_city="Lagos",
+        destination_state="Lagos",
+        destination_postal_code="100213",
+        source_command="create_outbound_intent",
+        idempotency_key=f"alternate-intent-{uuid.uuid4().hex}",
+        created_by_id=graph["operator_id"],
+    )
+    session.add(intent)
+    await session.flush()
+    quote = quote_helpers._quote(graph, package, seal, intent, customer_id)
+    session.add(quote)
+    await session.flush()
+    option = quote_helpers._option(quote.id, f"alternate-{uuid.uuid4().hex[:8]}")
+    session.add(option)
+    await session.flush()
+    selection = CustomerShippingQuoteSelection(
+        quote_id=quote.id,
+        intent_id=intent.id,
+        option_id=option.id,
+        customer_id=customer_id,
+        selected_by_id=customer_id,
+        source_command="select_shipping_quote_option",
+        idempotency_key=f"alternate-selection-{uuid.uuid4().hex}",
+    )
+    session.add(selection)
+    await session.flush()
+    return intent, quote, option, selection
+
+
 async def _present_payment_lease(session, lease_token: uuid.UUID) -> None:
     await session.execute(
         text("SELECT set_config('shopsoma.payment_lease_token', :token, true)"),
@@ -672,3 +724,351 @@ async def test_verification_serializes_with_stock_reduction_after_ttl(
     finally:
         await verifier.close()
         await reducer.close()
+
+
+@pytest.mark.asyncio
+async def test_full_order_payment_attempts_serialize_across_package_selections(
+    db_session, vendor_user, customer_user
+) -> None:
+    lane = _lane_helpers()
+    graph, intent, quote, option, selection, sku = await lane._checkout_subject(
+        db_session, vendor_user, customer_user, stock=3
+    )
+    alternate = await _alternate_selection(
+        db_session, lane, graph, customer_user["user"].id
+    )
+    alternate_intent, alternate_quote, alternate_option, alternate_selection = alternate
+    first_reservation = lane._reservation(
+        graph, intent, quote, option, selection, customer_user["user"].id, sku
+    )
+    second_reservation = lane._reservation(
+        graph,
+        alternate_intent,
+        alternate_quote,
+        alternate_option,
+        alternate_selection,
+        customer_user["user"].id,
+        sku,
+    )
+    db_session.add_all([first_reservation, second_reservation])
+    await db_session.flush()
+
+    first_attempt = lane._payment_attempt(
+        graph, intent, quote, option, selection, customer_user["user"].id
+    )
+    db_session.add(first_attempt)
+    await db_session.flush()
+    db_session.add(
+        PaymentAttemptReservation(
+            attempt_id=first_attempt.id, reservation_id=first_reservation.id
+        )
+    )
+    await db_session.flush()
+    await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+    await db_session.execute(text("SET CONSTRAINTS ALL DEFERRED"))
+
+    with pytest.raises(DBAPIError, match="payment attempt already active for order"):
+        async with db_session.begin_nested():
+            db_session.add(
+                lane._payment_attempt(
+                    graph,
+                    alternate_intent,
+                    alternate_quote,
+                    alternate_option,
+                    alternate_selection,
+                    customer_user["user"].id,
+                )
+            )
+            await db_session.flush()
+
+    evidence = PaymentAttemptEvidence(
+        attempt_id=first_attempt.id,
+        source="payment_worker",
+        event_id=f"failed-{uuid.uuid4().hex}",
+        evidence_type="payment_failed",
+        evidence_hash="8" * 64,
+        observed_at=datetime.now(timezone.utc),
+    )
+    db_session.add(evidence)
+    await db_session.flush()
+    await db_session.execute(
+        text(
+            "UPDATE payment_attempts SET state='failed', terminal_evidence_id=:evidence_id, "
+            "row_version=row_version+1 WHERE id=:attempt_id"
+        ),
+        {"evidence_id": evidence.id, "attempt_id": first_attempt.id},
+    )
+
+    retry = lane._payment_attempt(
+        graph,
+        alternate_intent,
+        alternate_quote,
+        alternate_option,
+        alternate_selection,
+        customer_user["user"].id,
+        supersedes_attempt_id=first_attempt.id,
+    )
+    db_session.add(retry)
+    await db_session.flush()
+    db_session.add(
+        PaymentAttemptReservation(
+            attempt_id=retry.id, reservation_id=second_reservation.id
+        )
+    )
+    await db_session.flush()
+    await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+
+@pytest.mark.asyncio
+async def test_in_flight_authorization_grace_keeps_inventory_and_can_verify(
+    db_session, vendor_user, customer_user
+) -> None:
+    lane = _lane_helpers()
+    graph, intent, quote, option, selection, sku = await lane._checkout_subject(
+        db_session, vendor_user, customer_user, stock=1
+    )
+    (
+        competing_graph,
+        competing_intent,
+        competing_quote,
+        competing_option,
+        competing_selection,
+        _,
+    ) = await lane._checkout_subject(db_session, vendor_user, customer_user, stock=1)
+    competing_graph["item"].product_id = graph["item"].product_id
+    reservation = lane._reservation(
+        graph,
+        intent,
+        quote,
+        option,
+        selection,
+        customer_user["user"].id,
+        sku,
+        ttl_seconds=1,
+    )
+    db_session.add(reservation)
+    await db_session.flush()
+    attempt = lane._payment_attempt(
+        graph,
+        intent,
+        quote,
+        option,
+        selection,
+        customer_user["user"].id,
+        payment_window_seconds=1,
+        authorization_grace_seconds=5,
+        claim_ttl_seconds=5,
+    )
+    db_session.add(attempt)
+    await db_session.flush()
+    db_session.add(
+        PaymentAttemptReservation(attempt_id=attempt.id, reservation_id=reservation.id)
+    )
+    await db_session.flush()
+    await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+    await db_session.execute(text("SET CONSTRAINTS ALL DEFERRED"))
+    lease_token = uuid.uuid4()
+    await db_session.execute(
+        text(
+            "UPDATE payment_attempts SET state='call_started', lease_token=:lease_token, "
+            "row_version=row_version+1 WHERE id=:attempt_id"
+        ),
+        {"lease_token": lease_token, "attempt_id": attempt.id},
+    )
+    await db_session.commit()
+    await asyncio.sleep(1.1)
+
+    competing = lane._reservation(
+        competing_graph,
+        competing_intent,
+        competing_quote,
+        competing_option,
+        competing_selection,
+        customer_user["user"].id,
+        sku,
+    )
+    with pytest.raises(
+        DBAPIError, match="stock reservation exceeds available inventory"
+    ):
+        async with db_session.begin_nested():
+            db_session.add(competing)
+            await db_session.flush()
+
+    evidence = PaymentAttemptEvidence(
+        attempt_id=attempt.id,
+        source="provider_webhook",
+        event_id=f"grace-verified-{uuid.uuid4().hex}",
+        evidence_type="payment_verified",
+        evidence_hash="9" * 64,
+        observed_at=datetime.now(timezone.utc),
+    )
+    db_session.add(evidence)
+    await db_session.flush()
+    await _present_payment_lease(db_session, lease_token)
+    await db_session.execute(
+        text(
+            "UPDATE payment_attempts SET state='verified', terminal_evidence_id=:evidence_id, "
+            "row_version=row_version+1 WHERE id=:attempt_id"
+        ),
+        {"evidence_id": evidence.id, "attempt_id": attempt.id},
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("truth_target", ["order_item", "order"])
+async def test_reservation_locks_order_truth_before_waiting_on_inventory(
+    db_session, vendor_user, customer_user, truth_target
+) -> None:
+    lane = _lane_helpers()
+    graph, intent, quote, option, selection, sku = await lane._checkout_subject(
+        db_session, vendor_user, customer_user, stock=1
+    )
+    await db_session.commit()
+    factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+    inventory_locker = factory()
+    reserver = factory()
+    truth_editor = factory()
+    try:
+        await inventory_locker.execute(
+            text("SELECT 1 FROM products WHERE id=:product_id FOR UPDATE"),
+            {"product_id": graph["item"].product_id},
+        )
+
+        async def reserve_unit():
+            candidate = lane._reservation(
+                graph,
+                intent,
+                quote,
+                option,
+                selection,
+                customer_user["user"].id,
+                sku,
+            )
+            reserver.add(candidate)
+            try:
+                await reserver.flush()
+                await reserver.commit()
+                return None
+            except DBAPIError as exc:
+                await reserver.rollback()
+                return str(exc)
+
+        reserve_task = asyncio.create_task(reserve_unit())
+        await asyncio.sleep(0.2)
+
+        async def edit_truth():
+            try:
+                if truth_target == "order_item":
+                    await truth_editor.execute(
+                        text(
+                            "UPDATE order_items SET unit_price=unit_price + 1 "
+                            "WHERE id=:subject_id"
+                        ),
+                        {"subject_id": graph["item"].id},
+                    )
+                else:
+                    await truth_editor.execute(
+                        text(
+                            "UPDATE orders SET total_amount=total_amount + 1 "
+                            "WHERE id=:subject_id"
+                        ),
+                        {"subject_id": graph["order"].id},
+                    )
+                await truth_editor.commit()
+                return None
+            except DBAPIError as exc:
+                await truth_editor.rollback()
+                return str(exc)
+
+        edit_task = asyncio.create_task(edit_truth())
+        await asyncio.sleep(0.2)
+        await inventory_locker.commit()
+        reserve_result = await asyncio.wait_for(reserve_task, timeout=5)
+        edit_result = await asyncio.wait_for(edit_task, timeout=5)
+        assert reserve_result is None
+        expected = (
+            "reserved order item truth is immutable"
+            if truth_target == "order_item"
+            else "reserved order payment truth is immutable"
+        )
+        assert edit_result is not None
+        assert expected in edit_result
+    finally:
+        await inventory_locker.close()
+        await reserver.close()
+        await truth_editor.close()
+
+
+@pytest.mark.asyncio
+async def test_reservation_quantity_cannot_exceed_quoted_package_composition(
+    db_session, vendor_user, customer_user
+) -> None:
+    lane = _lane_helpers()
+    graph, intent, quote, option, selection, sku = await lane._checkout_subject(
+        db_session, vendor_user, customer_user, stock=3
+    )
+    oversized = lane._reservation(
+        graph,
+        intent,
+        quote,
+        option,
+        selection,
+        customer_user["user"].id,
+        sku,
+        quantity=2,
+        line_amount=graph["item"].unit_price * 2,
+    )
+    with pytest.raises(
+        DBAPIError, match="stock reservation exceeds quoted package item quantity"
+    ):
+        async with db_session.begin_nested():
+            db_session.add(oversized)
+            await db_session.flush()
+
+
+@pytest.mark.asyncio
+async def test_payment_attempt_requires_exact_quoted_package_composition(
+    db_session, vendor_user, customer_user
+) -> None:
+    lane = _lane_helpers()
+    graph, _intent, _quote, _option, _selection, sku = await lane._checkout_subject(
+        db_session, vendor_user, customer_user, stock=3
+    )
+    intent, quote, option, selection = await _alternate_selection(
+        db_session,
+        lane,
+        graph,
+        customer_user["user"].id,
+        quantity=2,
+    )
+    partial = lane._reservation(
+        graph,
+        intent,
+        quote,
+        option,
+        selection,
+        customer_user["user"].id,
+        sku,
+        quantity=1,
+        line_amount=graph["item"].unit_price,
+    )
+    db_session.add(partial)
+    await db_session.flush()
+    attempt = lane._payment_attempt(
+        graph,
+        intent,
+        quote,
+        option,
+        selection,
+        customer_user["user"].id,
+    )
+    db_session.add(attempt)
+    await db_session.flush()
+    db_session.add(
+        PaymentAttemptReservation(attempt_id=attempt.id, reservation_id=partial.id)
+    )
+    await db_session.flush()
+    with pytest.raises(
+        DBAPIError, match="payment attempt must cover exact quoted package composition"
+    ):
+        await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))

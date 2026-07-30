@@ -258,7 +258,7 @@ class PaymentAttempt(Base):
         Index("ix_payment_attempts_subject", "quote_selection_id", "created_at"),
         Index(
             "uq_payment_attempts_active_subject",
-            "quote_selection_id",
+            "order_id",
             unique=True,
             postgresql_where=text("state IN ('pending','call_started')"),
         ),
@@ -344,7 +344,10 @@ DECLARE
     selection_intent uuid;
     selection_customer uuid;
     quote_order uuid;
+    quote_package uuid;
+    quote_package_version integer;
     quote_expires timestamptz;
+    package_item_quantity integer;
     active_quantity bigint;
 BEGIN
     IF TG_OP = 'DELETE' THEN
@@ -358,6 +361,12 @@ BEGIN
         NEW.row_version := 1;
         NEW.creation_txid := txid_current();
 
+        -- Serialize order -> item before snapshotting either row. Inventory and
+        -- quote locks come later in the shared cross-aggregate lock order.
+        PERFORM 1 FROM orders WHERE id = NEW.order_id FOR UPDATE;
+        IF NOT FOUND THEN
+            RAISE EXCEPTION 'stock reservation subject binding is invalid';
+        END IF;
         SELECT oi.order_id, oi.product_id, oi.variant_id,
                NULLIF(oi.variant_details->>'size_stock_id', '')::uuid,
                NULLIF(oi.variant_details->>'variation_id', '')::uuid,
@@ -367,7 +376,8 @@ BEGIN
                item_variation, item_size, item_quantity,
                item_unit_price, item_currency, order_customer
           FROM order_items oi JOIN orders o ON o.id = oi.order_id
-         WHERE oi.id = NEW.order_item_id;
+         WHERE oi.id = NEW.order_item_id AND o.id = NEW.order_id
+         FOR UPDATE OF oi;
         IF NOT FOUND OR item_order <> NEW.order_id OR order_customer <> NEW.customer_id
            OR item_product <> NEW.product_id OR item_variant IS DISTINCT FROM NEW.variant_id
            OR item_size_stock IS DISTINCT FROM NEW.size_stock_id
@@ -411,9 +421,9 @@ BEGIN
         END IF;
 
         SELECT s.quote_id, s.option_id, s.intent_id, s.customer_id,
-               q.order_id, q.expires_at
+               q.order_id, q.package_id, q.package_version, q.expires_at
           INTO selection_quote, selection_option, selection_intent, selection_customer,
-               quote_order, quote_expires
+               quote_order, quote_package, quote_package_version, quote_expires
           FROM customer_shipping_quote_selections s
           JOIN customer_shipping_quotes q ON q.id = s.quote_id
          WHERE s.id = NEW.quote_selection_id
@@ -431,13 +441,21 @@ BEGIN
                        WHERE successor.supersedes_quote_id = NEW.quote_id) THEN
             RAISE EXCEPTION 'stock reservation subject binding is invalid';
         END IF;
+        SELECT quantity INTO package_item_quantity
+          FROM hub_package_items
+         WHERE package_id = quote_package
+           AND package_version = quote_package_version
+           AND order_item_id = NEW.order_item_id;
+        IF NOT FOUND THEN
+            RAISE EXCEPTION 'stock reservation is not in quoted package composition';
+        END IF;
         NEW.expires_at := LEAST(
             now_at + NEW.ttl_seconds * interval '1 second',
             quote_expires
         );
         IF EXISTS (
             SELECT 1 FROM payment_attempts
-             WHERE quote_selection_id = NEW.quote_selection_id
+             WHERE order_id = NEW.order_id
                AND state IN ('pending', 'call_started')
         ) THEN
             RAISE EXCEPTION 'reservation set is locked by active payment attempt';
@@ -452,7 +470,13 @@ BEGIN
            AND (sr.expires_at > now_at OR EXISTS (
                SELECT 1 FROM payment_attempt_reservations ar
                JOIN payment_attempts pa ON pa.id = ar.attempt_id
-                WHERE ar.reservation_id = sr.id AND pa.state = 'verified'
+                WHERE ar.reservation_id = sr.id
+                 AND (pa.state = 'verified' OR (
+                     pa.state = 'call_started'
+                     AND pa.call_started_at < sr.expires_at
+                     AND pa.claim_expires_at > now_at
+                     AND pa.authorization_deadline_at >= now_at
+                 ))
            ));
         IF NOT product_made_to_order
            AND active_quantity + NEW.quantity > COALESCE(size_stock_stock, variant_stock, product_stock) THEN
@@ -465,10 +489,35 @@ BEGIN
            AND (sr.expires_at > now_at OR EXISTS (
                SELECT 1 FROM payment_attempt_reservations ar
                JOIN payment_attempts pa ON pa.id = ar.attempt_id
-                WHERE ar.reservation_id = sr.id AND pa.state = 'verified'
+                WHERE ar.reservation_id = sr.id
+                 AND (pa.state = 'verified' OR (
+                     pa.state = 'call_started'
+                     AND pa.call_started_at < sr.expires_at
+                     AND pa.claim_expires_at > now_at
+                     AND pa.authorization_deadline_at >= now_at
+                 ))
            ));
         IF active_quantity + NEW.quantity > item_quantity THEN
             RAISE EXCEPTION 'stock reservation exceeds order item quantity';
+        END IF;
+        SELECT COALESCE(sum(quantity), 0) INTO active_quantity
+          FROM stock_reservations sr
+         WHERE sr.quote_selection_id = NEW.quote_selection_id
+           AND sr.order_item_id = NEW.order_item_id
+           AND sr.state = 'active'
+           AND (sr.expires_at > now_at OR EXISTS (
+               SELECT 1 FROM payment_attempt_reservations ar
+               JOIN payment_attempts pa ON pa.id = ar.attempt_id
+                WHERE ar.reservation_id = sr.id
+                  AND (pa.state = 'verified' OR (
+                      pa.state = 'call_started'
+                      AND pa.call_started_at < sr.expires_at
+                      AND pa.claim_expires_at > now_at
+                      AND pa.authorization_deadline_at >= now_at
+                  ))
+           ));
+        IF active_quantity + NEW.quantity > package_item_quantity THEN
+            RAISE EXCEPTION 'stock reservation exceeds quoted package item quantity';
         END IF;
         RETURN NEW;
     END IF;
@@ -558,6 +607,7 @@ DECLARE
     old_size text;
     new_made_to_order boolean;
     old_made_to_order boolean;
+    now_at timestamptz := clock_timestamp();
 BEGIN
     IF TG_TABLE_NAME = 'products' THEN
         new_stock := (to_jsonb(NEW)->>'total_stock')::integer;
@@ -582,10 +632,16 @@ BEGIN
           FROM stock_reservations sr
          WHERE sr.product_id = OLD.id AND sr.variant_id IS NULL AND sr.size_stock_id IS NULL
            AND sr.state = 'active'
-           AND (sr.expires_at > statement_timestamp() OR EXISTS (
+           AND (sr.expires_at > now_at OR EXISTS (
                SELECT 1 FROM payment_attempt_reservations ar
                JOIN payment_attempts pa ON pa.id = ar.attempt_id
-                WHERE ar.reservation_id = sr.id AND pa.state = 'verified'
+                WHERE ar.reservation_id = sr.id
+                 AND (pa.state = 'verified' OR (
+                     pa.state = 'call_started'
+                     AND pa.call_started_at < sr.expires_at
+                     AND pa.claim_expires_at > now_at
+                     AND pa.authorization_deadline_at >= now_at
+                 ))
            ));
         IF new_stock < active_quantity THEN
             RAISE EXCEPTION 'inventory cannot be reduced below active reservations';
@@ -609,10 +665,16 @@ BEGIN
           FROM stock_reservations sr
          WHERE sr.product_id = OLD.product_id AND sr.variant_id = OLD.id
            AND sr.state = 'active'
-           AND (sr.expires_at > statement_timestamp() OR EXISTS (
+           AND (sr.expires_at > now_at OR EXISTS (
                SELECT 1 FROM payment_attempt_reservations ar
                JOIN payment_attempts pa ON pa.id = ar.attempt_id
-                WHERE ar.reservation_id = sr.id AND pa.state = 'verified'
+                WHERE ar.reservation_id = sr.id
+                 AND (pa.state = 'verified' OR (
+                     pa.state = 'call_started'
+                     AND pa.call_started_at < sr.expires_at
+                     AND pa.claim_expires_at > now_at
+                     AND pa.authorization_deadline_at >= now_at
+                 ))
            ));
         IF new_stock < active_quantity THEN
             RAISE EXCEPTION 'inventory cannot be reduced below active reservations';
@@ -636,10 +698,16 @@ BEGIN
         SELECT COALESCE(sum(quantity), 0) INTO active_quantity
           FROM stock_reservations sr
          WHERE sr.size_stock_id = OLD.id AND sr.state = 'active'
-           AND (sr.expires_at > statement_timestamp() OR EXISTS (
+           AND (sr.expires_at > now_at OR EXISTS (
                SELECT 1 FROM payment_attempt_reservations ar
                JOIN payment_attempts pa ON pa.id = ar.attempt_id
-                WHERE ar.reservation_id = sr.id AND pa.state = 'verified'
+                WHERE ar.reservation_id = sr.id
+                 AND (pa.state = 'verified' OR (
+                     pa.state = 'call_started'
+                     AND pa.call_started_at < sr.expires_at
+                     AND pa.claim_expires_at > now_at
+                     AND pa.authorization_deadline_at >= now_at
+                 ))
            ));
         IF new_stock < active_quantity THEN
             RAISE EXCEPTION 'inventory cannot be reduced below active reservations';
@@ -756,13 +824,13 @@ BEGIN
         END IF;
         IF EXISTS (
             SELECT 1 FROM payment_attempts active_attempt
-             WHERE active_attempt.quote_selection_id = NEW.quote_selection_id
+             WHERE active_attempt.order_id = NEW.order_id
                AND active_attempt.state IN ('pending', 'call_started')
         ) THEN
-            RAISE EXCEPTION 'payment attempt already active for subject';
+            RAISE EXCEPTION 'payment attempt already active for order';
         END IF;
         SELECT * INTO predecessor FROM payment_attempts prior
-         WHERE prior.quote_selection_id = NEW.quote_selection_id
+         WHERE prior.order_id = NEW.order_id
          ORDER BY prior.created_at DESC, prior.id DESC
          LIMIT 1 FOR UPDATE;
         IF FOUND THEN
@@ -943,7 +1011,8 @@ BEGIN
                 SELECT 1 FROM payment_attempt_reservations ar
                 JOIN stock_reservations sr ON sr.id = ar.reservation_id
                 WHERE ar.attempt_id = OLD.id
-                  AND (sr.state <> 'active' OR sr.expires_at <= now_at)
+                  AND (sr.state <> 'active'
+                       OR (sr.expires_at <= now_at AND OLD.call_started_at >= sr.expires_at))
             ) OR NOT EXISTS (
                 SELECT 1 FROM payment_attempt_reservations WHERE attempt_id = OLD.id
             ) OR EXISTS (
@@ -1008,17 +1077,22 @@ CREATE FUNCTION validate_payment_attempt_exact_reservations() RETURNS trigger AS
 DECLARE
     target_attempt uuid;
     attempt_subject uuid;
+    attempt_package uuid;
+    attempt_package_version integer;
     missing_count bigint;
     extra_count bigint;
+    composition_mismatch_count bigint;
 BEGIN
     IF TG_TABLE_NAME = 'payment_attempts' THEN
         target_attempt := NEW.id;
-        attempt_subject := NEW.quote_selection_id;
     ELSE
         target_attempt := NEW.attempt_id;
-        SELECT quote_selection_id INTO attempt_subject
-          FROM payment_attempts WHERE id = target_attempt;
     END IF;
+    SELECT pa.quote_selection_id, q.package_id, q.package_version
+      INTO attempt_subject, attempt_package, attempt_package_version
+      FROM payment_attempts pa
+      JOIN customer_shipping_quotes q ON q.id = pa.quote_id
+     WHERE pa.id = target_attempt;
     SELECT count(*) INTO missing_count
       FROM stock_reservations sr
      WHERE sr.quote_selection_id = attempt_subject
@@ -1037,6 +1111,31 @@ BEGIN
         SELECT 1 FROM payment_attempt_reservations WHERE attempt_id = target_attempt
     ) THEN
         RAISE EXCEPTION 'payment attempt must cover the exact active reservation set';
+    END IF;
+    SELECT count(*) INTO composition_mismatch_count
+      FROM hub_package_items hpi
+     WHERE hpi.package_id = attempt_package
+       AND hpi.package_version = attempt_package_version
+       AND hpi.quantity <> COALESCE((
+           SELECT sum(sr.quantity)
+             FROM payment_attempt_reservations ar
+             JOIN stock_reservations sr ON sr.id = ar.reservation_id
+            WHERE ar.attempt_id = target_attempt
+              AND sr.order_item_id = hpi.order_item_id
+       ), 0);
+    IF composition_mismatch_count <> 0 OR EXISTS (
+        SELECT 1
+          FROM payment_attempt_reservations ar
+          JOIN stock_reservations sr ON sr.id = ar.reservation_id
+         WHERE ar.attempt_id = target_attempt
+           AND NOT EXISTS (
+               SELECT 1 FROM hub_package_items hpi
+                WHERE hpi.package_id = attempt_package
+                  AND hpi.package_version = attempt_package_version
+                  AND hpi.order_item_id = sr.order_item_id
+           )
+    ) THEN
+        RAISE EXCEPTION 'payment attempt must cover exact quoted package composition';
     END IF;
     RETURN NULL;
 END;

@@ -272,7 +272,7 @@ def test_lane_2a_4b_models_expose_database_enforced_contracts() -> None:
         "payment attempt subject binding is invalid",
         "payment amount is server-owned",
         "payment attempt must cover the exact active reservation set",
-        "payment attempt already active for subject",
+        "payment attempt already active for order",
         "payment attempt lease has not expired",
         "payment attempt authorization deadline elapsed",
         "payment verification requires live reservations",
@@ -457,7 +457,7 @@ async def test_payment_attempt_exact_set_lease_evidence_and_consumption_lifecycl
     duplicate = _payment_attempt(
         graph, intent, quote, option, selection, customer_user["user"].id
     )
-    with pytest.raises(DBAPIError, match="payment attempt already active for subject"):
+    with pytest.raises(DBAPIError, match="payment attempt already active for order"):
         async with db_session.begin_nested():
             db_session.add(duplicate)
             await db_session.flush()
