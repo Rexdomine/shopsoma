@@ -56,7 +56,8 @@ CREATE TABLE stock_reservations (
  intent_id uuid NOT NULL REFERENCES outbound_shipment_intents(id) ON DELETE RESTRICT,
  product_id uuid NOT NULL REFERENCES products(id) ON DELETE RESTRICT,
  variant_id uuid REFERENCES product_variants(id) ON DELETE RESTRICT,
- sku varchar(100) NOT NULL, quantity integer NOT NULL,
+ size_stock_id uuid REFERENCES size_stocks(id) ON DELETE RESTRICT,
+ sku varchar(100), quantity integer NOT NULL,
  unit_price numeric(18,4) NOT NULL, line_amount numeric(18,4) NOT NULL,
  currency varchar(3) NOT NULL, ttl_seconds integer NOT NULL DEFAULT 1800,
  expires_at timestamptz NOT NULL, state varchar(20) NOT NULL DEFAULT 'active',
@@ -67,7 +68,8 @@ CREATE TABLE stock_reservations (
  updated_at timestamptz NOT NULL DEFAULT statement_timestamp(),
  CONSTRAINT ck_stock_reservations_quantity CHECK (quantity > 0),
  CONSTRAINT ck_stock_reservations_money CHECK (unit_price NOT IN ('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric) AND line_amount NOT IN ('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric) AND unit_price > 0 AND line_amount = unit_price * quantity AND currency ~ '^[A-Z]{3}$'),
- CONSTRAINT ck_stock_reservations_identifiers CHECK (sku ~ '^[!-~]+$' AND source_command ~ '^[A-Za-z0-9][A-Za-z0-9._:-]*$' AND idempotency_key ~ '^[!-~]+$'),
+ CONSTRAINT ck_stock_reservations_identifiers CHECK ((sku IS NULL OR sku ~ '^[!-~]+$') AND source_command ~ '^[A-Za-z0-9][A-Za-z0-9._:-]*$' AND idempotency_key ~ '^[!-~]+$'),
+ CONSTRAINT ck_stock_reservations_one_detailed_subject CHECK (variant_id IS NULL OR size_stock_id IS NULL),
  CONSTRAINT ck_stock_reservations_lifecycle CHECK (ttl_seconds BETWEEN 1 AND 1800 AND row_version > 0 AND expires_at > created_at AND expires_at <= created_at + ttl_seconds * interval '1 second'),
  CONSTRAINT ck_stock_reservations_state CHECK (state IN ('active','released','consumed','expired') AND ((state='active' AND terminal_at IS NULL AND terminal_reason IS NULL) OR (state<>'active' AND terminal_at IS NOT NULL AND terminal_reason IS NOT NULL))),
  CONSTRAINT uq_stock_reservations_customer_replay UNIQUE (customer_id,source_command,idempotency_key)
@@ -75,7 +77,7 @@ CREATE TABLE stock_reservations (
 """
     )
     op.execute(
-        "CREATE INDEX ix_stock_reservations_inventory_subject ON stock_reservations(product_id,variant_id,state,expires_at)"
+        "CREATE INDEX ix_stock_reservations_inventory_subject ON stock_reservations(product_id,variant_id,size_stock_id,state,expires_at)"
     )
     op.execute(
         "CREATE INDEX ix_stock_reservations_selection ON stock_reservations(quote_selection_id,created_at)"

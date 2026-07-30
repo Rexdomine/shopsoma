@@ -74,7 +74,10 @@ class StockReservation(Base):
         _UUID, ForeignKey("products.id", ondelete="RESTRICT"), nullable=False
     )
     variant_id = Column(_UUID, ForeignKey("product_variants.id", ondelete="RESTRICT"))
-    sku = Column(String(100), nullable=False)
+    size_stock_id = Column(_UUID, ForeignKey("size_stocks.id", ondelete="RESTRICT"))
+    # Catalog SKUs are optional snapshots. The UUID subject columns above are
+    # the collision-free server-owned inventory identity.
+    sku = Column(String(100))
     quantity = Column(Integer, nullable=False)
     unit_price = Column(Numeric(18, 4), nullable=False)
     line_amount = Column(Numeric(18, 4), nullable=False)
@@ -103,9 +106,14 @@ class StockReservation(Base):
             name="ck_stock_reservations_money",
         ),
         CheckConstraint(
-            "sku ~ '^[!-~]+$' AND source_command ~ '^[A-Za-z0-9][A-Za-z0-9._:-]*$' "
+            "(sku IS NULL OR sku ~ '^[!-~]+$') "
+            "AND source_command ~ '^[A-Za-z0-9][A-Za-z0-9._:-]*$' "
             "AND idempotency_key ~ '^[!-~]+$'",
             name="ck_stock_reservations_identifiers",
+        ),
+        CheckConstraint(
+            "variant_id IS NULL OR size_stock_id IS NULL",
+            name="ck_stock_reservations_one_detailed_subject",
         ),
         CheckConstraint(
             "ttl_seconds BETWEEN 1 AND 1800 AND row_version > 0 "
@@ -129,6 +137,7 @@ class StockReservation(Base):
             "ix_stock_reservations_inventory_subject",
             "product_id",
             "variant_id",
+            "size_stock_id",
             "state",
             "expires_at",
         ),
@@ -313,15 +322,23 @@ DECLARE
     item_order uuid;
     item_product uuid;
     item_variant uuid;
+    item_size_stock uuid;
+    item_variation uuid;
+    item_size text;
     item_quantity integer;
     item_unit_price numeric;
     item_currency text;
     order_customer uuid;
     product_stock integer;
     product_sku text;
+    product_made_to_order boolean;
     variant_stock integer;
     variant_sku text;
     variant_product uuid;
+    size_stock_stock integer;
+    size_stock_product uuid;
+    size_stock_variation uuid;
+    size_stock_size text;
     selection_quote uuid;
     selection_option uuid;
     selection_intent uuid;
@@ -341,25 +358,49 @@ BEGIN
         NEW.row_version := 1;
         NEW.creation_txid := txid_current();
 
-        SELECT oi.order_id, oi.product_id, oi.variant_id, oi.quantity,
+        SELECT oi.order_id, oi.product_id, oi.variant_id,
+               NULLIF(oi.variant_details->>'size_stock_id', '')::uuid,
+               NULLIF(oi.variant_details->>'variation_id', '')::uuid,
+               oi.variant_details->>'size', oi.quantity,
                oi.unit_price, oi.currency, o.customer_id
-          INTO item_order, item_product, item_variant, item_quantity,
+          INTO item_order, item_product, item_variant, item_size_stock,
+               item_variation, item_size, item_quantity,
                item_unit_price, item_currency, order_customer
           FROM order_items oi JOIN orders o ON o.id = oi.order_id
          WHERE oi.id = NEW.order_item_id;
         IF NOT FOUND OR item_order <> NEW.order_id OR order_customer <> NEW.customer_id
            OR item_product <> NEW.product_id OR item_variant IS DISTINCT FROM NEW.variant_id
+           OR item_size_stock IS DISTINCT FROM NEW.size_stock_id
            OR item_unit_price <> NEW.unit_price OR item_currency <> NEW.currency
            OR NEW.line_amount <> NEW.unit_price * NEW.quantity THEN
             RAISE EXCEPTION 'stock reservation subject binding is invalid';
         END IF;
 
-        SELECT total_stock, sku INTO product_stock, product_sku
+        SELECT total_stock, sku, made_to_order
+          INTO product_stock, product_sku, product_made_to_order
           FROM products WHERE id = NEW.product_id FOR UPDATE;
         IF NOT FOUND THEN
             RAISE EXCEPTION 'stock reservation subject binding is invalid';
         END IF;
-        IF NEW.variant_id IS NOT NULL THEN
+        IF NEW.size_stock_id IS NOT NULL THEN
+            -- Lock the parent before the child. Otherwise a concurrent
+            -- variation move can commit after this reservation and retarget
+            -- the same SizeStock to another product.
+            PERFORM 1 FROM variations WHERE id = item_variation FOR UPDATE;
+            IF NOT FOUND THEN
+                RAISE EXCEPTION 'stock reservation subject binding is invalid';
+            END IF;
+            SELECT ss.stock, v.product_id, ss.variation_id, ss.size::text
+              INTO size_stock_stock, size_stock_product, size_stock_variation, size_stock_size
+              FROM size_stocks ss
+              JOIN variations v ON v.id = ss.variation_id
+             WHERE ss.id = NEW.size_stock_id FOR UPDATE OF ss;
+            IF NOT FOUND OR size_stock_product <> NEW.product_id
+               OR size_stock_variation IS DISTINCT FROM item_variation
+               OR size_stock_size IS DISTINCT FROM item_size OR NEW.sku IS NOT NULL THEN
+                RAISE EXCEPTION 'stock reservation subject binding is invalid';
+            END IF;
+        ELSIF NEW.variant_id IS NOT NULL THEN
             SELECT stock, sku, product_id INTO variant_stock, variant_sku, variant_product
               FROM product_variants WHERE id = NEW.variant_id FOR UPDATE;
             IF NOT FOUND OR variant_product <> NEW.product_id OR variant_sku IS DISTINCT FROM NEW.sku THEN
@@ -403,17 +444,29 @@ BEGIN
         END IF;
 
         SELECT COALESCE(sum(quantity), 0) INTO active_quantity
-          FROM stock_reservations
-         WHERE product_id = NEW.product_id
-           AND variant_id IS NOT DISTINCT FROM NEW.variant_id
-           AND state = 'active' AND expires_at > now_at;
-        IF active_quantity + NEW.quantity > COALESCE(variant_stock, product_stock) THEN
+          FROM stock_reservations sr
+         WHERE sr.product_id = NEW.product_id
+           AND sr.variant_id IS NOT DISTINCT FROM NEW.variant_id
+           AND sr.size_stock_id IS NOT DISTINCT FROM NEW.size_stock_id
+           AND sr.state = 'active'
+           AND (sr.expires_at > now_at OR EXISTS (
+               SELECT 1 FROM payment_attempt_reservations ar
+               JOIN payment_attempts pa ON pa.id = ar.attempt_id
+                WHERE ar.reservation_id = sr.id AND pa.state = 'verified'
+           ));
+        IF NOT product_made_to_order
+           AND active_quantity + NEW.quantity > COALESCE(size_stock_stock, variant_stock, product_stock) THEN
             RAISE EXCEPTION 'stock reservation exceeds available inventory';
         END IF;
         SELECT COALESCE(sum(quantity), 0) INTO active_quantity
-          FROM stock_reservations
-         WHERE order_item_id = NEW.order_item_id
-           AND state = 'active' AND expires_at > now_at;
+          FROM stock_reservations sr
+         WHERE sr.order_item_id = NEW.order_item_id
+           AND sr.state = 'active'
+           AND (sr.expires_at > now_at OR EXISTS (
+               SELECT 1 FROM payment_attempt_reservations ar
+               JOIN payment_attempts pa ON pa.id = ar.attempt_id
+                WHERE ar.reservation_id = sr.id AND pa.state = 'verified'
+           ));
         IF active_quantity + NEW.quantity > item_quantity THEN
             RAISE EXCEPTION 'stock reservation exceeds order item quantity';
         END IF;
@@ -432,6 +485,7 @@ BEGIN
        OR NEW.intent_id IS DISTINCT FROM OLD.intent_id
        OR NEW.product_id IS DISTINCT FROM OLD.product_id
        OR NEW.variant_id IS DISTINCT FROM OLD.variant_id
+       OR NEW.size_stock_id IS DISTINCT FROM OLD.size_stock_id
        OR NEW.sku IS DISTINCT FROM OLD.sku OR NEW.quantity IS DISTINCT FROM OLD.quantity
        OR NEW.unit_price IS DISTINCT FROM OLD.unit_price
        OR NEW.line_amount IS DISTINCT FROM OLD.line_amount
@@ -498,26 +552,41 @@ DECLARE
     old_sku text;
     new_product_id uuid;
     old_product_id uuid;
+    new_variation_id uuid;
+    old_variation_id uuid;
+    new_size text;
+    old_size text;
+    new_made_to_order boolean;
+    old_made_to_order boolean;
 BEGIN
     IF TG_TABLE_NAME = 'products' THEN
         new_stock := (to_jsonb(NEW)->>'total_stock')::integer;
         old_stock := (to_jsonb(OLD)->>'total_stock')::integer;
         new_sku := to_jsonb(NEW)->>'sku';
         old_sku := to_jsonb(OLD)->>'sku';
-        IF new_sku IS DISTINCT FROM old_sku AND EXISTS (
+        new_made_to_order := (to_jsonb(NEW)->>'made_to_order')::boolean;
+        old_made_to_order := (to_jsonb(OLD)->>'made_to_order')::boolean;
+        IF (new_sku IS DISTINCT FROM old_sku AND EXISTS (
             SELECT 1 FROM stock_reservations
-             WHERE product_id = OLD.id AND variant_id IS NULL
-        ) THEN
+             WHERE product_id = OLD.id AND variant_id IS NULL AND size_stock_id IS NULL
+        )) OR (new_made_to_order IS DISTINCT FROM old_made_to_order AND EXISTS (
+            SELECT 1 FROM stock_reservations WHERE product_id = OLD.id
+        )) THEN
             RAISE EXCEPTION 'reserved product identity is immutable';
         END IF;
-        IF new_stock IS NOT DISTINCT FROM old_stock THEN
+        IF new_stock IS NOT DISTINCT FROM old_stock OR new_made_to_order THEN
             RETURN NEW;
         END IF;
         PERFORM 1 FROM products WHERE id = OLD.id FOR UPDATE;
         SELECT COALESCE(sum(quantity), 0) INTO active_quantity
-          FROM stock_reservations
-         WHERE product_id = OLD.id AND variant_id IS NULL
-           AND state = 'active' AND expires_at > statement_timestamp();
+          FROM stock_reservations sr
+         WHERE sr.product_id = OLD.id AND sr.variant_id IS NULL AND sr.size_stock_id IS NULL
+           AND sr.state = 'active'
+           AND (sr.expires_at > statement_timestamp() OR EXISTS (
+               SELECT 1 FROM payment_attempt_reservations ar
+               JOIN payment_attempts pa ON pa.id = ar.attempt_id
+                WHERE ar.reservation_id = sr.id AND pa.state = 'verified'
+           ));
         IF new_stock < active_quantity THEN
             RAISE EXCEPTION 'inventory cannot be reduced below active reservations';
         END IF;
@@ -537,11 +606,53 @@ BEGIN
         END IF;
         PERFORM 1 FROM product_variants WHERE id = OLD.id FOR UPDATE;
         SELECT COALESCE(sum(quantity), 0) INTO active_quantity
-          FROM stock_reservations
-         WHERE product_id = OLD.product_id AND variant_id = OLD.id
-           AND state = 'active' AND expires_at > statement_timestamp();
+          FROM stock_reservations sr
+         WHERE sr.product_id = OLD.product_id AND sr.variant_id = OLD.id
+           AND sr.state = 'active'
+           AND (sr.expires_at > statement_timestamp() OR EXISTS (
+               SELECT 1 FROM payment_attempt_reservations ar
+               JOIN payment_attempts pa ON pa.id = ar.attempt_id
+                WHERE ar.reservation_id = sr.id AND pa.state = 'verified'
+           ));
         IF new_stock < active_quantity THEN
             RAISE EXCEPTION 'inventory cannot be reduced below active reservations';
+        END IF;
+    ELSIF TG_TABLE_NAME = 'size_stocks' THEN
+        new_stock := (to_jsonb(NEW)->>'stock')::integer;
+        old_stock := (to_jsonb(OLD)->>'stock')::integer;
+        new_variation_id := (to_jsonb(NEW)->>'variation_id')::uuid;
+        old_variation_id := (to_jsonb(OLD)->>'variation_id')::uuid;
+        new_size := to_jsonb(NEW)->>'size';
+        old_size := to_jsonb(OLD)->>'size';
+        IF (new_variation_id IS DISTINCT FROM old_variation_id
+            OR new_size IS DISTINCT FROM old_size)
+           AND EXISTS (SELECT 1 FROM stock_reservations WHERE size_stock_id = OLD.id) THEN
+            RAISE EXCEPTION 'reserved product identity is immutable';
+        END IF;
+        IF new_stock IS NOT DISTINCT FROM old_stock THEN
+            RETURN NEW;
+        END IF;
+        PERFORM 1 FROM size_stocks WHERE id = OLD.id FOR UPDATE;
+        SELECT COALESCE(sum(quantity), 0) INTO active_quantity
+          FROM stock_reservations sr
+         WHERE sr.size_stock_id = OLD.id AND sr.state = 'active'
+           AND (sr.expires_at > statement_timestamp() OR EXISTS (
+               SELECT 1 FROM payment_attempt_reservations ar
+               JOIN payment_attempts pa ON pa.id = ar.attempt_id
+                WHERE ar.reservation_id = sr.id AND pa.state = 'verified'
+           ));
+        IF new_stock < active_quantity THEN
+            RAISE EXCEPTION 'inventory cannot be reduced below active reservations';
+        END IF;
+    ELSIF TG_TABLE_NAME = 'variations' THEN
+        new_product_id := (to_jsonb(NEW)->>'product_id')::uuid;
+        old_product_id := (to_jsonb(OLD)->>'product_id')::uuid;
+        IF new_product_id IS DISTINCT FROM old_product_id AND EXISTS (
+            SELECT 1 FROM size_stocks ss
+            JOIN stock_reservations sr ON sr.size_stock_id = ss.id
+            WHERE ss.variation_id = OLD.id
+        ) THEN
+            RAISE EXCEPTION 'reserved product identity is immutable';
         END IF;
     END IF;
     RETURN NEW;
@@ -551,6 +662,10 @@ CREATE TRIGGER trg_products_reserved_inventory
 BEFORE UPDATE ON products FOR EACH ROW EXECUTE FUNCTION protect_reserved_inventory();
 CREATE TRIGGER trg_product_variants_reserved_inventory
 BEFORE UPDATE ON product_variants FOR EACH ROW EXECUTE FUNCTION protect_reserved_inventory();
+CREATE TRIGGER trg_size_stocks_reserved_inventory
+BEFORE UPDATE ON size_stocks FOR EACH ROW EXECUTE FUNCTION protect_reserved_inventory();
+CREATE TRIGGER trg_variations_reserved_inventory
+BEFORE UPDATE ON variations FOR EACH ROW EXECUTE FUNCTION protect_reserved_inventory();
 
 CREATE FUNCTION protect_reserved_order_item() RETURNS trigger AS $$
 BEGIN
@@ -558,6 +673,7 @@ BEGIN
        AND (NEW.order_id IS DISTINCT FROM OLD.order_id
             OR NEW.product_id IS DISTINCT FROM OLD.product_id
             OR NEW.variant_id IS DISTINCT FROM OLD.variant_id
+            OR NEW.variant_details IS DISTINCT FROM OLD.variant_details
             OR NEW.quantity IS DISTINCT FROM OLD.quantity
             OR NEW.unit_price IS DISTINCT FROM OLD.unit_price
             OR NEW.currency IS DISTINCT FROM OLD.currency) THEN
@@ -770,6 +886,43 @@ BEGIN
             IF now_at > OLD.authorization_deadline_at THEN
                 RAISE EXCEPTION 'payment attempt authorization deadline elapsed';
             END IF;
+            -- Reservation insertion serializes on the authoritative inventory
+            -- rows. Acquire the same product -> variation -> detailed-stock
+            -- order before the reservation rows so verification cannot become
+            -- visible after an expired unit was concurrently reserved again.
+            PERFORM p.id FROM products p
+            JOIN (
+                SELECT DISTINCT sr.product_id
+                FROM stock_reservations sr
+                JOIN payment_attempt_reservations ar ON ar.reservation_id = sr.id
+                WHERE ar.attempt_id = OLD.id
+            ) subjects ON subjects.product_id = p.id
+            ORDER BY p.id FOR UPDATE OF p;
+            PERFORM v.id FROM variations v
+            JOIN (
+                SELECT DISTINCT ss.variation_id
+                FROM stock_reservations sr
+                JOIN payment_attempt_reservations ar ON ar.reservation_id = sr.id
+                JOIN size_stocks ss ON ss.id = sr.size_stock_id
+                WHERE ar.attempt_id = OLD.id
+            ) subjects ON subjects.variation_id = v.id
+            ORDER BY v.id FOR UPDATE OF v;
+            PERFORM pv.id FROM product_variants pv
+            JOIN (
+                SELECT DISTINCT sr.variant_id
+                FROM stock_reservations sr
+                JOIN payment_attempt_reservations ar ON ar.reservation_id = sr.id
+                WHERE ar.attempt_id = OLD.id AND sr.variant_id IS NOT NULL
+            ) subjects ON subjects.variant_id = pv.id
+            ORDER BY pv.id FOR UPDATE OF pv;
+            PERFORM ss.id FROM size_stocks ss
+            JOIN (
+                SELECT DISTINCT sr.size_stock_id
+                FROM stock_reservations sr
+                JOIN payment_attempt_reservations ar ON ar.reservation_id = sr.id
+                WHERE ar.attempt_id = OLD.id AND sr.size_stock_id IS NOT NULL
+            ) subjects ON subjects.size_stock_id = ss.id
+            ORDER BY ss.id FOR UPDATE OF ss;
             -- Shared serialization point with reservation release/expiry. Lock
             -- the exact linked set in stable order before reading its state.
             PERFORM 1 FROM stock_reservations sr
@@ -929,6 +1082,8 @@ STOCK_PAYMENT_DROP_DDLS: tuple[str, ...] = (
     r"""
 DROP TRIGGER IF EXISTS trg_orders_reserved_payment_truth ON orders;
 DROP TRIGGER IF EXISTS trg_order_items_reserved_truth ON order_items;
+DROP TRIGGER IF EXISTS trg_variations_reserved_inventory ON variations;
+DROP TRIGGER IF EXISTS trg_size_stocks_reserved_inventory ON size_stocks;
 DROP TRIGGER IF EXISTS trg_product_variants_reserved_inventory ON product_variants;
 DROP TRIGGER IF EXISTS trg_products_reserved_inventory ON products;
 DROP FUNCTION IF EXISTS protect_reserved_order();

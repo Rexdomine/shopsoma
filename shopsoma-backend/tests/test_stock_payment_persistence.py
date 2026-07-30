@@ -131,6 +131,7 @@ RESERVATION_COLUMNS = {
     "intent_id",
     "product_id",
     "variant_id",
+    "size_stock_id",
     "sku",
     "quantity",
     "unit_price",
@@ -295,6 +296,7 @@ def test_lane_2a_4b_models_expose_database_enforced_contracts() -> None:
     assert tuple(column.name for column in inventory_index.columns) == (
         "product_id",
         "variant_id",
+        "size_stock_id",
         "state",
         "expires_at",
     )
@@ -328,6 +330,8 @@ async def test_lane_2a_4b_schema_installs_all_authoritative_triggers(
         "trg_stock_reservations_validate",
         "trg_products_reserved_inventory",
         "trg_product_variants_reserved_inventory",
+        "trg_size_stocks_reserved_inventory",
+        "trg_variations_reserved_inventory",
         "trg_order_items_reserved_truth",
         "trg_orders_reserved_payment_truth",
         "trg_payment_attempts_validate",
