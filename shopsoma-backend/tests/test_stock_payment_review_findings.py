@@ -1264,3 +1264,290 @@ async def test_cohort_split_package_quantity_is_aggregated_for_reservation_and_a
     )
     await db_session.flush()
     await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+
+@pytest.mark.asyncio
+async def test_split_reservations_accept_inventory_deducted_by_order_creation(
+    db_session, vendor_user, customer_user
+) -> None:
+    """A durable order deduction supports split reservations without double charging."""
+
+    lane = _lane_helpers()
+    graph, intent, quote, option, selection, sku = await lane._checkout_subject(
+        db_session, vendor_user, customer_user, stock=4
+    )
+    assert graph["item"].quantity == 3
+    await _split_package_item_across_cohorts(db_session, graph, quote)
+    await db_session.execute(
+        text(
+            "UPDATE products SET total_stock = total_stock - :quantity "
+            "WHERE id = :product_id"
+        ),
+        {"quantity": graph["item"].quantity, "product_id": graph["item"].product_id},
+    )
+    deduction = await db_session.execute(
+        text(
+            "SELECT order_item_id, product_id, event_type, quantity "
+            "FROM inventory_deduction_events"
+        )
+    )
+    assert deduction.one() == (
+        graph["item"].id,
+        graph["item"].product_id,
+        "deducted",
+        graph["item"].quantity,
+    )
+    with pytest.raises(
+        DBAPIError,
+        match="inventory deduction provenance is append-only and trigger-owned",
+    ):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(
+                    "INSERT INTO inventory_deduction_events "
+                    "(id, order_item_id, product_id, event_type, quantity) "
+                    "VALUES (:id, :item_id, :product_id, 'restored', :quantity)"
+                ),
+                {
+                    "id": uuid.uuid4(),
+                    "item_id": graph["item"].id,
+                    "product_id": graph["item"].product_id,
+                    "quantity": graph["item"].quantity,
+                },
+            )
+
+    first = lane._reservation(
+        graph,
+        intent,
+        quote,
+        option,
+        selection,
+        customer_user["user"].id,
+        sku,
+        quantity=2,
+        line_amount=graph["item"].unit_price * 2,
+    )
+    second = lane._reservation(
+        graph, intent, quote, option, selection, customer_user["user"].id, sku
+    )
+    db_session.add(first)
+    await db_session.flush()
+    db_session.add(second)
+    await db_session.flush()
+
+    remaining_stock = await db_session.scalar(
+        text("SELECT total_stock FROM products WHERE id = :product_id"),
+        {"product_id": graph["item"].product_id},
+    )
+    assert remaining_stock == 1
+
+
+@pytest.mark.asyncio
+async def test_reservation_rejects_non_deducted_direct_sql_oversell(
+    db_session, vendor_user, customer_user
+) -> None:
+    """Order-item quantity alone is not proof that inventory was deducted."""
+
+    lane = _lane_helpers()
+    graph, intent, quote, option, selection, sku = await lane._checkout_subject(
+        db_session, vendor_user, customer_user, stock=1
+    )
+    assert graph["item"].quantity == 3
+    await _split_package_item_across_cohorts(db_session, graph, quote)
+    reservation = lane._reservation(
+        graph,
+        intent,
+        quote,
+        option,
+        selection,
+        customer_user["user"].id,
+        sku,
+        quantity=2,
+        line_amount=graph["item"].unit_price * 2,
+    )
+
+    with pytest.raises(
+        DBAPIError, match="stock reservation exceeds available inventory"
+    ):
+        async with db_session.begin_nested():
+            db_session.add(reservation)
+            await db_session.flush()
+
+
+@pytest.mark.asyncio
+async def test_inventory_deduction_provenance_rolls_back_with_stock_change(
+    db_session, vendor_user, customer_user
+) -> None:
+    """A rolled-back deduction cannot leave durable provenance credit."""
+
+    lane = _lane_helpers()
+    graph, *_ = await lane._checkout_subject(
+        db_session, vendor_user, customer_user, stock=4
+    )
+
+    with pytest.raises(RuntimeError, match="force inventory rollback"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(
+                    "UPDATE products SET total_stock = total_stock - :quantity "
+                    "WHERE id = :product_id"
+                ),
+                {
+                    "quantity": graph["item"].quantity,
+                    "product_id": graph["item"].product_id,
+                },
+            )
+            raise RuntimeError("force inventory rollback")
+
+    assert (
+        await db_session.scalar(
+            text("SELECT total_stock FROM products WHERE id = :product_id"),
+            {"product_id": graph["item"].product_id},
+        )
+        == 4
+    )
+    assert (
+        await db_session.scalar(
+            text(
+                "SELECT count(*) FROM inventory_deduction_events "
+                "WHERE order_item_id = :item_id"
+            ),
+            {"item_id": graph["item"].id},
+        )
+        == 0
+    )
+
+
+@pytest.mark.asyncio
+async def test_cancellation_restoration_nets_only_prior_deduction_provenance(
+    db_session, vendor_user, customer_user
+) -> None:
+    """Cancellation restoration nets a real deduction but cannot fabricate one."""
+
+    lane = _lane_helpers()
+    graph, *_ = await lane._checkout_subject(
+        db_session, vendor_user, customer_user, stock=4
+    )
+    await db_session.execute(
+        text(
+            "UPDATE products SET total_stock = total_stock - :quantity "
+            "WHERE id = :product_id"
+        ),
+        {
+            "quantity": graph["item"].quantity,
+            "product_id": graph["item"].product_id,
+        },
+    )
+    await db_session.execute(
+        text("UPDATE orders SET fulfillment_status = 'cancelled' WHERE id = :order_id"),
+        {"order_id": graph["order"].id},
+    )
+    await db_session.execute(
+        text(
+            "UPDATE products SET total_stock = total_stock + :quantity "
+            "WHERE id = :product_id"
+        ),
+        {
+            "quantity": graph["item"].quantity,
+            "product_id": graph["item"].product_id,
+        },
+    )
+
+    events = (
+        await db_session.execute(
+            text(
+                "SELECT event_type, quantity FROM inventory_deduction_events "
+                "WHERE order_item_id = :item_id ORDER BY event_type"
+            ),
+            {"item_id": graph["item"].id},
+        )
+    ).all()
+    assert events == [
+        ("deducted", graph["item"].quantity),
+        ("restored", graph["item"].quantity),
+    ]
+
+    undeducted, *_ = await lane._checkout_subject(
+        db_session, vendor_user, customer_user, stock=4
+    )
+    await db_session.execute(
+        text("UPDATE orders SET fulfillment_status = 'cancelled' WHERE id = :order_id"),
+        {"order_id": undeducted["order"].id},
+    )
+    await db_session.execute(
+        text(
+            "UPDATE products SET total_stock = total_stock + :quantity "
+            "WHERE id = :product_id"
+        ),
+        {
+            "quantity": undeducted["item"].quantity,
+            "product_id": undeducted["item"].product_id,
+        },
+    )
+    assert (
+        await db_session.scalar(
+            text(
+                "SELECT count(*) FROM inventory_deduction_events "
+                "WHERE order_item_id = :item_id"
+            ),
+            {"item_id": undeducted["item"].id},
+        )
+        == 0
+    )
+
+
+@pytest.mark.asyncio
+async def test_payment_attempt_rejects_unreserved_selected_package(
+    db_session, vendor_user, customer_user
+) -> None:
+    lane = _lane_helpers()
+    graph, intent, quote, option, selection, sku = await lane._checkout_subject(
+        db_session, vendor_user, customer_user, stock=3
+    )
+    await _alternate_selection(db_session, lane, graph, customer_user["user"].id)
+    reservation = lane._reservation(
+        graph, intent, quote, option, selection, customer_user["user"].id, sku
+    )
+    db_session.add(reservation)
+    await db_session.flush()
+    attempt = lane._payment_attempt(
+        graph, intent, quote, option, selection, customer_user["user"].id
+    )
+    db_session.add(attempt)
+    await db_session.flush()
+    db_session.add(
+        PaymentAttemptReservation(attempt_id=attempt.id, reservation_id=reservation.id)
+    )
+    await db_session.flush()
+
+    with pytest.raises(
+        DBAPIError, match="payment attempt must cover exact quoted package composition"
+    ):
+        await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+
+@pytest.mark.asyncio
+async def test_payment_attempt_rejects_cancelled_order_authoritative_status(
+    db_session, vendor_user, customer_user
+) -> None:
+    lane = _lane_helpers()
+    graph, intent, quote, option, selection, sku = await lane._checkout_subject(
+        db_session, vendor_user, customer_user
+    )
+    reservation = lane._reservation(
+        graph, intent, quote, option, selection, customer_user["user"].id, sku
+    )
+    db_session.add(reservation)
+    await db_session.flush()
+    await db_session.execute(
+        text("UPDATE orders SET fulfillment_status = 'cancelled' WHERE id = :order_id"),
+        {"order_id": graph["order"].id},
+    )
+
+    attempt = lane._payment_attempt(
+        graph, intent, quote, option, selection, customer_user["user"].id
+    )
+    with pytest.raises(DBAPIError, match="cancelled order cannot start payment"):
+        async with db_session.begin_nested():
+            db_session.add(attempt)
+            await db_session.flush()

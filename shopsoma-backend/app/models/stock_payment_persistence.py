@@ -316,6 +316,122 @@ class PaymentAttemptEvidence(Base):
 
 STOCK_PAYMENT_TRIGGER_DDLS: tuple[str, ...] = (
     r"""
+CREATE TABLE inventory_deduction_events (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    order_item_id uuid NOT NULL REFERENCES order_items(id) ON DELETE RESTRICT,
+    product_id uuid NOT NULL REFERENCES products(id) ON DELETE RESTRICT,
+    variant_id uuid REFERENCES product_variants(id) ON DELETE RESTRICT,
+    size_stock_id uuid REFERENCES size_stocks(id) ON DELETE RESTRICT,
+    event_type varchar(20) NOT NULL,
+    quantity integer NOT NULL,
+    creation_txid bigint NOT NULL DEFAULT txid_current(),
+    created_at timestamptz NOT NULL DEFAULT statement_timestamp(),
+    CONSTRAINT ck_inventory_deduction_events_quantity CHECK (quantity > 0),
+    CONSTRAINT ck_inventory_deduction_events_type CHECK (event_type IN ('deducted','restored')),
+    CONSTRAINT ck_inventory_deduction_events_one_detailed_subject
+        CHECK (variant_id IS NULL OR size_stock_id IS NULL),
+    CONSTRAINT uq_inventory_deduction_events_item_type UNIQUE (order_item_id, event_type)
+);
+CREATE INDEX ix_inventory_deduction_events_item
+    ON inventory_deduction_events (order_item_id, event_type);
+
+CREATE FUNCTION validate_inventory_deduction_event_write() RETURNS trigger AS $$
+BEGIN
+    IF TG_OP <> 'INSERT' OR pg_trigger_depth() <> 2 THEN
+        RAISE EXCEPTION 'inventory deduction provenance is append-only and trigger-owned';
+    END IF;
+    NEW.creation_txid := txid_current();
+    NEW.created_at := statement_timestamp();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+CREATE TRIGGER trg_inventory_deduction_events_validate
+BEFORE INSERT OR UPDATE OR DELETE ON inventory_deduction_events
+FOR EACH ROW EXECUTE FUNCTION validate_inventory_deduction_event_write();
+
+CREATE FUNCTION record_order_inventory_change() RETURNS trigger AS $$
+DECLARE
+    old_stock integer;
+    new_stock integer;
+    target_item uuid;
+    target_product uuid;
+    target_variant uuid;
+    target_size_stock uuid;
+    delta integer;
+    change_type text;
+BEGIN
+    IF TG_TABLE_NAME = 'products' THEN
+        old_stock := OLD.total_stock;
+        new_stock := NEW.total_stock;
+    ELSE
+        old_stock := OLD.stock;
+        new_stock := NEW.stock;
+    END IF;
+    IF new_stock IS NOT DISTINCT FROM old_stock THEN
+        RETURN NEW;
+    END IF;
+    delta := abs(new_stock - old_stock);
+    change_type := CASE WHEN new_stock < old_stock THEN 'deducted' ELSE 'restored' END;
+
+    SELECT oi.id, oi.product_id, oi.variant_id,
+           NULLIF(oi.variant_details->>'size_stock_id', '')::uuid
+      INTO target_item, target_product, target_variant, target_size_stock
+      FROM order_items oi
+      JOIN orders o ON o.id = oi.order_id
+     WHERE oi.quantity = delta
+       AND (
+           (TG_TABLE_NAME = 'products' AND oi.product_id = OLD.id
+                AND oi.variant_id IS NULL
+                AND NULLIF(oi.variant_details->>'size_stock_id', '') IS NULL)
+        OR (TG_TABLE_NAME = 'product_variants' AND oi.variant_id = OLD.id)
+        OR (TG_TABLE_NAME = 'size_stocks'
+                AND NULLIF(oi.variant_details->>'size_stock_id', '')::uuid = OLD.id)
+       )
+       AND (
+           (change_type = 'deducted'
+                AND age(oi.xmin) = 0
+                AND o.fulfillment_status <> 'cancelled'
+                AND NOT EXISTS (
+                    SELECT 1 FROM inventory_deduction_events e
+                     WHERE e.order_item_id = oi.id AND e.event_type = 'deducted'
+                ))
+        OR (change_type = 'restored'
+                AND age(o.xmin) = 0
+                AND o.fulfillment_status = 'cancelled'
+                AND EXISTS (
+                    SELECT 1 FROM inventory_deduction_events e
+                     WHERE e.order_item_id = oi.id AND e.event_type = 'deducted'
+                )
+                AND NOT EXISTS (
+                    SELECT 1 FROM inventory_deduction_events e
+                     WHERE e.order_item_id = oi.id AND e.event_type = 'restored'
+                ))
+       )
+     ORDER BY oi.id
+     LIMIT 1
+     FOR UPDATE OF oi;
+
+    IF target_item IS NOT NULL THEN
+        INSERT INTO inventory_deduction_events (
+            order_item_id, product_id, variant_id, size_stock_id, event_type, quantity
+        ) VALUES (
+            target_item, target_product, target_variant, target_size_stock, change_type, delta
+        );
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+CREATE TRIGGER trg_products_order_inventory_change
+AFTER UPDATE OF total_stock ON products
+FOR EACH ROW EXECUTE FUNCTION record_order_inventory_change();
+CREATE TRIGGER trg_product_variants_order_inventory_change
+AFTER UPDATE OF stock ON product_variants
+FOR EACH ROW EXECUTE FUNCTION record_order_inventory_change();
+CREATE TRIGGER trg_size_stocks_order_inventory_change
+AFTER UPDATE OF stock ON size_stocks
+FOR EACH ROW EXECUTE FUNCTION record_order_inventory_change();
+""",
+    r"""
 CREATE FUNCTION validate_stock_reservation_write() RETURNS trigger AS $$
 DECLARE
     now_at timestamptz := statement_timestamp();
@@ -349,6 +465,7 @@ DECLARE
     quote_expires timestamptz;
     package_item_quantity integer;
     active_quantity bigint;
+    deducted_quantity bigint;
 BEGIN
     IF TG_OP = 'DELETE' THEN
         RAISE EXCEPTION 'stock reservation is immutable audit';
@@ -478,8 +595,17 @@ BEGIN
                      AND pa.authorization_deadline_at >= now_at
                  ))
            ));
+        SELECT COALESCE(sum(CASE event_type WHEN 'deducted' THEN quantity ELSE -quantity END), 0)
+          INTO deducted_quantity
+          FROM inventory_deduction_events
+         WHERE order_item_id = NEW.order_item_id;
+        -- Finite stock is deducted during POST /orders. Append-only deduction and
+        -- restoration events are the durable proof for crediting those exact
+        -- order-owned units; order quantity and current stock are never provenance.
         IF NOT product_made_to_order
-           AND active_quantity + NEW.quantity > COALESCE(size_stock_stock, variant_stock, product_stock) THEN
+           AND active_quantity + NEW.quantity
+               > COALESCE(size_stock_stock, variant_stock, product_stock)
+                 + deducted_quantity THEN
             RAISE EXCEPTION 'stock reservation exceeds available inventory';
         END IF;
         SELECT COALESCE(sum(quantity), 0) INTO active_quantity
@@ -779,6 +905,7 @@ DECLARE
     quote_expires timestamptz;
     order_amount numeric;
     order_currency text;
+    order_fulfillment_status text;
     earliest_reservation_expiry timestamptz;
     predecessor payment_attempts%%ROWTYPE;
     evidence_attempt uuid;
@@ -796,9 +923,16 @@ BEGIN
         END IF;
         -- Cross-aggregate lock order is always order then quote. Quote creation
         -- already locks its order before a predecessor quote.
-        SELECT total_amount, currency INTO order_amount, order_currency
+        SELECT total_amount, currency, fulfillment_status
+          INTO order_amount, order_currency, order_fulfillment_status
           FROM orders WHERE id = NEW.order_id FOR UPDATE;
-        IF NOT FOUND OR NEW.amount <> order_amount OR NEW.currency <> order_currency THEN
+        IF NOT FOUND THEN
+            RAISE EXCEPTION 'payment amount is server-owned';
+        END IF;
+        IF order_fulfillment_status = 'cancelled' THEN
+            RAISE EXCEPTION 'cancelled order cannot start payment';
+        END IF;
+        IF NEW.amount <> order_amount OR NEW.currency <> order_currency THEN
             RAISE EXCEPTION 'payment amount is server-owned';
         END IF;
         SELECT s.quote_id, s.option_id, s.intent_id, s.customer_id,
@@ -1124,10 +1258,13 @@ BEGIN
             FROM hub_package_items hpi
             JOIN (
                 SELECT DISTINCT q.package_id, q.package_version
-                  FROM payment_attempt_reservations ar
-                  JOIN stock_reservations sr ON sr.id = ar.reservation_id
-                  JOIN customer_shipping_quotes q ON q.id = sr.quote_id
-                 WHERE ar.attempt_id = target_attempt
+                  FROM customer_shipping_quote_selections s
+                  JOIN customer_shipping_quotes q ON q.id = s.quote_id
+                 WHERE q.order_id = attempt_order
+                   AND NOT EXISTS (
+                       SELECT 1 FROM customer_shipping_quotes successor
+                        WHERE successor.supersedes_quote_id = q.id
+                   )
             ) selected_packages
               ON selected_packages.package_id = hpi.package_id
              AND selected_packages.package_version = hpi.package_version
@@ -1186,6 +1323,10 @@ DROP TRIGGER IF EXISTS trg_variations_reserved_inventory ON variations;
 DROP TRIGGER IF EXISTS trg_size_stocks_reserved_inventory ON size_stocks;
 DROP TRIGGER IF EXISTS trg_product_variants_reserved_inventory ON product_variants;
 DROP TRIGGER IF EXISTS trg_products_reserved_inventory ON products;
+DROP TRIGGER IF EXISTS trg_size_stocks_order_inventory_change ON size_stocks;
+DROP TRIGGER IF EXISTS trg_product_variants_order_inventory_change ON product_variants;
+DROP TRIGGER IF EXISTS trg_products_order_inventory_change ON products;
+DROP TRIGGER IF EXISTS trg_inventory_deduction_events_validate ON inventory_deduction_events;
 DROP FUNCTION IF EXISTS protect_reserved_order();
 DROP FUNCTION IF EXISTS protect_reserved_order_item();
 DROP FUNCTION IF EXISTS protect_reserved_inventory();
@@ -1194,6 +1335,9 @@ DROP FUNCTION IF EXISTS validate_payment_attempt_exact_reservations();
 DROP FUNCTION IF EXISTS validate_payment_attempt_membership_write();
 DROP FUNCTION IF EXISTS validate_payment_attempt_write();
 DROP FUNCTION IF EXISTS validate_stock_reservation_write();
+DROP FUNCTION IF EXISTS record_order_inventory_change();
+DROP FUNCTION IF EXISTS validate_inventory_deduction_event_write();
+DROP TABLE IF EXISTS inventory_deduction_events;
 """,
 )
 
