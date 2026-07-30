@@ -848,10 +848,10 @@ async def test_active_payment_attempt_locks_its_exact_reservation_set(
 
 
 @pytest.mark.asyncio
-async def test_expired_payment_lease_can_be_abandoned_and_reacquired(
+async def test_expired_payment_lease_requires_reconciliation_before_retry(
     db_session, vendor_user, customer_user
 ) -> None:
-    """Expired provider work becomes auditable terminal truth and a new attempt."""
+    """Unknown provider work is terminal but not safely retryable."""
 
     from app.models.stock_payment_persistence import (
         PaymentAttemptEvidence,
@@ -916,26 +916,12 @@ async def test_expired_payment_lease_can_be_abandoned_and_reacquired(
         graph, intent, quote, option, selection, customer_user["user"].id
     )
     successor.supersedes_attempt_id = attempt.id
-    db_session.add(successor)
-    await db_session.flush()
-    db_session.add(
-        PaymentAttemptReservation(
-            attempt_id=successor.id, reservation_id=reservation.id
-        )
-    )
-    await db_session.flush()
-    await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
-    await db_session.execute(text("SET CONSTRAINTS ALL DEFERRED"))
-
-    with pytest.raises(DBAPIError, match="superseded payment attempt cannot complete"):
+    with pytest.raises(
+        DBAPIError, match="payment retry must supersede current terminal leaf"
+    ):
         async with db_session.begin_nested():
-            await db_session.execute(
-                text(
-                    "UPDATE payment_attempts SET state='verified', row_version=4 "
-                    "WHERE id=:id"
-                ),
-                {"id": attempt.id},
-            )
+            db_session.add(successor)
+            await db_session.flush()
 
 
 @pytest.mark.asyncio

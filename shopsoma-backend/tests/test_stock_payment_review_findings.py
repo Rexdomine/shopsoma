@@ -1551,3 +1551,211 @@ async def test_payment_attempt_rejects_cancelled_order_authoritative_status(
         async with db_session.begin_nested():
             db_session.add(attempt)
             await db_session.flush()
+
+
+@pytest.mark.asyncio
+async def test_payment_attempt_rejects_already_paid_order(
+    db_session, vendor_user, customer_user
+) -> None:
+    lane = _lane_helpers()
+    graph, intent, quote, option, selection, sku = await lane._checkout_subject(
+        db_session, vendor_user, customer_user
+    )
+    reservation = lane._reservation(
+        graph, intent, quote, option, selection, customer_user["user"].id, sku
+    )
+    db_session.add(reservation)
+    await db_session.flush()
+    await db_session.execute(
+        text("UPDATE orders SET payment_status='PAID' WHERE id=:order_id"),
+        {"order_id": graph["order"].id},
+    )
+    with pytest.raises(DBAPIError, match="paid order cannot start payment"):
+        async with db_session.begin_nested():
+            db_session.add(
+                lane._payment_attempt(
+                    graph, intent, quote, option, selection, customer_user["user"].id
+                )
+            )
+            await db_session.flush()
+
+
+@pytest.mark.asyncio
+async def test_historical_reservation_does_not_block_product_sku_edit(
+    db_session, vendor_user, customer_user
+) -> None:
+    lane = _lane_helpers()
+    graph, intent, quote, option, selection, sku = await lane._checkout_subject(
+        db_session, vendor_user, customer_user
+    )
+    reservation = lane._reservation(
+        graph, intent, quote, option, selection, customer_user["user"].id, sku
+    )
+    db_session.add(reservation)
+    await db_session.flush()
+    await db_session.execute(
+        text(
+            "UPDATE stock_reservations SET state='released', terminal_reason='checkout abandoned', "
+            "row_version=row_version+1 WHERE id=:reservation_id"
+        ),
+        {"reservation_id": reservation.id},
+    )
+    await db_session.execute(
+        text("UPDATE products SET sku=:sku WHERE id=:product_id"),
+        {
+            "sku": f"replacement-{uuid.uuid4().hex[:8]}",
+            "product_id": graph["item"].product_id,
+        },
+    )
+
+
+async def _invalidate_intent(session, intent, operator_id) -> None:
+    from app.models.package_custody import OutboundShipmentIntentInvalidation
+
+    now = datetime.now(timezone.utc)
+    session.add(
+        OutboundShipmentIntentInvalidation(
+            intent_id=intent.id,
+            reason="package replaced",
+            actor_type="user",
+            actor_id=str(operator_id),
+            source_command="invalidate_outbound_intent",
+            idempotency_key=f"invalidate-{uuid.uuid4().hex}",
+            invalidated_at=now,
+            created_at=now,
+        )
+    )
+    await session.flush()
+
+
+@pytest.mark.asyncio
+async def test_reservation_rejects_invalidated_outbound_intent(
+    db_session, vendor_user, customer_user
+) -> None:
+    lane = _lane_helpers()
+    graph, intent, quote, option, selection, sku = await lane._checkout_subject(
+        db_session, vendor_user, customer_user
+    )
+    await _invalidate_intent(db_session, intent, graph["operator_id"])
+    with pytest.raises(
+        DBAPIError, match="stock reservation subject binding is invalid"
+    ):
+        async with db_session.begin_nested():
+            db_session.add(
+                lane._reservation(
+                    graph,
+                    intent,
+                    quote,
+                    option,
+                    selection,
+                    customer_user["user"].id,
+                    sku,
+                )
+            )
+            await db_session.flush()
+
+
+@pytest.mark.asyncio
+async def test_payment_rejects_intent_invalidated_after_reservation(
+    db_session, vendor_user, customer_user
+) -> None:
+    lane = _lane_helpers()
+    graph, intent, quote, option, selection, sku = await lane._checkout_subject(
+        db_session, vendor_user, customer_user
+    )
+    reservation = lane._reservation(
+        graph, intent, quote, option, selection, customer_user["user"].id, sku
+    )
+    db_session.add(reservation)
+    await db_session.flush()
+    await _invalidate_intent(db_session, intent, graph["operator_id"])
+    with pytest.raises(DBAPIError, match="payment attempt subject binding is invalid"):
+        async with db_session.begin_nested():
+            db_session.add(
+                lane._payment_attempt(
+                    graph, intent, quote, option, selection, customer_user["user"].id
+                )
+            )
+            await db_session.flush()
+
+
+def test_migration_backfills_identifiable_legacy_inventory_deductions() -> None:
+    migration = (
+        Path(__file__).parents[1]
+        / "alembic/versions/f9d1b3e5a7c9_add_stock_payment_persistence.py"
+    ).read_text(encoding="utf-8")
+    assert "Backfill identifiable legacy order deductions" in migration
+    assert "INSERT INTO inventory_deduction_events" in migration
+    assert "o.payment_status = 'PENDING'" in migration
+
+
+@pytest.mark.asyncio
+async def test_verification_revalidates_order_cancellation_after_provider_call(
+    db_session, vendor_user, customer_user
+) -> None:
+    from app.models.stock_payment_persistence import (
+        PaymentAttemptEvidence,
+        PaymentAttemptReservation,
+    )
+
+    lane = _lane_helpers()
+    graph, intent, quote, option, selection, sku = await lane._checkout_subject(
+        db_session, vendor_user, customer_user
+    )
+    reservation = lane._reservation(
+        graph, intent, quote, option, selection, customer_user["user"].id, sku
+    )
+    attempt = lane._payment_attempt(
+        graph, intent, quote, option, selection, customer_user["user"].id
+    )
+    db_session.add(reservation)
+    await db_session.flush()
+    db_session.add(attempt)
+    await db_session.flush()
+    db_session.add(
+        PaymentAttemptReservation(attempt_id=attempt.id, reservation_id=reservation.id)
+    )
+    await db_session.flush()
+    await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+    await db_session.execute(text("SET CONSTRAINTS ALL DEFERRED"))
+    lease_token = uuid.uuid4()
+    await db_session.execute(
+        text(
+            "UPDATE payment_attempts SET state='call_started', lease_token=:token, "
+            "row_version=2 WHERE id=:attempt_id"
+        ),
+        {"token": lease_token, "attempt_id": attempt.id},
+    )
+    evidence = PaymentAttemptEvidence(
+        attempt_id=attempt.id,
+        source="provider_webhook",
+        event_id=f"evt-{uuid.uuid4().hex}",
+        evidence_type="verified",
+        evidence_hash=uuid.uuid4().hex * 2,
+        observed_at=datetime.now(timezone.utc),
+    )
+    db_session.add(evidence)
+    await db_session.flush()
+    await db_session.execute(
+        text("UPDATE orders SET fulfillment_status='cancelled' WHERE id=:order_id"),
+        {"order_id": graph["order"].id},
+    )
+    await _present_payment_lease(db_session, lease_token)
+    with pytest.raises(DBAPIError, match="cancelled order cannot verify payment"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(
+                    "UPDATE payment_attempts SET state='verified', "
+                    "terminal_evidence_id=:evidence_id, row_version=3 WHERE id=:attempt_id"
+                ),
+                {"evidence_id": evidence.id, "attempt_id": attempt.id},
+            )
+
+
+def test_capacity_credit_covers_every_counted_order_item() -> None:
+    source = (
+        Path(__file__).parents[1] / "app/models/stock_payment_persistence.py"
+    ).read_text(encoding="utf-8")
+    assert "SELECT DISTINCT sr.order_item_id" in source
+    assert "UNION SELECT NEW.order_item_id" in source
+    assert "GROUP BY ide.order_item_id" in source

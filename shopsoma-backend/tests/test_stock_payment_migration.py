@@ -180,8 +180,117 @@ def test_lane_2a_4b_real_upgrade_downgrade_upgrade_cycle() -> None:
 
         migrate("upgrade", "e8c0a2d4f6b8")
         assert_schema(False, "e8c0a2d4f6b8")
+        vendor_user_id = uuid.uuid4()
+        customer_id = uuid.uuid4()
+        vendor_id = uuid.uuid4()
+        product_id = uuid.uuid4()
+        made_to_order_product_id = uuid.uuid4()
+        order_id = uuid.uuid4()
+        order_item_id = uuid.uuid4()
+        made_to_order_item_id = uuid.uuid4()
+        target = create_engine(database_url)
+        try:
+            with target.begin() as connection:
+                connection.execute(
+                    text(
+                        "INSERT INTO users (id,email,full_name,role,is_guest_created) VALUES "
+                        "(:vendor_user_id,:vendor_email,'Migration Vendor','VENDOR',false),"
+                        "(:customer_id,:customer_email,'Migration Customer','CUSTOMER',false)"
+                    ),
+                    {
+                        "vendor_user_id": vendor_user_id,
+                        "vendor_email": f"vendor-{uuid.uuid4().hex}@example.test",
+                        "customer_id": customer_id,
+                        "customer_email": f"customer-{uuid.uuid4().hex}@example.test",
+                    },
+                )
+                connection.execute(
+                    text(
+                        "INSERT INTO vendors "
+                        "(id,user_id,business_name,kyc_status,commission_rate,approved,"
+                        "store_active,is_onboarding,brand_info_completed,payout_info_completed,"
+                        "total_products,total_orders,total_revenue) VALUES "
+                        "(:vendor_id,:user_id,'Migration Vendor','PENDING',12.5,false,true,true,"
+                        "false,false,0,0,0)"
+                    ),
+                    {"vendor_id": vendor_id, "user_id": vendor_user_id},
+                )
+                connection.execute(
+                    text(
+                        "INSERT INTO products "
+                        "(id,vendor_id,title,base_price,currency,total_stock,status,is_featured,"
+                        "product_type,made_to_order,views_count,orders_count,moderation_status) "
+                        "VALUES (:product_id,:vendor_id,'Migration Product',10,'NGN',3,'DRAFT',"
+                        "false,'SINGLE',false,0,0,'PENDING'),"
+                        "(:made_to_order_product_id,:vendor_id,'Migration MTO Product',10,'NGN',"
+                        "0,'DRAFT',false,'SINGLE',true,0,0,'PENDING')"
+                    ),
+                    {
+                        "product_id": product_id,
+                        "made_to_order_product_id": made_to_order_product_id,
+                        "vendor_id": vendor_id,
+                    },
+                )
+                connection.execute(
+                    text(
+                        "INSERT INTO orders "
+                        "(id,order_number,customer_id,subtotal,shipping_cost,tax_amount,"
+                        "discount_amount,total_amount,payment_status,fulfillment_status) "
+                        "VALUES (:order_id,:order_number,:customer_id,20,0,0,0,20,'PENDING',"
+                        "'order_received')"
+                    ),
+                    {
+                        "order_id": order_id,
+                        "order_number": f"MIG-{uuid.uuid4().hex[:12]}",
+                        "customer_id": customer_id,
+                    },
+                )
+                connection.execute(
+                    text(
+                        "INSERT INTO order_items "
+                        "(id,order_id,product_id,vendor_id,product_title,quantity,unit_price,"
+                        "subtotal,commission_rate,commission_amount,vendor_payout,"
+                        "fulfillment_status) VALUES "
+                        "(:item_id,:order_id,:product_id,:vendor_id,'Migration Product',2,10,"
+                        "20,10,2,18,'order_received'),"
+                        "(:made_to_order_item_id,:order_id,:made_to_order_product_id,:vendor_id,"
+                        "'Migration MTO Product',1,10,10,10,1,9,'order_received')"
+                    ),
+                    {
+                        "item_id": order_item_id,
+                        "made_to_order_item_id": made_to_order_item_id,
+                        "order_id": order_id,
+                        "product_id": product_id,
+                        "made_to_order_product_id": made_to_order_product_id,
+                        "vendor_id": vendor_id,
+                    },
+                )
+        finally:
+            target.dispose()
         migrate("upgrade", "f9d1b3e5a7c9")
         assert_schema(True, "f9d1b3e5a7c9")
+        target = create_engine(database_url)
+        try:
+            with target.connect() as connection:
+                assert connection.execute(
+                    text(
+                        "SELECT event_type, quantity FROM inventory_deduction_events "
+                        "WHERE order_item_id=:item_id"
+                    ),
+                    {"item_id": order_item_id},
+                ).one() == ("deducted", 2)
+                assert (
+                    connection.scalar(
+                        text(
+                            "SELECT count(*) FROM inventory_deduction_events "
+                            "WHERE order_item_id=:item_id"
+                        ),
+                        {"item_id": made_to_order_item_id},
+                    )
+                    == 0
+                )
+        finally:
+            target.dispose()
         migrate("downgrade", "e8c0a2d4f6b8")
         assert_schema(False, "e8c0a2d4f6b8")
         migrate("upgrade", "f9d1b3e5a7c9")

@@ -555,7 +555,22 @@ BEGIN
            OR selection_intent <> NEW.intent_id OR selection_customer <> NEW.customer_id
            OR quote_order <> NEW.order_id OR quote_expires <= now_at
            OR EXISTS (SELECT 1 FROM customer_shipping_quotes successor
-                       WHERE successor.supersedes_quote_id = NEW.quote_id) THEN
+                      WHERE successor.supersedes_quote_id = NEW.quote_id)
+           OR EXISTS (SELECT 1 FROM outbound_shipment_intent_invalidations
+                       WHERE intent_id = NEW.intent_id)
+           OR NOT EXISTS (
+               SELECT 1 FROM hub_packages hp
+               JOIN customer_shipping_quotes cq ON cq.package_id = hp.id
+               JOIN hub_package_seals hs ON hs.id = cq.seal_id
+               WHERE cq.id = NEW.quote_id AND hp.state = 'ready'
+                 AND hs.retired_at IS NULL
+                 AND NOT EXISTS (
+                     SELECT 1 FROM custody_events ce
+                      WHERE ce.package_id = cq.package_id
+                        AND ce.package_version = cq.package_version
+                        AND ce.event_type IN ('released','tendered','provider_accepted')
+                 )
+           ) THEN
             RAISE EXCEPTION 'stock reservation subject binding is invalid';
         END IF;
         SELECT COALESCE(sum(quantity), 0) INTO package_item_quantity
@@ -595,10 +610,34 @@ BEGIN
                      AND pa.authorization_deadline_at >= now_at
                  ))
            ));
-        SELECT COALESCE(sum(CASE event_type WHEN 'deducted' THEN quantity ELSE -quantity END), 0)
-          INTO deducted_quantity
-          FROM inventory_deduction_events
-         WHERE order_item_id = NEW.order_item_id;
+        SELECT COALESCE(sum(item_deduction), 0) INTO deducted_quantity
+          FROM (
+              SELECT ide.order_item_id,
+                     sum(CASE ide.event_type WHEN 'deducted' THEN ide.quantity ELSE -ide.quantity END)
+                         AS item_deduction
+                FROM inventory_deduction_events ide
+               WHERE ide.order_item_id IN (
+                   SELECT DISTINCT sr.order_item_id
+                     FROM stock_reservations sr
+                    WHERE sr.product_id = NEW.product_id
+                      AND sr.variant_id IS NOT DISTINCT FROM NEW.variant_id
+                      AND sr.size_stock_id IS NOT DISTINCT FROM NEW.size_stock_id
+                      AND sr.state = 'active'
+                      AND (sr.expires_at > now_at OR EXISTS (
+                          SELECT 1 FROM payment_attempt_reservations ar
+                          JOIN payment_attempts pa ON pa.id = ar.attempt_id
+                           WHERE ar.reservation_id = sr.id
+                            AND (pa.state = 'verified' OR (
+                                pa.state = 'call_started'
+                                AND pa.call_started_at < sr.expires_at
+                                AND pa.claim_expires_at > now_at
+                                AND pa.authorization_deadline_at >= now_at
+                            ))
+                      ))
+                   UNION SELECT NEW.order_item_id
+               )
+               GROUP BY ide.order_item_id
+          ) item_deductions;
         -- Finite stock is deducted during POST /orders. Append-only deduction and
         -- restoration events are the durable proof for crediting those exact
         -- order-owned units; order quantity and current stock are never provenance.
@@ -743,10 +782,12 @@ BEGIN
         new_made_to_order := (to_jsonb(NEW)->>'made_to_order')::boolean;
         old_made_to_order := (to_jsonb(OLD)->>'made_to_order')::boolean;
         IF (new_sku IS DISTINCT FROM old_sku AND EXISTS (
-            SELECT 1 FROM stock_reservations
-             WHERE product_id = OLD.id AND variant_id IS NULL AND size_stock_id IS NULL
+            SELECT 1 FROM stock_reservations sr
+             WHERE sr.product_id = OLD.id AND sr.variant_id IS NULL AND sr.size_stock_id IS NULL
+               AND sr.state = 'active' AND sr.expires_at > now_at
         )) OR (new_made_to_order IS DISTINCT FROM old_made_to_order AND EXISTS (
-            SELECT 1 FROM stock_reservations WHERE product_id = OLD.id
+            SELECT 1 FROM stock_reservations sr
+             WHERE sr.product_id = OLD.id AND sr.state = 'active' AND sr.expires_at > now_at
         )) THEN
             RAISE EXCEPTION 'reserved product identity is immutable';
         END IF;
@@ -780,7 +821,9 @@ BEGIN
         new_product_id := (to_jsonb(NEW)->>'product_id')::uuid;
         old_product_id := (to_jsonb(OLD)->>'product_id')::uuid;
         IF (new_sku IS DISTINCT FROM old_sku OR new_product_id IS DISTINCT FROM old_product_id)
-           AND EXISTS (SELECT 1 FROM stock_reservations WHERE variant_id = OLD.id) THEN
+           AND EXISTS (SELECT 1 FROM stock_reservations sr
+                        WHERE sr.variant_id = OLD.id AND sr.state = 'active'
+                          AND sr.expires_at > now_at) THEN
             RAISE EXCEPTION 'reserved product identity is immutable';
         END IF;
         IF new_stock IS NOT DISTINCT FROM old_stock THEN
@@ -814,7 +857,9 @@ BEGIN
         old_size := to_jsonb(OLD)->>'size';
         IF (new_variation_id IS DISTINCT FROM old_variation_id
             OR new_size IS DISTINCT FROM old_size)
-           AND EXISTS (SELECT 1 FROM stock_reservations WHERE size_stock_id = OLD.id) THEN
+           AND EXISTS (SELECT 1 FROM stock_reservations sr
+                        WHERE sr.size_stock_id = OLD.id AND sr.state = 'active'
+                          AND sr.expires_at > now_at) THEN
             RAISE EXCEPTION 'reserved product identity is immutable';
         END IF;
         IF new_stock IS NOT DISTINCT FROM old_stock THEN
@@ -844,7 +889,8 @@ BEGIN
         IF new_product_id IS DISTINCT FROM old_product_id AND EXISTS (
             SELECT 1 FROM size_stocks ss
             JOIN stock_reservations sr ON sr.size_stock_id = ss.id
-            WHERE ss.variation_id = OLD.id
+            WHERE ss.variation_id = OLD.id AND sr.state = 'active'
+              AND sr.expires_at > now_at
         ) THEN
             RAISE EXCEPTION 'reserved product identity is immutable';
         END IF;
@@ -906,6 +952,7 @@ DECLARE
     order_amount numeric;
     order_currency text;
     order_fulfillment_status text;
+    order_payment_status text;
     earliest_reservation_expiry timestamptz;
     predecessor payment_attempts%%ROWTYPE;
     evidence_attempt uuid;
@@ -923,14 +970,17 @@ BEGIN
         END IF;
         -- Cross-aggregate lock order is always order then quote. Quote creation
         -- already locks its order before a predecessor quote.
-        SELECT total_amount, currency, fulfillment_status
-          INTO order_amount, order_currency, order_fulfillment_status
+        SELECT total_amount, currency, fulfillment_status, payment_status
+          INTO order_amount, order_currency, order_fulfillment_status, order_payment_status
           FROM orders WHERE id = NEW.order_id FOR UPDATE;
         IF NOT FOUND THEN
             RAISE EXCEPTION 'payment amount is server-owned';
         END IF;
         IF order_fulfillment_status = 'cancelled' THEN
             RAISE EXCEPTION 'cancelled order cannot start payment';
+        END IF;
+        IF order_payment_status = 'PAID' THEN
+            RAISE EXCEPTION 'paid order cannot start payment';
         END IF;
         IF NEW.amount <> order_amount OR NEW.currency <> order_currency THEN
             RAISE EXCEPTION 'payment amount is server-owned';
@@ -946,7 +996,22 @@ BEGIN
            OR selection_intent <> NEW.intent_id OR selection_customer <> NEW.customer_id
            OR quote_order <> NEW.order_id OR quote_expires <= now_at
            OR EXISTS (SELECT 1 FROM customer_shipping_quotes successor
-                       WHERE successor.supersedes_quote_id = NEW.quote_id) THEN
+                      WHERE successor.supersedes_quote_id = NEW.quote_id)
+           OR EXISTS (SELECT 1 FROM outbound_shipment_intent_invalidations
+                       WHERE intent_id = NEW.intent_id)
+           OR NOT EXISTS (
+               SELECT 1 FROM hub_packages hp
+               JOIN customer_shipping_quotes cq ON cq.package_id = hp.id
+               JOIN hub_package_seals hs ON hs.id = cq.seal_id
+               WHERE cq.id = NEW.quote_id AND hp.state = 'ready'
+                 AND hs.retired_at IS NULL
+                 AND NOT EXISTS (
+                     SELECT 1 FROM custody_events ce
+                      WHERE ce.package_id = cq.package_id
+                        AND ce.package_version = cq.package_version
+                        AND ce.event_type IN ('released','tendered','provider_accepted')
+                 )
+           ) THEN
             RAISE EXCEPTION 'payment attempt subject binding is invalid';
         END IF;
         SELECT min(expires_at) INTO earliest_reservation_expiry
@@ -972,7 +1037,7 @@ BEGIN
                OR NEW.supersedes_attempt_id IS DISTINCT FROM predecessor.id
                OR predecessor.order_id <> NEW.order_id
                OR predecessor.customer_id <> NEW.customer_id
-               OR predecessor.state NOT IN ('failed','expired','abandoned_unknown') THEN
+               OR predecessor.state NOT IN ('failed','expired') THEN
                 RAISE EXCEPTION 'payment retry must supersede current terminal leaf';
             END IF;
         ELSIF NEW.supersedes_attempt_id IS NOT NULL THEN
@@ -1084,6 +1149,15 @@ BEGIN
         ELSIF NEW.state = 'verified' THEN
             IF OLD.state <> 'call_started' THEN
                 RAISE EXCEPTION 'payment attempt transition is illegal';
+            END IF;
+            SELECT fulfillment_status, payment_status
+              INTO order_fulfillment_status, order_payment_status
+              FROM orders WHERE id = OLD.order_id FOR UPDATE;
+            IF NOT FOUND OR order_fulfillment_status = 'cancelled' THEN
+                RAISE EXCEPTION 'cancelled order cannot verify payment';
+            END IF;
+            IF order_payment_status = 'PAID' THEN
+                RAISE EXCEPTION 'paid order cannot verify another payment';
             END IF;
             IF now_at > OLD.authorization_deadline_at THEN
                 RAISE EXCEPTION 'payment attempt authorization deadline elapsed';
