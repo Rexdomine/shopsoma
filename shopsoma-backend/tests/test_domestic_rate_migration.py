@@ -16,7 +16,8 @@ from sqlalchemy.engine import make_url
 
 
 ROOT = Path(__file__).resolve().parents[1]
-HEAD = "e8c0a2d4f6b8"
+HEAD = "f9d1b3e5a7c9"
+QUOTE_REVISION = "e8c0a2d4f6b8"
 REVISION = "d7b9f1c3e5a8"
 PARENT = "c6a8e0f2b4d7"
 FOUNDATION_PARENT = "b5f7d9a2c4e6"
@@ -54,7 +55,8 @@ def _literal(name: str, revision_id: str = REVISION):
 def test_domestic_rate_migration_is_the_single_linear_static_head() -> None:
     graph = _scripts()
     assert graph.get_heads() == [HEAD]
-    assert graph.get_revision(HEAD).down_revision == REVISION
+    assert graph.get_revision(HEAD).down_revision == QUOTE_REVISION
+    assert graph.get_revision(QUOTE_REVISION).down_revision == REVISION
     assert graph.get_revision(REVISION).down_revision == PARENT
     assert graph.get_revision(PARENT).down_revision == FOUNDATION_PARENT
     source = _source()

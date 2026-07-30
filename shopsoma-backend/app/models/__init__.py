@@ -78,6 +78,12 @@ from app.models.customer_shipping_quote import (
     CustomerShippingQuoteOption,
     CustomerShippingQuoteSelection,
 )
+from app.models.stock_payment_persistence import (
+    PaymentAttempt,
+    PaymentAttemptEvidence,
+    PaymentAttemptReservation,
+    StockReservation,
+)
 
 __all__ = [
     "User",
@@ -147,4 +153,8 @@ __all__ = [
     "CustomerShippingQuote",
     "CustomerShippingQuoteOption",
     "CustomerShippingQuoteSelection",
+    "StockReservation",
+    "PaymentAttempt",
+    "PaymentAttemptReservation",
+    "PaymentAttemptEvidence",
 ]
