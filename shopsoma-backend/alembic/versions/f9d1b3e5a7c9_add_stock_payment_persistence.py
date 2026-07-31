@@ -34,7 +34,7 @@ def _statements(blocks):
     for block in blocks:
         remaining = block.strip()
         while remaining:
-            if remaining.startswith("CREATE FUNCTION"):
+            if remaining.startswith(("CREATE FUNCTION", "CREATE OR REPLACE FUNCTION")):
                 marker = "$$ LANGUAGE plpgsql;"
                 end = remaining.index(marker) + len(marker)
             else:

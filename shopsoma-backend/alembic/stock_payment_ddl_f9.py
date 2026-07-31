@@ -704,6 +704,17 @@ TRIGGER_DDLS = (
     "\n"
     "CREATE FUNCTION protect_reserved_order() RETURNS trigger AS $$\n"
     "BEGIN\n"
+    "    -- Every order UPDATE already owns the order row, the global serialization\n"
+    "    -- point. Read attempt state without reversing the attempt -> order lock\n"
+    "    -- order; a concurrent attempt transition waits, then revalidates the order.\n"
+    "    IF NEW.payment_status IS DISTINCT FROM OLD.payment_status\n"
+    "       AND EXISTS (\n"
+    "           SELECT 1 FROM payment_attempts pa\n"
+    "            WHERE pa.order_id = OLD.id\n"
+    "              AND pa.state IN ('pending', 'call_started', 'abandoned_unknown')\n"
+    "       ) THEN\n"
+    "        RAISE EXCEPTION 'payment attempt prevents legacy payment status write';\n"
+    "    END IF;\n"
     "    IF NEW.fulfillment_status = 'cancelled'\n"
     "       AND OLD.fulfillment_status IS DISTINCT FROM 'cancelled'\n"
     "       AND EXISTS (\n"
@@ -724,6 +735,74 @@ TRIGGER_DDLS = (
     "$$ LANGUAGE plpgsql;\n"
     "CREATE TRIGGER trg_orders_reserved_payment_truth\n"
     "BEFORE UPDATE ON orders FOR EACH ROW EXECUTE FUNCTION protect_reserved_order();\n",
+    r"""
+CREATE OR REPLACE FUNCTION validate_customer_shipping_quote_selection_write() RETURNS trigger AS $$
+DECLARE
+    quote customer_shipping_quotes%ROWTYPE;
+    option_quote_id uuid;
+    event_at timestamptz;
+    package_state text;
+    seal_retired_at timestamptz;
+    quote_order_id uuid;
+BEGIN
+    IF TG_OP <> 'INSERT' THEN
+        RAISE EXCEPTION USING ERRCODE='23503', MESSAGE='quote selection records are immutable audit';
+    END IF;
+    SELECT * INTO quote FROM customer_shipping_quotes WHERE id=NEW.quote_id;
+    IF NOT FOUND OR quote.customer_id IS DISTINCT FROM NEW.customer_id
+       OR quote.intent_id IS DISTINCT FROM NEW.intent_id
+       OR NEW.selected_by_id IS DISTINCT FROM NEW.customer_id THEN
+        RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='quote selection owner does not match quote';
+    END IF;
+    -- Selection joins the global order-first payment lock order before any
+    -- package/intent/quote lock. This serializes the selected package set with
+    -- attempt creation, provider-call start, verification, and legacy writes.
+    quote_order_id := quote.order_id;
+    PERFORM 1 FROM orders WHERE id=quote_order_id FOR UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='quote selection order is invalid';
+    END IF;
+    IF EXISTS (
+        SELECT 1 FROM payment_attempts pa
+         WHERE pa.order_id=quote_order_id
+           AND pa.state IN ('pending','call_started','abandoned_unknown','verified')
+    ) THEN
+        RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='payment attempt prevents later package selection';
+    END IF;
+    PERFORM 1 FROM hub_package_seals WHERE id=quote.seal_id FOR UPDATE;
+    SELECT state INTO package_state FROM hub_packages
+     WHERE id=quote.package_id FOR UPDATE;
+    PERFORM 1 FROM outbound_shipment_intents
+     WHERE id=quote.intent_id FOR UPDATE;
+    SELECT * INTO quote FROM customer_shipping_quotes WHERE id=NEW.quote_id FOR UPDATE;
+    event_at := clock_timestamp();
+    NEW.selected_at := event_at;
+    NEW.created_at := event_at;
+    SELECT retired_at INTO seal_retired_at FROM hub_package_seals WHERE id=quote.seal_id;
+    IF EXISTS (
+        SELECT 1 FROM outbound_shipment_intent_invalidations WHERE intent_id=quote.intent_id
+    ) OR package_state IS DISTINCT FROM 'ready' OR seal_retired_at IS NOT NULL
+       OR EXISTS (
+           SELECT 1 FROM custody_events
+            WHERE package_id=quote.package_id AND package_version=quote.package_version
+              AND event_type IN ('released','tendered','provider_accepted')
+       ) THEN
+        RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='quote subject is no longer eligible for selection';
+    END IF;
+    SELECT quote_id INTO option_quote_id FROM customer_shipping_quote_options
+     WHERE id=NEW.option_id FOR KEY SHARE;
+    IF option_quote_id IS DISTINCT FROM NEW.quote_id THEN
+        RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='quote selection must identify an option from the quote';
+    END IF;
+    IF event_at >= quote.expires_at OR EXISTS (
+        SELECT 1 FROM customer_shipping_quotes successor WHERE successor.supersedes_quote_id=quote.id
+    ) THEN
+        RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='quote is expired or superseded';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+""",
     "\n"
     "CREATE FUNCTION validate_payment_attempt_write() RETURNS trigger AS $$\n"
     "DECLARE\n"
@@ -897,6 +976,39 @@ TRIGGER_DDLS = (
     "        IF order_payment_status = 'PAID' THEN\n"
     "            RAISE EXCEPTION 'paid order cannot start payment call';\n"
     "        END IF;\n"
+    "        -- The order lock makes the selected package set stable. Compare the\n"
+    "        -- complete current leaf-selection composition with the attempt's frozen\n"
+    "        -- reservation membership before any provider call can begin.\n"
+    "        IF EXISTS (\n"
+    "            SELECT 1\n"
+    "              FROM (\n"
+    "                  SELECT q.package_id, q.package_version, hpi.order_item_id,\n"
+    "                         sum(hpi.quantity) AS selected_quantity\n"
+    "                    FROM customer_shipping_quote_selections s\n"
+    "                    JOIN customer_shipping_quotes q ON q.id = s.quote_id\n"
+    "                    JOIN hub_package_items hpi\n"
+    "                      ON hpi.package_id = q.package_id\n"
+    "                     AND hpi.package_version = q.package_version\n"
+    "                   WHERE q.order_id = OLD.order_id\n"
+    "                     AND NOT EXISTS (\n"
+    "                         SELECT 1 FROM customer_shipping_quotes successor\n"
+    "                          WHERE successor.supersedes_quote_id = q.id\n"
+    "                     )\n"
+    "                   GROUP BY q.package_id, q.package_version, hpi.order_item_id\n"
+    "              ) selected\n"
+    "              FULL OUTER JOIN (\n"
+    "                  SELECT q.package_id, q.package_version, sr.order_item_id,\n"
+    "                         sum(sr.quantity) AS reserved_quantity\n"
+    "                    FROM payment_attempt_reservations ar\n"
+    "                    JOIN stock_reservations sr ON sr.id = ar.reservation_id\n"
+    "                    JOIN customer_shipping_quotes q ON q.id = sr.quote_id\n"
+    "                   WHERE ar.attempt_id = OLD.id\n"
+    "                   GROUP BY q.package_id, q.package_version, sr.order_item_id\n"
+    "              ) reserved USING (package_id, package_version, order_item_id)\n"
+    "             WHERE selected.selected_quantity IS DISTINCT FROM reserved.reserved_quantity\n"
+    "        ) THEN\n"
+    "            RAISE EXCEPTION 'payment attempt selected package set changed';\n"
+    "        END IF;\n"
     "        -- Global payment/inventory lock order: target attempt (owned by UPDATE),\n"
     "        -- order, products, variations, product variants, size stocks, then linked\n"
     "        -- reservations. Reservation creation uses order/item before the same\n"
@@ -1048,6 +1160,39 @@ TRIGGER_DDLS = (
     "            END IF;\n"
     "            IF order_payment_status = 'PAID' THEN\n"
     "                RAISE EXCEPTION 'paid order cannot verify another payment';\n"
+    "            END IF;\n"
+    "            -- The same order lock serializes reconciliation with package selection.\n"
+    "            -- Recheck the complete selected package composition for historical,\n"
+    "            -- imported, or otherwise pre-fence rows before recording success.\n"
+    "            IF EXISTS (\n"
+    "                SELECT 1\n"
+    "                  FROM (\n"
+    "                      SELECT q.package_id, q.package_version, hpi.order_item_id,\n"
+    "                             sum(hpi.quantity) AS selected_quantity\n"
+    "                        FROM customer_shipping_quote_selections s\n"
+    "                        JOIN customer_shipping_quotes q ON q.id = s.quote_id\n"
+    "                        JOIN hub_package_items hpi\n"
+    "                          ON hpi.package_id = q.package_id\n"
+    "                         AND hpi.package_version = q.package_version\n"
+    "                       WHERE q.order_id = OLD.order_id\n"
+    "                         AND NOT EXISTS (\n"
+    "                             SELECT 1 FROM customer_shipping_quotes successor\n"
+    "                              WHERE successor.supersedes_quote_id = q.id\n"
+    "                         )\n"
+    "                       GROUP BY q.package_id, q.package_version, hpi.order_item_id\n"
+    "                  ) selected\n"
+    "                  FULL OUTER JOIN (\n"
+    "                      SELECT q.package_id, q.package_version, sr.order_item_id,\n"
+    "                             sum(sr.quantity) AS reserved_quantity\n"
+    "                        FROM payment_attempt_reservations ar\n"
+    "                        JOIN stock_reservations sr ON sr.id = ar.reservation_id\n"
+    "                        JOIN customer_shipping_quotes q ON q.id = sr.quote_id\n"
+    "                       WHERE ar.attempt_id = OLD.id\n"
+    "                       GROUP BY q.package_id, q.package_version, sr.order_item_id\n"
+    "                  ) reserved USING (package_id, package_version, order_item_id)\n"
+    "                 WHERE selected.selected_quantity IS DISTINCT FROM reserved.reserved_quantity\n"
+    "            ) THEN\n"
+    "                RAISE EXCEPTION 'payment attempt selected package set changed';\n"
     "            END IF;\n"
     "            IF OLD.state = 'call_started' AND now_at > OLD.authorization_deadline_at THEN\n"
     "                RAISE EXCEPTION 'payment attempt authorization deadline elapsed';\n"

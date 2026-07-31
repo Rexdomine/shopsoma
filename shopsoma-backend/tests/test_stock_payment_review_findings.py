@@ -28,8 +28,16 @@ def _lane_helpers():
     return module
 
 
-async def _alternate_selection(session, lane, graph, customer_id, *, quantity: int = 1):
-    """Create a second package/intent/selection for the same order."""
+async def _alternate_selection(
+    session,
+    lane,
+    graph,
+    customer_id,
+    *,
+    quantity: int = 1,
+    selected: bool = True,
+):
+    """Create a second package/intent/quote, optionally selected, for one order."""
 
     from app.models.customer_shipping_quote import CustomerShippingQuoteSelection
     from app.models.package_custody import OutboundShipmentIntent
@@ -66,6 +74,8 @@ async def _alternate_selection(session, lane, graph, customer_id, *, quantity: i
     option = quote_helpers._option(quote.id, f"alternate-{uuid.uuid4().hex[:8]}")
     session.add(option)
     await session.flush()
+    if not selected:
+        return intent, quote, option, None
     selection = CustomerShippingQuoteSelection(
         quote_id=quote.id,
         intent_id=intent.id,
@@ -171,6 +181,78 @@ async def _present_payment_lease(session, lease_token: uuid.UUID) -> None:
     await session.execute(
         text("SELECT set_config('shopsoma.payment_lease_token', :token, true)"),
         {"token": str(lease_token)},
+    )
+
+
+async def _set_attempt_state_for_interlock_matrix(session, attempt, state: str) -> None:
+    """Reach each persisted state while preserving the real transition contract."""
+
+    if state == "pending":
+        return
+    if state == "expired":
+        await session.execute(text("SET LOCAL session_replication_role = replica"))
+        await session.execute(
+            text(
+                "UPDATE payment_attempts SET state='expired', terminal_at=clock_timestamp(), "
+                "row_version=2 WHERE id=:attempt_id"
+            ),
+            {"attempt_id": attempt.id},
+        )
+        await session.execute(text("SET LOCAL session_replication_role = origin"))
+        return
+
+    lease_token = uuid.uuid4()
+    if state == "failed":
+        evidence_type = "payment_failed"
+        next_version = 2
+    else:
+        await session.execute(
+            text(
+                "UPDATE payment_attempts SET state='call_started', lease_token=:token, "
+                "row_version=2 WHERE id=:attempt_id"
+            ),
+            {"token": lease_token, "attempt_id": attempt.id},
+        )
+        if state == "call_started":
+            return
+        evidence_type = (
+            "outcome_unknown" if state == "abandoned_unknown" else "payment_verified"
+        )
+        next_version = 3
+
+    evidence = PaymentAttemptEvidence(
+        attempt_id=attempt.id,
+        source="interlock_matrix",
+        event_id=f"{state}-{uuid.uuid4().hex}",
+        evidence_type=evidence_type,
+        evidence_hash=uuid.uuid4().hex * 2,
+        observed_at=datetime.now(timezone.utc),
+    )
+    session.add(evidence)
+    await session.flush()
+    if state == "abandoned_unknown":
+        await session.execute(text("SET LOCAL session_replication_role = replica"))
+        await session.execute(
+            text(
+                "UPDATE payment_attempts SET claim_expires_at=clock_timestamp() - interval '1 second' "
+                "WHERE id=:attempt_id"
+            ),
+            {"attempt_id": attempt.id},
+        )
+        await session.execute(text("SET LOCAL session_replication_role = origin"))
+    if state in {"verified", "abandoned_unknown"}:
+        await _present_payment_lease(session, lease_token)
+    await session.execute(
+        text(
+            "UPDATE payment_attempts SET state=:state, terminal_evidence_id=:evidence_id, "
+            "row_version=:row_version WHERE id=:attempt_id"
+        ),
+        {
+            "state": state,
+            "evidence_id": evidence.id,
+            "row_version": next_version,
+            "attempt_id": attempt.id,
+        },
     )
 
 
@@ -2372,6 +2454,351 @@ def test_intent_invalidation_is_fenced_by_payment_outcome() -> None:
     assert "ORDER BY pa.id FOR UPDATE OF pa" in source
     assert "pa.state IN ('call_started', 'abandoned_unknown', 'verified')" in source
     assert "payment attempt prevents intent invalidation" in source
+
+
+async def _attempt_with_late_selection_candidate(session, vendor_user, customer_user):
+    lane = _lane_helpers()
+    graph, intent, quote, option, selection, sku = await lane._checkout_subject(
+        session, vendor_user, customer_user, stock=2
+    )
+    alternate_intent, alternate_quote, alternate_option, _ = await _alternate_selection(
+        session,
+        lane,
+        graph,
+        customer_user["user"].id,
+        selected=False,
+    )
+    reservation = lane._reservation(
+        graph, intent, quote, option, selection, customer_user["user"].id, sku
+    )
+    session.add(reservation)
+    await session.flush()
+    attempt = lane._payment_attempt(
+        graph, intent, quote, option, selection, customer_user["user"].id
+    )
+    session.add(attempt)
+    await session.flush()
+    session.add(
+        PaymentAttemptReservation(attempt_id=attempt.id, reservation_id=reservation.id)
+    )
+    await session.flush()
+    await session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+    await session.execute(text("SET CONSTRAINTS ALL DEFERRED"))
+    return (
+        lane,
+        graph,
+        attempt,
+        alternate_intent,
+        alternate_quote,
+        alternate_option,
+    )
+
+
+def _late_selection(graph, customer_id, intent, quote, option):
+    from app.models.customer_shipping_quote import CustomerShippingQuoteSelection
+
+    return CustomerShippingQuoteSelection(
+        quote_id=quote.id,
+        intent_id=intent.id,
+        option_id=option.id,
+        customer_id=customer_id,
+        selected_by_id=customer_id,
+        source_command="select_shipping_quote_option",
+        idempotency_key=f"late-selection-{uuid.uuid4().hex}",
+        selected_at=datetime.now(timezone.utc),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("attempt_state", "legacy_write_blocked", "selection_blocked"),
+    [
+        ("pending", True, True),
+        ("call_started", True, True),
+        ("abandoned_unknown", True, True),
+        ("verified", False, True),
+        ("failed", False, False),
+        ("expired", False, False),
+    ],
+)
+async def test_attempt_state_cartesian_interlock_matrix(
+    db_session,
+    vendor_user,
+    customer_user,
+    attempt_state,
+    legacy_write_blocked,
+    selection_blocked,
+) -> None:
+    (
+        _lane,
+        graph,
+        attempt,
+        alternate_intent,
+        alternate_quote,
+        alternate_option,
+    ) = await _attempt_with_late_selection_candidate(
+        db_session, vendor_user, customer_user
+    )
+    await _set_attempt_state_for_interlock_matrix(db_session, attempt, attempt_state)
+
+    legacy_savepoint = await db_session.begin_nested()
+    try:
+        if legacy_write_blocked:
+            with pytest.raises(
+                DBAPIError, match="payment attempt prevents legacy payment status write"
+            ):
+                await db_session.execute(
+                    text("UPDATE orders SET payment_status='PAID' WHERE id=:order_id"),
+                    {"order_id": graph["order"].id},
+                )
+        else:
+            await db_session.execute(
+                text("UPDATE orders SET payment_status='PAID' WHERE id=:order_id"),
+                {"order_id": graph["order"].id},
+            )
+    finally:
+        await legacy_savepoint.rollback()
+
+    late = _late_selection(
+        graph,
+        customer_user["user"].id,
+        alternate_intent,
+        alternate_quote,
+        alternate_option,
+    )
+    selection_savepoint = await db_session.begin_nested()
+    try:
+        db_session.add(late)
+        if selection_blocked:
+            with pytest.raises(
+                DBAPIError, match="payment attempt prevents later package selection"
+            ):
+                await db_session.flush()
+        else:
+            await db_session.flush()
+    finally:
+        await selection_savepoint.rollback()
+
+
+@pytest.mark.asyncio
+async def test_call_start_rejects_historical_late_selected_package(
+    db_session, vendor_user, customer_user
+) -> None:
+    (
+        _lane,
+        graph,
+        attempt,
+        alternate_intent,
+        alternate_quote,
+        alternate_option,
+    ) = await _attempt_with_late_selection_candidate(
+        db_session, vendor_user, customer_user
+    )
+    await db_session.execute(text("SET LOCAL session_replication_role = replica"))
+    db_session.add(
+        _late_selection(
+            graph,
+            customer_user["user"].id,
+            alternate_intent,
+            alternate_quote,
+            alternate_option,
+        )
+    )
+    await db_session.flush()
+    await db_session.execute(text("SET LOCAL session_replication_role = origin"))
+
+    with pytest.raises(
+        DBAPIError, match="payment attempt selected package set changed"
+    ):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(
+                    "UPDATE payment_attempts SET state='call_started', lease_token=:token, "
+                    "row_version=2 WHERE id=:attempt_id"
+                ),
+                {"token": uuid.uuid4(), "attempt_id": attempt.id},
+            )
+
+
+@pytest.mark.asyncio
+async def test_verification_rejects_historical_late_selected_package(
+    db_session, vendor_user, customer_user
+) -> None:
+    (
+        _lane,
+        graph,
+        attempt,
+        alternate_intent,
+        alternate_quote,
+        alternate_option,
+    ) = await _attempt_with_late_selection_candidate(
+        db_session, vendor_user, customer_user
+    )
+    lease_token = uuid.uuid4()
+    await db_session.execute(
+        text(
+            "UPDATE payment_attempts SET state='call_started', lease_token=:token, "
+            "row_version=2 WHERE id=:attempt_id"
+        ),
+        {"token": lease_token, "attempt_id": attempt.id},
+    )
+    await db_session.execute(text("SET LOCAL session_replication_role = replica"))
+    db_session.add(
+        _late_selection(
+            graph,
+            customer_user["user"].id,
+            alternate_intent,
+            alternate_quote,
+            alternate_option,
+        )
+    )
+    await db_session.flush()
+    await db_session.execute(text("SET LOCAL session_replication_role = origin"))
+    evidence = PaymentAttemptEvidence(
+        attempt_id=attempt.id,
+        source="interlock_matrix",
+        event_id=f"late-verify-{uuid.uuid4().hex}",
+        evidence_type="payment_verified",
+        evidence_hash=uuid.uuid4().hex * 2,
+        observed_at=datetime.now(timezone.utc),
+    )
+    db_session.add(evidence)
+    await db_session.flush()
+    await _present_payment_lease(db_session, lease_token)
+
+    with pytest.raises(
+        DBAPIError, match="payment attempt selected package set changed"
+    ):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(
+                    "UPDATE payment_attempts SET state='verified', "
+                    "terminal_evidence_id=:evidence_id, row_version=3 "
+                    "WHERE id=:attempt_id"
+                ),
+                {"evidence_id": evidence.id, "attempt_id": attempt.id},
+            )
+
+
+@pytest.mark.asyncio
+async def test_call_start_serializes_before_late_selection_across_connections(
+    db_session, vendor_user, customer_user
+) -> None:
+    (
+        _lane,
+        graph,
+        attempt,
+        alternate_intent,
+        alternate_quote,
+        alternate_option,
+    ) = await _attempt_with_late_selection_candidate(
+        db_session, vendor_user, customer_user
+    )
+    await db_session.commit()
+    factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+    caller = factory()
+    selector = factory()
+    selection_task = None
+    try:
+        await caller.execute(
+            text(
+                "UPDATE payment_attempts SET state='call_started', lease_token=:token, "
+                "row_version=2 WHERE id=:attempt_id"
+            ),
+            {"token": uuid.uuid4(), "attempt_id": attempt.id},
+        )
+
+        async def select_late_package():
+            selector.add(
+                _late_selection(
+                    graph,
+                    customer_user["user"].id,
+                    alternate_intent,
+                    alternate_quote,
+                    alternate_option,
+                )
+            )
+            try:
+                await selector.flush()
+                await selector.commit()
+                return None
+            except DBAPIError as exc:
+                await selector.rollback()
+                return str(exc)
+
+        selection_task = asyncio.create_task(select_late_package())
+        await asyncio.sleep(0.2)
+        assert not selection_task.done()
+        await caller.commit()
+        result = await asyncio.wait_for(selection_task, timeout=5)
+        assert result is not None
+        assert "payment attempt prevents later package selection" in result
+    finally:
+        if selection_task is not None and not selection_task.done():
+            selection_task.cancel()
+            await asyncio.gather(selection_task, return_exceptions=True)
+        await caller.rollback()
+        await selector.rollback()
+        await caller.close()
+        await selector.close()
+
+
+@pytest.mark.asyncio
+async def test_legacy_payment_write_serializes_before_call_start(
+    db_session, vendor_user, customer_user
+) -> None:
+    (
+        _lane,
+        graph,
+        attempt,
+        _alternate_intent,
+        _alternate_quote,
+        _alternate_option,
+    ) = await _attempt_with_late_selection_candidate(
+        db_session, vendor_user, customer_user
+    )
+    await db_session.commit()
+    factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+    legacy = factory()
+    caller = factory()
+    call_task = None
+    try:
+        await legacy.execute(
+            text("UPDATE orders SET updated_at=updated_at WHERE id=:order_id"),
+            {"order_id": graph["order"].id},
+        )
+
+        async def start_call():
+            await caller.execute(
+                text(
+                    "UPDATE payment_attempts SET state='call_started', lease_token=:token, "
+                    "row_version=2 WHERE id=:attempt_id"
+                ),
+                {"token": uuid.uuid4(), "attempt_id": attempt.id},
+            )
+            await caller.commit()
+
+        call_task = asyncio.create_task(start_call())
+        await asyncio.sleep(0.2)
+        assert not call_task.done()
+        with pytest.raises(
+            DBAPIError, match="payment attempt prevents legacy payment status write"
+        ):
+            async with legacy.begin_nested():
+                await legacy.execute(
+                    text("UPDATE orders SET payment_status='PAID' WHERE id=:order_id"),
+                    {"order_id": graph["order"].id},
+                )
+        await legacy.rollback()
+        await asyncio.wait_for(call_task, timeout=5)
+    finally:
+        if call_task is not None and not call_task.done():
+            call_task.cancel()
+            await asyncio.gather(call_task, return_exceptions=True)
+        await legacy.rollback()
+        await caller.rollback()
+        await legacy.close()
+        await caller.close()
 
 
 def test_verified_payment_blocks_late_order_cancellation() -> None:

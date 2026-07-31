@@ -453,13 +453,14 @@ BEFORE INSERT OR UPDATE OR DELETE ON customer_shipping_quote_options
 FOR EACH ROW EXECUTE FUNCTION validate_customer_shipping_quote_option_write();
 """,
     """
-CREATE FUNCTION validate_customer_shipping_quote_selection_write() RETURNS trigger AS $$
+CREATE OR REPLACE FUNCTION validate_customer_shipping_quote_selection_write() RETURNS trigger AS $$
 DECLARE
     quote customer_shipping_quotes%%ROWTYPE;
     option_quote_id uuid;
     event_at timestamptz;
     package_state text;
     seal_retired_at timestamptz;
+    quote_order_id uuid;
 BEGIN
     IF TG_OP <> 'INSERT' THEN
         RAISE EXCEPTION USING ERRCODE='23503', MESSAGE='quote selection records are immutable audit';
@@ -469,6 +470,21 @@ BEGIN
        OR quote.intent_id IS DISTINCT FROM NEW.intent_id
        OR NEW.selected_by_id IS DISTINCT FROM NEW.customer_id THEN
         RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='quote selection owner does not match quote';
+    END IF;
+    -- Selection joins the global order-first payment lock order before any
+    -- package/intent/quote lock. This serializes the selected package set with
+    -- attempt creation, provider-call start, verification, and legacy writes.
+    quote_order_id := quote.order_id;
+    PERFORM 1 FROM orders WHERE id=quote_order_id FOR UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='quote selection order is invalid';
+    END IF;
+    IF EXISTS (
+        SELECT 1 FROM payment_attempts pa
+         WHERE pa.order_id=quote_order_id
+           AND pa.state IN ('pending','call_started','abandoned_unknown','verified')
+    ) THEN
+        RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='payment attempt prevents later package selection';
     END IF;
     PERFORM 1 FROM hub_package_seals WHERE id=quote.seal_id FOR UPDATE;
     SELECT state INTO package_state FROM hub_packages
