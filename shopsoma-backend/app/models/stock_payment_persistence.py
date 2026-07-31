@@ -1308,6 +1308,10 @@ BEGIN
                          SELECT 1 FROM customer_shipping_quotes successor
                           WHERE successor.supersedes_quote_id = q.id
                      )
+                     AND NOT EXISTS (
+                         SELECT 1 FROM outbound_shipment_intent_invalidations invalidation
+                          WHERE invalidation.intent_id = s.intent_id
+                     )
                    GROUP BY q.package_id, q.package_version, hpi.order_item_id
               ) selected
               FULL OUTER JOIN (
@@ -1317,6 +1321,10 @@ BEGIN
                     JOIN stock_reservations sr ON sr.id = ar.reservation_id
                     JOIN customer_shipping_quotes q ON q.id = sr.quote_id
                    WHERE ar.attempt_id = OLD.id
+                     AND NOT EXISTS (
+                         SELECT 1 FROM outbound_shipment_intent_invalidations invalidation
+                          WHERE invalidation.intent_id = sr.intent_id
+                     )
                    GROUP BY q.package_id, q.package_version, sr.order_item_id
               ) reserved USING (package_id, package_version, order_item_id)
              WHERE selected.selected_quantity IS DISTINCT FROM reserved.reserved_quantity
@@ -1493,6 +1501,10 @@ BEGIN
                              SELECT 1 FROM customer_shipping_quotes successor
                               WHERE successor.supersedes_quote_id = q.id
                          )
+                         AND NOT EXISTS (
+                             SELECT 1 FROM outbound_shipment_intent_invalidations invalidation
+                              WHERE invalidation.intent_id = s.intent_id
+                         )
                        GROUP BY q.package_id, q.package_version, hpi.order_item_id
                   ) selected
                   FULL OUTER JOIN (
@@ -1502,6 +1514,10 @@ BEGIN
                         JOIN stock_reservations sr ON sr.id = ar.reservation_id
                         JOIN customer_shipping_quotes q ON q.id = sr.quote_id
                        WHERE ar.attempt_id = OLD.id
+                         AND NOT EXISTS (
+                             SELECT 1 FROM outbound_shipment_intent_invalidations invalidation
+                              WHERE invalidation.intent_id = sr.intent_id
+                         )
                        GROUP BY q.package_id, q.package_version, sr.order_item_id
                   ) reserved USING (package_id, package_version, order_item_id)
                  WHERE selected.selected_quantity IS DISTINCT FROM reserved.reserved_quantity

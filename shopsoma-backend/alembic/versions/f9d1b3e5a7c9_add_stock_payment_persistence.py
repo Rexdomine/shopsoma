@@ -4,6 +4,7 @@ Revision ID: f9d1b3e5a7c9
 Revises: e8c0a2d4f6b8
 """
 
+import ast
 import importlib.util
 from pathlib import Path
 
@@ -41,6 +42,33 @@ def _statements(blocks):
                 end = remaining.index(";") + 1
             yield remaining[:end].strip()
             remaining = remaining[end:].strip()
+
+
+def _pre_f9_selection_validator_ddl() -> str:
+    """Read the exact validator installed by the immutable parent migration."""
+
+    parent_path = Path(__file__).with_name(
+        "e8c0a2d4f6b8_add_customer_shipping_quote_persistence.py"
+    )
+    tree = ast.parse(parent_path.read_text(encoding="utf-8"))
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name == "upgrade":
+            for child in node.body:
+                if (
+                    isinstance(child, ast.Assign)
+                    and len(child.targets) == 1
+                    and isinstance(child.targets[0], ast.Name)
+                    and child.targets[0].id == "statements"
+                ):
+                    statements = ast.literal_eval(child.value)
+                    return next(
+                        statement
+                        for statement in statements
+                        if statement.startswith(
+                            "CREATE FUNCTION validate_customer_shipping_quote_selection_write()"
+                        )
+                    )
+    raise RuntimeError("parent shipping-selection validator DDL is missing")
 
 
 def upgrade() -> None:
@@ -173,3 +201,8 @@ def downgrade() -> None:
     op.drop_table("stock_reservations")
     for statement in _statements(DROP_DDLS):
         op.execute(statement)
+    op.execute(
+        _pre_f9_selection_validator_ddl().replace(
+            "CREATE FUNCTION", "CREATE OR REPLACE FUNCTION", 1
+        )
+    )

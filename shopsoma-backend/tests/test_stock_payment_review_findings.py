@@ -1634,6 +1634,38 @@ async def test_repacked_order_requires_only_non_invalidated_selected_package(
 
 
 @pytest.mark.asyncio
+async def test_repacked_multi_package_attempt_revalidates_only_current_selections(
+    db_session, vendor_user, customer_user
+) -> None:
+    lane = _lane_helpers()
+    graph, old_intent, _old_quote, _old_option, _old_selection, sku = (
+        await lane._checkout_subject(db_session, vendor_user, customer_user, stock=4)
+    )
+    await _invalidate_intent(db_session, old_intent, graph["operator_id"])
+    replacement = await _alternate_selection(
+        db_session, lane, graph, customer_user["user"].id
+    )
+    attempt, _second_current_intent = await _multi_package_attempt_subject(
+        db_session,
+        lane,
+        graph,
+        replacement,
+        customer_user["user"].id,
+        sku,
+    )
+
+    await _transition_multi_package_attempt(db_session, attempt, "verified")
+
+    assert (
+        await db_session.scalar(
+            text("SELECT state FROM payment_attempts WHERE id=:attempt_id"),
+            {"attempt_id": attempt.id},
+        )
+        == "verified"
+    )
+
+
+@pytest.mark.asyncio
 async def test_cohort_split_package_quantity_is_aggregated_for_reservation_and_attempt(
     db_session, vendor_user, customer_user
 ) -> None:

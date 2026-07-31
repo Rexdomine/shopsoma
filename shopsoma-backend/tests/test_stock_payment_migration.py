@@ -178,8 +178,38 @@ def test_lane_2a_4b_real_upgrade_downgrade_upgrade_cycle() -> None:
             finally:
                 target.dispose()
 
+        def selection_validator_definition() -> str:
+            target = create_engine(database_url)
+            try:
+                with target.connect() as connection:
+                    definition = connection.scalar(
+                        text(
+                            "SELECT pg_get_functiondef("
+                            "'validate_customer_shipping_quote_selection_write()'::regprocedure)"
+                        )
+                    )
+                    assert definition is not None
+                    trigger_function = connection.scalar(
+                        text(
+                            "SELECT p.proname FROM pg_trigger t "
+                            "JOIN pg_proc p ON p.oid=t.tgfoid "
+                            "WHERE t.tgrelid='customer_shipping_quote_selections'::regclass "
+                            "AND t.tgname='customer_shipping_quote_selections_validate' "
+                            "AND NOT t.tgisinternal"
+                        )
+                    )
+                    assert (
+                        trigger_function
+                        == "validate_customer_shipping_quote_selection_write"
+                    )
+                    return definition
+            finally:
+                target.dispose()
+
         migrate("upgrade", "e8c0a2d4f6b8")
         assert_schema(False, "e8c0a2d4f6b8")
+        pre_f9_selection_validator = selection_validator_definition()
+        assert "payment_attempts" not in pre_f9_selection_validator
         vendor_user_id = uuid.uuid4()
         customer_id = uuid.uuid4()
         vendor_id = uuid.uuid4()
@@ -279,6 +309,8 @@ def test_lane_2a_4b_real_upgrade_downgrade_upgrade_cycle() -> None:
             target.dispose()
         migrate("upgrade", "f9d1b3e5a7c9")
         assert_schema(True, "f9d1b3e5a7c9")
+        f9_selection_validator = selection_validator_definition()
+        assert "payment_attempts" in f9_selection_validator
         target = create_engine(database_url)
         try:
             with target.connect() as connection:
@@ -306,8 +338,10 @@ def test_lane_2a_4b_real_upgrade_downgrade_upgrade_cycle() -> None:
             target.dispose()
         migrate("downgrade", "e8c0a2d4f6b8")
         assert_schema(False, "e8c0a2d4f6b8")
+        assert selection_validator_definition() == pre_f9_selection_validator
         migrate("upgrade", "f9d1b3e5a7c9")
         assert_schema(True, "f9d1b3e5a7c9")
+        assert selection_validator_definition() == f9_selection_validator
     finally:
         with admin.connect() as connection:
             connection.execute(
