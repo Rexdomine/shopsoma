@@ -603,11 +603,8 @@ BEGIN
                SELECT 1 FROM payment_attempt_reservations ar
                JOIN payment_attempts pa ON pa.id = ar.attempt_id
                 WHERE ar.reservation_id = sr.id
-                 AND (pa.state = 'verified' OR (
+                 AND (pa.state IN ('verified', 'abandoned_unknown') OR (
                      pa.state = 'call_started'
-                     AND pa.call_started_at < sr.expires_at
-                     AND pa.claim_expires_at > now_at
-                     AND pa.authorization_deadline_at >= now_at
                  ))
            ));
         SELECT COALESCE(sum(item_deduction), 0) INTO deducted_quantity
@@ -627,11 +624,8 @@ BEGIN
                           SELECT 1 FROM payment_attempt_reservations ar
                           JOIN payment_attempts pa ON pa.id = ar.attempt_id
                            WHERE ar.reservation_id = sr.id
-                            AND (pa.state = 'verified' OR (
+                            AND (pa.state IN ('verified', 'abandoned_unknown') OR (
                                 pa.state = 'call_started'
-                                AND pa.call_started_at < sr.expires_at
-                                AND pa.claim_expires_at > now_at
-                                AND pa.authorization_deadline_at >= now_at
                             ))
                       ))
                    UNION SELECT NEW.order_item_id
@@ -655,11 +649,8 @@ BEGIN
                SELECT 1 FROM payment_attempt_reservations ar
                JOIN payment_attempts pa ON pa.id = ar.attempt_id
                 WHERE ar.reservation_id = sr.id
-                 AND (pa.state = 'verified' OR (
+                 AND (pa.state IN ('verified', 'abandoned_unknown') OR (
                      pa.state = 'call_started'
-                     AND pa.call_started_at < sr.expires_at
-                     AND pa.claim_expires_at > now_at
-                     AND pa.authorization_deadline_at >= now_at
                  ))
            ));
         IF active_quantity + NEW.quantity > item_quantity THEN
@@ -674,11 +665,8 @@ BEGIN
                SELECT 1 FROM payment_attempt_reservations ar
                JOIN payment_attempts pa ON pa.id = ar.attempt_id
                 WHERE ar.reservation_id = sr.id
-                  AND (pa.state = 'verified' OR (
+                  AND (pa.state IN ('verified', 'abandoned_unknown') OR (
                       pa.state = 'call_started'
-                      AND pa.call_started_at < sr.expires_at
-                      AND pa.claim_expires_at > now_at
-                      AND pa.authorization_deadline_at >= now_at
                   ))
            ));
         IF active_quantity + NEW.quantity > package_item_quantity THEN
@@ -722,7 +710,7 @@ BEGIN
         SELECT 1 FROM payment_attempt_reservations ar
         JOIN payment_attempts pa ON pa.id = ar.attempt_id
         WHERE ar.reservation_id = OLD.id
-          AND pa.state IN ('pending', 'call_started')
+          AND pa.state IN ('pending', 'call_started', 'abandoned_unknown')
     ) THEN
         RAISE EXCEPTION 'reservation set is locked by active payment attempt';
     END IF;
@@ -782,16 +770,22 @@ BEGIN
         old_sku := to_jsonb(OLD)->>'sku';
         new_made_to_order := (to_jsonb(NEW)->>'made_to_order')::boolean;
         old_made_to_order := (to_jsonb(OLD)->>'made_to_order')::boolean;
-        -- A verified-linked active reservation remains authoritative after TTL;
-        -- reserved inventory identity remains live after verified payment until
-        -- the reservation is explicitly consumed or otherwise terminal.
+        -- A verified or unresolved-unknown linked active reservation remains
+        -- authoritative after TTL. Its inventory identity stays live until
+        -- definitive failure or successful consumption makes it terminal.
         IF (new_sku IS DISTINCT FROM old_sku AND EXISTS (
             SELECT 1 FROM stock_reservations sr
              WHERE sr.product_id = OLD.id AND sr.variant_id IS NULL AND sr.size_stock_id IS NULL
                AND sr.state = 'active' AND (sr.expires_at > now_at OR EXISTS (
                    SELECT 1 FROM payment_attempt_reservations ar
                    JOIN payment_attempts pa ON pa.id = ar.attempt_id
-                    WHERE ar.reservation_id = sr.id AND pa.state = 'verified'
+                    WHERE ar.reservation_id = sr.id
+                      AND (
+                          pa.state IN ('verified', 'abandoned_unknown')
+                          OR (
+                              pa.state = 'call_started'
+                          )
+                      )
                ))
         )) OR (new_made_to_order IS DISTINCT FROM old_made_to_order AND EXISTS (
             SELECT 1 FROM stock_reservations sr
@@ -799,7 +793,13 @@ BEGIN
                AND (sr.expires_at > now_at OR EXISTS (
                    SELECT 1 FROM payment_attempt_reservations ar
                    JOIN payment_attempts pa ON pa.id = ar.attempt_id
-                    WHERE ar.reservation_id = sr.id AND pa.state = 'verified'
+                    WHERE ar.reservation_id = sr.id
+                      AND (
+                          pa.state IN ('verified', 'abandoned_unknown')
+                          OR (
+                              pa.state = 'call_started'
+                          )
+                      )
                ))
         )) THEN
             RAISE EXCEPTION 'reserved product identity is immutable';
@@ -816,11 +816,8 @@ BEGIN
                SELECT 1 FROM payment_attempt_reservations ar
                JOIN payment_attempts pa ON pa.id = ar.attempt_id
                 WHERE ar.reservation_id = sr.id
-                 AND (pa.state = 'verified' OR (
+                 AND (pa.state IN ('verified', 'abandoned_unknown') OR (
                      pa.state = 'call_started'
-                     AND pa.call_started_at < sr.expires_at
-                     AND pa.claim_expires_at > now_at
-                     AND pa.authorization_deadline_at >= now_at
                  ))
            ));
         SELECT COALESCE(sum(net_quantity), 0) INTO deducted_quantity FROM (
@@ -835,11 +832,8 @@ BEGIN
                         SELECT 1 FROM payment_attempt_reservations ar
                         JOIN payment_attempts pa ON pa.id = ar.attempt_id
                          WHERE ar.reservation_id = sr.id
-                           AND (pa.state = 'verified' OR (
+                           AND (pa.state IN ('verified', 'abandoned_unknown') OR (
                                pa.state = 'call_started'
-                               AND pa.call_started_at < sr.expires_at
-                               AND pa.claim_expires_at > now_at
-                               AND pa.authorization_deadline_at >= now_at
                            ))
                     ))
              )
@@ -861,7 +855,13 @@ BEGIN
                           AND (sr.expires_at > now_at OR EXISTS (
                               SELECT 1 FROM payment_attempt_reservations ar
                               JOIN payment_attempts pa ON pa.id = ar.attempt_id
-                               WHERE ar.reservation_id = sr.id AND pa.state = 'verified'
+                               WHERE ar.reservation_id = sr.id
+                      AND (
+                          pa.state IN ('verified', 'abandoned_unknown')
+                          OR (
+                              pa.state = 'call_started'
+                          )
+                      )
                           ))) THEN
             RAISE EXCEPTION 'reserved product identity is immutable';
         END IF;
@@ -877,11 +877,8 @@ BEGIN
                SELECT 1 FROM payment_attempt_reservations ar
                JOIN payment_attempts pa ON pa.id = ar.attempt_id
                 WHERE ar.reservation_id = sr.id
-                 AND (pa.state = 'verified' OR (
+                 AND (pa.state IN ('verified', 'abandoned_unknown') OR (
                      pa.state = 'call_started'
-                     AND pa.call_started_at < sr.expires_at
-                     AND pa.claim_expires_at > now_at
-                     AND pa.authorization_deadline_at >= now_at
                  ))
            ));
         SELECT COALESCE(sum(net_quantity), 0) INTO deducted_quantity FROM (
@@ -896,11 +893,8 @@ BEGIN
                         SELECT 1 FROM payment_attempt_reservations ar
                         JOIN payment_attempts pa ON pa.id = ar.attempt_id
                          WHERE ar.reservation_id = sr.id
-                           AND (pa.state = 'verified' OR (
+                           AND (pa.state IN ('verified', 'abandoned_unknown') OR (
                                pa.state = 'call_started'
-                               AND pa.call_started_at < sr.expires_at
-                               AND pa.claim_expires_at > now_at
-                               AND pa.authorization_deadline_at >= now_at
                            ))
                     ))
              )
@@ -923,7 +917,13 @@ BEGIN
                           AND (sr.expires_at > now_at OR EXISTS (
                               SELECT 1 FROM payment_attempt_reservations ar
                               JOIN payment_attempts pa ON pa.id = ar.attempt_id
-                               WHERE ar.reservation_id = sr.id AND pa.state = 'verified'
+                               WHERE ar.reservation_id = sr.id
+                      AND (
+                          pa.state IN ('verified', 'abandoned_unknown')
+                          OR (
+                              pa.state = 'call_started'
+                          )
+                      )
                           ))) THEN
             RAISE EXCEPTION 'reserved product identity is immutable';
         END IF;
@@ -938,11 +938,8 @@ BEGIN
                SELECT 1 FROM payment_attempt_reservations ar
                JOIN payment_attempts pa ON pa.id = ar.attempt_id
                 WHERE ar.reservation_id = sr.id
-                 AND (pa.state = 'verified' OR (
+                 AND (pa.state IN ('verified', 'abandoned_unknown') OR (
                      pa.state = 'call_started'
-                     AND pa.call_started_at < sr.expires_at
-                     AND pa.claim_expires_at > now_at
-                     AND pa.authorization_deadline_at >= now_at
                  ))
            ));
         SELECT COALESCE(sum(net_quantity), 0) INTO deducted_quantity FROM (
@@ -956,11 +953,8 @@ BEGIN
                         SELECT 1 FROM payment_attempt_reservations ar
                         JOIN payment_attempts pa ON pa.id = ar.attempt_id
                          WHERE ar.reservation_id = sr.id
-                           AND (pa.state = 'verified' OR (
+                           AND (pa.state IN ('verified', 'abandoned_unknown') OR (
                                pa.state = 'call_started'
-                               AND pa.call_started_at < sr.expires_at
-                               AND pa.claim_expires_at > now_at
-                               AND pa.authorization_deadline_at >= now_at
                            ))
                     ))
              )
@@ -979,7 +973,13 @@ BEGIN
               AND (sr.expires_at > now_at OR EXISTS (
                   SELECT 1 FROM payment_attempt_reservations ar
                   JOIN payment_attempts pa ON pa.id = ar.attempt_id
-                   WHERE ar.reservation_id = sr.id AND pa.state = 'verified'
+                   WHERE ar.reservation_id = sr.id
+                      AND (
+                          pa.state IN ('verified', 'abandoned_unknown')
+                          OR (
+                              pa.state = 'call_started'
+                          )
+                      )
               ))
         ) THEN
             RAISE EXCEPTION 'reserved product identity is immutable';
@@ -1198,13 +1198,105 @@ BEGIN
         IF NEW.lease_token IS NULL THEN
             RAISE EXCEPTION 'payment attempt lease token required';
         END IF;
+        -- The authoritative order row serializes call start against cancellation.
+        -- A waiter re-reads the committed row after acquiring the lock, so either
+        -- cancellation wins and this call is rejected or call start wins and the
+        -- order-side unresolved-payment fence rejects cancellation.
+        SELECT fulfillment_status, payment_status
+          INTO order_fulfillment_status, order_payment_status
+          FROM orders WHERE id = OLD.order_id FOR UPDATE;
+        IF NOT FOUND OR order_fulfillment_status = 'cancelled' THEN
+            RAISE EXCEPTION 'cancelled order cannot start payment call';
+        END IF;
+        IF order_payment_status = 'PAID' THEN
+            RAISE EXCEPTION 'paid order cannot start payment call';
+        END IF;
         IF EXISTS (SELECT 1 FROM outbound_shipment_intent_invalidations
                    WHERE intent_id = OLD.intent_id) THEN
             RAISE EXCEPTION 'invalidated intent cannot start payment call';
         END IF;
-        -- PostgreSQL owns the target row lock before this BEFORE UPDATE trigger
-        -- runs. Re-sample wall-clock time after any wait on that row.
+        -- Global payment/inventory lock order: target attempt (owned by UPDATE),
+        -- order, products, variations, product variants, size stocks, then linked
+        -- reservations. Reservation creation uses order/item before the same
+        -- inventory hierarchy; inventory identity writers own only their target
+        -- row and never lock attempts. This prevents a cycle while fencing every
+        -- provider-bound inventory subject before the external call can start.
+        PERFORM p.id FROM products p
+        JOIN (
+            SELECT DISTINCT sr.product_id
+            FROM stock_reservations sr
+            JOIN payment_attempt_reservations ar ON ar.reservation_id = sr.id
+            WHERE ar.attempt_id = OLD.id
+        ) subjects ON subjects.product_id = p.id
+        ORDER BY p.id FOR UPDATE OF p;
+        PERFORM v.id FROM variations v
+        JOIN (
+            SELECT DISTINCT ss.variation_id
+            FROM stock_reservations sr
+            JOIN payment_attempt_reservations ar ON ar.reservation_id = sr.id
+            JOIN size_stocks ss ON ss.id = sr.size_stock_id
+            WHERE ar.attempt_id = OLD.id
+        ) subjects ON subjects.variation_id = v.id
+        ORDER BY v.id FOR UPDATE OF v;
+        PERFORM pv.id FROM product_variants pv
+        JOIN (
+            SELECT DISTINCT sr.variant_id
+            FROM stock_reservations sr
+            JOIN payment_attempt_reservations ar ON ar.reservation_id = sr.id
+            WHERE ar.attempt_id = OLD.id AND sr.variant_id IS NOT NULL
+        ) subjects ON subjects.variant_id = pv.id
+        ORDER BY pv.id FOR UPDATE OF pv;
+        PERFORM ss.id FROM size_stocks ss
+        JOIN (
+            SELECT DISTINCT sr.size_stock_id
+            FROM stock_reservations sr
+            JOIN payment_attempt_reservations ar ON ar.reservation_id = sr.id
+            WHERE ar.attempt_id = OLD.id AND sr.size_stock_id IS NOT NULL
+        ) subjects ON subjects.size_stock_id = ss.id
+        ORDER BY ss.id FOR UPDATE OF ss;
+        PERFORM 1 FROM stock_reservations sr
+        JOIN payment_attempt_reservations ar ON ar.reservation_id = sr.id
+        WHERE ar.attempt_id = OLD.id
+        ORDER BY sr.id FOR UPDATE OF sr;
+
+        -- A lock wait may cross the reservation TTL or follow a committed
+        -- identity writer. Re-sample time and revalidate the complete immutable
+        -- subject only after every row in the shared lock order is owned.
         now_at := clock_timestamp();
+        IF NOT EXISTS (
+            SELECT 1 FROM payment_attempt_reservations WHERE attempt_id = OLD.id
+        ) OR EXISTS (
+            SELECT 1
+            FROM payment_attempt_reservations ar
+            JOIN stock_reservations sr ON sr.id = ar.reservation_id
+            JOIN order_items oi ON oi.id = sr.order_item_id
+            JOIN products p ON p.id = sr.product_id
+            LEFT JOIN product_variants pv ON pv.id = sr.variant_id
+            LEFT JOIN size_stocks ss ON ss.id = sr.size_stock_id
+            LEFT JOIN variations v ON v.id = ss.variation_id
+            WHERE ar.attempt_id = OLD.id
+              AND (
+                  sr.state <> 'active' OR sr.expires_at <= now_at
+                  OR sr.order_id <> OLD.order_id OR oi.order_id <> sr.order_id
+                  OR oi.product_id <> sr.product_id
+                  OR oi.variant_id IS DISTINCT FROM sr.variant_id
+                  OR NULLIF(oi.variant_details->>'size_stock_id', '')::uuid
+                     IS DISTINCT FROM sr.size_stock_id
+                  OR (sr.variant_id IS NULL AND sr.size_stock_id IS NULL
+                      AND sr.sku IS DISTINCT FROM p.sku)
+                  OR (sr.variant_id IS NOT NULL AND
+                      (pv.product_id IS DISTINCT FROM sr.product_id
+                       OR pv.sku IS DISTINCT FROM sr.sku))
+                  OR (sr.size_stock_id IS NOT NULL AND
+                      (v.product_id IS DISTINCT FROM sr.product_id
+                       OR ss.variation_id IS DISTINCT FROM
+                          NULLIF(oi.variant_details->>'variation_id', '')::uuid
+                       OR ss.size::text IS DISTINCT FROM oi.variant_details->>'size'
+                       OR sr.sku IS NOT NULL))
+              )
+        ) THEN
+            RAISE EXCEPTION 'payment call requires live authoritative reservations';
+        END IF;
         IF now_at >= OLD.expires_at THEN
             RAISE EXCEPTION 'payment attempt window elapsed';
         END IF;
@@ -1312,6 +1404,40 @@ BEGIN
             WHERE ar.attempt_id = OLD.id
             ORDER BY sr.id
             FOR UPDATE OF sr;
+            -- Shared post-lock subject check: call start and verification both
+            -- validate the exact order-item/inventory identity only after owning
+            -- the same deterministic inventory and reservation lock set.
+            IF EXISTS (
+                SELECT 1
+                FROM payment_attempt_reservations ar
+                JOIN stock_reservations sr ON sr.id = ar.reservation_id
+                JOIN order_items oi ON oi.id = sr.order_item_id
+                JOIN products p ON p.id = sr.product_id
+                LEFT JOIN product_variants pv ON pv.id = sr.variant_id
+                LEFT JOIN size_stocks ss ON ss.id = sr.size_stock_id
+                LEFT JOIN variations v ON v.id = ss.variation_id
+                WHERE ar.attempt_id = OLD.id
+                  AND (
+                      sr.order_id <> OLD.order_id OR oi.order_id <> sr.order_id
+                      OR oi.product_id <> sr.product_id
+                      OR oi.variant_id IS DISTINCT FROM sr.variant_id
+                      OR NULLIF(oi.variant_details->>'size_stock_id', '')::uuid
+                         IS DISTINCT FROM sr.size_stock_id
+                      OR (sr.variant_id IS NULL AND sr.size_stock_id IS NULL
+                          AND sr.sku IS DISTINCT FROM p.sku)
+                      OR (sr.variant_id IS NOT NULL AND
+                          (pv.product_id IS DISTINCT FROM sr.product_id
+                           OR pv.sku IS DISTINCT FROM sr.sku))
+                      OR (sr.size_stock_id IS NOT NULL AND
+                          (v.product_id IS DISTINCT FROM sr.product_id
+                           OR ss.variation_id IS DISTINCT FROM
+                              NULLIF(oi.variant_details->>'variation_id', '')::uuid
+                           OR ss.size::text IS DISTINCT FROM oi.variant_details->>'size'
+                           OR sr.sku IS NOT NULL))
+                  )
+            ) THEN
+                RAISE EXCEPTION 'payment verification subject binding changed';
+            END IF;
             -- A lock wait can cross reservation, claim, or authorization boundaries;
             -- re-sample wall-clock truth only after the exact set is locked.
             now_at := clock_timestamp();
@@ -1370,7 +1496,7 @@ BEGIN
     IF EXISTS (
         SELECT 1 FROM payment_attempts pa
          WHERE pa.intent_id = NEW.intent_id
-           AND pa.state IN ('call_started', 'verified')
+           AND pa.state IN ('call_started', 'abandoned_unknown', 'verified')
     ) THEN
         RAISE EXCEPTION 'payment attempt prevents intent invalidation';
     END IF;

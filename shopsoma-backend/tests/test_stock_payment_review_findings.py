@@ -87,6 +87,82 @@ async def _present_payment_lease(session, lease_token: uuid.UUID) -> None:
     )
 
 
+async def _abandoned_unknown_subject(session, vendor_user, customer_user):
+    """Create one evidence-backed unknown provider outcome with an active reservation."""
+
+    lane = _lane_helpers()
+    graph, intent, quote, option, selection, sku = await lane._checkout_subject(
+        session, vendor_user, customer_user, stock=1
+    )
+    reservation = lane._reservation(
+        graph, intent, quote, option, selection, customer_user["user"].id, sku
+    )
+    session.add(reservation)
+    await session.flush()
+    attempt = lane._payment_attempt(
+        graph, intent, quote, option, selection, customer_user["user"].id
+    )
+    session.add(attempt)
+    await session.flush()
+    session.add(
+        PaymentAttemptReservation(attempt_id=attempt.id, reservation_id=reservation.id)
+    )
+    await session.flush()
+    await session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+    await session.execute(text("SET CONSTRAINTS ALL DEFERRED"))
+
+    lease_token = uuid.uuid4()
+    await session.execute(
+        text(
+            "UPDATE payment_attempts SET state='call_started', lease_token=:token, "
+            "row_version=2 WHERE id=:attempt_id"
+        ),
+        {"token": lease_token, "attempt_id": attempt.id},
+    )
+    evidence = PaymentAttemptEvidence(
+        attempt_id=attempt.id,
+        source="provider_reconciliation",
+        event_id=f"unknown-{uuid.uuid4().hex}",
+        evidence_type="outcome_unknown",
+        evidence_hash=uuid.uuid4().hex * 2,
+        observed_at=datetime.now(timezone.utc),
+    )
+    session.add(evidence)
+    await session.flush()
+    await session.execute(text("SET LOCAL session_replication_role = replica"))
+    await session.execute(
+        text(
+            "UPDATE payment_attempts SET claim_expires_at=clock_timestamp() - interval '1 second' "
+            "WHERE id=:attempt_id"
+        ),
+        {"attempt_id": attempt.id},
+    )
+    await session.execute(text("SET LOCAL session_replication_role = origin"))
+    await _present_payment_lease(session, lease_token)
+    await session.execute(
+        text(
+            "UPDATE payment_attempts SET state='abandoned_unknown', "
+            "terminal_evidence_id=:evidence_id, row_version=3 WHERE id=:attempt_id"
+        ),
+        {"evidence_id": evidence.id, "attempt_id": attempt.id},
+    )
+    return lane, graph, intent, quote, option, selection, sku, reservation, attempt
+
+
+async def _expire_reservation_without_lifecycle_transition(
+    session, reservation_id
+) -> None:
+    await session.execute(text("SET LOCAL session_replication_role = replica"))
+    await session.execute(
+        text(
+            "UPDATE stock_reservations SET created_at=statement_timestamp() - interval '2 seconds', "
+            "expires_at=statement_timestamp() - interval '1 second' WHERE id=:reservation_id"
+        ),
+        {"reservation_id": reservation_id},
+    )
+    await session.execute(text("SET LOCAL session_replication_role = origin"))
+
+
 async def _split_package_item_across_cohorts(session, graph, quote) -> None:
     """Represent one order item as two cohort-keyed rows in one package version."""
 
@@ -983,6 +1059,125 @@ async def test_in_flight_authorization_grace_keeps_inventory_and_can_verify(
 
 
 @pytest.mark.asyncio
+async def test_in_flight_authorization_grace_keeps_inventory_identity_immutable(
+    db_session, vendor_user, customer_user
+) -> None:
+    lane = _lane_helpers()
+    graph, intent, quote, option, selection, sku = await lane._checkout_subject(
+        db_session, vendor_user, customer_user, stock=1
+    )
+    reservation = lane._reservation(
+        graph,
+        intent,
+        quote,
+        option,
+        selection,
+        customer_user["user"].id,
+        sku,
+        ttl_seconds=1,
+    )
+    db_session.add(reservation)
+    await db_session.flush()
+    attempt = lane._payment_attempt(
+        graph,
+        intent,
+        quote,
+        option,
+        selection,
+        customer_user["user"].id,
+        payment_window_seconds=1,
+        authorization_grace_seconds=5,
+        claim_ttl_seconds=5,
+    )
+    db_session.add(attempt)
+    await db_session.flush()
+    db_session.add(
+        PaymentAttemptReservation(attempt_id=attempt.id, reservation_id=reservation.id)
+    )
+    await db_session.flush()
+    await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+    await db_session.execute(text("SET CONSTRAINTS ALL DEFERRED"))
+    await db_session.execute(
+        text(
+            "UPDATE payment_attempts SET state='call_started', lease_token=:token, "
+            "row_version=2 WHERE id=:attempt_id"
+        ),
+        {"token": uuid.uuid4(), "attempt_id": attempt.id},
+    )
+    await db_session.commit()
+    await asyncio.sleep(1.1)
+
+    with pytest.raises(DBAPIError, match="reserved product identity is immutable"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text("UPDATE products SET sku=:sku WHERE id=:product_id"),
+                {
+                    "sku": f"grace-{uuid.uuid4().hex[:8]}",
+                    "product_id": graph["item"].product_id,
+                },
+            )
+
+
+@pytest.mark.asyncio
+async def test_expired_call_lease_keeps_inventory_identity_unresolved(
+    db_session, vendor_user, customer_user
+) -> None:
+    lane = _lane_helpers()
+    graph, intent, quote, option, selection, sku = await lane._checkout_subject(
+        db_session, vendor_user, customer_user, stock=1
+    )
+    reservation = lane._reservation(
+        graph, intent, quote, option, selection, customer_user["user"].id, sku
+    )
+    db_session.add(reservation)
+    await db_session.flush()
+    attempt = lane._payment_attempt(
+        graph, intent, quote, option, selection, customer_user["user"].id
+    )
+    db_session.add(attempt)
+    await db_session.flush()
+    db_session.add(
+        PaymentAttemptReservation(attempt_id=attempt.id, reservation_id=reservation.id)
+    )
+    await db_session.flush()
+    await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+    await db_session.execute(text("SET CONSTRAINTS ALL DEFERRED"))
+    await db_session.execute(
+        text(
+            "UPDATE payment_attempts SET state='call_started', lease_token=:token, "
+            "row_version=2 WHERE id=:attempt_id"
+        ),
+        {"token": uuid.uuid4(), "attempt_id": attempt.id},
+    )
+    await db_session.execute(text("SET LOCAL session_replication_role = replica"))
+    await db_session.execute(
+        text(
+            "UPDATE stock_reservations SET created_at=statement_timestamp() - interval '2 seconds', "
+            "expires_at=statement_timestamp() - interval '1 second' WHERE id=:reservation_id"
+        ),
+        {"reservation_id": reservation.id},
+    )
+    await db_session.execute(
+        text(
+            "UPDATE payment_attempts SET claim_expires_at=statement_timestamp() - interval '1 second' "
+            "WHERE id=:attempt_id"
+        ),
+        {"attempt_id": attempt.id},
+    )
+    await db_session.execute(text("SET LOCAL session_replication_role = origin"))
+
+    with pytest.raises(DBAPIError, match="reserved product identity is immutable"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text("UPDATE products SET sku=:sku WHERE id=:product_id"),
+                {
+                    "sku": f"expired-lease-{uuid.uuid4().hex[:8]}",
+                    "product_id": graph["item"].product_id,
+                },
+            )
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("truth_target", ["order_item", "order"])
 async def test_reservation_locks_order_truth_before_waiting_on_inventory(
     db_session, vendor_user, customer_user, truth_target
@@ -1679,25 +1874,191 @@ async def test_payment_rejects_intent_invalidated_after_reservation(
             await db_session.flush()
 
 
-def test_migration_backfills_identifiable_legacy_inventory_deductions() -> None:
+@pytest.mark.asyncio
+async def test_pending_attempt_rechecks_order_cancellation_before_provider_call(
+    db_session, vendor_user, customer_user
+) -> None:
+    lane = _lane_helpers()
+    graph, intent, quote, option, selection, sku = await lane._checkout_subject(
+        db_session, vendor_user, customer_user
+    )
+    reservation = lane._reservation(
+        graph, intent, quote, option, selection, customer_user["user"].id, sku
+    )
+    db_session.add(reservation)
+    await db_session.flush()
+    attempt = lane._payment_attempt(
+        graph, intent, quote, option, selection, customer_user["user"].id
+    )
+    db_session.add(attempt)
+    await db_session.flush()
+    db_session.add(
+        PaymentAttemptReservation(attempt_id=attempt.id, reservation_id=reservation.id)
+    )
+    await db_session.flush()
+    await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+    await db_session.execute(text("SET CONSTRAINTS ALL DEFERRED"))
+    await db_session.execute(
+        text("UPDATE orders SET fulfillment_status='cancelled' WHERE id=:order_id"),
+        {"order_id": graph["order"].id},
+    )
+
+    with pytest.raises(DBAPIError, match="cancelled order cannot start payment call"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(
+                    "UPDATE payment_attempts SET state='call_started', lease_token=:token, "
+                    "row_version=2 WHERE id=:attempt_id"
+                ),
+                {"token": uuid.uuid4(), "attempt_id": attempt.id},
+            )
+
+
+@pytest.mark.asyncio
+async def test_cancellation_wins_race_before_provider_call_starts(
+    db_session, vendor_user, customer_user
+) -> None:
+    lane = _lane_helpers()
+    graph, intent, quote, option, selection, sku = await lane._checkout_subject(
+        db_session, vendor_user, customer_user
+    )
+    reservation = lane._reservation(
+        graph, intent, quote, option, selection, customer_user["user"].id, sku
+    )
+    db_session.add(reservation)
+    await db_session.flush()
+    attempt = lane._payment_attempt(
+        graph, intent, quote, option, selection, customer_user["user"].id
+    )
+    db_session.add(attempt)
+    await db_session.flush()
+    db_session.add(
+        PaymentAttemptReservation(attempt_id=attempt.id, reservation_id=reservation.id)
+    )
+    await db_session.flush()
+    await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+    await db_session.commit()
+
+    factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+    canceller = factory()
+    caller = factory()
+    call_task = None
+    try:
+        await canceller.execute(
+            text("UPDATE orders SET fulfillment_status='cancelled' WHERE id=:order_id"),
+            {"order_id": graph["order"].id},
+        )
+
+        async def start_provider_call():
+            try:
+                await caller.execute(
+                    text(
+                        "UPDATE payment_attempts SET state='call_started', lease_token=:token, "
+                        "row_version=2 WHERE id=:attempt_id"
+                    ),
+                    {"token": uuid.uuid4(), "attempt_id": attempt.id},
+                )
+                await caller.commit()
+                return None
+            except DBAPIError as exc:
+                await caller.rollback()
+                return str(exc)
+
+        call_task = asyncio.create_task(start_provider_call())
+        await asyncio.sleep(0.2)
+        assert not call_task.done()
+        await canceller.commit()
+        result = await asyncio.wait_for(call_task, timeout=5)
+        assert result is not None
+        assert "cancelled order cannot start payment call" in result
+    finally:
+        if call_task is not None and not call_task.done():
+            call_task.cancel()
+            await asyncio.gather(call_task, return_exceptions=True)
+        await canceller.rollback()
+        await caller.rollback()
+        await canceller.close()
+        await caller.close()
+
+
+@pytest.mark.asyncio
+async def test_unknown_outcome_keeps_linked_reservation_locked_after_ttl(
+    db_session, vendor_user, customer_user
+) -> None:
+    *_, reservation, _attempt = await _abandoned_unknown_subject(
+        db_session, vendor_user, customer_user
+    )
+    await _expire_reservation_without_lifecycle_transition(db_session, reservation.id)
+
+    with pytest.raises(
+        DBAPIError, match="reservation set is locked by active payment attempt"
+    ):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(
+                    "UPDATE stock_reservations SET state='expired', "
+                    "terminal_reason='ttl elapsed', row_version=2 WHERE id=:reservation_id"
+                ),
+                {"reservation_id": reservation.id},
+            )
+
+
+@pytest.mark.asyncio
+async def test_unknown_outcome_blocks_shipment_intent_invalidation(
+    db_session, vendor_user, customer_user
+) -> None:
+    _lane, graph, intent, *_ = await _abandoned_unknown_subject(
+        db_session, vendor_user, customer_user
+    )
+
+    with pytest.raises(
+        DBAPIError, match="payment attempt prevents intent invalidation"
+    ):
+        async with db_session.begin_nested():
+            await _invalidate_intent(db_session, intent, graph["operator_id"])
+
+
+@pytest.mark.asyncio
+async def test_unknown_outcome_keeps_inventory_identity_live_after_ttl(
+    db_session, vendor_user, customer_user
+) -> None:
+    _lane, graph, _intent, *_prefix, reservation, _attempt = (
+        await _abandoned_unknown_subject(db_session, vendor_user, customer_user)
+    )
+    await _expire_reservation_without_lifecycle_transition(db_session, reservation.id)
+
+    with pytest.raises(DBAPIError, match="reserved product identity is immutable"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text("UPDATE products SET sku=:sku WHERE id=:product_id"),
+                {
+                    "sku": f"replacement-{uuid.uuid4().hex[:8]}",
+                    "product_id": graph["item"].product_id,
+                },
+            )
+
+
+def test_migration_quarantines_ambiguous_legacy_inventory_deductions() -> None:
     migration = (
         Path(__file__).parents[1]
         / "alembic/versions/f9d1b3e5a7c9_add_stock_payment_persistence.py"
     ).read_text(encoding="utf-8")
-    assert "Backfill identifiable legacy order deductions" in migration
-    assert "INSERT INTO inventory_deduction_events" in migration
-    assert "o.payment_status IN ('PENDING', 'FAILED')" in migration
+    assert "Conservatively leave ambiguous legacy deductions uncredited" in migration
+    assert "INSERT INTO inventory_deduction_events" not in migration
+
+
+def test_frozen_alembic_program_uses_valid_rowtype_syntax() -> None:
+    frozen = (Path(__file__).parents[1] / "alembic/stock_payment_ddl_f9.py").read_text(
+        encoding="utf-8"
+    )
+    assert "payment_attempts%ROWTYPE" in frozen
+    assert "payment_attempts%%ROWTYPE" not in frozen
 
 
 @pytest.mark.asyncio
-async def test_verification_revalidates_order_cancellation_after_provider_call(
+async def test_unresolved_provider_call_blocks_late_order_cancellation(
     db_session, vendor_user, customer_user
 ) -> None:
-    from app.models.stock_payment_persistence import (
-        PaymentAttemptEvidence,
-        PaymentAttemptReservation,
-    )
-
     lane = _lane_helpers()
     graph, intent, quote, option, selection, sku = await lane._checkout_subject(
         db_session, vendor_user, customer_user
@@ -1718,37 +2079,23 @@ async def test_verification_revalidates_order_cancellation_after_provider_call(
     await db_session.flush()
     await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
     await db_session.execute(text("SET CONSTRAINTS ALL DEFERRED"))
-    lease_token = uuid.uuid4()
     await db_session.execute(
         text(
             "UPDATE payment_attempts SET state='call_started', lease_token=:token, "
             "row_version=2 WHERE id=:attempt_id"
         ),
-        {"token": lease_token, "attempt_id": attempt.id},
+        {"token": uuid.uuid4(), "attempt_id": attempt.id},
     )
-    evidence = PaymentAttemptEvidence(
-        attempt_id=attempt.id,
-        source="provider_webhook",
-        event_id=f"evt-{uuid.uuid4().hex}",
-        evidence_type="verified",
-        evidence_hash=uuid.uuid4().hex * 2,
-        observed_at=datetime.now(timezone.utc),
-    )
-    db_session.add(evidence)
-    await db_session.flush()
-    await db_session.execute(
-        text("UPDATE orders SET fulfillment_status='cancelled' WHERE id=:order_id"),
-        {"order_id": graph["order"].id},
-    )
-    await _present_payment_lease(db_session, lease_token)
-    with pytest.raises(DBAPIError, match="cancelled order cannot verify payment"):
+
+    with pytest.raises(
+        DBAPIError, match="unresolved or verified payment prevents order cancellation"
+    ):
         async with db_session.begin_nested():
             await db_session.execute(
                 text(
-                    "UPDATE payment_attempts SET state='verified', "
-                    "terminal_evidence_id=:evidence_id, row_version=3 WHERE id=:attempt_id"
+                    "UPDATE orders SET fulfillment_status='cancelled' WHERE id=:order_id"
                 ),
-                {"evidence_id": evidence.id, "attempt_id": attempt.id},
+                {"order_id": graph["order"].id},
             )
 
 
@@ -1780,12 +2127,12 @@ def test_unknown_attempt_has_evidence_backed_reconciliation_path() -> None:
     )
 
 
-def test_verified_reservations_keep_inventory_identity_live_after_ttl() -> None:
+def test_unresolved_reservations_keep_inventory_identity_live_after_ttl() -> None:
     source = (
         Path(__file__).parents[1] / "app/models/stock_payment_persistence.py"
     ).read_text(encoding="utf-8")
-    assert source.count("pa.state = 'verified'") >= 8
-    assert "reserved inventory identity remains live after verified payment" in source
+    assert source.count("pa.state IN ('verified', 'abandoned_unknown')") >= 15
+    assert "Its inventory identity stays live" in source
 
 
 def test_intent_invalidation_is_fenced_by_payment_outcome() -> None:
@@ -1794,6 +2141,7 @@ def test_intent_invalidation_is_fenced_by_payment_outcome() -> None:
     ).read_text(encoding="utf-8")
     assert "protect_payment_intent_invalidation" in source
     assert "ORDER BY pa.id FOR UPDATE OF pa" in source
+    assert "pa.state IN ('call_started', 'abandoned_unknown', 'verified')" in source
     assert "payment attempt prevents intent invalidation" in source
 
 
@@ -1803,3 +2151,165 @@ def test_verified_payment_blocks_late_order_cancellation() -> None:
     ).read_text(encoding="utf-8")
     assert "pa.state IN ('call_started', 'abandoned_unknown', 'verified')" in source
     assert "unresolved or verified payment prevents order cancellation" in source
+
+
+async def _pending_call_race_subject(
+    session, vendor_user, customer_user, *, include_competing_order: bool = False
+):
+    lane = _lane_helpers()
+    graph, intent, quote, option, selection, sku = await lane._checkout_subject(
+        session, vendor_user, customer_user, stock=1
+    )
+    reservation = lane._reservation(
+        graph,
+        intent,
+        quote,
+        option,
+        selection,
+        customer_user["user"].id,
+        sku,
+        ttl_seconds=1,
+    )
+    session.add(reservation)
+    await session.flush()
+    attempt = lane._payment_attempt(
+        graph,
+        intent,
+        quote,
+        option,
+        selection,
+        customer_user["user"].id,
+        payment_window_seconds=1,
+        authorization_grace_seconds=5,
+        claim_ttl_seconds=5,
+    )
+    session.add(attempt)
+    await session.flush()
+    session.add(
+        PaymentAttemptReservation(attempt_id=attempt.id, reservation_id=reservation.id)
+    )
+    await session.flush()
+    await session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+    await session.execute(text("SET CONSTRAINTS ALL DEFERRED"))
+
+    competing = None
+    if include_competing_order:
+        other_graph, other_intent, other_quote, other_option, other_selection, _ = (
+            await lane._checkout_subject(session, vendor_user, customer_user, stock=1)
+        )
+        other_graph["item"].product_id = graph["item"].product_id
+        await session.flush()
+        competing = lane._reservation(
+            other_graph,
+            other_intent,
+            other_quote,
+            other_option,
+            other_selection,
+            customer_user["user"].id,
+            sku,
+        )
+
+    await session.commit()
+    return lane, graph, reservation, attempt, competing
+
+
+@pytest.mark.asyncio
+async def test_uncommitted_call_start_fences_identity_mutation_across_reservation_ttl(
+    db_session, vendor_user, customer_user
+) -> None:
+    _lane, graph, _reservation_row, attempt, _competing = (
+        await _pending_call_race_subject(db_session, vendor_user, customer_user)
+    )
+    factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+    caller = factory()
+    mutator = factory()
+    mutation_task = None
+    replacement_sku = f"raced-{uuid.uuid4().hex[:8]}"
+    try:
+        await caller.execute(
+            text(
+                "UPDATE payment_attempts SET state='call_started', lease_token=:token, "
+                "row_version=2 WHERE id=:attempt_id"
+            ),
+            {"token": uuid.uuid4(), "attempt_id": attempt.id},
+        )
+        await asyncio.sleep(1.1)
+
+        async def mutate_identity():
+            try:
+                await mutator.execute(
+                    text("UPDATE products SET sku=:sku WHERE id=:product_id"),
+                    {"sku": replacement_sku, "product_id": graph["item"].product_id},
+                )
+                await mutator.commit()
+                return None
+            except DBAPIError as exc:
+                await mutator.rollback()
+                return str(exc)
+
+        mutation_task = asyncio.create_task(mutate_identity())
+        await asyncio.sleep(0.2)
+        assert not mutation_task.done()
+        await caller.commit()
+        result = await asyncio.wait_for(mutation_task, timeout=5)
+        assert result is not None
+        assert "reserved product identity is immutable" in result
+    finally:
+        if mutation_task is not None and not mutation_task.done():
+            mutation_task.cancel()
+            await asyncio.gather(mutation_task, return_exceptions=True)
+        await caller.rollback()
+        await mutator.rollback()
+        await caller.close()
+        await mutator.close()
+
+
+@pytest.mark.asyncio
+async def test_uncommitted_call_start_fences_competing_reservation_across_ttl(
+    db_session, vendor_user, customer_user
+) -> None:
+    _lane, _graph, _reservation_row, attempt, competing = (
+        await _pending_call_race_subject(
+            db_session, vendor_user, customer_user, include_competing_order=True
+        )
+    )
+    assert competing is not None
+    factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+    caller = factory()
+    reserver = factory()
+    reservation_task = None
+    try:
+        await caller.execute(
+            text(
+                "UPDATE payment_attempts SET state='call_started', lease_token=:token, "
+                "row_version=2 WHERE id=:attempt_id"
+            ),
+            {"token": uuid.uuid4(), "attempt_id": attempt.id},
+        )
+        await asyncio.sleep(1.1)
+
+        async def reserve_competing_unit():
+            try:
+                reserver.add(competing)
+                await reserver.flush()
+                await reserver.commit()
+                return None
+            except DBAPIError as exc:
+                await reserver.rollback()
+                return str(exc)
+
+        reservation_task = asyncio.create_task(reserve_competing_unit())
+        await asyncio.sleep(0.2)
+        assert not reservation_task.done()
+        await caller.commit()
+        result = await asyncio.wait_for(reservation_task, timeout=5)
+        assert result is not None
+        assert "stock reservation exceeds available inventory" in result
+    finally:
+        if reservation_task is not None and not reservation_task.done():
+            reservation_task.cancel()
+            await asyncio.gather(reservation_task, return_exceptions=True)
+        await caller.rollback()
+        await reserver.rollback()
+        await caller.close()
+        await reserver.close()

@@ -150,35 +150,12 @@ CREATE TABLE payment_attempt_evidence (
     for statement in _statements(TRIGGER_DDLS):
         op.execute(statement)
 
-    # Backfill identifiable legacy order deductions. The legacy order-creation
-    # path deducts finite stock before persisting a retryable PENDING or FAILED
-    # order. Those rows predate the trigger-owned provenance table and must be represented before
-    # reservations can safely credit their order-owned units.
-    op.execute(
-        "ALTER TABLE inventory_deduction_events "
-        "DISABLE TRIGGER trg_inventory_deduction_events_validate"
-    )
-    op.execute(
-        r"""
-INSERT INTO inventory_deduction_events (
-    order_item_id, product_id, variant_id, size_stock_id,
-    event_type, quantity, creation_txid, created_at
-)
-SELECT oi.id, oi.product_id, oi.variant_id,
-       NULLIF(oi.variant_details->>'size_stock_id', '')::uuid,
-       'deducted', oi.quantity, txid_current(), statement_timestamp()
-  FROM order_items oi
-  JOIN orders o ON o.id = oi.order_id
-  JOIN products p ON p.id = oi.product_id
- WHERE o.payment_status IN ('PENDING', 'FAILED')
-   AND o.fulfillment_status <> 'cancelled'
-   AND NOT p.made_to_order
-"""
-    )
-    op.execute(
-        "ALTER TABLE inventory_deduction_events "
-        "ENABLE TRIGGER trg_inventory_deduction_events_validate"
-    )
+    # Conservatively leave ambiguous legacy deductions uncredited. Historical
+    # orders do not persist event-time made-to-order mode or another durable
+    # deduction marker, so the current product flag cannot prove stock was
+    # decremented when the order was created. Such rows therefore remain
+    # quarantined from reservation deduction credit until a later explicit,
+    # evidence-backed reconciliation records provenance.
 
 
 def downgrade() -> None:

@@ -265,6 +265,16 @@ def test_lane_2a_4b_real_upgrade_downgrade_upgrade_cycle() -> None:
                         "vendor_id": vendor_id,
                     },
                 )
+                # This order item was created while made-to-order, so legacy
+                # checkout did not deduct finite stock. The current mutable flag
+                # cannot preserve that fact and must not manufacture provenance.
+                connection.execute(
+                    text(
+                        "UPDATE products SET made_to_order=false "
+                        "WHERE id=:made_to_order_product_id"
+                    ),
+                    {"made_to_order_product_id": made_to_order_product_id},
+                )
         finally:
             target.dispose()
         migrate("upgrade", "f9d1b3e5a7c9")
@@ -272,13 +282,16 @@ def test_lane_2a_4b_real_upgrade_downgrade_upgrade_cycle() -> None:
         target = create_engine(database_url)
         try:
             with target.connect() as connection:
-                assert connection.execute(
-                    text(
-                        "SELECT event_type, quantity FROM inventory_deduction_events "
-                        "WHERE order_item_id=:item_id"
-                    ),
-                    {"item_id": order_item_id},
-                ).one() == ("deducted", 2)
+                assert (
+                    connection.scalar(
+                        text(
+                            "SELECT count(*) FROM inventory_deduction_events "
+                            "WHERE order_item_id=:item_id"
+                        ),
+                        {"item_id": order_item_id},
+                    )
+                    == 0
+                )
                 assert (
                     connection.scalar(
                         text(
