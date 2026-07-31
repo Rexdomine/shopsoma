@@ -1686,7 +1686,7 @@ def test_migration_backfills_identifiable_legacy_inventory_deductions() -> None:
     ).read_text(encoding="utf-8")
     assert "Backfill identifiable legacy order deductions" in migration
     assert "INSERT INTO inventory_deduction_events" in migration
-    assert "o.payment_status = 'PENDING'" in migration
+    assert "o.payment_status IN ('PENDING', 'FAILED')" in migration
 
 
 @pytest.mark.asyncio
@@ -1801,4 +1801,5 @@ def test_verified_payment_blocks_late_order_cancellation() -> None:
     source = (
         Path(__file__).parents[1] / "app/models/stock_payment_persistence.py"
     ).read_text(encoding="utf-8")
-    assert "verified payment prevents order cancellation" in source
+    assert "pa.state IN ('call_started', 'abandoned_unknown', 'verified')" in source
+    assert "unresolved or verified payment prevents order cancellation" in source

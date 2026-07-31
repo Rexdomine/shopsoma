@@ -1021,9 +1021,10 @@ BEGIN
        AND OLD.fulfillment_status IS DISTINCT FROM 'cancelled'
        AND EXISTS (
            SELECT 1 FROM payment_attempts pa
-            WHERE pa.order_id = OLD.id AND pa.state = 'verified'
+            WHERE pa.order_id = OLD.id
+              AND pa.state IN ('call_started', 'abandoned_unknown', 'verified')
        ) THEN
-        RAISE EXCEPTION 'verified payment prevents order cancellation';
+        RAISE EXCEPTION 'unresolved or verified payment prevents order cancellation';
     END IF;
     IF EXISTS (SELECT 1 FROM stock_reservations WHERE order_id = OLD.id)
        AND (NEW.customer_id IS DISTINCT FROM OLD.customer_id

@@ -151,8 +151,8 @@ CREATE TABLE payment_attempt_evidence (
         op.execute(statement)
 
     # Backfill identifiable legacy order deductions. The legacy order-creation
-    # path deducts finite stock before persisting a PENDING order. Those rows
-    # predate the trigger-owned provenance table and must be represented before
+    # path deducts finite stock before persisting a retryable PENDING or FAILED
+    # order. Those rows predate the trigger-owned provenance table and must be represented before
     # reservations can safely credit their order-owned units.
     op.execute(
         "ALTER TABLE inventory_deduction_events "
@@ -170,7 +170,7 @@ SELECT oi.id, oi.product_id, oi.variant_id,
   FROM order_items oi
   JOIN orders o ON o.id = oi.order_id
   JOIN products p ON p.id = oi.product_id
- WHERE o.payment_status = 'PENDING'
+ WHERE o.payment_status IN ('PENDING', 'FAILED')
    AND o.fulfillment_status <> 'cancelled'
    AND NOT p.made_to_order
 """
