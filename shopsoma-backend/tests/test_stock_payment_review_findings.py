@@ -80,6 +80,93 @@ async def _alternate_selection(session, lane, graph, customer_id, *, quantity: i
     return intent, quote, option, selection
 
 
+async def _multi_package_attempt_subject(
+    session, lane, graph, subject, customer_id, sku
+):
+    """Create one full-order attempt anchored to A but reserving packages A and B."""
+
+    intent, quote, option, selection = subject
+    alternate_intent, alternate_quote, alternate_option, alternate_selection = (
+        await _alternate_selection(session, lane, graph, customer_id)
+    )
+    reservations = (
+        lane._reservation(graph, intent, quote, option, selection, customer_id, sku),
+        lane._reservation(
+            graph,
+            alternate_intent,
+            alternate_quote,
+            alternate_option,
+            alternate_selection,
+            customer_id,
+            sku,
+        ),
+    )
+    session.add_all(reservations)
+    await session.flush()
+    attempt = lane._payment_attempt(
+        graph, intent, quote, option, selection, customer_id
+    )
+    session.add(attempt)
+    await session.flush()
+    session.add_all(
+        [
+            PaymentAttemptReservation(
+                attempt_id=attempt.id, reservation_id=reservation.id
+            )
+            for reservation in reservations
+        ]
+    )
+    await session.flush()
+    await session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+    await session.execute(text("SET CONSTRAINTS ALL DEFERRED"))
+    return attempt, alternate_intent
+
+
+async def _transition_multi_package_attempt(session, attempt, state: str) -> None:
+    lease_token = uuid.uuid4()
+    await session.execute(
+        text(
+            "UPDATE payment_attempts SET state='call_started', lease_token=:token, "
+            "row_version=2 WHERE id=:attempt_id"
+        ),
+        {"token": lease_token, "attempt_id": attempt.id},
+    )
+    if state == "call_started":
+        return
+
+    evidence = PaymentAttemptEvidence(
+        attempt_id=attempt.id,
+        source="provider_reconciliation",
+        event_id=f"multi-package-{state}-{uuid.uuid4().hex}",
+        evidence_type=(
+            "outcome_unknown" if state == "abandoned_unknown" else "payment_verified"
+        ),
+        evidence_hash=uuid.uuid4().hex * 2,
+        observed_at=datetime.now(timezone.utc),
+    )
+    session.add(evidence)
+    await session.flush()
+    if state == "abandoned_unknown":
+        await session.execute(text("SET LOCAL session_replication_role = replica"))
+        await session.execute(
+            text(
+                "UPDATE payment_attempts "
+                "SET claim_expires_at=clock_timestamp() - interval '1 second' "
+                "WHERE id=:attempt_id"
+            ),
+            {"attempt_id": attempt.id},
+        )
+        await session.execute(text("SET LOCAL session_replication_role = origin"))
+    await _present_payment_lease(session, lease_token)
+    await session.execute(
+        text(
+            "UPDATE payment_attempts SET state=:state, "
+            "terminal_evidence_id=:evidence_id, row_version=3 WHERE id=:attempt_id"
+        ),
+        {"state": state, "evidence_id": evidence.id, "attempt_id": attempt.id},
+    )
+
+
 async def _present_payment_lease(session, lease_token: uuid.UUID) -> None:
     await session.execute(
         text("SELECT set_config('shopsoma.payment_lease_token', :token, true)"),
@@ -2016,6 +2103,111 @@ async def test_unknown_outcome_blocks_shipment_intent_invalidation(
     ):
         async with db_session.begin_nested():
             await _invalidate_intent(db_session, intent, graph["operator_id"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "attempt_state", ["call_started", "abandoned_unknown", "verified"]
+)
+async def test_full_order_attempt_fences_every_linked_package_intent(
+    db_session, vendor_user, customer_user, attempt_state
+) -> None:
+    lane = _lane_helpers()
+    graph, intent, quote, option, selection, sku = await lane._checkout_subject(
+        db_session, vendor_user, customer_user, stock=2
+    )
+    attempt, alternate_intent = await _multi_package_attempt_subject(
+        db_session,
+        lane,
+        graph,
+        (intent, quote, option, selection),
+        customer_user["user"].id,
+        sku,
+    )
+    await _transition_multi_package_attempt(db_session, attempt, attempt_state)
+
+    with pytest.raises(
+        DBAPIError, match="payment attempt prevents intent invalidation"
+    ):
+        async with db_session.begin_nested():
+            await _invalidate_intent(db_session, alternate_intent, graph["operator_id"])
+
+
+@pytest.mark.asyncio
+async def test_full_order_call_start_rejects_invalidated_linked_package_intent(
+    db_session, vendor_user, customer_user
+) -> None:
+    lane = _lane_helpers()
+    graph, intent, quote, option, selection, sku = await lane._checkout_subject(
+        db_session, vendor_user, customer_user, stock=2
+    )
+    attempt, alternate_intent = await _multi_package_attempt_subject(
+        db_session,
+        lane,
+        graph,
+        (intent, quote, option, selection),
+        customer_user["user"].id,
+        sku,
+    )
+    await _invalidate_intent(db_session, alternate_intent, graph["operator_id"])
+
+    with pytest.raises(
+        DBAPIError, match="invalidated intent cannot start payment call"
+    ):
+        async with db_session.begin_nested():
+            await _transition_multi_package_attempt(db_session, attempt, "call_started")
+
+
+@pytest.mark.asyncio
+async def test_full_order_verification_rechecks_every_linked_package_intent(
+    db_session, vendor_user, customer_user
+) -> None:
+    lane = _lane_helpers()
+    graph, intent, quote, option, selection, sku = await lane._checkout_subject(
+        db_session, vendor_user, customer_user, stock=2
+    )
+    attempt, alternate_intent = await _multi_package_attempt_subject(
+        db_session,
+        lane,
+        graph,
+        (intent, quote, option, selection),
+        customer_user["user"].id,
+        sku,
+    )
+    lease_token = uuid.uuid4()
+    await db_session.execute(
+        text(
+            "UPDATE payment_attempts SET state='call_started', lease_token=:token, "
+            "row_version=2 WHERE id=:attempt_id"
+        ),
+        {"token": lease_token, "attempt_id": attempt.id},
+    )
+    # Model an invalidation committed by the pre-fix fence or imported historical data.
+    await db_session.execute(text("SET LOCAL session_replication_role = replica"))
+    await _invalidate_intent(db_session, alternate_intent, graph["operator_id"])
+    await db_session.execute(text("SET LOCAL session_replication_role = origin"))
+    evidence = PaymentAttemptEvidence(
+        attempt_id=attempt.id,
+        source="provider_reconciliation",
+        event_id=f"multi-package-verify-{uuid.uuid4().hex}",
+        evidence_type="payment_verified",
+        evidence_hash=uuid.uuid4().hex * 2,
+        observed_at=datetime.now(timezone.utc),
+    )
+    db_session.add(evidence)
+    await db_session.flush()
+    await _present_payment_lease(db_session, lease_token)
+
+    with pytest.raises(DBAPIError, match="invalidated intent cannot verify payment"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(
+                    "UPDATE payment_attempts SET state='verified', "
+                    "terminal_evidence_id=:evidence_id, row_version=3 "
+                    "WHERE id=:attempt_id"
+                ),
+                {"evidence_id": evidence.id, "attempt_id": attempt.id},
+            )
 
 
 @pytest.mark.asyncio

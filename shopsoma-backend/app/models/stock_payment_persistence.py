@@ -1211,10 +1211,6 @@ BEGIN
         IF order_payment_status = 'PAID' THEN
             RAISE EXCEPTION 'paid order cannot start payment call';
         END IF;
-        IF EXISTS (SELECT 1 FROM outbound_shipment_intent_invalidations
-                   WHERE intent_id = OLD.intent_id) THEN
-            RAISE EXCEPTION 'invalidated intent cannot start payment call';
-        END IF;
         -- Global payment/inventory lock order: target attempt (owned by UPDATE),
         -- order, products, variations, product variants, size stocks, then linked
         -- reservations. Reservation creation uses order/item before the same
@@ -1258,6 +1254,16 @@ BEGIN
         JOIN payment_attempt_reservations ar ON ar.reservation_id = sr.id
         WHERE ar.attempt_id = OLD.id
         ORDER BY sr.id FOR UPDATE OF sr;
+
+        IF EXISTS (
+            SELECT 1 FROM payment_attempt_reservations ar
+            JOIN stock_reservations sr ON sr.id = ar.reservation_id
+            JOIN outbound_shipment_intent_invalidations invalidation
+              ON invalidation.intent_id = sr.intent_id
+            WHERE ar.attempt_id = OLD.id
+        ) THEN
+            RAISE EXCEPTION 'invalidated intent cannot start payment call';
+        END IF;
 
         -- A lock wait may cross the reservation TTL or follow a committed
         -- identity writer. Re-sample time and revalidate the complete immutable
@@ -1404,6 +1410,15 @@ BEGIN
             WHERE ar.attempt_id = OLD.id
             ORDER BY sr.id
             FOR UPDATE OF sr;
+            IF EXISTS (
+                SELECT 1 FROM payment_attempt_reservations ar
+                JOIN stock_reservations sr ON sr.id = ar.reservation_id
+                JOIN outbound_shipment_intent_invalidations invalidation
+                  ON invalidation.intent_id = sr.intent_id
+                WHERE ar.attempt_id = OLD.id
+            ) THEN
+                RAISE EXCEPTION 'invalidated intent cannot verify payment';
+            END IF;
             -- Shared post-lock subject check: call start and verification both
             -- validate the exact order-item/inventory identity only after owning
             -- the same deterministic inventory and reservation lock set.
@@ -1491,11 +1506,19 @@ BEGIN
     -- concurrently starting, this waits for that transition and then reads
     -- its committed state before deciding whether invalidation is legal.
     PERFORM pa.id FROM payment_attempts pa
-     WHERE pa.intent_id = NEW.intent_id
+     WHERE pa.intent_id = NEW.intent_id OR EXISTS (
+         SELECT 1 FROM payment_attempt_reservations ar
+         JOIN stock_reservations sr ON sr.id = ar.reservation_id
+         WHERE ar.attempt_id = pa.id AND sr.intent_id = NEW.intent_id
+     )
      ORDER BY pa.id FOR UPDATE OF pa;
     IF EXISTS (
         SELECT 1 FROM payment_attempts pa
-         WHERE pa.intent_id = NEW.intent_id
+         WHERE (pa.intent_id = NEW.intent_id OR EXISTS (
+                   SELECT 1 FROM payment_attempt_reservations ar
+                   JOIN stock_reservations sr ON sr.id = ar.reservation_id
+                   WHERE ar.attempt_id = pa.id AND sr.intent_id = NEW.intent_id
+               ))
            AND pa.state IN ('call_started', 'abandoned_unknown', 'verified')
     ) THEN
         RAISE EXCEPTION 'payment attempt prevents intent invalidation';
