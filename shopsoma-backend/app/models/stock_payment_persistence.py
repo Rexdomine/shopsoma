@@ -1617,6 +1617,10 @@ BEGIN
                        SELECT 1 FROM customer_shipping_quotes successor
                         WHERE successor.supersedes_quote_id = q.id
                    )
+                   AND NOT EXISTS (
+                       SELECT 1 FROM outbound_shipment_intent_invalidations invalidation
+                        WHERE invalidation.intent_id = s.intent_id
+                   )
             ) selected_packages
               ON selected_packages.package_id = hpi.package_id
              AND selected_packages.package_version = hpi.package_version

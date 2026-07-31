@@ -1515,6 +1515,43 @@ async def test_order_total_payment_attempt_accepts_all_selected_package_reservat
 
 
 @pytest.mark.asyncio
+async def test_repacked_order_requires_only_non_invalidated_selected_package(
+    db_session, vendor_user, customer_user
+) -> None:
+    lane = _lane_helpers()
+    graph, old_intent, _old_quote, _old_option, _old_selection, sku = (
+        await lane._checkout_subject(db_session, vendor_user, customer_user, stock=3)
+    )
+    await _invalidate_intent(db_session, old_intent, graph["operator_id"])
+    replacement = await _alternate_selection(
+        db_session, lane, graph, customer_user["user"].id
+    )
+    intent, quote, option, selection = replacement
+    reservation = lane._reservation(
+        graph,
+        intent,
+        quote,
+        option,
+        selection,
+        customer_user["user"].id,
+        sku,
+    )
+    db_session.add(reservation)
+    await db_session.flush()
+    attempt = lane._payment_attempt(
+        graph, intent, quote, option, selection, customer_user["user"].id
+    )
+    db_session.add(attempt)
+    await db_session.flush()
+    db_session.add(
+        PaymentAttemptReservation(attempt_id=attempt.id, reservation_id=reservation.id)
+    )
+    await db_session.flush()
+
+    await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+
+@pytest.mark.asyncio
 async def test_cohort_split_package_quantity_is_aggregated_for_reservation_and_attempt(
     db_session, vendor_user, customer_user
 ) -> None:
