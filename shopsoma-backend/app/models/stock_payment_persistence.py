@@ -760,6 +760,7 @@ FOR EACH ROW EXECUTE FUNCTION validate_stock_reservation_write();
 CREATE FUNCTION protect_reserved_inventory() RETURNS trigger AS $$
 DECLARE
     active_quantity bigint;
+    deducted_quantity bigint := 0;
     new_stock integer;
     old_stock integer;
     new_sku text;
@@ -781,13 +782,25 @@ BEGIN
         old_sku := to_jsonb(OLD)->>'sku';
         new_made_to_order := (to_jsonb(NEW)->>'made_to_order')::boolean;
         old_made_to_order := (to_jsonb(OLD)->>'made_to_order')::boolean;
+        -- A verified-linked active reservation remains authoritative after TTL;
+        -- reserved inventory identity remains live after verified payment until
+        -- the reservation is explicitly consumed or otherwise terminal.
         IF (new_sku IS DISTINCT FROM old_sku AND EXISTS (
             SELECT 1 FROM stock_reservations sr
              WHERE sr.product_id = OLD.id AND sr.variant_id IS NULL AND sr.size_stock_id IS NULL
-               AND sr.state = 'active' AND sr.expires_at > now_at
+               AND sr.state = 'active' AND (sr.expires_at > now_at OR EXISTS (
+                   SELECT 1 FROM payment_attempt_reservations ar
+                   JOIN payment_attempts pa ON pa.id = ar.attempt_id
+                    WHERE ar.reservation_id = sr.id AND pa.state = 'verified'
+               ))
         )) OR (new_made_to_order IS DISTINCT FROM old_made_to_order AND EXISTS (
             SELECT 1 FROM stock_reservations sr
-             WHERE sr.product_id = OLD.id AND sr.state = 'active' AND sr.expires_at > now_at
+             WHERE sr.product_id = OLD.id AND sr.state = 'active'
+               AND (sr.expires_at > now_at OR EXISTS (
+                   SELECT 1 FROM payment_attempt_reservations ar
+                   JOIN payment_attempts pa ON pa.id = ar.attempt_id
+                    WHERE ar.reservation_id = sr.id AND pa.state = 'verified'
+               ))
         )) THEN
             RAISE EXCEPTION 'reserved product identity is immutable';
         END IF;
@@ -810,7 +823,29 @@ BEGIN
                      AND pa.authorization_deadline_at >= now_at
                  ))
            ));
-        IF new_stock < active_quantity THEN
+        SELECT COALESCE(sum(net_quantity), 0) INTO deducted_quantity FROM (
+            SELECT ide.order_item_id,
+                   sum(CASE WHEN ide.event_type = 'deducted' THEN ide.quantity ELSE -ide.quantity END) AS net_quantity
+              FROM inventory_deduction_events ide
+             WHERE ide.order_item_id IN (
+                 SELECT DISTINCT sr.order_item_id FROM stock_reservations sr
+                  WHERE sr.product_id = OLD.id AND sr.variant_id IS NULL AND sr.size_stock_id IS NULL
+                    AND sr.state = 'active'
+                    AND (sr.expires_at > now_at OR EXISTS (
+                        SELECT 1 FROM payment_attempt_reservations ar
+                        JOIN payment_attempts pa ON pa.id = ar.attempt_id
+                         WHERE ar.reservation_id = sr.id
+                           AND (pa.state = 'verified' OR (
+                               pa.state = 'call_started'
+                               AND pa.call_started_at < sr.expires_at
+                               AND pa.claim_expires_at > now_at
+                               AND pa.authorization_deadline_at >= now_at
+                           ))
+                    ))
+             )
+             GROUP BY ide.order_item_id
+        ) deduction_credit;
+        IF new_stock + deducted_quantity < active_quantity THEN
             RAISE EXCEPTION 'inventory cannot be reduced below active reservations';
         END IF;
     ELSIF TG_TABLE_NAME = 'product_variants' THEN
@@ -823,7 +858,11 @@ BEGIN
         IF (new_sku IS DISTINCT FROM old_sku OR new_product_id IS DISTINCT FROM old_product_id)
            AND EXISTS (SELECT 1 FROM stock_reservations sr
                         WHERE sr.variant_id = OLD.id AND sr.state = 'active'
-                          AND sr.expires_at > now_at) THEN
+                          AND (sr.expires_at > now_at OR EXISTS (
+                              SELECT 1 FROM payment_attempt_reservations ar
+                              JOIN payment_attempts pa ON pa.id = ar.attempt_id
+                               WHERE ar.reservation_id = sr.id AND pa.state = 'verified'
+                          ))) THEN
             RAISE EXCEPTION 'reserved product identity is immutable';
         END IF;
         IF new_stock IS NOT DISTINCT FROM old_stock THEN
@@ -845,7 +884,29 @@ BEGIN
                      AND pa.authorization_deadline_at >= now_at
                  ))
            ));
-        IF new_stock < active_quantity THEN
+        SELECT COALESCE(sum(net_quantity), 0) INTO deducted_quantity FROM (
+            SELECT ide.order_item_id,
+                   sum(CASE WHEN ide.event_type = 'deducted' THEN ide.quantity ELSE -ide.quantity END) AS net_quantity
+              FROM inventory_deduction_events ide
+             WHERE ide.order_item_id IN (
+                 SELECT DISTINCT sr.order_item_id FROM stock_reservations sr
+                  WHERE sr.product_id = OLD.product_id AND sr.variant_id = OLD.id
+                    AND sr.state = 'active'
+                    AND (sr.expires_at > now_at OR EXISTS (
+                        SELECT 1 FROM payment_attempt_reservations ar
+                        JOIN payment_attempts pa ON pa.id = ar.attempt_id
+                         WHERE ar.reservation_id = sr.id
+                           AND (pa.state = 'verified' OR (
+                               pa.state = 'call_started'
+                               AND pa.call_started_at < sr.expires_at
+                               AND pa.claim_expires_at > now_at
+                               AND pa.authorization_deadline_at >= now_at
+                           ))
+                    ))
+             )
+             GROUP BY ide.order_item_id
+        ) deduction_credit;
+        IF new_stock + deducted_quantity < active_quantity THEN
             RAISE EXCEPTION 'inventory cannot be reduced below active reservations';
         END IF;
     ELSIF TG_TABLE_NAME = 'size_stocks' THEN
@@ -859,7 +920,11 @@ BEGIN
             OR new_size IS DISTINCT FROM old_size)
            AND EXISTS (SELECT 1 FROM stock_reservations sr
                         WHERE sr.size_stock_id = OLD.id AND sr.state = 'active'
-                          AND sr.expires_at > now_at) THEN
+                          AND (sr.expires_at > now_at OR EXISTS (
+                              SELECT 1 FROM payment_attempt_reservations ar
+                              JOIN payment_attempts pa ON pa.id = ar.attempt_id
+                               WHERE ar.reservation_id = sr.id AND pa.state = 'verified'
+                          ))) THEN
             RAISE EXCEPTION 'reserved product identity is immutable';
         END IF;
         IF new_stock IS NOT DISTINCT FROM old_stock THEN
@@ -880,7 +945,28 @@ BEGIN
                      AND pa.authorization_deadline_at >= now_at
                  ))
            ));
-        IF new_stock < active_quantity THEN
+        SELECT COALESCE(sum(net_quantity), 0) INTO deducted_quantity FROM (
+            SELECT ide.order_item_id,
+                   sum(CASE WHEN ide.event_type = 'deducted' THEN ide.quantity ELSE -ide.quantity END) AS net_quantity
+              FROM inventory_deduction_events ide
+             WHERE ide.order_item_id IN (
+                 SELECT DISTINCT sr.order_item_id FROM stock_reservations sr
+                  WHERE sr.size_stock_id = OLD.id AND sr.state = 'active'
+                    AND (sr.expires_at > now_at OR EXISTS (
+                        SELECT 1 FROM payment_attempt_reservations ar
+                        JOIN payment_attempts pa ON pa.id = ar.attempt_id
+                         WHERE ar.reservation_id = sr.id
+                           AND (pa.state = 'verified' OR (
+                               pa.state = 'call_started'
+                               AND pa.call_started_at < sr.expires_at
+                               AND pa.claim_expires_at > now_at
+                               AND pa.authorization_deadline_at >= now_at
+                           ))
+                    ))
+             )
+             GROUP BY ide.order_item_id
+        ) deduction_credit;
+        IF new_stock + deducted_quantity < active_quantity THEN
             RAISE EXCEPTION 'inventory cannot be reduced below active reservations';
         END IF;
     ELSIF TG_TABLE_NAME = 'variations' THEN
@@ -890,7 +976,11 @@ BEGIN
             SELECT 1 FROM size_stocks ss
             JOIN stock_reservations sr ON sr.size_stock_id = ss.id
             WHERE ss.variation_id = OLD.id AND sr.state = 'active'
-              AND sr.expires_at > now_at
+              AND (sr.expires_at > now_at OR EXISTS (
+                  SELECT 1 FROM payment_attempt_reservations ar
+                  JOIN payment_attempts pa ON pa.id = ar.attempt_id
+                   WHERE ar.reservation_id = sr.id AND pa.state = 'verified'
+              ))
         ) THEN
             RAISE EXCEPTION 'reserved product identity is immutable';
         END IF;
@@ -927,6 +1017,14 @@ BEFORE UPDATE ON order_items FOR EACH ROW EXECUTE FUNCTION protect_reserved_orde
 
 CREATE FUNCTION protect_reserved_order() RETURNS trigger AS $$
 BEGIN
+    IF NEW.fulfillment_status = 'cancelled'
+       AND OLD.fulfillment_status IS DISTINCT FROM 'cancelled'
+       AND EXISTS (
+           SELECT 1 FROM payment_attempts pa
+            WHERE pa.order_id = OLD.id AND pa.state = 'verified'
+       ) THEN
+        RAISE EXCEPTION 'verified payment prevents order cancellation';
+    END IF;
     IF EXISTS (SELECT 1 FROM stock_reservations WHERE order_id = OLD.id)
        AND (NEW.customer_id IS DISTINCT FROM OLD.customer_id
             OR NEW.currency IS DISTINCT FROM OLD.currency
@@ -1061,8 +1159,11 @@ BEGIN
                WHERE successor.supersedes_attempt_id = OLD.id) THEN
         RAISE EXCEPTION 'superseded payment attempt cannot complete';
     END IF;
-    IF OLD.state NOT IN ('pending', 'call_started') THEN
+    IF OLD.state NOT IN ('pending', 'call_started', 'abandoned_unknown') THEN
         RAISE EXCEPTION 'payment attempt is terminal';
+    END IF;
+    IF OLD.state = 'abandoned_unknown' AND NEW.state NOT IN ('failed', 'verified') THEN
+        RAISE EXCEPTION 'unknown payment attempt requires definitive reconciliation';
     END IF;
     IF NEW.id IS DISTINCT FROM OLD.id OR NEW.order_id IS DISTINCT FROM OLD.order_id
        OR NEW.customer_id IS DISTINCT FROM OLD.customer_id
@@ -1095,6 +1196,10 @@ BEGIN
     IF OLD.state = 'pending' AND NEW.state = 'call_started' THEN
         IF NEW.lease_token IS NULL THEN
             RAISE EXCEPTION 'payment attempt lease token required';
+        END IF;
+        IF EXISTS (SELECT 1 FROM outbound_shipment_intent_invalidations
+                   WHERE intent_id = OLD.intent_id) THEN
+            RAISE EXCEPTION 'invalidated intent cannot start payment call';
         END IF;
         -- PostgreSQL owns the target row lock before this BEFORE UPDATE trigger
         -- runs. Re-sample wall-clock time after any wait on that row.
@@ -1147,7 +1252,7 @@ BEGIN
                 RAISE EXCEPTION 'payment attempt lease has not expired';
             END IF;
         ELSIF NEW.state = 'verified' THEN
-            IF OLD.state <> 'call_started' THEN
+            IF OLD.state NOT IN ('call_started', 'abandoned_unknown') THEN
                 RAISE EXCEPTION 'payment attempt transition is illegal';
             END IF;
             SELECT fulfillment_status, payment_status
@@ -1159,7 +1264,7 @@ BEGIN
             IF order_payment_status = 'PAID' THEN
                 RAISE EXCEPTION 'paid order cannot verify another payment';
             END IF;
-            IF now_at > OLD.authorization_deadline_at THEN
+            IF OLD.state = 'call_started' AND now_at > OLD.authorization_deadline_at THEN
                 RAISE EXCEPTION 'payment attempt authorization deadline elapsed';
             END IF;
             -- Reservation insertion serializes on the authoritative inventory
@@ -1209,10 +1314,11 @@ BEGIN
             -- A lock wait can cross reservation, claim, or authorization boundaries;
             -- re-sample wall-clock truth only after the exact set is locked.
             now_at := clock_timestamp();
-            IF OLD.claim_expires_at IS NULL OR now_at >= OLD.claim_expires_at THEN
+            IF OLD.state = 'call_started'
+               AND (OLD.claim_expires_at IS NULL OR now_at >= OLD.claim_expires_at) THEN
                 RAISE EXCEPTION 'payment claim lease expired';
             END IF;
-            IF now_at > OLD.authorization_deadline_at THEN
+            IF OLD.state = 'call_started' AND now_at > OLD.authorization_deadline_at THEN
                 RAISE EXCEPTION 'payment attempt authorization deadline elapsed';
             END IF;
             IF EXISTS (
@@ -1234,7 +1340,7 @@ BEGIN
             ) THEN
                 RAISE EXCEPTION 'payment verification requires live reservations';
             END IF;
-        ELSIF OLD.state NOT IN ('pending', 'call_started') THEN
+        ELSIF OLD.state NOT IN ('pending', 'call_started', 'abandoned_unknown') THEN
             RAISE EXCEPTION 'payment attempt transition is illegal';
         END IF;
         NEW.lease_token := NULL;
@@ -1251,6 +1357,28 @@ $$ LANGUAGE plpgsql;
 CREATE TRIGGER trg_payment_attempts_validate
 BEFORE INSERT OR UPDATE OR DELETE ON payment_attempts
 FOR EACH ROW EXECUTE FUNCTION validate_payment_attempt_write();
+
+CREATE FUNCTION protect_payment_intent_invalidation() RETURNS trigger AS $$
+BEGIN
+    -- Lock every matching attempt in stable order. If a provider call is
+    -- concurrently starting, this waits for that transition and then reads
+    -- its committed state before deciding whether invalidation is legal.
+    PERFORM pa.id FROM payment_attempts pa
+     WHERE pa.intent_id = NEW.intent_id
+     ORDER BY pa.id FOR UPDATE OF pa;
+    IF EXISTS (
+        SELECT 1 FROM payment_attempts pa
+         WHERE pa.intent_id = NEW.intent_id
+           AND pa.state IN ('call_started', 'verified')
+    ) THEN
+        RAISE EXCEPTION 'payment attempt prevents intent invalidation';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+CREATE TRIGGER trg_payment_intent_invalidation_fence
+BEFORE INSERT ON outbound_shipment_intent_invalidations
+FOR EACH ROW EXECUTE FUNCTION protect_payment_intent_invalidation();
 """,
     r"""
 CREATE FUNCTION validate_payment_attempt_membership_write() RETURNS trigger AS $$
@@ -1370,7 +1498,7 @@ BEGIN
     END IF;
     SELECT state, created_at INTO attempt_state, attempt_created_at
       FROM payment_attempts WHERE id = NEW.attempt_id FOR UPDATE;
-    IF NOT FOUND OR attempt_state NOT IN ('pending', 'call_started') THEN
+    IF NOT FOUND OR attempt_state NOT IN ('pending', 'call_started', 'abandoned_unknown') THEN
         RAISE EXCEPTION 'payment attempt evidence creation is closed';
     END IF;
     IF NEW.observed_at > clock_timestamp() THEN
@@ -1391,6 +1519,7 @@ FOR EACH ROW EXECUTE FUNCTION validate_payment_attempt_evidence_write();
 
 STOCK_PAYMENT_DROP_DDLS: tuple[str, ...] = (
     r"""
+DROP TRIGGER IF EXISTS trg_payment_intent_invalidation_fence ON outbound_shipment_intent_invalidations;
 DROP TRIGGER IF EXISTS trg_orders_reserved_payment_truth ON orders;
 DROP TRIGGER IF EXISTS trg_order_items_reserved_truth ON order_items;
 DROP TRIGGER IF EXISTS trg_variations_reserved_inventory ON variations;
@@ -1402,6 +1531,7 @@ DROP TRIGGER IF EXISTS trg_product_variants_order_inventory_change ON product_va
 DROP TRIGGER IF EXISTS trg_products_order_inventory_change ON products;
 DROP TRIGGER IF EXISTS trg_inventory_deduction_events_validate ON inventory_deduction_events;
 DROP FUNCTION IF EXISTS protect_reserved_order();
+DROP FUNCTION IF EXISTS protect_payment_intent_invalidation();
 DROP FUNCTION IF EXISTS protect_reserved_order_item();
 DROP FUNCTION IF EXISTS protect_reserved_inventory();
 DROP FUNCTION IF EXISTS validate_payment_attempt_evidence_write();

@@ -1759,3 +1759,46 @@ def test_capacity_credit_covers_every_counted_order_item() -> None:
     assert "SELECT DISTINCT sr.order_item_id" in source
     assert "UNION SELECT NEW.order_item_id" in source
     assert "GROUP BY ide.order_item_id" in source
+
+
+def test_stock_update_guard_nets_durable_deduction_credit() -> None:
+    source = (
+        Path(__file__).parents[1] / "app/models/stock_payment_persistence.py"
+    ).read_text(encoding="utf-8")
+    assert "deducted_quantity bigint" in source
+    assert source.count("new_stock + deducted_quantity < active_quantity") == 3
+
+
+def test_unknown_attempt_has_evidence_backed_reconciliation_path() -> None:
+    source = (
+        Path(__file__).parents[1] / "app/models/stock_payment_persistence.py"
+    ).read_text(encoding="utf-8")
+    assert "OLD.state = 'abandoned_unknown'" in source
+    assert (
+        "attempt_state NOT IN ('pending', 'call_started', 'abandoned_unknown')"
+        in source
+    )
+
+
+def test_verified_reservations_keep_inventory_identity_live_after_ttl() -> None:
+    source = (
+        Path(__file__).parents[1] / "app/models/stock_payment_persistence.py"
+    ).read_text(encoding="utf-8")
+    assert source.count("pa.state = 'verified'") >= 8
+    assert "reserved inventory identity remains live after verified payment" in source
+
+
+def test_intent_invalidation_is_fenced_by_payment_outcome() -> None:
+    source = (
+        Path(__file__).parents[1] / "app/models/stock_payment_persistence.py"
+    ).read_text(encoding="utf-8")
+    assert "protect_payment_intent_invalidation" in source
+    assert "ORDER BY pa.id FOR UPDATE OF pa" in source
+    assert "payment attempt prevents intent invalidation" in source
+
+
+def test_verified_payment_blocks_late_order_cancellation() -> None:
+    source = (
+        Path(__file__).parents[1] / "app/models/stock_payment_persistence.py"
+    ).read_text(encoding="utf-8")
+    assert "verified payment prevents order cancellation" in source
