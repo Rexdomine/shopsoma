@@ -410,6 +410,10 @@ SELECT oi.id, oi.product_id, oi.variant_id,
        CASE
            WHEN COALESCE(oi.variant_details->>'size_stock_id', '')
                 ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+                AND EXISTS (
+                    SELECT 1 FROM size_stocks ss
+                     WHERE ss.id = (oi.variant_details->>'size_stock_id')::uuid
+                )
            THEN (oi.variant_details->>'size_stock_id')::uuid
        END,
        oi.quantity
@@ -1483,8 +1487,8 @@ BEGIN
     IF NEW.row_version <> OLD.row_version + 1 THEN
         RAISE EXCEPTION 'payment attempt transition is illegal';
     END IF;
-    IF OLD.call_started_at IS NOT NULL
-       AND NEW.call_started_at IS DISTINCT FROM OLD.call_started_at THEN
+    IF NEW.call_started_at IS DISTINCT FROM OLD.call_started_at
+       AND NOT (OLD.state = 'pending' AND NEW.state = 'call_started') THEN
         RAISE EXCEPTION 'payment attempt call start audit is immutable';
     END IF;
 

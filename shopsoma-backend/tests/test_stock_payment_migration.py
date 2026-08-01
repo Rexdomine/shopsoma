@@ -2,6 +2,7 @@
 
 import ast
 import importlib.util
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -221,6 +222,7 @@ def test_lane_2a_4b_real_upgrade_downgrade_upgrade_cycle() -> None:
         current_made_to_order_product_id = uuid.uuid4()
         order_id = uuid.uuid4()
         order_item_id = uuid.uuid4()
+        stale_size_stock_id = uuid.uuid4()
         made_to_order_item_id = uuid.uuid4()
         current_made_to_order_item_id = uuid.uuid4()
         target = create_engine(database_url)
@@ -288,14 +290,14 @@ def test_lane_2a_4b_real_upgrade_downgrade_upgrade_cycle() -> None:
                         "INSERT INTO order_items "
                         "(id,order_id,product_id,vendor_id,product_title,quantity,unit_price,"
                         "subtotal,commission_rate,commission_amount,vendor_payout,"
-                        "fulfillment_status) VALUES "
+                        "fulfillment_status,variant_details) VALUES "
                         "(:item_id,:order_id,:product_id,:vendor_id,'Migration Product',2,10,"
-                        "20,10,2,18,'order_received'),"
+                        "20,10,2,18,'order_received',CAST(:variant_details AS jsonb)),"
                         "(:made_to_order_item_id,:order_id,:made_to_order_product_id,:vendor_id,"
-                        "'Migration MTO Product',1,10,10,10,1,9,'order_received'),"
+                        "'Migration MTO Product',1,10,10,10,1,9,'order_received',NULL),"
                         "(:current_made_to_order_item_id,:order_id,"
                         ":current_made_to_order_product_id,:vendor_id,'Migration Current MTO',1,"
-                        "10,10,10,1,9,'order_received')"
+                        "10,10,10,1,9,'order_received',NULL)"
                     ),
                     {
                         "item_id": order_item_id,
@@ -303,6 +305,9 @@ def test_lane_2a_4b_real_upgrade_downgrade_upgrade_cycle() -> None:
                         "current_made_to_order_item_id": current_made_to_order_item_id,
                         "order_id": order_id,
                         "product_id": product_id,
+                        "variant_details": json.dumps(
+                            {"size_stock_id": str(stale_size_stock_id)}
+                        ),
                         "made_to_order_product_id": made_to_order_product_id,
                         "current_made_to_order_product_id": current_made_to_order_product_id,
                         "vendor_id": vendor_id,
@@ -346,6 +351,17 @@ def test_lane_2a_4b_real_upgrade_downgrade_upgrade_cycle() -> None:
                     made_to_order_item_id: "unresolved",
                     current_made_to_order_item_id: "unresolved",
                 }
+                assert (
+                    connection.scalar(
+                        text(
+                            "SELECT size_stock_id "
+                            "FROM legacy_inventory_deduction_candidates "
+                            "WHERE order_item_id=:order_item_id"
+                        ),
+                        {"order_item_id": order_item_id},
+                    )
+                    is None
+                )
                 assert (
                     connection.scalar(
                         text("SELECT count(*) FROM inventory_deduction_events")
