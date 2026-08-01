@@ -3473,7 +3473,7 @@ async def test_abandoned_unknown_resolution_rejects_wrong_disposition_evidence(
     *_, attempt = await _abandoned_unknown_subject(
         db_session, vendor_user, customer_user
     )
-    evidence = await _definitive_reconciliation_evidence(
+    evidence = await _unvalidated_definitive_reconciliation_evidence(
         db_session,
         attempt,
         target_state,
@@ -3735,3 +3735,196 @@ async def test_ambiguous_historical_unknown_binding_fails_closed(
                 ),
                 {"evidence_id": evidence.id, "attempt_id": attempt.id},
             )
+
+
+@pytest.mark.asyncio
+async def test_outcome_unknown_evidence_requires_call_started_attempt(
+    db_session, vendor_user, customer_user
+) -> None:
+    """The live evidence path rejects an unknown outcome before any provider call."""
+
+    attempt = await _pending_payment_subject(db_session, vendor_user, customer_user)
+    with pytest.raises(
+        DBAPIError, match="unknown evidence requires started provider call"
+    ):
+        async with db_session.begin_nested():
+            db_session.add(
+                PaymentAttemptEvidence(
+                    attempt_id=attempt.id,
+                    source="provider_reconciliation",
+                    event_id=f"pending-unknown-{uuid.uuid4().hex}",
+                    evidence_type="outcome_unknown",
+                    provider=attempt.provider,
+                    provider_reference=attempt.provider_reference,
+                    evidence_hash=uuid.uuid4().hex * 2,
+                    observed_at=datetime.now(timezone.utc),
+                )
+            )
+            await db_session.flush()
+
+
+@pytest.mark.asyncio
+async def test_abandoned_unknown_rejects_evidence_staged_before_provider_call(
+    db_session, vendor_user, customer_user
+) -> None:
+    """Unknown evidence must describe this provider call, not a pending attempt."""
+
+    attempt = await _pending_payment_subject(db_session, vendor_user, customer_user)
+    evidence = PaymentAttemptEvidence(
+        attempt_id=attempt.id,
+        source="provider_reconciliation",
+        event_id=f"pre-call-unknown-{uuid.uuid4().hex}",
+        evidence_type="outcome_unknown",
+        provider=attempt.provider,
+        provider_reference=attempt.provider_reference,
+        evidence_hash=uuid.uuid4().hex * 2,
+        observed_at=datetime.now(timezone.utc),
+    )
+    await db_session.execute(text("SET LOCAL session_replication_role = replica"))
+    db_session.add(evidence)
+    await db_session.flush()
+    await db_session.execute(text("SET LOCAL session_replication_role = origin"))
+
+    lease_token = uuid.uuid4()
+    await db_session.execute(
+        text(
+            "UPDATE payment_attempts SET state='call_started', lease_token=:token, "
+            "row_version=2 WHERE id=:attempt_id"
+        ),
+        {"token": lease_token, "attempt_id": attempt.id},
+    )
+    await db_session.execute(text("SET LOCAL session_replication_role = replica"))
+    await db_session.execute(
+        text(
+            "UPDATE payment_attempts "
+            "SET claim_expires_at=clock_timestamp() - interval '1 second' "
+            "WHERE id=:attempt_id"
+        ),
+        {"attempt_id": attempt.id},
+    )
+    await db_session.execute(text("SET LOCAL session_replication_role = origin"))
+    await _present_payment_lease(db_session, lease_token)
+
+    with pytest.raises(DBAPIError, match="unknown evidence predates provider call"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(
+                    "UPDATE payment_attempts SET state='abandoned_unknown', "
+                    "terminal_evidence_id=:evidence_id, row_version=3 "
+                    "WHERE id=:attempt_id"
+                ),
+                {"evidence_id": evidence.id, "attempt_id": attempt.id},
+            )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target_state", ["verified", "failed"])
+@pytest.mark.parametrize(
+    "call_started_mutation", ["NULL", "call_started_at + interval '1 second'"]
+)
+async def test_abandoned_unknown_resolution_preserves_call_started_audit(
+    db_session,
+    vendor_user,
+    customer_user,
+    target_state,
+    call_started_mutation,
+) -> None:
+    """Definitive reconciliation cannot erase or rewrite the provider-call start."""
+
+    *_, attempt = await _abandoned_unknown_subject(
+        db_session, vendor_user, customer_user
+    )
+    evidence = await _definitive_reconciliation_evidence(
+        db_session, attempt, target_state
+    )
+
+    with pytest.raises(
+        DBAPIError, match="payment attempt call start audit is immutable"
+    ):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(
+                    "UPDATE payment_attempts SET state=:target_state, "
+                    f"call_started_at={call_started_mutation}, "
+                    "terminal_evidence_id=:evidence_id, row_version=4 "
+                    "WHERE id=:attempt_id"
+                ),
+                {
+                    "target_state": target_state,
+                    "evidence_id": evidence.id,
+                    "attempt_id": attempt.id,
+                },
+            )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("chronology_field", ["created_at", "observed_at"])
+@pytest.mark.parametrize(
+    ("boundary_delta", "accepted"),
+    [
+        (timedelta(microseconds=-1), False),
+        (timedelta(0), True),
+        (timedelta(microseconds=1), True),
+    ],
+)
+async def test_abandoned_unknown_evidence_respects_claim_expiry_boundary(
+    db_session,
+    vendor_user,
+    customer_user,
+    chronology_field,
+    boundary_delta,
+    accepted,
+) -> None:
+    """Both durable evidence clocks must be at/after the elapsed claim boundary."""
+
+    attempt, lease_token = await _call_started_subject(
+        db_session, vendor_user, customer_user
+    )
+    await db_session.execute(text("SET LOCAL session_replication_role = replica"))
+    await db_session.execute(
+        text(
+            "UPDATE payment_attempts "
+            "SET call_started_at=clock_timestamp() - interval '2 seconds', "
+            "claim_expires_at=clock_timestamp() - interval '1 second' "
+            "WHERE id=:attempt_id"
+        ),
+        {"attempt_id": attempt.id},
+    )
+    await db_session.execute(text("SET LOCAL session_replication_role = origin"))
+    await db_session.refresh(attempt)
+    boundary = attempt.claim_expires_at
+    assert boundary is not None
+
+    evidence = PaymentAttemptEvidence(
+        attempt_id=attempt.id,
+        source="provider_reconciliation",
+        event_id=f"expiry-boundary-{chronology_field}-{uuid.uuid4().hex}",
+        evidence_type="outcome_unknown",
+        provider=attempt.provider,
+        provider_reference=attempt.provider_reference,
+        evidence_hash=uuid.uuid4().hex * 2,
+        observed_at=boundary + timedelta(seconds=1),
+    )
+    db_session.add(evidence)
+    await db_session.flush()
+    chronology = {
+        "created_at": boundary + timedelta(seconds=1),
+        "observed_at": boundary + timedelta(seconds=1),
+    }
+    chronology[chronology_field] = boundary + boundary_delta
+    await _force_evidence_chronology(db_session, evidence.id, **chronology)
+    await _present_payment_lease(db_session, lease_token)
+
+    transition = text(
+        "UPDATE payment_attempts SET state='abandoned_unknown', "
+        "terminal_evidence_id=:evidence_id, row_version=3 WHERE id=:attempt_id"
+    )
+    params = {"evidence_id": evidence.id, "attempt_id": attempt.id}
+    if accepted:
+        await db_session.execute(transition, params)
+    else:
+        with pytest.raises(
+            DBAPIError, match="unknown evidence predates provider call or lease expiry"
+        ):
+            async with db_session.begin_nested():
+                await db_session.execute(transition, params)

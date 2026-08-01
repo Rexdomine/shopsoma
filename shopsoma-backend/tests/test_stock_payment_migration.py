@@ -153,6 +153,7 @@ def test_lane_2a_4b_real_upgrade_downgrade_upgrade_cycle() -> None:
                             "payment_attempts",
                             "payment_attempt_reservations",
                             "payment_attempt_evidence",
+                            "legacy_inventory_deduction_candidates",
                         )
                     )
                     functions = set(
@@ -164,7 +165,9 @@ def test_lane_2a_4b_real_upgrade_downgrade_upgrade_cycle() -> None:
                                 "'protect_reserved_order','validate_payment_attempt_write',"
                                 "'validate_payment_attempt_membership_write',"
                                 "'validate_payment_attempt_exact_reservations',"
-                                "'validate_payment_attempt_evidence_write')"
+                                "'validate_payment_attempt_evidence_write',"
+                                "'validate_legacy_inventory_candidate_write',"
+                                "'reconcile_legacy_inventory_deduction')"
                             )
                         ).scalars()
                     )
@@ -215,9 +218,11 @@ def test_lane_2a_4b_real_upgrade_downgrade_upgrade_cycle() -> None:
         vendor_id = uuid.uuid4()
         product_id = uuid.uuid4()
         made_to_order_product_id = uuid.uuid4()
+        current_made_to_order_product_id = uuid.uuid4()
         order_id = uuid.uuid4()
         order_item_id = uuid.uuid4()
         made_to_order_item_id = uuid.uuid4()
+        current_made_to_order_item_id = uuid.uuid4()
         target = create_engine(database_url)
         try:
             with target.begin() as connection:
@@ -250,14 +255,17 @@ def test_lane_2a_4b_real_upgrade_downgrade_upgrade_cycle() -> None:
                         "INSERT INTO products "
                         "(id,vendor_id,title,base_price,currency,total_stock,status,is_featured,"
                         "product_type,made_to_order,views_count,orders_count,moderation_status) "
-                        "VALUES (:product_id,:vendor_id,'Migration Product',10,'NGN',3,'DRAFT',"
+                        "VALUES (:product_id,:vendor_id,'Migration Product',10,'NGN',0,'DRAFT',"
                         "false,'SINGLE',false,0,0,'PENDING'),"
                         "(:made_to_order_product_id,:vendor_id,'Migration MTO Product',10,'NGN',"
-                        "0,'DRAFT',false,'SINGLE',true,0,0,'PENDING')"
+                        "0,'DRAFT',false,'SINGLE',true,0,0,'PENDING'),"
+                        "(:current_made_to_order_product_id,:vendor_id,'Migration Current MTO',10,"
+                        "'NGN',0,'DRAFT',false,'SINGLE',true,0,0,'PENDING')"
                     ),
                     {
                         "product_id": product_id,
                         "made_to_order_product_id": made_to_order_product_id,
+                        "current_made_to_order_product_id": current_made_to_order_product_id,
                         "vendor_id": vendor_id,
                     },
                 )
@@ -284,14 +292,19 @@ def test_lane_2a_4b_real_upgrade_downgrade_upgrade_cycle() -> None:
                         "(:item_id,:order_id,:product_id,:vendor_id,'Migration Product',2,10,"
                         "20,10,2,18,'order_received'),"
                         "(:made_to_order_item_id,:order_id,:made_to_order_product_id,:vendor_id,"
-                        "'Migration MTO Product',1,10,10,10,1,9,'order_received')"
+                        "'Migration MTO Product',1,10,10,10,1,9,'order_received'),"
+                        "(:current_made_to_order_item_id,:order_id,"
+                        ":current_made_to_order_product_id,:vendor_id,'Migration Current MTO',1,"
+                        "10,10,10,1,9,'order_received')"
                     ),
                     {
                         "item_id": order_item_id,
                         "made_to_order_item_id": made_to_order_item_id,
+                        "current_made_to_order_item_id": current_made_to_order_item_id,
                         "order_id": order_id,
                         "product_id": product_id,
                         "made_to_order_product_id": made_to_order_product_id,
+                        "current_made_to_order_product_id": current_made_to_order_product_id,
                         "vendor_id": vendor_id,
                     },
                 )
@@ -313,27 +326,83 @@ def test_lane_2a_4b_real_upgrade_downgrade_upgrade_cycle() -> None:
         assert "payment_attempts" in f9_selection_validator
         target = create_engine(database_url)
         try:
-            with target.connect() as connection:
+            with target.begin() as connection:
+                candidates = dict(
+                    connection.execute(
+                        text(
+                            "SELECT order_item_id, state "
+                            "FROM legacy_inventory_deduction_candidates "
+                            "WHERE order_item_id IN (:deducted_id,:not_deducted_id,:mto_deducted_id)"
+                        ),
+                        {
+                            "deducted_id": order_item_id,
+                            "not_deducted_id": made_to_order_item_id,
+                            "mto_deducted_id": current_made_to_order_item_id,
+                        },
+                    ).all()
+                )
+                assert candidates == {
+                    order_item_id: "unresolved",
+                    made_to_order_item_id: "unresolved",
+                    current_made_to_order_item_id: "unresolved",
+                }
                 assert (
                     connection.scalar(
-                        text(
-                            "SELECT count(*) FROM inventory_deduction_events "
-                            "WHERE order_item_id=:item_id"
-                        ),
-                        {"item_id": order_item_id},
+                        text("SELECT count(*) FROM inventory_deduction_events")
                     )
                     == 0
                 )
-                assert (
-                    connection.scalar(
-                        text(
-                            "SELECT count(*) FROM inventory_deduction_events "
-                            "WHERE order_item_id=:item_id"
-                        ),
-                        {"item_id": made_to_order_item_id},
-                    )
-                    == 0
+
+                decisions = (
+                    (order_item_id, True, "legacy-deducted"),
+                    (made_to_order_item_id, False, "legacy-not-deducted"),
+                    (current_made_to_order_item_id, True, "legacy-mto-deducted"),
                 )
+                for item_id, was_deducted, event_id in decisions:
+                    result = connection.scalar(
+                        text(
+                            "SELECT reconcile_legacy_inventory_deduction("
+                            ":item_id,:was_deducted,:source,:event_id,:evidence_hash,:actor_id)"
+                        ),
+                        {
+                            "item_id": item_id,
+                            "was_deducted": was_deducted,
+                            "source": "legacy_inventory_audit",
+                            "event_id": event_id,
+                            "evidence_hash": ("a" if was_deducted else "b") * 64,
+                            "actor_id": vendor_user_id,
+                        },
+                    )
+                    assert result == ("credited" if was_deducted else "not_deducted")
+
+                resolved = dict(
+                    connection.execute(
+                        text(
+                            "SELECT order_item_id, state "
+                            "FROM legacy_inventory_deduction_candidates "
+                            "WHERE order_item_id IN (:deducted_id,:not_deducted_id,:mto_deducted_id)"
+                        ),
+                        {
+                            "deducted_id": order_item_id,
+                            "not_deducted_id": made_to_order_item_id,
+                            "mto_deducted_id": current_made_to_order_item_id,
+                        },
+                    ).all()
+                )
+                assert resolved == {
+                    order_item_id: "credited",
+                    made_to_order_item_id: "not_deducted",
+                    current_made_to_order_item_id: "credited",
+                }
+                credited_items = set(
+                    connection.execute(
+                        text(
+                            "SELECT order_item_id FROM inventory_deduction_events "
+                            "WHERE event_type='deducted'"
+                        )
+                    ).scalars()
+                )
+                assert credited_items == {order_item_id, current_made_to_order_item_id}
         finally:
             target.dispose()
         migrate("downgrade", "e8c0a2d4f6b8")

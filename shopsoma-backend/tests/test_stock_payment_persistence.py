@@ -488,7 +488,9 @@ async def test_payment_attempt_exact_set_lease_evidence_and_consumption_lifecycl
     await db_session.flush()
     await _present_payment_lease(db_session, lease_token)
 
-    with pytest.raises(DBAPIError, match="payment attempt lease has not expired"):
+    with pytest.raises(
+        DBAPIError, match="unknown evidence predates provider call or lease expiry"
+    ):
         async with db_session.begin_nested():
             await db_session.execute(
                 text(
@@ -907,6 +909,7 @@ async def test_expired_payment_lease_requires_reconciliation_before_retry(
         ),
         {"token": recovery_token, "id": attempt.id},
     )
+    await asyncio.sleep(1.1)
     evidence = PaymentAttemptEvidence(
         attempt_id=attempt.id,
         source="recovery_worker",
@@ -918,7 +921,6 @@ async def test_expired_payment_lease_requires_reconciliation_before_retry(
     db_session.add(evidence)
     await db_session.flush()
 
-    await asyncio.sleep(1.1)
     await _present_payment_lease(db_session, recovery_token)
     await db_session.execute(
         text(

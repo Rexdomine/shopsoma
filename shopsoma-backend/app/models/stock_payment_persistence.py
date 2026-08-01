@@ -372,6 +372,185 @@ CREATE TRIGGER trg_inventory_deduction_events_validate
 BEFORE INSERT OR UPDATE OR DELETE ON inventory_deduction_events
 FOR EACH ROW EXECUTE FUNCTION validate_inventory_deduction_event_write();
 
+CREATE TABLE legacy_inventory_deduction_candidates (
+    order_item_id uuid PRIMARY KEY REFERENCES order_items(id) ON DELETE RESTRICT,
+    product_id uuid NOT NULL REFERENCES products(id) ON DELETE RESTRICT,
+    variant_id uuid REFERENCES product_variants(id) ON DELETE RESTRICT,
+    size_stock_id uuid REFERENCES size_stocks(id) ON DELETE RESTRICT,
+    quantity integer NOT NULL,
+    state varchar(20) NOT NULL DEFAULT 'unresolved',
+    decision_source varchar(100),
+    decision_event_id varchar(200),
+    evidence_hash varchar(64),
+    actor_id uuid REFERENCES users(id) ON DELETE RESTRICT,
+    decided_at timestamptz,
+    creation_txid bigint NOT NULL DEFAULT txid_current(),
+    created_at timestamptz NOT NULL DEFAULT statement_timestamp(),
+    CONSTRAINT ck_legacy_inventory_candidate_quantity CHECK (quantity > 0),
+    CONSTRAINT ck_legacy_inventory_candidate_subject
+        CHECK (variant_id IS NULL OR size_stock_id IS NULL),
+    CONSTRAINT ck_legacy_inventory_candidate_state CHECK (
+        (state = 'unresolved' AND decision_source IS NULL AND decision_event_id IS NULL
+            AND evidence_hash IS NULL AND actor_id IS NULL AND decided_at IS NULL)
+        OR (state IN ('credited','not_deducted')
+            AND decision_source = 'legacy_inventory_audit'
+            AND decision_event_id ~ '^[!-~]+$'
+            AND length(decision_event_id) BETWEEN 1 AND 200
+            AND evidence_hash ~ '^[0-9a-f]{64}$'
+            AND actor_id IS NOT NULL AND decided_at IS NOT NULL)
+    ),
+    CONSTRAINT uq_legacy_inventory_candidate_decision
+        UNIQUE (decision_source, decision_event_id)
+);
+
+INSERT INTO legacy_inventory_deduction_candidates (
+    order_item_id, product_id, variant_id, size_stock_id, quantity
+)
+SELECT oi.id, oi.product_id, oi.variant_id,
+       CASE
+           WHEN COALESCE(oi.variant_details->>'size_stock_id', '')
+                ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+           THEN (oi.variant_details->>'size_stock_id')::uuid
+       END,
+       oi.quantity
+  FROM order_items oi;
+
+CREATE FUNCTION validate_legacy_inventory_candidate_write() RETURNS trigger AS $$
+BEGIN
+    IF TG_OP <> 'UPDATE' OR OLD.state <> 'unresolved'
+       OR NEW.state NOT IN ('credited','not_deducted') THEN
+        RAISE EXCEPTION 'legacy inventory candidate is immutable audit';
+    END IF;
+    IF NEW.order_item_id IS DISTINCT FROM OLD.order_item_id
+       OR NEW.product_id IS DISTINCT FROM OLD.product_id
+       OR NEW.variant_id IS DISTINCT FROM OLD.variant_id
+       OR NEW.size_stock_id IS DISTINCT FROM OLD.size_stock_id
+       OR NEW.quantity IS DISTINCT FROM OLD.quantity
+       OR NEW.creation_txid IS DISTINCT FROM OLD.creation_txid
+       OR NEW.created_at IS DISTINCT FROM OLD.created_at THEN
+        RAISE EXCEPTION 'legacy inventory candidate identity is immutable';
+    END IF;
+    NEW.creation_txid := OLD.creation_txid;
+    NEW.created_at := OLD.created_at;
+    NEW.decided_at := statement_timestamp();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+CREATE TRIGGER trg_legacy_inventory_candidates_validate
+BEFORE INSERT OR UPDATE OR DELETE ON legacy_inventory_deduction_candidates
+FOR EACH ROW EXECUTE FUNCTION validate_legacy_inventory_candidate_write();
+
+CREATE FUNCTION record_legacy_inventory_credit() RETURNS trigger AS $$
+BEGIN
+    IF NEW.state = 'credited' THEN
+        INSERT INTO inventory_deduction_events (
+            order_item_id, product_id, variant_id, size_stock_id, event_type, quantity
+        ) VALUES (
+            NEW.order_item_id, NEW.product_id, NEW.variant_id,
+            NEW.size_stock_id, 'deducted', NEW.quantity
+        );
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+CREATE TRIGGER trg_legacy_inventory_candidates_credit
+AFTER UPDATE ON legacy_inventory_deduction_candidates
+FOR EACH ROW EXECUTE FUNCTION record_legacy_inventory_credit();
+
+CREATE FUNCTION reconcile_legacy_inventory_deduction(
+    target_order_item_id uuid,
+    was_deducted boolean,
+    evidence_source text,
+    evidence_event_id text,
+    evidence_sha256 text,
+    evidence_actor_id uuid
+) RETURNS text SECURITY DEFINER SET search_path = public, pg_temp AS $$
+DECLARE
+    target_order uuid;
+    target_product uuid;
+    target_variant uuid;
+    target_size_stock uuid;
+    target_quantity integer;
+    candidate_state text;
+    candidate_source text;
+    candidate_event_id text;
+    candidate_hash text;
+    candidate_actor uuid;
+    order_fulfillment_status text;
+    resolved_state text := CASE WHEN was_deducted THEN 'credited' ELSE 'not_deducted' END;
+BEGIN
+    IF target_order_item_id IS NULL OR was_deducted IS NULL
+       OR evidence_source IS DISTINCT FROM 'legacy_inventory_audit'
+       OR evidence_event_id IS NULL OR length(evidence_event_id) NOT BETWEEN 1 AND 200
+       OR evidence_event_id !~ '^[!-~]+$'
+       OR evidence_sha256 IS NULL OR evidence_sha256 !~ '^[0-9a-f]{64}$'
+       OR evidence_actor_id IS NULL THEN
+        RAISE EXCEPTION 'legacy inventory reconciliation evidence is invalid';
+    END IF;
+
+    SELECT order_id INTO target_order
+      FROM order_items WHERE id = target_order_item_id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'legacy inventory candidate is unavailable';
+    END IF;
+    SELECT fulfillment_status INTO order_fulfillment_status
+      FROM orders WHERE id = target_order FOR UPDATE;
+    PERFORM 1 FROM order_items WHERE id = target_order_item_id FOR UPDATE;
+    SELECT product_id, variant_id, size_stock_id, quantity, state,
+           decision_source, decision_event_id, evidence_hash, actor_id
+      INTO target_product, target_variant, target_size_stock, target_quantity,
+           candidate_state, candidate_source, candidate_event_id,
+           candidate_hash, candidate_actor
+      FROM legacy_inventory_deduction_candidates
+     WHERE order_item_id = target_order_item_id FOR UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'legacy inventory candidate is unavailable';
+    END IF;
+    IF candidate_state <> 'unresolved' THEN
+        IF candidate_state = resolved_state
+           AND candidate_source IS NOT DISTINCT FROM evidence_source
+           AND candidate_event_id IS NOT DISTINCT FROM evidence_event_id
+           AND candidate_hash IS NOT DISTINCT FROM evidence_sha256
+           AND candidate_actor IS NOT DISTINCT FROM evidence_actor_id THEN
+            RETURN candidate_state;
+        END IF;
+        RAISE EXCEPTION 'legacy inventory reconciliation conflicts with durable decision';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM users WHERE id = evidence_actor_id) THEN
+        RAISE EXCEPTION 'legacy inventory reconciliation actor is invalid';
+    END IF;
+    IF was_deducted AND order_fulfillment_status = 'cancelled' THEN
+        RAISE EXCEPTION 'cancelled legacy order cannot receive deduction credit';
+    END IF;
+    IF EXISTS (
+        SELECT 1 FROM inventory_deduction_events
+         WHERE order_item_id = target_order_item_id
+    ) THEN
+        RAISE EXCEPTION 'legacy inventory deduction already has durable provenance';
+    END IF;
+
+    PERFORM 1 FROM products WHERE id = target_product FOR UPDATE;
+    IF target_variant IS NOT NULL THEN
+        PERFORM 1 FROM product_variants WHERE id = target_variant FOR UPDATE;
+    END IF;
+    IF target_size_stock IS NOT NULL THEN
+        PERFORM 1 FROM size_stocks WHERE id = target_size_stock FOR UPDATE;
+    END IF;
+
+    UPDATE legacy_inventory_deduction_candidates
+       SET state = resolved_state,
+           decision_source = evidence_source,
+           decision_event_id = evidence_event_id,
+           evidence_hash = evidence_sha256,
+           actor_id = evidence_actor_id
+     WHERE order_item_id = target_order_item_id;
+    RETURN resolved_state;
+END;
+$$ LANGUAGE plpgsql;
+REVOKE ALL ON FUNCTION reconcile_legacy_inventory_deduction(uuid, boolean, text, text, text, uuid)
+    FROM PUBLIC;
+REVOKE ALL ON TABLE legacy_inventory_deduction_candidates FROM PUBLIC;
+
 CREATE FUNCTION record_order_inventory_change() RETURNS trigger AS $$
 DECLARE
     old_stock integer;
@@ -1304,9 +1483,8 @@ BEGIN
     IF NEW.row_version <> OLD.row_version + 1 THEN
         RAISE EXCEPTION 'payment attempt transition is illegal';
     END IF;
-    IF (OLD.state = 'pending' AND NEW.call_started_at IS NOT NULL)
-       OR (OLD.state = 'call_started'
-           AND NEW.call_started_at IS DISTINCT FROM OLD.call_started_at) THEN
+    IF OLD.call_started_at IS NOT NULL
+       AND NEW.call_started_at IS DISTINCT FROM OLD.call_started_at THEN
         RAISE EXCEPTION 'payment attempt call start audit is immutable';
     END IF;
 
@@ -1545,6 +1723,16 @@ BEGIN
         IF evidence_provider IS DISTINCT FROM OLD.provider
            OR evidence_provider_reference IS DISTINCT FROM OLD.provider_reference THEN
             RAISE EXCEPTION 'payment provider binding does not match';
+        END IF;
+        IF NEW.state = 'abandoned_unknown' AND (
+            evidence_created_at IS NULL OR evidence_observed_at IS NULL
+            OR OLD.claim_expires_at IS NULL
+            OR evidence_created_at < OLD.call_started_at
+            OR evidence_observed_at < OLD.call_started_at
+            OR evidence_created_at < OLD.claim_expires_at
+            OR evidence_observed_at < OLD.claim_expires_at
+        ) THEN
+            RAISE EXCEPTION 'unknown evidence predates provider call or lease expiry';
         END IF;
         IF NEW.state IN ('failed', 'verified') AND (
             evidence_created_at IS NULL OR evidence_observed_at IS NULL
@@ -1904,14 +2092,15 @@ CREATE FUNCTION validate_payment_attempt_evidence_write() RETURNS trigger AS $$
 DECLARE
     attempt_state text;
     attempt_created_at timestamptz;
+    attempt_call_started_at timestamptz;
     attempt_provider text;
     attempt_provider_reference text;
 BEGIN
     IF TG_OP <> 'INSERT' THEN
         RAISE EXCEPTION 'payment attempt evidence is append-only';
     END IF;
-    SELECT state, created_at, provider, provider_reference
-      INTO attempt_state, attempt_created_at, attempt_provider,
+    SELECT state, created_at, call_started_at, provider, provider_reference
+      INTO attempt_state, attempt_created_at, attempt_call_started_at, attempt_provider,
            attempt_provider_reference
       FROM payment_attempts WHERE id = NEW.attempt_id FOR UPDATE;
     IF NOT FOUND OR attempt_state NOT IN ('pending', 'call_started', 'abandoned_unknown') THEN
@@ -1932,6 +2121,13 @@ BEGIN
     END IF;
     IF NEW.observed_at < attempt_created_at THEN
         RAISE EXCEPTION 'payment evidence predates attempt';
+    END IF;
+    IF NEW.evidence_type = 'outcome_unknown'
+       AND (attempt_state <> 'call_started'
+            OR attempt_call_started_at IS NULL
+            OR NEW.observed_at < attempt_call_started_at
+            OR statement_timestamp() < attempt_call_started_at) THEN
+        RAISE EXCEPTION 'unknown evidence requires started provider call';
     END IF;
     NEW.created_at := statement_timestamp();
     RETURN NEW;
@@ -1955,7 +2151,12 @@ DROP TRIGGER IF EXISTS trg_products_reserved_inventory ON products;
 DROP TRIGGER IF EXISTS trg_size_stocks_order_inventory_change ON size_stocks;
 DROP TRIGGER IF EXISTS trg_product_variants_order_inventory_change ON product_variants;
 DROP TRIGGER IF EXISTS trg_products_order_inventory_change ON products;
+DROP TRIGGER IF EXISTS trg_legacy_inventory_candidates_credit ON legacy_inventory_deduction_candidates;
+DROP TRIGGER IF EXISTS trg_legacy_inventory_candidates_validate ON legacy_inventory_deduction_candidates;
 DROP TRIGGER IF EXISTS trg_inventory_deduction_events_validate ON inventory_deduction_events;
+DROP FUNCTION IF EXISTS reconcile_legacy_inventory_deduction(uuid, boolean, text, text, text, uuid);
+DROP FUNCTION IF EXISTS record_legacy_inventory_credit();
+DROP FUNCTION IF EXISTS validate_legacy_inventory_candidate_write();
 DROP FUNCTION IF EXISTS protect_reserved_order();
 DROP FUNCTION IF EXISTS protect_payment_intent_invalidation();
 DROP FUNCTION IF EXISTS protect_reserved_order_item();
@@ -1967,6 +2168,7 @@ DROP FUNCTION IF EXISTS validate_payment_attempt_write();
 DROP FUNCTION IF EXISTS validate_stock_reservation_write();
 DROP FUNCTION IF EXISTS record_order_inventory_change();
 DROP FUNCTION IF EXISTS validate_inventory_deduction_event_write();
+DROP TABLE IF EXISTS legacy_inventory_deduction_candidates;
 DROP TABLE IF EXISTS inventory_deduction_events;
 """,
 )
