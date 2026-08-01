@@ -110,6 +110,8 @@ def _payment_attempt(graph, intent, quote, option, selection, customer_id, **ove
         "intent_id": intent.id,
         "amount": graph["order"].total_amount,
         "currency": graph["order"].currency,
+        "provider": "paystack",
+        "provider_reference": f"paystack-{uuid.uuid4().hex}",
         "payment_window_seconds": 600,
         "authorization_grace_seconds": 300,
         "claim_ttl_seconds": 300,
@@ -159,6 +161,8 @@ ATTEMPT_COLUMNS = {
     "intent_id",
     "amount",
     "currency",
+    "provider",
+    "provider_reference",
     "state",
     "payment_window_seconds",
     "authorization_grace_seconds",
@@ -190,6 +194,8 @@ EVIDENCE_COLUMNS = {
     "source",
     "event_id",
     "evidence_type",
+    "provider",
+    "provider_reference",
     "evidence_hash",
     "observed_at",
     "created_at",
@@ -470,15 +476,15 @@ async def test_payment_attempt_exact_set_lease_evidence_and_consumption_lifecycl
         ),
         {"lease_token": lease_token, "attempt_id": attempt.id},
     )
-    evidence = PaymentAttemptEvidence(
+    unknown_evidence = PaymentAttemptEvidence(
         attempt_id=attempt.id,
         source="gateway_webhook",
-        event_id=f"evt-{uuid.uuid4().hex}",
-        evidence_type="authorization_result",
+        event_id=f"unknown-{uuid.uuid4().hex}",
+        evidence_type="outcome_unknown",
         evidence_hash=uuid.uuid4().hex * 2,
         observed_at=datetime.now(timezone.utc),
     )
-    db_session.add(evidence)
+    db_session.add(unknown_evidence)
     await db_session.flush()
     await _present_payment_lease(db_session, lease_token)
 
@@ -489,15 +495,25 @@ async def test_payment_attempt_exact_set_lease_evidence_and_consumption_lifecycl
                     "UPDATE payment_attempts SET state='abandoned_unknown', "
                     "terminal_evidence_id=:evidence_id, row_version=3 WHERE id=:attempt_id"
                 ),
-                {"evidence_id": evidence.id, "attempt_id": attempt.id},
+                {"evidence_id": unknown_evidence.id, "attempt_id": attempt.id},
             )
 
+    verified_evidence = PaymentAttemptEvidence(
+        attempt_id=attempt.id,
+        source="gateway_webhook",
+        event_id=f"verified-{uuid.uuid4().hex}",
+        evidence_type="payment_verified",
+        evidence_hash=uuid.uuid4().hex * 2,
+        observed_at=datetime.now(timezone.utc),
+    )
+    db_session.add(verified_evidence)
+    await db_session.flush()
     await db_session.execute(
         text(
             "UPDATE payment_attempts SET state='verified', "
             "terminal_evidence_id=:evidence_id, row_version=3 WHERE id=:attempt_id"
         ),
-        {"evidence_id": evidence.id, "attempt_id": attempt.id},
+        {"evidence_id": verified_evidence.id, "attempt_id": attempt.id},
     )
     await db_session.execute(
         text(
@@ -513,7 +529,7 @@ async def test_payment_attempt_exact_set_lease_evidence_and_consumption_lifecycl
                 text(
                     "UPDATE payment_attempt_evidence SET evidence_type='changed' WHERE id=:id"
                 ),
-                {"id": evidence.id},
+                {"id": verified_evidence.id},
             )
     with pytest.raises(DBAPIError, match="payment attempt is terminal"):
         async with db_session.begin_nested():
@@ -615,7 +631,7 @@ async def test_retry_must_supersede_current_terminal_payment_leaf(
         attempt_id=first.id,
         source="gateway_webhook",
         event_id=f"evt-{uuid.uuid4().hex}",
-        evidence_type="gateway_failure",
+        evidence_type="payment_failed",
         evidence_hash=uuid.uuid4().hex * 2,
         observed_at=datetime.now(timezone.utc),
     )
@@ -679,7 +695,7 @@ async def test_payment_evidence_cannot_predate_its_attempt(
                     attempt_id=attempt.id,
                     source="gateway_webhook",
                     event_id=f"evt-{uuid.uuid4().hex}",
-                    evidence_type="gateway_failure",
+                    evidence_type="payment_failed",
                     evidence_hash=uuid.uuid4().hex * 2,
                     observed_at=(
                         attempt.created_at.replace(tzinfo=timezone.utc)
@@ -895,7 +911,7 @@ async def test_expired_payment_lease_requires_reconciliation_before_retry(
         attempt_id=attempt.id,
         source="recovery_worker",
         event_id=f"evt-{uuid.uuid4().hex}",
-        evidence_type="unknown_outcome",
+        evidence_type="outcome_unknown",
         evidence_hash=uuid.uuid4().hex * 2,
         observed_at=datetime.now(timezone.utc),
     )
@@ -960,7 +976,7 @@ async def test_verification_serializes_against_reservation_release(
         attempt_id=attempt.id,
         source="gateway",
         event_id="evt-race-verify-release",
-        evidence_type="authorization",
+        evidence_type="payment_verified",
         evidence_hash="c" * 64,
         observed_at=datetime.now(timezone.utc),
     )
@@ -1035,7 +1051,7 @@ async def test_verification_sees_release_committed_while_waiting(
         attempt_id=attempt.id,
         source="gateway",
         event_id="evt-race-release-verify",
-        evidence_type="authorization",
+        evidence_type="payment_verified",
         evidence_hash="e" * 64,
         observed_at=datetime.now(timezone.utc),
     )
@@ -1119,7 +1135,7 @@ async def test_expired_claim_holder_cannot_complete(
         attempt_id=attempt.id,
         source="gateway",
         event_id="evt-expired-holder",
-        evidence_type="authorization",
+        evidence_type="payment_verified",
         evidence_hash="d" * 64,
         observed_at=datetime.now(timezone.utc),
     )

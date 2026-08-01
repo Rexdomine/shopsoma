@@ -139,7 +139,7 @@ async def test_call_started_completion_requires_exact_lease_owner(
         attempt_id=attempt.id,
         source="gateway",
         event_id=f"evt-owner-{uuid.uuid4().hex}",
-        evidence_type="authorization",
+        evidence_type="payment_verified",
         evidence_hash="a" * 64,
         observed_at=datetime.now(timezone.utc),
     )
@@ -257,7 +257,7 @@ async def test_verification_honors_authorization_grace_after_reservation_lock_wa
         attempt_id=attempt.id,
         source="gateway",
         event_id=f"evt-clock-{uuid.uuid4().hex}",
-        evidence_type="authorization",
+        evidence_type="payment_verified",
         evidence_hash="b" * 64,
         observed_at=datetime.now(timezone.utc),
     )
@@ -450,7 +450,7 @@ async def test_terminal_transition_preserves_call_started_audit_timestamp(
         attempt_id=attempt.id,
         source="gateway",
         event_id=f"evt-{uuid.uuid4().hex}",
-        evidence_type="failure",
+        evidence_type="payment_failed",
         evidence_hash=uuid.uuid4().hex * 2,
         observed_at=datetime.now(timezone.utc),
     )
@@ -481,7 +481,7 @@ async def test_pending_failure_cannot_fabricate_call_started_audit_timestamp(
         attempt_id=attempt.id,
         source="gateway",
         event_id=f"evt-{uuid.uuid4().hex}",
-        evidence_type="failure",
+        evidence_type="payment_failed",
         evidence_hash=uuid.uuid4().hex * 2,
         observed_at=datetime.now(timezone.utc),
     )

@@ -281,6 +281,8 @@ async def _abandoned_unknown_subject(session, vendor_user, customer_user):
     await session.execute(text("SET CONSTRAINTS ALL DEFERRED"))
 
     lease_token = uuid.uuid4()
+    provider = attempt.provider
+    provider_reference = attempt.provider_reference
     await session.execute(
         text(
             "UPDATE payment_attempts SET state='call_started', lease_token=:token, "
@@ -288,11 +290,14 @@ async def _abandoned_unknown_subject(session, vendor_user, customer_user):
         ),
         {"token": lease_token, "attempt_id": attempt.id},
     )
+    await session.refresh(attempt)
     evidence = PaymentAttemptEvidence(
         attempt_id=attempt.id,
         source="provider_reconciliation",
         event_id=f"unknown-{uuid.uuid4().hex}",
         evidence_type="outcome_unknown",
+        provider=provider,
+        provider_reference=provider_reference,
         evidence_hash=uuid.uuid4().hex * 2,
         observed_at=datetime.now(timezone.utc),
     )
@@ -316,6 +321,86 @@ async def _abandoned_unknown_subject(session, vendor_user, customer_user):
         {"evidence_id": evidence.id, "attempt_id": attempt.id},
     )
     return lane, graph, intent, quote, option, selection, sku, reservation, attempt
+
+
+async def _call_started_subject(session, vendor_user, customer_user):
+    """Create one provider-bound call-started attempt with an active reservation."""
+
+    lane = _lane_helpers()
+    graph, intent, quote, option, selection, sku = await lane._checkout_subject(
+        session, vendor_user, customer_user, stock=1
+    )
+    reservation = lane._reservation(
+        graph, intent, quote, option, selection, customer_user["user"].id, sku
+    )
+    session.add(reservation)
+    await session.flush()
+    attempt = lane._payment_attempt(
+        graph, intent, quote, option, selection, customer_user["user"].id
+    )
+    session.add(attempt)
+    await session.flush()
+    session.add(
+        PaymentAttemptReservation(attempt_id=attempt.id, reservation_id=reservation.id)
+    )
+    await session.flush()
+    await session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+    await session.execute(text("SET CONSTRAINTS ALL DEFERRED"))
+
+    lease_token = uuid.uuid4()
+    await session.execute(
+        text(
+            "UPDATE payment_attempts SET state='call_started', lease_token=:token, "
+            "row_version=2 WHERE id=:attempt_id"
+        ),
+        {"token": lease_token, "attempt_id": attempt.id},
+    )
+    await session.refresh(attempt)
+    return attempt, lease_token
+
+
+async def _definitive_reconciliation_evidence(
+    session,
+    attempt,
+    target_state: str,
+    *,
+    evidence_type: str | None = None,
+    source: str = "provider_reconciliation",
+    event_id: str | None = None,
+    provider: str | None = None,
+    provider_reference: str | None = None,
+):
+    evidence = PaymentAttemptEvidence(
+        attempt_id=attempt.id,
+        source=source,
+        event_id=event_id or f"definitive-{target_state}-{uuid.uuid4().hex}",
+        evidence_type=evidence_type
+        or ("payment_verified" if target_state == "verified" else "payment_failed"),
+        provider=provider or attempt.provider,
+        provider_reference=provider_reference or attempt.provider_reference,
+        evidence_hash=uuid.uuid4().hex * 2,
+        observed_at=datetime.now(timezone.utc),
+    )
+    session.add(evidence)
+    await session.flush()
+    return evidence
+
+
+async def _unvalidated_definitive_reconciliation_evidence(
+    session,
+    attempt,
+    target_state: str,
+    **overrides,
+):
+    """Inject migration-era evidence to exercise the terminal fail-closed guard."""
+
+    await session.execute(text("SET LOCAL session_replication_role = replica"))
+    try:
+        return await _definitive_reconciliation_evidence(
+            session, attempt, target_state, **overrides
+        )
+    finally:
+        await session.execute(text("SET LOCAL session_replication_role = origin"))
 
 
 async def _expire_reservation_without_lifecycle_transition(
@@ -433,7 +518,7 @@ async def test_verified_linked_reservation_remains_inventory_effective_after_ttl
         attempt_id=attempt.id,
         source="gateway_webhook",
         event_id=f"verified-{uuid.uuid4().hex}",
-        evidence_type="authorization_result",
+        evidence_type="payment_verified",
         evidence_hash=uuid.uuid4().hex * 2,
         observed_at=datetime.now(timezone.utc),
     )
@@ -3001,3 +3086,382 @@ async def test_uncommitted_call_start_fences_competing_reservation_across_ttl(
         await reserver.rollback()
         await caller.close()
         await reserver.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("target_state", "wrong_evidence_type"),
+    [
+        ("verified", "payment_failed"),
+        ("verified", "outcome_unknown"),
+        ("failed", "payment_verified"),
+        ("failed", "outcome_unknown"),
+        ("abandoned_unknown", "payment_verified"),
+        ("abandoned_unknown", "payment_failed"),
+    ],
+)
+async def test_call_started_terminal_transition_rejects_wrong_evidence_type(
+    db_session,
+    vendor_user,
+    customer_user,
+    target_state,
+    wrong_evidence_type,
+) -> None:
+    attempt, lease_token = await _call_started_subject(
+        db_session, vendor_user, customer_user
+    )
+    evidence = await _definitive_reconciliation_evidence(
+        db_session,
+        attempt,
+        target_state,
+        evidence_type=wrong_evidence_type,
+    )
+    if target_state == "abandoned_unknown":
+        await db_session.execute(text("SET LOCAL session_replication_role = replica"))
+        await db_session.execute(
+            text(
+                "UPDATE payment_attempts "
+                "SET claim_expires_at=clock_timestamp() - interval '1 second' "
+                "WHERE id=:attempt_id"
+            ),
+            {"attempt_id": attempt.id},
+        )
+        await db_session.execute(text("SET LOCAL session_replication_role = origin"))
+    await _present_payment_lease(db_session, lease_token)
+
+    with pytest.raises(
+        DBAPIError, match="payment evidence does not match target state"
+    ):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(
+                    "UPDATE payment_attempts SET state=:target_state, "
+                    "terminal_evidence_id=:evidence_id, row_version=3 WHERE id=:attempt_id"
+                ),
+                {
+                    "target_state": target_state,
+                    "evidence_id": evidence.id,
+                    "attempt_id": attempt.id,
+                },
+            )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target_state", ["verified", "failed"])
+async def test_abandoned_unknown_resolution_rejects_reused_unknown_evidence(
+    db_session, vendor_user, customer_user, target_state
+) -> None:
+    *_, attempt = await _abandoned_unknown_subject(
+        db_session, vendor_user, customer_user
+    )
+    unknown_evidence_id = await db_session.scalar(
+        text("SELECT terminal_evidence_id FROM payment_attempts WHERE id=:attempt_id"),
+        {"attempt_id": attempt.id},
+    )
+
+    with pytest.raises(DBAPIError, match="definitive reconciliation evidence required"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(
+                    "UPDATE payment_attempts SET state=:target_state, row_version=4 "
+                    "WHERE id=:attempt_id"
+                ),
+                {"target_state": target_state, "attempt_id": attempt.id},
+            )
+
+    row = (
+        await db_session.execute(
+            text(
+                "SELECT state, terminal_evidence_id FROM payment_attempts WHERE id=:attempt_id"
+            ),
+            {"attempt_id": attempt.id},
+        )
+    ).one()
+    assert row.state == "abandoned_unknown"
+    assert row.terminal_evidence_id == unknown_evidence_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("target_state", "wrong_evidence_type"),
+    [
+        ("verified", "payment_failed"),
+        ("failed", "payment_verified"),
+        ("verified", "authorization_result"),
+        ("failed", "authorization_result"),
+        ("verified", "outcome_unknown"),
+        ("failed", "outcome_unknown"),
+    ],
+)
+async def test_abandoned_unknown_resolution_rejects_wrong_disposition_evidence(
+    db_session,
+    vendor_user,
+    customer_user,
+    target_state,
+    wrong_evidence_type,
+) -> None:
+    *_, attempt = await _abandoned_unknown_subject(
+        db_session, vendor_user, customer_user
+    )
+    evidence = await _definitive_reconciliation_evidence(
+        db_session,
+        attempt,
+        target_state,
+        evidence_type=wrong_evidence_type,
+    )
+
+    with pytest.raises(DBAPIError, match="definitive reconciliation evidence required"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(
+                    "UPDATE payment_attempts SET state=:target_state, "
+                    "terminal_evidence_id=:evidence_id, row_version=4 WHERE id=:attempt_id"
+                ),
+                {
+                    "target_state": target_state,
+                    "evidence_id": evidence.id,
+                    "attempt_id": attempt.id,
+                },
+            )
+
+
+@pytest.mark.asyncio
+async def test_abandoned_unknown_resolution_rejects_other_attempt_evidence(
+    db_session, vendor_user, customer_user
+) -> None:
+    *_, attempt = await _abandoned_unknown_subject(
+        db_session, vendor_user, customer_user
+    )
+    *_, other_attempt = await _abandoned_unknown_subject(
+        db_session, vendor_user, customer_user
+    )
+    evidence = await _definitive_reconciliation_evidence(
+        db_session, other_attempt, "verified"
+    )
+
+    with pytest.raises(
+        DBAPIError, match="payment attempt terminal evidence is invalid"
+    ):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(
+                    "UPDATE payment_attempts SET state='verified', "
+                    "terminal_evidence_id=:evidence_id, row_version=4 WHERE id=:attempt_id"
+                ),
+                {"evidence_id": evidence.id, "attempt_id": attempt.id},
+            )
+
+
+@pytest.mark.asyncio
+async def test_definitive_reconciliation_evidence_replay_is_idempotently_unique(
+    db_session, vendor_user, customer_user
+) -> None:
+    *_, attempt = await _abandoned_unknown_subject(
+        db_session, vendor_user, customer_user
+    )
+    event_id = f"definitive-replay-{uuid.uuid4().hex}"
+    evidence = await _definitive_reconciliation_evidence(
+        db_session, attempt, "verified", event_id=event_id
+    )
+
+    with pytest.raises(DBAPIError, match="uq_payment_attempt_evidence_external_event"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(
+                    "INSERT INTO payment_attempt_evidence "
+                    "(id, attempt_id, source, event_id, evidence_type, evidence_hash, observed_at) "
+                    "VALUES (:id, :attempt_id, :source, :event_id, 'payment_verified', "
+                    ":evidence_hash, clock_timestamp())"
+                ),
+                {
+                    "id": uuid.uuid4(),
+                    "attempt_id": attempt.id,
+                    "source": evidence.source,
+                    "event_id": event_id,
+                    "evidence_hash": uuid.uuid4().hex * 2,
+                },
+            )
+
+    count = await db_session.scalar(
+        text(
+            "SELECT count(*) FROM payment_attempt_evidence "
+            "WHERE source=:source AND event_id=:event_id"
+        ),
+        {"source": evidence.source, "event_id": event_id},
+    )
+    assert count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target_state", ["verified", "failed"])
+async def test_abandoned_unknown_resolution_accepts_distinct_definitive_evidence(
+    db_session, vendor_user, customer_user, target_state
+) -> None:
+    *_, attempt = await _abandoned_unknown_subject(
+        db_session, vendor_user, customer_user
+    )
+    unknown_evidence_id = await db_session.scalar(
+        text("SELECT terminal_evidence_id FROM payment_attempts WHERE id=:attempt_id"),
+        {"attempt_id": attempt.id},
+    )
+    evidence = await _definitive_reconciliation_evidence(
+        db_session, attempt, target_state
+    )
+
+    await db_session.execute(
+        text(
+            "UPDATE payment_attempts SET state=:target_state, "
+            "terminal_evidence_id=:evidence_id, row_version=4 WHERE id=:attempt_id"
+        ),
+        {
+            "target_state": target_state,
+            "evidence_id": evidence.id,
+            "attempt_id": attempt.id,
+        },
+    )
+
+    row = (
+        await db_session.execute(
+            text(
+                "SELECT state, terminal_evidence_id FROM payment_attempts WHERE id=:attempt_id"
+            ),
+            {"attempt_id": attempt.id},
+        )
+    ).one()
+    assert row.state == target_state
+    assert row.terminal_evidence_id == evidence.id
+    assert row.terminal_evidence_id != unknown_evidence_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target_state", ["verified", "failed"])
+@pytest.mark.parametrize(
+    ("binding_field", "spoofed_value"),
+    [("provider", "stripe"), ("provider_reference", "spoofed-reference")],
+)
+async def test_abandoned_unknown_resolution_rejects_spoofed_provider_binding(
+    db_session,
+    vendor_user,
+    customer_user,
+    target_state,
+    binding_field,
+    spoofed_value,
+) -> None:
+    *_, attempt = await _abandoned_unknown_subject(
+        db_session, vendor_user, customer_user
+    )
+    evidence = await _unvalidated_definitive_reconciliation_evidence(
+        db_session,
+        attempt,
+        target_state,
+        **{binding_field: spoofed_value},
+    )
+
+    with pytest.raises(DBAPIError, match="payment provider binding does not match"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(
+                    "UPDATE payment_attempts SET state=:target_state, "
+                    "terminal_evidence_id=:evidence_id, row_version=4 "
+                    "WHERE id=:attempt_id"
+                ),
+                {
+                    "target_state": target_state,
+                    "evidence_id": evidence.id,
+                    "attempt_id": attempt.id,
+                },
+            )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target_state", ["verified", "failed"])
+async def test_abandoned_unknown_resolution_rejects_source_only_spoofing(
+    db_session, vendor_user, customer_user, target_state
+) -> None:
+    *_, attempt = await _abandoned_unknown_subject(
+        db_session, vendor_user, customer_user
+    )
+    evidence = await _unvalidated_definitive_reconciliation_evidence(
+        db_session,
+        attempt,
+        target_state,
+        source="provider_reconciliation",
+        provider="stripe",
+        provider_reference="source-alone-is-not-provider-proof",
+    )
+
+    with pytest.raises(DBAPIError, match="payment provider binding does not match"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(
+                    "UPDATE payment_attempts SET state=:target_state, "
+                    "terminal_evidence_id=:evidence_id, row_version=4 "
+                    "WHERE id=:attempt_id"
+                ),
+                {
+                    "target_state": target_state,
+                    "evidence_id": evidence.id,
+                    "attempt_id": attempt.id,
+                },
+            )
+
+
+@pytest.mark.asyncio
+async def test_definitive_reconciliation_rejects_attempt_reference_drift(
+    db_session, vendor_user, customer_user
+) -> None:
+    *_, attempt = await _abandoned_unknown_subject(
+        db_session, vendor_user, customer_user
+    )
+    evidence = await _definitive_reconciliation_evidence(
+        db_session, attempt, "verified"
+    )
+
+    with pytest.raises(DBAPIError, match="payment provider binding is immutable"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(
+                    "UPDATE payment_attempts SET state='verified', "
+                    "provider_reference='drifted-reference', "
+                    "terminal_evidence_id=:evidence_id, row_version=4 "
+                    "WHERE id=:attempt_id"
+                ),
+                {"evidence_id": evidence.id, "attempt_id": attempt.id},
+            )
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_historical_unknown_binding_fails_closed(
+    db_session, vendor_user, customer_user
+) -> None:
+    *_, attempt = await _abandoned_unknown_subject(
+        db_session, vendor_user, customer_user
+    )
+    await db_session.execute(text("SET LOCAL session_replication_role = replica"))
+    await db_session.execute(
+        text(
+            "UPDATE payment_attempts SET provider=NULL, provider_reference=NULL "
+            "WHERE id=:attempt_id"
+        ),
+        {"attempt_id": attempt.id},
+    )
+    await db_session.execute(text("SET LOCAL session_replication_role = origin"))
+    await db_session.refresh(attempt)
+    evidence = await _unvalidated_definitive_reconciliation_evidence(
+        db_session,
+        attempt,
+        "verified",
+        provider="paystack",
+        provider_reference="cannot-backfill-ambiguous-history",
+    )
+
+    with pytest.raises(DBAPIError, match="payment provider binding is unavailable"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(
+                    "UPDATE payment_attempts SET state='verified', "
+                    "terminal_evidence_id=:evidence_id, row_version=4 "
+                    "WHERE id=:attempt_id"
+                ),
+                {"evidence_id": evidence.id, "attempt_id": attempt.id},
+            )

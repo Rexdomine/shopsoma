@@ -120,6 +120,7 @@ CREATE TABLE payment_attempts (
  quote_option_id uuid NOT NULL REFERENCES customer_shipping_quote_options(id) ON DELETE RESTRICT,
  intent_id uuid NOT NULL REFERENCES outbound_shipment_intents(id) ON DELETE RESTRICT,
  amount numeric(18,4) NOT NULL, currency varchar(3) NOT NULL,
+ provider varchar(30), provider_reference varchar(200),
  state varchar(30) NOT NULL DEFAULT 'pending', payment_window_seconds integer NOT NULL DEFAULT 1800,
  authorization_grace_seconds integer NOT NULL DEFAULT 900,
  expires_at timestamptz NOT NULL, authorization_deadline_at timestamptz NOT NULL,
@@ -136,8 +137,10 @@ CREATE TABLE payment_attempts (
  CONSTRAINT ck_payment_attempts_lifecycle_shape CHECK ((state='pending' AND lease_token IS NULL AND call_started_at IS NULL AND claim_expires_at IS NULL AND terminal_evidence_id IS NULL AND terminal_at IS NULL) OR (state='call_started' AND lease_token IS NOT NULL AND call_started_at IS NOT NULL AND claim_expires_at IS NOT NULL AND terminal_evidence_id IS NULL AND terminal_at IS NULL) OR (state IN ('verified','failed','abandoned_unknown') AND terminal_evidence_id IS NOT NULL AND terminal_at IS NOT NULL) OR (state='expired' AND terminal_evidence_id IS NULL AND terminal_at IS NOT NULL)),
  CONSTRAINT ck_payment_attempts_timing CHECK (payment_window_seconds BETWEEN 1 AND 1800 AND authorization_grace_seconds BETWEEN 0 AND 900 AND claim_ttl_seconds BETWEEN 1 AND 900 AND row_version > 0 AND expires_at > created_at AND authorization_deadline_at = expires_at + authorization_grace_seconds * interval '1 second'),
  CONSTRAINT ck_payment_attempts_identifiers CHECK (source_command ~ '^[A-Za-z0-9][A-Za-z0-9._:-]*$' AND idempotency_key ~ '^[!-~]+$'),
+ CONSTRAINT ck_payment_attempts_provider_binding CHECK ((provider IS NULL AND provider_reference IS NULL) OR (provider ~ '^[a-z][a-z0-9._-]{0,29}$' AND provider_reference = btrim(provider_reference) AND provider_reference ~ '^[!-~]+$')),
  CONSTRAINT uq_payment_attempts_customer_replay UNIQUE (customer_id,source_command,idempotency_key),
- CONSTRAINT uq_payment_attempts_single_successor UNIQUE (supersedes_attempt_id)
+ CONSTRAINT uq_payment_attempts_single_successor UNIQUE (supersedes_attempt_id),
+ CONSTRAINT uq_payment_attempts_provider_reference UNIQUE (provider,provider_reference)
 )
 """
     )
@@ -162,9 +165,11 @@ CREATE TABLE payment_attempt_reservations (
 CREATE TABLE payment_attempt_evidence (
  id uuid PRIMARY KEY, attempt_id uuid NOT NULL REFERENCES payment_attempts(id) ON DELETE RESTRICT,
  source varchar(50) NOT NULL, event_id varchar(200) NOT NULL,
- evidence_type varchar(50) NOT NULL, evidence_hash varchar(64) NOT NULL,
+ evidence_type varchar(50) NOT NULL, provider varchar(30), provider_reference varchar(200),
+ evidence_hash varchar(64) NOT NULL,
  observed_at timestamptz NOT NULL, created_at timestamptz NOT NULL DEFAULT statement_timestamp(),
  CONSTRAINT ck_payment_attempt_evidence_identifiers CHECK (source ~ '^[A-Za-z0-9][A-Za-z0-9._:-]*$' AND event_id ~ '^[!-~]+$' AND evidence_type ~ '^[A-Za-z0-9][A-Za-z0-9._:-]*$' AND evidence_hash ~ '^[0-9a-f]{64}$'),
+ CONSTRAINT ck_payment_attempt_evidence_provider_binding CHECK ((provider IS NULL AND provider_reference IS NULL) OR (provider ~ '^[a-z][a-z0-9._-]{0,29}$' AND provider_reference = btrim(provider_reference) AND provider_reference ~ '^[!-~]+$')),
  CONSTRAINT uq_payment_attempt_evidence_external_event UNIQUE(source,event_id)
 )
 """

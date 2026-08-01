@@ -179,6 +179,8 @@ class PaymentAttempt(Base):
     )
     amount = Column(Numeric(18, 4), nullable=False)
     currency = Column(String(3), nullable=False)
+    provider = Column(String(30))
+    provider_reference = Column(String(200))
     state = Column(String(30), nullable=False, server_default="pending")
     payment_window_seconds = Column(Integer, nullable=False, server_default="1800")
     authorization_grace_seconds = Column(Integer, nullable=False, server_default="900")
@@ -246,6 +248,13 @@ class PaymentAttempt(Base):
             "AND idempotency_key ~ '^[!-~]+$'",
             name="ck_payment_attempts_identifiers",
         ),
+        CheckConstraint(
+            "(provider IS NULL AND provider_reference IS NULL) OR "
+            "(provider ~ '^[a-z][a-z0-9._-]{0,29}$' "
+            "AND provider_reference = btrim(provider_reference) "
+            "AND provider_reference ~ '^[!-~]+$')",
+            name="ck_payment_attempts_provider_binding",
+        ),
         UniqueConstraint(
             "customer_id",
             "source_command",
@@ -254,6 +263,11 @@ class PaymentAttempt(Base):
         ),
         UniqueConstraint(
             "supersedes_attempt_id", name="uq_payment_attempts_single_successor"
+        ),
+        UniqueConstraint(
+            "provider",
+            "provider_reference",
+            name="uq_payment_attempts_provider_reference",
         ),
         Index("ix_payment_attempts_subject", "quote_selection_id", "created_at"),
         Index(
@@ -296,6 +310,8 @@ class PaymentAttemptEvidence(Base):
     source = Column(String(50), nullable=False)
     event_id = Column(String(200), nullable=False)
     evidence_type = Column(String(50), nullable=False)
+    provider = Column(String(30))
+    provider_reference = Column(String(200))
     evidence_hash = Column(String(64), nullable=False)
     observed_at = Column(DateTime(timezone=True), nullable=False)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=_NOW)
@@ -306,6 +322,13 @@ class PaymentAttemptEvidence(Base):
             "AND evidence_type ~ '^[A-Za-z0-9][A-Za-z0-9._:-]*$' "
             "AND evidence_hash ~ '^[0-9a-f]{64}$'",
             name="ck_payment_attempt_evidence_identifiers",
+        ),
+        CheckConstraint(
+            "(provider IS NULL AND provider_reference IS NULL) OR "
+            "(provider ~ '^[a-z][a-z0-9._-]{0,29}$' "
+            "AND provider_reference = btrim(provider_reference) "
+            "AND provider_reference ~ '^[!-~]+$')",
+            name="ck_payment_attempt_evidence_provider_binding",
         ),
         UniqueConstraint(
             "source", "event_id", name="uq_payment_attempt_evidence_external_event"
@@ -1134,6 +1157,11 @@ DECLARE
     earliest_reservation_expiry timestamptz;
     predecessor payment_attempts%%ROWTYPE;
     evidence_attempt uuid;
+    evidence_type text;
+    evidence_provider text;
+    evidence_provider_reference text;
+    unresolved_evidence_provider text;
+    unresolved_evidence_provider_reference text;
     presented_lease_token text;
 BEGIN
     IF TG_OP = 'DELETE' THEN
@@ -1143,7 +1171,8 @@ BEGIN
     IF TG_OP = 'INSERT' THEN
         IF NEW.state <> 'pending' OR NEW.lease_token IS NOT NULL OR NEW.call_started_at IS NOT NULL
            OR NEW.claim_expires_at IS NOT NULL OR NEW.terminal_evidence_id IS NOT NULL
-           OR NEW.terminal_at IS NOT NULL THEN
+           OR NEW.terminal_at IS NOT NULL OR NEW.provider IS NULL
+           OR NEW.provider_reference IS NULL THEN
             RAISE EXCEPTION 'payment attempt must start pending';
         END IF;
         -- Cross-aggregate lock order is always order then quote. Quote creation
@@ -1244,6 +1273,10 @@ BEGIN
     END IF;
     IF OLD.state = 'abandoned_unknown' AND NEW.state NOT IN ('failed', 'verified') THEN
         RAISE EXCEPTION 'unknown payment attempt requires definitive reconciliation';
+    END IF;
+    IF NEW.provider IS DISTINCT FROM OLD.provider
+       OR NEW.provider_reference IS DISTINCT FROM OLD.provider_reference THEN
+        RAISE EXCEPTION 'payment provider binding is immutable';
     END IF;
     IF NEW.id IS DISTINCT FROM OLD.id OR NEW.order_id IS DISTINCT FROM OLD.order_id
        OR NEW.customer_id IS DISTINCT FROM OLD.customer_id
@@ -1461,10 +1494,50 @@ BEGIN
                 RAISE EXCEPTION 'payment claim lease expired';
             END IF;
         END IF;
-        SELECT attempt_id INTO evidence_attempt FROM payment_attempt_evidence
+        SELECT attempt_id, payment_attempt_evidence.evidence_type,
+               provider, provider_reference
+          INTO evidence_attempt, evidence_type, evidence_provider,
+               evidence_provider_reference
+          FROM payment_attempt_evidence
          WHERE id = NEW.terminal_evidence_id;
         IF NOT FOUND OR evidence_attempt <> OLD.id THEN
             RAISE EXCEPTION 'payment attempt terminal evidence is invalid';
+        END IF;
+        IF OLD.state = 'abandoned_unknown'
+           AND NEW.state IN ('failed', 'verified')
+           AND (OLD.provider IS NULL OR OLD.provider_reference IS NULL) THEN
+            RAISE EXCEPTION 'payment provider binding is unavailable';
+        END IF;
+        IF OLD.state = 'abandoned_unknown'
+           AND NEW.state IN ('failed', 'verified') THEN
+            SELECT provider, provider_reference
+              INTO unresolved_evidence_provider,
+                   unresolved_evidence_provider_reference
+              FROM payment_attempt_evidence
+             WHERE id = OLD.terminal_evidence_id;
+            IF NOT FOUND OR unresolved_evidence_provider IS DISTINCT FROM OLD.provider
+               OR unresolved_evidence_provider_reference IS DISTINCT FROM OLD.provider_reference THEN
+                RAISE EXCEPTION 'payment provider binding is unavailable';
+            END IF;
+        END IF;
+        IF evidence_type IS DISTINCT FROM (CASE NEW.state
+               WHEN 'verified' THEN 'payment_verified'
+               WHEN 'failed' THEN 'payment_failed'
+               ELSE 'outcome_unknown'
+           END) THEN
+            IF OLD.state = 'abandoned_unknown' THEN
+                RAISE EXCEPTION 'definitive reconciliation evidence required';
+            END IF;
+            RAISE EXCEPTION 'payment evidence does not match target state';
+        END IF;
+        IF OLD.state = 'abandoned_unknown'
+           AND NEW.state IN ('failed', 'verified')
+           AND NEW.terminal_evidence_id = OLD.terminal_evidence_id THEN
+            RAISE EXCEPTION 'definitive reconciliation evidence required';
+        END IF;
+        IF evidence_provider IS DISTINCT FROM OLD.provider
+           OR evidence_provider_reference IS DISTINCT FROM OLD.provider_reference THEN
+            RAISE EXCEPTION 'payment provider binding does not match';
         END IF;
         IF NEW.state = 'abandoned_unknown' THEN
             IF OLD.state <> 'call_started' OR now_at < OLD.claim_expires_at THEN
@@ -1807,14 +1880,28 @@ CREATE FUNCTION validate_payment_attempt_evidence_write() RETURNS trigger AS $$
 DECLARE
     attempt_state text;
     attempt_created_at timestamptz;
+    attempt_provider text;
+    attempt_provider_reference text;
 BEGIN
     IF TG_OP <> 'INSERT' THEN
         RAISE EXCEPTION 'payment attempt evidence is append-only';
     END IF;
-    SELECT state, created_at INTO attempt_state, attempt_created_at
+    SELECT state, created_at, provider, provider_reference
+      INTO attempt_state, attempt_created_at, attempt_provider,
+           attempt_provider_reference
       FROM payment_attempts WHERE id = NEW.attempt_id FOR UPDATE;
     IF NOT FOUND OR attempt_state NOT IN ('pending', 'call_started', 'abandoned_unknown') THEN
         RAISE EXCEPTION 'payment attempt evidence creation is closed';
+    END IF;
+    IF attempt_provider IS NULL OR attempt_provider_reference IS NULL THEN
+        RAISE EXCEPTION 'payment provider binding is unavailable';
+    END IF;
+    IF NEW.provider IS NULL AND NEW.provider_reference IS NULL THEN
+        NEW.provider := attempt_provider;
+        NEW.provider_reference := attempt_provider_reference;
+    ELSIF NEW.provider IS DISTINCT FROM attempt_provider
+       OR NEW.provider_reference IS DISTINCT FROM attempt_provider_reference THEN
+        RAISE EXCEPTION 'payment provider binding does not match';
     END IF;
     IF NEW.observed_at > clock_timestamp() THEN
         RAISE EXCEPTION 'payment attempt evidence chronology is invalid';
