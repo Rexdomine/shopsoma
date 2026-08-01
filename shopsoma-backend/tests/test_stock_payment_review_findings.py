@@ -323,8 +323,8 @@ async def _abandoned_unknown_subject(session, vendor_user, customer_user):
     return lane, graph, intent, quote, option, selection, sku, reservation, attempt
 
 
-async def _call_started_subject(session, vendor_user, customer_user):
-    """Create one provider-bound call-started attempt with an active reservation."""
+async def _pending_payment_subject(session, vendor_user, customer_user):
+    """Create one provider-bound pending attempt with an active reservation."""
 
     lane = _lane_helpers()
     graph, intent, quote, option, selection, sku = await lane._checkout_subject(
@@ -346,7 +346,13 @@ async def _call_started_subject(session, vendor_user, customer_user):
     await session.flush()
     await session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
     await session.execute(text("SET CONSTRAINTS ALL DEFERRED"))
+    return attempt
 
+
+async def _call_started_subject(session, vendor_user, customer_user):
+    """Create one provider-bound call-started attempt with an active reservation."""
+
+    attempt = await _pending_payment_subject(session, vendor_user, customer_user)
     lease_token = uuid.uuid4()
     await session.execute(
         text(
@@ -398,6 +404,33 @@ async def _unvalidated_definitive_reconciliation_evidence(
     try:
         return await _definitive_reconciliation_evidence(
             session, attempt, target_state, **overrides
+        )
+    finally:
+        await session.execute(text("SET LOCAL session_replication_role = origin"))
+
+
+async def _force_evidence_chronology(
+    session,
+    evidence_id,
+    *,
+    created_at: datetime | None = None,
+    observed_at: datetime | None = None,
+) -> None:
+    """Inject migration-era chronology without weakening the live append-only path."""
+
+    await session.execute(text("SET LOCAL session_replication_role = replica"))
+    try:
+        await session.execute(
+            text(
+                "UPDATE payment_attempt_evidence "
+                "SET created_at=COALESCE(:created_at, created_at), "
+                "observed_at=COALESCE(:observed_at, observed_at) WHERE id=:evidence_id"
+            ),
+            {
+                "created_at": created_at,
+                "observed_at": observed_at,
+                "evidence_id": evidence_id,
+            },
         )
     finally:
         await session.execute(text("SET LOCAL session_replication_role = origin"))
@@ -3086,6 +3119,243 @@ async def test_uncommitted_call_start_fences_competing_reservation_across_ttl(
         await reserver.rollback()
         await caller.close()
         await reserver.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target_state", ["verified", "failed"])
+async def test_call_started_terminal_rejects_definitive_evidence_prestaged_while_pending(
+    db_session, vendor_user, customer_user, target_state
+) -> None:
+    attempt = await _pending_payment_subject(db_session, vendor_user, customer_user)
+    evidence = await _definitive_reconciliation_evidence(
+        db_session, attempt, target_state
+    )
+    lease_token = uuid.uuid4()
+    await db_session.execute(
+        text(
+            "UPDATE payment_attempts SET state='call_started', lease_token=:token, "
+            "row_version=2 WHERE id=:attempt_id"
+        ),
+        {"token": lease_token, "attempt_id": attempt.id},
+    )
+    await _present_payment_lease(db_session, lease_token)
+
+    with pytest.raises(DBAPIError, match="payment evidence chronology is invalid"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(
+                    "UPDATE payment_attempts SET state=:target_state, "
+                    "terminal_evidence_id=:evidence_id, row_version=3 WHERE id=:attempt_id"
+                ),
+                {
+                    "target_state": target_state,
+                    "evidence_id": evidence.id,
+                    "attempt_id": attempt.id,
+                },
+            )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target_state", ["verified", "failed"])
+@pytest.mark.parametrize("chronology_field", ["created_at", "observed_at"])
+@pytest.mark.parametrize(
+    ("tick_offset", "accepted"), [(-1, False), (0, True), (1, True)]
+)
+async def test_call_started_terminal_requires_definitive_evidence_at_or_after_call_start(
+    db_session,
+    vendor_user,
+    customer_user,
+    target_state,
+    chronology_field,
+    tick_offset,
+    accepted,
+) -> None:
+    attempt, lease_token = await _call_started_subject(
+        db_session, vendor_user, customer_user
+    )
+    evidence = await _definitive_reconciliation_evidence(
+        db_session, attempt, target_state
+    )
+    call_started_at = await db_session.scalar(
+        text("SELECT call_started_at FROM payment_attempts WHERE id=:attempt_id"),
+        {"attempt_id": attempt.id},
+    )
+    valid_time = call_started_at + timedelta(microseconds=2)
+    chronology = {"created_at": valid_time, "observed_at": valid_time}
+    chronology[chronology_field] = call_started_at + timedelta(microseconds=tick_offset)
+    await _force_evidence_chronology(db_session, evidence.id, **chronology)
+    await _present_payment_lease(db_session, lease_token)
+    transition = text(
+        "UPDATE payment_attempts SET state=:target_state, "
+        "terminal_evidence_id=:evidence_id, row_version=3 WHERE id=:attempt_id"
+    )
+    params = {
+        "target_state": target_state,
+        "evidence_id": evidence.id,
+        "attempt_id": attempt.id,
+    }
+
+    if not accepted:
+        with pytest.raises(DBAPIError, match="payment evidence chronology is invalid"):
+            async with db_session.begin_nested():
+                await db_session.execute(transition, params)
+        return
+
+    await db_session.execute(transition, params)
+    assert (
+        await db_session.scalar(
+            text("SELECT state FROM payment_attempts WHERE id=:attempt_id"),
+            {"attempt_id": attempt.id},
+        )
+        == target_state
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target_state", ["verified", "failed"])
+async def test_abandoned_unknown_resolution_rejects_definitive_evidence_from_call_started(
+    db_session, vendor_user, customer_user, target_state
+) -> None:
+    attempt, lease_token = await _call_started_subject(
+        db_session, vendor_user, customer_user
+    )
+    prestaged = await _definitive_reconciliation_evidence(
+        db_session, attempt, target_state
+    )
+    unknown = await _definitive_reconciliation_evidence(
+        db_session,
+        attempt,
+        "failed",
+        evidence_type="outcome_unknown",
+    )
+    await db_session.execute(text("SET LOCAL session_replication_role = replica"))
+    await db_session.execute(
+        text(
+            "UPDATE payment_attempts "
+            "SET claim_expires_at=clock_timestamp() - interval '1 second' "
+            "WHERE id=:attempt_id"
+        ),
+        {"attempt_id": attempt.id},
+    )
+    await db_session.execute(text("SET LOCAL session_replication_role = origin"))
+    await _present_payment_lease(db_session, lease_token)
+    await db_session.execute(
+        text(
+            "UPDATE payment_attempts SET state='abandoned_unknown', "
+            "terminal_evidence_id=:evidence_id, row_version=3 WHERE id=:attempt_id"
+        ),
+        {"evidence_id": unknown.id, "attempt_id": attempt.id},
+    )
+
+    with pytest.raises(DBAPIError, match="payment evidence chronology is invalid"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(
+                    "UPDATE payment_attempts SET state=:target_state, "
+                    "terminal_evidence_id=:evidence_id, row_version=4 WHERE id=:attempt_id"
+                ),
+                {
+                    "target_state": target_state,
+                    "evidence_id": prestaged.id,
+                    "attempt_id": attempt.id,
+                },
+            )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target_state", ["verified", "failed"])
+@pytest.mark.parametrize("chronology_field", ["created_at", "observed_at"])
+@pytest.mark.parametrize("boundary_kind", ["unknown_terminal", "prior_uncertainty"])
+@pytest.mark.parametrize(
+    ("tick_offset", "accepted"), [(-1, False), (0, False), (1, True)]
+)
+async def test_abandoned_unknown_resolution_requires_strictly_new_definitive_evidence(
+    db_session,
+    vendor_user,
+    customer_user,
+    target_state,
+    chronology_field,
+    boundary_kind,
+    tick_offset,
+    accepted,
+) -> None:
+    *_, attempt = await _abandoned_unknown_subject(
+        db_session, vendor_user, customer_user
+    )
+    attempt_row = (
+        await db_session.execute(
+            text(
+                "SELECT terminal_at, terminal_evidence_id FROM payment_attempts "
+                "WHERE id=:attempt_id"
+            ),
+            {"attempt_id": attempt.id},
+        )
+    ).one()
+    prior_row = (
+        await db_session.execute(
+            text(
+                "SELECT created_at, observed_at FROM payment_attempt_evidence "
+                "WHERE id=:evidence_id"
+            ),
+            {"evidence_id": attempt_row.terminal_evidence_id},
+        )
+    ).one()
+    prior_times = {
+        "created_at": prior_row.created_at,
+        "observed_at": prior_row.observed_at,
+    }
+    if boundary_kind == "unknown_terminal":
+        prior_times[chronology_field] = attempt_row.terminal_at - timedelta(
+            microseconds=10
+        )
+    else:
+        prior_times[chronology_field] = attempt_row.terminal_at + timedelta(
+            microseconds=10
+        )
+    await _force_evidence_chronology(
+        db_session,
+        attempt_row.terminal_evidence_id,
+        **prior_times,
+    )
+    boundary = (
+        attempt_row.terminal_at
+        if boundary_kind == "unknown_terminal"
+        else prior_times[chronology_field]
+    )
+    evidence = await _definitive_reconciliation_evidence(
+        db_session, attempt, target_state
+    )
+    other_field = "observed_at" if chronology_field == "created_at" else "created_at"
+    chronology = {
+        chronology_field: boundary + timedelta(microseconds=tick_offset),
+        other_field: max(attempt_row.terminal_at, prior_times[other_field])
+        + timedelta(microseconds=20),
+    }
+    await _force_evidence_chronology(db_session, evidence.id, **chronology)
+    transition = text(
+        "UPDATE payment_attempts SET state=:target_state, "
+        "terminal_evidence_id=:evidence_id, row_version=4 WHERE id=:attempt_id"
+    )
+    params = {
+        "target_state": target_state,
+        "evidence_id": evidence.id,
+        "attempt_id": attempt.id,
+    }
+
+    if not accepted:
+        with pytest.raises(DBAPIError, match="payment evidence chronology is invalid"):
+            async with db_session.begin_nested():
+                await db_session.execute(transition, params)
+        return
+
+    await db_session.execute(transition, params)
+    assert (
+        await db_session.scalar(
+            text("SELECT state FROM payment_attempts WHERE id=:attempt_id"),
+            {"attempt_id": attempt.id},
+        )
+        == target_state
+    )
 
 
 @pytest.mark.asyncio

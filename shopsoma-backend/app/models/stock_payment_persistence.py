@@ -1160,8 +1160,12 @@ DECLARE
     evidence_type text;
     evidence_provider text;
     evidence_provider_reference text;
+    evidence_created_at timestamptz;
+    evidence_observed_at timestamptz;
     unresolved_evidence_provider text;
     unresolved_evidence_provider_reference text;
+    unresolved_evidence_created_at timestamptz;
+    unresolved_evidence_observed_at timestamptz;
     presented_lease_token text;
 BEGIN
     IF TG_OP = 'DELETE' THEN
@@ -1495,9 +1499,10 @@ BEGIN
             END IF;
         END IF;
         SELECT attempt_id, payment_attempt_evidence.evidence_type,
-               provider, provider_reference
+               provider, provider_reference, created_at, observed_at
           INTO evidence_attempt, evidence_type, evidence_provider,
-               evidence_provider_reference
+               evidence_provider_reference, evidence_created_at,
+               evidence_observed_at
           FROM payment_attempt_evidence
          WHERE id = NEW.terminal_evidence_id;
         IF NOT FOUND OR evidence_attempt <> OLD.id THEN
@@ -1510,9 +1515,11 @@ BEGIN
         END IF;
         IF OLD.state = 'abandoned_unknown'
            AND NEW.state IN ('failed', 'verified') THEN
-            SELECT provider, provider_reference
+            SELECT provider, provider_reference, created_at, observed_at
               INTO unresolved_evidence_provider,
-                   unresolved_evidence_provider_reference
+                   unresolved_evidence_provider_reference,
+                   unresolved_evidence_created_at,
+                   unresolved_evidence_observed_at
               FROM payment_attempt_evidence
              WHERE id = OLD.terminal_evidence_id;
             IF NOT FOUND OR unresolved_evidence_provider IS DISTINCT FROM OLD.provider
@@ -1538,6 +1545,23 @@ BEGIN
         IF evidence_provider IS DISTINCT FROM OLD.provider
            OR evidence_provider_reference IS DISTINCT FROM OLD.provider_reference THEN
             RAISE EXCEPTION 'payment provider binding does not match';
+        END IF;
+        IF NEW.state IN ('failed', 'verified') AND (
+            evidence_created_at IS NULL OR evidence_observed_at IS NULL
+            OR (OLD.state = 'call_started' AND (
+                evidence_created_at < OLD.call_started_at
+                OR evidence_observed_at < OLD.call_started_at
+            ))
+            OR (OLD.state = 'abandoned_unknown' AND (
+                evidence_created_at <= OLD.terminal_at
+                OR evidence_observed_at <= OLD.terminal_at
+                OR unresolved_evidence_created_at IS NULL
+                OR unresolved_evidence_observed_at IS NULL
+                OR evidence_created_at <= unresolved_evidence_created_at
+                OR evidence_observed_at <= unresolved_evidence_observed_at
+            ))
+        ) THEN
+            RAISE EXCEPTION 'payment evidence chronology is invalid';
         END IF;
         IF NEW.state = 'abandoned_unknown' THEN
             IF OLD.state <> 'call_started' OR now_at < OLD.claim_expires_at THEN
