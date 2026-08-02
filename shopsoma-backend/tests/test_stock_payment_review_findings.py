@@ -4438,3 +4438,101 @@ async def test_two_connections_variant_delete_waits_for_reservation_then_revalid
         await creator.close()
         await deleter.close()
         await observer.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("inventory_kind", ["product_variant", "size_stock"])
+async def test_two_connections_expiry_delete_cannot_commit_orphan_pending_attempt(
+    db_session, vendor_user, customer_user, inventory_kind
+) -> None:
+    """If DELETE wins after TTL, deferred exact-membership aborts the attempt."""
+
+    if inventory_kind == "product_variant":
+        lane, graph, intent, quote, option, selection, subject, reservation = (
+            await _catalog_product_variant_subject(
+                db_session, vendor_user, customer_user
+            )
+        )
+        await _detach_order_item_variant_fk(db_session, graph["item"].id)
+        table = "product_variants"
+    else:
+        (
+            lane,
+            graph,
+            intent,
+            quote,
+            option,
+            selection,
+            _variation,
+            subject,
+            reservation,
+        ) = await _catalog_replacement_sized_subject(
+            db_session, vendor_user, customer_user
+        )
+        table = "size_stocks"
+    attempt = lane._payment_attempt(
+        graph, intent, quote, option, selection, customer_user["user"].id
+    )
+    subject_id = subject.id
+    reservation_id = reservation.id
+    await db_session.execute(text("SET LOCAL session_replication_role = replica"))
+    await db_session.execute(
+        text(
+            "UPDATE stock_reservations SET created_at=statement_timestamp(), "
+            "expires_at=statement_timestamp() + interval '2 seconds' WHERE id=:id"
+        ),
+        {"id": reservation_id},
+    )
+    await db_session.execute(text("SET LOCAL session_replication_role = origin"))
+    await db_session.commit()
+
+    factory = async_sessionmaker(bind=db_session.bind, expire_on_commit=False)
+    creator = factory()
+    deleter = factory()
+    observer = factory()
+    try:
+        creator.add(attempt)
+        await creator.flush()
+        creator.add(
+            PaymentAttemptReservation(
+                attempt_id=attempt.id, reservation_id=reservation_id
+            )
+        )
+        await creator.flush()
+        # Cross the reservation TTL while the attempt transaction remains open.
+        await asyncio.sleep(2.1)
+
+        await deleter.execute(
+            text(f"DELETE FROM {table} WHERE id=:subject_id"),
+            {"subject_id": subject_id},
+        )
+        await deleter.commit()
+
+        with pytest.raises(
+            DBAPIError,
+            match="payment attempt must cover the exact active reservation set",
+        ):
+            await creator.commit()
+        await creator.rollback()
+
+        assert (
+            await observer.scalar(
+                text("SELECT count(*) FROM payment_attempts WHERE id=:attempt_id"),
+                {"attempt_id": attempt.id},
+            )
+            == 0
+        )
+        assert (
+            await observer.scalar(
+                text(f"SELECT count(*) FROM {table} WHERE id=:subject_id"),
+                {"subject_id": subject_id},
+            )
+            == 0
+        )
+    finally:
+        await creator.rollback()
+        await deleter.rollback()
+        await observer.rollback()
+        await creator.close()
+        await deleter.close()
+        await observer.close()
