@@ -3928,3 +3928,513 @@ async def test_abandoned_unknown_evidence_respects_claim_expiry_boundary(
         ):
             async with db_session.begin_nested():
                 await db_session.execute(transition, params)
+
+
+async def _catalog_replacement_sized_subject(session, vendor_user, customer_user):
+    """Build the real sized-order subject used by catalog replacement regressions."""
+
+    lane = _lane_helpers()
+    graph, intent, quote, option, selection, _ = await lane._checkout_subject(
+        session, vendor_user, customer_user, stock=0
+    )
+    variation = Variation(
+        product_id=graph["item"].product_id,
+        title="Original",
+        type="color",
+        price=graph["item"].unit_price,
+    )
+    session.add(variation)
+    await session.flush()
+    size_stock = SizeStock(variation_id=variation.id, size=SizeEnum.M, stock=3)
+    session.add(size_stock)
+    await session.flush()
+    await session.execute(
+        text(
+            "UPDATE order_items SET variant_details=CAST(:details AS jsonb) "
+            "WHERE id=:order_item_id"
+        ),
+        {
+            "details": json.dumps(
+                {
+                    "size": "M",
+                    "color": "Original",
+                    "size_stock_id": str(size_stock.id),
+                    "variation_id": str(variation.id),
+                }
+            ),
+            "order_item_id": graph["item"].id,
+        },
+    )
+    reservation = lane._reservation(
+        graph,
+        intent,
+        quote,
+        option,
+        selection,
+        customer_user["user"].id,
+        None,
+        size_stock_id=size_stock.id,
+    )
+    session.add(reservation)
+    await session.flush()
+    return (
+        lane,
+        graph,
+        intent,
+        quote,
+        option,
+        selection,
+        variation,
+        size_stock,
+        reservation,
+    )
+
+
+async def _make_sized_reservation_terminal(
+    session, lane, graph, intent, quote, option, selection, reservation, state: str
+) -> None:
+    if state == "released":
+        await session.execute(
+            text(
+                "UPDATE stock_reservations SET state='released', "
+                "terminal_reason='checkout abandoned', row_version=2 WHERE id=:id"
+            ),
+            {"id": reservation.id},
+        )
+        return
+    if state == "expired":
+        await _expire_reservation_without_lifecycle_transition(session, reservation.id)
+        await session.execute(
+            text(
+                "UPDATE stock_reservations SET state='expired', "
+                "terminal_reason='ttl elapsed', row_version=2 WHERE id=:id"
+            ),
+            {"id": reservation.id},
+        )
+        return
+
+    attempt = lane._payment_attempt(
+        graph,
+        intent,
+        quote,
+        option,
+        selection,
+        reservation.customer_id,
+    )
+    session.add(attempt)
+    await session.flush()
+    session.add(
+        PaymentAttemptReservation(attempt_id=attempt.id, reservation_id=reservation.id)
+    )
+    await session.flush()
+    await session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+    await session.execute(text("SET CONSTRAINTS ALL DEFERRED"))
+    await _set_attempt_state_for_interlock_matrix(session, attempt, "verified")
+    await session.execute(
+        text(
+            "UPDATE stock_reservations SET state='consumed', "
+            "terminal_reason='verified payment consumed stock', row_version=2 WHERE id=:id"
+        ),
+        {"id": reservation.id},
+    )
+
+
+async def _inject_catalog_replacement_audit_rows(
+    session, graph, size_stock, state: str
+) -> None:
+    await session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+    await session.execute(text("SET LOCAL session_replication_role = replica"))
+    await session.execute(
+        text(
+            "INSERT INTO legacy_inventory_deduction_candidates "
+            "(order_item_id,product_id,size_stock_id,quantity,state,decision_source,"
+            "decision_event_id,evidence_hash,actor_id,decided_at) VALUES "
+            "(:item_id,:product_id,:size_stock_id,1,CAST(:state AS varchar),:source,:event_id,"
+            ":evidence_hash,:actor_id,CASE WHEN CAST(:state AS varchar)='unresolved' THEN NULL "
+            "ELSE statement_timestamp() END)"
+        ),
+        {
+            "item_id": graph["item"].id,
+            "product_id": graph["item"].product_id,
+            "size_stock_id": size_stock.id,
+            "state": state,
+            "source": None if state == "unresolved" else "legacy_inventory_audit",
+            "event_id": None if state == "unresolved" else f"catalog-{state}",
+            "evidence_hash": None if state == "unresolved" else "a" * 64,
+            "actor_id": None if state == "unresolved" else graph["order"].customer_id,
+        },
+    )
+    if state == "credited":
+        await session.execute(
+            text(
+                "INSERT INTO inventory_deduction_events "
+                "(order_item_id,product_id,size_stock_id,event_type,quantity) "
+                "VALUES (:item_id,:product_id,:size_stock_id,'deducted',1)"
+            ),
+            {
+                "item_id": graph["item"].id,
+                "product_id": graph["item"].product_id,
+                "size_stock_id": size_stock.id,
+            },
+        )
+    await session.execute(text("SET LOCAL session_replication_role = origin"))
+    await session.execute(text("SET CONSTRAINTS ALL DEFERRED"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("reservation_state", "candidate_state"),
+    [("released", "unresolved"), ("expired", "not_deducted"), ("consumed", "credited")],
+)
+async def test_vendor_variation_replacement_preserves_safe_size_stock_audit_identity(
+    client,
+    db_session,
+    vendor_user,
+    customer_user,
+    reservation_state,
+    candidate_state,
+) -> None:
+    """Safe history keeps immutable UUID evidence without pinning mutable catalog rows."""
+
+    (
+        lane,
+        graph,
+        intent,
+        quote,
+        option,
+        selection,
+        variation,
+        size_stock,
+        reservation,
+    ) = await _catalog_replacement_sized_subject(db_session, vendor_user, customer_user)
+    await _make_sized_reservation_terminal(
+        db_session,
+        lane,
+        graph,
+        intent,
+        quote,
+        option,
+        selection,
+        reservation,
+        reservation_state,
+    )
+    await _inject_catalog_replacement_audit_rows(
+        db_session, graph, size_stock, candidate_state
+    )
+    old_variation_id = variation.id
+    old_size_stock_id = size_stock.id
+    product_id = graph["item"].product_id
+    await db_session.commit()
+
+    response = await client.put(
+        f"/api/v1/products/{product_id}",
+        json={
+            "variations": [
+                {
+                    "title": "Replacement",
+                    "type": "color",
+                    "price": "10.00",
+                    "sizes": [{"size": "L", "stock": 4}],
+                }
+            ]
+        },
+        headers=vendor_user["headers"],
+    )
+
+    assert response.status_code == 200, response.text
+    assert (
+        await db_session.scalar(
+            text("SELECT count(*) FROM variations WHERE id=:id"),
+            {"id": old_variation_id},
+        )
+        == 0
+    )
+    assert (
+        await db_session.scalar(
+            text("SELECT count(*) FROM size_stocks WHERE id=:id"),
+            {"id": old_size_stock_id},
+        )
+        == 0
+    )
+    for table in ("stock_reservations", "legacy_inventory_deduction_candidates"):
+        assert (
+            await db_session.scalar(
+                text(f"SELECT size_stock_id FROM {table} WHERE order_item_id=:item_id"),
+                {"item_id": graph["item"].id},
+            )
+            == old_size_stock_id
+        )
+    if candidate_state == "credited":
+        assert (
+            await db_session.scalar(
+                text(
+                    "SELECT size_stock_id FROM inventory_deduction_events "
+                    "WHERE order_item_id=:item_id AND event_type='deducted'"
+                ),
+                {"item_id": graph["item"].id},
+            )
+            == old_size_stock_id
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "attempt_state", ["pending", "call_started", "verified", "abandoned_unknown"]
+)
+async def test_vendor_variation_replacement_fails_while_payment_outcome_is_live(
+    client, db_session, vendor_user, customer_user, attempt_state
+) -> None:
+    """Expired-by-clock stock stays pinned while payment remains unresolved."""
+
+    (
+        lane,
+        graph,
+        intent,
+        quote,
+        option,
+        selection,
+        _variation,
+        _size_stock,
+        reservation,
+    ) = await _catalog_replacement_sized_subject(db_session, vendor_user, customer_user)
+    attempt = lane._payment_attempt(
+        graph,
+        intent,
+        quote,
+        option,
+        selection,
+        customer_user["user"].id,
+    )
+    db_session.add(attempt)
+    await db_session.flush()
+    db_session.add(
+        PaymentAttemptReservation(attempt_id=attempt.id, reservation_id=reservation.id)
+    )
+    await db_session.flush()
+    await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+    await db_session.execute(text("SET CONSTRAINTS ALL DEFERRED"))
+    await _set_attempt_state_for_interlock_matrix(db_session, attempt, attempt_state)
+    await _expire_reservation_without_lifecycle_transition(db_session, reservation.id)
+    product_id = graph["item"].product_id
+    await db_session.commit()
+
+    with pytest.raises(DBAPIError, match="reserved product identity is immutable"):
+        await client.put(
+            f"/api/v1/products/{product_id}",
+            json={
+                "variations": [
+                    {
+                        "title": "Blocked replacement",
+                        "type": "color",
+                        "price": "10.00",
+                        "sizes": [{"size": "L", "stock": 4}],
+                    }
+                ]
+            },
+            headers=vendor_user["headers"],
+        )
+
+
+async def _catalog_product_variant_subject(
+    session, vendor_user, customer_user, *, persist_reservation: bool = True
+):
+    """Build a finite-stock ProductVariant reservation subject."""
+
+    lane = _lane_helpers()
+    graph, intent, quote, option, selection, _ = await lane._checkout_subject(
+        session, vendor_user, customer_user, stock=0
+    )
+    sku = f"VAR-{uuid.uuid4().hex[:12]}"
+    variant = ProductVariant(
+        product_id=graph["item"].product_id,
+        size="M",
+        color="Delete fence",
+        price=graph["item"].unit_price,
+        stock=3,
+        sku=sku,
+    )
+    session.add(variant)
+    await session.flush()
+    await session.execute(
+        text("UPDATE order_items SET variant_id=:variant_id WHERE id=:order_item_id"),
+        {"variant_id": variant.id, "order_item_id": graph["item"].id},
+    )
+    reservation = lane._reservation(
+        graph,
+        intent,
+        quote,
+        option,
+        selection,
+        customer_user["user"].id,
+        sku,
+        variant_id=variant.id,
+    )
+    if persist_reservation:
+        session.add(reservation)
+        await session.flush()
+    return lane, graph, intent, quote, option, selection, variant, reservation
+
+
+async def _detach_order_item_variant_fk(session, order_item_id) -> None:
+    """Isolate the Lane 2A-4B UUID audit fence from the legacy OrderItem FK."""
+
+    await session.execute(text("SET LOCAL session_replication_role = replica"))
+    await session.execute(
+        text("UPDATE order_items SET variant_id=NULL WHERE id=:order_item_id"),
+        {"order_item_id": order_item_id},
+    )
+    await session.execute(text("SET LOCAL session_replication_role = origin"))
+
+
+@pytest.mark.asyncio
+async def test_admin_product_variant_delete_rejects_unexpired_active_reservation(
+    client, db_session, admin_user, vendor_user, customer_user
+) -> None:
+    """The real admin delete path cannot orphan live variant stock identity."""
+
+    lane, graph, intent, quote, option, selection, variant, reservation = (
+        await _catalog_product_variant_subject(db_session, vendor_user, customer_user)
+    )
+    del lane, intent, quote, option, selection, reservation
+    await _detach_order_item_variant_fk(db_session, graph["item"].id)
+    product_id = variant.product_id
+    variant_id = variant.id
+    await db_session.commit()
+
+    with pytest.raises(DBAPIError, match="reserved product identity is immutable"):
+        await client.delete(
+            f"/api/v1/admin/products/{product_id}/variants/{variant_id}",
+            headers=admin_user["headers"],
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "attempt_state", ["pending", "call_started", "verified", "abandoned_unknown"]
+)
+async def test_product_variant_delete_rejects_expired_active_payment_truth(
+    db_session, vendor_user, customer_user, attempt_state
+) -> None:
+    """Expired active stock stays fenced while any live payment truth remains."""
+
+    lane, graph, intent, quote, option, selection, variant, reservation = (
+        await _catalog_product_variant_subject(db_session, vendor_user, customer_user)
+    )
+    attempt = lane._payment_attempt(
+        graph,
+        intent,
+        quote,
+        option,
+        selection,
+        customer_user["user"].id,
+    )
+    db_session.add(attempt)
+    await db_session.flush()
+    db_session.add(
+        PaymentAttemptReservation(attempt_id=attempt.id, reservation_id=reservation.id)
+    )
+    await db_session.flush()
+    await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+    await db_session.execute(text("SET CONSTRAINTS ALL DEFERRED"))
+    await _set_attempt_state_for_interlock_matrix(db_session, attempt, attempt_state)
+    await _expire_reservation_without_lifecycle_transition(db_session, reservation.id)
+    await _detach_order_item_variant_fk(db_session, graph["item"].id)
+
+    with pytest.raises(DBAPIError, match="reserved product identity is immutable"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text("DELETE FROM product_variants WHERE id=:variant_id"),
+                {"variant_id": variant.id},
+            )
+
+
+@pytest.mark.asyncio
+async def test_admin_product_variant_delete_preserves_safe_terminal_uuid_evidence(
+    client, db_session, admin_user, vendor_user, customer_user
+) -> None:
+    """Released history keeps its immutable variant UUID without pinning catalog rows."""
+
+    lane, graph, intent, quote, option, selection, variant, reservation = (
+        await _catalog_product_variant_subject(db_session, vendor_user, customer_user)
+    )
+    del lane, intent, quote, option, selection
+    await db_session.execute(
+        text(
+            "UPDATE stock_reservations SET state='released', "
+            "terminal_reason='checkout abandoned', row_version=2 WHERE id=:id"
+        ),
+        {"id": reservation.id},
+    )
+    await _detach_order_item_variant_fk(db_session, graph["item"].id)
+    product_id = variant.product_id
+    variant_id = variant.id
+    reservation_id = reservation.id
+    await db_session.commit()
+
+    response = await client.delete(
+        f"/api/v1/admin/products/{product_id}/variants/{variant_id}",
+        headers=admin_user["headers"],
+    )
+
+    assert response.status_code == 200, response.text
+    assert (
+        await db_session.scalar(
+            text("SELECT variant_id FROM stock_reservations WHERE id=:id"),
+            {"id": reservation_id},
+        )
+        == variant_id
+    )
+
+
+@pytest.mark.asyncio
+async def test_two_connections_variant_delete_waits_for_reservation_then_revalidates(
+    db_session, vendor_user, customer_user
+) -> None:
+    """Lock order is order -> item -> product -> variant; DELETE waits then rechecks."""
+
+    lane, graph, intent, quote, option, selection, variant, reservation = (
+        await _catalog_product_variant_subject(
+            db_session, vendor_user, customer_user, persist_reservation=False
+        )
+    )
+    del lane, intent, quote, option, selection
+    order_item_id = graph["item"].id
+    variant_id = variant.id
+    await db_session.commit()
+    factory = async_sessionmaker(bind=db_session.bind, expire_on_commit=False)
+    creator = factory()
+    deleter = factory()
+    observer = factory()
+    try:
+        creator.add(reservation)
+        await creator.flush()
+        await _detach_order_item_variant_fk(creator, order_item_id)
+
+        deleter_pid = await deleter.scalar(text("SELECT pg_backend_pid()"))
+
+        delete_task = asyncio.create_task(
+            deleter.execute(
+                text("DELETE FROM product_variants WHERE id=:variant_id"),
+                {"variant_id": variant_id},
+            )
+        )
+        for _ in range(100):
+            blockers = await observer.scalar(
+                text("SELECT pg_blocking_pids(:pid)"), {"pid": deleter_pid}
+            )
+            if blockers:
+                break
+            await asyncio.sleep(0.01)
+        else:
+            pytest.fail("variant DELETE never reached the expected row-lock wait")
+        assert not delete_task.done()
+
+        await creator.commit()
+        with pytest.raises(DBAPIError, match="reserved product identity is immutable"):
+            await asyncio.wait_for(delete_task, timeout=5)
+    finally:
+        await creator.rollback()
+        await deleter.rollback()
+        await creator.close()
+        await deleter.close()
+        await observer.close()

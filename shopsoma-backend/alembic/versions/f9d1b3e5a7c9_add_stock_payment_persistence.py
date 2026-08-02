@@ -16,7 +16,8 @@ branch_labels = None
 depends_on = None
 
 # Frozen companion SQL installs validate_stock_reservation_write,
-# protect_reserved_inventory, protect_reserved_order_item, protect_reserved_order,
+# protect_reserved_inventory, protect_live_inventory_subject_delete,
+# protect_reserved_order_item, protect_reserved_order,
 # validate_payment_attempt_write, validate_payment_attempt_membership_write,
 # validate_payment_attempt_exact_reservations, and
 # validate_payment_attempt_evidence_write.
@@ -83,8 +84,8 @@ CREATE TABLE stock_reservations (
  quote_option_id uuid NOT NULL REFERENCES customer_shipping_quote_options(id) ON DELETE RESTRICT,
  intent_id uuid NOT NULL REFERENCES outbound_shipment_intents(id) ON DELETE RESTRICT,
  product_id uuid NOT NULL REFERENCES products(id) ON DELETE RESTRICT,
- variant_id uuid REFERENCES product_variants(id) ON DELETE RESTRICT,
- size_stock_id uuid REFERENCES size_stocks(id) ON DELETE RESTRICT,
+ variant_id uuid,
+ size_stock_id uuid,
  sku varchar(100), quantity integer NOT NULL,
  unit_price numeric(18,4) NOT NULL, line_amount numeric(18,4) NOT NULL,
  currency varchar(3) NOT NULL, ttl_seconds integer NOT NULL DEFAULT 1800,

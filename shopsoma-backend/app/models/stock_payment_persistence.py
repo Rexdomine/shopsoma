@@ -73,8 +73,11 @@ class StockReservation(Base):
     product_id = Column(
         _UUID, ForeignKey("products.id", ondelete="RESTRICT"), nullable=False
     )
-    variant_id = Column(_UUID, ForeignKey("product_variants.id", ondelete="RESTRICT"))
-    size_stock_id = Column(_UUID, ForeignKey("size_stocks.id", ondelete="RESTRICT"))
+    # Detailed catalog UUIDs are immutable evidence snapshots, not live catalog
+    # ownership links. Deleting/replacing a safe catalog row must not rewrite
+    # historical reservation identity.
+    variant_id = Column(_UUID)
+    size_stock_id = Column(_UUID)
     # Catalog SKUs are optional snapshots. The UUID subject columns above are
     # the collision-free server-owned inventory identity.
     sku = Column(String(100))
@@ -343,8 +346,8 @@ CREATE TABLE inventory_deduction_events (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     order_item_id uuid NOT NULL REFERENCES order_items(id) ON DELETE RESTRICT,
     product_id uuid NOT NULL REFERENCES products(id) ON DELETE RESTRICT,
-    variant_id uuid REFERENCES product_variants(id) ON DELETE RESTRICT,
-    size_stock_id uuid REFERENCES size_stocks(id) ON DELETE RESTRICT,
+    variant_id uuid,
+    size_stock_id uuid,
     event_type varchar(20) NOT NULL,
     quantity integer NOT NULL,
     creation_txid bigint NOT NULL DEFAULT txid_current(),
@@ -375,8 +378,8 @@ FOR EACH ROW EXECUTE FUNCTION validate_inventory_deduction_event_write();
 CREATE TABLE legacy_inventory_deduction_candidates (
     order_item_id uuid PRIMARY KEY REFERENCES order_items(id) ON DELETE RESTRICT,
     product_id uuid NOT NULL REFERENCES products(id) ON DELETE RESTRICT,
-    variant_id uuid REFERENCES product_variants(id) ON DELETE RESTRICT,
-    size_stock_id uuid REFERENCES size_stocks(id) ON DELETE RESTRICT,
+    variant_id uuid,
+    size_stock_id uuid,
     quantity integer NOT NULL,
     state varchar(20) NOT NULL DEFAULT 'unresolved',
     decision_source varchar(100),
@@ -1202,6 +1205,50 @@ CREATE TRIGGER trg_size_stocks_reserved_inventory
 BEFORE UPDATE ON size_stocks FOR EACH ROW EXECUTE FUNCTION protect_reserved_inventory();
 CREATE TRIGGER trg_variations_reserved_inventory
 BEFORE UPDATE ON variations FOR EACH ROW EXECUTE FUNCTION protect_reserved_inventory();
+
+CREATE FUNCTION protect_live_inventory_subject_delete() RETURNS trigger AS $$
+BEGIN
+    -- DELETE already owns the inventory-subject row. Reservation creation uses
+    -- order -> item -> product -> (variation -> size stock | product variant),
+    -- so a competing DELETE waits for that writer and this trigger revalidates
+    -- durable reservation/payment truth after the writer commits.
+    IF EXISTS (
+        SELECT 1
+          FROM stock_reservations sr
+         WHERE sr.state = 'active'
+           AND (
+               (TG_TABLE_NAME = 'product_variants' AND sr.variant_id = OLD.id)
+               OR (TG_TABLE_NAME = 'size_stocks' AND sr.size_stock_id = OLD.id)
+               OR (TG_TABLE_NAME = 'variations' AND EXISTS (
+                   SELECT 1 FROM size_stocks ss
+                    WHERE ss.id = sr.size_stock_id AND ss.variation_id = OLD.id
+               ))
+           )
+           AND (
+               sr.expires_at > statement_timestamp()
+               OR EXISTS (
+                   SELECT 1
+                     FROM payment_attempt_reservations ar
+                     JOIN payment_attempts pa ON pa.id = ar.attempt_id
+                    WHERE ar.reservation_id = sr.id
+                      AND pa.state IN ('pending','call_started','verified','abandoned_unknown')
+               )
+           )
+    ) THEN
+        RAISE EXCEPTION 'reserved product identity is immutable';
+    END IF;
+    RETURN OLD;
+END;
+$$ LANGUAGE plpgsql;
+CREATE TRIGGER trg_product_variants_live_subject_delete
+BEFORE DELETE ON product_variants
+FOR EACH ROW EXECUTE FUNCTION protect_live_inventory_subject_delete();
+CREATE TRIGGER trg_size_stocks_live_subject_delete
+BEFORE DELETE ON size_stocks
+FOR EACH ROW EXECUTE FUNCTION protect_live_inventory_subject_delete();
+CREATE TRIGGER trg_variations_live_subject_delete
+BEFORE DELETE ON variations
+FOR EACH ROW EXECUTE FUNCTION protect_live_inventory_subject_delete();
 
 CREATE FUNCTION protect_reserved_order_item() RETURNS trigger AS $$
 BEGIN
@@ -2148,6 +2195,9 @@ STOCK_PAYMENT_DROP_DDLS: tuple[str, ...] = (
 DROP TRIGGER IF EXISTS trg_payment_intent_invalidation_fence ON outbound_shipment_intent_invalidations;
 DROP TRIGGER IF EXISTS trg_orders_reserved_payment_truth ON orders;
 DROP TRIGGER IF EXISTS trg_order_items_reserved_truth ON order_items;
+DROP TRIGGER IF EXISTS trg_product_variants_live_subject_delete ON product_variants;
+DROP TRIGGER IF EXISTS trg_variations_live_subject_delete ON variations;
+DROP TRIGGER IF EXISTS trg_size_stocks_live_subject_delete ON size_stocks;
 DROP TRIGGER IF EXISTS trg_variations_reserved_inventory ON variations;
 DROP TRIGGER IF EXISTS trg_size_stocks_reserved_inventory ON size_stocks;
 DROP TRIGGER IF EXISTS trg_product_variants_reserved_inventory ON product_variants;
@@ -2164,6 +2214,7 @@ DROP FUNCTION IF EXISTS validate_legacy_inventory_candidate_write();
 DROP FUNCTION IF EXISTS protect_reserved_order();
 DROP FUNCTION IF EXISTS protect_payment_intent_invalidation();
 DROP FUNCTION IF EXISTS protect_reserved_order_item();
+DROP FUNCTION IF EXISTS protect_live_inventory_subject_delete();
 DROP FUNCTION IF EXISTS protect_reserved_inventory();
 DROP FUNCTION IF EXISTS validate_payment_attempt_evidence_write();
 DROP FUNCTION IF EXISTS validate_payment_attempt_exact_reservations();
