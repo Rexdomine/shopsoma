@@ -28,6 +28,28 @@ def _lane_helpers():
     return module
 
 
+async def _coordinate(session, *keys: tuple[str, uuid.UUID]) -> None:
+    payload = json.dumps(
+        [
+            {"subject_kind": kind, "subject_id": str(subject_id)}
+            for kind, subject_id in keys
+        ]
+    )
+    await session.execute(
+        text("SELECT coordinate_stock_payment_write(CAST(:keys AS jsonb))"),
+        {"keys": payload},
+    )
+
+
+async def _coordinate_attempt(
+    session, attempt_id: uuid.UUID, order_id: uuid.UUID
+) -> None:
+    await session.execute(
+        text("SELECT coordinate_payment_attempt_write(:attempt_id, :order_id)"),
+        {"attempt_id": attempt_id, "order_id": order_id},
+    )
+
+
 async def _alternate_selection(
     session,
     lane,
@@ -834,6 +856,12 @@ async def test_size_stock_parent_cannot_move_during_reservation(
     mover = factory()
     reserver = factory()
     try:
+        await _coordinate(
+            mover,
+            ("product", graph["item"].product_id),
+            ("product", other_graph["item"].product_id),
+            ("variation", variation.id),
+        )
         await mover.execute(
             text("UPDATE variations SET product_id=:product_id WHERE id=:id"),
             {"product_id": other_graph["item"].product_id, "id": variation.id},
@@ -1019,6 +1047,7 @@ async def test_verification_serializes_with_reservation_after_ttl(
         )
         await verifier.flush()
         await _present_payment_lease(verifier, lease_token)
+        await _coordinate_attempt(verifier, attempt.id, graph["order"].id)
         await verifier.execute(
             text(
                 "UPDATE payment_attempts SET state='verified', terminal_evidence_id=:evidence_id, "
@@ -1119,6 +1148,7 @@ async def test_verification_serializes_with_stock_reduction_after_ttl(
         )
         await verifier.flush()
         await _present_payment_lease(verifier, lease_token)
+        await _coordinate_attempt(verifier, attempt.id, graph["order"].id)
         await verifier.execute(
             text(
                 "UPDATE payment_attempts SET state='verified', terminal_evidence_id=:evidence_id, "
@@ -1130,6 +1160,7 @@ async def test_verification_serializes_with_stock_reduction_after_ttl(
 
         async def reduce_paid_inventory():
             try:
+                await _coordinate(reducer, ("product", graph["item"].product_id))
                 await reducer.execute(
                     text("UPDATE products SET total_stock=0 WHERE id=:product_id"),
                     {"product_id": graph["item"].product_id},
@@ -1336,6 +1367,7 @@ async def test_in_flight_authorization_grace_keeps_inventory_and_can_verify(
     db_session.add(evidence)
     await db_session.flush()
     await _present_payment_lease(db_session, lease_token)
+    await _coordinate_attempt(db_session, attempt.id, graph["order"].id)
     await db_session.execute(
         text(
             "UPDATE payment_attempts SET state='verified', terminal_evidence_id=:evidence_id, "
@@ -2307,6 +2339,7 @@ async def test_cancellation_wins_race_before_provider_call_starts(
 
         async def start_provider_call():
             try:
+                await _coordinate_attempt(caller, attempt.id, graph["order"].id)
                 await caller.execute(
                     text(
                         "UPDATE payment_attempts SET state='call_started', lease_token=:token, "
@@ -2850,6 +2883,7 @@ async def test_call_start_serializes_before_late_selection_across_connections(
     selector = factory()
     selection_task = None
     try:
+        await _coordinate_attempt(caller, attempt.id, graph["order"].id)
         await caller.execute(
             text(
                 "UPDATE payment_attempts SET state='call_started', lease_token=:token, "
@@ -2919,6 +2953,7 @@ async def test_legacy_payment_write_serializes_before_call_start(
         )
 
         async def start_call():
+            await _coordinate_attempt(caller, attempt.id, graph["order"].id)
             await caller.execute(
                 text(
                     "UPDATE payment_attempts SET state='call_started', lease_token=:token, "
@@ -3032,6 +3067,7 @@ async def test_uncommitted_call_start_fences_identity_mutation_across_reservatio
     mutation_task = None
     replacement_sku = f"raced-{uuid.uuid4().hex[:8]}"
     try:
+        await _coordinate_attempt(caller, attempt.id, graph["order"].id)
         await caller.execute(
             text(
                 "UPDATE payment_attempts SET state='call_started', lease_token=:token, "
@@ -3043,6 +3079,7 @@ async def test_uncommitted_call_start_fences_identity_mutation_across_reservatio
 
         async def mutate_identity():
             try:
+                await _coordinate(mutator, ("product", graph["item"].product_id))
                 await mutator.execute(
                     text("UPDATE products SET sku=:sku WHERE id=:product_id"),
                     {"sku": replacement_sku, "product_id": graph["item"].product_id},
@@ -3085,6 +3122,7 @@ async def test_uncommitted_call_start_fences_competing_reservation_across_ttl(
     reserver = factory()
     reservation_task = None
     try:
+        await _coordinate_attempt(caller, attempt.id, attempt.order_id)
         await caller.execute(
             text(
                 "UPDATE payment_attempts SET state='call_started', lease_token=:token, "
@@ -3975,6 +4013,18 @@ async def _catalog_replacement_sized_subject(session, vendor_user, customer_user
         None,
         size_stock_id=size_stock.id,
     )
+    await session.execute(
+        text(
+            "SELECT coordinate_stock_reservation_write("
+            ":reservation_id,:order_id,:product_id,NULL,:size_stock_id)"
+        ),
+        {
+            "reservation_id": reservation.id,
+            "order_id": reservation.order_id,
+            "product_id": reservation.product_id,
+            "size_stock_id": reservation.size_stock_id,
+        },
+    )
     session.add(reservation)
     await session.flush()
     return (
@@ -4270,6 +4320,18 @@ async def _catalog_product_variant_subject(
         variant_id=variant.id,
     )
     if persist_reservation:
+        await session.execute(
+            text(
+                "SELECT coordinate_stock_reservation_write("
+                ":reservation_id,:order_id,:product_id,:variant_id,NULL)"
+            ),
+            {
+                "reservation_id": reservation.id,
+                "order_id": reservation.order_id,
+                "product_id": reservation.product_id,
+                "variant_id": reservation.variant_id,
+            },
+        )
         session.add(reservation)
         await session.flush()
     return lane, graph, intent, quote, option, selection, variant, reservation
@@ -4442,10 +4504,15 @@ async def test_two_connections_variant_delete_waits_for_reservation_then_revalid
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("inventory_kind", ["product_variant", "size_stock"])
-async def test_two_connections_expiry_delete_cannot_commit_orphan_pending_attempt(
-    db_session, vendor_user, customer_user, inventory_kind
+@pytest.mark.parametrize("constraints_consumed", [False, True])
+async def test_two_connections_attempt_locks_inventory_subject_through_ttl(
+    db_session,
+    vendor_user,
+    customer_user,
+    inventory_kind,
+    constraints_consumed,
 ) -> None:
-    """If DELETE wins after TTL, deferred exact-membership aborts the attempt."""
+    """Attempt creation serializes subject deletion through commit."""
 
     if inventory_kind == "product_variant":
         lane, graph, intent, quote, option, selection, subject, reservation = (
@@ -4455,6 +4522,10 @@ async def test_two_connections_expiry_delete_cannot_commit_orphan_pending_attemp
         )
         await _detach_order_item_variant_fk(db_session, graph["item"].id)
         table = "product_variants"
+        catalog_keys = [
+            {"subject_kind": "product", "subject_id": str(reservation.product_id)},
+            {"subject_kind": "product_variant", "subject_id": str(subject.id)},
+        ]
     else:
         (
             lane,
@@ -4470,6 +4541,11 @@ async def test_two_connections_expiry_delete_cannot_commit_orphan_pending_attemp
             db_session, vendor_user, customer_user
         )
         table = "size_stocks"
+        catalog_keys = [
+            {"subject_kind": "product", "subject_id": str(reservation.product_id)},
+            {"subject_kind": "variation", "subject_id": str(_variation.id)},
+            {"subject_kind": "size_stock", "subject_id": str(subject.id)},
+        ]
     attempt = lane._payment_attempt(
         graph, intent, quote, option, selection, customer_user["user"].id
     )
@@ -4491,6 +4567,10 @@ async def test_two_connections_expiry_delete_cannot_commit_orphan_pending_attemp
     deleter = factory()
     observer = factory()
     try:
+        await creator.execute(
+            text("SELECT coordinate_payment_attempt_write(:attempt_id, :order_id)"),
+            {"attempt_id": attempt.id, "order_id": graph["order"].id},
+        )
         creator.add(attempt)
         await creator.flush()
         creator.add(
@@ -4499,35 +4579,60 @@ async def test_two_connections_expiry_delete_cannot_commit_orphan_pending_attemp
             )
         )
         await creator.flush()
-        # Cross the reservation TTL while the attempt transaction remains open.
+        if constraints_consumed:
+            # Force and consume the deferred event before the TTL boundary.
+            # Subject locks must still serialize deletion with this attempt.
+            await creator.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+            await creator.execute(text("SET CONSTRAINTS ALL DEFERRED"))
         await asyncio.sleep(2.1)
 
-        await deleter.execute(
-            text(f"DELETE FROM {table} WHERE id=:subject_id"),
-            {"subject_id": subject_id},
-        )
-        await deleter.commit()
+        async def delete_subject() -> None:
+            await deleter.execute(
+                text("SELECT coordinate_stock_payment_write(CAST(:keys AS jsonb))"),
+                {"keys": json.dumps(catalog_keys)},
+            )
+            await deleter.execute(
+                text(f"DELETE FROM {table} WHERE id=:subject_id"),
+                {"subject_id": subject_id},
+            )
+            await deleter.commit()
 
-        with pytest.raises(
-            DBAPIError,
-            match="payment attempt must cover the exact active reservation set",
-        ):
+        delete_task = asyncio.create_task(delete_subject())
+        await asyncio.sleep(0.2)
+        assert not delete_task.done()
+        if constraints_consumed:
             await creator.commit()
-        await creator.rollback()
+            with pytest.raises(
+                DBAPIError, match="reserved product identity is immutable"
+            ):
+                await asyncio.wait_for(delete_task, timeout=2)
+            await deleter.rollback()
+            expected_attempts = 1
+            expected_subjects = 1
+        else:
+            with pytest.raises(
+                DBAPIError,
+                match="payment attempt must cover the exact active reservation set",
+            ):
+                await creator.commit()
+            await creator.rollback()
+            await asyncio.wait_for(delete_task, timeout=2)
+            expected_attempts = 0
+            expected_subjects = 0
 
         assert (
             await observer.scalar(
                 text("SELECT count(*) FROM payment_attempts WHERE id=:attempt_id"),
                 {"attempt_id": attempt.id},
             )
-            == 0
+            == expected_attempts
         )
         assert (
             await observer.scalar(
                 text(f"SELECT count(*) FROM {table} WHERE id=:subject_id"),
                 {"subject_id": subject_id},
             )
-            == 0
+            == expected_subjects
         )
     finally:
         await creator.rollback()
@@ -4536,3 +4641,244 @@ async def test_two_connections_expiry_delete_cannot_commit_orphan_pending_attemp
         await creator.close()
         await deleter.close()
         await observer.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("inventory_kind", ["product_variant", "size_stock"])
+async def test_attempt_revalidates_inventory_binding_after_lock_wait(
+    db_session, vendor_user, customer_user, inventory_kind
+) -> None:
+    """A stale pre-wait snapshot cannot admit a reparented inventory subject."""
+
+    if inventory_kind == "product_variant":
+        lane, graph, intent, quote, option, selection, subject, reservation = (
+            await _catalog_product_variant_subject(
+                db_session, vendor_user, customer_user
+            )
+        )
+        table = "product_variants"
+        binding_column = "product_id"
+    else:
+        (
+            lane,
+            graph,
+            intent,
+            quote,
+            option,
+            selection,
+            _variation,
+            subject,
+            reservation,
+        ) = await _catalog_replacement_sized_subject(
+            db_session, vendor_user, customer_user
+        )
+        table = "size_stocks"
+        binding_column = "variation_id"
+    (
+        _other_lane,
+        other_graph,
+        _other_intent,
+        _other_quote,
+        _other_option,
+        _other_selection,
+        _other_variant,
+        _other_reservation,
+    ) = await _catalog_product_variant_subject(
+        db_session, vendor_user, customer_user, persist_reservation=False
+    )
+    if inventory_kind == "product_variant":
+        await _detach_order_item_variant_fk(db_session, other_graph["item"].id)
+        await db_session.delete(_other_variant)
+        await db_session.flush()
+        replacement_binding = other_graph["item"].product_id
+    else:
+        replacement_variation = Variation(
+            product_id=other_graph["item"].product_id,
+            title="Replacement target",
+            type="color",
+            price=graph["item"].unit_price,
+        )
+        db_session.add(replacement_variation)
+        await db_session.flush()
+        replacement_binding = replacement_variation.id
+
+    reservation_id = reservation.id
+    subject_id = subject.id
+    order_id = graph["order"].id
+    attempt = lane._payment_attempt(
+        graph, intent, quote, option, selection, customer_user["user"].id
+    )
+    await db_session.execute(text("SET LOCAL session_replication_role = replica"))
+    await db_session.execute(
+        text(
+            "UPDATE stock_reservations SET created_at=statement_timestamp(), "
+            "expires_at=statement_timestamp() + interval '2 seconds' WHERE id=:id"
+        ),
+        {"id": reservation_id},
+    )
+    await db_session.execute(text("SET LOCAL session_replication_role = origin"))
+    await db_session.commit()
+
+    factory = async_sessionmaker(bind=db_session.bind, expire_on_commit=False)
+    blocker = factory()
+    creator = factory()
+    mutator = factory()
+    observer = factory()
+    try:
+        await blocker.execute(
+            text("SELECT id FROM orders WHERE id=:order_id FOR UPDATE"),
+            {"order_id": order_id},
+        )
+        creator_pid = await creator.scalar(text("SELECT pg_backend_pid()"))
+        creator.add(attempt)
+        create_task = asyncio.create_task(creator.flush())
+        for _ in range(100):
+            blockers = await observer.scalar(
+                text("SELECT pg_blocking_pids(:pid)"), {"pid": creator_pid}
+            )
+            if blockers:
+                break
+            await asyncio.sleep(0.01)
+        else:
+            pytest.fail("attempt INSERT never reached the expected order-lock wait")
+
+        # The attempt statement's timestamp still sees the reservation as active,
+        # but the catalog mutation starts after TTL and cannot see the attempt.
+        await asyncio.sleep(2.1)
+        # Bypass write guards only to model an independently committed identity
+        # change and prove the waiting attempt revalidates authoritative bindings.
+        await mutator.execute(text("SET LOCAL session_replication_role = replica"))
+        await mutator.execute(
+            text(
+                f"UPDATE {table} SET {binding_column}=:replacement_binding "
+                "WHERE id=:subject_id"
+            ),
+            {
+                "replacement_binding": replacement_binding,
+                "subject_id": subject_id,
+            },
+        )
+        await mutator.execute(text("SET LOCAL session_replication_role = origin"))
+        await mutator.commit()
+        await blocker.commit()
+
+        with pytest.raises(
+            DBAPIError, match="payment attempt requires active reservations"
+        ):
+            await asyncio.wait_for(create_task, timeout=5)
+        await creator.rollback()
+        assert (
+            await observer.scalar(
+                text("SELECT count(*) FROM payment_attempts WHERE id=:attempt_id"),
+                {"attempt_id": attempt.id},
+            )
+            == 0
+        )
+    finally:
+        await blocker.rollback()
+        await creator.rollback()
+        await mutator.rollback()
+        await observer.rollback()
+        await blocker.close()
+        await creator.close()
+        await mutator.close()
+        await observer.close()
+
+
+@pytest.mark.asyncio
+async def test_attempt_lock_order_avoids_fk_reparent_deadlock(
+    db_session, vendor_user, customer_user
+) -> None:
+    """Attempt locking follows child-to-parent FK order during a reparent race."""
+
+    lane, graph, intent, quote, option, selection, variant, reservation = (
+        await _catalog_product_variant_subject(db_session, vendor_user, customer_user)
+    )
+    (
+        _other_lane,
+        other_graph,
+        _other_intent,
+        _other_quote,
+        _other_option,
+        _other_selection,
+        other_variant,
+        _other_reservation,
+    ) = await _catalog_product_variant_subject(
+        db_session, vendor_user, customer_user, persist_reservation=False
+    )
+    other_variant.color = "Other parent"
+    await db_session.flush()
+    # A real multi-item order can reserve both products. This fixture isolates
+    # the physical lock graph by adding the second subject under replica mode;
+    # all referenced rows and foreign keys remain real.
+    second_reservation = lane._reservation(
+        graph,
+        intent,
+        quote,
+        option,
+        selection,
+        customer_user["user"].id,
+        other_variant.sku,
+        variant_id=other_variant.id,
+    )
+    second_reservation.product_id = other_graph["item"].product_id
+    second_reservation.expires_at = datetime.now(timezone.utc) + timedelta(seconds=2)
+    second_reservation.creation_txid = await db_session.scalar(
+        text("SELECT txid_current()")
+    )
+    await db_session.execute(text("SET LOCAL session_replication_role = replica"))
+    db_session.add(second_reservation)
+    await db_session.flush()
+    await db_session.execute(
+        text(
+            "UPDATE stock_reservations SET created_at=statement_timestamp(), "
+            "expires_at=statement_timestamp() + interval '2 seconds' "
+            "WHERE id IN (:first_id,:second_id)"
+        ),
+        {"first_id": reservation.id, "second_id": second_reservation.id},
+    )
+    await db_session.execute(text("SET LOCAL session_replication_role = origin"))
+    await db_session.commit()
+
+    attempt = lane._payment_attempt(
+        graph, intent, quote, option, selection, customer_user["user"].id
+    )
+    factory = async_sessionmaker(bind=db_session.bind, expire_on_commit=False)
+    creator = factory()
+    mutator = factory()
+    create_task = None
+    try:
+        await _coordinate(
+            mutator,
+            ("product", graph["item"].product_id),
+            ("product", other_graph["item"].product_id),
+            ("product_variant", variant.id),
+        )
+        await mutator.execute(
+            text("SELECT id FROM product_variants WHERE id=:id FOR UPDATE"),
+            {"id": variant.id},
+        )
+        creator.add(attempt)
+        create_task = asyncio.create_task(creator.flush())
+        await asyncio.sleep(0.2)
+        assert not create_task.done()
+        await asyncio.sleep(2.1)
+        await mutator.execute(
+            text("UPDATE product_variants SET product_id=:product_id WHERE id=:id"),
+            {"product_id": other_graph["item"].product_id, "id": variant.id},
+        )
+        await mutator.commit()
+
+        with pytest.raises(
+            DBAPIError,
+            match="payment attempt requires active reservations",
+        ):
+            await asyncio.wait_for(create_task, timeout=5)
+        await creator.rollback()
+    finally:
+        if create_task is not None and not create_task.done():
+            create_task.cancel()
+        await creator.rollback()
+        await mutator.rollback()
+        await creator.close()
+        await mutator.close()

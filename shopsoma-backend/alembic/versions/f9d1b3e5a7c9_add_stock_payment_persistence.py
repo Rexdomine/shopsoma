@@ -75,6 +75,21 @@ def _pre_f9_selection_validator_ddl() -> str:
 def upgrade() -> None:
     op.execute(
         r"""
+CREATE TABLE stock_payment_lock_coordinator (
+ subject_kind varchar(32) NOT NULL,
+ subject_id uuid NOT NULL,
+ claimed_txid bigint,
+ updated_at timestamptz NOT NULL DEFAULT statement_timestamp(),
+ PRIMARY KEY(subject_kind, subject_id),
+ CONSTRAINT ck_stock_payment_lock_coordinator_kind CHECK (
+   subject_kind IN ('order','product','variation','product_variant',
+                    'size_stock','reservation','payment_attempt')
+ )
+)
+"""
+    )
+    op.execute(
+        r"""
 CREATE TABLE stock_reservations (
  id uuid PRIMARY KEY, order_id uuid NOT NULL REFERENCES orders(id) ON DELETE RESTRICT,
  order_item_id uuid NOT NULL REFERENCES order_items(id) ON DELETE RESTRICT,
@@ -207,6 +222,7 @@ def downgrade() -> None:
     op.drop_table("stock_reservations")
     for statement in _statements(DROP_DDLS):
         op.execute(statement)
+    op.drop_table("stock_payment_lock_coordinator")
     op.execute(
         _pre_f9_selection_validator_ddl().replace(
             "CREATE FUNCTION", "CREATE OR REPLACE FUNCTION", 1

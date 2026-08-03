@@ -19,6 +19,7 @@ from app.models.address import Address
 from app.models.shipping_rate import ShippingRate
 from app.models.vendor import Vendor
 from app.models.setting import Setting
+from app.models.stock_payment_persistence import coordinate_catalog_write
 from app.schemas.order import (
     OrderCreate,
     OrderUpdate,
@@ -957,6 +958,26 @@ async def create_order(
             len(items)
         )
 
+    # Core DML bypasses Session.before_flush, so enroll the full order/catalog
+    # subject union before the first stock statement.
+    await coordinate_catalog_write(
+        db,
+        order_ids=[new_order.id],
+        product_ids=[
+            entry["id"] for entry in stock_updates if entry["source"] == "product"
+        ],
+        product_variant_ids=[
+            entry["id"]
+            for entry in stock_updates
+            if entry["source"] == "product_variant"
+        ],
+        size_stock_ids=[
+            entry["id"]
+            for entry in stock_updates
+            if entry["source"] == "size_stock"
+        ],
+    )
+
     # Update stock
     for update_entry in stock_updates:
         if update_entry["source"] == "product_variant":
@@ -1370,6 +1391,23 @@ async def cancel_order(
     order.fulfillment_status = FulfillmentStatus.CANCELLED
     order.cancelled_at = datetime.now()
     order.cancellation_reason = cancel_data.cancellation_reason
+
+    size_stock_ids = [
+        UUID(str(item.variant_details["size_stock_id"]))
+        for item in order.items
+        if not item.variant_id
+        and item.variant_details
+        and item.variant_details.get("size_stock_id")
+    ]
+    await coordinate_catalog_write(
+        db,
+        order_ids=[order.id],
+        product_ids=[item.product_id for item in order.items if not item.variant_id],
+        product_variant_ids=[
+            item.variant_id for item in order.items if item.variant_id
+        ],
+        size_stock_ids=size_stock_ids,
+    )
 
     # Restore stock
     for item in order.items:

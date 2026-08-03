@@ -4,6 +4,7 @@ This lane contains no provider transport, credentials, raw payloads, or feature
 activation. It records exact authoritative checkout subjects and audit evidence.
 """
 
+import json
 import uuid
 
 from sqlalchemy import (
@@ -20,12 +21,15 @@ from sqlalchemy import (
     String,
     UniqueConstraint,
     event,
+    inspect,
     text,
 )
 from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import Session
 from sqlalchemy.sql import func
 
 from app.core.base import Base
+from app.models.product import Product, ProductVariant, SizeStock, Variation
 
 _UUID = UUID(as_uuid=True)
 _NOW = func.statement_timestamp()
@@ -33,6 +37,25 @@ _NOW = func.statement_timestamp()
 
 def _id_column():
     return Column(_UUID, primary_key=True, default=uuid.uuid4)
+
+
+class StockPaymentLockCoordinator(Base):
+    """Sparse transaction-lock namespace for stock/payment/catalog writers."""
+
+    __tablename__ = "stock_payment_lock_coordinator"
+
+    subject_kind = Column(String(32), primary_key=True)
+    subject_id = Column(_UUID, primary_key=True)
+    claimed_txid = Column(BigInteger)
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=_NOW)
+
+    __table_args__ = (
+        CheckConstraint(
+            "subject_kind IN ('order','product','variation','product_variant',"
+            "'size_stock','reservation','payment_attempt')",
+            name="ck_stock_payment_lock_coordinator_kind",
+        ),
+    )
 
 
 class StockReservation(Base):
@@ -340,7 +363,624 @@ class PaymentAttemptEvidence(Base):
     )
 
 
+def _add_reservation_coordinator_keys(connection, keys, reservation) -> None:
+    """Expand one reservation into its complete canonical coordinator key set."""
+
+    values = (
+        reservation
+        if isinstance(reservation, dict)
+        else {
+            "id": reservation.id,
+            "order_id": reservation.order_id,
+            "product_id": reservation.product_id,
+            "variant_id": reservation.variant_id,
+            "size_stock_id": reservation.size_stock_id,
+        }
+    )
+    keys.update(
+        (kind, subject_id)
+        for kind, subject_id in (
+            ("order", values["order_id"]),
+            ("product", values["product_id"]),
+            ("product_variant", values["variant_id"]),
+            ("size_stock", values["size_stock_id"]),
+            ("reservation", values["id"]),
+        )
+        if subject_id is not None
+    )
+    if values["size_stock_id"] is not None:
+        variation_id = connection.execute(
+            text("SELECT variation_id FROM size_stocks WHERE id = :id"),
+            {"id": values["size_stock_id"]},
+        ).scalar_one_or_none()
+        if variation_id is None:
+            raise ValueError("reservation size-stock subject no longer exists")
+        keys.add(("variation", variation_id))
+
+
+async def coordinate_catalog_write(
+    session,
+    *,
+    order_ids=(),
+    product_ids=(),
+    variation_ids=(),
+    product_variant_ids=(),
+    size_stock_ids=(),
+) -> None:
+    """Acquire one complete coordinator set for SQLAlchemy Core catalog DML."""
+
+    keys = {
+        (kind, subject_id)
+        for kind, subject_ids in (
+            ("order", order_ids),
+            ("product", product_ids),
+            ("variation", variation_ids),
+            ("product_variant", product_variant_ids),
+            ("size_stock", size_stock_ids),
+        )
+        for subject_id in subject_ids
+        if subject_id is not None
+    }
+
+    variant_ids = {subject_id for subject_id in product_variant_ids if subject_id}
+    if variant_ids:
+        rows = (
+            (
+                await session.execute(
+                    text(
+                        "SELECT id, product_id FROM product_variants "
+                        "WHERE id = ANY(:subject_ids)"
+                    ),
+                    {"subject_ids": list(variant_ids)},
+                )
+            )
+            .mappings()
+            .all()
+        )
+        if {row["id"] for row in rows} != variant_ids:
+            raise ValueError(
+                "catalog coordinator product-variant subject no longer exists"
+            )
+        keys.update(("product", row["product_id"]) for row in rows)
+
+    requested_variations = {subject_id for subject_id in variation_ids if subject_id}
+    if requested_variations:
+        rows = (
+            (
+                await session.execute(
+                    text(
+                        "SELECT id, product_id FROM variations WHERE id = ANY(:subject_ids)"
+                    ),
+                    {"subject_ids": list(requested_variations)},
+                )
+            )
+            .mappings()
+            .all()
+        )
+        if {row["id"] for row in rows} != requested_variations:
+            raise ValueError("catalog coordinator variation subject no longer exists")
+        keys.update(("product", row["product_id"]) for row in rows)
+
+    requested_size_stocks = {subject_id for subject_id in size_stock_ids if subject_id}
+    if requested_size_stocks:
+        rows = (
+            (
+                await session.execute(
+                    text(
+                        "SELECT ss.id, ss.variation_id, v.product_id "
+                        "FROM size_stocks ss JOIN variations v ON v.id = ss.variation_id "
+                        "WHERE ss.id = ANY(:subject_ids)"
+                    ),
+                    {"subject_ids": list(requested_size_stocks)},
+                )
+            )
+            .mappings()
+            .all()
+        )
+        if {row["id"] for row in rows} != requested_size_stocks:
+            raise ValueError("catalog coordinator size-stock subject no longer exists")
+        keys.update(("variation", row["variation_id"]) for row in rows)
+        keys.update(("product", row["product_id"]) for row in rows)
+
+    payload = [
+        {"subject_kind": kind, "subject_id": str(subject_id)}
+        for kind, subject_id in keys
+    ]
+    await session.execute(
+        text("SELECT coordinate_stock_payment_write(CAST(:keys AS jsonb))"),
+        {"keys": json.dumps(payload)},
+    )
+
+
+@event.listens_for(Session, "before_flush")
+def _coordinate_orm_stock_payment_writes(session, _flush_context, _instances) -> None:
+    """Route ORM persistence writes through one complete canonical preflight."""
+
+    changed = set(session.new).union(session.dirty, session.deleted)
+    reservations = [row for row in changed if isinstance(row, StockReservation)]
+    attempts = [row for row in changed if isinstance(row, PaymentAttempt)]
+    memberships = [row for row in changed if isinstance(row, PaymentAttemptReservation)]
+    catalog_rows = [
+        row
+        for row in set(session.dirty).union(session.deleted)
+        if isinstance(row, (Product, ProductVariant, Variation, SizeStock))
+    ]
+    if not reservations and not attempts and not memberships and not catalog_rows:
+        return
+
+    for row in (*reservations, *attempts):
+        if row.id is None:
+            row.id = uuid.uuid4()
+
+    connection = session.connection()
+    keys: set[tuple[str, uuid.UUID]] = set()
+    for reservation in reservations:
+        _add_reservation_coordinator_keys(connection, keys, reservation)
+
+    new_attempt_ids = {row.id for row in session.new if isinstance(row, PaymentAttempt)}
+    for attempt in attempts:
+        keys.add(("order", attempt.order_id))
+        keys.add(("payment_attempt", attempt.id))
+        if attempt.id in new_attempt_ids:
+            rows = connection.execute(
+                text(
+                    "SELECT id, order_id, product_id, variant_id, size_stock_id "
+                    "FROM stock_reservations WHERE order_id = :order_id "
+                    "AND state = 'active' AND expires_at > clock_timestamp()"
+                ),
+                {"order_id": attempt.order_id},
+            ).mappings()
+        else:
+            rows = connection.execute(
+                text(
+                    "SELECT sr.id, sr.order_id, sr.product_id, sr.variant_id, "
+                    "sr.size_stock_id FROM stock_reservations sr "
+                    "JOIN payment_attempt_reservations par "
+                    "ON par.reservation_id = sr.id WHERE par.attempt_id = :attempt_id"
+                ),
+                {"attempt_id": attempt.id},
+            ).mappings()
+        for reservation in rows:
+            _add_reservation_coordinator_keys(connection, keys, dict(reservation))
+
+    for membership in memberships:
+        attempt = next(
+            (row for row in attempts if row.id == membership.attempt_id), None
+        )
+        order_id = (
+            attempt.order_id
+            if attempt is not None
+            else connection.execute(
+                text("SELECT order_id FROM payment_attempts WHERE id = :id"),
+                {"id": membership.attempt_id},
+            ).scalar_one_or_none()
+        )
+        if order_id is None:
+            raise ValueError("payment-attempt membership has no authoritative order")
+        keys.update((("order", order_id), ("payment_attempt", membership.attempt_id)))
+        reservation = (
+            connection.execute(
+                text(
+                    "SELECT id, order_id, product_id, variant_id, size_stock_id "
+                    "FROM stock_reservations WHERE id = :id"
+                ),
+                {"id": membership.reservation_id},
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if reservation is not None:
+            _add_reservation_coordinator_keys(connection, keys, dict(reservation))
+
+    def identity_values(row, attribute_name):
+        history = inspect(row).attrs[attribute_name].history
+        return {
+            value
+            for value in (
+                *history.deleted,
+                *history.added,
+                getattr(row, attribute_name),
+            )
+            if value is not None
+        }
+
+    for row in catalog_rows:
+        if isinstance(row, Product):
+            keys.add(("product", row.id))
+        elif isinstance(row, ProductVariant):
+            keys.add(("product_variant", row.id))
+            keys.update(
+                ("product", value) for value in identity_values(row, "product_id")
+            )
+        elif isinstance(row, Variation):
+            keys.add(("variation", row.id))
+            keys.update(
+                ("product", value) for value in identity_values(row, "product_id")
+            )
+        else:
+            keys.add(("size_stock", row.id))
+            variation_ids = identity_values(row, "variation_id")
+            keys.update(("variation", value) for value in variation_ids)
+            product_ids = connection.execute(
+                text(
+                    "SELECT product_id FROM variations WHERE id = ANY(:variation_ids)"
+                ),
+                {"variation_ids": list(variation_ids)},
+            ).scalars()
+            keys.update(("product", value) for value in product_ids)
+
+    ordered_keys = [
+        {"subject_kind": kind, "subject_id": str(subject_id)}
+        for kind, subject_id in keys
+    ]
+    connection.execute(
+        text("SELECT coordinate_stock_payment_write(CAST(:keys AS jsonb))"),
+        {"keys": json.dumps(ordered_keys)},
+    )
+
+
 STOCK_PAYMENT_TRIGGER_DDLS: tuple[str, ...] = (
+    r"""
+CREATE FUNCTION coordinate_stock_payment_write(requested_keys jsonb)
+RETURNS integer SECURITY DEFINER SET search_path = public, pg_temp AS $$
+DECLARE
+    key_count integer;
+    duplicate_count integer;
+    requested record;
+BEGIN
+    IF requested_keys IS NULL OR jsonb_typeof(requested_keys) <> 'array'
+       OR jsonb_array_length(requested_keys) = 0
+       OR jsonb_array_length(requested_keys) > 10000 THEN
+        RAISE EXCEPTION 'coordinator key set is invalid';
+    END IF;
+
+    SELECT count(*) INTO key_count
+      FROM jsonb_array_elements(requested_keys) AS item
+     WHERE jsonb_typeof(item) = 'object'
+       AND item ? 'subject_kind' AND item ? 'subject_id'
+       AND (SELECT count(*) FROM jsonb_object_keys(item)) = 2
+       AND item->>'subject_kind' IN (
+           'order','product','variation','product_variant',
+           'size_stock','reservation','payment_attempt'
+       )
+       AND item->>'subject_id'
+           ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$';
+    IF key_count <> jsonb_array_length(requested_keys) THEN
+        IF EXISTS (
+            SELECT 1 FROM jsonb_array_elements(requested_keys) AS item
+             WHERE jsonb_typeof(item) = 'object'
+               AND item ? 'subject_kind'
+               AND item->>'subject_kind' NOT IN (
+                   'order','product','variation','product_variant',
+                   'size_stock','reservation','payment_attempt'
+               )
+        ) THEN
+            RAISE EXCEPTION 'coordinator subject kind is invalid';
+        END IF;
+        RAISE EXCEPTION 'coordinator key set is invalid';
+    END IF;
+
+    SELECT count(*) - count(DISTINCT (item->>'subject_kind', item->>'subject_id'))
+      INTO duplicate_count
+      FROM jsonb_array_elements(requested_keys) AS item;
+    IF duplicate_count <> 0 THEN
+        RAISE EXCEPTION 'coordinator key set contains duplicates';
+    END IF;
+
+    FOR requested IN
+        SELECT item->>'subject_kind' AS subject_kind,
+               (item->>'subject_id')::uuid AS subject_id
+          FROM jsonb_array_elements(requested_keys) AS item
+         ORDER BY CASE item->>'subject_kind'
+                    WHEN 'order' THEN 10
+                    WHEN 'product' THEN 20
+                    WHEN 'variation' THEN 30
+                    WHEN 'product_variant' THEN 40
+                    WHEN 'size_stock' THEN 50
+                    WHEN 'reservation' THEN 60
+                    WHEN 'payment_attempt' THEN 70
+                  END,
+                  (item->>'subject_id')::uuid
+    LOOP
+        INSERT INTO stock_payment_lock_coordinator(subject_kind, subject_id)
+        VALUES (requested.subject_kind, requested.subject_id)
+        ON CONFLICT DO NOTHING;
+    END LOOP;
+
+    FOR requested IN
+        SELECT item->>'subject_kind' AS subject_kind,
+               (item->>'subject_id')::uuid AS subject_id
+          FROM jsonb_array_elements(requested_keys) AS item
+         ORDER BY CASE item->>'subject_kind'
+                    WHEN 'order' THEN 10
+                    WHEN 'product' THEN 20
+                    WHEN 'variation' THEN 30
+                    WHEN 'product_variant' THEN 40
+                    WHEN 'size_stock' THEN 50
+                    WHEN 'reservation' THEN 60
+                    WHEN 'payment_attempt' THEN 70
+                  END,
+                  (item->>'subject_id')::uuid
+    LOOP
+        UPDATE stock_payment_lock_coordinator
+           SET claimed_txid = txid_current(), updated_at = clock_timestamp()
+         WHERE subject_kind = requested.subject_kind
+           AND subject_id = requested.subject_id;
+    END LOOP;
+    RETURN key_count;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE FUNCTION assert_stock_payment_write_lock(
+    required_kind text, required_id uuid
+) RETURNS void SECURITY DEFINER SET search_path = public, pg_temp AS $$
+BEGIN
+    IF required_id IS NULL OR NOT EXISTS (
+        SELECT 1 FROM stock_payment_lock_coordinator
+         WHERE subject_kind = required_kind
+           AND subject_id = required_id
+           AND claimed_txid = txid_current()
+    ) THEN
+        RAISE EXCEPTION USING MESSAGE =
+            'stock/payment coordinator preflight required for '
+            || required_kind || ' ' || COALESCE(required_id::text, '<null>');
+    END IF;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE FUNCTION coordinate_stock_reservation_write(
+    target_reservation uuid, target_order uuid, target_product uuid,
+    target_variant uuid DEFAULT NULL, target_size_stock uuid DEFAULT NULL
+) RETURNS integer AS $$
+DECLARE
+    keys jsonb;
+BEGIN
+    IF target_reservation IS NULL OR target_order IS NULL OR target_product IS NULL
+       OR (target_variant IS NOT NULL AND target_size_stock IS NOT NULL) THEN
+        RAISE EXCEPTION 'reservation coordinator subject is invalid';
+    END IF;
+    SELECT jsonb_agg(
+               jsonb_build_object('subject_kind', subject_kind, 'subject_id', subject_id)
+               ORDER BY kind_order, subject_id
+           ) INTO keys
+      FROM (
+          SELECT DISTINCT subject_kind, subject_id, kind_order
+            FROM (
+                VALUES ('order', target_order, 10),
+                       ('product', target_product, 20),
+                       ('product_variant', target_variant, 40),
+                       ('size_stock', target_size_stock, 50),
+                       ('reservation', target_reservation, 60)
+            ) requested(subject_kind, subject_id, kind_order)
+           WHERE subject_id IS NOT NULL
+          UNION
+          SELECT 'variation', ss.variation_id, 30
+            FROM size_stocks ss WHERE ss.id = target_size_stock
+      ) complete_keys;
+    RETURN coordinate_stock_payment_write(keys);
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE FUNCTION coordinate_payment_attempt_write(
+    target_attempt uuid, target_order uuid
+) RETURNS integer AS $$
+DECLARE
+    keys jsonb;
+BEGIN
+    IF target_attempt IS NULL OR target_order IS NULL THEN
+        RAISE EXCEPTION 'payment attempt coordinator subject is invalid';
+    END IF;
+    WITH relevant_reservations AS (
+        SELECT sr.* FROM stock_reservations sr
+         WHERE (
+             (EXISTS (SELECT 1 FROM payment_attempts pa WHERE pa.id = target_attempt)
+              AND EXISTS (
+                  SELECT 1 FROM payment_attempt_reservations ar
+                   WHERE ar.attempt_id = target_attempt AND ar.reservation_id = sr.id
+              ))
+             OR
+             (NOT EXISTS (SELECT 1 FROM payment_attempts pa WHERE pa.id = target_attempt)
+              AND sr.order_id = target_order AND sr.state = 'active'
+              AND sr.expires_at > clock_timestamp())
+         )
+    ), complete_keys AS (
+        SELECT 'order'::text AS subject_kind, target_order AS subject_id, 10 AS kind_order
+        UNION SELECT 'product', product_id, 20 FROM relevant_reservations
+        UNION SELECT 'variation', ss.variation_id, 30
+                FROM relevant_reservations sr
+                JOIN size_stocks ss ON ss.id = sr.size_stock_id
+        UNION SELECT 'product_variant', variant_id, 40
+                FROM relevant_reservations WHERE variant_id IS NOT NULL
+        UNION SELECT 'size_stock', size_stock_id, 50
+                FROM relevant_reservations WHERE size_stock_id IS NOT NULL
+        UNION SELECT 'reservation', id, 60 FROM relevant_reservations
+        UNION SELECT 'payment_attempt', target_attempt, 70
+    )
+    SELECT jsonb_agg(
+               jsonb_build_object('subject_kind', subject_kind, 'subject_id', subject_id)
+               ORDER BY kind_order, subject_id
+           ) INTO keys FROM complete_keys;
+    RETURN coordinate_stock_payment_write(keys);
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE FUNCTION assert_stock_reservation_lock_set(
+    target_reservation uuid, target_order uuid, target_product uuid,
+    target_variant uuid, target_size_stock uuid
+) RETURNS void AS $$
+DECLARE
+    target_variation uuid;
+BEGIN
+    PERFORM assert_stock_payment_write_lock('order', target_order);
+    PERFORM assert_stock_payment_write_lock('product', target_product);
+    IF target_variant IS NOT NULL THEN
+        PERFORM assert_stock_payment_write_lock('product_variant', target_variant);
+    END IF;
+    IF target_size_stock IS NOT NULL THEN
+        SELECT variation_id INTO target_variation FROM size_stocks WHERE id = target_size_stock;
+        PERFORM assert_stock_payment_write_lock('variation', target_variation);
+        PERFORM assert_stock_payment_write_lock('size_stock', target_size_stock);
+    END IF;
+    PERFORM assert_stock_payment_write_lock('reservation', target_reservation);
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE FUNCTION assert_payment_attempt_lock_set(
+    target_attempt uuid, target_order uuid
+) RETURNS void AS $$
+DECLARE
+    reservation_row record;
+BEGIN
+    PERFORM assert_stock_payment_write_lock('order', target_order);
+    FOR reservation_row IN
+        SELECT sr.* FROM stock_reservations sr
+         WHERE (
+             (EXISTS (SELECT 1 FROM payment_attempts pa WHERE pa.id = target_attempt)
+              AND EXISTS (
+                  SELECT 1 FROM payment_attempt_reservations ar
+                   WHERE ar.attempt_id = target_attempt AND ar.reservation_id = sr.id
+              ))
+             OR
+             (NOT EXISTS (SELECT 1 FROM payment_attempts pa WHERE pa.id = target_attempt)
+              AND sr.order_id = target_order AND sr.state = 'active'
+              AND sr.expires_at > clock_timestamp())
+         )
+    LOOP
+        PERFORM assert_stock_reservation_lock_set(
+            reservation_row.id, reservation_row.order_id, reservation_row.product_id,
+            reservation_row.variant_id, reservation_row.size_stock_id
+        );
+    END LOOP;
+    PERFORM assert_stock_payment_write_lock('payment_attempt', target_attempt);
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE FUNCTION guard_stock_reservation_coordinator() RETURNS trigger AS $$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        PERFORM assert_stock_reservation_lock_set(
+            NEW.id, NEW.order_id, NEW.product_id, NEW.variant_id, NEW.size_stock_id
+        );
+        RETURN NEW;
+    END IF;
+    PERFORM assert_stock_reservation_lock_set(
+        OLD.id, OLD.order_id, OLD.product_id, OLD.variant_id, OLD.size_stock_id
+    );
+    IF TG_OP = 'UPDATE' THEN
+        PERFORM assert_stock_reservation_lock_set(
+            NEW.id, NEW.order_id, NEW.product_id, NEW.variant_id, NEW.size_stock_id
+        );
+        RETURN NEW;
+    END IF;
+    RETURN OLD;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE FUNCTION guard_payment_attempt_coordinator() RETURNS trigger AS $$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        PERFORM assert_payment_attempt_lock_set(NEW.id, NEW.order_id);
+        RETURN NEW;
+    END IF;
+    PERFORM assert_payment_attempt_lock_set(OLD.id, OLD.order_id);
+    IF TG_OP = 'UPDATE' THEN
+        IF NEW.order_id IS DISTINCT FROM OLD.order_id THEN
+            PERFORM assert_payment_attempt_lock_set(NEW.id, NEW.order_id);
+        END IF;
+        RETURN NEW;
+    END IF;
+    RETURN OLD;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE FUNCTION guard_payment_attempt_membership_coordinator() RETURNS trigger AS $$
+DECLARE
+    target_order uuid;
+BEGIN
+    SELECT order_id INTO target_order FROM payment_attempts
+     WHERE id = CASE WHEN TG_OP = 'DELETE' THEN OLD.attempt_id ELSE NEW.attempt_id END;
+    PERFORM assert_payment_attempt_lock_set(
+        CASE WHEN TG_OP = 'DELETE' THEN OLD.attempt_id ELSE NEW.attempt_id END,
+        target_order
+    );
+    RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_stock_reservations_coordinator
+BEFORE INSERT OR UPDATE OR DELETE ON stock_reservations
+FOR EACH ROW EXECUTE FUNCTION guard_stock_reservation_coordinator();
+CREATE TRIGGER trg_payment_attempts_coordinator
+BEFORE INSERT OR UPDATE OR DELETE ON payment_attempts
+FOR EACH ROW EXECUTE FUNCTION guard_payment_attempt_coordinator();
+CREATE TRIGGER trg_payment_attempt_reservations_coordinator
+BEFORE INSERT OR UPDATE OR DELETE ON payment_attempt_reservations
+FOR EACH ROW EXECUTE FUNCTION guard_payment_attempt_membership_coordinator();
+
+CREATE FUNCTION guard_coordinated_catalog_write() RETURNS trigger AS $$
+DECLARE
+    old_product_id uuid;
+    new_product_id uuid;
+    old_variation_id uuid;
+    new_variation_id uuid;
+BEGIN
+    IF TG_OP NOT IN ('UPDATE', 'DELETE') THEN
+        RETURN NEW;
+    END IF;
+
+    IF TG_TABLE_NAME = 'products' THEN
+        PERFORM assert_stock_payment_write_lock('product', OLD.id);
+    ELSIF TG_TABLE_NAME = 'product_variants' THEN
+        PERFORM assert_stock_payment_write_lock('product', OLD.product_id);
+        IF TG_OP = 'UPDATE' AND NEW.product_id IS DISTINCT FROM OLD.product_id THEN
+            PERFORM assert_stock_payment_write_lock('product', NEW.product_id);
+        END IF;
+        PERFORM assert_stock_payment_write_lock('product_variant', OLD.id);
+    ELSIF TG_TABLE_NAME = 'variations' THEN
+        PERFORM assert_stock_payment_write_lock('product', OLD.product_id);
+        IF TG_OP = 'UPDATE' AND NEW.product_id IS DISTINCT FROM OLD.product_id THEN
+            PERFORM assert_stock_payment_write_lock('product', NEW.product_id);
+        END IF;
+        PERFORM assert_stock_payment_write_lock('variation', OLD.id);
+    ELSIF TG_TABLE_NAME = 'size_stocks' THEN
+        old_variation_id := OLD.variation_id;
+        new_variation_id := CASE WHEN TG_OP = 'UPDATE' THEN NEW.variation_id ELSE OLD.variation_id END;
+        SELECT product_id INTO old_product_id FROM variations WHERE id = old_variation_id;
+        SELECT product_id INTO new_product_id FROM variations WHERE id = new_variation_id;
+        -- A nested FK cascade has already asserted the product and variation ancestors.
+        IF old_product_id IS NOT NULL THEN
+            PERFORM assert_stock_payment_write_lock('product', old_product_id);
+        ELSIF TG_OP <> 'DELETE' OR pg_trigger_depth() <= 1 THEN
+            PERFORM assert_stock_payment_write_lock('product', old_product_id);
+        END IF;
+        IF new_product_id IS DISTINCT FROM old_product_id THEN
+            PERFORM assert_stock_payment_write_lock('product', new_product_id);
+        END IF;
+        PERFORM assert_stock_payment_write_lock('variation', old_variation_id);
+        IF new_variation_id IS DISTINCT FROM old_variation_id THEN
+            PERFORM assert_stock_payment_write_lock('variation', new_variation_id);
+        END IF;
+        PERFORM assert_stock_payment_write_lock('size_stock', OLD.id);
+    END IF;
+    RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_products_stock_payment_coordinator
+BEFORE UPDATE OR DELETE ON products
+FOR EACH ROW EXECUTE FUNCTION guard_coordinated_catalog_write();
+CREATE TRIGGER trg_variations_stock_payment_coordinator
+BEFORE UPDATE OR DELETE ON variations
+FOR EACH ROW EXECUTE FUNCTION guard_coordinated_catalog_write();
+CREATE TRIGGER trg_product_variants_stock_payment_coordinator
+BEFORE UPDATE OR DELETE ON product_variants
+FOR EACH ROW EXECUTE FUNCTION guard_coordinated_catalog_write();
+CREATE TRIGGER trg_size_stocks_stock_payment_coordinator
+BEFORE UPDATE OR DELETE ON size_stocks
+FOR EACH ROW EXECUTE FUNCTION guard_coordinated_catalog_write();
+
+REVOKE ALL ON TABLE stock_payment_lock_coordinator FROM PUBLIC;
+""",
     r"""
 CREATE TABLE inventory_deduction_events (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1433,6 +2073,10 @@ BEGIN
           FROM customer_shipping_quote_selections s
           JOIN customer_shipping_quotes q ON q.id = s.quote_id
          WHERE s.id = NEW.quote_selection_id FOR UPDATE OF q;
+        -- Locks above may wait behind another transaction. Re-sample the database
+        -- clock only after authoritative order/quote state is owned so TTL and
+        -- eligibility checks cannot use a stale statement-start boundary.
+        now_at := clock_timestamp();
         IF NOT FOUND OR selection_quote <> NEW.quote_id OR selection_option <> NEW.quote_option_id
            OR selection_intent <> NEW.intent_id OR selection_customer <> NEW.customer_id
            OR quote_order <> NEW.order_id OR quote_expires <= now_at
@@ -2192,6 +2836,13 @@ FOR EACH ROW EXECUTE FUNCTION validate_payment_attempt_evidence_write();
 
 STOCK_PAYMENT_DROP_DDLS: tuple[str, ...] = (
     r"""
+DROP TRIGGER IF EXISTS trg_size_stocks_stock_payment_coordinator ON size_stocks;
+DROP TRIGGER IF EXISTS trg_product_variants_stock_payment_coordinator ON product_variants;
+DROP TRIGGER IF EXISTS trg_variations_stock_payment_coordinator ON variations;
+DROP TRIGGER IF EXISTS trg_products_stock_payment_coordinator ON products;
+DROP TRIGGER IF EXISTS trg_payment_attempt_reservations_coordinator ON payment_attempt_reservations;
+DROP TRIGGER IF EXISTS trg_payment_attempts_coordinator ON payment_attempts;
+DROP TRIGGER IF EXISTS trg_stock_reservations_coordinator ON stock_reservations;
 DROP TRIGGER IF EXISTS trg_payment_intent_invalidation_fence ON outbound_shipment_intent_invalidations;
 DROP TRIGGER IF EXISTS trg_orders_reserved_payment_truth ON orders;
 DROP TRIGGER IF EXISTS trg_order_items_reserved_truth ON order_items;
@@ -2221,6 +2872,16 @@ DROP FUNCTION IF EXISTS validate_payment_attempt_exact_reservations();
 DROP FUNCTION IF EXISTS validate_payment_attempt_membership_write();
 DROP FUNCTION IF EXISTS validate_payment_attempt_write();
 DROP FUNCTION IF EXISTS validate_stock_reservation_write();
+DROP FUNCTION IF EXISTS guard_payment_attempt_membership_coordinator();
+DROP FUNCTION IF EXISTS guard_payment_attempt_coordinator();
+DROP FUNCTION IF EXISTS guard_stock_reservation_coordinator();
+DROP FUNCTION IF EXISTS assert_payment_attempt_lock_set(uuid, uuid);
+DROP FUNCTION IF EXISTS assert_stock_reservation_lock_set(uuid, uuid, uuid, uuid, uuid);
+DROP FUNCTION IF EXISTS coordinate_payment_attempt_write(uuid, uuid);
+DROP FUNCTION IF EXISTS coordinate_stock_reservation_write(uuid, uuid, uuid, uuid, uuid);
+DROP FUNCTION IF EXISTS guard_coordinated_catalog_write();
+DROP FUNCTION IF EXISTS assert_stock_payment_write_lock(text, uuid);
+DROP FUNCTION IF EXISTS coordinate_stock_payment_write(jsonb);
 DROP FUNCTION IF EXISTS record_order_inventory_change();
 DROP FUNCTION IF EXISTS validate_inventory_deduction_event_write();
 DROP TABLE IF EXISTS legacy_inventory_deduction_candidates;
@@ -2256,5 +2917,7 @@ __all__ = [
     "PaymentAttemptReservation",
     "STOCK_PAYMENT_DROP_DDLS",
     "STOCK_PAYMENT_TRIGGER_DDLS",
+    "StockPaymentLockCoordinator",
     "StockReservation",
+    "coordinate_catalog_write",
 ]

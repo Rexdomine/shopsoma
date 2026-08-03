@@ -34,6 +34,13 @@ async def _present_payment_lease(session, lease_token: uuid.UUID) -> None:
     )
 
 
+async def _coordinate_payment_attempt(session, attempt) -> None:
+    await session.execute(
+        text("SELECT coordinate_payment_attempt_write(:attempt_id, :order_id)"),
+        {"attempt_id": attempt.id, "order_id": attempt.order_id},
+    )
+
+
 async def _attempt_subject(db_session, vendor_user, customer_user, **attempt_overrides):
     lane = _lane_helpers()
     graph, intent, quote, option, selection, sku = await lane._checkout_subject(
@@ -273,15 +280,18 @@ async def test_verification_honors_authorization_grace_after_reservation_lock_wa
             {"id": reservation.id},
         )
         await _present_payment_lease(verifier, lease_token)
-        verification_task = asyncio.create_task(
-            verifier.execute(
+
+        async def verify_after_preflight():
+            await _coordinate_payment_attempt(verifier, attempt)
+            return await verifier.execute(
                 text(
                     "UPDATE payment_attempts SET state='verified', "
                     "terminal_evidence_id=:evidence_id, row_version=3 WHERE id=:id"
                 ),
                 {"evidence_id": evidence.id, "id": attempt.id},
             )
-        )
+
+        verification_task = asyncio.create_task(verify_after_preflight())
         await asyncio.sleep(0.1)
         assert not verification_task.done(), "verification bypassed reservation lock"
         await asyncio.sleep(1.0)
@@ -365,6 +375,7 @@ async def test_pending_claim_rechecks_database_clock_after_row_lock_wait(
     await db_session.commit()
 
     try:
+        await _coordinate_payment_attempt(db_session, attempt)
         await db_session.execute(
             text(
                 "ALTER TABLE payment_attempts DISABLE TRIGGER "
@@ -408,15 +419,18 @@ async def test_pending_claim_rechecks_database_clock_after_row_lock_wait(
             text("SELECT id FROM payment_attempts WHERE id=:id FOR UPDATE"),
             {"id": attempt.id},
         )
-        claim_task = asyncio.create_task(
-            claimant.execute(
+
+        async def claim_after_preflight():
+            await _coordinate_payment_attempt(claimant, attempt)
+            return await claimant.execute(
                 text(
                     "UPDATE payment_attempts SET state='call_started', "
                     "lease_token=:token, row_version=2 WHERE id=:id"
                 ),
                 {"token": uuid.uuid4(), "id": attempt.id},
             )
-        )
+
+        claim_task = asyncio.create_task(claim_after_preflight())
         await asyncio.sleep(0.1)
         assert not claim_task.done(), "claim did not wait on the attempt row"
         await asyncio.sleep(0.9)

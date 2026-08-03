@@ -4,6 +4,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import importlib.util
+import json
 from pathlib import Path
 import uuid
 
@@ -35,6 +36,31 @@ async def _present_payment_lease(session, lease_token: uuid.UUID) -> None:
     )
 
 
+async def _coordinate_payment_attempt(
+    session, attempt_id: uuid.UUID, order_id: uuid.UUID
+) -> None:
+    await session.execute(
+        text("SELECT coordinate_payment_attempt_write(:attempt_id, :order_id)"),
+        {"attempt_id": attempt_id, "order_id": order_id},
+    )
+
+
+async def _coordinate_reservation(session, reservation) -> None:
+    await session.execute(
+        text(
+            "SELECT coordinate_stock_reservation_write("
+            ":reservation_id, :order_id, :product_id, :variant_id, :size_stock_id)"
+        ),
+        {
+            "reservation_id": reservation.id,
+            "order_id": reservation.order_id,
+            "product_id": reservation.product_id,
+            "variant_id": reservation.variant_id,
+            "size_stock_id": reservation.size_stock_id,
+        },
+    )
+
+
 async def _checkout_subject(db_session, vendor_user, customer_user, *, stock=2):
     quote_helpers = _load_helpers(
         "test_customer_shipping_quote_persistence.py", "lane_4b_quote_helpers"
@@ -44,6 +70,19 @@ async def _checkout_subject(db_session, vendor_user, customer_user, *, stock=2):
         db_session, vendor_user, customer_user
     )
     sku = f"SKU-{uuid.uuid4().hex[:12]}"
+    await db_session.execute(
+        text("SELECT coordinate_stock_payment_write(CAST(:keys AS jsonb))"),
+        {
+            "keys": json.dumps(
+                [
+                    {
+                        "subject_kind": "product",
+                        "subject_id": str(graph["item"].product_id),
+                    }
+                ]
+            )
+        },
+    )
     await db_session.execute(
         text("UPDATE products SET sku=:sku, total_stock=:stock WHERE id=:product_id"),
         {"sku": sku, "stock": stock, "product_id": graph["item"].product_id},
@@ -76,6 +115,7 @@ def _reservation(
     from app.models.stock_payment_persistence import StockReservation
 
     values = {
+        "id": uuid.uuid4(),
         "order_id": graph["order"].id,
         "order_item_id": graph["item"].id,
         "customer_id": customer_id,
@@ -102,6 +142,7 @@ def _payment_attempt(graph, intent, quote, option, selection, customer_id, **ove
     from app.models.stock_payment_persistence import PaymentAttempt
 
     values = {
+        "id": uuid.uuid4(),
         "order_id": graph["order"].id,
         "customer_id": customer_id,
         "quote_id": quote.id,
@@ -780,6 +821,7 @@ async def test_two_connections_serialize_payment_claim(
     async with sessions() as first, sessions() as second:
         first_token = uuid.uuid4()
         second_token = uuid.uuid4()
+        await _coordinate_payment_attempt(first, attempt.id, attempt.order_id)
         await first.execute(
             text(
                 "UPDATE payment_attempts SET state='call_started', lease_token=:token, "
@@ -789,6 +831,7 @@ async def test_two_connections_serialize_payment_claim(
         )
 
         async def competing_claim():
+            await _coordinate_payment_attempt(second, attempt.id, attempt.order_id)
             await second.execute(
                 text(
                     "UPDATE payment_attempts SET state='call_started', lease_token=:token, "
@@ -990,6 +1033,7 @@ async def test_verification_serializes_against_reservation_release(
     releaser = factory()
     try:
         await _present_payment_lease(verifier, lease_token)
+        await _coordinate_payment_attempt(verifier, attempt.id, attempt.order_id)
         await verifier.execute(
             text(
                 "UPDATE payment_attempts SET state='verified', "
@@ -997,15 +1041,18 @@ async def test_verification_serializes_against_reservation_release(
             ),
             {"evidence_id": evidence.id, "id": attempt.id},
         )
-        release_task = asyncio.create_task(
-            releaser.execute(
+
+        async def competing_release():
+            await _coordinate_reservation(releaser, reservation)
+            return await releaser.execute(
                 text(
                     "UPDATE stock_reservations SET state='released', "
                     "terminal_reason='payment cancelled', row_version=2 WHERE id=:id"
                 ),
                 {"id": reservation.id},
             )
-        )
+
+        release_task = asyncio.create_task(competing_release())
         await asyncio.sleep(0.1)
         assert not release_task.done(), "release bypassed verification reservation lock"
         await verifier.commit()
@@ -1076,15 +1123,18 @@ async def test_verification_sees_release_committed_while_waiting(
             {"id": reservation.id},
         )
         await _present_payment_lease(verifier, lease_token)
-        verification_task = asyncio.create_task(
-            verifier.execute(
+
+        async def competing_verification():
+            await _coordinate_payment_attempt(verifier, attempt.id, attempt.order_id)
+            return await verifier.execute(
                 text(
                     "UPDATE payment_attempts SET state='verified', "
                     "terminal_evidence_id=:evidence_id, row_version=3 WHERE id=:id"
                 ),
                 {"evidence_id": evidence.id, "id": attempt.id},
             )
-        )
+
+        verification_task = asyncio.create_task(competing_verification())
         await asyncio.sleep(0.1)
         assert not verification_task.done(), "verification bypassed reservation lock"
         await releaser.commit()
@@ -1148,6 +1198,7 @@ async def test_expired_claim_holder_cannot_complete(
 
     with pytest.raises(DBAPIError, match="payment claim lease expired"):
         async with db_session.begin_nested():
+            await _coordinate_payment_attempt(db_session, attempt.id, attempt.order_id)
             await db_session.execute(
                 text(
                     "UPDATE payment_attempts SET state='verified', "
