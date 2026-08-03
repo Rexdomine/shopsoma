@@ -16,6 +16,7 @@ from app.models.product import ProductVariant, SizeEnum, SizeStock, Variation
 from app.models.stock_payment_persistence import (
     PaymentAttemptEvidence,
     PaymentAttemptReservation,
+    coordinate_catalog_write,
 )
 
 
@@ -4225,6 +4226,204 @@ async def test_vendor_variation_replacement_preserves_safe_size_stock_audit_iden
             )
             == old_size_stock_id
         )
+
+
+@pytest.mark.asyncio
+async def test_customer_cancellation_allows_retired_size_stock_snapshot(
+    client, db_session, vendor_user, customer_user
+) -> None:
+    """A historical SizeStock UUID cannot strand an otherwise eligible cancellation."""
+
+    (
+        lane,
+        graph,
+        intent,
+        quote,
+        option,
+        selection,
+        _variation,
+        size_stock,
+        reservation,
+    ) = await _catalog_replacement_sized_subject(db_session, vendor_user, customer_user)
+    await _make_sized_reservation_terminal(
+        db_session,
+        lane,
+        graph,
+        intent,
+        quote,
+        option,
+        selection,
+        reservation,
+        "released",
+    )
+    await _inject_catalog_replacement_audit_rows(
+        db_session, graph, size_stock, "unresolved"
+    )
+    old_size_stock_id = size_stock.id
+    product_id = graph["item"].product_id
+    order_id = graph["order"].id
+    await db_session.commit()
+
+    replacement = await client.put(
+        f"/api/v1/products/{product_id}",
+        json={
+            "variations": [
+                {
+                    "title": "Replacement",
+                    "type": "color",
+                    "price": "10.00",
+                    "sizes": [{"size": "L", "stock": 4}],
+                }
+            ]
+        },
+        headers=vendor_user["headers"],
+    )
+    assert replacement.status_code == 200, replacement.text
+    assert (
+        await db_session.scalar(
+            text("SELECT count(*) FROM size_stocks WHERE id=:id"),
+            {"id": old_size_stock_id},
+        )
+        == 0
+    )
+
+    response = await client.post(
+        f"/api/v1/orders/{order_id}/cancel",
+        json={"cancellation_reason": "No longer needed"},
+        headers=customer_user["headers"],
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["fulfillment_status"] == "cancelled"
+    assert (
+        await db_session.scalar(
+            text(
+                "SELECT stock FROM size_stocks ss JOIN variations v "
+                "ON v.id=ss.variation_id WHERE v.product_id=:product_id"
+            ),
+            {"product_id": product_id},
+        )
+        == 4
+    )
+
+
+@pytest.mark.asyncio
+async def test_cancellation_rejects_same_binding_size_stock_resurrection(
+    db_session, vendor_user, customer_user
+) -> None:
+    """A deleted/reinserted UUID is not the inventory lifecycle that was deducted."""
+
+    (
+        lane,
+        graph,
+        intent,
+        quote,
+        option,
+        selection,
+        variation,
+        size_stock,
+        reservation,
+    ) = await _catalog_replacement_sized_subject(db_session, vendor_user, customer_user)
+    await _make_sized_reservation_terminal(
+        db_session,
+        lane,
+        graph,
+        intent,
+        quote,
+        option,
+        selection,
+        reservation,
+        "released",
+    )
+    await _inject_catalog_replacement_audit_rows(
+        db_session, graph, size_stock, "unresolved"
+    )
+    subject_id = size_stock.id
+    variation_id = variation.id
+    product_id = graph["item"].product_id
+    order_id = graph["order"].id
+    await db_session.commit()
+
+    factory = async_sessionmaker(bind=db_session.bind, expire_on_commit=False)
+    canceller = factory()
+    replacer = factory()
+    observer = factory()
+    cancellation_task = None
+    try:
+        # Hold the complete production catalog lock hierarchy so cancellation
+        # snapshots the original row before waiting on the catalog writer.
+        await _coordinate(
+            replacer,
+            ("product", product_id),
+            ("variation", variation_id),
+            ("size_stock", subject_id),
+        )
+        canceller_pid = await canceller.scalar(text("SELECT pg_backend_pid()"))
+
+        async def cancel_and_restore() -> str:
+            try:
+                extant_ids = await coordinate_catalog_write(
+                    canceller,
+                    order_ids=[order_id],
+                    product_ids=[product_id],
+                    size_stock_ids=[subject_id],
+                    allow_missing_size_stock_ids=True,
+                )
+                if subject_id in extant_ids:
+                    await canceller.execute(
+                        text("UPDATE size_stocks SET stock=stock + 1 WHERE id=:id"),
+                        {"id": subject_id},
+                    )
+                await canceller.commit()
+                return "committed"
+            except ValueError as exc:
+                await canceller.rollback()
+                return str(exc)
+
+        cancellation_task = asyncio.create_task(cancel_and_restore())
+        for _ in range(100):
+            blockers = await observer.scalar(
+                text("SELECT pg_blocking_pids(:pid)"), {"pid": canceller_pid}
+            )
+            if blockers:
+                break
+            await asyncio.sleep(0.01)
+        else:
+            pytest.fail(
+                "cancellation never reached the expected catalog coordinator wait"
+            )
+
+        # Use the real coordinated catalog trigger path: the terminal reservation
+        # and immutable audit snapshots allow replacement without bypassing guards.
+        await replacer.execute(
+            text("DELETE FROM size_stocks WHERE id=:id"), {"id": subject_id}
+        )
+        await replacer.execute(
+            text(
+                "INSERT INTO size_stocks (id,variation_id,size,stock) "
+                "VALUES (:id,:variation_id,'M',7)"
+            ),
+            {"id": subject_id, "variation_id": variation_id},
+        )
+        await replacer.commit()
+
+        outcome = await asyncio.wait_for(cancellation_task, timeout=5)
+        durable_stock = await observer.scalar(
+            text("SELECT stock FROM size_stocks WHERE id=:id"), {"id": subject_id}
+        )
+        assert (outcome, durable_stock) == (
+            "catalog coordinator size-stock lifecycle changed during preflight",
+            7,
+        )
+    finally:
+        if cancellation_task is not None and not cancellation_task.done():
+            cancellation_task.cancel()
+        await canceller.rollback()
+        await replacer.rollback()
+        await observer.rollback()
+        await canceller.close()
+        await replacer.close()
+        await observer.close()
 
 
 @pytest.mark.asyncio

@@ -406,8 +406,14 @@ async def coordinate_catalog_write(
     variation_ids=(),
     product_variant_ids=(),
     size_stock_ids=(),
-) -> None:
-    """Acquire one complete coordinator set for SQLAlchemy Core catalog DML."""
+    allow_missing_size_stock_ids: bool = False,
+) -> frozenset[uuid.UUID]:
+    """Acquire one complete coordinator set for SQLAlchemy Core catalog DML.
+
+    When explicitly allowed for historical order snapshots, missing SizeStock IDs
+    remain in the synthetic lock set. The returned IDs are the detailed subjects
+    that still exist after that lock is acquired and can therefore be updated.
+    """
 
     keys = {
         (kind, subject_id)
@@ -462,12 +468,14 @@ async def coordinate_catalog_write(
         keys.update(("product", row["product_id"]) for row in rows)
 
     requested_size_stocks = {subject_id for subject_id in size_stock_ids if subject_id}
+    initial_size_stock_rows = {}
     if requested_size_stocks:
         rows = (
             (
                 await session.execute(
                     text(
-                        "SELECT ss.id, ss.variation_id, v.product_id "
+                        "SELECT ss.id, ss.variation_id, v.product_id, "
+                        "ss.xmin::text AS lifecycle_token "
                         "FROM size_stocks ss JOIN variations v ON v.id = ss.variation_id "
                         "WHERE ss.id = ANY(:subject_ids)"
                     ),
@@ -477,7 +485,25 @@ async def coordinate_catalog_write(
             .mappings()
             .all()
         )
-        if {row["id"] for row in rows} != requested_size_stocks:
+        # PostgreSQL's row-version token distinguishes a stable extant row from
+        # delete/reinsert resurrection even when UUID and ancestry are reused.
+        # A durable generation/tombstone would provide the same distinction but
+        # would widen this bounded cancellation fix into a SizeStock schema and
+        # migration contract. xmin is compared only within this open transaction,
+        # never persisted as audit identity; any concurrent row version change is
+        # therefore rejected conservatively instead of restoring uncertain stock.
+        initial_size_stock_rows = {
+            row["id"]: (
+                row["variation_id"],
+                row["product_id"],
+                row["lifecycle_token"],
+            )
+            for row in rows
+        }
+        if (
+            set(initial_size_stock_rows) != requested_size_stocks
+            and not allow_missing_size_stock_ids
+        ):
             raise ValueError("catalog coordinator size-stock subject no longer exists")
         keys.update(("variation", row["variation_id"]) for row in rows)
         keys.update(("product", row["product_id"]) for row in rows)
@@ -490,6 +516,41 @@ async def coordinate_catalog_write(
         text("SELECT coordinate_stock_payment_write(CAST(:keys AS jsonb))"),
         {"keys": json.dumps(payload)},
     )
+
+    if allow_missing_size_stock_ids and requested_size_stocks:
+        rows = (
+            (
+                await session.execute(
+                    text(
+                        "SELECT ss.id, ss.variation_id, v.product_id, "
+                        "ss.xmin::text AS lifecycle_token "
+                        "FROM size_stocks ss JOIN variations v ON v.id = ss.variation_id "
+                        "WHERE ss.id = ANY(:subject_ids)"
+                    ),
+                    {"subject_ids": list(requested_size_stocks)},
+                )
+            )
+            .mappings()
+            .all()
+        )
+        locked_size_stock_rows = {
+            row["id"]: (
+                row["variation_id"],
+                row["product_id"],
+                row["lifecycle_token"],
+            )
+            for row in rows
+        }
+        if any(
+            initial_size_stock_rows.get(subject_id) != identity
+            for subject_id, identity in locked_size_stock_rows.items()
+        ):
+            raise ValueError(
+                "catalog coordinator size-stock lifecycle changed during preflight"
+            )
+        return frozenset(locked_size_stock_rows)
+
+    return frozenset(requested_size_stocks)
 
 
 @event.listens_for(Session, "before_flush")

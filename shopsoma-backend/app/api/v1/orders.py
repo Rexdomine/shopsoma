@@ -1399,7 +1399,7 @@ async def cancel_order(
         and item.variant_details
         and item.variant_details.get("size_stock_id")
     ]
-    await coordinate_catalog_write(
+    extant_size_stock_ids = await coordinate_catalog_write(
         db,
         order_ids=[order.id],
         product_ids=[item.product_id for item in order.items if not item.variant_id],
@@ -1407,6 +1407,7 @@ async def cancel_order(
             item.variant_id for item in order.items if item.variant_id
         ],
         size_stock_ids=size_stock_ids,
+        allow_missing_size_stock_ids=True,
     )
 
     # Restore stock
@@ -1423,12 +1424,17 @@ async def cancel_order(
         if item.variant_details:
             size_stock_id = item.variant_details.get("size_stock_id")
 
-        if size_stock_id:
+        if size_stock_id and UUID(str(size_stock_id)) in extant_size_stock_ids:
             await db.execute(
                 update(SizeStock)
                 .where(SizeStock.id == size_stock_id)
                 .values(stock=SizeStock.stock + item.quantity)
             )
+        elif size_stock_id:
+            # Product variation replacement intentionally preserves the historical
+            # SizeStock UUID as audit evidence. Do not transfer its cancelled units
+            # into a newly created inventory identity.
+            continue
         else:
             await db.execute(
                 update(Product)
@@ -1437,6 +1443,5 @@ async def cancel_order(
             )
 
     await db.commit()
-    await db.refresh(order)
-
-    return order
+    refreshed_result = await db.execute(query)
+    return refreshed_result.scalar_one()
