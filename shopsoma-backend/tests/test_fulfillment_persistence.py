@@ -6,7 +6,7 @@ import uuid
 
 import pytest
 from sqlalchemy import delete, inspect, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker
 from sqlalchemy.orm.exc import StaleDataError
 
@@ -18,6 +18,7 @@ from app.models import (
     ProductLogisticsProfile,
 )
 from app.models.product import Product, ProductVariant
+from app.models.stock_payment_persistence import coordinate_catalog_write
 from app.models.user import User
 
 
@@ -419,16 +420,27 @@ async def test_product_and_variant_deletes_cascade_profiles(db_session, sample_p
     await db_session.flush()
     product_profile_id = product_profile.id
     variant_profile_id = variant_profile.id
+    variant_id = variant.id
     sample_product_id = sample_product.id
 
+    with pytest.raises(
+        DBAPIError, match="stock/payment coordinator preflight required"
+    ):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                delete(ProductVariant).where(ProductVariant.id == variant_id)
+            )
+
+    await coordinate_catalog_write(db_session, product_variant_ids=[variant_id])
     await db_session.execute(
-        delete(ProductVariant).where(ProductVariant.id == variant.id)
+        delete(ProductVariant).where(ProductVariant.id == variant_id)
     )
     await db_session.flush()
     db_session.expire_all()
     assert await db_session.get(ProductLogisticsProfile, variant_profile_id) is None
     assert await db_session.get(ProductLogisticsProfile, product_profile_id) is not None
 
+    await coordinate_catalog_write(db_session, product_ids=[sample_product_id])
     await db_session.execute(delete(Product).where(Product.id == sample_product_id))
     await db_session.flush()
     db_session.expire_all()

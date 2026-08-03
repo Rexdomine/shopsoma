@@ -347,6 +347,8 @@ async def reset_database(db: AsyncSession = Depends(get_db)):
     try:
         # Delete in correct order due to foreign keys
         await db.execute(text("DELETE FROM product_images"))
+        # This unrestricted destructive fixture reset has no bounded subject set;
+        # the stock/payment coordinator intentionally fails closed after Lane 2A-4B.
         await db.execute(text("DELETE FROM product_variants"))
         await db.execute(text("DELETE FROM products"))
         await db.execute(text("DELETE FROM vendors WHERE business_name = 'Shopsoma Demo Store' OR business_name = 'Test Business'"))

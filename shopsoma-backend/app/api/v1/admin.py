@@ -14,7 +14,16 @@ import os
 
 from app.core.database import get_db
 from app.api.dependencies import get_current_admin
-from app.models.product import Product, ProductVariant, ProductImage, ProductStatus, ModerationStatus
+from app.models.product import (
+    ModerationStatus,
+    Product,
+    ProductImage,
+    ProductStatus,
+    ProductVariant,
+    SizeStock,
+    Variation,
+)
+from app.models.stock_payment_persistence import coordinate_catalog_write
 from app.models.payment import Payment
 from app.models.setting import Setting
 from app.models.user import User, UserRole
@@ -236,6 +245,8 @@ async def reset_products(db: AsyncSession = Depends(get_db)):
     Delete all products, variants, and images (for testing)
     """
     try:
+        # This test-only, unbounded reset intentionally fails closed when any
+        # Lane 2A-4B stock/payment subject exists; it has no safe bounded key set.
         # Delete in correct order due to foreign keys
         await db.execute("DELETE FROM product_images")
         await db.execute("DELETE FROM product_variants")
@@ -1658,6 +1669,39 @@ async def delete_product(
 
     product_title = product.title
 
+    variant_ids = list(
+        (
+            await db.execute(
+                select(ProductVariant.id).where(ProductVariant.product_id == product_id)
+            )
+        ).scalars()
+    )
+    variation_ids = list(
+        (
+            await db.execute(
+                select(Variation.id).where(Variation.product_id == product_id)
+            )
+        ).scalars()
+    )
+    size_stock_ids = (
+        list(
+            (
+                await db.execute(
+                    select(SizeStock.id).where(SizeStock.variation_id.in_(variation_ids))
+                )
+            ).scalars()
+        )
+        if variation_ids
+        else []
+    )
+    await coordinate_catalog_write(
+        db,
+        product_ids=[product_id],
+        variation_ids=variation_ids,
+        product_variant_ids=variant_ids,
+        size_stock_ids=size_stock_ids,
+    )
+
     try:
         # Delete associated product images
         await db.execute(
@@ -2383,6 +2427,16 @@ async def update_featured_products(
 
     Requires admin role
     """
+    current_featured_ids = list(
+        (
+            await db.execute(select(Product.id).where(Product.is_featured.is_(True)))
+        ).scalars()
+    )
+    await coordinate_catalog_write(
+        db,
+        product_ids=set(current_featured_ids).union(product_ids),
+    )
+
     # Clear existing featured status
     await db.execute(
         update(Product)
