@@ -19,7 +19,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Import routers
-from app.api.v1 import auth, products, images, admin, seed, cart, addresses, shipping_rates, orders, promo_codes, payments, users, wishlist, newsletter, preferences, payment_portals, vendors, vendor_activation, vendor_applications, vendor_payment_methods, categories, collections, designers, settings as settings_router, admin_orders, admin_returns, admin_payouts, websocket
+from app.api.v1 import auth, products, images, admin, seed, cart, addresses, shipping_rates, shipping_quotes, orders, promo_codes, payments, users, wishlist, newsletter, preferences, payment_portals, vendors, vendor_activation, vendor_applications, vendor_payment_methods, categories, collections, designers, settings as settings_router, admin_orders, admin_returns, admin_payouts, websocket
 from app.core.config import settings
 
 # Import middleware
@@ -58,7 +58,7 @@ app.add_middleware(
     allow_origin_regex=settings.ALLOWED_ORIGIN_REGEX,
     allow_credentials=False,
     allow_methods=["*"],
-    allow_headers=["Authorization", "Content-Type", "X-Requested-With", "X-Session-ID"],
+    allow_headers=["Authorization", "Content-Type", "X-Requested-With", "X-Session-ID", "X-Idempotency-Key"],
 )
 
 # Add security headers middleware
@@ -110,6 +110,7 @@ app.include_router(seed.router, prefix="/api/v1")
 app.include_router(cart.router, prefix="/api/v1")
 app.include_router(addresses.router, prefix="/api/v1")
 app.include_router(shipping_rates.router, prefix="/api/v1")
+app.include_router(shipping_quotes.router, prefix="/api/v1")
 app.include_router(promo_codes.router, prefix="/api/v1")
 app.include_router(orders.router, prefix="/api/v1")
 app.include_router(payments.router, prefix="/api/v1")
