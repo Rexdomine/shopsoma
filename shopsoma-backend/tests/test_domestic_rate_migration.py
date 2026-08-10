@@ -13,6 +13,7 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import CheckConstraint, create_engine, inspect, text
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.engine import make_url
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -27,6 +28,96 @@ TABLES = (
     "domestic_rate_responses",
     "domestic_rate_offers",
 )
+
+_PACKAGE_SPEC = importlib.util.spec_from_file_location(
+    "rate_migration_package_helpers",
+    Path(__file__).with_name("test_package_custody_persistence.py"),
+)
+assert _PACKAGE_SPEC is not None and _PACKAGE_SPEC.loader is not None
+_PACKAGE = importlib.util.module_from_spec(_PACKAGE_SPEC)
+_PACKAGE_SPEC.loader.exec_module(_PACKAGE)
+
+
+async def _seed_valid_outbound_intent(database_url: str) -> uuid.UUID:
+    """Seed one legal ready package and intent using the existing fixture graph."""
+    from app.models.user import User, UserRole
+    from app.models.vendor import KYCStatus, Vendor
+
+    engine = create_async_engine(
+        make_url(database_url).set(drivername="postgresql+asyncpg")
+    )
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with sessions() as session:
+            customer = User(
+                id=uuid.uuid4(),
+                email=f"rate-customer-{uuid.uuid4().hex}@example.test",
+                hashed_password="not-used",
+                full_name="Rate Migration Customer",
+                role=UserRole.CUSTOMER,
+                email_verified=True,
+                is_active=True,
+            )
+            operator = User(
+                id=uuid.uuid4(),
+                email=f"rate-operator-{uuid.uuid4().hex}@example.test",
+                hashed_password="not-used",
+                full_name="Rate Migration Operator",
+                role=UserRole.VENDOR,
+                email_verified=True,
+                is_active=True,
+            )
+            session.add_all([customer, operator])
+            await session.flush()
+            vendor = Vendor(
+                id=uuid.uuid4(),
+                user_id=operator.id,
+                business_name="Rate Migration Vendor",
+                kyc_status=KYCStatus.APPROVED,
+                approved=True,
+            )
+            session.add(vendor)
+            await session.flush()
+            graph = await _PACKAGE._passed_graph(
+                session,
+                {"user": operator, "vendor": vendor},
+                {"user": customer},
+                quantity=1,
+            )
+            package, _version, _item, seal = await _PACKAGE._ready_package(
+                session, graph, quantity=1
+            )
+            sentinel_id = uuid.uuid4()
+            await session.execute(
+                text(
+                    """INSERT INTO outbound_shipment_intents (
+                        id, package_id, package_version, seal_id, order_id,
+                        origin_hub_id, destination_name, destination_phone,
+                        destination_address_line1, destination_address_line2,
+                        destination_city, destination_state,
+                        destination_postal_code, destination_country_code,
+                        source_command, idempotency_key, created_by_id
+                    ) VALUES (
+                        :id, :package_id, 1, :seal_id, :order_id,
+                        :hub_id, 'Migration Sentinel', '+234****0000',
+                        '1 Sentinel Street', 'Suite 2', 'Lagos', 'Lagos',
+                        '100001', 'NG', 'migration-test', 'migration-sentinel',
+                        :created_by_id
+                    )"""
+                ),
+                {
+                    "id": sentinel_id,
+                    "package_id": package.id,
+                    "seal_id": seal.id,
+                    "order_id": graph["order"].id,
+                    "hub_id": graph["hub"].id,
+                    "created_by_id": graph["operator_id"],
+                },
+            )
+            await session.commit()
+            return sentinel_id
+    finally:
+        await engine.dispose()
 
 
 def _scripts() -> ScriptDirectory:
@@ -187,7 +278,7 @@ def test_domestic_rate_migration_contains_only_normalized_safe_evidence() -> Non
         assert forbidden not in sql
 
 
-def test_domestic_rate_real_upgrade_downgrade_upgrade_cycle() -> None:
+async def test_domestic_rate_real_upgrade_downgrade_upgrade_cycle() -> None:
     config_spec = importlib.util.spec_from_file_location(
         "rate_test_config", ROOT / "tests/conftest.py"
     )
@@ -232,7 +323,13 @@ def test_domestic_rate_real_upgrade_downgrade_upgrade_cycle() -> None:
             finally:
                 target.dispose()
 
-        migrate("upgrade", FOUNDATION_PARENT)
+        # Seed through the repository's legal package fixture at the current head,
+        # then return to the pre-rate foundation. The subsequent path remains the
+        # real foundation -> parent -> lease revision migration cycle, with this
+        # row pre-existing when the destination hash is introduced.
+        migrate("upgrade", HEAD)
+        sentinel_id = await _seed_valid_outbound_intent(database_url)
+        migrate("downgrade", FOUNDATION_PARENT)
 
         def assert_tables(present: bool, leases: bool = False) -> None:
             target = create_engine(database_url)
@@ -272,40 +369,6 @@ def test_domestic_rate_real_upgrade_downgrade_upgrade_cycle() -> None:
                 target.dispose()
 
         assert_tables(False)
-
-        sentinel_id = uuid.uuid4()
-        target = create_engine(database_url)
-        try:
-            with target.begin() as connection:
-                connection.execute(text("SET LOCAL session_replication_role = replica"))
-                connection.execute(
-                    text(
-                        """INSERT INTO outbound_shipment_intents (
-                            id, package_id, package_version, seal_id, order_id,
-                            origin_hub_id, destination_name, destination_phone,
-                            destination_address_line1, destination_address_line2,
-                            destination_city, destination_state,
-                            destination_postal_code, destination_country_code,
-                            source_command, idempotency_key, created_by_id
-                        ) VALUES (
-                            :id, :package_id, 1, :seal_id, :order_id,
-                            :hub_id, 'Migration Sentinel', '+2340000000000',
-                            '1 Sentinel Street', 'Suite 2', 'Lagos', 'Lagos',
-                            '100001', 'NG', 'migration-test', 'migration-sentinel',
-                            :created_by_id
-                        )"""
-                    ),
-                    {
-                        "id": sentinel_id,
-                        "package_id": uuid.uuid4(),
-                        "seal_id": uuid.uuid4(),
-                        "order_id": uuid.uuid4(),
-                        "hub_id": uuid.uuid4(),
-                        "created_by_id": uuid.uuid4(),
-                    },
-                )
-        finally:
-            target.dispose()
 
         migrate("upgrade", PARENT)
         target = create_engine(database_url)
