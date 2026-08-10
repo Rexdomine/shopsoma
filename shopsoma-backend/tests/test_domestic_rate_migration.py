@@ -1,7 +1,6 @@
 """Static parity and real PostgreSQL lifecycle for domestic rate evidence."""
 
 import ast
-import asyncio
 import importlib.util
 import os
 from pathlib import Path
@@ -279,7 +278,7 @@ def test_domestic_rate_migration_contains_only_normalized_safe_evidence() -> Non
         assert forbidden not in sql
 
 
-def test_domestic_rate_real_upgrade_downgrade_upgrade_cycle() -> None:
+async def test_domestic_rate_real_upgrade_downgrade_upgrade_cycle() -> None:
     config_spec = importlib.util.spec_from_file_location(
         "rate_test_config", ROOT / "tests/conftest.py"
     )
@@ -329,7 +328,7 @@ def test_domestic_rate_real_upgrade_downgrade_upgrade_cycle() -> None:
         # real foundation -> parent -> lease revision migration cycle, with this
         # row pre-existing when the destination hash is introduced.
         migrate("upgrade", HEAD)
-        sentinel_id = asyncio.run(_seed_valid_outbound_intent(database_url))
+        sentinel_id = await _seed_valid_outbound_intent(database_url)
         migrate("downgrade", FOUNDATION_PARENT)
 
         def assert_tables(present: bool, leases: bool = False) -> None:
