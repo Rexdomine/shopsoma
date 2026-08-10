@@ -136,6 +136,24 @@ describe('CustomerShippingQuotes', () => {
     expect(await screen.findByRole('button', { name: 'Selected DHL Express Domestic' })).toBeDisabled();
   });
 
+  it('clears pending identity after a definitive selection rejection', async () => {
+    const replacementQuote = quoteForOrder('order-1', 'quote-2', 'option-2', 'DHL Express Replacement');
+    listQuotes.mockResolvedValue([availableQuote, replacementQuote]);
+    selectOption.mockRejectedValue({
+      isAxiosError: true,
+      response: { status: 409 },
+    });
+    render(<CustomerShippingQuotes orderId="order-1" />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Choose DHL Express Domestic' }));
+
+    expect(await screen.findByText(SAFE_ERROR)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Choose DHL Express Replacement' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Choose DHL Express Replacement' }));
+    await waitFor(() => expect(selectOption).toHaveBeenCalledTimes(2));
+    expect(selectOption.mock.calls[0][3]).not.toBe(selectOption.mock.calls[1][3]);
+  });
+
   it('keeps same-key selection recovery available after the quote expires', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2099-01-01T11:59:59Z'));

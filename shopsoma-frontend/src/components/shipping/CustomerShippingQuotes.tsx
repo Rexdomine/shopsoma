@@ -1,3 +1,4 @@
+import { isAxiosError } from 'axios';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   shippingQuoteService,
@@ -24,6 +25,11 @@ function sameSelection(left: PendingSelection | null, right: PendingSelection): 
     && left.optionId === right.optionId
     && left.key === right.key
     && left.generation === right.generation;
+}
+
+function isDefinitiveSelectionRejection(error: unknown): boolean {
+  const status = isAxiosError(error) ? error.response?.status : undefined;
+  return status !== undefined && status >= 400 && status < 500;
 }
 
 const SAFE_ERROR = 'Delivery options are unavailable right now. Please try again.';
@@ -204,8 +210,12 @@ export default function CustomerShippingQuotes({ orderId }: CustomerShippingQuot
       setSelectingOptionId(null);
       setQuotes((current) => current.map((item) => (item.id === updated.id ? updated : item)));
       setMessage('Delivery option selected.');
-    } catch {
+    } catch (error) {
       if (!remainsAuthoritative()) return;
+      if (isDefinitiveSelectionRejection(error)) {
+        pendingSelectionRef.current = null;
+        setPendingSelection(null);
+      }
       inFlightSelectionRef.current = null;
       setSelectingOptionId(null);
       setMessage(SAFE_ERROR);
