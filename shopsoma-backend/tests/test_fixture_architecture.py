@@ -206,6 +206,38 @@ def test_create_recovers_when_marker_publication_is_interrupted(monkeypatch) -> 
         lifecycle.drop()
 
 
+def test_create_accepts_exact_marker_after_ambiguous_publication_ack(
+    monkeypatch,
+) -> None:
+    """A committed marker survives a lost client acknowledgment without false failure."""
+    from tests.conftest import RESOLVED_DB_URL
+
+    monkeypatch.setenv("SHOPSOMA_PYTEST_DB_RUN_ID", uuid.uuid4().hex[:24])
+    monkeypatch.setenv(
+        "SHOPSOMA_PYTEST_DB_OWNER_TOKEN", uuid.uuid4().hex + uuid.uuid4().hex
+    )
+    lifecycle = DisposableDatabase(RESOLVED_DB_URL)
+    real_exec_driver_sql = Connection.exec_driver_sql
+    acknowledgment_lost = False
+
+    def publish_then_lose_ack(self, statement, *args, **kwargs):
+        nonlocal acknowledgment_lost
+        result = real_exec_driver_sql(self, statement, *args, **kwargs)
+        if not acknowledgment_lost and statement.startswith("COMMENT ON DATABASE"):
+            acknowledgment_lost = True
+            raise RuntimeError("simulated lost acknowledgment after marker commit")
+        return result
+
+    monkeypatch.setattr(Connection, "exec_driver_sql", publish_then_lose_ack)
+    try:
+        assert lifecycle.create() == lifecycle.name
+        assert acknowledgment_lost
+        lifecycle.assert_owned()
+    finally:
+        monkeypatch.setattr(Connection, "exec_driver_sql", real_exec_driver_sql)
+        lifecycle.drop()
+
+
 def test_scavenger_fences_active_publication_and_removes_crashed_orphan(
     monkeypatch,
 ) -> None:

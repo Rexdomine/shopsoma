@@ -426,6 +426,20 @@ class DisposableDatabase:
         ).first()
         return (False, None) if row is None else (True, row[0])
 
+    def _publication_matches_exact_owner(self) -> bool:
+        """Reconcile a possibly committed marker after a lost client acknowledgment."""
+        engine = self._admin()
+        try:
+            with engine.connect() as connection:
+                return self._database_marker_row(connection, self.name) == (
+                    True,
+                    self.marker_text,
+                )
+        except Exception:
+            return False
+        finally:
+            engine.dispose()
+
     def _try_acquire_publication_lease(self, connection, name: str) -> bool:
         return bool(
             connection.scalar(
@@ -597,10 +611,14 @@ class DisposableDatabase:
                         raise RuntimeError(
                             "database dialect cannot quote marker literal"
                         )
-                    connection.exec_driver_sql(
-                        f"COMMENT ON DATABASE {quoted_name} IS "
-                        f"{marker_literal(self.marker_text)}"
-                    )
+                    try:
+                        connection.exec_driver_sql(
+                            f"COMMENT ON DATABASE {quoted_name} IS "
+                            f"{marker_literal(self.marker_text)}"
+                        )
+                    except Exception:
+                        if not self._publication_matches_exact_owner():
+                            raise
             finally:
                 engine.dispose()
             self._release_publication_lease()
