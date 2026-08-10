@@ -6,7 +6,6 @@ import hashlib
 import hmac
 import json
 import os
-from pathlib import Path
 import re
 import secrets
 import time
@@ -16,8 +15,8 @@ from sqlalchemy import String, create_engine, text
 from sqlalchemy.engine import URL
 from sqlalchemy.pool import NullPool
 
-_MARKER_APP = "shopsoma-pytest-database-v3"
-_MARKER_PREFIX = '{"app":"shopsoma-pytest-database-v3"'
+_MARKER_APP = "shopsoma-pytest-database-v4"
+_MARKER_PREFIX = '{"app":"shopsoma-pytest-database-v4"'
 _MAX_IDENTIFIER_BYTES = 63
 _MAX_SCAVENGE = 8
 _MAX_SCAVENGE_SCAN = 64
@@ -83,12 +82,14 @@ def build_test_database_name(
     return name
 
 
-def process_start_token(pid: int) -> str | None:
-    """Read Linux process start ticks so PID reuse cannot impersonate an owner."""
-    try:
-        return Path(f"/proc/{pid}/stat").read_text().split()[21]
-    except (FileNotFoundError, IndexError, PermissionError, OSError):
-        return None
+def advisory_lock_key(lease_token: str, database_name: str, parent: str) -> int:
+    """Derive a signed PostgreSQL advisory-lock key from authenticated identity."""
+    identity = "\0".join((_MARKER_APP, lease_token, database_name, parent))
+    return int.from_bytes(
+        hashlib.blake2b(identity.encode("utf-8"), digest_size=8).digest(),
+        byteorder="big",
+        signed=True,
+    )
 
 
 def parent_fingerprint(base_url: URL) -> str:
@@ -100,16 +101,20 @@ def parent_fingerprint(base_url: URL) -> str:
 def make_owner_marker(base_url: URL, database_name: str) -> dict[str, Any]:
     """Build a signed exact-match ownership marker inherited by xdist children."""
     pid = os.getpid()
+    owner_token = os.environ.setdefault(
+        "SHOPSOMA_PYTEST_DB_OWNER_TOKEN", secrets.token_hex(32)
+    )
+    lease_token = secrets.token_hex(32)
+    parent = parent_fingerprint(base_url)
     marker = {
         "app": _MARKER_APP,
         "created_ns": time.time_ns(),
         "database": database_name,
-        "owner_token": os.environ.setdefault(
-            "SHOPSOMA_PYTEST_DB_OWNER_TOKEN", secrets.token_hex(32)
-        ),
-        "parent": parent_fingerprint(base_url),
+        "lease_key": advisory_lock_key(lease_token, database_name, parent),
+        "lease_token": lease_token,
+        "owner_token": owner_token,
+        "parent": parent,
         "pid": pid,
-        "process_start": process_start_token(pid),
         "run": os.environ.setdefault(
             "SHOPSOMA_PYTEST_DB_RUN_ID", secrets.token_hex(12)
         ),
@@ -158,10 +163,11 @@ def parse_marker(value: object) -> dict[str, Any] | None:
         "app",
         "created_ns",
         "database",
+        "lease_key",
+        "lease_token",
         "owner_token",
         "parent",
         "pid",
-        "process_start",
         "run",
         "signature",
     }
@@ -171,7 +177,13 @@ def parse_marker(value: object) -> dict[str, Any] | None:
         or marker["app"] != _MARKER_APP
     ):
         return None
-    hex_shapes = {"owner_token": 64, "parent": 32, "run": 24, "signature": 64}
+    hex_shapes = {
+        "lease_token": 64,
+        "owner_token": 64,
+        "parent": 32,
+        "run": 24,
+        "signature": 64,
+    }
     if any(
         not isinstance(marker[field], str)
         or re.fullmatch(rf"[0-9a-f]{{{length}}}", marker[field]) is None
@@ -189,14 +201,18 @@ def parse_marker(value: object) -> dict[str, Any] | None:
         or marker["created_ns"] <= 0
         or type(marker["pid"]) is not int
         or marker["pid"] <= 0
-        or not isinstance(marker["process_start"], str)
-        or re.fullmatch(r"[0-9]+", marker["process_start"]) is None
+        or type(marker["lease_key"]) is not int
+        or not -(2**63) <= marker["lease_key"] < 2**63
+        or marker["lease_key"]
+        != advisory_lock_key(
+            marker["lease_token"], marker["database"], marker["parent"]
+        )
     ):
         return None
     return marker
 
 
-def marker_is_stale(
+def marker_is_cleanup_candidate(
     marker: dict[str, Any],
     *,
     base_url: URL,
@@ -205,7 +221,7 @@ def marker_is_stale(
     now_ns: int,
     minimum_age_seconds: float,
 ) -> bool:
-    """Authorize cleanup only for signed same-cluster markers after age/process death."""
+    """Validate signed same-cluster ownership and the minimum cleanup age."""
     if (
         marker.get("database") != database_name
         or marker.get("parent") != parent
@@ -213,12 +229,11 @@ def marker_is_stale(
     ):
         return False
     created_ns = marker.get("created_ns")
-    pid = marker.get("pid")
-    if not isinstance(created_ns, int) or not isinstance(pid, int):
+    if not isinstance(created_ns, int):
         return False
     if now_ns - created_ns < int(minimum_age_seconds * 1_000_000_000):
         return False
-    return process_start_token(pid) != marker.get("process_start")
+    return True
 
 
 class DisposableDatabase:
@@ -235,15 +250,85 @@ class DisposableDatabase:
         self.marker = make_owner_marker(base_url, self.name)
         self.marker_text = serialize_marker(self.marker)
         self._scavenge_cursor = ""
+        self._lease_engine = None
+        self._lease_connection = None
 
     def _admin(self):
         return create_engine(
             self.admin_url, isolation_level="AUTOCOMMIT", poolclass=NullPool
         )
 
+    def _acquire_owner_lease(self) -> None:
+        """Hold cluster-visible liveness for this owner until drop or process death."""
+        if self._lease_connection is not None:
+            return
+        engine = self._admin()
+        connection = engine.connect()
+        try:
+            acquired = connection.scalar(
+                text("SELECT pg_try_advisory_lock(:key)"),
+                {"key": self.marker["lease_key"]},
+            )
+            if not acquired:
+                raise RuntimeError(
+                    "refusing to reuse an existing live test database lease"
+                )
+        except BaseException:
+            connection.close()
+            engine.dispose()
+            raise
+        self._lease_engine = engine
+        self._lease_connection = connection
+
+    def _release_owner_lease(self) -> None:
+        connection = self._lease_connection
+        engine = self._lease_engine
+        self._lease_connection = None
+        self._lease_engine = None
+        if connection is None:
+            return
+        try:
+            connection.execute(
+                text("SELECT pg_advisory_unlock(:key)"),
+                {"key": self.marker["lease_key"]},
+            )
+        finally:
+            connection.close()
+            if engine is not None:
+                engine.dispose()
+
+    @staticmethod
+    def _try_acquire_marker_lease(connection, marker: dict[str, Any]) -> bool:
+        return bool(
+            connection.scalar(
+                text("SELECT pg_try_advisory_lock(:key)"),
+                {"key": marker["lease_key"]},
+            )
+        )
+
+    @staticmethod
+    def _release_marker_lease(connection, marker: dict[str, Any]) -> None:
+        released = connection.scalar(
+            text("SELECT pg_advisory_unlock(:key)"),
+            {"key": marker["lease_key"]},
+        )
+        if not released:
+            raise RuntimeError("lost fixture cleanup lease before database drop")
+
     @staticmethod
     def _quote(connection, identifier: str) -> str:
         return connection.dialect.identifier_preparer.quote(identifier)
+
+    @staticmethod
+    def _database_marker_text(connection, name: str) -> str | None:
+        """Read the authoritative marker while holding the candidate cleanup lease."""
+        return connection.execute(
+            text(
+                "SELECT shobj_description(oid, 'pg_database') "
+                "FROM pg_database WHERE datname=:name"
+            ),
+            {"name": name},
+        ).scalar()
 
     def _terminate_and_drop(self, connection, name: str) -> None:
         connection.execute(
@@ -285,60 +370,94 @@ class DisposableDatabase:
                         break
                     self._scavenge_cursor = name
                     marker = parse_marker(raw_marker)
-                    if marker and marker_is_stale(
-                        marker,
-                        base_url=self.base_url,
-                        database_name=name,
-                        parent=self.marker["parent"],
-                        now_ns=time.time_ns(),
-                        minimum_age_seconds=minimum_age,
+                    if (
+                        marker
+                        and marker_is_cleanup_candidate(
+                            marker,
+                            base_url=self.base_url,
+                            database_name=name,
+                            parent=self.marker["parent"],
+                            now_ns=time.time_ns(),
+                            minimum_age_seconds=minimum_age,
+                        )
+                        and self._try_acquire_marker_lease(connection, marker)
                     ):
-                        self._terminate_and_drop(connection, name)
-                        removed += 1
+                        try:
+                            if (
+                                self._database_marker_text(connection, name)
+                                != raw_marker
+                            ):
+                                continue
+                            self._terminate_and_drop(connection, name)
+                            removed += 1
+                        finally:
+                            self._release_marker_lease(connection, marker)
         finally:
             engine.dispose()
         return removed
 
     def create(self) -> str:
         """Create new; never reuse an existing database or blindly replace a collision."""
-        self.scavenge()
-        engine = self._admin()
+        self._acquire_owner_lease()
         try:
-            with engine.connect() as connection:
-                existing = connection.execute(
-                    text(
-                        "SELECT shobj_description(oid, 'pg_database') "
-                        "FROM pg_database WHERE datname=:name"
-                    ),
-                    {"name": self.name},
-                ).scalar()
-                if existing is not None:
-                    marker = parse_marker(existing)
-                    stale = marker and marker_is_stale(
-                        marker,
-                        base_url=self.base_url,
-                        database_name=self.name,
-                        parent=self.marker["parent"],
-                        now_ns=time.time_ns(),
-                        minimum_age_seconds=float(
-                            os.getenv("SHOPSOMA_PYTEST_DB_STALE_SECONDS", "3600")
+            self.scavenge()
+            engine = self._admin()
+            try:
+                with engine.connect() as connection:
+                    existing = connection.execute(
+                        text(
+                            "SELECT shobj_description(oid, 'pg_database') "
+                            "FROM pg_database WHERE datname=:name"
                         ),
-                    )
-                    if not stale:
+                        {"name": self.name},
+                    ).scalar()
+                    if existing is not None:
+                        marker = parse_marker(existing)
+                        if not marker or not marker_is_cleanup_candidate(
+                            marker,
+                            base_url=self.base_url,
+                            database_name=self.name,
+                            parent=self.marker["parent"],
+                            now_ns=time.time_ns(),
+                            minimum_age_seconds=float(
+                                os.getenv("SHOPSOMA_PYTEST_DB_STALE_SECONDS", "3600")
+                            ),
+                        ):
+                            raise RuntimeError(
+                                "refusing to reuse an existing test database"
+                            )
+                        if not self._try_acquire_marker_lease(connection, marker):
+                            raise RuntimeError(
+                                "refusing to reuse an existing test database"
+                            )
+                        try:
+                            if (
+                                self._database_marker_text(connection, self.name)
+                                != existing
+                            ):
+                                raise RuntimeError(
+                                    "refusing to replace a test database whose "
+                                    "ownership changed while acquiring its lease"
+                                )
+                            self._terminate_and_drop(connection, self.name)
+                        finally:
+                            self._release_marker_lease(connection, marker)
+                    quoted_name = self._quote(connection, self.name)
+                    connection.exec_driver_sql(f"CREATE DATABASE {quoted_name}")
+                    marker_literal = String().literal_processor(connection.dialect)
+                    if marker_literal is None:
                         raise RuntimeError(
-                            "refusing to reuse an existing test database"
+                            "database dialect cannot quote marker literal"
                         )
-                    self._terminate_and_drop(connection, self.name)
-                quoted_name = self._quote(connection, self.name)
-                connection.exec_driver_sql(f"CREATE DATABASE {quoted_name}")
-                marker_literal = String().literal_processor(connection.dialect)
-                if marker_literal is None:
-                    raise RuntimeError("database dialect cannot quote marker literal")
-                connection.exec_driver_sql(
-                    f"COMMENT ON DATABASE {quoted_name} IS {marker_literal(self.marker_text)}"
-                )
-        finally:
-            engine.dispose()
+                    connection.exec_driver_sql(
+                        f"COMMENT ON DATABASE {quoted_name} IS "
+                        f"{marker_literal(self.marker_text)}"
+                    )
+            finally:
+                engine.dispose()
+        except BaseException:
+            self._release_owner_lease()
+            raise
         return self.name
 
     def assert_owned(self) -> None:
@@ -404,6 +523,7 @@ class DisposableDatabase:
                 self._terminate_and_drop(connection, self.name)
         finally:
             engine.dispose()
+            self._release_owner_lease()
 
 
 def get_process_database(base_url: URL) -> tuple[DisposableDatabase, bool]:

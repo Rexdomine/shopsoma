@@ -23,7 +23,7 @@ from tests.fixture_database import (
     DisposableDatabase,
     build_test_database_name,
     make_owner_marker,
-    marker_is_stale,
+    marker_is_cleanup_candidate,
     parse_marker,
     sign_owner_marker,
     serialize_marker,
@@ -59,7 +59,7 @@ def _owned_probe_databases(run_id: str, owner_token: str):
                     "FROM pg_database d WHERE shobj_description(d.oid, 'pg_database') "
                     "LIKE :prefix ORDER BY d.datname"
                 ),
-                {"prefix": '{"app":"shopsoma-pytest-database-v3"%'},
+                {"prefix": '{"app":"shopsoma-pytest-database-v4"%'},
             ).all()
     finally:
         engine.dispose()
@@ -176,9 +176,11 @@ def test_owner_marker_rejects_malformed_weak_and_extra_fields() -> None:
         ("run", "z" * 24),
         ("owner_token", True),
         ("owner_token", "z" * 64),
-        ("process_start", True),
-        ("process_start", None),
-        ("process_start", "-1"),
+        ("lease_key", True),
+        ("lease_key", None),
+        ("lease_key", 2**63),
+        ("lease_token", True),
+        ("lease_token", "z" * 64),
         ("created_ns", True),
         ("created_ns", 0),
         ("created_ns", "1"),
@@ -254,14 +256,11 @@ def test_structural_urls_normalize_asyncpg_style_parameters_for_each_driver() ->
     }
 
 
-def test_scavenger_requires_matching_owner_parent_age_and_dead_process(
-    monkeypatch,
-) -> None:
+def test_cleanup_candidate_requires_matching_owner_parent_and_age() -> None:
     from tests.conftest import RESOLVED_DB_URL
 
     marker = make_owner_marker(RESOLVED_DB_URL, "probe")
     now = marker["created_ns"] + 10_000_000_000
-    monkeypatch.setattr("tests.fixture_database.process_start_token", lambda _pid: None)
     arguments = dict(
         marker=marker,
         base_url=RESOLVED_DB_URL,
@@ -270,18 +269,25 @@ def test_scavenger_requires_matching_owner_parent_age_and_dead_process(
         now_ns=now,
         minimum_age_seconds=1,
     )
-    assert marker_is_stale(**arguments)
-    cross_run = sign_owner_marker(RESOLVED_DB_URL, {**marker, "owner_token": "x" * 64})
-    assert marker_is_stale(**{**arguments, "marker": cross_run})
-    assert not marker_is_stale(
+    assert marker_is_cleanup_candidate(**arguments)
+    cross_run_token = "a" * 64
+    cross_run = sign_owner_marker(
+        RESOLVED_DB_URL,
+        {
+            **marker,
+            "owner_token": cross_run_token,
+        },
+    )
+    assert marker_is_cleanup_candidate(**{**arguments, "marker": cross_run})
+    assert not marker_is_cleanup_candidate(
         **{**arguments, "marker": {**marker, "owner_token": "tampered" * 8}}
     )
-    assert not marker_is_stale(
+    assert not marker_is_cleanup_candidate(
         **{**arguments, "marker": {**marker, "signature": "0" * 64}}
     )
-    assert not marker_is_stale(**{**arguments, "database_name": "foreign"})
-    assert not marker_is_stale(**{**arguments, "parent": "foreign"})
-    assert not marker_is_stale(**{**arguments, "minimum_age_seconds": 60})
+    assert not marker_is_cleanup_candidate(**{**arguments, "database_name": "foreign"})
+    assert not marker_is_cleanup_candidate(**{**arguments, "parent": "foreign"})
+    assert not marker_is_cleanup_candidate(**{**arguments, "minimum_age_seconds": 60})
 
 
 def test_existing_live_owned_database_is_never_blindly_reused() -> None:
@@ -291,6 +297,140 @@ def test_existing_live_owned_database_is_never_blindly_reused() -> None:
     assert duplicate.name == TEST_DATABASE_NAME
     with pytest.raises(RuntimeError, match="refusing to reuse"):
         duplicate.create()
+
+
+def test_scavenger_preserves_old_live_owner_when_local_pid_is_invisible(
+    monkeypatch,
+) -> None:
+    """Cluster-visible liveness must win across separate runner PID namespaces."""
+    from tests.conftest import RESOLVED_DB_URL
+
+    monkeypatch.setenv("SHOPSOMA_PYTEST_DB_RUN_ID", uuid.uuid4().hex[:24])
+    monkeypatch.setenv(
+        "SHOPSOMA_PYTEST_DB_OWNER_TOKEN", uuid.uuid4().hex + uuid.uuid4().hex
+    )
+    monkeypatch.setenv("SHOPSOMA_PYTEST_DB_STALE_SECONDS", "0")
+    owner = DisposableDatabase(RESOLVED_DB_URL)
+    try:
+        owner.create()
+        old_marker = sign_owner_marker(
+            RESOLVED_DB_URL, {**owner.marker, "created_ns": 1}
+        )
+        _replace_database_marker(owner, old_marker)
+
+        monkeypatch.setenv("SHOPSOMA_PYTEST_DB_RUN_ID", uuid.uuid4().hex[:24])
+        monkeypatch.setenv(
+            "SHOPSOMA_PYTEST_DB_OWNER_TOKEN", uuid.uuid4().hex + uuid.uuid4().hex
+        )
+        assert DisposableDatabase(RESOLVED_DB_URL).scavenge() == 0
+        owner.assert_owned()
+    finally:
+        owner.drop()
+
+
+def test_scavenger_revalidates_marker_after_waiting_for_stale_lease(
+    monkeypatch,
+) -> None:
+    """A same-name replacement published during lease wait must survive cleanup."""
+    from tests.conftest import RESOLVED_DB_URL
+
+    monkeypatch.setenv("SHOPSOMA_PYTEST_DB_RUN_ID", uuid.uuid4().hex[:24])
+    monkeypatch.setenv(
+        "SHOPSOMA_PYTEST_DB_OWNER_TOKEN", uuid.uuid4().hex + uuid.uuid4().hex
+    )
+    monkeypatch.setenv("SHOPSOMA_PYTEST_DB_STALE_SECONDS", "0")
+    original = DisposableDatabase(RESOLVED_DB_URL)
+    replacement = None
+    try:
+        original.create()
+        stale_marker = sign_owner_marker(
+            RESOLVED_DB_URL, {**original.marker, "created_ns": time.time_ns()}
+        )
+        _replace_database_marker(original, stale_marker)
+        original._release_owner_lease()
+
+        replacement = DisposableDatabase(RESOLVED_DB_URL)
+        scavenger = DisposableDatabase(RESOLVED_DB_URL)
+        real_try_acquire = DisposableDatabase._try_acquire_marker_lease
+        replacement_started = False
+
+        def replace_before_outer_acquire(connection, marker):
+            nonlocal replacement_started
+            if (
+                marker["lease_key"] == stale_marker["lease_key"]
+                and not replacement_started
+            ):
+                replacement_started = True
+                replacement.create()
+            return real_try_acquire(connection, marker)
+
+        monkeypatch.setattr(
+            DisposableDatabase,
+            "_try_acquire_marker_lease",
+            staticmethod(replace_before_outer_acquire),
+        )
+        assert scavenger.scavenge() == 0
+        assert replacement_started
+        replacement.assert_owned()
+    finally:
+        if replacement is not None:
+            replacement.drop()
+        original.drop()
+
+
+def test_create_revalidates_marker_after_acquiring_stale_collision_lease(
+    monkeypatch,
+) -> None:
+    """A collision must fail closed if another owner replaces its marker first."""
+    from tests.conftest import RESOLVED_DB_URL
+
+    monkeypatch.setenv("SHOPSOMA_PYTEST_DB_RUN_ID", uuid.uuid4().hex[:24])
+    monkeypatch.setenv(
+        "SHOPSOMA_PYTEST_DB_OWNER_TOKEN", uuid.uuid4().hex + uuid.uuid4().hex
+    )
+    monkeypatch.setenv("SHOPSOMA_PYTEST_DB_STALE_SECONDS", "0")
+    original = DisposableDatabase(RESOLVED_DB_URL)
+    replacement = None
+    contender = None
+    try:
+        original.create()
+        stale_marker = sign_owner_marker(
+            RESOLVED_DB_URL, {**original.marker, "created_ns": time.time_ns()}
+        )
+        _replace_database_marker(original, stale_marker)
+        original._release_owner_lease()
+
+        replacement = DisposableDatabase(RESOLVED_DB_URL)
+        contender = DisposableDatabase(RESOLVED_DB_URL)
+        monkeypatch.setattr(contender, "scavenge", lambda: 0)
+        real_try_acquire = DisposableDatabase._try_acquire_marker_lease
+        replacement_started = False
+
+        def replace_before_contender_acquire(connection, marker):
+            nonlocal replacement_started
+            if (
+                marker["lease_key"] == stale_marker["lease_key"]
+                and not replacement_started
+            ):
+                replacement_started = True
+                replacement.create()
+            return real_try_acquire(connection, marker)
+
+        monkeypatch.setattr(
+            DisposableDatabase,
+            "_try_acquire_marker_lease",
+            staticmethod(replace_before_contender_acquire),
+        )
+        with pytest.raises(RuntimeError, match="ownership changed"):
+            contender.create()
+        assert replacement_started
+        replacement.assert_owned()
+    finally:
+        if contender is not None:
+            contender._release_owner_lease()
+        if replacement is not None:
+            replacement.drop()
+        original.drop()
 
 
 @pytest.mark.parametrize("outcome", ["pass", "fail"])
@@ -408,9 +548,8 @@ def test_stale_owned_collision_replaces_standalone_function(monkeypatch) -> None
             RESOLVED_DB_URL,
             {
                 **original.marker,
-                "created_ns": 1,
+                "created_ns": time.time_ns(),
                 "pid": 2_147_483_647,
-                "process_start": "1",
             },
         )
         original.marker = stale_marker
@@ -426,6 +565,9 @@ def test_stale_owned_collision_replaces_standalone_function(monkeypatch) -> None
                 )
         finally:
             admin.dispose()
+
+        # Simulate process death: PostgreSQL releases the session-level owner lease.
+        original._release_owner_lease()
 
         replacement = DisposableDatabase(RESOLVED_DB_URL)
         assert replacement.name == original.name
@@ -476,12 +618,14 @@ def test_scavenger_cleanup_is_bounded_to_one_batch(monkeypatch) -> None:
                     RESOLVED_DB_URL,
                     {
                         **lifecycle.marker,
-                        "created_ns": 1,
+                        # Other xdist workers retain the default one-hour threshold,
+                        # while this test's scavenger explicitly uses zero seconds.
+                        "created_ns": time.time_ns(),
                         "pid": 2_147_483_647,
-                        "process_start": "1",
                     },
                 ),
             )
+            lifecycle._release_owner_lease()
 
         monkeypatch.setenv("SHOPSOMA_PYTEST_DB_RUN_ID", uuid.uuid4().hex[:24])
         monkeypatch.setenv(
@@ -515,7 +659,7 @@ def test_scavenger_cursor_reaches_stale_marker_after_rejected_page(monkeypatch) 
                 connection.exec_driver_sql(
                     f"CREATE DATABASE {scavenger._quote(connection, name)}"
                 )
-            rejected_marker = '{"app":"shopsoma-pytest-database-v3","bad":true}'
+            rejected_marker = '{"app":"shopsoma-pytest-database-v4","bad":true}'
             for name in rejected_names:
                 connection.exec_driver_sql(
                     f"COMMENT ON DATABASE {scavenger._quote(connection, name)} "
@@ -525,9 +669,8 @@ def test_scavenger_cursor_reaches_stale_marker_after_rejected_page(monkeypatch) 
                 RESOLVED_DB_URL,
                 {
                     **make_owner_marker(RESOLVED_DB_URL, stale_name),
-                    "created_ns": 1,
+                    "created_ns": time.time_ns(),
                     "pid": 2_147_483_647,
-                    "process_start": "1",
                 },
             )
             connection.exec_driver_sql(
