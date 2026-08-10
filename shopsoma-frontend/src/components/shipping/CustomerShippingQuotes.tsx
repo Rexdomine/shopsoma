@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   shippingQuoteService,
   type CustomerShippingQuote,
@@ -7,6 +7,23 @@ import {
 
 interface CustomerShippingQuotesProps {
   orderId: string;
+}
+
+interface PendingSelection {
+  orderId: string;
+  quoteId: string;
+  optionId: string;
+  key: string;
+  generation: number;
+}
+
+function sameSelection(left: PendingSelection | null, right: PendingSelection): boolean {
+  return left !== null
+    && left.orderId === right.orderId
+    && left.quoteId === right.quoteId
+    && left.optionId === right.optionId
+    && left.key === right.key
+    && left.generation === right.generation;
 }
 
 const SAFE_ERROR = 'Delivery options are unavailable right now. Please try again.';
@@ -60,10 +77,21 @@ export default function CustomerShippingQuotes({ orderId }: CustomerShippingQuot
   const [reloadToken, setReloadToken] = useState(0);
   const [message, setMessage] = useState('');
   const [nowMs, setNowMs] = useState(() => Date.now());
+  const [pendingSelection, setPendingSelection] = useState<PendingSelection | null>(null);
+  const pendingSelectionRef = useRef<PendingSelection | null>(null);
+  const inFlightSelectionRef = useRef<PendingSelection | null>(null);
+  const selectionGenerationRef = useRef(0);
+  const latestOrderIdRef = useRef(orderId);
   const pendingQuoteKey = useRef<string | null>(null);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    latestOrderIdRef.current = orderId;
+    selectionGenerationRef.current += 1;
     pendingQuoteKey.current = null;
+    pendingSelectionRef.current = null;
+    inFlightSelectionRef.current = null;
+    setPendingSelection(null);
+    setSelectingOptionId(null);
   }, [orderId]);
 
   useEffect(() => {
@@ -109,7 +137,7 @@ export default function CustomerShippingQuotes({ orderId }: CustomerShippingQuot
   }, [quotes, nowMs]);
 
   const requestQuote = async () => {
-    if (requesting) return;
+    if (requesting || pendingSelectionRef.current !== null) return;
     setRequesting(true);
     setLoadFailed(false);
     setMessage('');
@@ -129,22 +157,58 @@ export default function CustomerShippingQuotes({ orderId }: CustomerShippingQuot
   };
 
   const selectOption = async (quote: CustomerShippingQuote, option: CustomerShippingQuoteOption) => {
-    if (selectingOptionId || effectiveQuoteStatus(quote, Date.now()) !== 'available') return;
+    if (inFlightSelectionRef.current !== null) return;
+
+    const existingSelection = pendingSelectionRef.current;
+    const matchesExisting = existingSelection !== null
+      && existingSelection.orderId === orderId
+      && existingSelection.quoteId === quote.id
+      && existingSelection.optionId === option.id;
+    if (existingSelection !== null && !matchesExisting) {
+      setMessage(SAFE_ERROR);
+      return;
+    }
+    if (!matchesExisting && effectiveQuoteStatus(quote, Date.now()) !== 'available') return;
+
+    const selectionRequest: PendingSelection = existingSelection ?? {
+      orderId,
+      quoteId: quote.id,
+      optionId: option.id,
+      key: actionKey('selection'),
+      generation: selectionGenerationRef.current + 1,
+    };
+    if (existingSelection === null) {
+      selectionGenerationRef.current = selectionRequest.generation;
+      pendingSelectionRef.current = selectionRequest;
+      setPendingSelection(selectionRequest);
+    }
+    inFlightSelectionRef.current = selectionRequest;
     setSelectingOptionId(option.id);
     setMessage('');
+
+    const remainsAuthoritative = () => latestOrderIdRef.current === selectionRequest.orderId
+      && sameSelection(pendingSelectionRef.current, selectionRequest)
+      && sameSelection(inFlightSelectionRef.current, selectionRequest);
+
     try {
       const updated = await shippingQuoteService.selectOption(
-        orderId,
-        quote.id,
-        option.id,
-        actionKey('selection'),
+        selectionRequest.orderId,
+        selectionRequest.quoteId,
+        selectionRequest.optionId,
+        selectionRequest.key,
       );
+      if (!remainsAuthoritative()) return;
+      pendingSelectionRef.current = null;
+      inFlightSelectionRef.current = null;
+      setPendingSelection(null);
+      setSelectingOptionId(null);
       setQuotes((current) => current.map((item) => (item.id === updated.id ? updated : item)));
       setMessage('Delivery option selected.');
     } catch {
-      setMessage(SAFE_ERROR);
-    } finally {
+      if (!remainsAuthoritative()) return;
+      inFlightSelectionRef.current = null;
       setSelectingOptionId(null);
+      setMessage(SAFE_ERROR);
     }
   };
 
@@ -188,15 +252,25 @@ export default function CustomerShippingQuotes({ orderId }: CustomerShippingQuot
               {quote.options.map((option) => {
                 const selected = quote.selected_option_id === option.id;
                 const unavailable = quote.status === 'expired' || quote.status === 'superseded';
-                const selecting = selectingOptionId === option.id;
-                const disabled = unavailable || quote.status === 'selected' || selectingOptionId !== null;
+                const matchingPending = pendingSelection !== null
+                  && pendingSelection.orderId === orderId
+                  && pendingSelection.quoteId === quote.id
+                  && pendingSelection.optionId === option.id;
+                const selecting = selectingOptionId === option.id && matchingPending;
+                const recovering = unavailable && matchingPending;
+                const disabled = quote.status === 'selected'
+                  || selectingOptionId !== null
+                  || (unavailable && !recovering)
+                  || (pendingSelection !== null && !matchingPending);
                 const buttonLabel = selected
                   ? `Selected ${option.service_label}`
-                  : unavailable
-                    ? `${quote.status === 'expired' ? 'Expired' : 'Unavailable'} ${option.service_label}`
-                    : selecting
-                      ? 'Selecting…'
-                      : `Choose ${option.service_label}`;
+                  : selecting
+                    ? 'Selecting…'
+                    : recovering
+                      ? `Retry selection for ${option.service_label}`
+                      : unavailable
+                        ? `${quote.status === 'expired' ? 'Expired' : 'Unavailable'} ${option.service_label}`
+                        : `Choose ${option.service_label}`;
                 return (
                   <div key={option.id} className="flex flex-col gap-3 rounded-sm bg-gray-50 p-3 sm:flex-row sm:items-center sm:justify-between">
                     <div>
@@ -211,7 +285,15 @@ export default function CustomerShippingQuotes({ orderId }: CustomerShippingQuot
                       onClick={() => selectOption(quote, option)}
                       className="min-h-11 rounded-sm bg-primary px-4 py-2 text-sm font-semibold text-white transition hover:bg-primary-dark disabled:cursor-not-allowed disabled:bg-gray-300"
                     >
-                      {selected ? 'Selected' : unavailable ? (quote.status === 'expired' ? 'Expired' : 'Unavailable') : selecting ? 'Selecting…' : 'Choose'}
+                      {selected
+                        ? 'Selected'
+                        : selecting
+                          ? 'Selecting…'
+                          : recovering
+                            ? 'Retry selection'
+                            : unavailable
+                              ? quote.status === 'expired' ? 'Expired' : 'Unavailable'
+                              : 'Choose'}
                     </button>
                   </div>
                 );
@@ -224,12 +306,20 @@ export default function CustomerShippingQuotes({ orderId }: CustomerShippingQuot
       {!hasSelectableQuote && !displayQuotes.some((quote) => quote.status === 'selected') && (
         <button
           type="button"
-          disabled={requesting}
-          aria-label={loadFailed ? 'Retry loading delivery options' : undefined}
+          disabled={requesting || pendingSelection !== null}
+          aria-label={loadFailed
+            ? 'Retry loading delivery options'
+            : pendingSelection !== null
+              ? 'Resolve pending delivery selection first'
+              : undefined}
           onClick={loadFailed ? () => setReloadToken((value) => value + 1) : requestQuote}
           className="min-h-11 w-full rounded-sm border border-primary px-4 py-2 text-sm font-semibold text-primary transition hover:bg-primary/5 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
         >
-          {requesting ? 'Getting delivery options…' : loadFailed || message === SAFE_ERROR ? 'Try again' : 'Get delivery options'}
+          {requesting
+            ? 'Getting delivery options…'
+            : pendingSelection !== null
+              ? 'Resolve pending selection first'
+              : loadFailed || message === SAFE_ERROR ? 'Try again' : 'Get delivery options'}
         </button>
       )}
 
