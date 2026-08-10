@@ -14,6 +14,7 @@ import uuid
 
 import pytest
 from sqlalchemy import String, create_engine, text
+from sqlalchemy.engine import Connection
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import async_sessionmaker
 from sqlalchemy.pool import NullPool
@@ -22,6 +23,7 @@ from tests.fixture_database import (
     _MAX_SCAVENGE,
     DisposableDatabase,
     build_test_database_name,
+    database_name_is_authenticated,
     make_owner_marker,
     marker_is_cleanup_candidate,
     parse_marker,
@@ -152,6 +154,186 @@ def test_database_names_bind_distinct_parent_clusters_and_fit_postgres() -> None
     assert first != second
     assert len(first.encode("ascii")) <= 63
     assert len(second.encode("ascii")) <= 63
+
+
+def test_create_recovers_when_marker_publication_is_interrupted(monkeypatch) -> None:
+    """An autocommitted CREATE must not leak or block retry if COMMENT never runs."""
+    from tests.conftest import RESOLVED_DB_URL
+
+    monkeypatch.setenv("SHOPSOMA_PYTEST_DB_RUN_ID", uuid.uuid4().hex[:24])
+    monkeypatch.setenv(
+        "SHOPSOMA_PYTEST_DB_OWNER_TOKEN", uuid.uuid4().hex + uuid.uuid4().hex
+    )
+    lifecycle = DisposableDatabase(RESOLVED_DB_URL)
+    assert database_name_is_authenticated(RESOLVED_DB_URL, lifecycle.name)
+    real_exec_driver_sql = Connection.exec_driver_sql
+    interrupted = False
+
+    def interrupt_first_marker(self, statement, *args, **kwargs):
+        nonlocal interrupted
+        if not interrupted and statement.startswith("COMMENT ON DATABASE"):
+            interrupted = True
+            raise RuntimeError("simulated process death before marker publication")
+        return real_exec_driver_sql(self, statement, *args, **kwargs)
+
+    monkeypatch.setattr(Connection, "exec_driver_sql", interrupt_first_marker)
+    try:
+        with pytest.raises(
+            RuntimeError, match="simulated process death before marker publication"
+        ):
+            lifecycle.create()
+        admin = lifecycle._admin()
+        try:
+            with admin.connect() as connection:
+                assert lifecycle._database_marker_row(connection, lifecycle.name) == (
+                    True,
+                    None,
+                )
+        finally:
+            admin.dispose()
+
+        for attempt in range(3):
+            try:
+                assert lifecycle.create() == lifecycle.name
+                break
+            except RuntimeError as error:
+                if "still publishing" not in str(error) or attempt == 2:
+                    raise
+                time.sleep(0.05)
+        lifecycle.assert_owned()
+    finally:
+        monkeypatch.setattr(Connection, "exec_driver_sql", real_exec_driver_sql)
+        lifecycle.drop()
+
+
+def test_scavenger_fences_active_publication_and_removes_crashed_orphan(
+    monkeypatch,
+) -> None:
+    """Only the authenticated unmarked DB whose publication lease ended is removable."""
+    from tests.conftest import RESOLVED_DB_URL
+
+    monkeypatch.setenv("SHOPSOMA_PYTEST_DB_RUN_ID", uuid.uuid4().hex[:24])
+    monkeypatch.setenv(
+        "SHOPSOMA_PYTEST_DB_OWNER_TOKEN", uuid.uuid4().hex + uuid.uuid4().hex
+    )
+    owner = DisposableDatabase(RESOLVED_DB_URL)
+    scavenger = DisposableDatabase(RESOLVED_DB_URL)
+    owner._acquire_owner_lease()
+    owner._acquire_publication_lease()
+    admin = owner._admin()
+    try:
+        with admin.connect() as connection:
+            connection.exec_driver_sql(
+                f"CREATE DATABASE {owner._quote(connection, owner.name)}"
+            )
+        scavenger.scavenge()
+        with admin.connect() as connection:
+            assert owner._database_marker_row(connection, owner.name) == (True, None)
+        owner._release_publication_lease()
+        owner._release_owner_lease()
+        scavenger._scavenge_cursor = ""
+        scavenger.scavenge()
+        with admin.connect() as connection:
+            assert owner._database_marker_row(connection, owner.name) == (False, None)
+    finally:
+        owner._release_publication_lease()
+        owner._release_owner_lease()
+        with admin.connect() as connection:
+            owner._terminate_and_drop(connection, owner.name)
+        admin.dispose()
+
+
+def test_scavenger_preserves_unauthenticated_unmarked_prefixed_database(
+    monkeypatch,
+) -> None:
+    """A fixture-looking name without a valid authority tag must fail closed."""
+    from tests.conftest import RESOLVED_DB_URL
+
+    monkeypatch.setenv("SHOPSOMA_PYTEST_DB_RUN_ID", uuid.uuid4().hex[:24])
+    monkeypatch.setenv(
+        "SHOPSOMA_PYTEST_DB_OWNER_TOKEN", uuid.uuid4().hex + uuid.uuid4().hex
+    )
+    lifecycle = DisposableDatabase(RESOLVED_DB_URL)
+    foreign_name = f"sspt_foreign_{uuid.uuid4().hex[:20]}"
+    assert not database_name_is_authenticated(RESOLVED_DB_URL, foreign_name)
+    admin = lifecycle._admin()
+    try:
+        with admin.connect() as connection:
+            connection.exec_driver_sql(
+                f"CREATE DATABASE {lifecycle._quote(connection, foreign_name)}"
+            )
+        lifecycle.scavenge()
+        with admin.connect() as connection:
+            assert lifecycle._database_marker_row(connection, foreign_name) == (
+                True,
+                None,
+            )
+    finally:
+        with admin.connect() as connection:
+            lifecycle._terminate_and_drop(connection, foreign_name)
+        admin.dispose()
+
+
+def test_scavenger_preserves_authenticated_name_from_different_parent(
+    monkeypatch,
+) -> None:
+    """A same-secret name from another parent identity must fail closed."""
+    from tests.conftest import RESOLVED_DB_URL
+
+    monkeypatch.setenv("SHOPSOMA_PYTEST_DB_RUN_ID", uuid.uuid4().hex[:24])
+    monkeypatch.setenv(
+        "SHOPSOMA_PYTEST_DB_OWNER_TOKEN", uuid.uuid4().hex + uuid.uuid4().hex
+    )
+    lifecycle = DisposableDatabase(RESOLVED_DB_URL)
+    foreign_parent_url = RESOLVED_DB_URL.set(database=f"foreign_{uuid.uuid4().hex[:8]}")
+    foreign_name = DisposableDatabase(foreign_parent_url).name
+    assert database_name_is_authenticated(foreign_parent_url, foreign_name)
+    assert not database_name_is_authenticated(RESOLVED_DB_URL, foreign_name)
+    admin = lifecycle._admin()
+    try:
+        with admin.connect() as connection:
+            connection.exec_driver_sql(
+                f"CREATE DATABASE {lifecycle._quote(connection, foreign_name)}"
+            )
+        lifecycle.scavenge()
+        with admin.connect() as connection:
+            assert lifecycle._database_marker_row(connection, foreign_name) == (
+                True,
+                None,
+            )
+    finally:
+        with admin.connect() as connection:
+            lifecycle._terminate_and_drop(connection, foreign_name)
+        admin.dispose()
+
+
+def test_scavenger_preserves_forged_authenticated_shape(monkeypatch) -> None:
+    """A fixture-shaped name with an invalid authentication tag must survive."""
+    from tests.conftest import RESOLVED_DB_URL
+
+    monkeypatch.setenv("SHOPSOMA_PYTEST_DB_RUN_ID", uuid.uuid4().hex[:24])
+    monkeypatch.setenv(
+        "SHOPSOMA_PYTEST_DB_OWNER_TOKEN", uuid.uuid4().hex + uuid.uuid4().hex
+    )
+    lifecycle = DisposableDatabase(RESOLVED_DB_URL)
+    forged_name = f"sspt_forged_{uuid.uuid4().hex[:16]}_a{'0' * 18}"
+    assert not database_name_is_authenticated(RESOLVED_DB_URL, forged_name)
+    admin = lifecycle._admin()
+    try:
+        with admin.connect() as connection:
+            connection.exec_driver_sql(
+                f"CREATE DATABASE {lifecycle._quote(connection, forged_name)}"
+            )
+        lifecycle.scavenge()
+        with admin.connect() as connection:
+            assert lifecycle._database_marker_row(connection, forged_name) == (
+                True,
+                None,
+            )
+    finally:
+        with admin.connect() as connection:
+            lifecycle._terminate_and_drop(connection, forged_name)
+        admin.dispose()
 
 
 def test_owner_marker_rejects_malformed_weak_and_extra_fields() -> None:
@@ -322,7 +504,10 @@ def test_scavenger_preserves_old_live_owner_when_local_pid_is_invisible(
         monkeypatch.setenv(
             "SHOPSOMA_PYTEST_DB_OWNER_TOKEN", uuid.uuid4().hex + uuid.uuid4().hex
         )
-        assert DisposableDatabase(RESOLVED_DB_URL).scavenge() == 0
+        # Other xdist workers may expose their own recoverable orphans while this
+        # scavenger runs, so the global removal count is not an isolation-safe
+        # assertion. The contract under test is that this exact live owner survives.
+        DisposableDatabase(RESOLVED_DB_URL).scavenge()
         owner.assert_owned()
     finally:
         owner.drop()

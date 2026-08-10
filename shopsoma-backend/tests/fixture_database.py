@@ -20,6 +20,10 @@ _MARKER_PREFIX = '{"app":"shopsoma-pytest-database-v4"'
 _MAX_IDENTIFIER_BYTES = 63
 _MAX_SCAVENGE = 8
 _MAX_SCAVENGE_SCAN = 64
+_PUBLICATION_LEASE_WAIT_SECONDS = 10.0
+_PUBLICATION_LEASE_POLL_SECONDS = 0.02
+_NAME_PREFIX = "sspt_"
+_NAME_AUTH_HEX = 18
 _PROCESS_DATABASES: dict[tuple[str, str], "DisposableDatabase"] = {}
 
 
@@ -73,7 +77,7 @@ def build_test_database_name(
     )
     name = (
         f"sspt_{base_prefix or 'x'}_{worker_prefix or 'x'}_"
-        f"p{_digest(parent_identity)}_i{_digest(combined_identity, size=12)}"
+        f"p{_digest(parent_identity)}_i{_digest(combined_identity, size=8)}"
     )
     if len(name.encode("utf-8")) > _MAX_IDENTIFIER_BYTES:
         raise AssertionError(
@@ -131,6 +135,48 @@ def _ownership_key(base_url: URL) -> bytes:
     if not password:
         raise RuntimeError("test database ownership signing requires a password")
     return hashlib.sha256(f"{_MARKER_APP}\0{password}".encode("utf-8")).digest()
+
+
+def authenticate_database_name(base_url: URL, unsigned_name: str) -> str:
+    """Embed proof that an otherwise-unmarked name belongs to this fixture authority."""
+    tag = hmac.new(
+        _ownership_key(base_url),
+        (
+            f"{_MARKER_APP}\0database-name\0{parent_fingerprint(base_url)}\0"
+            f"{unsigned_name}"
+        ).encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()[:_NAME_AUTH_HEX]
+    name = f"{unsigned_name}_a{tag}"
+    if len(name.encode("utf-8")) > _MAX_IDENTIFIER_BYTES:
+        raise AssertionError(
+            "authenticated test database identifier exceeds PostgreSQL's 63-byte limit"
+        )
+    return name
+
+
+def database_name_is_authenticated(base_url: URL, name: str) -> bool:
+    """Accept only fixture names carrying a password-derived authentication tag."""
+    match = re.fullmatch(
+        rf"(?P<unsigned>{re.escape(_NAME_PREFIX)}[a-z0-9_]+)_a"
+        rf"(?P<tag>[0-9a-f]{{{_NAME_AUTH_HEX}}})",
+        name,
+    )
+    if match is None:
+        return False
+    return hmac.compare_digest(
+        name, authenticate_database_name(base_url, match.group("unsigned"))
+    )
+
+
+def publication_lock_key(database_name: str, parent: str) -> int:
+    """Derive the deterministic lock that fences CREATE-to-COMMENT publication."""
+    identity = "\0".join((_MARKER_APP, "publication", database_name, parent))
+    return int.from_bytes(
+        hashlib.blake2b(identity.encode("utf-8"), digest_size=8).digest(),
+        byteorder="big",
+        signed=True,
+    )
 
 
 def sign_owner_marker(base_url: URL, marker: dict[str, Any]) -> dict[str, Any]:
@@ -243,15 +289,20 @@ class DisposableDatabase:
         self.base_url = base_url
         driver = base_url.drivername.split("+", 1)[0]
         self.admin_url = base_url.set(drivername=driver, database="postgres")
-        self.name = build_test_database_name(
-            base_url.database or "postgres",
-            parent_identity=parent_fingerprint(base_url),
+        parent = parent_fingerprint(base_url)
+        self.name = authenticate_database_name(
+            base_url,
+            build_test_database_name(
+                base_url.database or "postgres",
+                parent_identity=parent,
+            ),
         )
         self.marker = make_owner_marker(base_url, self.name)
         self.marker_text = serialize_marker(self.marker)
         self._scavenge_cursor = ""
         self._lease_engine = None
         self._lease_connection = None
+        self._publication_lease_held = False
 
     def _admin(self):
         return create_engine(
@@ -297,6 +348,40 @@ class DisposableDatabase:
             if engine is not None:
                 engine.dispose()
 
+    def _acquire_publication_lease(self) -> None:
+        """Fence the non-transactional CREATE DATABASE / COMMENT publication gap."""
+        connection = self._lease_connection
+        if connection is None:
+            raise RuntimeError("owner lease is required before database publication")
+        if self._publication_lease_held:
+            return
+        key = publication_lock_key(self.name, self.marker["parent"])
+        deadline = time.monotonic() + _PUBLICATION_LEASE_WAIT_SECONDS
+        while True:
+            acquired = connection.scalar(
+                text("SELECT pg_try_advisory_lock(:key)"), {"key": key}
+            )
+            if acquired:
+                self._publication_lease_held = True
+                return
+            if time.monotonic() >= deadline:
+                raise RuntimeError("another test database creator is still publishing")
+            time.sleep(_PUBLICATION_LEASE_POLL_SECONDS)
+
+    def _release_publication_lease(self) -> None:
+        connection = self._lease_connection
+        if not self._publication_lease_held:
+            return
+        if connection is None:
+            raise RuntimeError("lost fixture publication connection")
+        released = connection.scalar(
+            text("SELECT pg_advisory_unlock(:key)"),
+            {"key": publication_lock_key(self.name, self.marker["parent"])},
+        )
+        self._publication_lease_held = False
+        if not released:
+            raise RuntimeError("lost fixture publication lease")
+
     @staticmethod
     def _try_acquire_marker_lease(connection, marker: dict[str, Any]) -> bool:
         return bool(
@@ -330,6 +415,33 @@ class DisposableDatabase:
             {"name": name},
         ).scalar()
 
+    @staticmethod
+    def _database_marker_row(connection, name: str) -> tuple[bool, str | None]:
+        row = connection.execute(
+            text(
+                "SELECT shobj_description(oid, 'pg_database') "
+                "FROM pg_database WHERE datname=:name"
+            ),
+            {"name": name},
+        ).first()
+        return (False, None) if row is None else (True, row[0])
+
+    def _try_acquire_publication_lease(self, connection, name: str) -> bool:
+        return bool(
+            connection.scalar(
+                text("SELECT pg_try_advisory_lock(:key)"),
+                {"key": publication_lock_key(name, self.marker["parent"])},
+            )
+        )
+
+    def _release_candidate_publication_lease(self, connection, name: str) -> None:
+        released = connection.scalar(
+            text("SELECT pg_advisory_unlock(:key)"),
+            {"key": publication_lock_key(name, self.marker["parent"])},
+        )
+        if not released:
+            raise RuntimeError("lost fixture orphan-publication cleanup lease")
+
     def _terminate_and_drop(self, connection, name: str) -> None:
         connection.execute(
             text(
@@ -353,12 +465,15 @@ class DisposableDatabase:
                     text(
                         "SELECT d.datname, shobj_description(d.oid, 'pg_database') "
                         "FROM pg_database d "
-                        "WHERE shobj_description(d.oid, 'pg_database') LIKE :prefix "
+                        "WHERE (shobj_description(d.oid, 'pg_database') LIKE :prefix "
+                        "OR (shobj_description(d.oid, 'pg_database') IS NULL "
+                        "AND d.datname LIKE :name_prefix)) "
                         "AND d.datname > :cursor "
                         "ORDER BY d.datname LIMIT :limit"
                     ),
                     {
                         "prefix": f"{_MARKER_PREFIX[:-1]}%",
+                        "name_prefix": f"{_NAME_PREFIX}%",
                         "cursor": self._scavenge_cursor,
                         "limit": _MAX_SCAVENGE_SCAN,
                     },
@@ -370,6 +485,22 @@ class DisposableDatabase:
                         break
                     self._scavenge_cursor = name
                     marker = parse_marker(raw_marker)
+                    if raw_marker is None and database_name_is_authenticated(
+                        self.base_url, name
+                    ):
+                        if not self._try_acquire_publication_lease(connection, name):
+                            continue
+                        try:
+                            exists, current = self._database_marker_row(
+                                connection, name
+                            )
+                            if not exists or current is not None:
+                                continue
+                            self._terminate_and_drop(connection, name)
+                            removed += 1
+                        finally:
+                            self._release_candidate_publication_lease(connection, name)
+                        continue
                     if (
                         marker
                         and marker_is_cleanup_candidate(
@@ -397,21 +528,31 @@ class DisposableDatabase:
         return removed
 
     def create(self) -> str:
-        """Create new; never reuse an existing database or blindly replace a collision."""
+        """Create new; recover only authenticated orphans from interrupted publication."""
         self._acquire_owner_lease()
         try:
             self.scavenge()
             engine = self._admin()
             try:
                 with engine.connect() as connection:
-                    existing = connection.execute(
-                        text(
-                            "SELECT shobj_description(oid, 'pg_database') "
-                            "FROM pg_database WHERE datname=:name"
-                        ),
-                        {"name": self.name},
-                    ).scalar()
-                    if existing is not None:
+                    exists, existing = self._database_marker_row(connection, self.name)
+                    if exists and existing is None:
+                        if not database_name_is_authenticated(self.base_url, self.name):
+                            raise RuntimeError(
+                                "refusing to replace an unauthenticated unmarked database"
+                            )
+                        self._acquire_publication_lease()
+                        current_exists, current = self._database_marker_row(
+                            connection, self.name
+                        )
+                        if current_exists and current is not None:
+                            raise RuntimeError(
+                                "refusing to replace an unmarked database whose "
+                                "ownership changed while acquiring its publication lease"
+                            )
+                        if current_exists:
+                            self._terminate_and_drop(connection, self.name)
+                    elif existing is not None:
                         marker = parse_marker(existing)
                         if not marker or not marker_is_cleanup_candidate(
                             marker,
@@ -442,6 +583,13 @@ class DisposableDatabase:
                             self._terminate_and_drop(connection, self.name)
                         finally:
                             self._release_marker_lease(connection, marker)
+                    self._acquire_publication_lease()
+                    appeared, _ = self._database_marker_row(connection, self.name)
+                    if appeared:
+                        raise RuntimeError(
+                            "refusing to create a test database whose name became occupied "
+                            "while acquiring its publication lease"
+                        )
                     quoted_name = self._quote(connection, self.name)
                     connection.exec_driver_sql(f"CREATE DATABASE {quoted_name}")
                     marker_literal = String().literal_processor(connection.dialect)
@@ -455,7 +603,9 @@ class DisposableDatabase:
                     )
             finally:
                 engine.dispose()
+            self._release_publication_lease()
         except BaseException:
+            self._release_publication_lease()
             self._release_owner_lease()
             raise
         return self.name
