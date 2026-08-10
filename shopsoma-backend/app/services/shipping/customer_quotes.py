@@ -32,6 +32,7 @@ from app.models.package_custody import (
     OutboundShipmentIntent,
     OutboundShipmentIntentInvalidation,
 )
+from app.models.user import User
 from app.services.shipping.capabilities import DomesticShippingCapabilities
 
 
@@ -127,6 +128,14 @@ class CustomerShippingQuoteService:
         quote.status = status
         return quote
 
+    async def _lock_customer(self, customer_id: UUID) -> None:
+        """Serialize customer-wide quote idempotency before any order lock."""
+        locked = await self.session.scalar(
+            select(User.id).where(User.id == customer_id).with_for_update()
+        )
+        if locked is None:
+            raise ShippingQuoteNotFound("shipping quote was not found")
+
     async def _owned_order(
         self, order_id: UUID, customer_id: UUID, *, lock: bool = False
     ) -> Order:
@@ -220,17 +229,7 @@ class CustomerShippingQuoteService:
             raise ShippingQuoteUnavailable("shipping quotes are unavailable")
 
         fingerprint = _fingerprint("create_quote", order_id=order_id)
-        replay = await self.session.scalar(
-            select(CustomerShippingQuote).where(
-                CustomerShippingQuote.customer_id == customer_id,
-                CustomerShippingQuote.idempotency_key == idempotency_key,
-            )
-        )
-        if replay is not None:
-            if replay.request_fingerprint != fingerprint:
-                raise ShippingQuoteConflict("idempotency key was already used")
-            return await self._decorate(replay)
-
+        await self._lock_customer(customer_id)
         order = await self._owned_order(order_id, customer_id, lock=True)
         replay = await self.session.scalar(
             select(CustomerShippingQuote).where(
@@ -244,6 +243,14 @@ class CustomerShippingQuoteService:
             return await self._decorate(replay)
 
         intent, package, seal = await self._active_subject(order.id)
+        selected_quote_id = await self.session.scalar(
+            select(CustomerShippingQuoteSelection.quote_id).where(
+                CustomerShippingQuoteSelection.intent_id == intent.id
+            )
+        )
+        if selected_quote_id is not None:
+            raise ShippingQuoteConflict("selected shipping quote cannot be replaced")
+
         now = await self._clock()
         minimum_expiry = now + timedelta(seconds=self.quote_ttl_seconds)
         response, attempt, offers = await self._eligible_rate_evidence(
@@ -263,11 +270,6 @@ class CustomerShippingQuoteService:
         predecessor = await self.session.scalar(
             select(CustomerShippingQuote)
             .where(CustomerShippingQuote.intent_id == intent.id)
-            .outerjoin(
-                CustomerShippingQuoteSelection,
-                CustomerShippingQuoteSelection.quote_id == CustomerShippingQuote.id,
-            )
-            .where(CustomerShippingQuoteSelection.id.is_(None))
             .order_by(CustomerShippingQuote.created_at.desc())
             .limit(1)
         )

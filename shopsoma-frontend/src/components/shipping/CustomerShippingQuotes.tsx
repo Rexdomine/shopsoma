@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   shippingQuoteService,
   type CustomerShippingQuote,
@@ -10,6 +10,7 @@ interface CustomerShippingQuotesProps {
 }
 
 const SAFE_ERROR = 'Delivery options are unavailable right now. Please try again.';
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
 function actionKey(prefix: 'quote' | 'selection'): string {
   const random = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -23,6 +24,16 @@ function formatAmount(amount: string, currency: string): string {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })}`;
+}
+
+function effectiveQuoteStatus(
+  quote: CustomerShippingQuote,
+  nowMs: number,
+): CustomerShippingQuote['status'] {
+  if (quote.status === 'available' && Date.parse(quote.expires_at) <= nowMs) {
+    return 'expired';
+  }
+  return quote.status;
 }
 
 function optionTiming(option: CustomerShippingQuoteOption): string | null {
@@ -48,6 +59,12 @@ export default function CustomerShippingQuotes({ orderId }: CustomerShippingQuot
   const [loadFailed, setLoadFailed] = useState(false);
   const [reloadToken, setReloadToken] = useState(0);
   const [message, setMessage] = useState('');
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  const pendingQuoteKey = useRef<string | null>(null);
+
+  useEffect(() => {
+    pendingQuoteKey.current = null;
+  }, [orderId]);
 
   useEffect(() => {
     let active = true;
@@ -57,7 +74,10 @@ export default function CustomerShippingQuotes({ orderId }: CustomerShippingQuot
     shippingQuoteService
       .listQuotes(orderId)
       .then((data) => {
-        if (active) setQuotes(data);
+        if (active) {
+          setQuotes(data);
+          setNowMs(Date.now());
+        }
       })
       .catch(() => {
         if (active) {
@@ -74,14 +94,32 @@ export default function CustomerShippingQuotes({ orderId }: CustomerShippingQuot
     };
   }, [orderId, reloadToken]);
 
+  useEffect(() => {
+    const nextExpiry = quotes
+      .filter((quote) => quote.status === 'available')
+      .map((quote) => Date.parse(quote.expires_at))
+      .filter((expiry) => Number.isFinite(expiry) && expiry > nowMs)
+      .sort((left, right) => left - right)[0];
+    if (nextExpiry === undefined) return undefined;
+    const timer = window.setTimeout(
+      () => setNowMs(Date.now()),
+      Math.min(MAX_TIMER_DELAY_MS, Math.max(0, nextExpiry - Date.now())),
+    );
+    return () => window.clearTimeout(timer);
+  }, [quotes, nowMs]);
+
   const requestQuote = async () => {
     if (requesting) return;
     setRequesting(true);
     setLoadFailed(false);
     setMessage('');
+    const idempotencyKey = pendingQuoteKey.current ?? actionKey('quote');
+    pendingQuoteKey.current = idempotencyKey;
     try {
-      const quote = await shippingQuoteService.createQuote(orderId, actionKey('quote'));
+      const quote = await shippingQuoteService.createQuote(orderId, idempotencyKey);
+      pendingQuoteKey.current = null;
       setQuotes((current) => [quote, ...current.filter((item) => item.id !== quote.id)]);
+      setNowMs(Date.now());
       setMessage('Delivery options are ready.');
     } catch {
       setMessage(SAFE_ERROR);
@@ -91,7 +129,7 @@ export default function CustomerShippingQuotes({ orderId }: CustomerShippingQuot
   };
 
   const selectOption = async (quote: CustomerShippingQuote, option: CustomerShippingQuoteOption) => {
-    if (selectingOptionId || quote.status !== 'available') return;
+    if (selectingOptionId || effectiveQuoteStatus(quote, Date.now()) !== 'available') return;
     setSelectingOptionId(option.id);
     setMessage('');
     try {
@@ -114,7 +152,11 @@ export default function CustomerShippingQuotes({ orderId }: CustomerShippingQuot
     return <p className="text-sm text-gray-500" role="status">Loading delivery options…</p>;
   }
 
-  const hasSelectableQuote = quotes.some((quote) => quote.status === 'available');
+  const displayQuotes = quotes.map((quote) => ({
+    ...quote,
+    status: effectiveQuoteStatus(quote, nowMs),
+  }));
+  const hasSelectableQuote = displayQuotes.some((quote) => quote.status === 'available');
 
   return (
     <section aria-labelledby={`shipping-quotes-${orderId}`} className="border-t border-gray-200 pt-5 space-y-4">
@@ -132,7 +174,7 @@ export default function CustomerShippingQuotes({ orderId }: CustomerShippingQuot
       )}
 
       <div className="space-y-4">
-        {quotes.map((quote) => (
+        {displayQuotes.map((quote) => (
           <article key={quote.id} className="rounded-sm border border-gray-200 p-4 space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="text-xs font-semibold uppercase tracking-wide text-gray-600">{quote.status}</span>
@@ -179,7 +221,7 @@ export default function CustomerShippingQuotes({ orderId }: CustomerShippingQuot
         ))}
       </div>
 
-      {!hasSelectableQuote && !quotes.some((quote) => quote.status === 'selected') && (
+      {!hasSelectableQuote && !displayQuotes.some((quote) => quote.status === 'selected') && (
         <button
           type="button"
           disabled={requesting}

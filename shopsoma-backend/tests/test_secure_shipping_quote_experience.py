@@ -264,6 +264,81 @@ async def _case_selection_revalidates_eligibility_and_replay_conflicts(
         )
 
 
+async def _case_create_conflicts_when_selected_quote_blocks_requoting(
+    db_session, vendor_user, customer_user
+) -> None:
+    from app.services.shipping.customer_quotes import (
+        CustomerShippingQuoteService,
+        ShippingQuoteConflict,
+    )
+
+    graph, *_rest = await _rated_subject(db_session, vendor_user, customer_user)
+    service = CustomerShippingQuoteService(
+        db_session,
+        capabilities=_capabilities(),
+        quote_ttl_seconds=1800,
+    )
+    quote = await service.create_quote(
+        order_id=graph["order"].id,
+        customer_id=customer_user["user"].id,
+        idempotency_key="create-before-selection",
+    )
+    await service.select_option(
+        order_id=graph["order"].id,
+        quote_id=quote.id,
+        option_id=quote.options[0].id,
+        customer_id=customer_user["user"].id,
+        idempotency_key="select-before-requote",
+    )
+
+    with pytest.raises(
+        ShippingQuoteConflict, match="selected shipping quote cannot be replaced"
+    ):
+        await service.create_quote(
+            order_id=graph["order"].id,
+            customer_id=customer_user["user"].id,
+            idempotency_key="requote-after-selection",
+        )
+
+
+async def _case_create_keys_serialize_across_customer_orders(
+    db_session, vendor_user, customer_user
+) -> None:
+    from app.services.shipping.customer_quotes import (
+        CustomerShippingQuoteService,
+        ShippingQuoteConflict,
+    )
+
+    first_graph, *_ = await _rated_subject(db_session, vendor_user, customer_user)
+    second_graph, *_ = await _rated_subject(db_session, vendor_user, customer_user)
+    sessions = async_sessionmaker(db_session.bind, expire_on_commit=False)
+
+    async def create(order_id):
+        async with sessions() as session:
+            service = CustomerShippingQuoteService(
+                session,
+                capabilities=_capabilities(),
+                quote_ttl_seconds=1800,
+            )
+            try:
+                quote = await service.create_quote(
+                    order_id=order_id,
+                    customer_id=customer_user["user"].id,
+                    idempotency_key="customer-wide-create-race",
+                )
+                await session.commit()
+                return ("created", quote.order_id)
+            except ShippingQuoteConflict:
+                await session.rollback()
+                return ("conflict", order_id)
+
+    results = await asyncio.gather(
+        create(first_graph["order"].id),
+        create(second_graph["order"].id),
+    )
+    assert sorted(result[0] for result in results) == ["conflict", "created"]
+
+
 async def _case_selection_is_serialized_across_two_postgresql_connections(
     db_session, vendor_user, customer_user
 ) -> None:
@@ -363,6 +438,16 @@ async def _case_api_is_authenticated_idor_safe_and_redacted(
     assert selected.status_code == 200, selected.text
     assert selected.json()["status"] == "selected"
 
+    requote = await client.post(
+        path,
+        headers={
+            **customer_user["headers"],
+            "X-Idempotency-Key": "api-requote-after-selection",
+        },
+    )
+    assert requote.status_code == 409, requote.text
+    assert requote.json() == {"detail": "selected shipping quote cannot be replaced"}
+
 
 @pytest.mark.asyncio
 async def test_secure_shipping_quote_experience_end_to_end(
@@ -376,6 +461,12 @@ async def test_secure_shipping_quote_experience_end_to_end(
         db_session, vendor_user, customer_user
     )
     await _case_selection_revalidates_eligibility_and_replay_conflicts(
+        db_session, vendor_user, customer_user
+    )
+    await _case_create_keys_serialize_across_customer_orders(
+        db_session, vendor_user, customer_user
+    )
+    await _case_create_conflicts_when_selected_quote_blocks_requoting(
         db_session, vendor_user, customer_user
     )
     await _case_selection_is_serialized_across_two_postgresql_connections(

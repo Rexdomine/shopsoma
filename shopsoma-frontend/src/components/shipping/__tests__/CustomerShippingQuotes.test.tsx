@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import CustomerShippingQuotes from '../CustomerShippingQuotes';
 
@@ -107,7 +107,7 @@ describe('CustomerShippingQuotes', () => {
     expect(await screen.findByText('DHL Express Domestic')).toBeInTheDocument();
   });
 
-  it('shows PII-safe generic copy and permits a fresh request retry after failure', async () => {
+  it('reuses the same idempotency key after an ambiguous create failure', async () => {
     listQuotes.mockResolvedValue([]);
     createQuote
       .mockRejectedValueOnce(new Error('provider account 123; package hash secret'))
@@ -120,6 +120,27 @@ describe('CustomerShippingQuotes', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     await waitFor(() => expect(createQuote).toHaveBeenCalledTimes(2));
-    expect(createQuote.mock.calls[0][1]).not.toBe(createQuote.mock.calls[1][1]);
+    expect(createQuote.mock.calls[0][1]).toBe(createQuote.mock.calls[1][1]);
+  });
+
+  it('expires an available quote while the customer keeps the view open', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2099-01-01T11:59:59Z'));
+    listQuotes.mockResolvedValue([
+      { ...availableQuote, expires_at: '2099-01-01T12:00:00Z' },
+    ]);
+    render(<CustomerShippingQuotes orderId="order-1" />);
+
+    await vi.waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Choose DHL Express Domestic' })).toBeEnabled();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+
+    expect(screen.getByRole('button', { name: 'Expired DHL Express Domestic' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Get delivery options' })).toBeEnabled();
+    expect(selectOption).not.toHaveBeenCalled();
+    vi.useRealTimers();
   });
 });
