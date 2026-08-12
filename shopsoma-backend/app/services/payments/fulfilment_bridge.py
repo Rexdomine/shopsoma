@@ -179,7 +179,7 @@ async def _ensure_bridge_attempt(
         raise PaymentBridgeError("payment order was not found")
 
     attempt = await active_bridge_attempt(session, order_id=order.id, lock=True)
-    if attempt is not None:
+    if attempt is not None and attempt.state not in {"failed", "expired"}:
         return attempt
 
     active_reservations = list(
@@ -247,8 +247,9 @@ async def _ensure_bridge_attempt(
         currency=locked_order.currency,
         provider=provider,
         provider_reference=f"shopsoma-{provider}-{attempt_id.hex}",
+        supersedes_attempt_id=attempt.id if attempt is not None else None,
         source_command="initialize_checkout_payment",
-        idempotency_key=f"initialize:{locked_order.id}:{provider}",
+        idempotency_key=f"initialize:{locked_order.id}:{provider}:{attempt_id.hex}",
     )
     session.add(attempt)
     try:

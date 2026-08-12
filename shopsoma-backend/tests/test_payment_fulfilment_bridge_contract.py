@@ -1188,6 +1188,252 @@ async def _invoke_authenticated_failure(
     return await payments.paystack_webhook(request, signature, db)
 
 
+async def _terminal_route_attempt(
+    db_session, vendor_user, customer_user, monkeypatch, provider, terminal_state
+):
+    if terminal_state == "failed":
+        graph, attempt, payment = await _call_started_route_payment(
+            db_session, vendor_user, customer_user, provider
+        )
+        await _invoke_authenticated_failure(
+            provider,
+            "callback",
+            db_session,
+            monkeypatch,
+            attempt=attempt,
+            payment=payment,
+        )
+    else:
+        graph, attempt = await _pending_route_attempt(
+            db_session, vendor_user, customer_user, provider
+        )
+        await db_session.execute(text("SET LOCAL session_replication_role = replica"))
+        await db_session.execute(
+            text(
+                "UPDATE payment_attempts SET state='expired', "
+                "terminal_at=clock_timestamp(), row_version=row_version + 1 "
+                "WHERE id=:attempt_id"
+            ),
+            {"attempt_id": attempt.id},
+        )
+        await db_session.execute(text("SET LOCAL session_replication_role = origin"))
+        await db_session.commit()
+    await db_session.refresh(attempt)
+    assert attempt.state == terminal_state
+    return graph, attempt
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ["stripe", "paystack"])
+@pytest.mark.parametrize("terminal_state", ["failed", "expired"])
+async def test_production_initialize_creates_terminal_attempt_successor_before_provider(
+    db_session,
+    vendor_user,
+    customer_user,
+    monkeypatch,
+    provider,
+    terminal_state,
+) -> None:
+    graph, predecessor = await _terminal_route_attempt(
+        db_session,
+        vendor_user,
+        customer_user,
+        monkeypatch,
+        provider,
+        terminal_state,
+    )
+    predecessor_provider = predecessor.provider
+    predecessor_reference = predecessor.provider_reference
+    memberships = set(
+        await db_session.scalars(
+            select(PaymentAttemptReservation.reservation_id).where(
+                PaymentAttemptReservation.attempt_id == predecessor.id
+            )
+        )
+    )
+    monkeypatch.setattr(
+        payments,
+        "domestic_shipping_capabilities",
+        lambda settings: DomesticShippingCapabilities(True, True, False),
+    )
+    observed = {}
+
+    async def capture_successor():
+        successor = await db_session.scalar(
+            select(PaymentAttempt).where(
+                PaymentAttempt.supersedes_attempt_id == predecessor.id
+            )
+        )
+        assert successor is not None
+        observed["successor"] = successor
+        observed["memberships"] = set(
+            await db_session.scalars(
+                select(PaymentAttemptReservation.reservation_id).where(
+                    PaymentAttemptReservation.attempt_id == successor.id
+                )
+            )
+        )
+        assert successor.state == "call_started"
+
+    if provider == "stripe":
+        customer_user["user"].stripe_customer_id = "cus_existing"
+        await db_session.commit()
+
+        def create_intent(**kwargs):
+            observed["provider_calls"] = observed.get("provider_calls", 0) + 1
+            observed["payload"] = kwargs
+            return SimpleNamespace(id="pi_successor", client_secret="secret_successor")
+
+        original_truth = payments.payment_initialization_truth
+
+        async def capture_truth(*args, **kwargs):
+            truth = await original_truth(*args, **kwargs)
+            await capture_successor()
+            return truth
+
+        monkeypatch.setattr(payments, "payment_initialization_truth", capture_truth)
+        monkeypatch.setattr(payments.stripe.PaymentIntent, "create", create_intent)
+    else:
+        _PaystackInitializationClient.calls = 0
+        monkeypatch.setattr(payments, "PAYSTACK_SECRET_KEY", "sk_test_placeholder")
+
+        class CapturingPaystackClient(_PaystackInitializationClient):
+            async def post(self, *args, **kwargs):
+                observed["provider_calls"] = observed.get("provider_calls", 0) + 1
+                await capture_successor()
+                observed["payload"] = kwargs["json"]
+                return await super().post(*args, **kwargs)
+
+        monkeypatch.setattr(payments.httpx, "AsyncClient", CapturingPaystackClient)
+
+    response = await payments.initialize_payment(
+        PaymentInitializeRequest(
+            order_id=graph["order"].id,
+            email=customer_user["user"].email,
+            payment_gateway=provider,
+            currency=graph["order"].currency,
+            callback_url=None,
+        ),
+        current_user=customer_user["user"],
+        db=db_session,
+    )
+
+    successor = observed["successor"]
+    await db_session.refresh(predecessor)
+    assert response.status is True
+    assert predecessor.provider == predecessor_provider
+    assert predecessor.provider_reference == predecessor_reference
+    assert successor.provider == provider
+    assert successor.provider_reference != predecessor_reference
+    assert successor.idempotency_key != predecessor.idempotency_key
+    assert successor.supersedes_attempt_id == predecessor.id
+    assert observed["memberships"] == memberships
+    assert observed["payload"]["amount"] == int(successor.amount * 100)
+
+    if provider == "stripe":
+        retry = await payments.initialize_payment(
+            PaymentInitializeRequest(
+                order_id=graph["order"].id,
+                email=customer_user["user"].email,
+                payment_gateway=provider,
+                currency=graph["order"].currency,
+                callback_url=None,
+            ),
+            current_user=customer_user["user"],
+            db=db_session,
+        )
+        assert retry.payment_intent_id == response.payment_intent_id
+        assert observed["provider_calls"] == 2
+    else:
+        with pytest.raises(HTTPException) as caught:
+            await payments.initialize_payment(
+                PaymentInitializeRequest(
+                    order_id=graph["order"].id,
+                    email=customer_user["user"].email,
+                    payment_gateway=provider,
+                    currency=graph["order"].currency,
+                    callback_url=None,
+                ),
+                current_user=customer_user["user"],
+                db=db_session,
+            )
+        assert caught.value.status_code == 409
+        assert observed["provider_calls"] == 1
+
+    attempts = list(
+        await db_session.scalars(
+            select(PaymentAttempt).where(PaymentAttempt.order_id == graph["order"].id)
+        )
+    )
+    assert len(attempts) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ["stripe", "paystack"])
+async def test_concurrent_terminal_retry_converges_to_one_successor(
+    db_session, vendor_user, customer_user, monkeypatch, provider
+) -> None:
+    graph, predecessor = await _terminal_route_attempt(
+        db_session,
+        vendor_user,
+        customer_user,
+        monkeypatch,
+        provider,
+        "expired",
+    )
+    predecessor_memberships = set(
+        await db_session.scalars(
+            select(PaymentAttemptReservation.reservation_id).where(
+                PaymentAttemptReservation.attempt_id == predecessor.id
+            )
+        )
+    )
+    maker = async_sessionmaker(db_session.bind, expire_on_commit=False)
+
+    async def initialize():
+        async with maker() as session:
+            order = await session.get(Order, graph["order"].id)
+            try:
+                truth = await payment_initialization_truth(
+                    session,
+                    order=order,
+                    provider=provider,
+                    capabilities=DomesticShippingCapabilities(True, True, False),
+                )
+                await session.commit()
+                return truth
+            except PaymentBridgeError as exc:
+                await session.rollback()
+                return exc
+
+    results = await asyncio.gather(initialize(), initialize())
+    successors = list(
+        await db_session.scalars(
+            select(PaymentAttempt).where(
+                PaymentAttempt.supersedes_attempt_id == predecessor.id
+            )
+        )
+    )
+    assert len(successors) == 1
+    successor_memberships = set(
+        await db_session.scalars(
+            select(PaymentAttemptReservation.reservation_id).where(
+                PaymentAttemptReservation.attempt_id == successors[0].id
+            )
+        )
+    )
+    assert successor_memberships == predecessor_memberships
+    if provider == "stripe":
+        assert all(isinstance(result, PaymentInitializationTruth) for result in results)
+        assert {result.attempt_id for result in results} == {successors[0].id}
+    else:
+        assert (
+            sum(isinstance(result, PaymentInitializationTruth) for result in results)
+            == 1
+        )
+        assert sum(isinstance(result, PaymentBridgeError) for result in results) == 1
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("provider", ["stripe", "paystack"])
 @pytest.mark.parametrize("transport", ["callback", "webhook"])
