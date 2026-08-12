@@ -33,6 +33,7 @@ from app.services.payments.fulfilment_bridge import (
     finalize_failed_payment,
     finalize_verified_payment,
     payment_initialization_truth,
+    recover_failed_payment_mapping,
     recover_payment_mapping,
 )
 from app.services.shipping.capabilities import domestic_shipping_capabilities
@@ -735,19 +736,33 @@ async def paystack_webhook(
         payment = await db.scalar(
             select(Payment).where(Payment.transaction_id == reference)
         )
-        if payment and payment.status != TransactionStatus.COMPLETED:
+        if payment is None or payment.status != TransactionStatus.COMPLETED:
             try:
-                await finalize_failed_payment(
-                    db,
-                    payment=payment,
-                    provider="paystack",
-                    provider_reference=reference,
-                    event_id=str(data.get("id", reference)),
-                    evidence_payload=data,
-                    failure_reason=data.get("gateway_response") or "Payment failed",
-                )
+                if payment is None:
+                    payment, _ = await recover_failed_payment_mapping(
+                        db,
+                        provider="paystack",
+                        provider_reference=reference,
+                        transaction_id=reference,
+                        event_id=str(data.get("id", reference)),
+                        evidence_payload=data,
+                        failure_reason=data.get("gateway_response") or "Payment failed",
+                    )
+                else:
+                    await finalize_failed_payment(
+                        db,
+                        payment=payment,
+                        provider="paystack",
+                        provider_reference=reference,
+                        event_id=str(data.get("id", reference)),
+                        evidence_payload=data,
+                        failure_reason=data.get("gateway_response") or "Payment failed",
+                    )
                 payment.gateway_response = event_data
                 await db.commit()
+            except PaymentRecoveryUnavailable as error:
+                await db.rollback()
+                raise HTTPException(status_code=503, detail=str(error))
             except (PaymentBridgeError, PaymentTruthMismatch) as error:
                 await db.rollback()
                 raise HTTPException(
@@ -855,7 +870,11 @@ async def stripe_webhook(
             payment_result = await db.execute(payment_query)
             payment = payment_result.scalar_one_or_none()
 
-            if payment and payment.status != TransactionStatus.COMPLETED:
+            if (
+                payment
+                and payment.status != TransactionStatus.COMPLETED
+                and payment_intent.status == "canceled"
+            ):
                 failure_reason = (
                     payment_intent.last_payment_error.message
                     if payment_intent.last_payment_error
