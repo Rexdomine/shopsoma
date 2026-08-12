@@ -123,6 +123,16 @@ async def _initialize_stripe_payment(
         customer_record = user_result.scalar_one()
 
         stripe_customer_id = customer_record.stripe_customer_id
+        customer_idempotency_key = (
+            f"shopsoma-payment-attempt:{truth.attempt_id}:customer"
+            if truth.bridge_applied
+            else None
+        )
+        intent_idempotency_key = (
+            f"shopsoma-payment-attempt:{truth.attempt_id}:payment-intent"
+            if truth.bridge_applied
+            else None
+        )
         if not stripe_customer_id:
             # Try to reuse any existing Stripe customer for this email so saved cards carry over
             sanitized_email = payment_data.email.replace("'", r"\'")
@@ -134,6 +144,7 @@ async def _initialize_stripe_payment(
                 stripe_customer_id = search_result.data[0].id
             else:
                 customer = stripe.Customer.create(
+                    idempotency_key=customer_idempotency_key,
                     email=payment_data.email,
                     name=customer_record.full_name or payment_data.email,
                 )
@@ -147,11 +158,7 @@ async def _initialize_stripe_payment(
 
         # Create Payment Intent
         intent = stripe.PaymentIntent.create(
-            idempotency_key=(
-                f"shopsoma-payment-attempt:{truth.attempt_id}"
-                if truth.bridge_applied
-                else None
-            ),
+            idempotency_key=intent_idempotency_key,
             amount=amount_in_cents,
             currency=truth.currency.lower(),
             customer=stripe_customer_id,
@@ -171,19 +178,24 @@ async def _initialize_stripe_payment(
             receipt_email=payment_data.email,
         )
 
-        payment = Payment(
-            order_id=order.id,
-            transaction_id=intent.id,
-            payment_gateway=PaymentGateway.STRIPE,
-            payment_method="stripe",
-            amount=truth.amount,
-            currency=truth.currency,
-            status=TransactionStatus.PENDING,
-            gateway_response={"payment_intent": intent.id},
+        payment = await db.scalar(
+            select(Payment).where(Payment.transaction_id == intent.id)
         )
-
-        db.add(payment)
-        await db.commit()
+        if payment is None:
+            payment = Payment(
+                order_id=order.id,
+                transaction_id=intent.id,
+                payment_gateway=PaymentGateway.STRIPE,
+                payment_method="stripe",
+                amount=truth.amount,
+                currency=truth.currency,
+                status=TransactionStatus.PENDING,
+                gateway_response={"payment_intent": intent.id},
+            )
+            db.add(payment)
+            await db.commit()
+        elif payment.order_id != order.id:
+            raise PaymentTruthMismatch("verified payment truth does not match")
 
         return PaymentInitializeResponse(
             status=True,

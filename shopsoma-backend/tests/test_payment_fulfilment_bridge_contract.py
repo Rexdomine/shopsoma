@@ -309,7 +309,7 @@ async def test_bridge_initialization_legally_starts_attempt_then_finalizes(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("provider", ["stripe", "paystack"])
-async def test_initialization_retry_cannot_cross_provider_boundary(
+async def test_initialization_retry_replays_only_stripe(
     db_session,
     vendor_user,
     customer_user,
@@ -391,8 +391,14 @@ async def test_initialization_retry_cannot_cross_provider_boundary(
         ),
     )
 
-    with pytest.raises(HTTPException) as retry_error:
-        await initialize(request, graph["order"], db_session)
+    retry_error = None
+    retry = None
+    if provider == "stripe":
+        retry = await initialize(request, graph["order"], db_session)
+    else:
+        with pytest.raises(HTTPException) as caught:
+            await initialize(request, graph["order"], db_session)
+        retry_error = caught.value
 
     if provider == "paystack":
         provider_calls = _PaystackInitializationClient.calls
@@ -409,9 +415,15 @@ async def test_initialization_retry_cannot_cross_provider_boundary(
     assert first.status is True
     assert first_truth[0] == "call_started"
     assert first_truth[1] is not None
-    assert retry_error.value.status_code == 409
-    assert retry_error.value.detail == "payment attempt is not ready for initialization"
-    assert provider_calls == 1
+    if provider == "stripe":
+        assert retry is not None and retry.status is True
+        assert retry.payment_intent_id == first.payment_intent_id
+        assert provider_calls == 2
+    else:
+        assert retry_error is not None
+        assert retry_error.status_code == 409
+        assert retry_error.detail == "payment attempt is not ready for initialization"
+        assert provider_calls == 1
     assert retry_truth == first_truth
 
 
@@ -448,7 +460,7 @@ async def _pending_route_attempt(db_session, vendor_user, customer_user, provide
 
 
 @pytest.mark.asyncio
-async def test_stripe_customer_boundary_follows_durable_start_and_retry_calls_nothing(
+async def test_stripe_customer_accept_then_local_loss_retries_idempotently(
     db_session, vendor_user, customer_user, monkeypatch
 ) -> None:
     graph, attempt = await _pending_route_attempt(
@@ -461,20 +473,27 @@ async def test_stripe_customer_boundary_follows_durable_start_and_retry_calls_no
         "domestic_shipping_capabilities",
         lambda settings: DomesticShippingCapabilities(True, True, False),
     )
-    calls = []
+    calls = {"search": [], "customer": [], "intent": []}
+    provider_customers = {}
+    provider_intents = {}
 
     def search_customer(**kwargs):
-        assert attempt.state == "call_started"
-        calls.append("search")
+        calls["search"].append(kwargs)
+        # Force reconciliation through Customer.create's idempotent boundary,
+        # as Stripe search indexing may lag an accepted create.
         return SimpleNamespace(data=[])
 
     def create_customer(**kwargs):
-        calls.append("customer")
-        return SimpleNamespace(id="cus_accepted")
+        calls["customer"].append(kwargs)
+        key = kwargs["idempotency_key"]
+        return provider_customers.setdefault(key, SimpleNamespace(id="cus_accepted"))
 
     def create_intent(**kwargs):
-        calls.append(("intent", kwargs.get("idempotency_key")))
-        raise RuntimeError("provider accepted; local mapping commit lost")
+        calls["intent"].append(kwargs)
+        key = kwargs["idempotency_key"]
+        return provider_intents.setdefault(
+            key, SimpleNamespace(id="pi_accepted", client_secret="secret_accepted")
+        )
 
     monkeypatch.setattr(payments.stripe.Customer, "search", search_customer)
     monkeypatch.setattr(payments.stripe.Customer, "create", create_customer)
@@ -486,25 +505,46 @@ async def test_stripe_customer_boundary_follows_durable_start_and_retry_calls_no
         currency=attempt.currency,
         callback_url=None,
     )
+    original_commit = db_session.commit
+    commit_calls = 0
 
-    with pytest.raises(RuntimeError, match="mapping commit lost"):
+    async def fail_customer_mapping_commit():
+        nonlocal commit_calls
+        commit_calls += 1
+        if commit_calls == 2:
+            raise RuntimeError("customer accepted; local persistence lost")
+        await original_commit()
+
+    monkeypatch.setattr(db_session, "commit", fail_customer_mapping_commit)
+    with pytest.raises(RuntimeError, match="local persistence lost"):
         await payments._initialize_stripe_payment(request, graph["order"], db_session)
+    monkeypatch.setattr(db_session, "commit", original_commit)
     await db_session.rollback()
+    await db_session.refresh(graph["order"])
+
+    response = await payments._initialize_stripe_payment(
+        request, graph["order"], db_session
+    )
+
+    customer_key = f"shopsoma-payment-attempt:{attempt.id}:customer"
+    intent_key = f"shopsoma-payment-attempt:{attempt.id}:payment-intent"
+    assert response.payment_intent_id == "pi_accepted"
+    assert len(calls["search"]) == 2
+    assert len(calls["customer"]) == 2
+    assert [call["idempotency_key"] for call in calls["customer"]] == [
+        customer_key,
+        customer_key,
+    ]
+    assert len(provider_customers) == 1
+    assert len(calls["intent"]) == 1
+    assert calls["intent"][0]["idempotency_key"] == intent_key
+    assert len(provider_intents) == 1
     assert (
         await db_session.scalar(
-            select(type(attempt).state).where(type(attempt).id == attempt.id)
+            select(func.count(Payment.id)).where(Payment.order_id == graph["order"].id)
         )
-        == "call_started"
+        == 1
     )
-    with pytest.raises(HTTPException) as retry:
-        await payments._initialize_stripe_payment(request, graph["order"], db_session)
-
-    assert retry.value.status_code == 409
-    assert calls == [
-        "search",
-        "customer",
-        ("intent", f"shopsoma-payment-attempt:{attempt.id}"),
-    ]
 
 
 @pytest.mark.asyncio

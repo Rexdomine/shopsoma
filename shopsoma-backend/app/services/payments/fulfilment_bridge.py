@@ -121,7 +121,21 @@ async def payment_initialization_truth(
         return PaymentInitializationTruth(
             False, legacy_amount, legacy_currency, None, None, None
         )
-    if attempt.state != "pending" or attempt.provider != provider:
+    if attempt.provider != provider:
+        raise PaymentBridgeError("payment attempt is not ready for initialization")
+    if attempt.state == "call_started" and provider == "stripe":
+        amount, currency = authoritative_gateway_amount(
+            attempt.amount, attempt.currency
+        )
+        return PaymentInitializationTruth(
+            True,
+            amount,
+            currency,
+            attempt.provider_reference,
+            attempt.lease_token,
+            attempt.id,
+        )
+    if attempt.state != "pending":
         raise PaymentBridgeError("payment attempt is not ready for initialization")
     await session.execute(
         text("SELECT coordinate_payment_attempt_write(:attempt_id, :order_id)"),
