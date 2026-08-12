@@ -51,6 +51,53 @@ async def _coordinate_attempt(
     )
 
 
+async def _wait_for_postgres_lock(observer, backend_pid: int) -> None:
+    """Wait until PostgreSQL reports that a backend is blocked by another backend."""
+
+    async with asyncio.timeout(5):
+        while not await observer.scalar(
+            text("SELECT cardinality(pg_blocking_pids(:backend_pid)) > 0"),
+            {"backend_pid": backend_pid},
+        ):
+            await asyncio.sleep(0.01)
+
+
+@pytest.mark.asyncio
+async def test_postgres_lock_probe_observes_a_blocked_backend(db_session) -> None:
+    """Concurrency tests can synchronize on PostgreSQL, not scheduler timing."""
+
+    factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+    holder = factory()
+    contender = factory()
+    observer = factory()
+    lock_key = uuid.uuid4().int % (2**31)
+    contend_task = None
+    try:
+        await holder.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": lock_key})
+        backend_pid = await contender.scalar(text("SELECT pg_backend_pid()"))
+
+        async def contend_for_lock() -> None:
+            await contender.execute(
+                text("SELECT pg_advisory_xact_lock(:key)"), {"key": lock_key}
+            )
+
+        contend_task = asyncio.create_task(contend_for_lock())
+        await _wait_for_postgres_lock(observer, backend_pid)
+        assert not contend_task.done()
+        await holder.commit()
+        await asyncio.wait_for(contend_task, timeout=5)
+    finally:
+        if contend_task is not None and not contend_task.done():
+            contend_task.cancel()
+            await asyncio.gather(contend_task, return_exceptions=True)
+        await holder.rollback()
+        await contender.rollback()
+        await observer.rollback()
+        await holder.close()
+        await contender.close()
+        await observer.close()
+
+
 async def _alternate_selection(
     session,
     lane,
@@ -471,6 +518,34 @@ async def _expire_reservation_without_lifecycle_transition(
         {"reservation_id": reservation_id},
     )
     await session.execute(text("SET LOCAL session_replication_role = origin"))
+
+
+async def _refresh_call_start_deadlines(session, reservation_id, attempt_id) -> None:
+    """Keep the test subject live until the race explicitly forces its expiry."""
+
+    await session.execute(text("SET LOCAL session_replication_role = replica"))
+    try:
+        await session.execute(
+            text(
+                "UPDATE stock_reservations "
+                "SET created_at=statement_timestamp(), ttl_seconds=1800, "
+                "expires_at=statement_timestamp() + interval '1800 seconds' "
+                "WHERE id=:reservation_id"
+            ),
+            {"reservation_id": reservation_id},
+        )
+        await session.execute(
+            text(
+                "UPDATE payment_attempts "
+                "SET created_at=statement_timestamp(), payment_window_seconds=1800, "
+                "expires_at=statement_timestamp() + interval '1800 seconds', "
+                "authorization_deadline_at=statement_timestamp() + interval '1805 seconds' "
+                "WHERE id=:attempt_id"
+            ),
+            {"attempt_id": attempt_id},
+        )
+    finally:
+        await session.execute(text("SET LOCAL session_replication_role = origin"))
 
 
 async def _split_package_item_across_cohorts(session, graph, quote) -> None:
@@ -1511,6 +1586,7 @@ async def test_reservation_locks_order_truth_before_waiting_on_inventory(
     inventory_locker = factory()
     reserver = factory()
     truth_editor = factory()
+    observer = factory()
     try:
         await inventory_locker.execute(
             text("SELECT 1 FROM products WHERE id=:product_id FOR UPDATE"),
@@ -1536,8 +1612,9 @@ async def test_reservation_locks_order_truth_before_waiting_on_inventory(
                 await reserver.rollback()
                 return str(exc)
 
+        reserver_pid = await reserver.scalar(text("SELECT pg_backend_pid()"))
         reserve_task = asyncio.create_task(reserve_unit())
-        await asyncio.sleep(0.2)
+        await _wait_for_postgres_lock(observer, reserver_pid)
 
         async def edit_truth():
             try:
@@ -1563,8 +1640,9 @@ async def test_reservation_locks_order_truth_before_waiting_on_inventory(
                 await truth_editor.rollback()
                 return str(exc)
 
+        truth_editor_pid = await truth_editor.scalar(text("SELECT pg_backend_pid()"))
         edit_task = asyncio.create_task(edit_truth())
-        await asyncio.sleep(0.2)
+        await _wait_for_postgres_lock(observer, truth_editor_pid)
         await inventory_locker.commit()
         reserve_result = await asyncio.wait_for(reserve_task, timeout=5)
         edit_result = await asyncio.wait_for(edit_task, timeout=5)
@@ -1580,6 +1658,7 @@ async def test_reservation_locks_order_truth_before_waiting_on_inventory(
         await inventory_locker.close()
         await reserver.close()
         await truth_editor.close()
+        await observer.close()
 
 
 @pytest.mark.asyncio
@@ -3065,10 +3144,12 @@ async def test_uncommitted_call_start_fences_identity_mutation_across_reservatio
     factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
     caller = factory()
     mutator = factory()
+    observer = factory()
     mutation_task = None
     replacement_sku = f"raced-{uuid.uuid4().hex[:8]}"
     try:
         await _coordinate_attempt(caller, attempt.id, graph["order"].id)
+        await _refresh_call_start_deadlines(caller, _reservation_row.id, attempt.id)
         await caller.execute(
             text(
                 "UPDATE payment_attempts SET state='call_started', lease_token=:token, "
@@ -3076,7 +3157,9 @@ async def test_uncommitted_call_start_fences_identity_mutation_across_reservatio
             ),
             {"token": uuid.uuid4(), "attempt_id": attempt.id},
         )
-        await asyncio.sleep(1.1)
+        await _expire_reservation_without_lifecycle_transition(
+            caller, _reservation_row.id
+        )
 
         async def mutate_identity():
             try:
@@ -3091,8 +3174,9 @@ async def test_uncommitted_call_start_fences_identity_mutation_across_reservatio
                 await mutator.rollback()
                 return str(exc)
 
+        mutator_pid = await mutator.scalar(text("SELECT pg_backend_pid()"))
         mutation_task = asyncio.create_task(mutate_identity())
-        await asyncio.sleep(0.2)
+        await _wait_for_postgres_lock(observer, mutator_pid)
         assert not mutation_task.done()
         await caller.commit()
         result = await asyncio.wait_for(mutation_task, timeout=5)
@@ -3104,8 +3188,10 @@ async def test_uncommitted_call_start_fences_identity_mutation_across_reservatio
             await asyncio.gather(mutation_task, return_exceptions=True)
         await caller.rollback()
         await mutator.rollback()
+        await observer.rollback()
         await caller.close()
         await mutator.close()
+        await observer.close()
 
 
 @pytest.mark.asyncio
@@ -3121,9 +3207,11 @@ async def test_uncommitted_call_start_fences_competing_reservation_across_ttl(
     factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
     caller = factory()
     reserver = factory()
+    observer = factory()
     reservation_task = None
     try:
         await _coordinate_attempt(caller, attempt.id, attempt.order_id)
+        await _refresh_call_start_deadlines(caller, _reservation_row.id, attempt.id)
         await caller.execute(
             text(
                 "UPDATE payment_attempts SET state='call_started', lease_token=:token, "
@@ -3131,7 +3219,9 @@ async def test_uncommitted_call_start_fences_competing_reservation_across_ttl(
             ),
             {"token": uuid.uuid4(), "attempt_id": attempt.id},
         )
-        await asyncio.sleep(1.1)
+        await _expire_reservation_without_lifecycle_transition(
+            caller, _reservation_row.id
+        )
 
         async def reserve_competing_unit():
             try:
@@ -3143,8 +3233,9 @@ async def test_uncommitted_call_start_fences_competing_reservation_across_ttl(
                 await reserver.rollback()
                 return str(exc)
 
+        reserver_pid = await reserver.scalar(text("SELECT pg_backend_pid()"))
         reservation_task = asyncio.create_task(reserve_competing_unit())
-        await asyncio.sleep(0.2)
+        await _wait_for_postgres_lock(observer, reserver_pid)
         assert not reservation_task.done()
         await caller.commit()
         result = await asyncio.wait_for(reservation_task, timeout=5)
@@ -3156,8 +3247,10 @@ async def test_uncommitted_call_start_fences_competing_reservation_across_ttl(
             await asyncio.gather(reservation_task, return_exceptions=True)
         await caller.rollback()
         await reserver.rollback()
+        await observer.rollback()
         await caller.close()
         await reserver.close()
+        await observer.close()
 
 
 @pytest.mark.asyncio
