@@ -398,6 +398,36 @@ async def finalize_failed_payment(
         raise PaymentBridgeError("payment attempt is not ready for verification")
 
     observed_at = observed_at or datetime.now(timezone.utc)
+    database_now = await session.scalar(text("SELECT clock_timestamp()"))
+    if attempt.state == "call_started" and (
+        attempt.claim_expires_at is None or database_now >= attempt.claim_expires_at
+    ):
+        unknown_evidence = PaymentAttemptEvidence(
+            attempt_id=attempt.id,
+            source="payment.failure_reconciliation",
+            event_id=f"{provider}:lease-expired:{event_id}",
+            evidence_type="outcome_unknown",
+            provider=provider,
+            provider_reference=provider_reference,
+            evidence_hash=_evidence_hash(evidence_payload),
+            observed_at=observed_at,
+        )
+        session.add(unknown_evidence)
+        await session.flush()
+        await session.execute(
+            text("SELECT coordinate_payment_attempt_write(:attempt_id, :order_id)"),
+            {"attempt_id": attempt.id, "order_id": order.id},
+        )
+        await session.execute(
+            text("SELECT set_config('shopsoma.payment_lease_token', :token, true)"),
+            {"token": str(attempt.lease_token)},
+        )
+        attempt.state = "abandoned_unknown"
+        attempt.terminal_evidence_id = unknown_evidence.id
+        attempt.row_version += 1
+        await session.flush()
+        observed_at = await session.scalar(text("SELECT clock_timestamp()"))
+
     evidence = PaymentAttemptEvidence(
         attempt_id=attempt.id,
         source="payment.failed",

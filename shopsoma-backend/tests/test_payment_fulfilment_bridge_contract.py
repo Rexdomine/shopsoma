@@ -1,6 +1,7 @@
 """Launch-critical payment/fulfilment bridge contracts."""
 
 import asyncio
+from datetime import datetime, timezone
 from decimal import Decimal
 import hashlib
 import hmac
@@ -799,6 +800,52 @@ async def _call_started_route_payment(db_session, vendor_user, customer_user, pr
     return graph, attempt, payment
 
 
+async def _prepare_failure_reconciliation(db_session, attempt, starting_state):
+    if starting_state == "fresh_call_started":
+        return
+
+    await db_session.execute(text("SET LOCAL session_replication_role = replica"))
+    await db_session.execute(
+        text(
+            "UPDATE payment_attempts "
+            "SET claim_expires_at=clock_timestamp() - interval '1 second' "
+            "WHERE id=:attempt_id"
+        ),
+        {"attempt_id": attempt.id},
+    )
+    await db_session.execute(text("SET LOCAL session_replication_role = origin"))
+    await db_session.refresh(attempt)
+    if starting_state == "call_started":
+        await db_session.commit()
+        return
+
+    unknown = PaymentAttemptEvidence(
+        attempt_id=attempt.id,
+        source="provider_reconciliation",
+        event_id=f"unknown:{attempt.id.hex}",
+        evidence_type="outcome_unknown",
+        provider=attempt.provider,
+        provider_reference=attempt.provider_reference,
+        evidence_hash=uuid.uuid4().hex * 2,
+        observed_at=datetime.now(timezone.utc),
+    )
+    db_session.add(unknown)
+    await db_session.flush()
+    await db_session.execute(
+        text("SELECT coordinate_payment_attempt_write(:attempt_id, :order_id)"),
+        {"attempt_id": attempt.id, "order_id": attempt.order_id},
+    )
+    await db_session.execute(
+        text("SELECT set_config('shopsoma.payment_lease_token', :token, true)"),
+        {"token": str(attempt.lease_token)},
+    )
+    attempt.state = "abandoned_unknown"
+    attempt.terminal_evidence_id = unknown.id
+    attempt.row_version += 1
+    await db_session.commit()
+    await db_session.refresh(attempt)
+
+
 async def _invoke_authenticated_failure(
     provider, transport, db, monkeypatch, *, attempt, payment
 ):
@@ -877,17 +924,23 @@ async def _invoke_authenticated_failure(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("provider", ["stripe", "paystack"])
 @pytest.mark.parametrize("transport", ["callback", "webhook"])
-async def test_authenticated_failure_finalizes_call_started_attempt_atomically(
+@pytest.mark.parametrize(
+    "starting_state",
+    ["fresh_call_started", "call_started", "abandoned_unknown"],
+)
+async def test_authenticated_failure_reconciles_expired_attempt_atomically(
     db_session,
     vendor_user,
     customer_user,
     monkeypatch,
     provider,
     transport,
+    starting_state,
 ) -> None:
     graph, attempt, payment = await _call_started_route_payment(
         db_session, vendor_user, customer_user, provider
     )
+    await _prepare_failure_reconciliation(db_session, attempt, starting_state)
 
     first = await _invoke_authenticated_failure(
         provider,
@@ -927,14 +980,16 @@ async def test_authenticated_failure_finalizes_call_started_attempt_atomically(
         assert first == {"status": "success"}
         assert second == {"status": "success"}
     assert attempt.state == "failed"
-    assert attempt.terminal_evidence_id == evidence[0].id
+    definitive_evidence = [
+        item for item in evidence if item.evidence_type == "payment_failed"
+    ]
+    assert attempt.terminal_evidence_id == definitive_evidence[0].id
     assert payment.status == TransactionStatus.FAILED
     assert graph["order"].payment_status == PaymentStatus.FAILED
-    assert len(evidence) == 1
-    assert evidence[0].source == "payment.failed"
-    assert evidence[0].evidence_type == "payment_failed"
-    assert evidence[0].provider == provider
-    assert evidence[0].provider_reference == attempt.provider_reference
+    assert len(definitive_evidence) == 1
+    assert definitive_evidence[0].source == "payment.failed"
+    assert definitive_evidence[0].provider == provider
+    assert definitive_evidence[0].provider_reference == attempt.provider_reference
 
 
 @pytest.mark.asyncio
