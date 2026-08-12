@@ -6,7 +6,7 @@ import stripe
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Header
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update, func
+from sqlalchemy import select
 from uuid import UUID
 from decimal import Decimal
 import httpx
@@ -30,6 +30,7 @@ from app.services.payments.fulfilment_bridge import (
     PaymentBridgeError,
     PaymentRecoveryUnavailable,
     PaymentTruthMismatch,
+    finalize_failed_payment,
     finalize_verified_payment,
     payment_initialization_truth,
     recover_payment_mapping,
@@ -439,18 +440,29 @@ async def _verify_stripe_payment(
         ]:
             payment.status = TransactionStatus.PENDING
         else:
-            payment.status = TransactionStatus.FAILED
-            payment.failed_at = func.now()
-            payment.failure_reason = (
+            failure_reason = (
                 intent.last_payment_error.message
                 if intent.last_payment_error
                 else "Payment failed"
             )
-
-            await db.execute(
-                update(Order)
-                .where(Order.id == payment.order_id)
-                .values(payment_status=PaymentStatus.FAILED)
+            provider_reference = (
+                intent.metadata.get("shopsoma_payment_reference")
+                if getattr(intent, "metadata", None)
+                else intent.id
+            )
+            await finalize_failed_payment(
+                db,
+                payment=payment,
+                provider="stripe",
+                provider_reference=provider_reference,
+                event_id=f"verify:{intent.id}",
+                evidence_payload={
+                    "id": intent.id,
+                    "status": intent.status,
+                    "amount": intent.amount,
+                    "currency": intent.currency,
+                },
+                failure_reason=failure_reason,
             )
 
         await db.commit()
@@ -578,15 +590,16 @@ async def _verify_paystack_payment(
                 transaction_data["status"] == "failed"
                 and payment.status != TransactionStatus.COMPLETED
             ):
-                payment.status = TransactionStatus.FAILED
                 payment.gateway_response = paystack_response
-                payment.failed_at = func.now()
-                payment.failure_reason = transaction_data.get("gateway_response")
-
-                await db.execute(
-                    update(Order)
-                    .where(Order.id == payment.order_id)
-                    .values(payment_status=PaymentStatus.FAILED)
+                await finalize_failed_payment(
+                    db,
+                    payment=payment,
+                    provider="paystack",
+                    provider_reference=transaction_data["reference"],
+                    event_id=f"verify:{transaction_data.get('id', transaction_data['reference'])}",
+                    evidence_payload=transaction_data,
+                    failure_reason=transaction_data.get("gateway_response")
+                    or "Payment failed",
                 )
 
             await db.commit()
@@ -717,6 +730,30 @@ async def paystack_webhook(
             await db.rollback()
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error))
 
+    elif event_type == "charge.failed":
+        reference = data.get("reference")
+        payment = await db.scalar(
+            select(Payment).where(Payment.transaction_id == reference)
+        )
+        if payment and payment.status != TransactionStatus.COMPLETED:
+            try:
+                await finalize_failed_payment(
+                    db,
+                    payment=payment,
+                    provider="paystack",
+                    provider_reference=reference,
+                    event_id=str(data.get("id", reference)),
+                    evidence_payload=data,
+                    failure_reason=data.get("gateway_response") or "Payment failed",
+                )
+                payment.gateway_response = event_data
+                await db.commit()
+            except (PaymentBridgeError, PaymentTruthMismatch) as error:
+                await db.rollback()
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT, detail=str(error)
+                )
+
     return {"status": "success"}
 
 
@@ -819,18 +856,28 @@ async def stripe_webhook(
             payment = payment_result.scalar_one_or_none()
 
             if payment and payment.status != TransactionStatus.COMPLETED:
-                payment.status = TransactionStatus.FAILED
-                payment.failed_at = func.now()
-                payment.failure_reason = (
+                failure_reason = (
                     payment_intent.last_payment_error.message
                     if payment_intent.last_payment_error
                     else "Payment failed"
                 )
-
-                await db.execute(
-                    update(Order)
-                    .where(Order.id == payment.order_id)
-                    .values(payment_status=PaymentStatus.FAILED)
+                provider_reference = (
+                    payment_intent.metadata.get("shopsoma_payment_reference")
+                    if getattr(payment_intent, "metadata", None)
+                    else payment_intent.id
+                )
+                await finalize_failed_payment(
+                    db,
+                    payment=payment,
+                    provider="stripe",
+                    provider_reference=provider_reference,
+                    event_id=str(event.id),
+                    evidence_payload={
+                        "event_id": str(event.id),
+                        "payment_intent_id": payment_intent.id,
+                        "status": payment_intent.status,
+                    },
+                    failure_reason=failure_reason,
                 )
 
                 await db.commit()

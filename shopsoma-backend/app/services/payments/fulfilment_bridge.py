@@ -351,3 +351,82 @@ async def finalize_verified_payment(
         current_status=order.fulfillment_status,
     )
     return PaymentFinalizationResult(True, False, order)
+
+
+async def finalize_failed_payment(
+    session: AsyncSession,
+    *,
+    payment: Payment,
+    provider: str,
+    provider_reference: str,
+    event_id: str,
+    evidence_payload: dict[str, Any],
+    failure_reason: str,
+    observed_at: datetime | None = None,
+) -> PaymentFinalizationResult:
+    """Atomically finalize authenticated provider failure and payment truth."""
+    order = await session.scalar(
+        select(Order).where(Order.id == payment.order_id).with_for_update()
+    )
+    if order is None:
+        raise PaymentBridgeError("payment order was not found")
+
+    attempt = await active_bridge_attempt(session, order_id=order.id, lock=True)
+    if attempt is None:
+        replay = payment.status in {
+            TransactionStatus.FAILED,
+            TransactionStatus.COMPLETED,
+        }
+        if payment.status != TransactionStatus.COMPLETED:
+            payment.status = TransactionStatus.FAILED
+            payment.failed_at = observed_at or datetime.now(timezone.utc)
+            payment.failure_reason = failure_reason
+            order.payment_status = PaymentStatus.FAILED
+        return PaymentFinalizationResult(False, replay, order)
+
+    if attempt.provider != provider or attempt.provider_reference != provider_reference:
+        raise PaymentTruthMismatch("verified payment truth does not match")
+    if attempt.state == "verified" or payment.status == TransactionStatus.COMPLETED:
+        return PaymentFinalizationResult(True, True, order)
+    if attempt.state == "failed":
+        payment.status = TransactionStatus.FAILED
+        payment.failed_at = attempt.terminal_at
+        payment.failure_reason = failure_reason
+        order.payment_status = PaymentStatus.FAILED
+        return PaymentFinalizationResult(True, True, order)
+    if attempt.state not in {"call_started", "abandoned_unknown"}:
+        raise PaymentBridgeError("payment attempt is not ready for verification")
+
+    observed_at = observed_at or datetime.now(timezone.utc)
+    evidence = PaymentAttemptEvidence(
+        attempt_id=attempt.id,
+        source="payment.failed",
+        event_id=f"{provider}:{event_id}",
+        evidence_type="payment_failed",
+        provider=provider,
+        provider_reference=provider_reference,
+        evidence_hash=_evidence_hash(evidence_payload),
+        observed_at=observed_at,
+    )
+    session.add(evidence)
+    await session.flush()
+
+    await session.execute(
+        text("SELECT coordinate_payment_attempt_write(:attempt_id, :order_id)"),
+        {"attempt_id": attempt.id, "order_id": order.id},
+    )
+    if attempt.state == "call_started":
+        await session.execute(
+            text("SELECT set_config('shopsoma.payment_lease_token', :token, true)"),
+            {"token": str(attempt.lease_token)},
+        )
+    attempt.state = "failed"
+    attempt.terminal_evidence_id = evidence.id
+    attempt.row_version += 1
+    await session.flush()
+
+    payment.status = TransactionStatus.FAILED
+    payment.failed_at = observed_at
+    payment.failure_reason = failure_reason
+    order.payment_status = PaymentStatus.FAILED
+    return PaymentFinalizationResult(True, False, order)

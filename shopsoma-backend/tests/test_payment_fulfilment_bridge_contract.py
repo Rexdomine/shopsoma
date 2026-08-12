@@ -771,6 +771,216 @@ async def _invoke_authenticated_route(
     return await payments.paystack_webhook(request, signature, db)
 
 
+async def _call_started_route_payment(db_session, vendor_user, customer_user, provider):
+    graph, attempt = await _pending_route_attempt(
+        db_session, vendor_user, customer_user, provider
+    )
+    await payment_initialization_truth(
+        db_session,
+        order=graph["order"],
+        provider=provider,
+        capabilities=DomesticShippingCapabilities(True, True, False),
+    )
+    transaction_id = (
+        f"pi_{attempt.id.hex}" if provider == "stripe" else attempt.provider_reference
+    )
+    payment = Payment(
+        order_id=attempt.order_id,
+        transaction_id=transaction_id,
+        payment_gateway=PaymentGateway(provider),
+        payment_method=provider,
+        amount=attempt.amount,
+        currency=attempt.currency,
+        status=TransactionStatus.PENDING,
+    )
+    db_session.add(payment)
+    await db_session.commit()
+    await db_session.refresh(attempt)
+    return graph, attempt, payment
+
+
+async def _invoke_authenticated_failure(
+    provider, transport, db, monkeypatch, *, attempt, payment
+):
+    if provider == "stripe":
+        intent = SimpleNamespace(
+            id=payment.transaction_id,
+            status="canceled",
+            amount=int(attempt.amount * 100),
+            currency=attempt.currency.lower(),
+            metadata={"shopsoma_payment_reference": attempt.provider_reference},
+            last_payment_error=SimpleNamespace(message="Card declined"),
+        )
+        if transport == "callback":
+            monkeypatch.setattr(
+                payments.stripe.PaymentIntent, "retrieve", lambda value: intent
+            )
+            return await payments._verify_stripe_payment(
+                PaymentVerifyRequest(
+                    payment_gateway="stripe", payment_intent_id=intent.id
+                ),
+                db,
+            )
+        event = SimpleNamespace(
+            id=f"evt_failed_{attempt.id.hex}",
+            type="payment_intent.payment_failed",
+            data=SimpleNamespace(object=intent),
+        )
+        monkeypatch.setattr(payments.settings, "STRIPE_WEBHOOK_SECRET", "secret")
+        monkeypatch.setattr(
+            payments.stripe.Webhook, "construct_event", lambda **kwargs: event
+        )
+        return await payments.stripe_webhook(
+            _AuthenticatedWebhookRequest({"signed": True}), "signature", db
+        )
+
+    data = {
+        "id": 9,
+        "status": "failed",
+        "reference": attempt.provider_reference,
+        "amount": int(attempt.amount * 100),
+        "currency": attempt.currency,
+        "gateway_response": "Declined",
+    }
+    if transport == "callback":
+
+        class Response:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"status": True, "data": data}
+
+        class Client:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return None
+
+            async def get(self, *args, **kwargs):
+                return Response()
+
+        monkeypatch.setattr(payments.httpx, "AsyncClient", Client)
+        return await payments._verify_paystack_payment(
+            PaymentVerifyRequest(
+                payment_gateway="paystack", reference=attempt.provider_reference
+            ),
+            db,
+        )
+    request = _AuthenticatedWebhookRequest({"event": "charge.failed", "data": data})
+    monkeypatch.setattr(payments, "PAYSTACK_SECRET_KEY", "secret")
+    signature = hmac.new(b"secret", request.body_bytes, hashlib.sha512).hexdigest()
+    return await payments.paystack_webhook(request, signature, db)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ["stripe", "paystack"])
+@pytest.mark.parametrize("transport", ["callback", "webhook"])
+async def test_authenticated_failure_finalizes_call_started_attempt_atomically(
+    db_session,
+    vendor_user,
+    customer_user,
+    monkeypatch,
+    provider,
+    transport,
+) -> None:
+    graph, attempt, payment = await _call_started_route_payment(
+        db_session, vendor_user, customer_user, provider
+    )
+
+    first = await _invoke_authenticated_failure(
+        provider,
+        transport,
+        db_session,
+        monkeypatch,
+        attempt=attempt,
+        payment=payment,
+    )
+    second = await _invoke_authenticated_failure(
+        provider,
+        transport,
+        db_session,
+        monkeypatch,
+        attempt=attempt,
+        payment=payment,
+    )
+
+    await db_session.refresh(attempt)
+    await db_session.refresh(payment)
+    await db_session.refresh(graph["order"])
+    evidence = (
+        (
+            await db_session.execute(
+                select(PaymentAttemptEvidence).where(
+                    PaymentAttemptEvidence.attempt_id == attempt.id
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if transport == "callback":
+        assert first.status is (provider == "paystack")
+        assert second.status is (provider == "paystack")
+    else:
+        assert first == {"status": "success"}
+        assert second == {"status": "success"}
+    assert attempt.state == "failed"
+    assert attempt.terminal_evidence_id == evidence[0].id
+    assert payment.status == TransactionStatus.FAILED
+    assert graph["order"].payment_status == PaymentStatus.FAILED
+    assert len(evidence) == 1
+    assert evidence[0].source == "payment.failed"
+    assert evidence[0].evidence_type == "payment_failed"
+    assert evidence[0].provider == provider
+    assert evidence[0].provider_reference == attempt.provider_reference
+
+
+@pytest.mark.asyncio
+async def test_mismatched_authenticated_failure_cannot_mutate_bridge_truth(
+    db_session, vendor_user, customer_user, monkeypatch
+) -> None:
+    graph, attempt, payment = await _call_started_route_payment(
+        db_session, vendor_user, customer_user, "stripe"
+    )
+    mismatched = SimpleNamespace(
+        id=payment.transaction_id,
+        status="canceled",
+        amount=int(attempt.amount * 100),
+        currency=attempt.currency.lower(),
+        metadata={"shopsoma_payment_reference": "mismatched-reference"},
+        last_payment_error=SimpleNamespace(message="Card declined"),
+    )
+    monkeypatch.setattr(
+        payments.stripe.PaymentIntent, "retrieve", lambda value: mismatched
+    )
+
+    with pytest.raises(HTTPException) as error:
+        await payments._verify_stripe_payment(
+            PaymentVerifyRequest(
+                payment_gateway="stripe", payment_intent_id=payment.transaction_id
+            ),
+            db_session,
+        )
+
+    assert error.value.status_code == 409
+    await db_session.refresh(attempt)
+    await db_session.refresh(payment)
+    await db_session.refresh(graph["order"])
+    assert attempt.state == "call_started"
+    assert payment.status == TransactionStatus.PENDING
+    assert graph["order"].payment_status == PaymentStatus.PENDING
+    assert (
+        await db_session.scalar(
+            select(func.count(PaymentAttemptEvidence.id)).where(
+                PaymentAttemptEvidence.attempt_id == attempt.id
+            )
+        )
+        == 0
+    )
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("provider", ["stripe", "paystack"])
 @pytest.mark.parametrize(
