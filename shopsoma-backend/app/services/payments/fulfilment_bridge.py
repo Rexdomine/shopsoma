@@ -20,7 +20,7 @@ from app.models.package_custody import (
     OutboundShipmentIntent,
     OutboundShipmentIntentInvalidation,
 )
-from app.models.payment import Payment, TransactionStatus
+from app.models.payment import Payment, PaymentGateway, TransactionStatus
 from app.models.stock_payment_persistence import PaymentAttempt, PaymentAttemptEvidence
 from app.services.shipping.capabilities import DomesticShippingCapabilities
 
@@ -31,6 +31,10 @@ class PaymentBridgeError(Exception):
 
 class PaymentTruthMismatch(PaymentBridgeError):
     """Authenticated provider truth does not match immutable server truth."""
+
+
+class PaymentRecoveryUnavailable(PaymentBridgeError):
+    """Authenticated provider evidence cannot yet be durably associated."""
 
 
 def _money(value: object) -> Decimal:
@@ -92,6 +96,7 @@ class PaymentInitializationTruth:
     currency: str
     provider_reference: str | None
     lease_token: uuid.UUID | None
+    attempt_id: uuid.UUID | None
 
 
 async def payment_initialization_truth(
@@ -107,14 +112,14 @@ async def payment_initialization_truth(
     )
     if not capabilities.quote_enforcement_enabled:
         return PaymentInitializationTruth(
-            False, legacy_amount, legacy_currency, None, None
+            False, legacy_amount, legacy_currency, None, None, None
         )
 
     attempt = await active_bridge_attempt(session, order_id=order.id, lock=True)
     if attempt is None:
         # Orders without a bridge attempt remain on the established checkout path.
         return PaymentInitializationTruth(
-            False, legacy_amount, legacy_currency, None, None
+            False, legacy_amount, legacy_currency, None, None, None
         )
     if attempt.state != "pending" or attempt.provider != provider:
         raise PaymentBridgeError("payment attempt is not ready for initialization")
@@ -128,7 +133,12 @@ async def payment_initialization_truth(
     await session.flush()
     amount, currency = authoritative_gateway_amount(attempt.amount, attempt.currency)
     return PaymentInitializationTruth(
-        True, amount, currency, attempt.provider_reference, attempt.lease_token
+        True,
+        amount,
+        currency,
+        attempt.provider_reference,
+        attempt.lease_token,
+        attempt.id,
     )
 
 
@@ -144,6 +154,61 @@ async def active_bridge_attempt(
     if lock:
         statement = statement.with_for_update()
     return await session.scalar(statement)
+
+
+async def recover_payment_mapping(
+    session: AsyncSession,
+    *,
+    provider: str,
+    provider_reference: str,
+    transaction_id: str,
+    observed_amount: object,
+    observed_currency: str,
+    event_id: str,
+    evidence_payload: dict[str, Any],
+) -> tuple[Payment, PaymentFinalizationResult]:
+    """Recover and finalize one mapping under the immutable attempt lock."""
+    attempt = await session.scalar(
+        select(PaymentAttempt)
+        .where(
+            PaymentAttempt.provider == provider,
+            PaymentAttempt.provider_reference == provider_reference,
+        )
+        .with_for_update()
+    )
+    if attempt is None:
+        raise PaymentRecoveryUnavailable(
+            "authenticated payment evidence cannot be durably associated"
+        )
+    payment = await session.scalar(
+        select(Payment).where(Payment.transaction_id == transaction_id)
+    )
+    if payment is None:
+        payment = Payment(
+            order_id=attempt.order_id,
+            transaction_id=transaction_id,
+            payment_gateway=PaymentGateway(provider),
+            payment_method=provider,
+            amount=attempt.amount,
+            currency=attempt.currency,
+            status=TransactionStatus.PENDING,
+            gateway_response=evidence_payload,
+        )
+        session.add(payment)
+        await session.flush()
+    elif payment.order_id != attempt.order_id:
+        raise PaymentTruthMismatch("verified payment truth does not match")
+    result = await finalize_verified_payment(
+        session,
+        payment=payment,
+        provider=provider,
+        provider_reference=provider_reference,
+        observed_amount=observed_amount,
+        observed_currency=observed_currency,
+        event_id=event_id,
+        evidence_payload=evidence_payload,
+    )
+    return payment, result
 
 
 async def package_ready_for_attempt(

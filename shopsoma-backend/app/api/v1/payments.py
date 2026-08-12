@@ -28,9 +28,11 @@ from app.services.email_service import email_service
 from app.services.account_claim import send_account_claim_email_if_guest
 from app.services.payments.fulfilment_bridge import (
     PaymentBridgeError,
+    PaymentRecoveryUnavailable,
     PaymentTruthMismatch,
     finalize_verified_payment,
     payment_initialization_truth,
+    recover_payment_mapping,
 )
 from app.services.shipping.capabilities import domestic_shipping_capabilities
 from sqlalchemy.orm import selectinload
@@ -106,6 +108,15 @@ async def _initialize_stripe_payment(
 ) -> PaymentInitializeResponse:
     """Initialize Stripe payment using Payment Intents"""
     try:
+        truth = await payment_initialization_truth(
+            db,
+            order=order,
+            provider="stripe",
+            capabilities=domestic_shipping_capabilities(settings),
+        )
+        if truth.bridge_applied:
+            # Every Stripe SDK boundary follows the committed attempt fence.
+            await db.commit()
         # Ensure Stripe customer exists so saved cards can be reused
         user_query = select(User).where(User.id == order.customer_id)
         user_result = await db.execute(user_query)
@@ -131,20 +142,16 @@ async def _initialize_stripe_payment(
             customer_record.stripe_customer_id = stripe_customer_id
             await db.commit()
 
-        truth = await payment_initialization_truth(
-            db,
-            order=order,
-            provider="stripe",
-            capabilities=domestic_shipping_capabilities(settings),
-        )
-        if truth.bridge_applied:
-            # Durable call_started truth must precede the provider boundary.
-            await db.commit()
         # Stripe uses cents; the source is always persisted server truth.
         amount_in_cents = int(truth.amount * 100)
 
         # Create Payment Intent
         intent = stripe.PaymentIntent.create(
+            idempotency_key=(
+                f"shopsoma-payment-attempt:{truth.attempt_id}"
+                if truth.bridge_applied
+                else None
+            ),
             amount=amount_in_cents,
             currency=truth.currency.lower(),
             customer=stripe_customer_id,
@@ -364,34 +371,43 @@ async def _verify_stripe_payment(
         payment_result = await db.execute(payment_query)
         payment = payment_result.scalar_one_or_none()
 
-        if not payment:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Payment record not found"
-            )
-
         claim_customer = None
 
         # Update payment status based on authenticated intent truth
         if intent.status == "succeeded":
-            result = await finalize_verified_payment(
-                db,
-                payment=payment,
-                provider="stripe",
-                provider_reference=(
-                    intent.metadata.get("shopsoma_payment_reference")
-                    if getattr(intent, "metadata", None)
-                    else intent.id
-                ),
-                observed_amount=Decimal(intent.amount) / 100,
-                observed_currency=intent.currency,
-                event_id=f"verify:{intent.id}",
-                evidence_payload={
-                    "id": intent.id,
-                    "status": intent.status,
-                    "amount": intent.amount,
-                    "currency": intent.currency,
-                },
+            provider_reference = (
+                intent.metadata.get("shopsoma_payment_reference")
+                if getattr(intent, "metadata", None)
+                else intent.id
             )
+            authenticated = {
+                "id": intent.id,
+                "status": intent.status,
+                "amount": intent.amount,
+                "currency": intent.currency,
+            }
+            if payment is None:
+                payment, result = await recover_payment_mapping(
+                    db,
+                    provider="stripe",
+                    provider_reference=provider_reference,
+                    transaction_id=intent.id,
+                    observed_amount=Decimal(intent.amount) / 100,
+                    observed_currency=intent.currency,
+                    event_id=f"verify:{intent.id}",
+                    evidence_payload=authenticated,
+                )
+            else:
+                result = await finalize_verified_payment(
+                    db,
+                    payment=payment,
+                    provider="stripe",
+                    provider_reference=provider_reference,
+                    observed_amount=Decimal(intent.amount) / 100,
+                    observed_currency=intent.currency,
+                    event_id=f"verify:{intent.id}",
+                    evidence_payload=authenticated,
+                )
             payment.gateway_response = {
                 "payment_intent": intent.id,
                 "status": intent.status,
@@ -457,6 +473,11 @@ async def _verify_stripe_payment(
             },
         )
 
+    except PaymentRecoveryUnavailable as e:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(e)
+        )
     except (PaymentBridgeError, PaymentTruthMismatch) as e:
         await db.rollback()
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
@@ -502,30 +523,37 @@ async def _verify_paystack_payment(
             payment_result = await db.execute(payment_query)
             payment = payment_result.scalar_one_or_none()
 
-            if not payment:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Payment record not found",
-                )
-
             claim_customer = None
 
             # Update payment status from authenticated Paystack truth.
             if transaction_data["status"] == "success":
-                result = await finalize_verified_payment(
-                    db,
-                    payment=payment,
-                    provider="paystack",
-                    provider_reference=transaction_data["reference"],
-                    observed_amount=(
-                        Decimal(transaction_data["amount"]) / 100
-                        if transaction_data.get("amount") is not None
-                        else None
-                    ),
-                    observed_currency=transaction_data.get("currency"),
-                    event_id=f"verify:{transaction_data.get('id', transaction_data['reference'])}",
-                    evidence_payload=transaction_data,
+                observed_amount = (
+                    Decimal(transaction_data["amount"]) / 100
+                    if transaction_data.get("amount") is not None
+                    else None
                 )
+                if payment is None:
+                    payment, result = await recover_payment_mapping(
+                        db,
+                        provider="paystack",
+                        provider_reference=transaction_data["reference"],
+                        transaction_id=transaction_data["reference"],
+                        observed_amount=observed_amount,
+                        observed_currency=transaction_data.get("currency"),
+                        event_id=f"verify:{transaction_data.get('id', transaction_data['reference'])}",
+                        evidence_payload=transaction_data,
+                    )
+                else:
+                    result = await finalize_verified_payment(
+                        db,
+                        payment=payment,
+                        provider="paystack",
+                        provider_reference=transaction_data["reference"],
+                        observed_amount=observed_amount,
+                        observed_currency=transaction_data.get("currency"),
+                        event_id=f"verify:{transaction_data.get('id', transaction_data['reference'])}",
+                        evidence_payload=transaction_data,
+                    )
                 payment.gateway_response = paystack_response
                 order = await db.scalar(
                     select(Order)
@@ -573,6 +601,11 @@ async def _verify_paystack_payment(
                 data=transaction_data,
             )
 
+        except PaymentRecoveryUnavailable as e:
+            await db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(e)
+            )
         except (PaymentBridgeError, PaymentTruthMismatch) as e:
             await db.rollback()
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
@@ -633,8 +666,19 @@ async def paystack_webhook(
         payment_result = await db.execute(payment_query)
         payment = payment_result.scalar_one_or_none()
 
-        if payment:
-            try:
+        try:
+            if payment is None:
+                payment, result = await recover_payment_mapping(
+                    db,
+                    provider="paystack",
+                    provider_reference=reference,
+                    transaction_id=reference,
+                    observed_amount=Decimal(data["amount"]) / 100,
+                    observed_currency=data["currency"],
+                    event_id=str(data.get("id", reference)),
+                    evidence_payload=data,
+                )
+            else:
                 result = await finalize_verified_payment(
                     db,
                     payment=payment,
@@ -645,20 +689,21 @@ async def paystack_webhook(
                     event_id=str(data.get("id", reference)),
                     evidence_payload=data,
                 )
-                payment.gateway_response = event_data
-                completed_order = await db.scalar(
-                    select(Order)
-                    .options(selectinload(Order.customer))
-                    .where(Order.id == payment.order_id)
-                )
-                await db.commit()
-                if completed_order and completed_order.customer and not result.replay:
-                    await send_account_claim_email_if_guest(completed_order.customer)
-            except (PaymentBridgeError, PaymentTruthMismatch) as error:
-                await db.rollback()
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT, detail=str(error)
-                )
+            payment.gateway_response = event_data
+            completed_order = await db.scalar(
+                select(Order)
+                .options(selectinload(Order.customer))
+                .where(Order.id == payment.order_id)
+            )
+            await db.commit()
+            if completed_order and completed_order.customer and not result.replay:
+                await send_account_claim_email_if_guest(completed_order.customer)
+        except PaymentRecoveryUnavailable as error:
+            await db.rollback()
+            raise HTTPException(status_code=503, detail=str(error))
+        except (PaymentBridgeError, PaymentTruthMismatch) as error:
+            await db.rollback()
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error))
 
     return {"status": "success"}
 
@@ -707,35 +752,48 @@ async def stripe_webhook(
             payment_result = await db.execute(payment_query)
             payment = payment_result.scalar_one_or_none()
 
-            if payment:
+            authenticated = {
+                "event_id": str(event.id),
+                "payment_intent_id": payment_intent.id,
+                "amount": payment_intent.amount_received,
+                "currency": payment_intent.currency,
+            }
+            provider_reference = (
+                payment_intent.metadata.get("shopsoma_payment_reference")
+                if getattr(payment_intent, "metadata", None)
+                else payment_intent.id
+            )
+            if payment is None:
+                payment, result = await recover_payment_mapping(
+                    db,
+                    provider="stripe",
+                    provider_reference=provider_reference,
+                    transaction_id=payment_intent.id,
+                    observed_amount=Decimal(payment_intent.amount_received) / 100,
+                    observed_currency=payment_intent.currency,
+                    event_id=str(event.id),
+                    evidence_payload=authenticated,
+                )
+            else:
                 result = await finalize_verified_payment(
                     db,
                     payment=payment,
                     provider="stripe",
-                    provider_reference=(
-                        payment_intent.metadata.get("shopsoma_payment_reference")
-                        if getattr(payment_intent, "metadata", None)
-                        else payment_intent.id
-                    ),
+                    provider_reference=provider_reference,
                     observed_amount=Decimal(payment_intent.amount_received) / 100,
                     observed_currency=payment_intent.currency,
                     event_id=str(event.id),
-                    evidence_payload={
-                        "event_id": str(event.id),
-                        "payment_intent_id": payment_intent.id,
-                        "amount": payment_intent.amount_received,
-                        "currency": payment_intent.currency,
-                    },
+                    evidence_payload=authenticated,
                 )
-                payment.gateway_response = {"payment_intent_id": payment_intent.id}
-                completed_order = await db.scalar(
-                    select(Order)
-                    .options(selectinload(Order.customer))
-                    .where(Order.id == payment.order_id)
-                )
-                await db.commit()
-                if completed_order and completed_order.customer and not result.replay:
-                    await send_account_claim_email_if_guest(completed_order.customer)
+            payment.gateway_response = {"payment_intent_id": payment_intent.id}
+            completed_order = await db.scalar(
+                select(Order)
+                .options(selectinload(Order.customer))
+                .where(Order.id == payment.order_id)
+            )
+            await db.commit()
+            if completed_order and completed_order.customer and not result.replay:
+                await send_account_claim_email_if_guest(completed_order.customer)
 
         # Handle payment_intent.payment_failed event
         elif event.type == "payment_intent.payment_failed":
@@ -771,6 +829,9 @@ async def stripe_webhook(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Stripe signature"
         )
+    except PaymentRecoveryUnavailable as error:
+        await db.rollback()
+        raise HTTPException(status_code=503, detail=str(error))
     except (PaymentBridgeError, PaymentTruthMismatch) as error:
         await db.rollback()
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error))

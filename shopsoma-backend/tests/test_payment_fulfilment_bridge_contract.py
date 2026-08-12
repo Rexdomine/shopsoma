@@ -1,7 +1,11 @@
 """Launch-critical payment/fulfilment bridge contracts."""
 
+import asyncio
 from decimal import Decimal
+import hashlib
+import hmac
 import importlib.util
+import json
 from pathlib import Path
 from types import SimpleNamespace
 import uuid
@@ -9,12 +13,16 @@ import uuid
 import pytest
 from fastapi import HTTPException
 from sqlalchemy import func, select, text
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.api.v1 import payments
 from app.models.order import FulfillmentStatus, Order, PaymentStatus
 from app.models.payment import Payment, PaymentGateway, TransactionStatus
-from app.models.stock_payment_persistence import PaymentAttemptEvidence
-from app.schemas.payment import PaymentInitializeRequest
+from app.models.stock_payment_persistence import (
+    PaymentAttemptEvidence,
+    PaymentAttemptReservation,
+)
+from app.schemas.payment import PaymentInitializeRequest, PaymentVerifyRequest
 from app.services.payments.fulfilment_bridge import (
     PaymentTruthMismatch,
     authoritative_gateway_amount,
@@ -405,3 +413,375 @@ async def test_initialization_retry_cannot_cross_provider_boundary(
     assert retry_error.value.detail == "payment attempt is not ready for initialization"
     assert provider_calls == 1
     assert retry_truth == first_truth
+
+
+async def _pending_route_attempt(db_session, vendor_user, customer_user, provider):
+    stock = _load_stock_helpers()
+    graph, intent, quote, option, selection, sku = await stock._checkout_subject(
+        db_session, vendor_user, customer_user
+    )
+    reservation = stock._reservation(
+        graph, intent, quote, option, selection, customer_user["user"].id, sku
+    )
+    db_session.add(reservation)
+    await db_session.flush()
+    attempt = stock._payment_attempt(
+        graph,
+        intent,
+        quote,
+        option,
+        selection,
+        customer_user["user"].id,
+        provider=provider,
+        provider_reference=f"recover-{provider}-{uuid.uuid4().hex}",
+    )
+    db_session.add(attempt)
+    await db_session.flush()
+    db_session.add(
+        PaymentAttemptReservation(attempt_id=attempt.id, reservation_id=reservation.id)
+    )
+    await db_session.flush()
+    await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+    await db_session.execute(text("SET CONSTRAINTS ALL DEFERRED"))
+    await db_session.commit()
+    return graph, attempt
+
+
+@pytest.mark.asyncio
+async def test_stripe_customer_boundary_follows_durable_start_and_retry_calls_nothing(
+    db_session, vendor_user, customer_user, monkeypatch
+) -> None:
+    graph, attempt = await _pending_route_attempt(
+        db_session, vendor_user, customer_user, "stripe"
+    )
+    customer_user["user"].stripe_customer_id = None
+    await db_session.commit()
+    monkeypatch.setattr(
+        payments,
+        "domestic_shipping_capabilities",
+        lambda settings: DomesticShippingCapabilities(True, True, False),
+    )
+    calls = []
+
+    def search_customer(**kwargs):
+        assert attempt.state == "call_started"
+        calls.append("search")
+        return SimpleNamespace(data=[])
+
+    def create_customer(**kwargs):
+        calls.append("customer")
+        return SimpleNamespace(id="cus_accepted")
+
+    def create_intent(**kwargs):
+        calls.append(("intent", kwargs.get("idempotency_key")))
+        raise RuntimeError("provider accepted; local mapping commit lost")
+
+    monkeypatch.setattr(payments.stripe.Customer, "search", search_customer)
+    monkeypatch.setattr(payments.stripe.Customer, "create", create_customer)
+    monkeypatch.setattr(payments.stripe.PaymentIntent, "create", create_intent)
+    request = PaymentInitializeRequest(
+        order_id=graph["order"].id,
+        email=customer_user["user"].email,
+        payment_gateway="stripe",
+        currency=attempt.currency,
+        callback_url=None,
+    )
+
+    with pytest.raises(RuntimeError, match="mapping commit lost"):
+        await payments._initialize_stripe_payment(request, graph["order"], db_session)
+    await db_session.rollback()
+    assert (
+        await db_session.scalar(
+            select(type(attempt).state).where(type(attempt).id == attempt.id)
+        )
+        == "call_started"
+    )
+    with pytest.raises(HTTPException) as retry:
+        await payments._initialize_stripe_payment(request, graph["order"], db_session)
+
+    assert retry.value.status_code == 409
+    assert calls == [
+        "search",
+        "customer",
+        ("intent", f"shopsoma-payment-attempt:{attempt.id}"),
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ["stripe", "paystack"])
+async def test_missing_mapping_recovery_is_canonical_under_replay_and_race(
+    db_session, vendor_user, customer_user, monkeypatch, provider
+) -> None:
+    graph, attempt = await _pending_route_attempt(
+        db_session, vendor_user, customer_user, provider
+    )
+    await payment_initialization_truth(
+        db_session,
+        order=graph["order"],
+        provider=provider,
+        capabilities=DomesticShippingCapabilities(True, True, False),
+    )
+    await db_session.commit()
+    factory = async_sessionmaker(bind=db_session.bind, expire_on_commit=False)
+    effects = {"receipt": 0, "claim": 0}
+
+    async def receipt(**kwargs):
+        effects["receipt"] += 1
+
+    async def claim(customer):
+        effects["claim"] += 1
+
+    monkeypatch.setattr(payments.email_service, "send_payment_receipt_email", receipt)
+    monkeypatch.setattr(payments, "send_account_claim_email_if_guest", claim)
+
+    async def recover(transport):
+        async with factory() as session:
+            await _invoke_authenticated_route(
+                provider,
+                transport,
+                session,
+                monkeypatch,
+                reference=attempt.provider_reference,
+                amount=attempt.amount,
+                currency=attempt.currency,
+            )
+
+    await asyncio.gather(recover("callback"), recover("webhook"))
+    await recover("callback")
+    assert (
+        await db_session.scalar(
+            select(func.count(Payment.id)).where(Payment.order_id == graph["order"].id)
+        )
+        == 1
+    )
+    await db_session.refresh(graph["order"])
+    assert graph["order"].payment_status == PaymentStatus.PAID
+    assert (
+        await db_session.scalar(
+            select(func.count(PaymentAttemptEvidence.id)).where(
+                PaymentAttemptEvidence.attempt_id == attempt.id
+            )
+        )
+        == 1
+    )
+    assert effects["claim"] == 1
+    assert effects["receipt"] <= 1
+
+
+class _AuthenticatedWebhookRequest:
+    def __init__(self, payload):
+        self.payload = payload
+        self.body_bytes = json.dumps(payload).encode()
+
+    async def body(self):
+        return self.body_bytes
+
+    async def json(self):
+        return self.payload
+
+
+async def _invoke_authenticated_route(
+    provider, transport, db, monkeypatch, *, reference, amount, currency
+):
+    if provider == "stripe":
+        intent = SimpleNamespace(
+            id=f"pi_{reference}",
+            status="succeeded",
+            amount=int(amount * 100),
+            amount_received=int(amount * 100),
+            currency=currency.lower(),
+            metadata={"shopsoma_payment_reference": reference},
+        )
+        if transport == "callback":
+            monkeypatch.setattr(
+                payments.stripe.PaymentIntent, "retrieve", lambda value: intent
+            )
+            return await payments._verify_stripe_payment(
+                PaymentVerifyRequest(
+                    payment_gateway="stripe", payment_intent_id=intent.id
+                ),
+                db,
+            )
+        event = SimpleNamespace(
+            id=f"evt_{reference}",
+            type="payment_intent.succeeded",
+            data=SimpleNamespace(object=intent),
+        )
+        monkeypatch.setattr(payments.settings, "STRIPE_WEBHOOK_SECRET", "secret")
+        monkeypatch.setattr(
+            payments.stripe.Webhook, "construct_event", lambda **kwargs: event
+        )
+        return await payments.stripe_webhook(
+            _AuthenticatedWebhookRequest({"signed": True}), "signature", db
+        )
+
+    data = {
+        "id": 7,
+        "status": "success",
+        "reference": reference,
+        "amount": int(amount * 100),
+        "currency": currency,
+    }
+    if transport == "callback":
+
+        class Response:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"status": True, "data": data}
+
+        class Client:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return None
+
+            async def get(self, *args, **kwargs):
+                return Response()
+
+        monkeypatch.setattr(payments.httpx, "AsyncClient", Client)
+        return await payments._verify_paystack_payment(
+            PaymentVerifyRequest(payment_gateway="paystack", reference=reference), db
+        )
+    request = _AuthenticatedWebhookRequest({"event": "charge.success", "data": data})
+    monkeypatch.setattr(payments, "PAYSTACK_SECRET_KEY", "secret")
+    signature = hmac.new(b"secret", request.body_bytes, hashlib.sha512).hexdigest()
+    return await payments.paystack_webhook(request, signature, db)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ["stripe", "paystack"])
+@pytest.mark.parametrize("transport", ["callback", "webhook"])
+async def test_authenticated_unassociable_route_is_retryable_without_mutation(
+    db_session, monkeypatch, provider, transport
+) -> None:
+    before = (
+        await db_session.scalar(select(func.count(Payment.id))),
+        await db_session.scalar(select(func.count(PaymentAttemptEvidence.id))),
+        await db_session.scalar(select(func.count(Order.id))),
+    )
+
+    with pytest.raises(HTTPException) as error:
+        await _invoke_authenticated_route(
+            provider,
+            transport,
+            db_session,
+            monkeypatch,
+            reference=f"missing-{provider}-{transport}",
+            amount=Decimal("1.00"),
+            currency="NGN",
+        )
+
+    assert error.value.status_code == 503
+    assert (
+        await db_session.scalar(select(func.count(Payment.id))),
+        await db_session.scalar(select(func.count(PaymentAttemptEvidence.id))),
+        await db_session.scalar(select(func.count(Order.id))),
+    ) == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ["stripe", "paystack"])
+@pytest.mark.parametrize("transport", ["callback", "webhook"])
+async def test_authenticated_route_recovers_missing_mapping(
+    db_session, vendor_user, customer_user, monkeypatch, provider, transport
+) -> None:
+    graph, attempt = await _pending_route_attempt(
+        db_session, vendor_user, customer_user, provider
+    )
+    await payment_initialization_truth(
+        db_session,
+        order=graph["order"],
+        provider=provider,
+        capabilities=DomesticShippingCapabilities(True, True, False),
+    )
+    await db_session.commit()
+    transaction_id = (
+        f"pi_{attempt.id.hex}" if provider == "stripe" else attempt.provider_reference
+    )
+    if provider == "stripe":
+        intent = SimpleNamespace(
+            id=transaction_id,
+            status="succeeded",
+            amount=int(attempt.amount * 100),
+            amount_received=int(attempt.amount * 100),
+            currency="ngn",
+            metadata={"shopsoma_payment_reference": attempt.provider_reference},
+        )
+        if transport == "callback":
+            monkeypatch.setattr(
+                payments.stripe.PaymentIntent, "retrieve", lambda value: intent
+            )
+            await payments._verify_stripe_payment(
+                PaymentVerifyRequest(
+                    payment_gateway="stripe", payment_intent_id=transaction_id
+                ),
+                db_session,
+            )
+        else:
+            event = SimpleNamespace(
+                id=f"evt_{attempt.id.hex}",
+                type="payment_intent.succeeded",
+                data=SimpleNamespace(object=intent),
+            )
+            monkeypatch.setattr(payments.settings, "STRIPE_WEBHOOK_SECRET", "secret")
+            monkeypatch.setattr(
+                payments.stripe.Webhook, "construct_event", lambda **kwargs: event
+            )
+            await payments.stripe_webhook(
+                _AuthenticatedWebhookRequest({"signed": True}), "signature", db_session
+            )
+    else:
+        data = {
+            "id": 7,
+            "status": "success",
+            "reference": transaction_id,
+            "amount": int(attempt.amount * 100),
+            "currency": "NGN",
+        }
+        if transport == "callback":
+
+            class Response:
+                def raise_for_status(self):
+                    return None
+
+                def json(self):
+                    return {"status": True, "data": data}
+
+            class Client:
+                async def __aenter__(self):
+                    return self
+
+                async def __aexit__(self, *args):
+                    return None
+
+                async def get(self, *args, **kwargs):
+                    return Response()
+
+            monkeypatch.setattr(payments.httpx, "AsyncClient", Client)
+            await payments._verify_paystack_payment(
+                PaymentVerifyRequest(
+                    payment_gateway="paystack", reference=transaction_id
+                ),
+                db_session,
+            )
+        else:
+            request = _AuthenticatedWebhookRequest(
+                {"event": "charge.success", "data": data}
+            )
+            monkeypatch.setattr(payments, "PAYSTACK_SECRET_KEY", "secret")
+            signature = hmac.new(
+                b"secret", request.body_bytes, hashlib.sha512
+            ).hexdigest()
+            await payments.paystack_webhook(request, signature, db_session)
+
+    payment = await db_session.scalar(
+        select(Payment).where(Payment.order_id == graph["order"].id)
+    )
+    await db_session.refresh(graph["order"])
+    assert payment is not None
+    assert payment.transaction_id == transaction_id
+    assert payment.status == TransactionStatus.COMPLETED
+    assert graph["order"].payment_status == PaymentStatus.PAID
