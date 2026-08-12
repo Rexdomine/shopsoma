@@ -2,6 +2,7 @@
 
 import uuid
 from decimal import Decimal
+from types import SimpleNamespace
 from typing import Optional
 
 import pytest
@@ -24,6 +25,8 @@ class _FakePaystackResponse:
             "data": {
                 "status": "success",
                 "reference": "SHP-CLAIM-1",
+                "amount": 6000000,
+                "currency": "NGN",
                 "gateway_response": "Successful",
             },
         }
@@ -178,3 +181,121 @@ async def test_successful_registered_user_payment_does_not_send_claim_email(
 
     assert response.status is True
     assert claim_emails == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("gateway", ["stripe", "paystack"])
+async def test_verify_notifications_run_once_only_after_durable_first_completion(
+    db_session: AsyncSession, monkeypatch, gateway
+):
+    reference = "pi_claim_1" if gateway == "stripe" else "SHP-CLAIM-1"
+    await _create_payment_order(
+        db_session,
+        email=f"{gateway}-guest@example.com",
+        hashed_password=None,
+        is_guest_created=True,
+        reference=reference,
+    )
+    events = []
+    original_commit = db_session.commit
+
+    async def recording_commit():
+        await original_commit()
+        events.append("commit")
+
+    async def fake_receipt(**kwargs):
+        events.append("receipt")
+
+    async def fake_claim(email, name, claim_link):
+        events.append("claim")
+
+    monkeypatch.setattr(db_session, "commit", recording_commit)
+    monkeypatch.setattr(payments.httpx, "AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr(
+        payments.stripe.PaymentIntent,
+        "retrieve",
+        lambda payment_intent_id: SimpleNamespace(
+            id=payment_intent_id,
+            status="succeeded",
+            amount=6000000,
+            currency="ngn",
+            metadata={},
+        ),
+    )
+    monkeypatch.setattr(
+        payments.email_service, "send_payment_receipt_email", fake_receipt
+    )
+    monkeypatch.setattr(payments.email_service, "send_account_claim_email", fake_claim)
+    verify_data = PaymentVerifyRequest(
+        reference=reference if gateway == "paystack" else None,
+        payment_intent_id=reference if gateway == "stripe" else None,
+        payment_gateway=gateway,
+    )
+    verify = (
+        payments._verify_stripe_payment
+        if gateway == "stripe"
+        else payments._verify_paystack_payment
+    )
+
+    await verify(verify_data, db_session)
+    await verify(verify_data, db_session)
+
+    assert events == ["commit", "receipt", "claim", "commit"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("gateway", ["stripe", "paystack"])
+async def test_verify_commit_failure_sends_no_notifications(
+    db_session: AsyncSession, monkeypatch, gateway
+):
+    reference = "pi_commit_failure" if gateway == "stripe" else "SHP-CLAIM-1"
+    await _create_payment_order(
+        db_session,
+        email=f"{gateway}-failure@example.com",
+        hashed_password=None,
+        is_guest_created=True,
+        reference=reference,
+    )
+    notifications = []
+
+    async def failing_commit():
+        raise RuntimeError("forced commit failure")
+
+    async def fake_receipt(**kwargs):
+        notifications.append("receipt")
+
+    async def fake_claim(email, name, claim_link):
+        notifications.append("claim")
+
+    monkeypatch.setattr(db_session, "commit", failing_commit)
+    monkeypatch.setattr(payments.httpx, "AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr(
+        payments.stripe.PaymentIntent,
+        "retrieve",
+        lambda payment_intent_id: SimpleNamespace(
+            id=payment_intent_id,
+            status="succeeded",
+            amount=6000000,
+            currency="ngn",
+            metadata={},
+        ),
+    )
+    monkeypatch.setattr(
+        payments.email_service, "send_payment_receipt_email", fake_receipt
+    )
+    monkeypatch.setattr(payments.email_service, "send_account_claim_email", fake_claim)
+    verify_data = PaymentVerifyRequest(
+        reference=reference if gateway == "paystack" else None,
+        payment_intent_id=reference if gateway == "stripe" else None,
+        payment_gateway=gateway,
+    )
+    verify = (
+        payments._verify_stripe_payment
+        if gateway == "stripe"
+        else payments._verify_paystack_payment
+    )
+
+    with pytest.raises(RuntimeError, match="forced commit failure"):
+        await verify(verify_data, db_session)
+
+    assert notifications == []

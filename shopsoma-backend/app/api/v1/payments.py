@@ -1,4 +1,5 @@
 """Payment endpoints for Paystack and Stripe integration"""
+
 import hmac
 import hashlib
 import stripe
@@ -13,19 +14,25 @@ import httpx
 from app.core.config import settings
 from app.core.database import get_db
 from app.models.user import User
-from app.models.order import Order, PaymentStatus, FulfillmentStatus
+from app.models.order import Order, PaymentStatus
 from app.models.payment import Payment, PaymentGateway, TransactionStatus
 from app.schemas.payment import (
     PaymentInitializeRequest,
     PaymentInitializeResponse,
     PaymentVerifyRequest,
     PaymentVerifyResponse,
-    PaymentWebhookEvent,
     PaymentResponse,
 )
 from app.api.dependencies import get_current_active_user, get_optional_user
 from app.services.email_service import email_service
 from app.services.account_claim import send_account_claim_email_if_guest
+from app.services.payments.fulfilment_bridge import (
+    PaymentBridgeError,
+    PaymentTruthMismatch,
+    finalize_verified_payment,
+    payment_initialization_truth,
+)
+from app.services.shipping.capabilities import domestic_shipping_capabilities
 from sqlalchemy.orm import selectinload
 
 router = APIRouter(prefix="/payments", tags=["Payments"])
@@ -40,7 +47,7 @@ stripe.api_key = settings.STRIPE_SECRET_KEY
 async def initialize_payment(
     payment_data: PaymentInitializeRequest,
     current_user: Optional[User] = Depends(get_optional_user),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Initialize a payment for an order
@@ -51,11 +58,15 @@ async def initialize_payment(
     if payment_data.payment_gateway == "paystack" and payment_data.currency != "NGN":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Paystack only supports NGN currency. Current currency: {payment_data.currency}"
+            detail=f"Paystack only supports NGN currency. Current currency: {payment_data.currency}",
         )
 
     # Get order
-    order_query = select(Order).options(selectinload(Order.items)).where(Order.id == payment_data.order_id)
+    order_query = (
+        select(Order)
+        .options(selectinload(Order.items))
+        .where(Order.id == payment_data.order_id)
+    )
 
     # If authenticated, verify order ownership
     if current_user:
@@ -66,8 +77,7 @@ async def initialize_payment(
 
     if not order:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Order not found"
+            status_code=status.HTTP_404_NOT_FOUND, detail="Order not found"
         )
 
     order_currency = (order.currency or "NGN").upper()
@@ -81,7 +91,7 @@ async def initialize_payment(
     if order.payment_status == PaymentStatus.PAID:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Order has already been paid"
+            detail="Order has already been paid",
         )
 
     # Route to appropriate payment gateway
@@ -92,9 +102,7 @@ async def initialize_payment(
 
 
 async def _initialize_stripe_payment(
-    payment_data: PaymentInitializeRequest,
-    order: Order,
-    db: AsyncSession
+    payment_data: PaymentInitializeRequest, order: Order, db: AsyncSession
 ) -> PaymentInitializeResponse:
     """Initialize Stripe payment using Payment Intents"""
     try:
@@ -123,13 +131,22 @@ async def _initialize_stripe_payment(
             customer_record.stripe_customer_id = stripe_customer_id
             await db.commit()
 
-        # Convert amount based on currency (Stripe uses cents)
-        amount_in_cents = int(order.total_amount * 100)
+        truth = await payment_initialization_truth(
+            db,
+            order=order,
+            provider="stripe",
+            capabilities=domestic_shipping_capabilities(settings),
+        )
+        if truth.bridge_applied:
+            # Durable call_started truth must precede the provider boundary.
+            await db.commit()
+        # Stripe uses cents; the source is always persisted server truth.
+        amount_in_cents = int(truth.amount * 100)
 
         # Create Payment Intent
         intent = stripe.PaymentIntent.create(
             amount=amount_in_cents,
-            currency=payment_data.currency.lower(),
+            currency=truth.currency.lower(),
             customer=stripe_customer_id,
             payment_method_types=["card"],
             setup_future_usage="off_session",
@@ -142,6 +159,7 @@ async def _initialize_stripe_payment(
                 "order_id": str(order.id),
                 "order_number": order.order_number,
                 "customer_email": payment_data.email,
+                "shopsoma_payment_reference": truth.provider_reference or "",
             },
             receipt_email=payment_data.email,
         )
@@ -151,10 +169,10 @@ async def _initialize_stripe_payment(
             transaction_id=intent.id,
             payment_gateway=PaymentGateway.STRIPE,
             payment_method="stripe",
-            amount=order.total_amount,
-            currency=payment_data.currency,
+            amount=truth.amount,
+            currency=truth.currency,
             status=TransactionStatus.PENDING,
-            gateway_response={"payment_intent": intent.id}
+            gateway_response={"payment_intent": intent.id},
         )
 
         db.add(payment)
@@ -165,42 +183,55 @@ async def _initialize_stripe_payment(
             message="Stripe Payment Intent created successfully",
             client_secret=intent.client_secret,
             payment_intent_id=intent.id,
-            payment_gateway="stripe"
+            payment_gateway="stripe",
         )
 
+    except PaymentBridgeError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
     except stripe.error.StripeError as e:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Stripe error: {str(e)}"
+            detail=f"Stripe error: {str(e)}",
         )
 
 
 async def _initialize_paystack_payment(
-    payment_data: PaymentInitializeRequest,
-    order: Order,
-    db: AsyncSession
+    payment_data: PaymentInitializeRequest, order: Order, db: AsyncSession
 ) -> PaymentInitializeResponse:
     """Initialize Paystack payment"""
     # Validate Paystack secret key
     if not PAYSTACK_SECRET_KEY or PAYSTACK_SECRET_KEY == "":
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Paystack is not configured. Please contact support."
+            detail="Paystack is not configured. Please contact support.",
         )
 
     # Validate key format
     if not PAYSTACK_SECRET_KEY.startswith(("sk_test_", "sk_live_")):
-        print(f"⚠️  Invalid Paystack key format. Key should start with 'sk_test_' or 'sk_live_'")
+        print(
+            "⚠️  Invalid Paystack key format. Key should start with 'sk_test_' or 'sk_live_'"
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Invalid payment gateway configuration. Please contact support."
+            detail="Invalid payment gateway configuration. Please contact support.",
         )
 
-    # Generate unique reference
-    reference = f"SHP-{order.order_number}"
+    try:
+        truth = await payment_initialization_truth(
+            db,
+            order=order,
+            provider="paystack",
+            capabilities=domestic_shipping_capabilities(settings),
+        )
+    except PaymentBridgeError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    if truth.bridge_applied:
+        # Durable call_started truth must precede the provider boundary.
+        await db.commit()
+    reference = truth.provider_reference or f"SHP-{order.order_number}"
 
-    # Amount must be in kobo (multiply by 100)
-    amount_in_kobo = int(order.total_amount * 100)
+    # Paystack uses kobo; the source is always persisted server truth.
+    amount_in_kobo = int(truth.amount * 100)
 
     callback_url = f"{settings.FRONTEND_BASE_URL.rstrip('/')}/payment/verify"
 
@@ -208,19 +239,19 @@ async def _initialize_paystack_payment(
         "email": payment_data.email,
         "amount": amount_in_kobo,
         "reference": reference,
-        "currency": "NGN",
+        "currency": truth.currency,
         "callback_url": callback_url,
         "metadata": {
             "order_id": str(order.id),
             "order_number": order.order_number,
             "customer_name": payment_data.email,
-        }
+        },
     }
 
     # Call Paystack API
     headers = {
         "Authorization": f"Bearer {PAYSTACK_SECRET_KEY}",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
     }
 
     async with httpx.AsyncClient() as client:
@@ -229,7 +260,7 @@ async def _initialize_paystack_payment(
                 f"{PAYSTACK_BASE_URL}/transaction/initialize",
                 json=payload,
                 headers=headers,
-                timeout=30.0
+                timeout=30.0,
             )
 
             # Try to parse response regardless of status code for better error messages
@@ -240,28 +271,32 @@ async def _initialize_paystack_payment(
 
             # Check for HTTP errors
             if response.status_code != 200:
-                error_message = paystack_response.get("message", "Payment initialization failed")
-                print(f"❌ Paystack API Error (HTTP {response.status_code}): {error_message}")
+                error_message = paystack_response.get(
+                    "message", "Payment initialization failed"
+                )
+                print(
+                    f"❌ Paystack API Error (HTTP {response.status_code}): {error_message}"
+                )
                 print(f"   Response: {paystack_response}")
 
                 # Provide specific error messages
                 if response.status_code == 401:
                     raise HTTPException(
                         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                        detail="Payment gateway authentication failed. Please contact support."
+                        detail="Payment gateway authentication failed. Please contact support.",
                     )
                 else:
                     raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail=error_message
+                        status_code=status.HTTP_400_BAD_REQUEST, detail=error_message
                     )
 
             if not paystack_response.get("status"):
-                error_message = paystack_response.get("message", "Payment initialization failed")
+                error_message = paystack_response.get(
+                    "message", "Payment initialization failed"
+                )
                 print(f"❌ Paystack returned status=false: {error_message}")
                 raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=error_message
+                    status_code=status.HTTP_400_BAD_REQUEST, detail=error_message
                 )
 
             # Create payment record
@@ -270,10 +305,10 @@ async def _initialize_paystack_payment(
                 transaction_id=reference,
                 payment_gateway=PaymentGateway.PAYSTACK,
                 payment_method="paystack",
-                amount=order.total_amount,
-                currency="NGN",
+                amount=truth.amount,
+                currency=truth.currency,
                 status=TransactionStatus.PENDING,
-                gateway_response=paystack_response
+                gateway_response=paystack_response,
             )
 
             db.add(payment)
@@ -286,7 +321,7 @@ async def _initialize_paystack_payment(
                 authorization_url=data["authorization_url"],
                 access_code=data["access_code"],
                 reference=data["reference"],
-                payment_gateway="paystack"
+                payment_gateway="paystack",
             )
 
         except HTTPException:
@@ -295,14 +330,13 @@ async def _initialize_paystack_payment(
             print(f"❌ HTTP Error connecting to Paystack: {str(e)}")
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail=f"Payment service connection error: {str(e)}"
+                detail=f"Payment service connection error: {str(e)}",
             )
 
 
 @router.post("/verify", response_model=PaymentVerifyResponse)
 async def verify_payment(
-    verify_data: PaymentVerifyRequest,
-    db: AsyncSession = Depends(get_db)
+    verify_data: PaymentVerifyRequest, db: AsyncSession = Depends(get_db)
 ):
     """
     Verify a payment
@@ -316,8 +350,7 @@ async def verify_payment(
 
 
 async def _verify_stripe_payment(
-    verify_data: PaymentVerifyRequest,
-    db: AsyncSession
+    verify_data: PaymentVerifyRequest, db: AsyncSession
 ) -> PaymentVerifyResponse:
     """Verify Stripe payment using Payment Intent"""
     try:
@@ -333,60 +366,58 @@ async def _verify_stripe_payment(
 
         if not payment:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Payment record not found"
+                status_code=status.HTTP_404_NOT_FOUND, detail="Payment record not found"
             )
 
-        was_completed = payment.status == TransactionStatus.COMPLETED
         claim_customer = None
 
-        # Update payment status based on intent status
+        # Update payment status based on authenticated intent truth
         if intent.status == "succeeded":
-            payment.status = TransactionStatus.COMPLETED
-            payment.gateway_response = {"payment_intent": intent.id, "status": intent.status}
-            payment.completed_at = func.now()
-
-            # Update order payment status
-            await db.execute(
-                update(Order)
-                .where(Order.id == payment.order_id)
-                .values(
-                    payment_status=PaymentStatus.PAID,
-                    fulfillment_status=FulfillmentStatus.PREPARING_FOR_PICKUP
-                )
+            result = await finalize_verified_payment(
+                db,
+                payment=payment,
+                provider="stripe",
+                provider_reference=(
+                    intent.metadata.get("shopsoma_payment_reference")
+                    if getattr(intent, "metadata", None)
+                    else intent.id
+                ),
+                observed_amount=Decimal(intent.amount) / 100,
+                observed_currency=intent.currency,
+                event_id=f"verify:{intent.id}",
+                evidence_payload={
+                    "id": intent.id,
+                    "status": intent.status,
+                    "amount": intent.amount,
+                    "currency": intent.currency,
+                },
             )
+            payment.gateway_response = {
+                "payment_intent": intent.id,
+                "status": intent.status,
+            }
+            order = await db.scalar(
+                select(Order)
+                .options(selectinload(Order.customer))
+                .where(Order.id == payment.order_id)
+            )
+            if order and order.customer and not result.replay:
+                claim_customer = order.customer
 
-            # Send payment receipt email
-            try:
-                # Get order with customer details
-                order_query = select(Order).options(
-                    selectinload(Order.customer)
-                ).where(Order.id == payment.order_id)
-                order_result = await db.execute(order_query)
-                order = order_result.scalar_one_or_none()
-
-                if order and order.customer:
-                    if not was_completed:
-                        claim_customer = order.customer
-                    await email_service.send_payment_receipt_email(
-                        email=order.customer.email,
-                        name=order.customer.full_name,
-                        order_number=order.order_number,
-                        amount=float(payment.amount),
-                        currency=payment.currency,
-                        payment_method="Stripe",
-                        reference=payment.transaction_id
-                    )
-            except Exception as e:
-                # Log error but don't fail verification if email fails
-                print(f"Failed to send payment receipt email: {e}")
-
-        elif intent.status in ["requires_payment_method", "requires_confirmation", "requires_action"]:
+        elif intent.status in [
+            "requires_payment_method",
+            "requires_confirmation",
+            "requires_action",
+        ]:
             payment.status = TransactionStatus.PENDING
         else:
             payment.status = TransactionStatus.FAILED
             payment.failed_at = func.now()
-            payment.failure_reason = intent.last_payment_error.message if intent.last_payment_error else "Payment failed"
+            payment.failure_reason = (
+                intent.last_payment_error.message
+                if intent.last_payment_error
+                else "Payment failed"
+            )
 
             await db.execute(
                 update(Order)
@@ -398,24 +429,46 @@ async def _verify_stripe_payment(
         await db.refresh(payment)
 
         if claim_customer:
+            try:
+                await email_service.send_payment_receipt_email(
+                    email=claim_customer.email,
+                    name=claim_customer.full_name,
+                    order_number=order.order_number,
+                    amount=float(payment.amount),
+                    currency=payment.currency,
+                    payment_method="Stripe",
+                    reference=payment.transaction_id,
+                )
+            except Exception as e:
+                print(f"Failed to send payment receipt email: {e}")
             await send_account_claim_email_if_guest(claim_customer)
 
         return PaymentVerifyResponse(
             status=intent.status == "succeeded",
-            message="Payment verification successful" if intent.status == "succeeded" else "Payment not completed",
-            data={"status": intent.status, "amount": intent.amount, "currency": intent.currency}
+            message=(
+                "Payment verification successful"
+                if intent.status == "succeeded"
+                else "Payment not completed"
+            ),
+            data={
+                "status": intent.status,
+                "amount": intent.amount,
+                "currency": intent.currency,
+            },
         )
 
+    except (PaymentBridgeError, PaymentTruthMismatch) as e:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
     except stripe.error.StripeError as e:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Stripe verification error: {str(e)}"
+            detail=f"Stripe verification error: {str(e)}",
         )
 
 
 async def _verify_paystack_payment(
-    verify_data: PaymentVerifyRequest,
-    db: AsyncSession
+    verify_data: PaymentVerifyRequest, db: AsyncSession
 ) -> PaymentVerifyResponse:
     """Verify Paystack payment"""
     # Call Paystack verify endpoint
@@ -428,7 +481,7 @@ async def _verify_paystack_payment(
             response = await client.get(
                 f"{PAYSTACK_BASE_URL}/transaction/verify/{verify_data.reference}",
                 headers=headers,
-                timeout=30.0
+                timeout=30.0,
             )
             response.raise_for_status()
             paystack_response = response.json()
@@ -437,7 +490,7 @@ async def _verify_paystack_payment(
                 return PaymentVerifyResponse(
                     status=False,
                     message=paystack_response.get("message", "Verification failed"),
-                    data=None
+                    data=None,
                 )
 
             transaction_data = paystack_response["data"]
@@ -452,53 +505,39 @@ async def _verify_paystack_payment(
             if not payment:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Payment record not found"
+                    detail="Payment record not found",
                 )
 
-            was_completed = payment.status == TransactionStatus.COMPLETED
             claim_customer = None
 
-            # Update payment status
+            # Update payment status from authenticated Paystack truth.
             if transaction_data["status"] == "success":
-                payment.status = TransactionStatus.COMPLETED
-                payment.gateway_response = paystack_response
-                payment.completed_at = func.now()
-
-                # Update order payment status
-                await db.execute(
-                    update(Order)
-                    .where(Order.id == payment.order_id)
-                    .values(
-                        payment_status=PaymentStatus.PAID,
-                        fulfillment_status=FulfillmentStatus.PREPARING_FOR_PICKUP
-                    )
+                result = await finalize_verified_payment(
+                    db,
+                    payment=payment,
+                    provider="paystack",
+                    provider_reference=transaction_data["reference"],
+                    observed_amount=(
+                        Decimal(transaction_data["amount"]) / 100
+                        if transaction_data.get("amount") is not None
+                        else None
+                    ),
+                    observed_currency=transaction_data.get("currency"),
+                    event_id=f"verify:{transaction_data.get('id', transaction_data['reference'])}",
+                    evidence_payload=transaction_data,
                 )
-
-                # Send payment receipt email
-                try:
-                    # Get order with customer details
-                    order_query = select(Order).options(
-                        selectinload(Order.customer)
-                    ).where(Order.id == payment.order_id)
-                    order_result = await db.execute(order_query)
-                    order = order_result.scalar_one_or_none()
-
-                    if order and order.customer:
-                        if not was_completed:
-                            claim_customer = order.customer
-                        await email_service.send_payment_receipt_email(
-                            email=order.customer.email,
-                            name=order.customer.full_name,
-                            order_number=order.order_number,
-                            amount=float(payment.amount),
-                            currency=payment.currency,
-                            payment_method="Paystack",
-                            reference=payment.transaction_id
-                        )
-                except Exception as e:
-                    # Log error but don't fail verification if email fails
-                    print(f"Failed to send payment receipt email: {e}")
-            elif transaction_data["status"] == "failed":
+                payment.gateway_response = paystack_response
+                order = await db.scalar(
+                    select(Order)
+                    .options(selectinload(Order.customer))
+                    .where(Order.id == payment.order_id)
+                )
+                if order and order.customer and not result.replay:
+                    claim_customer = order.customer
+            elif (
+                transaction_data["status"] == "failed"
+                and payment.status != TransactionStatus.COMPLETED
+            ):
                 payment.status = TransactionStatus.FAILED
                 payment.gateway_response = paystack_response
                 payment.failed_at = func.now()
@@ -514,18 +553,33 @@ async def _verify_paystack_payment(
             await db.refresh(payment)
 
             if claim_customer:
+                try:
+                    await email_service.send_payment_receipt_email(
+                        email=claim_customer.email,
+                        name=claim_customer.full_name,
+                        order_number=order.order_number,
+                        amount=float(payment.amount),
+                        currency=payment.currency,
+                        payment_method="Paystack",
+                        reference=payment.transaction_id,
+                    )
+                except Exception as e:
+                    print(f"Failed to send payment receipt email: {e}")
                 await send_account_claim_email_if_guest(claim_customer)
 
             return PaymentVerifyResponse(
                 status=True,
                 message="Payment verification successful",
-                data=transaction_data
+                data=transaction_data,
             )
 
+        except (PaymentBridgeError, PaymentTruthMismatch) as e:
+            await db.rollback()
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
         except httpx.HTTPError as e:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail=f"Payment verification error: {str(e)}"
+                detail=f"Payment verification error: {str(e)}",
             )
 
 
@@ -533,7 +587,7 @@ async def _verify_paystack_payment(
 async def paystack_webhook(
     request: Request,
     x_paystack_signature: Optional[str] = Header(None),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Webhook endpoint for Paystack events
@@ -547,26 +601,22 @@ async def paystack_webhook(
     # Verify signature
     if not x_paystack_signature:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="No signature provided"
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="No signature provided"
         )
     if not PAYSTACK_SECRET_KEY:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Paystack webhook secret is not configured"
+            detail="Paystack webhook secret is not configured",
         )
 
     # Compute HMAC hash
     computed_signature = hmac.new(
-        PAYSTACK_SECRET_KEY.encode('utf-8'),
-        body,
-        hashlib.sha512
+        PAYSTACK_SECRET_KEY.encode("utf-8"), body, hashlib.sha512
     ).hexdigest()
 
     if computed_signature != x_paystack_signature:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid signature"
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid signature"
         )
 
     # Parse event
@@ -579,38 +629,36 @@ async def paystack_webhook(
         reference = data.get("reference")
 
         # Get payment record
-        payment_query = select(Payment).where(
-            Payment.transaction_id == reference
-        )
+        payment_query = select(Payment).where(Payment.transaction_id == reference)
         payment_result = await db.execute(payment_query)
         payment = payment_result.scalar_one_or_none()
 
-        if payment and payment.status != TransactionStatus.COMPLETED:
-            payment.status = TransactionStatus.COMPLETED
-            payment.gateway_response = event_data
-            payment.completed_at = func.now()
-
-            # Update order
-            await db.execute(
-                update(Order)
-                .where(Order.id == payment.order_id)
-                .values(
-                    payment_status=PaymentStatus.PAID,
-                    fulfillment_status=FulfillmentStatus.PREPARING_FOR_PICKUP
+        if payment:
+            try:
+                result = await finalize_verified_payment(
+                    db,
+                    payment=payment,
+                    provider="paystack",
+                    provider_reference=reference,
+                    observed_amount=Decimal(data["amount"]) / 100,
+                    observed_currency=data["currency"],
+                    event_id=str(data.get("id", reference)),
+                    evidence_payload=data,
                 )
-            )
-
-            order_result = await db.execute(
-                select(Order)
-                .options(selectinload(Order.customer))
-                .where(Order.id == payment.order_id)
-            )
-            completed_order = order_result.scalar_one_or_none()
-
-            await db.commit()
-
-            if completed_order and completed_order.customer:
-                await send_account_claim_email_if_guest(completed_order.customer)
+                payment.gateway_response = event_data
+                completed_order = await db.scalar(
+                    select(Order)
+                    .options(selectinload(Order.customer))
+                    .where(Order.id == payment.order_id)
+                )
+                await db.commit()
+                if completed_order and completed_order.customer and not result.replay:
+                    await send_account_claim_email_if_guest(completed_order.customer)
+            except (PaymentBridgeError, PaymentTruthMismatch) as error:
+                await db.rollback()
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT, detail=str(error)
+                )
 
     return {"status": "success"}
 
@@ -619,7 +667,7 @@ async def paystack_webhook(
 async def stripe_webhook(
     request: Request,
     stripe_signature: Optional[str] = Header(None, alias="stripe-signature"),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Webhook endpoint for Stripe events
@@ -633,7 +681,7 @@ async def stripe_webhook(
             if not stripe_signature:
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Missing Stripe signature"
+                    detail="Missing Stripe signature",
                 )
             event = stripe.Webhook.construct_event(
                 payload=body,
@@ -643,13 +691,10 @@ async def stripe_webhook(
         elif settings.ENVIRONMENT.lower() in {"staging", "production"}:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Stripe webhook secret is not configured"
+                detail="Stripe webhook secret is not configured",
             )
         else:
-            event = stripe.Event.construct_from(
-                await request.json(),
-                stripe.api_key
-            )
+            event = stripe.Event.construct_from(await request.json(), stripe.api_key)
 
         # Handle payment_intent.succeeded event
         if event.type == "payment_intent.succeeded":
@@ -662,31 +707,34 @@ async def stripe_webhook(
             payment_result = await db.execute(payment_query)
             payment = payment_result.scalar_one_or_none()
 
-            if payment and payment.status != TransactionStatus.COMPLETED:
-                payment.status = TransactionStatus.COMPLETED
-                payment.gateway_response = {"payment_intent_id": payment_intent.id}
-                payment.completed_at = func.now()
-
-                # Update order
-                await db.execute(
-                    update(Order)
-                    .where(Order.id == payment.order_id)
-                    .values(
-                        payment_status=PaymentStatus.PAID,
-                        fulfillment_status=FulfillmentStatus.PREPARING_FOR_PICKUP
-                    )
+            if payment:
+                result = await finalize_verified_payment(
+                    db,
+                    payment=payment,
+                    provider="stripe",
+                    provider_reference=(
+                        payment_intent.metadata.get("shopsoma_payment_reference")
+                        if getattr(payment_intent, "metadata", None)
+                        else payment_intent.id
+                    ),
+                    observed_amount=Decimal(payment_intent.amount_received) / 100,
+                    observed_currency=payment_intent.currency,
+                    event_id=str(event.id),
+                    evidence_payload={
+                        "event_id": str(event.id),
+                        "payment_intent_id": payment_intent.id,
+                        "amount": payment_intent.amount_received,
+                        "currency": payment_intent.currency,
+                    },
                 )
-
-                order_result = await db.execute(
+                payment.gateway_response = {"payment_intent_id": payment_intent.id}
+                completed_order = await db.scalar(
                     select(Order)
                     .options(selectinload(Order.customer))
                     .where(Order.id == payment.order_id)
                 )
-                completed_order = order_result.scalar_one_or_none()
-
                 await db.commit()
-
-                if completed_order and completed_order.customer:
+                if completed_order and completed_order.customer and not result.replay:
                     await send_account_claim_email_if_guest(completed_order.customer)
 
         # Handle payment_intent.payment_failed event
@@ -700,10 +748,14 @@ async def stripe_webhook(
             payment_result = await db.execute(payment_query)
             payment = payment_result.scalar_one_or_none()
 
-            if payment:
+            if payment and payment.status != TransactionStatus.COMPLETED:
                 payment.status = TransactionStatus.FAILED
                 payment.failed_at = func.now()
-                payment.failure_reason = payment_intent.last_payment_error.message if payment_intent.last_payment_error else "Payment failed"
+                payment.failure_reason = (
+                    payment_intent.last_payment_error.message
+                    if payment_intent.last_payment_error
+                    else "Payment failed"
+                )
 
                 await db.execute(
                     update(Order)
@@ -717,16 +769,17 @@ async def stripe_webhook(
 
     except stripe.error.SignatureVerificationError:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid Stripe signature"
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Stripe signature"
         )
+    except (PaymentBridgeError, PaymentTruthMismatch) as error:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error))
     except HTTPException:
         raise
     except Exception as e:
         print(f"Stripe webhook error: {str(e)}")
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Webhook error: {str(e)}"
+            status_code=status.HTTP_400_BAD_REQUEST, detail=f"Webhook error: {str(e)}"
         )
 
 
@@ -734,7 +787,7 @@ async def stripe_webhook(
 async def get_payment(
     payment_id: UUID,
     current_user: User = Depends(get_current_active_user),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ):
     """Get payment details by ID"""
     payment_query = select(Payment).where(Payment.id == payment_id)
@@ -743,8 +796,7 @@ async def get_payment(
 
     if not payment:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Payment not found"
+            status_code=status.HTTP_404_NOT_FOUND, detail="Payment not found"
         )
 
     # Verify user has access to this payment's order
@@ -755,7 +807,7 @@ async def get_payment(
     if order and order.customer_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not authorized to view this payment"
+            detail="Not authorized to view this payment",
         )
 
     return payment
