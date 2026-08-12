@@ -20,11 +20,14 @@ from app.api.v1 import payments
 from app.models.order import FulfillmentStatus, Order, PaymentStatus
 from app.models.payment import Payment, PaymentGateway, TransactionStatus
 from app.models.stock_payment_persistence import (
+    PaymentAttempt,
     PaymentAttemptEvidence,
     PaymentAttemptReservation,
 )
 from app.schemas.payment import PaymentInitializeRequest, PaymentVerifyRequest
 from app.services.payments.fulfilment_bridge import (
+    PaymentBridgeError,
+    PaymentInitializationTruth,
     PaymentTruthMismatch,
     authoritative_gateway_amount,
     bridge_fulfilment_status,
@@ -71,6 +74,270 @@ class _PaystackInitializationClient:
     async def post(self, *args, **kwargs):
         type(self).calls += 1
         return _PaystackInitializationResponse()
+
+
+async def _unattempted_route_subject(db_session, vendor_user, customer_user):
+    stock = _load_stock_helpers()
+    graph, intent, quote, option, selection, sku = await stock._checkout_subject(
+        db_session, vendor_user, customer_user
+    )
+    reservation = stock._reservation(
+        graph, intent, quote, option, selection, customer_user["user"].id, sku
+    )
+    db_session.add(reservation)
+    await db_session.commit()
+    return graph, quote, option, selection, reservation
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ["stripe", "paystack"])
+async def test_production_initialize_creates_authoritative_attempt_before_provider(
+    db_session, vendor_user, customer_user, monkeypatch, provider
+) -> None:
+    graph, quote, option, selection, reservation = await _unattempted_route_subject(
+        db_session, vendor_user, customer_user
+    )
+    monkeypatch.setattr(
+        payments,
+        "domestic_shipping_capabilities",
+        lambda settings: DomesticShippingCapabilities(True, True, False),
+    )
+    observed = {}
+
+    async def capture_attempt():
+        attempt = await db_session.scalar(
+            select(PaymentAttempt).where(PaymentAttempt.order_id == graph["order"].id)
+        )
+        assert attempt is not None
+        memberships = set(
+            await db_session.scalars(
+                select(PaymentAttemptReservation.reservation_id).where(
+                    PaymentAttemptReservation.attempt_id == attempt.id
+                )
+            )
+        )
+        observed.update(
+            attempt=attempt,
+            memberships=memberships,
+            amount=attempt.amount,
+            currency=attempt.currency,
+        )
+
+    if provider == "stripe":
+        customer_user["user"].stripe_customer_id = "cus_existing"
+        await db_session.commit()
+
+        def create_intent(**kwargs):
+            observed["payload"] = kwargs
+            assert observed["attempt"].state == "call_started"
+            return SimpleNamespace(id="pi_created", client_secret="secret_created")
+
+        original_truth = payments.payment_initialization_truth
+
+        async def capture_truth(*args, **kwargs):
+            truth = await original_truth(*args, **kwargs)
+            await capture_attempt()
+            return truth
+
+        monkeypatch.setattr(payments, "payment_initialization_truth", capture_truth)
+        monkeypatch.setattr(payments.stripe.PaymentIntent, "create", create_intent)
+    else:
+        _PaystackInitializationClient.calls = 0
+        monkeypatch.setattr(payments, "PAYSTACK_SECRET_KEY", "sk_test_placeholder")
+
+        class CapturingPaystackClient(_PaystackInitializationClient):
+            async def post(self, *args, **kwargs):
+                await capture_attempt()
+                observed["payload"] = kwargs["json"]
+                assert observed["attempt"].state == "call_started"
+                return await super().post(*args, **kwargs)
+
+        monkeypatch.setattr(payments.httpx, "AsyncClient", CapturingPaystackClient)
+
+    request = PaymentInitializeRequest(
+        order_id=graph["order"].id,
+        email=customer_user["user"].email,
+        payment_gateway=provider,
+        currency=graph["order"].currency,
+        callback_url=None,
+    )
+    response = await payments.initialize_payment(
+        request, current_user=customer_user["user"], db=db_session
+    )
+
+    attempt = observed["attempt"]
+    assert response.status is True
+    assert attempt.provider == provider
+    assert attempt.quote_id == quote.id
+    assert attempt.quote_option_id == option.id
+    assert attempt.quote_selection_id == selection.id
+    assert observed["memberships"] == {reservation.id}
+    assert observed["amount"] == graph["order"].total_amount
+    assert observed["currency"] == graph["order"].currency
+    assert observed["payload"]["amount"] == int(graph["order"].total_amount * 100)
+
+
+@pytest.mark.asyncio
+async def test_created_attempt_replay_does_not_duplicate_attempt_or_membership(
+    db_session, vendor_user, customer_user, monkeypatch
+) -> None:
+    graph, _, _, _, reservation = await _unattempted_route_subject(
+        db_session, vendor_user, customer_user
+    )
+    customer_user["user"].stripe_customer_id = "cus_existing"
+    await db_session.commit()
+    monkeypatch.setattr(
+        payments,
+        "domestic_shipping_capabilities",
+        lambda settings: DomesticShippingCapabilities(True, True, False),
+    )
+    calls = []
+
+    def create_intent(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(id="pi_replay", client_secret="secret_replay")
+
+    monkeypatch.setattr(payments.stripe.PaymentIntent, "create", create_intent)
+    request = PaymentInitializeRequest(
+        order_id=graph["order"].id,
+        email=customer_user["user"].email,
+        payment_gateway="stripe",
+        currency=graph["order"].currency,
+        callback_url=None,
+    )
+
+    await payments.initialize_payment(
+        request, current_user=customer_user["user"], db=db_session
+    )
+    await payments.initialize_payment(
+        request, current_user=customer_user["user"], db=db_session
+    )
+
+    attempts = list(
+        await db_session.scalars(
+            select(PaymentAttempt).where(PaymentAttempt.order_id == graph["order"].id)
+        )
+    )
+    memberships = list(
+        await db_session.scalars(
+            select(PaymentAttemptReservation.reservation_id).where(
+                PaymentAttemptReservation.attempt_id == attempts[0].id
+            )
+        )
+    )
+    assert len(attempts) == 1
+    assert memberships == [reservation.id]
+    assert len(calls) == 2
+    assert calls[0]["idempotency_key"] == calls[1]["idempotency_key"]
+
+
+@pytest.mark.asyncio
+async def test_concurrent_provider_initialization_converges_to_one_attempt(
+    db_session, vendor_user, customer_user
+) -> None:
+    graph, _, _, _, reservation = await _unattempted_route_subject(
+        db_session, vendor_user, customer_user
+    )
+    maker = async_sessionmaker(db_session.bind, expire_on_commit=False)
+    ready = asyncio.Event()
+
+    async def initialize(provider):
+        async with maker() as session:
+            order = await session.get(Order, graph["order"].id)
+            ready.set()
+            await ready.wait()
+            try:
+                truth = await payment_initialization_truth(
+                    session,
+                    order=order,
+                    provider=provider,
+                    capabilities=DomesticShippingCapabilities(True, True, False),
+                )
+                await session.commit()
+                return truth
+            except PaymentBridgeError as exc:
+                await session.rollback()
+                return exc
+
+    results = await asyncio.gather(initialize("stripe"), initialize("paystack"))
+    attempts = list(
+        await db_session.scalars(
+            select(PaymentAttempt).where(PaymentAttempt.order_id == graph["order"].id)
+        )
+    )
+    memberships = list(
+        await db_session.scalars(
+            select(PaymentAttemptReservation.reservation_id).where(
+                PaymentAttemptReservation.attempt_id == attempts[0].id
+            )
+        )
+    )
+    assert (
+        sum(isinstance(result, PaymentInitializationTruth) for result in results) == 1
+    )
+    assert sum(isinstance(result, PaymentBridgeError) for result in results) == 1
+    assert len(attempts) == 1
+    assert memberships == [reservation.id]
+
+
+@pytest.mark.asyncio
+async def test_enforced_selected_quote_without_reservations_fails_closed(
+    db_session, vendor_user, customer_user
+) -> None:
+    stock = _load_stock_helpers()
+    graph, *_ = await stock._checkout_subject(db_session, vendor_user, customer_user)
+
+    with pytest.raises(PaymentBridgeError, match="subject binding is invalid"):
+        await payment_initialization_truth(
+            db_session,
+            order=graph["order"],
+            provider="stripe",
+            capabilities=DomesticShippingCapabilities(True, True, False),
+        )
+
+
+@pytest.mark.asyncio
+async def test_disabled_gate_and_genuine_legacy_order_do_not_create_attempt(
+    db_session, customer_user
+) -> None:
+    order = Order(
+        order_number=f"LEGACY-INIT-{uuid.uuid4().hex[:10]}",
+        customer_id=customer_user["user"].id,
+        currency="NGN",
+        subtotal=Decimal("1000.00"),
+        shipping_cost=Decimal("50.00"),
+        tax_amount=Decimal("0.00"),
+        discount_amount=Decimal("0.00"),
+        total_amount=Decimal("1050.00"),
+        payment_status=PaymentStatus.PENDING,
+        fulfillment_status=FulfillmentStatus.ORDER_RECEIVED,
+    )
+    db_session.add(order)
+    await db_session.flush()
+
+    disabled = await payment_initialization_truth(
+        db_session,
+        order=order,
+        provider="stripe",
+        capabilities=DomesticShippingCapabilities(True, False, False),
+    )
+    legacy = await payment_initialization_truth(
+        db_session,
+        order=order,
+        provider="stripe",
+        capabilities=DomesticShippingCapabilities(True, True, False),
+    )
+
+    assert disabled.bridge_applied is False
+    assert legacy.bridge_applied is False
+    assert (
+        await db_session.scalar(
+            select(func.count(PaymentAttempt.id)).where(
+                PaymentAttempt.order_id == order.id
+            )
+        )
+        == 0
+    )
 
 
 def test_gateway_amount_is_derived_from_server_attempt_truth() -> None:

@@ -11,8 +11,14 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from sqlalchemy import select, text
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.customer_shipping_quote import (
+    CustomerShippingQuote,
+    CustomerShippingQuoteOption,
+    CustomerShippingQuoteSelection,
+)
 from app.models.order import FulfillmentStatus, Order, PaymentStatus
 from app.models.package_custody import (
     HubPackage,
@@ -21,7 +27,12 @@ from app.models.package_custody import (
     OutboundShipmentIntentInvalidation,
 )
 from app.models.payment import Payment, PaymentGateway, TransactionStatus
-from app.models.stock_payment_persistence import PaymentAttempt, PaymentAttemptEvidence
+from app.models.stock_payment_persistence import (
+    PaymentAttempt,
+    PaymentAttemptEvidence,
+    PaymentAttemptReservation,
+    StockReservation,
+)
 from app.services.shipping.capabilities import DomesticShippingCapabilities
 
 
@@ -115,9 +126,10 @@ async def payment_initialization_truth(
             False, legacy_amount, legacy_currency, None, None, None
         )
 
-    attempt = await active_bridge_attempt(session, order_id=order.id, lock=True)
+    attempt = await _ensure_bridge_attempt(session, order=order, provider=provider)
     if attempt is None:
-        # Orders without a bridge attempt remain on the established checkout path.
+        # Genuine legacy orders without selected quote/reservation truth remain on
+        # the established checkout path and are never reinterpreted.
         return PaymentInitializationTruth(
             False, legacy_amount, legacy_currency, None, None, None
         )
@@ -154,6 +166,105 @@ async def payment_initialization_truth(
         attempt.lease_token,
         attempt.id,
     )
+
+
+async def _ensure_bridge_attempt(
+    session: AsyncSession, *, order: Order, provider: str
+) -> PaymentAttempt | None:
+    """Create or replay the one quote-bound attempt before any provider boundary."""
+    locked_order = await session.scalar(
+        select(Order).where(Order.id == order.id).with_for_update()
+    )
+    if locked_order is None:
+        raise PaymentBridgeError("payment order was not found")
+
+    attempt = await active_bridge_attempt(session, order_id=order.id, lock=True)
+    if attempt is not None:
+        return attempt
+
+    active_reservations = list(
+        await session.scalars(
+            select(StockReservation)
+            .where(
+                StockReservation.order_id == order.id,
+                StockReservation.state == "active",
+                StockReservation.expires_at > text("clock_timestamp()"),
+            )
+            .order_by(StockReservation.id)
+            .with_for_update()
+        )
+    )
+    selection = await session.scalar(
+        select(CustomerShippingQuoteSelection)
+        .join(
+            CustomerShippingQuote,
+            CustomerShippingQuote.id == CustomerShippingQuoteSelection.quote_id,
+        )
+        .where(CustomerShippingQuote.order_id == order.id)
+        .order_by(
+            CustomerShippingQuoteSelection.created_at,
+            CustomerShippingQuoteSelection.id,
+        )
+        .limit(1)
+    )
+    if selection is None and not active_reservations:
+        return None
+    if selection is None or not active_reservations:
+        raise PaymentBridgeError("payment attempt subject binding is invalid")
+
+    anchor = active_reservations[0]
+    option = await session.scalar(
+        select(CustomerShippingQuoteOption).where(
+            CustomerShippingQuoteOption.id == anchor.quote_option_id,
+            CustomerShippingQuoteOption.quote_id == anchor.quote_id,
+        )
+    )
+    if (
+        option is None
+        or anchor.customer_id != locked_order.customer_id
+        or anchor.quote_selection_id != selection.id
+        or anchor.quote_id != selection.quote_id
+        or anchor.quote_option_id != selection.option_id
+        or anchor.intent_id != selection.intent_id
+        or any(
+            reservation.customer_id != locked_order.customer_id
+            or reservation.currency != locked_order.currency
+            for reservation in active_reservations
+        )
+    ):
+        raise PaymentBridgeError("payment attempt subject binding is invalid")
+
+    attempt_id = uuid.uuid4()
+    attempt = PaymentAttempt(
+        id=attempt_id,
+        order_id=locked_order.id,
+        customer_id=locked_order.customer_id,
+        quote_id=anchor.quote_id,
+        quote_selection_id=anchor.quote_selection_id,
+        quote_option_id=anchor.quote_option_id,
+        intent_id=anchor.intent_id,
+        amount=locked_order.total_amount,
+        currency=locked_order.currency,
+        provider=provider,
+        provider_reference=f"shopsoma-{provider}-{attempt_id.hex}",
+        source_command="initialize_checkout_payment",
+        idempotency_key=f"initialize:{locked_order.id}:{provider}",
+    )
+    session.add(attempt)
+    try:
+        await session.flush()
+        session.add_all(
+            PaymentAttemptReservation(
+                attempt_id=attempt.id, reservation_id=reservation.id
+            )
+            for reservation in active_reservations
+        )
+        await session.flush()
+        await session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+        await session.execute(text("SET CONSTRAINTS ALL DEFERRED"))
+    except DBAPIError as exc:
+        raise PaymentBridgeError("payment attempt subject binding is invalid") from exc
+    return attempt
 
 
 async def active_bridge_attempt(
