@@ -548,6 +548,86 @@ async def test_stripe_customer_accept_then_local_loss_retries_idempotently(
 
 
 @pytest.mark.asyncio
+async def test_stripe_intent_accept_then_payment_commit_loss_reconciles_canonically(
+    db_session, vendor_user, customer_user, monkeypatch
+) -> None:
+    graph, attempt = await _pending_route_attempt(
+        db_session, vendor_user, customer_user, "stripe"
+    )
+    customer_user["user"].stripe_customer_id = "cus_committed"
+    await db_session.commit()
+    monkeypatch.setattr(
+        payments,
+        "domestic_shipping_capabilities",
+        lambda settings: DomesticShippingCapabilities(True, True, False),
+    )
+    intent_calls = []
+    provider_intents = {}
+
+    def create_intent(**kwargs):
+        intent_calls.append(kwargs)
+        key = kwargs["idempotency_key"]
+        return provider_intents.setdefault(
+            key, SimpleNamespace(id="pi_accepted", client_secret="secret_accepted")
+        )
+
+    monkeypatch.setattr(payments.stripe.PaymentIntent, "create", create_intent)
+    request = PaymentInitializeRequest(
+        order_id=graph["order"].id,
+        email=customer_user["user"].email,
+        payment_gateway="stripe",
+        currency=attempt.currency,
+        callback_url=None,
+    )
+    original_commit = db_session.commit
+    commit_calls = 0
+
+    async def fail_payment_mapping_commit():
+        nonlocal commit_calls
+        commit_calls += 1
+        if commit_calls == 2:
+            raise RuntimeError("intent accepted; payment mapping commit lost")
+        await original_commit()
+
+    monkeypatch.setattr(db_session, "commit", fail_payment_mapping_commit)
+    with pytest.raises(RuntimeError, match="payment mapping commit lost"):
+        await payments._initialize_stripe_payment(request, graph["order"], db_session)
+    assert customer_user["user"].stripe_customer_id == "cus_committed"
+    assert len(intent_calls) == 1
+    monkeypatch.setattr(db_session, "commit", original_commit)
+    await db_session.rollback()
+    await db_session.refresh(graph["order"])
+
+    response = await payments._initialize_stripe_payment(
+        request, graph["order"], db_session
+    )
+
+    intent_key = f"shopsoma-payment-attempt:{attempt.id}:payment-intent"
+    canonical_payments = (
+        (
+            await db_session.execute(
+                select(Payment).where(Payment.order_id == graph["order"].id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert response.payment_intent_id == "pi_accepted"
+    assert [call["idempotency_key"] for call in intent_calls] == [
+        intent_key,
+        intent_key,
+    ]
+    assert len(provider_intents) == 1
+    assert len(canonical_payments) == 1
+    payment = canonical_payments[0]
+    assert payment.order_id == graph["order"].id
+    assert payment.amount == attempt.amount
+    assert payment.currency == attempt.currency
+    assert payment.payment_gateway == PaymentGateway.STRIPE
+    assert payment.transaction_id == "pi_accepted"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("provider", ["stripe", "paystack"])
 async def test_missing_mapping_recovery_is_canonical_under_replay_and_race(
     db_session, vendor_user, customer_user, monkeypatch, provider
@@ -689,6 +769,102 @@ async def _invoke_authenticated_route(
     monkeypatch.setattr(payments, "PAYSTACK_SECRET_KEY", "secret")
     signature = hmac.new(b"secret", request.body_bytes, hashlib.sha512).hexdigest()
     return await payments.paystack_webhook(request, signature, db)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ["stripe", "paystack"])
+@pytest.mark.parametrize(
+    "sequence",
+    [
+        ("callback", "webhook", "callback", "webhook"),
+        ("webhook", "callback", "webhook", "callback"),
+    ],
+    ids=["callback-first", "webhook-first"],
+)
+async def test_missing_mapping_serial_callback_webhook_orders_converge_once(
+    db_session,
+    vendor_user,
+    customer_user,
+    monkeypatch,
+    provider,
+    sequence,
+) -> None:
+    graph, attempt = await _pending_route_attempt(
+        db_session, vendor_user, customer_user, provider
+    )
+    await payment_initialization_truth(
+        db_session,
+        order=graph["order"],
+        provider=provider,
+        capabilities=DomesticShippingCapabilities(True, True, False),
+    )
+    await db_session.commit()
+    effects = {"receipt": 0, "claim": 0, "initialization": 0}
+
+    async def receipt(**kwargs):
+        effects["receipt"] += 1
+
+    async def claim(customer):
+        effects["claim"] += 1
+
+    def unexpected_stripe_initialization(**kwargs):
+        effects["initialization"] += 1
+        raise AssertionError("recovery must not initialize another provider payment")
+
+    monkeypatch.setattr(payments.email_service, "send_payment_receipt_email", receipt)
+    monkeypatch.setattr(payments, "send_account_claim_email_if_guest", claim)
+    monkeypatch.setattr(
+        payments.stripe.PaymentIntent, "create", unexpected_stripe_initialization
+    )
+
+    responses = []
+    for transport in sequence:
+        responses.append(
+            await _invoke_authenticated_route(
+                provider,
+                transport,
+                db_session,
+                monkeypatch,
+                reference=attempt.provider_reference,
+                amount=attempt.amount,
+                currency=attempt.currency,
+            )
+        )
+
+    canonical_payments = (
+        (
+            await db_session.execute(
+                select(Payment).where(Payment.order_id == graph["order"].id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    evidence_count = await db_session.scalar(
+        select(func.count(PaymentAttemptEvidence.id)).where(
+            PaymentAttemptEvidence.attempt_id == attempt.id
+        )
+    )
+    await db_session.refresh(graph["order"])
+    await db_session.refresh(attempt)
+
+    assert all(
+        (
+            response.status is True
+            if transport == "callback"
+            else response == {"status": "success"}
+        )
+        for transport, response in zip(sequence, responses)
+    )
+    assert len(canonical_payments) == 1
+    assert evidence_count == 1
+    assert attempt.customer_id == customer_user["user"].id
+    assert attempt.state == "verified"
+    assert graph["order"].payment_status == PaymentStatus.PAID
+    assert graph["order"].fulfillment_status == FulfillmentStatus.PREPARING_FOR_PICKUP
+    assert effects["claim"] == 1
+    assert effects["receipt"] == (1 if sequence[0] == "callback" else 0)
+    assert effects["initialization"] == 0
 
 
 @pytest.mark.asyncio
