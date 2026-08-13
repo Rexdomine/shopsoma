@@ -1123,6 +1123,225 @@ async def _invoke_authenticated_route(
     return await payments.paystack_webhook(request, signature, db)
 
 
+async def _invoke_paystack_pending(
+    db,
+    monkeypatch,
+    *,
+    reference,
+    amount,
+    currency,
+    transaction_id=31,
+    requested_reference=None,
+):
+    data = {
+        "id": transaction_id,
+        "status": "pending",
+        "reference": reference,
+        "amount": int(amount * 100),
+        "currency": currency,
+    }
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"status": True, "data": data}
+
+    class Client:
+        post_calls = 0
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def get(self, *args, **kwargs):
+            return Response()
+
+        async def post(self, *args, **kwargs):
+            type(self).post_calls += 1
+            raise AssertionError("verification must not initialize Paystack")
+
+    monkeypatch.setattr(payments.httpx, "AsyncClient", Client)
+    response = await payments._verify_paystack_payment(
+        PaymentVerifyRequest(
+            payment_gateway="paystack", reference=requested_reference or reference
+        ),
+        db,
+    )
+    return response, Client
+
+
+async def _call_started_route_attempt_without_mapping(
+    db_session, vendor_user, customer_user
+):
+    graph, attempt = await _pending_route_attempt(
+        db_session, vendor_user, customer_user, "paystack"
+    )
+    truth = await payment_initialization_truth(
+        db_session,
+        order=graph["order"],
+        provider="paystack",
+        capabilities=DomesticShippingCapabilities(True, True, False),
+    )
+    await db_session.commit()
+    await db_session.refresh(attempt)
+    assert truth.attempt_id == attempt.id
+    assert attempt.state == "call_started"
+    return graph, attempt
+
+
+@pytest.mark.asyncio
+async def test_paystack_pending_verify_recovers_missing_mapping_without_terminal_truth(
+    db_session, vendor_user, customer_user, monkeypatch
+) -> None:
+    graph, attempt = await _call_started_route_attempt_without_mapping(
+        db_session, vendor_user, customer_user
+    )
+
+    response, client = await _invoke_paystack_pending(
+        db_session,
+        monkeypatch,
+        reference=attempt.provider_reference,
+        amount=attempt.amount,
+        currency=attempt.currency,
+    )
+
+    mapping = await db_session.scalar(
+        select(Payment).where(Payment.transaction_id == attempt.provider_reference)
+    )
+    await db_session.refresh(attempt)
+    await db_session.refresh(graph["order"])
+    assert response.data["status"] == "pending"
+    assert mapping is not None
+    assert mapping.order_id == graph["order"].id
+    assert mapping.amount == attempt.amount
+    assert mapping.currency == attempt.currency
+    assert mapping.status == TransactionStatus.PENDING
+    assert attempt.state == "call_started"
+    assert graph["order"].payment_status == PaymentStatus.PENDING
+    assert client.post_calls == 0
+    assert (
+        await db_session.scalar(
+            select(func.count(PaymentAttemptEvidence.id)).where(
+                PaymentAttemptEvidence.attempt_id == attempt.id
+            )
+        )
+        == 0
+    )
+    truth = await payment_initialization_truth(
+        db_session,
+        order=graph["order"],
+        provider="paystack",
+        capabilities=DomesticShippingCapabilities(True, True, False),
+    )
+    assert truth.attempt_id == attempt.id
+    assert truth.provider_call_required is False
+    assert (
+        await db_session.scalar(
+            select(func.count(PaymentAttempt.id)).where(
+                PaymentAttempt.order_id == graph["order"].id
+            )
+        )
+        == 1
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mismatch", ["request_reference", "amount", "currency"])
+async def test_paystack_pending_verify_mismatch_fails_closed_without_mutation(
+    db_session, vendor_user, customer_user, monkeypatch, mismatch
+) -> None:
+    graph, attempt = await _call_started_route_attempt_without_mapping(
+        db_session, vendor_user, customer_user
+    )
+    kwargs = {
+        "reference": attempt.provider_reference,
+        "amount": attempt.amount,
+        "currency": attempt.currency,
+    }
+    if mismatch == "request_reference":
+        kwargs["requested_reference"] = f"other-{uuid.uuid4().hex}"
+    elif mismatch == "amount":
+        kwargs["amount"] += Decimal("1.00")
+    else:
+        kwargs["currency"] = "USD"
+
+    with pytest.raises(HTTPException) as caught:
+        await _invoke_paystack_pending(db_session, monkeypatch, **kwargs)
+
+    assert caught.value.status_code == 409
+    await db_session.refresh(attempt)
+    await db_session.refresh(graph["order"])
+    assert attempt.state == "call_started"
+    assert graph["order"].payment_status == PaymentStatus.PENDING
+    assert (
+        await db_session.scalar(
+            select(func.count(Payment.id)).where(Payment.order_id == graph["order"].id)
+        )
+        == 0
+    )
+    assert (
+        await db_session.scalar(
+            select(func.count(PaymentAttemptEvidence.id)).where(
+                PaymentAttemptEvidence.attempt_id == attempt.id
+            )
+        )
+        == 0
+    )
+    assert (
+        await db_session.scalar(
+            select(func.count(PaymentAttempt.id)).where(
+                PaymentAttempt.order_id == graph["order"].id
+            )
+        )
+        == 1
+    )
+
+
+@pytest.mark.asyncio
+async def test_paystack_pending_verify_replay_and_race_converge_on_one_mapping(
+    db_session, vendor_user, customer_user, monkeypatch
+) -> None:
+    graph, attempt = await _call_started_route_attempt_without_mapping(
+        db_session, vendor_user, customer_user
+    )
+    factory = async_sessionmaker(bind=db_session.bind, expire_on_commit=False)
+
+    async def verify():
+        async with factory() as session:
+            response, _ = await _invoke_paystack_pending(
+                session,
+                monkeypatch,
+                reference=attempt.provider_reference,
+                amount=attempt.amount,
+                currency=attempt.currency,
+            )
+            return response
+
+    first, second = await asyncio.gather(verify(), verify())
+    replay = await verify()
+
+    assert first.data["status"] == second.data["status"] == "pending"
+    assert replay.data["status"] == "pending"
+    assert (
+        await db_session.scalar(
+            select(func.count(Payment.id)).where(Payment.order_id == graph["order"].id)
+        )
+        == 1
+    )
+    assert (
+        await db_session.scalar(
+            select(func.count(PaymentAttemptEvidence.id)).where(
+                PaymentAttemptEvidence.attempt_id == attempt.id
+            )
+        )
+        == 0
+    )
+
+
 async def _call_started_route_payment(db_session, vendor_user, customer_user, provider):
     graph, attempt = await _pending_route_attempt(
         db_session, vendor_user, customer_user, provider
@@ -1149,6 +1368,42 @@ async def _call_started_route_payment(db_session, vendor_user, customer_user, pr
     await db_session.commit()
     await db_session.refresh(attempt)
     return graph, attempt, payment
+
+
+@pytest.mark.asyncio
+async def test_paystack_pending_verify_does_not_regress_completed_truth(
+    db_session, vendor_user, customer_user, monkeypatch
+) -> None:
+    graph, attempt, payment = await _call_started_route_payment(
+        db_session, vendor_user, customer_user, "paystack"
+    )
+    await finalize_verified_payment(
+        db_session,
+        payment=payment,
+        provider="paystack",
+        provider_reference=attempt.provider_reference,
+        observed_amount=attempt.amount,
+        observed_currency=attempt.currency,
+        event_id=f"completed:{attempt.id.hex}",
+        evidence_payload={"status": "success"},
+    )
+    await db_session.commit()
+
+    response, _ = await _invoke_paystack_pending(
+        db_session,
+        monkeypatch,
+        reference=attempt.provider_reference,
+        amount=attempt.amount,
+        currency=attempt.currency,
+    )
+
+    await db_session.refresh(attempt)
+    await db_session.refresh(payment)
+    await db_session.refresh(graph["order"])
+    assert response.data["status"] == "pending"
+    assert attempt.state == "verified"
+    assert payment.status == TransactionStatus.COMPLETED
+    assert graph["order"].payment_status == PaymentStatus.PAID
 
 
 async def _prepare_failure_reconciliation(db_session, attempt, starting_state):

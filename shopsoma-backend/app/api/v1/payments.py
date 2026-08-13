@@ -788,6 +788,8 @@ async def _verify_paystack_payment(
                 )
 
             transaction_data = paystack_response["data"]
+            if transaction_data.get("reference") != verify_data.reference:
+                raise PaymentTruthMismatch("verified payment truth does not match")
 
             # Get payment record
             payment_query = select(Payment).where(
@@ -859,6 +861,28 @@ async def _verify_paystack_payment(
                         or "Payment failed",
                     )
                 payment.gateway_response = paystack_response
+            elif transaction_data["status"] in {
+                "ongoing",
+                "pending",
+                "processing",
+                "queued",
+            }:
+                observed_amount = (
+                    Decimal(transaction_data["amount"]) / 100
+                    if transaction_data.get("amount") is not None
+                    else None
+                )
+                if payment is None:
+                    payment = await recover_pending_payment_mapping(
+                        db,
+                        provider="paystack",
+                        provider_reference=transaction_data["reference"],
+                        transaction_id=transaction_data["reference"],
+                        observed_amount=observed_amount,
+                        observed_currency=transaction_data.get("currency"),
+                        evidence_payload=transaction_data,
+                    )
+                    payment.gateway_response = paystack_response
 
             await db.commit()
             await db.refresh(payment)
