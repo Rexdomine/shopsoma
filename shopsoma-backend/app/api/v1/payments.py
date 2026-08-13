@@ -2,6 +2,7 @@
 
 import hmac
 import hashlib
+import re
 import stripe
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Header
@@ -224,9 +225,12 @@ def _paystack_definitive_absence(payload: object) -> bool:
     message = payload.get("message")
     if not isinstance(message, str):
         return False
-    normalized_message = message.lower()
-    return "not found" in normalized_message and (
-        "transaction" in normalized_message or "reference" in normalized_message
+    normalized_message = " ".join(message.casefold().split())
+    return bool(
+        re.fullmatch(
+            r"(?:transaction(?: reference)?|reference) not found[.!]?",
+            normalized_message,
+        )
     )
 
 
@@ -663,6 +667,13 @@ async def _verify_stripe_payment(
                         "currency": intent.currency,
                     },
                 )
+                owner_order_id = (
+                    intent.metadata.get("order_id")
+                    if getattr(intent, "metadata", None)
+                    else None
+                )
+                if owner_order_id and str(payment.order_id) != owner_order_id:
+                    raise PaymentTruthMismatch("verified payment truth does not match")
             elif payment.status != TransactionStatus.COMPLETED:
                 payment.status = TransactionStatus.PENDING
         else:

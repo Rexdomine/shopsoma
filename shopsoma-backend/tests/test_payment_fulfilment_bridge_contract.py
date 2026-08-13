@@ -2610,6 +2610,27 @@ class _PaystackAmbiguousReconciliationClient:
             "server_error": (500, {"status": False, "message": "server error"}),
             "malformed": (404, ["not", "trusted"]),
             "untrusted": (404, {"status": True, "message": "Transaction not found"}),
+            "service_not_found": (
+                404,
+                {
+                    "status": False,
+                    "message": "Transaction verification service not found",
+                },
+            ),
+            "endpoint_not_found": (
+                404,
+                {
+                    "status": False,
+                    "message": "Transaction verification endpoint not found",
+                },
+            ),
+            "resource_not_found": (
+                404,
+                {
+                    "status": False,
+                    "message": "Transaction verification resource not found",
+                },
+            ),
             "authentication": (401, {"status": False, "message": "Invalid key"}),
             "rate_limit": (429, {"status": False, "message": "Rate limited"}),
         }[type(self).outcome]
@@ -2626,6 +2647,9 @@ class _PaystackAmbiguousReconciliationClient:
         "server_error",
         "malformed",
         "untrusted",
+        "service_not_found",
+        "endpoint_not_found",
+        "resource_not_found",
         "authentication",
         "rate_limit",
     ],
@@ -3013,6 +3037,160 @@ async def test_stripe_retryable_state_recovers_missing_mapping_without_terminali
     )
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mismatch", ["amount", "currency", "reference", "ownership"])
+async def test_stripe_retryable_lost_mapping_route_fails_closed_on_truth_mismatch(
+    db_session, vendor_user, customer_user, monkeypatch, mismatch
+) -> None:
+    graph, attempt = await _pending_route_attempt(
+        db_session, vendor_user, customer_user, "stripe"
+    )
+    await payment_initialization_truth(
+        db_session,
+        order=graph["order"],
+        provider="stripe",
+        capabilities=DomesticShippingCapabilities(True, True, False),
+    )
+    await db_session.commit()
+    transaction_id = f"pi_{attempt.id.hex}"
+    provider_reference = attempt.provider_reference
+    amount = int(attempt.amount * 100)
+    currency = attempt.currency.lower()
+
+    if mismatch == "amount":
+        amount += 1
+    elif mismatch == "currency":
+        currency = "usd" if currency != "usd" else "ngn"
+    elif mismatch == "reference":
+        provider_reference = f"foreign-{uuid.uuid4().hex}"
+    owner_order_id = (
+        str(uuid.uuid4()) if mismatch == "ownership" else str(graph["order"].id)
+    )
+
+    effects = 0
+
+    async def claim(customer):
+        nonlocal effects
+        effects += 1
+
+    monkeypatch.setattr(payments, "send_account_claim_email_if_guest", claim)
+    intent = SimpleNamespace(
+        id=transaction_id,
+        status="processing",
+        amount=amount,
+        amount_received=0,
+        currency=currency,
+        metadata={
+            "shopsoma_payment_reference": provider_reference,
+            "order_id": owner_order_id,
+        },
+        last_payment_error=None,
+    )
+    monkeypatch.setattr(payments.stripe.PaymentIntent, "retrieve", lambda value: intent)
+
+    with pytest.raises(HTTPException) as caught:
+        await payments._verify_stripe_payment(
+            PaymentVerifyRequest(
+                payment_gateway="stripe",
+                payment_intent_id=transaction_id,
+                reference=None,
+            ),
+            db_session,
+        )
+
+    await db_session.refresh(attempt)
+    await db_session.refresh(graph["order"])
+    target_payments = await db_session.scalar(
+        select(func.count(Payment.id)).where(Payment.order_id == graph["order"].id)
+    )
+    evidence = await db_session.scalar(
+        select(func.count(PaymentAttemptEvidence.id)).where(
+            PaymentAttemptEvidence.attempt_id == attempt.id
+        )
+    )
+    assert caught.value.status_code == (503 if mismatch == "reference" else 409)
+    assert attempt.state == "call_started"
+    assert graph["order"].payment_status == PaymentStatus.PENDING
+    assert target_payments == 0
+    assert evidence == 0
+    assert effects == 0
+
+
+@pytest.mark.asyncio
+async def test_stripe_retryable_route_does_not_regress_completed_local_truth(
+    db_session, vendor_user, customer_user, monkeypatch
+) -> None:
+    graph, attempt, payment = await _call_started_route_payment(
+        db_session, vendor_user, customer_user, "stripe"
+    )
+    transaction_id = payment.transaction_id
+    effects = 0
+
+    async def claim(customer):
+        nonlocal effects
+        effects += 1
+
+    monkeypatch.setattr(payments, "send_account_claim_email_if_guest", claim)
+
+    def intent(provider_status):
+        return SimpleNamespace(
+            id=transaction_id,
+            status=provider_status,
+            amount=int(attempt.amount * 100),
+            amount_received=int(attempt.amount * 100),
+            currency=attempt.currency.lower(),
+            metadata={"shopsoma_payment_reference": attempt.provider_reference},
+            last_payment_error=None,
+        )
+
+    monkeypatch.setattr(
+        payments.stripe.PaymentIntent, "retrieve", lambda value: intent("succeeded")
+    )
+    completed = await payments._verify_stripe_payment(
+        PaymentVerifyRequest(
+            payment_gateway="stripe", payment_intent_id=transaction_id, reference=None
+        ),
+        db_session,
+    )
+    assert completed.status is True
+
+    evidence_before = await db_session.scalar(
+        select(func.count(PaymentAttemptEvidence.id)).where(
+            PaymentAttemptEvidence.attempt_id == attempt.id
+        )
+    )
+    monkeypatch.setattr(
+        payments.stripe.PaymentIntent, "retrieve", lambda value: intent("processing")
+    )
+    retryable = await payments._verify_stripe_payment(
+        PaymentVerifyRequest(
+            payment_gateway="stripe", payment_intent_id=transaction_id, reference=None
+        ),
+        db_session,
+    )
+
+    await db_session.refresh(attempt)
+    await db_session.refresh(payment)
+    await db_session.refresh(graph["order"])
+    evidence_after = await db_session.scalar(
+        select(func.count(PaymentAttemptEvidence.id)).where(
+            PaymentAttemptEvidence.attempt_id == attempt.id
+        )
+    )
+    assert retryable.status is False
+    assert attempt.state == "verified"
+    assert payment.status == TransactionStatus.COMPLETED
+    assert graph["order"].payment_status == PaymentStatus.PAID
+    assert evidence_after == evidence_before == 1
+    assert effects == 1
+    assert (
+        await db_session.scalar(
+            select(func.count(Payment.id)).where(Payment.order_id == graph["order"].id)
+        )
+        == 1
+    )
+
+
 class _PaystackHttp200FailureClient:
     post_calls = 0
     get_calls = 0
@@ -3045,6 +3223,10 @@ class _PaystackHttp200FailureClient:
     "message,definitive",
     [
         ("Transaction reference not found", True),
+        ("Transaction verification service not found", False),
+        ("Transaction verification endpoint not found", False),
+        ("Transaction verification resource not found", False),
+        ("Provider verification for transaction not found", False),
         ("Service temporarily unavailable", False),
         ("Invalid authorization key", False),
         ("Rate limit exceeded", False),
