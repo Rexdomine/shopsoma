@@ -1213,7 +1213,7 @@ async def _invoke_authenticated_failure(
             )
         event = SimpleNamespace(
             id=f"evt_failed_{attempt.id.hex}",
-            type="payment_intent.payment_failed",
+            type="payment_intent.canceled",
             data=SimpleNamespace(object=intent),
         )
         monkeypatch.setattr(payments.settings, "STRIPE_WEBHOOK_SECRET", "secret")
@@ -1344,22 +1344,27 @@ async def test_retryable_stripe_failure_then_success_keeps_one_attempt_and_one_e
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    "provider,transport", [("stripe", "webhook"), ("paystack", "callback")]
+)
+@pytest.mark.parametrize(
     "starting_state", ["fresh_call_started", "call_started", "abandoned_unknown"]
 )
-async def test_paystack_failed_webhook_recovers_missing_mapping_and_replays(
+async def test_definitive_failure_route_recovers_missing_mapping_and_replays(
     db_session,
     vendor_user,
     customer_user,
     monkeypatch,
+    provider,
+    transport,
     starting_state,
 ) -> None:
     graph, attempt = await _pending_route_attempt(
-        db_session, vendor_user, customer_user, "paystack"
+        db_session, vendor_user, customer_user, provider
     )
     await payment_initialization_truth(
         db_session,
         order=graph["order"],
-        provider="paystack",
+        provider=provider,
         capabilities=DomesticShippingCapabilities(True, True, False),
     )
     await db_session.commit()
@@ -1368,16 +1373,16 @@ async def test_paystack_failed_webhook_recovers_missing_mapping_and_replays(
 
     payment_stub = SimpleNamespace(transaction_id=attempt.provider_reference)
     first = await _invoke_authenticated_failure(
-        "paystack",
-        "webhook",
+        provider,
+        transport,
         db_session,
         monkeypatch,
         attempt=attempt,
         payment=payment_stub,
     )
     second = await _invoke_authenticated_failure(
-        "paystack",
-        "webhook",
+        provider,
+        transport,
         db_session,
         monkeypatch,
         attempt=attempt,
@@ -1391,12 +1396,199 @@ async def test_paystack_failed_webhook_recovers_missing_mapping_and_replays(
     )
     await db_session.refresh(attempt)
     await db_session.refresh(graph["order"])
-    assert first == second == {"status": "success"}
+    if transport == "callback":
+        assert first.status is True
+        assert second.status is True
+    else:
+        assert first == second == {"status": "success"}
     assert len(mappings) == 1
     assert mappings[0].transaction_id == attempt.provider_reference
     assert mappings[0].status == TransactionStatus.FAILED
     assert attempt.state == "failed"
     assert graph["order"].payment_status == PaymentStatus.FAILED
+    definitive_evidence = list(
+        await db_session.scalars(
+            select(PaymentAttemptEvidence).where(
+                PaymentAttemptEvidence.attempt_id == attempt.id,
+                PaymentAttemptEvidence.evidence_type == "payment_failed",
+            )
+        )
+    )
+    assert len(definitive_evidence) == 1
+
+    successor = await payment_initialization_truth(
+        db_session,
+        order=graph["order"],
+        provider=provider,
+        capabilities=DomesticShippingCapabilities(True, True, False),
+    )
+    assert successor.attempt_id != attempt.id
+    successor_attempt = await db_session.get(PaymentAttempt, successor.attempt_id)
+    assert successor_attempt.supersedes_attempt_id == attempt.id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "provider,transport", [("stripe", "webhook"), ("paystack", "callback")]
+)
+async def test_definitive_failure_route_unassociable_is_retryable_without_mutation(
+    db_session, monkeypatch, provider, transport
+) -> None:
+    before = (
+        await db_session.scalar(select(func.count(Payment.id))),
+        await db_session.scalar(select(func.count(PaymentAttemptEvidence.id))),
+        await db_session.scalar(select(func.count(Order.id))),
+    )
+    missing = SimpleNamespace(
+        id=uuid.uuid4(),
+        provider_reference=f"missing-{provider}-{uuid.uuid4().hex}",
+        amount=Decimal("1.00"),
+        currency="NGN",
+    )
+    payment_stub = SimpleNamespace(transaction_id=missing.provider_reference)
+
+    with pytest.raises(HTTPException) as caught:
+        await _invoke_authenticated_failure(
+            provider,
+            transport,
+            db_session,
+            monkeypatch,
+            attempt=missing,
+            payment=payment_stub,
+        )
+
+    assert caught.value.status_code == 503
+    assert (
+        await db_session.scalar(select(func.count(Payment.id))),
+        await db_session.scalar(select(func.count(PaymentAttemptEvidence.id))),
+        await db_session.scalar(select(func.count(Order.id))),
+    ) == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "provider,transport", [("stripe", "webhook"), ("paystack", "callback")]
+)
+async def test_definitive_failure_route_mismatch_rolls_back_atomically(
+    db_session, vendor_user, customer_user, monkeypatch, provider, transport
+) -> None:
+    graph, attempt, payment = await _call_started_route_payment(
+        db_session, vendor_user, customer_user, provider
+    )
+    observed = SimpleNamespace(
+        id=attempt.id,
+        provider_reference=f"mismatch-{uuid.uuid4().hex}",
+        amount=attempt.amount,
+        currency=attempt.currency,
+    )
+    with pytest.raises(HTTPException) as caught:
+        if provider == "stripe":
+            await _invoke_authenticated_failure(
+                provider,
+                transport,
+                db_session,
+                monkeypatch,
+                attempt=observed,
+                payment=payment,
+            )
+        else:
+            data = {
+                "id": 29,
+                "status": "failed",
+                "reference": observed.provider_reference,
+                "amount": int(observed.amount * 100),
+                "currency": observed.currency,
+                "gateway_response": "Declined",
+            }
+
+            class Response:
+                def raise_for_status(self):
+                    return None
+
+                def json(self):
+                    return {"status": True, "data": data}
+
+            class Client:
+                async def __aenter__(self):
+                    return self
+
+                async def __aexit__(self, *args):
+                    return None
+
+                async def get(self, *args, **kwargs):
+                    return Response()
+
+            monkeypatch.setattr(payments.httpx, "AsyncClient", Client)
+            await payments._verify_paystack_payment(
+                PaymentVerifyRequest(
+                    payment_gateway="paystack", reference=payment.transaction_id
+                ),
+                db_session,
+            )
+
+    assert caught.value.status_code == 409
+    await db_session.refresh(attempt)
+    await db_session.refresh(payment)
+    await db_session.refresh(graph["order"])
+    assert attempt.state == "call_started"
+    assert payment.status == TransactionStatus.PENDING
+    assert graph["order"].payment_status == PaymentStatus.PENDING
+    assert (
+        await db_session.scalar(
+            select(func.count(PaymentAttemptEvidence.id)).where(
+                PaymentAttemptEvidence.attempt_id == attempt.id
+            )
+        )
+        == 0
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "provider,transport", [("stripe", "webhook"), ("paystack", "callback")]
+)
+async def test_definitive_failure_route_never_downgrades_completed_truth(
+    db_session, vendor_user, customer_user, monkeypatch, provider, transport
+) -> None:
+    graph, attempt, payment = await _call_started_route_payment(
+        db_session, vendor_user, customer_user, provider
+    )
+    await finalize_verified_payment(
+        db_session,
+        payment=payment,
+        provider=provider,
+        provider_reference=attempt.provider_reference,
+        observed_amount=attempt.amount,
+        observed_currency=attempt.currency,
+        event_id=f"completed:{attempt.id.hex}",
+        evidence_payload={"status": "success"},
+    )
+    await db_session.commit()
+
+    await _invoke_authenticated_failure(
+        provider,
+        transport,
+        db_session,
+        monkeypatch,
+        attempt=attempt,
+        payment=payment,
+    )
+
+    await db_session.refresh(attempt)
+    await db_session.refresh(payment)
+    await db_session.refresh(graph["order"])
+    assert attempt.state == "verified"
+    assert payment.status == TransactionStatus.COMPLETED
+    assert graph["order"].payment_status == PaymentStatus.PAID
+    assert (
+        await db_session.scalar(
+            select(func.count(PaymentAttemptEvidence.id)).where(
+                PaymentAttemptEvidence.attempt_id == attempt.id,
+                PaymentAttemptEvidence.evidence_type == "payment_failed",
+            )
+        )
+        == 0
+    )
 
 
 @pytest.mark.asyncio
