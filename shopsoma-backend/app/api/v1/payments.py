@@ -872,20 +872,30 @@ async def _verify_paystack_payment(
                     if transaction_data.get("amount") is not None
                     else None
                 )
-                if payment is None:
-                    payment = await recover_pending_payment_mapping(
-                        db,
-                        provider="paystack",
-                        provider_reference=transaction_data["reference"],
-                        transaction_id=transaction_data["reference"],
-                        observed_amount=observed_amount,
-                        observed_currency=transaction_data.get("currency"),
-                        evidence_payload=transaction_data,
-                    )
-                    payment.gateway_response = paystack_response
+                payment = await recover_pending_payment_mapping(
+                    db,
+                    provider="paystack",
+                    provider_reference=transaction_data["reference"],
+                    transaction_id=transaction_data["reference"],
+                    observed_amount=observed_amount,
+                    observed_currency=transaction_data.get("currency"),
+                    evidence_payload=transaction_data,
+                )
+                payment.gateway_response = paystack_response
 
             await db.commit()
             await db.refresh(payment)
+
+            if transaction_data["status"] in {
+                "ongoing",
+                "pending",
+                "processing",
+                "queued",
+            }:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Payment verification is still pending",
+                )
 
             if claim_customer:
                 try:

@@ -1132,10 +1132,11 @@ async def _invoke_paystack_pending(
     currency,
     transaction_id=31,
     requested_reference=None,
+    provider_status="pending",
 ):
     data = {
         "id": transaction_id,
-        "status": "pending",
+        "status": provider_status,
         "reference": reference,
         "amount": int(amount * 100),
         "currency": currency,
@@ -1165,13 +1166,13 @@ async def _invoke_paystack_pending(
             raise AssertionError("verification must not initialize Paystack")
 
     monkeypatch.setattr(payments.httpx, "AsyncClient", Client)
-    response = await payments._verify_paystack_payment(
+    await payments._verify_paystack_payment(
         PaymentVerifyRequest(
             payment_gateway="paystack", reference=requested_reference or reference
         ),
         db,
     )
-    return response, Client
+    raise AssertionError("nonterminal Paystack verification must be retryable")
 
 
 async def _call_started_route_attempt_without_mapping(
@@ -1194,27 +1195,33 @@ async def _call_started_route_attempt_without_mapping(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "provider_status", ["pending", "ongoing", "processing", "queued"]
+)
 async def test_paystack_pending_verify_recovers_missing_mapping_without_terminal_truth(
-    db_session, vendor_user, customer_user, monkeypatch
+    db_session, vendor_user, customer_user, monkeypatch, provider_status
 ) -> None:
     graph, attempt = await _call_started_route_attempt_without_mapping(
         db_session, vendor_user, customer_user
     )
 
-    response, client = await _invoke_paystack_pending(
-        db_session,
-        monkeypatch,
-        reference=attempt.provider_reference,
-        amount=attempt.amount,
-        currency=attempt.currency,
-    )
+    with pytest.raises(HTTPException) as caught:
+        await _invoke_paystack_pending(
+            db_session,
+            monkeypatch,
+            reference=attempt.provider_reference,
+            amount=attempt.amount,
+            currency=attempt.currency,
+            provider_status=provider_status,
+        )
 
     mapping = await db_session.scalar(
         select(Payment).where(Payment.transaction_id == attempt.provider_reference)
     )
     await db_session.refresh(attempt)
     await db_session.refresh(graph["order"])
-    assert response.data["status"] == "pending"
+    assert caught.value.status_code == 503
+    assert caught.value.detail == "Payment verification is still pending"
     assert mapping is not None
     assert mapping.order_id == graph["order"].id
     assert mapping.amount == attempt.amount
@@ -1222,7 +1229,6 @@ async def test_paystack_pending_verify_recovers_missing_mapping_without_terminal
     assert mapping.status == TransactionStatus.PENDING
     assert attempt.state == "call_started"
     assert graph["order"].payment_status == PaymentStatus.PENDING
-    assert client.post_calls == 0
     assert (
         await db_session.scalar(
             select(func.count(PaymentAttemptEvidence.id)).where(
@@ -1312,20 +1318,21 @@ async def test_paystack_pending_verify_replay_and_race_converge_on_one_mapping(
 
     async def verify():
         async with factory() as session:
-            response, _ = await _invoke_paystack_pending(
-                session,
-                monkeypatch,
-                reference=attempt.provider_reference,
-                amount=attempt.amount,
-                currency=attempt.currency,
-            )
-            return response
+            with pytest.raises(HTTPException) as caught:
+                await _invoke_paystack_pending(
+                    session,
+                    monkeypatch,
+                    reference=attempt.provider_reference,
+                    amount=attempt.amount,
+                    currency=attempt.currency,
+                )
+            return caught.value.status_code
 
     first, second = await asyncio.gather(verify(), verify())
     replay = await verify()
 
-    assert first.data["status"] == second.data["status"] == "pending"
-    assert replay.data["status"] == "pending"
+    assert first == second == 503
+    assert replay == 503
     assert (
         await db_session.scalar(
             select(func.count(Payment.id)).where(Payment.order_id == graph["order"].id)
@@ -1371,6 +1378,90 @@ async def _call_started_route_payment(db_session, vendor_user, customer_user, pr
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "provider_status", ["pending", "ongoing", "processing", "queued"]
+)
+async def test_paystack_nonterminal_verify_preserves_existing_pending_mapping(
+    db_session, vendor_user, customer_user, monkeypatch, provider_status
+) -> None:
+    graph, attempt, payment = await _call_started_route_payment(
+        db_session, vendor_user, customer_user, "paystack"
+    )
+
+    with pytest.raises(HTTPException) as caught:
+        await _invoke_paystack_pending(
+            db_session,
+            monkeypatch,
+            reference=attempt.provider_reference,
+            amount=attempt.amount,
+            currency=attempt.currency,
+            provider_status=provider_status,
+        )
+
+    await db_session.refresh(attempt)
+    await db_session.refresh(payment)
+    await db_session.refresh(graph["order"])
+    assert caught.value.status_code == 503
+    assert caught.value.detail == "Payment verification is still pending"
+    assert attempt.state == "call_started"
+    assert payment.status == TransactionStatus.PENDING
+    assert graph["order"].payment_status == PaymentStatus.PENDING
+    assert (
+        await db_session.scalar(
+            select(func.count(PaymentAttempt.id)).where(
+                PaymentAttempt.order_id == graph["order"].id
+            )
+        )
+        == 1
+    )
+
+
+@pytest.mark.asyncio
+async def test_paystack_nonterminal_verify_rejects_foreign_existing_mapping(
+    db_session, vendor_user, customer_user, monkeypatch
+) -> None:
+    graph, attempt = await _call_started_route_attempt_without_mapping(
+        db_session, vendor_user, customer_user
+    )
+    foreign_graph, _, foreign_payment = await _call_started_route_payment(
+        db_session, vendor_user, customer_user, "paystack"
+    )
+    foreign_payment.transaction_id = attempt.provider_reference
+    foreign_payment.amount = attempt.amount
+    foreign_payment.currency = attempt.currency
+    await db_session.commit()
+    foreign_order_id = foreign_graph["order"].id
+
+    with pytest.raises(HTTPException) as caught:
+        await _invoke_paystack_pending(
+            db_session,
+            monkeypatch,
+            reference=attempt.provider_reference,
+            amount=attempt.amount,
+            currency=attempt.currency,
+        )
+
+    await db_session.refresh(attempt)
+    await db_session.refresh(graph["order"])
+    await db_session.refresh(foreign_graph["order"])
+    assert caught.value.status_code == 409
+    assert attempt.state == "call_started"
+    assert graph["order"].payment_status == PaymentStatus.PENDING
+    assert (
+        await db_session.scalar(
+            select(func.count(Payment.id)).where(Payment.order_id == foreign_order_id)
+        )
+        == 1
+    )
+    assert (
+        await db_session.scalar(
+            select(func.count(Payment.id)).where(Payment.order_id == graph["order"].id)
+        )
+        == 0
+    )
+
+
+@pytest.mark.asyncio
 async def test_paystack_pending_verify_does_not_regress_completed_truth(
     db_session, vendor_user, customer_user, monkeypatch
 ) -> None:
@@ -1389,18 +1480,19 @@ async def test_paystack_pending_verify_does_not_regress_completed_truth(
     )
     await db_session.commit()
 
-    response, _ = await _invoke_paystack_pending(
-        db_session,
-        monkeypatch,
-        reference=attempt.provider_reference,
-        amount=attempt.amount,
-        currency=attempt.currency,
-    )
+    with pytest.raises(HTTPException) as caught:
+        await _invoke_paystack_pending(
+            db_session,
+            monkeypatch,
+            reference=attempt.provider_reference,
+            amount=attempt.amount,
+            currency=attempt.currency,
+        )
 
     await db_session.refresh(attempt)
     await db_session.refresh(payment)
     await db_session.refresh(graph["order"])
-    assert response.data["status"] == "pending"
+    assert caught.value.status_code == 503
     assert attempt.state == "verified"
     assert payment.status == TransactionStatus.COMPLETED
     assert graph["order"].payment_status == PaymentStatus.PAID
