@@ -11,6 +11,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import uuid
 
+import httpx
 import pytest
 from fastapi import HTTPException
 from sqlalchemy import func, select, text
@@ -73,6 +74,7 @@ class _PaystackInitializationResponse:
 
 class _PaystackInitializationClient:
     calls = 0
+    lookup_calls = 0
 
     async def __aenter__(self):
         return self
@@ -83,6 +85,13 @@ class _PaystackInitializationClient:
     async def post(self, *args, **kwargs):
         type(self).calls += 1
         return _PaystackInitializationResponse()
+
+    async def get(self, *args, **kwargs):
+        type(self).lookup_calls += 1
+        return SimpleNamespace(
+            raise_for_status=lambda: None,
+            json=lambda: {"status": True, "data": {"status": "pending"}},
+        )
 
 
 async def _unattempted_route_subject(db_session, vendor_user, customer_user):
@@ -152,6 +161,7 @@ async def test_production_initialize_creates_authoritative_attempt_before_provid
         monkeypatch.setattr(payments.stripe.PaymentIntent, "create", create_intent)
     else:
         _PaystackInitializationClient.calls = 0
+        _PaystackInitializationClient.lookup_calls = 0
         monkeypatch.setattr(payments, "PAYSTACK_SECRET_KEY", "sk_test_placeholder")
 
         class CapturingPaystackClient(_PaystackInitializationClient):
@@ -708,6 +718,7 @@ async def test_initialization_retry_replays_only_stripe(
         initialize = payments._initialize_stripe_payment
     else:
         _PaystackInitializationClient.calls = 0
+        _PaystackInitializationClient.lookup_calls = 0
         monkeypatch.setattr(payments, "PAYSTACK_SECRET_KEY", "sk_test_placeholder")
         monkeypatch.setattr(
             payments.httpx, "AsyncClient", _PaystackInitializationClient
@@ -765,8 +776,8 @@ async def test_initialization_retry_replays_only_stripe(
         assert provider_calls == 2
     else:
         assert retry_error is not None
-        assert retry_error.status_code == 409
-        assert retry_error.detail == "payment attempt is not ready for initialization"
+        assert retry_error.status_code == 503
+        assert retry_error.detail == "Payment initialization outcome is not definitive"
         assert provider_calls == 1
     assert retry_truth == first_truth
 
@@ -1737,6 +1748,7 @@ async def test_production_initialize_creates_terminal_attempt_successor_before_p
         monkeypatch.setattr(payments.stripe.PaymentIntent, "create", create_intent)
     else:
         _PaystackInitializationClient.calls = 0
+        _PaystackInitializationClient.lookup_calls = 0
         monkeypatch.setattr(payments, "PAYSTACK_SECRET_KEY", "sk_test_placeholder")
 
         class CapturingPaystackClient(_PaystackInitializationClient):
@@ -1799,7 +1811,7 @@ async def test_production_initialize_creates_terminal_attempt_successor_before_p
                 current_user=customer_user["user"],
                 db=db_session,
             )
-        assert caught.value.status_code == 409
+        assert caught.value.status_code == 503
         assert observed["provider_calls"] == 1
 
     attempts = list(
@@ -1865,15 +1877,10 @@ async def test_concurrent_terminal_retry_converges_to_one_successor(
         )
     )
     assert successor_memberships == predecessor_memberships
-    if provider == "stripe":
-        assert all(isinstance(result, PaymentInitializationTruth) for result in results)
-        assert {result.attempt_id for result in results} == {successors[0].id}
-    else:
-        assert (
-            sum(isinstance(result, PaymentInitializationTruth) for result in results)
-            == 1
-        )
-        assert sum(isinstance(result, PaymentBridgeError) for result in results) == 1
+    assert all(isinstance(result, PaymentInitializationTruth) for result in results)
+    assert {result.attempt_id for result in results} == {successors[0].id}
+    if provider == "paystack":
+        assert sum(result.provider_call_required for result in results) == 1
 
 
 @pytest.mark.asyncio
@@ -2221,3 +2228,279 @@ async def test_authenticated_route_recovers_missing_mapping(
     assert payment.transaction_id == transaction_id
     assert payment.status == TransactionStatus.COMPLETED
     assert graph["order"].payment_status == PaymentStatus.PAID
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ["stripe", "paystack"])
+@pytest.mark.parametrize("transport", ["callback", "webhook"])
+async def test_authenticated_success_after_claim_expiry_reconciles_legally_once(
+    db_session, vendor_user, customer_user, monkeypatch, provider, transport
+) -> None:
+    graph, attempt, payment = await _call_started_route_payment(
+        db_session, vendor_user, customer_user, provider
+    )
+    await _prepare_failure_reconciliation(db_session, attempt, "call_started")
+    effects = {"receipt": 0, "claim": 0}
+
+    async def receipt(**kwargs):
+        effects["receipt"] += 1
+
+    async def claim(customer):
+        effects["claim"] += 1
+
+    monkeypatch.setattr(payments.email_service, "send_payment_receipt_email", receipt)
+    monkeypatch.setattr(payments, "send_account_claim_email_if_guest", claim)
+    for _ in range(2):
+        await _invoke_authenticated_route(
+            provider,
+            transport,
+            db_session,
+            monkeypatch,
+            reference=attempt.provider_reference,
+            amount=attempt.amount,
+            currency=attempt.currency,
+        )
+
+    await db_session.refresh(attempt)
+    canonical_transaction_id = (
+        f"pi_{attempt.provider_reference}"
+        if provider == "stripe"
+        else attempt.provider_reference
+    )
+    payment = await db_session.scalar(
+        select(Payment).where(Payment.transaction_id == canonical_transaction_id)
+    )
+    await db_session.refresh(graph["order"])
+    evidence = list(
+        await db_session.scalars(
+            select(PaymentAttemptEvidence).where(
+                PaymentAttemptEvidence.attempt_id == attempt.id
+            )
+        )
+    )
+    assert attempt.state == "verified"
+    assert payment.status == TransactionStatus.COMPLETED
+    assert graph["order"].payment_status == PaymentStatus.PAID
+    assert [item.evidence_type for item in evidence] == [
+        "outcome_unknown",
+        "payment_verified",
+    ]
+    assert attempt.terminal_evidence_id == evidence[-1].id
+    assert effects["claim"] == 1
+    assert effects["receipt"] <= 1
+
+
+class _PaystackInitializationRecoveryClient:
+    post_calls = 0
+    get_calls = 0
+    post_failure = "non_200"
+    verify_status = "failed"
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return None
+
+    async def post(self, *args, **kwargs):
+        type(self).post_calls += 1
+        if type(self).post_failure == "network":
+            raise httpx.ConnectError("synthetic initialization failure")
+        return SimpleNamespace(
+            status_code=502,
+            text="gateway unavailable",
+            json=lambda: {"status": False, "message": "gateway unavailable"},
+        )
+
+    async def get(self, url, *args, **kwargs):
+        type(self).get_calls += 1
+        if type(self).verify_status == "unreachable":
+            raise httpx.ConnectError("synthetic reconciliation failure")
+        reference = url.rsplit("/", 1)[-1]
+        data = {
+            "id": 41,
+            "status": type(self).verify_status,
+            "reference": reference,
+            "amount": 0,
+            "currency": "NGN",
+            "gateway_response": "Declined",
+        }
+        return SimpleNamespace(
+            raise_for_status=lambda: None,
+            json=lambda: {"status": True, "data": data},
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("post_failure", ["non_200", "network"])
+async def test_paystack_initialization_error_reconciles_definitive_rejection(
+    db_session, vendor_user, customer_user, monkeypatch, post_failure
+) -> None:
+    graph, _, _, _, _ = await _unattempted_route_subject(
+        db_session, vendor_user, customer_user
+    )
+    monkeypatch.setattr(
+        payments,
+        "domestic_shipping_capabilities",
+        lambda settings: DomesticShippingCapabilities(True, True, False),
+    )
+    monkeypatch.setattr(payments, "PAYSTACK_SECRET_KEY", "sk_test_synthetic")
+    client = _PaystackInitializationRecoveryClient
+    client.post_calls = client.get_calls = 0
+    client.post_failure = post_failure
+    client.verify_status = "failed"
+    monkeypatch.setattr(payments.httpx, "AsyncClient", client)
+    request = PaymentInitializeRequest(
+        order_id=graph["order"].id,
+        email=customer_user["user"].email,
+        payment_gateway="paystack",
+        currency=graph["order"].currency,
+        callback_url=None,
+    )
+
+    with pytest.raises(HTTPException) as caught:
+        await payments.initialize_payment(
+            request, current_user=customer_user["user"], db=db_session
+        )
+
+    attempt = await db_session.scalar(
+        select(PaymentAttempt).where(PaymentAttempt.order_id == graph["order"].id)
+    )
+    payment = await db_session.scalar(
+        select(Payment).where(Payment.order_id == graph["order"].id)
+    )
+    assert caught.value.status_code == 400
+    assert client.post_calls == 1
+    assert client.get_calls == 1
+    assert attempt.state == "failed"
+    assert payment.transaction_id == attempt.provider_reference
+    assert payment.status == TransactionStatus.FAILED
+    successor = await payment_initialization_truth(
+        db_session,
+        order=graph["order"],
+        provider="paystack",
+        capabilities=DomesticShippingCapabilities(True, True, False),
+    )
+    assert successor.attempt_id != attempt.id
+
+
+@pytest.mark.asyncio
+async def test_paystack_ambiguous_initialization_retries_lookup_without_duplicate_post(
+    db_session, vendor_user, customer_user, monkeypatch
+) -> None:
+    graph, _, _, _, _ = await _unattempted_route_subject(
+        db_session, vendor_user, customer_user
+    )
+    monkeypatch.setattr(
+        payments,
+        "domestic_shipping_capabilities",
+        lambda settings: DomesticShippingCapabilities(True, True, False),
+    )
+    monkeypatch.setattr(payments, "PAYSTACK_SECRET_KEY", "sk_test_synthetic")
+    client = _PaystackInitializationRecoveryClient
+    client.post_calls = client.get_calls = 0
+    client.post_failure = "network"
+    client.verify_status = "unreachable"
+    monkeypatch.setattr(payments.httpx, "AsyncClient", client)
+    request = PaymentInitializeRequest(
+        order_id=graph["order"].id,
+        email=customer_user["user"].email,
+        payment_gateway="paystack",
+        currency=graph["order"].currency,
+        callback_url=None,
+    )
+
+    for expired in (False, True):
+        if expired:
+            attempt = await db_session.scalar(
+                select(PaymentAttempt).where(
+                    PaymentAttempt.order_id == graph["order"].id
+                )
+            )
+            await _prepare_failure_reconciliation(db_session, attempt, "call_started")
+        with pytest.raises(HTTPException) as caught:
+            await payments.initialize_payment(
+                request, current_user=customer_user["user"], db=db_session
+            )
+        assert caught.value.status_code == 503
+
+    attempt = await db_session.scalar(
+        select(PaymentAttempt).where(PaymentAttempt.order_id == graph["order"].id)
+    )
+    assert client.post_calls == 1
+    assert client.get_calls == 2
+    assert attempt.state in {"call_started", "abandoned_unknown"}
+    assert (
+        await db_session.scalar(
+            select(func.count(Payment.id)).where(Payment.order_id == graph["order"].id)
+        )
+        == 0
+    )
+
+
+@pytest.mark.asyncio
+async def test_stripe_canceled_callback_recovers_missing_mapping_before_failure(
+    db_session, vendor_user, customer_user, monkeypatch
+) -> None:
+    graph, attempt = await _pending_route_attempt(
+        db_session, vendor_user, customer_user, "stripe"
+    )
+    await payment_initialization_truth(
+        db_session,
+        order=graph["order"],
+        provider="stripe",
+        capabilities=DomesticShippingCapabilities(True, True, False),
+    )
+    await db_session.commit()
+    await db_session.execute(text("SET LOCAL session_replication_role = replica"))
+    await db_session.execute(
+        text(
+            "UPDATE payment_attempts "
+            "SET claim_expires_at=clock_timestamp() + interval '5 minutes' "
+            "WHERE id=:attempt_id"
+        ),
+        {"attempt_id": attempt.id},
+    )
+    await db_session.execute(text("SET LOCAL session_replication_role = origin"))
+    await db_session.commit()
+    await db_session.refresh(attempt)
+    transaction_id = f"pi_{attempt.id.hex}"
+    canceled = SimpleNamespace(
+        id=transaction_id,
+        status="canceled",
+        amount=int(attempt.amount * 100),
+        currency=attempt.currency.lower(),
+        metadata={"shopsoma_payment_reference": attempt.provider_reference},
+        last_payment_error=SimpleNamespace(message="Canceled"),
+    )
+    monkeypatch.setattr(
+        payments.stripe.PaymentIntent, "retrieve", lambda value: canceled
+    )
+
+    for _ in range(2):
+        response = await payments._verify_stripe_payment(
+            PaymentVerifyRequest(
+                payment_gateway="stripe",
+                payment_intent_id=transaction_id,
+                reference=None,
+            ),
+            db_session,
+        )
+        assert response.status is False
+
+    payment = await db_session.scalar(
+        select(Payment).where(Payment.transaction_id == transaction_id)
+    )
+    await db_session.refresh(attempt)
+    assert payment.order_id == graph["order"].id
+    assert payment.status == TransactionStatus.FAILED
+    assert attempt.state == "failed"
+    assert (
+        await db_session.scalar(
+            select(func.count(PaymentAttemptEvidence.id)).where(
+                PaymentAttemptEvidence.attempt_id == attempt.id,
+                PaymentAttemptEvidence.evidence_type == "payment_failed",
+            )
+        )
+        == 1
+    )

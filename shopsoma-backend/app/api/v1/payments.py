@@ -216,6 +216,54 @@ async def _initialize_stripe_payment(
         )
 
 
+async def _reconcile_paystack_initialization(
+    client: httpx.AsyncClient,
+    *,
+    reference: str,
+    headers: dict[str, str],
+    db: AsyncSession,
+) -> None:
+    """Resolve a fenced Paystack POST outcome without issuing another POST."""
+    try:
+        response = await client.get(
+            f"{PAYSTACK_BASE_URL}/transaction/verify/{reference}",
+            headers=headers,
+            timeout=30.0,
+        )
+        response.raise_for_status()
+        provider_response = response.json()
+    except httpx.HTTPError as error:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Payment initialization outcome is unavailable: {str(error)}",
+        ) from error
+
+    transaction_data = provider_response.get("data", {})
+    if (
+        not provider_response.get("status")
+        or transaction_data.get("status") != "failed"
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Payment initialization outcome is not definitive",
+        )
+
+    await recover_failed_payment_mapping(
+        db,
+        provider="paystack",
+        provider_reference=transaction_data.get("reference", reference),
+        transaction_id=transaction_data.get("reference", reference),
+        event_id=f"initialize:{transaction_data.get('id', reference)}",
+        evidence_payload=transaction_data,
+        failure_reason=transaction_data.get("gateway_response") or "Payment failed",
+    )
+    await db.commit()
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail=transaction_data.get("gateway_response") or "Payment failed",
+    )
+
+
 async def _initialize_paystack_payment(
     payment_data: PaymentInitializeRequest, order: Order, db: AsyncSession
 ) -> PaymentInitializeResponse:
@@ -277,6 +325,13 @@ async def _initialize_paystack_payment(
 
     async with httpx.AsyncClient() as client:
         try:
+            if not truth.provider_call_required:
+                await _reconcile_paystack_initialization(
+                    client,
+                    reference=reference,
+                    headers=headers,
+                    db=db,
+                )
             response = await client.post(
                 f"{PAYSTACK_BASE_URL}/transaction/initialize",
                 json=payload,
@@ -292,6 +347,13 @@ async def _initialize_paystack_payment(
 
             # Check for HTTP errors
             if response.status_code != 200:
+                if truth.bridge_applied:
+                    await _reconcile_paystack_initialization(
+                        client,
+                        reference=reference,
+                        headers=headers,
+                        db=db,
+                    )
                 error_message = paystack_response.get(
                     "message", "Payment initialization failed"
                 )
@@ -348,6 +410,13 @@ async def _initialize_paystack_payment(
         except HTTPException:
             raise
         except httpx.HTTPError as e:
+            if truth.bridge_applied:
+                await _reconcile_paystack_initialization(
+                    client,
+                    reference=reference,
+                    headers=headers,
+                    db=db,
+                )
             print(f"❌ HTTP Error connecting to Paystack: {str(e)}")
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -451,20 +520,32 @@ async def _verify_stripe_payment(
                 if getattr(intent, "metadata", None)
                 else intent.id
             )
-            await finalize_failed_payment(
-                db,
-                payment=payment,
-                provider="stripe",
-                provider_reference=provider_reference,
-                event_id=f"verify:{intent.id}",
-                evidence_payload={
-                    "id": intent.id,
-                    "status": intent.status,
-                    "amount": intent.amount,
-                    "currency": intent.currency,
-                },
-                failure_reason=failure_reason,
-            )
+            authenticated = {
+                "id": intent.id,
+                "status": intent.status,
+                "amount": intent.amount,
+                "currency": intent.currency,
+            }
+            if payment is None:
+                payment, _ = await recover_failed_payment_mapping(
+                    db,
+                    provider="stripe",
+                    provider_reference=provider_reference,
+                    transaction_id=intent.id,
+                    event_id=f"verify:{intent.id}",
+                    evidence_payload=authenticated,
+                    failure_reason=failure_reason,
+                )
+            else:
+                await finalize_failed_payment(
+                    db,
+                    payment=payment,
+                    provider="stripe",
+                    provider_reference=provider_reference,
+                    event_id=f"verify:{intent.id}",
+                    evidence_payload=authenticated,
+                    failure_reason=failure_reason,
+                )
 
         await db.commit()
         await db.refresh(payment)

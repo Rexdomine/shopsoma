@@ -108,6 +108,7 @@ class PaymentInitializationTruth:
     provider_reference: str | None
     lease_token: uuid.UUID | None
     attempt_id: uuid.UUID | None
+    provider_call_required: bool = True
 
 
 async def payment_initialization_truth(
@@ -135,7 +136,7 @@ async def payment_initialization_truth(
         )
     if attempt.provider != provider:
         raise PaymentBridgeError("payment attempt is not ready for initialization")
-    if attempt.state == "call_started" and provider == "stripe":
+    if attempt.state == "call_started" and provider in {"stripe", "paystack"}:
         amount, currency = authoritative_gateway_amount(
             attempt.amount, attempt.currency
         )
@@ -146,6 +147,7 @@ async def payment_initialization_truth(
             attempt.provider_reference,
             attempt.lease_token,
             attempt.id,
+            provider == "stripe",
         )
     if attempt.state != "pending":
         raise PaymentBridgeError("payment attempt is not ready for initialization")
@@ -490,6 +492,38 @@ async def finalize_verified_payment(
         raise PaymentBridgeError("payment attempt is not ready for verification")
 
     observed_at = observed_at or datetime.now(timezone.utc)
+    database_now = await session.scalar(text("SELECT clock_timestamp()"))
+    if (
+        attempt.state == "call_started"
+        and attempt.claim_expires_at is not None
+        and database_now >= attempt.claim_expires_at
+    ):
+        unknown_evidence = PaymentAttemptEvidence(
+            attempt_id=attempt.id,
+            source="payment.success_reconciliation",
+            event_id=f"{provider}:lease-expired:{event_id}",
+            evidence_type="outcome_unknown",
+            provider=provider,
+            provider_reference=provider_reference,
+            evidence_hash=_evidence_hash(evidence_payload),
+            observed_at=database_now,
+        )
+        session.add(unknown_evidence)
+        await session.flush()
+        await session.execute(
+            text("SELECT coordinate_payment_attempt_write(:attempt_id, :order_id)"),
+            {"attempt_id": attempt.id, "order_id": order.id},
+        )
+        await session.execute(
+            text("SELECT set_config('shopsoma.payment_lease_token', :token, true)"),
+            {"token": str(attempt.lease_token)},
+        )
+        attempt.state = "abandoned_unknown"
+        attempt.terminal_evidence_id = unknown_evidence.id
+        attempt.row_version += 1
+        await session.flush()
+        observed_at = await session.scalar(text("SELECT clock_timestamp()"))
+
     evidence = PaymentAttemptEvidence(
         attempt_id=attempt.id,
         source="payment.verified",
@@ -585,7 +619,7 @@ async def finalize_failed_payment(
             provider=provider,
             provider_reference=provider_reference,
             evidence_hash=_evidence_hash(evidence_payload),
-            observed_at=observed_at,
+            observed_at=database_now,
         )
         session.add(unknown_evidence)
         await session.flush()
