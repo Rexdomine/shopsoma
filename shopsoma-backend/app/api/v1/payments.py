@@ -16,6 +16,7 @@ from app.core.database import get_db
 from app.models.user import User
 from app.models.order import Order, PaymentStatus
 from app.models.payment import Payment, PaymentGateway, TransactionStatus
+from app.models.stock_payment_persistence import PaymentAttempt
 from app.schemas.payment import (
     PaymentInitializeRequest,
     PaymentInitializeResponse,
@@ -224,6 +225,7 @@ async def _reconcile_paystack_initialization(
     db: AsyncSession,
 ) -> None:
     """Resolve a fenced Paystack POST outcome without issuing another POST."""
+    provider_response = None
     try:
         response = await client.get(
             f"{PAYSTACK_BASE_URL}/transaction/verify/{reference}",
@@ -232,11 +234,53 @@ async def _reconcile_paystack_initialization(
         )
         response.raise_for_status()
         provider_response = response.json()
+    except httpx.HTTPStatusError as error:
+        try:
+            error_payload = error.response.json()
+        except Exception:
+            error_payload = None
+        message = (
+            error_payload.get("message") if isinstance(error_payload, dict) else None
+        )
+        normalized_message = message.lower() if isinstance(message, str) else ""
+        definitive_absence = (
+            error.response.status_code == status.HTTP_404_NOT_FOUND
+            and error_payload.get("status") is False
+            and "not found" in normalized_message
+            and (
+                "transaction" in normalized_message or "reference" in normalized_message
+            )
+            if isinstance(error_payload, dict)
+            else False
+        )
+        if definitive_absence:
+            provider_response = error_payload
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Payment initialization outcome is unavailable",
+            ) from error
     except httpx.HTTPError as error:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Payment initialization outcome is unavailable: {str(error)}",
+            detail="Payment initialization outcome is unavailable",
         ) from error
+
+    if provider_response.get("status") is False:
+        await recover_failed_payment_mapping(
+            db,
+            provider="paystack",
+            provider_reference=reference,
+            transaction_id=reference,
+            event_id=f"initialize-absent:{reference}",
+            evidence_payload=provider_response,
+            failure_reason=provider_response["message"],
+        )
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Payment initialization was rejected",
+        )
 
     transaction_data = provider_response.get("data", {})
     if (
@@ -261,6 +305,55 @@ async def _reconcile_paystack_initialization(
     raise HTTPException(
         status_code=status.HTTP_400_BAD_REQUEST,
         detail=transaction_data.get("gateway_response") or "Payment failed",
+    )
+
+
+async def _stored_paystack_initialization_session(
+    db: AsyncSession, *, order: Order, attempt_id: UUID | None, reference: str
+) -> PaymentInitializeResponse | None:
+    attempt = await db.get(PaymentAttempt, attempt_id)
+    if (
+        attempt is None
+        or attempt.order_id != order.id
+        or attempt.provider != "paystack"
+        or attempt.provider_reference != reference
+    ):
+        raise PaymentTruthMismatch("stored payment attempt truth does not match")
+    payment = await db.scalar(
+        select(Payment).where(Payment.transaction_id == reference)
+    )
+    if payment is None:
+        return None
+    response = payment.gateway_response
+    data = response.get("data") if isinstance(response, dict) else None
+    authorization_url = (
+        data.get("authorization_url") if isinstance(data, dict) else None
+    )
+    access_code = data.get("access_code") if isinstance(data, dict) else None
+    stored_reference = data.get("reference") if isinstance(data, dict) else None
+    valid = (
+        payment.order_id == order.id
+        and payment.payment_gateway == PaymentGateway.PAYSTACK
+        and payment.payment_method == "paystack"
+        and payment.amount == order.total_amount
+        and payment.currency == order.currency
+        and isinstance(response, dict)
+        and response.get("status") is True
+        and isinstance(authorization_url, str)
+        and bool(authorization_url)
+        and isinstance(access_code, str)
+        and bool(access_code)
+        and stored_reference == reference
+    )
+    if not valid:
+        raise PaymentTruthMismatch("stored payment initialization truth does not match")
+    return PaymentInitializeResponse(
+        status=True,
+        message="Payment session created successfully",
+        authorization_url=authorization_url,
+        access_code=access_code,
+        reference=stored_reference,
+        payment_gateway="paystack",
     )
 
 
@@ -298,6 +391,21 @@ async def _initialize_paystack_payment(
         # Durable call_started truth must precede the provider boundary.
         await db.commit()
     reference = truth.provider_reference or f"SHP-{order.order_number}"
+    if truth.bridge_applied and not truth.provider_call_required:
+        try:
+            stored_session = await _stored_paystack_initialization_session(
+                db,
+                order=order,
+                attempt_id=truth.attempt_id,
+                reference=reference,
+            )
+        except PaymentBridgeError as error:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Stored payment initialization truth is unusable",
+            ) from error
+        if stored_session is not None:
+            return stored_session
 
     # Paystack uses kobo; the source is always persisted server truth.
     amount_in_kobo = int(truth.amount * 100)

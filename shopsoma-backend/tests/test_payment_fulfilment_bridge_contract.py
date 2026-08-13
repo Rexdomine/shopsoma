@@ -61,13 +61,16 @@ class _PaystackInitializationResponse:
     status_code = 200
     text = ""
 
+    def __init__(self, reference="provider-reference"):
+        self.reference = reference
+
     def json(self):
         return {
             "status": True,
             "data": {
                 "authorization_url": "https://paystack.invalid/authorize",
                 "access_code": "access-code",
-                "reference": "provider-reference",
+                "reference": self.reference,
             },
         }
 
@@ -84,7 +87,7 @@ class _PaystackInitializationClient:
 
     async def post(self, *args, **kwargs):
         type(self).calls += 1
-        return _PaystackInitializationResponse()
+        return _PaystackInitializationResponse(kwargs["json"]["reference"])
 
     async def get(self, *args, **kwargs):
         type(self).lookup_calls += 1
@@ -746,14 +749,7 @@ async def test_initialization_retry_replays_only_stripe(
         ),
     )
 
-    retry_error = None
-    retry = None
-    if provider == "stripe":
-        retry = await initialize(request, graph["order"], db_session)
-    else:
-        with pytest.raises(HTTPException) as caught:
-            await initialize(request, graph["order"], db_session)
-        retry_error = caught.value
+    retry = await initialize(request, graph["order"], db_session)
 
     if provider == "paystack":
         provider_calls = _PaystackInitializationClient.calls
@@ -775,9 +771,10 @@ async def test_initialization_retry_replays_only_stripe(
         assert retry.payment_intent_id == first.payment_intent_id
         assert provider_calls == 2
     else:
-        assert retry_error is not None
-        assert retry_error.status_code == 503
-        assert retry_error.detail == "Payment initialization outcome is not definitive"
+        assert retry.status is True
+        assert retry.reference == first.reference
+        assert retry.authorization_url == first.authorization_url
+        assert retry.access_code == first.access_code
         assert provider_calls == 1
     assert retry_truth == first_truth
 
@@ -1799,19 +1796,20 @@ async def test_production_initialize_creates_terminal_attempt_successor_before_p
         assert retry.payment_intent_id == response.payment_intent_id
         assert observed["provider_calls"] == 2
     else:
-        with pytest.raises(HTTPException) as caught:
-            await payments.initialize_payment(
-                PaymentInitializeRequest(
-                    order_id=graph["order"].id,
-                    email=customer_user["user"].email,
-                    payment_gateway=provider,
-                    currency=graph["order"].currency,
-                    callback_url=None,
-                ),
-                current_user=customer_user["user"],
-                db=db_session,
-            )
-        assert caught.value.status_code == 503
+        retry = await payments.initialize_payment(
+            PaymentInitializeRequest(
+                order_id=graph["order"].id,
+                email=customer_user["user"].email,
+                payment_gateway=provider,
+                currency=graph["order"].currency,
+                callback_url=None,
+            ),
+            current_user=customer_user["user"],
+            db=db_session,
+        )
+        assert retry.reference == response.reference
+        assert retry.authorization_url == response.authorization_url
+        assert retry.access_code == response.access_code
         assert observed["provider_calls"] == 1
 
     attempts = list(
@@ -2329,6 +2327,357 @@ class _PaystackInitializationRecoveryClient:
             raise_for_status=lambda: None,
             json=lambda: {"status": True, "data": data},
         )
+
+
+class _PaystackAbsentReferenceClient:
+    post_calls = 0
+    get_calls = 0
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return None
+
+    async def post(self, *args, **kwargs):
+        type(self).post_calls += 1
+        return SimpleNamespace(
+            status_code=400,
+            text="reference rejected",
+            json=lambda: {"status": False, "message": "reference rejected"},
+        )
+
+    async def get(self, url, *args, **kwargs):
+        type(self).get_calls += 1
+        request = httpx.Request("GET", url)
+        response = httpx.Response(
+            404,
+            request=request,
+            json={"status": False, "message": "Transaction reference not found"},
+        )
+        response.raise_for_status()
+
+
+def _paystack_route_request(graph, customer_user):
+    return PaymentInitializeRequest(
+        order_id=graph["order"].id,
+        email=customer_user["user"].email,
+        payment_gateway="paystack",
+        currency=graph["order"].currency,
+        callback_url=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_paystack_retry_replays_committed_authorization_session_without_provider_io(
+    db_session, vendor_user, customer_user, monkeypatch
+) -> None:
+    graph, attempt = await _pending_route_attempt(
+        db_session, vendor_user, customer_user, "paystack"
+    )
+    await payment_initialization_truth(
+        db_session,
+        order=graph["order"],
+        provider="paystack",
+        capabilities=DomesticShippingCapabilities(True, True, False),
+    )
+    stored_data = {
+        "authorization_url": "https://paystack.invalid/committed-session",
+        "access_code": "committed-access-code",
+        "reference": attempt.provider_reference,
+    }
+    db_session.add(
+        Payment(
+            order_id=graph["order"].id,
+            transaction_id=attempt.provider_reference,
+            payment_gateway=PaymentGateway.PAYSTACK,
+            payment_method="paystack",
+            amount=attempt.amount,
+            currency=attempt.currency,
+            status=TransactionStatus.PENDING,
+            gateway_response={"status": True, "data": stored_data},
+        )
+    )
+    await db_session.commit()
+    monkeypatch.setattr(
+        payments,
+        "domestic_shipping_capabilities",
+        lambda settings: DomesticShippingCapabilities(True, True, False),
+    )
+    monkeypatch.setattr(payments, "PAYSTACK_SECRET_KEY", "sk_" + "test_placeholder")
+
+    class NoProviderIO:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def get(self, *args, **kwargs):
+            pytest.fail("committed session replay must not verify with Paystack")
+
+        async def post(self, *args, **kwargs):
+            pytest.fail("committed session replay must not initialize with Paystack")
+
+    monkeypatch.setattr(payments.httpx, "AsyncClient", NoProviderIO)
+    request = _paystack_route_request(graph, customer_user)
+
+    first = await payments.initialize_payment(
+        request, current_user=customer_user["user"], db=db_session
+    )
+    second = await payments.initialize_payment(
+        request, current_user=customer_user["user"], db=db_session
+    )
+
+    for response in (first, second):
+        assert response.authorization_url == stored_data["authorization_url"]
+        assert response.access_code == stored_data["access_code"]
+        assert response.reference == stored_data["reference"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stored_session", ["foreign", "incomplete"])
+async def test_paystack_retry_rejects_unusable_stored_session_without_provider_io(
+    db_session, vendor_user, customer_user, monkeypatch, stored_session
+) -> None:
+    graph, attempt = await _pending_route_attempt(
+        db_session, vendor_user, customer_user, "paystack"
+    )
+    await payment_initialization_truth(
+        db_session,
+        order=graph["order"],
+        provider="paystack",
+        capabilities=DomesticShippingCapabilities(True, True, False),
+    )
+    data = {
+        "authorization_url": "https://paystack.invalid/private-session",
+        "access_code": "private-access-code",
+        "reference": attempt.provider_reference,
+    }
+    if stored_session == "foreign":
+        data["reference"] = "foreign-reference"
+    else:
+        data.pop("access_code")
+    db_session.add(
+        Payment(
+            order_id=graph["order"].id,
+            transaction_id=attempt.provider_reference,
+            payment_gateway=PaymentGateway.PAYSTACK,
+            payment_method="paystack",
+            amount=attempt.amount,
+            currency=attempt.currency,
+            status=TransactionStatus.PENDING,
+            gateway_response={"status": True, "data": data},
+        )
+    )
+    await db_session.commit()
+    monkeypatch.setattr(
+        payments,
+        "domestic_shipping_capabilities",
+        lambda settings: DomesticShippingCapabilities(True, True, False),
+    )
+    monkeypatch.setattr(payments, "PAYSTACK_SECRET_KEY", "sk_" + "test_placeholder")
+
+    class NoProviderIO:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def get(self, *args, **kwargs):
+            pytest.fail("unusable local mapping must fail closed before provider IO")
+
+        async def post(self, *args, **kwargs):
+            pytest.fail("unusable local mapping must fail closed before provider IO")
+
+    monkeypatch.setattr(payments.httpx, "AsyncClient", NoProviderIO)
+
+    with pytest.raises(HTTPException) as caught:
+        await payments.initialize_payment(
+            _paystack_route_request(graph, customer_user),
+            current_user=customer_user["user"],
+            db=db_session,
+        )
+
+    assert caught.value.status_code == 409
+    assert "private" not in str(caught.value.detail)
+    assert "foreign" not in str(caught.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_paystack_authenticated_absent_reference_terminalizes_and_allows_one_successor(
+    db_session, vendor_user, customer_user, monkeypatch
+) -> None:
+    graph, quote, option, selection, reservation = await _unattempted_route_subject(
+        db_session, vendor_user, customer_user
+    )
+    monkeypatch.setattr(
+        payments,
+        "domestic_shipping_capabilities",
+        lambda settings: DomesticShippingCapabilities(True, True, False),
+    )
+    monkeypatch.setattr(payments, "PAYSTACK_SECRET_KEY", "sk_" + "test_placeholder")
+    client = _PaystackAbsentReferenceClient
+    client.post_calls = client.get_calls = 0
+    monkeypatch.setattr(payments.httpx, "AsyncClient", client)
+
+    with pytest.raises(HTTPException) as caught:
+        await payments.initialize_payment(
+            _paystack_route_request(graph, customer_user),
+            current_user=customer_user["user"],
+            db=db_session,
+        )
+
+    predecessor = await db_session.scalar(
+        select(PaymentAttempt).where(PaymentAttempt.order_id == graph["order"].id)
+    )
+    assert caught.value.status_code == 400
+    assert client.post_calls == client.get_calls == 1
+    assert predecessor.state == "failed"
+    assert (
+        await db_session.scalar(
+            select(func.count(PaymentAttemptEvidence.id)).where(
+                PaymentAttemptEvidence.attempt_id == predecessor.id,
+                PaymentAttemptEvidence.evidence_type == "payment_failed",
+            )
+        )
+        == 1
+    )
+
+    maker = async_sessionmaker(db_session.bind, expire_on_commit=False)
+
+    async def create_successor():
+        async with maker() as session:
+            order = await session.get(Order, graph["order"].id)
+            truth = await payment_initialization_truth(
+                session,
+                order=order,
+                provider="paystack",
+                capabilities=DomesticShippingCapabilities(True, True, False),
+            )
+            await session.commit()
+            return truth.attempt_id
+
+    successor_ids = await asyncio.gather(create_successor(), create_successor())
+    assert successor_ids[0] == successor_ids[1]
+    successor = await db_session.get(PaymentAttempt, successor_ids[0])
+    assert successor.id != predecessor.id
+    assert successor.supersedes_attempt_id == predecessor.id
+    assert successor.quote_id == quote.id
+    assert successor.quote_option_id == option.id
+    assert successor.quote_selection_id == selection.id
+    assert successor.provider_reference != predecessor.provider_reference
+    memberships = list(
+        await db_session.scalars(
+            select(PaymentAttemptReservation).where(
+                PaymentAttemptReservation.attempt_id == successor.id
+            )
+        )
+    )
+    assert [membership.reservation_id for membership in memberships] == [reservation.id]
+
+
+class _PaystackAmbiguousReconciliationClient:
+    post_calls = 0
+    get_calls = 0
+    outcome = "network"
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return None
+
+    async def post(self, *args, **kwargs):
+        type(self).post_calls += 1
+        return SimpleNamespace(
+            status_code=502,
+            text="gateway unavailable",
+            json=lambda: {"status": False, "message": "gateway unavailable"},
+        )
+
+    async def get(self, url, *args, **kwargs):
+        type(self).get_calls += 1
+        request = httpx.Request("GET", url)
+        if type(self).outcome == "network":
+            raise httpx.ConnectError(
+                "synthetic reconciliation failure", request=request
+            )
+        if type(self).outcome == "timeout":
+            raise httpx.ReadTimeout("synthetic reconciliation timeout", request=request)
+        status_code, payload = {
+            "server_error": (500, {"status": False, "message": "server error"}),
+            "malformed": (404, ["not", "trusted"]),
+            "untrusted": (404, {"status": True, "message": "Transaction not found"}),
+            "authentication": (401, {"status": False, "message": "Invalid key"}),
+            "rate_limit": (429, {"status": False, "message": "Rate limited"}),
+        }[type(self).outcome]
+        response = httpx.Response(status_code, request=request, json=payload)
+        response.raise_for_status()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        "network",
+        "timeout",
+        "server_error",
+        "malformed",
+        "untrusted",
+        "authentication",
+        "rate_limit",
+    ],
+)
+async def test_paystack_ambiguous_reconciliation_never_terminalizes_or_posts_again(
+    db_session, vendor_user, customer_user, monkeypatch, outcome
+) -> None:
+    graph, _, _, _, _ = await _unattempted_route_subject(
+        db_session, vendor_user, customer_user
+    )
+    monkeypatch.setattr(
+        payments,
+        "domestic_shipping_capabilities",
+        lambda settings: DomesticShippingCapabilities(True, True, False),
+    )
+    monkeypatch.setattr(payments, "PAYSTACK_SECRET_KEY", "sk_" + "test_placeholder")
+    client = _PaystackAmbiguousReconciliationClient
+    client.post_calls = client.get_calls = 0
+    client.outcome = outcome
+    monkeypatch.setattr(payments.httpx, "AsyncClient", client)
+
+    with pytest.raises(HTTPException) as caught:
+        await payments.initialize_payment(
+            _paystack_route_request(graph, customer_user),
+            current_user=customer_user["user"],
+            db=db_session,
+        )
+
+    attempt = await db_session.scalar(
+        select(PaymentAttempt).where(PaymentAttempt.order_id == graph["order"].id)
+    )
+    assert caught.value.status_code == 503
+    assert client.post_calls == client.get_calls == 1
+    assert attempt.state == "call_started"
+    assert (
+        await db_session.scalar(
+            select(func.count(PaymentAttemptEvidence.id)).where(
+                PaymentAttemptEvidence.attempt_id == attempt.id
+            )
+        )
+        == 0
+    )
+
+    with pytest.raises(HTTPException) as retry:
+        await payments.initialize_payment(
+            _paystack_route_request(graph, customer_user),
+            current_user=customer_user["user"],
+            db=db_session,
+        )
+    assert retry.value.status_code == 503
+    assert client.post_calls == 1
+    assert client.get_calls == 2
 
 
 @pytest.mark.asyncio
