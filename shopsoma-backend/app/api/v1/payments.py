@@ -35,6 +35,7 @@ from app.services.payments.fulfilment_bridge import (
     finalize_verified_payment,
     payment_initialization_truth,
     recover_failed_payment_mapping,
+    recover_pending_payment_mapping,
     recover_payment_mapping,
 )
 from app.services.shipping.capabilities import domestic_shipping_capabilities
@@ -217,6 +218,18 @@ async def _initialize_stripe_payment(
         )
 
 
+def _paystack_definitive_absence(payload: object) -> bool:
+    if not isinstance(payload, dict) or payload.get("status") is not False:
+        return False
+    message = payload.get("message")
+    if not isinstance(message, str):
+        return False
+    normalized_message = message.lower()
+    return "not found" in normalized_message and (
+        "transaction" in normalized_message or "reference" in normalized_message
+    )
+
+
 async def _reconcile_paystack_initialization(
     client: httpx.AsyncClient,
     *,
@@ -239,19 +252,9 @@ async def _reconcile_paystack_initialization(
             error_payload = error.response.json()
         except Exception:
             error_payload = None
-        message = (
-            error_payload.get("message") if isinstance(error_payload, dict) else None
-        )
-        normalized_message = message.lower() if isinstance(message, str) else ""
         definitive_absence = (
             error.response.status_code == status.HTTP_404_NOT_FOUND
-            and error_payload.get("status") is False
-            and "not found" in normalized_message
-            and (
-                "transaction" in normalized_message or "reference" in normalized_message
-            )
-            if isinstance(error_payload, dict)
-            else False
+            and _paystack_definitive_absence(error_payload)
         )
         if definitive_absence:
             provider_response = error_payload
@@ -266,7 +269,12 @@ async def _reconcile_paystack_initialization(
             detail="Payment initialization outcome is unavailable",
         ) from error
 
-    if provider_response.get("status") is False:
+    if isinstance(provider_response, dict) and provider_response.get("status") is False:
+        if not _paystack_definitive_absence(provider_response):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Payment initialization outcome is not definitive",
+            )
         await recover_failed_payment_mapping(
             db,
             provider="paystack",
@@ -486,8 +494,26 @@ async def _initialize_paystack_payment(
                     "message", "Payment initialization failed"
                 )
                 print(f"❌ Paystack returned status=false: {error_message}")
+                if truth.bridge_applied and _paystack_definitive_absence(
+                    paystack_response
+                ):
+                    await recover_failed_payment_mapping(
+                        db,
+                        provider="paystack",
+                        provider_reference=reference,
+                        transaction_id=reference,
+                        event_id=f"initialize-absent:{reference}",
+                        evidence_payload=paystack_response,
+                        failure_reason=error_message,
+                    )
+                    await db.commit()
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Payment initialization was rejected",
+                    )
                 raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST, detail=error_message
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Payment initialization outcome is not definitive",
                 )
 
             # Create payment record
@@ -615,8 +641,30 @@ async def _verify_stripe_payment(
             "requires_payment_method",
             "requires_confirmation",
             "requires_action",
+            "processing",
         ]:
-            payment.status = TransactionStatus.PENDING
+            provider_reference = (
+                intent.metadata.get("shopsoma_payment_reference")
+                if getattr(intent, "metadata", None)
+                else intent.id
+            )
+            if payment is None:
+                payment = await recover_pending_payment_mapping(
+                    db,
+                    provider="stripe",
+                    provider_reference=provider_reference,
+                    transaction_id=intent.id,
+                    observed_amount=Decimal(intent.amount) / 100,
+                    observed_currency=intent.currency,
+                    evidence_payload={
+                        "id": intent.id,
+                        "status": intent.status,
+                        "amount": intent.amount,
+                        "currency": intent.currency,
+                    },
+                )
+            elif payment.status != TransactionStatus.COMPLETED:
+                payment.status = TransactionStatus.PENDING
         else:
             failure_reason = (
                 intent.last_payment_error.message

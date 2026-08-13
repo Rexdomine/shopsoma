@@ -349,6 +349,62 @@ async def recover_payment_mapping(
     return payment, result
 
 
+async def recover_pending_payment_mapping(
+    session: AsyncSession,
+    *,
+    provider: str,
+    provider_reference: str,
+    transaction_id: str,
+    observed_amount: object,
+    observed_currency: str,
+    evidence_payload: dict[str, Any],
+) -> Payment:
+    """Recover one attempt-bound mapping without changing terminal truth."""
+    attempt = await session.scalar(
+        select(PaymentAttempt)
+        .where(
+            PaymentAttempt.provider == provider,
+            PaymentAttempt.provider_reference == provider_reference,
+        )
+        .with_for_update()
+    )
+    if attempt is None:
+        raise PaymentRecoveryUnavailable(
+            "authenticated payment evidence cannot be durably associated"
+        )
+    validate_verified_payment_truth(
+        expected_amount=attempt.amount,
+        expected_currency=attempt.currency,
+        expected_reference=attempt.provider_reference,
+        observed_amount=observed_amount,
+        observed_currency=observed_currency,
+        observed_reference=provider_reference,
+    )
+    if attempt.state not in {"call_started", "abandoned_unknown"}:
+        raise PaymentRecoveryUnavailable(
+            "authenticated payment evidence cannot be durably associated"
+        )
+    payment = await session.scalar(
+        select(Payment).where(Payment.transaction_id == transaction_id)
+    )
+    if payment is None:
+        payment = Payment(
+            order_id=attempt.order_id,
+            transaction_id=transaction_id,
+            payment_gateway=PaymentGateway(provider),
+            payment_method=provider,
+            amount=attempt.amount,
+            currency=attempt.currency,
+            status=TransactionStatus.PENDING,
+            gateway_response=evidence_payload,
+        )
+        session.add(payment)
+        await session.flush()
+    elif payment.order_id != attempt.order_id:
+        raise PaymentTruthMismatch("verified payment truth does not match")
+    return payment
+
+
 async def recover_failed_payment_mapping(
     session: AsyncSession,
     *,
