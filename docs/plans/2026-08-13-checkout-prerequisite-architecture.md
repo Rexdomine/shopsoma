@@ -57,19 +57,20 @@ All enum-like columns below use PostgreSQL check constraints initially, matching
 
 ### 2.1 `orders` additive columns
 
-- `workflow_cohort varchar(40) NULL` during expand/backfill, later `NOT NULL`.
-  - Allowed: `legacy_pre_bridge`, `domestic_checkout_v1`.
+- `workflow_cohort varchar(40) NULL` during expand/backfill, then `NOT NULL` after the Section 3 compatibility-writer/backfill cutover.
+  - Allowed: `legacy_pre_bridge`, `legacy_ambiguous_quarantined`, `domestic_checkout_v1`.
   - Immutable after insert by trigger.
 - `workflow_policy_version varchar(40) NULL` during expand/backfill, later `NOT NULL`; immutable, printable ASCII identifier. Proposed current value for new enforced orders: `domestic_checkout_v1`.
-- `checkout_access_mode varchar(20) NULL` during expand/backfill, later `NOT NULL`; allowed `authenticated`, `guest_capability`; immutable.
-- `checkout_estimate_selection_id uuid NULL`, FK to `checkout_shipping_estimate_selections(id) ON DELETE RESTRICT`; set once for `domestic_checkout_v1`, then immutable.
+- `checkout_access_mode varchar(20) NULL` during expand/backfill, later `NOT NULL`; allowed `authenticated`, `guest_capability`, `legacy_quarantined`; immutable.
+- `checkout_estimate_selection_id uuid NULL`; after both tables exist, composite FK `(checkout_estimate_selection_id, id) -> checkout_shipping_estimate_selections(id, order_id) ON DELETE RESTRICT`, `DEFERRABLE INITIALLY DEFERRED`; set once for `domestic_checkout_v1`, then immutable.
 - `checkout_prerequisites_completed_at timestamptz NULL`; set only after selection plus coverage are atomically valid.
 
 Checks after validation:
 
-- legacy orders: `workflow_cohort='legacy_pre_bridge'`, no requirement for new selection/completion fields.
+- positively evidenced legacy orders: `workflow_cohort='legacy_pre_bridge'`, no requirement for new selection/completion fields.
+- ambiguous historical orders: `workflow_cohort='legacy_ambiguous_quarantined'`, `workflow_policy_version='legacy_quarantine_v1'`, `checkout_access_mode='legacy_quarantined'`; no customer/capability authorization, new estimate, selection, reservation, payment initialization, fulfilment transition, ownership claim, or automatic side effect is permitted. Read/cancel/refund/reconciliation are staff-only through existing audited legacy operations. The positive classification row is the mandatory quarantine evidence; absence of another record is never evidence.
 - enforced orders: `workflow_cohort='domestic_checkout_v1'`, `workflow_policy_version='domestic_checkout_v1'`; payment initialization requires non-null selection/completion but order insertion does not, because insertion precedes selection.
-- `checkout_access_mode` must match whether the order was issued a guest capability at creation; an authenticated order cannot later be downgraded to guest mode.
+- For non-quarantine cohorts, `checkout_access_mode` must match whether the order was issued a guest capability at creation; an authenticated order cannot later be downgraded to guest mode. Quarantine requires `legacy_quarantined` and forbids capabilities.
 
 Indexes:
 
@@ -82,7 +83,7 @@ Columns:
 
 - `id uuid PK`.
 - `order_id uuid NOT NULL FK orders(id) ON DELETE RESTRICT`.
-- `customer_id uuid NOT NULL FK users(id) ON DELETE RESTRICT` (the existing guest-created user remains ownership identity, not bearer authorization).
+- `customer_id uuid NOT NULL FK users(id) ON DELETE RESTRICT` (immutable original order customer, including the guest-created user; current authorization comes only from Section 2.6's owner projection/capability rule).
 - `destination_snapshot_hash char(64) NOT NULL` lowercase SHA-256 over canonical server-owned destination snapshot.
 - `order_snapshot_hash char(64) NOT NULL` over ordered item IDs, quantities, prices/currencies, destination, discounts/tax policy, and workflow policy version.
 - `currency char(3) NOT NULL` uppercase; must equal order currency.
@@ -101,6 +102,7 @@ Constraints/indexes:
 - unique `(customer_id, source_command, idempotency_key)`.
 - unique `(supersedes_estimate_id)`.
 - unique `(id, order_id)` and `(id, customer_id)` for composite ownership FKs.
+- insert trigger requires `customer_id = orders.customer_id`, currency equality, and an allowed non-quarantine cohort; these fields are immutable.
 - only the current unselected leaf may be superseded; selected estimates cannot be superseded.
 - checks for positive TTL, hash formats, uppercase currency, nonblank bounded identifiers.
 - indexes `(order_id, created_at)`, `(expires_at)`, `(order_snapshot_hash)`.
@@ -113,7 +115,7 @@ Columns:
 - `estimate_id uuid NOT NULL FK checkout_shipping_estimates(id) ON DELETE RESTRICT`.
 - `option_key varchar(100) NOT NULL`.
 - `service_code varchar(100) NOT NULL`, `service_label varchar(200) NOT NULL`.
-- `amount numeric(18,4) NOT NULL`, `currency char(3) NOT NULL`.
+- `amount numeric(10,2) NOT NULL`, `currency char(3) NOT NULL`.
 - `min_delivery_days integer NULL`, `max_delivery_days integer NULL`.
 - `source_rate_id uuid NULL FK shipping_rates(id) ON DELETE RESTRICT` for current static rate provenance.
 - `created_at timestamptz NOT NULL`.
@@ -133,7 +135,7 @@ Columns:
 - `id uuid PK`.
 - `estimate_id uuid NOT NULL`, `option_id uuid NOT NULL`, `order_id uuid NOT NULL`, `customer_id uuid NOT NULL`.
 - `selected_by_actor_type varchar(20) NOT NULL` allowed `customer`, `guest_capability`; `selected_by_actor_id varchar(200) NOT NULL`.
-- immutable monetary snapshot: `shipping_amount numeric(18,4) NOT NULL`, `currency char(3) NOT NULL` copied from option.
+- immutable monetary snapshot: `shipping_amount numeric(10,2) NOT NULL`, `currency char(3) NOT NULL` copied from option.
 - `source_command varchar(100) NOT NULL`, `idempotency_key varchar(200) NOT NULL`.
 - `selected_at timestamptz NOT NULL`, `created_at timestamptz NOT NULL`.
 
@@ -144,6 +146,7 @@ Composite FKs/checks/indexes:
 - `(option_id, estimate_id) -> checkout_shipping_estimate_options(id, estimate_id) ON DELETE RESTRICT`.
 - amount/currency must equal selected option; estimate must be current, unexpired, snapshot hashes must still match locked order truth.
 - unique `(estimate_id)`; unique `(order_id)` (one checkout selection per order); unique `(customer_id, source_command, idempotency_key)`.
+- unique `(id, order_id)` for the composite order pointer and downstream ownership FKs.
 - immutable; no update/delete.
 
 Selection atomically writes `orders.checkout_estimate_selection_id`, recalculates `shipping_cost`, `tax_amount`, and `total_amount` from server snapshots, and creates reservation coverage. A changed cart/address/currency requires a new order or an explicit pre-payment order-revision command that invalidates selection and reservations; this plan chooses the smaller safe V1: create a new order and cancel/release the old one.
@@ -152,165 +155,191 @@ Selection atomically writes `orders.checkout_estimate_selection_id`, recalculate
 
 Columns:
 
-- `id uuid PK` (public token lookup also requires token; UUID alone grants nothing).
-- `order_id uuid NOT NULL FK orders(id) ON DELETE RESTRICT`.
-- `customer_id uuid NOT NULL FK users(id) ON DELETE RESTRICT`.
-- `scope varchar(40) NOT NULL`; allowed initially `checkout_prerequisites`, `read_order`, `claim_order`. Issue separate capabilities per scope; do not overload one broad token.
-- `token_digest char(64) NOT NULL` = HMAC-SHA-256(server pepper, random token); plaintext is returned once and never persisted/logged.
+- `id uuid PK`; this is the bounded public row ID in the opaque credential `<base64url(id)>.<base64url(32-byte secret)>`. The parser accepts exactly this versioned shape and rejects oversized input before database access.
+- `order_id uuid NOT NULL`, `original_customer_id uuid NOT NULL`, with composite FK `(order_id, original_customer_id) -> order_current_owners(order_id, original_customer_id) ON DELETE RESTRICT`; for guest orders this is the immutable original guest-created user.
+- `scope varchar(40) NOT NULL`; allowed initially `checkout_prerequisites`, `read_order`, `claim_order`. Issue separate capabilities per scope.
+- `token_digest bytea NOT NULL`, exactly 32 bytes, computed as HMAC-SHA-256 using the key identified by `pepper_key_version smallint NOT NULL`; plaintext is returned once and never persisted.
 - `expires_at timestamptz NOT NULL`, `revoked_at timestamptz NULL`, `replaced_by_id uuid NULL FK same table ON DELETE RESTRICT`.
 - `claimed_by_user_id uuid NULL FK users(id) ON DELETE RESTRICT`, `claimed_at timestamptz NULL`.
 - `created_at`, `last_used_at`, `row_version integer NOT NULL DEFAULT 1`.
 
 Constraints/indexes:
 
-- unique `(token_digest)`; unique `(replaced_by_id)`; index `(order_id, scope, expires_at)`.
-- lifecycle check: active has no revocation/replacement/claim; rotation revokes old and references one new row; claim scope records claimant/time and is revoked in the same transaction.
-- maximum TTL is an explicit pre-implementation decision. Safe default: use the existing bounded payment-window plus auth-grace configuration for checkout scope, fail closed if unset/invalid; claim/read TTL needs product/security approval before activation.
+- unique `(token_digest, pepper_key_version)`; unique `(replaced_by_id)`; index `(order_id, scope, expires_at)`.
+- lifecycle check: active has no revocation/replacement/claim; rotation revokes old and references one new row; claim records claimant and database-clock timestamp and revokes the row in the same transaction.
+- maximum TTL is configurable but schema-bounded; checkout defaults to the existing payment-window plus auth grace and fails closed when invalid. Read/claim TTL values are activation-only decisions.
 
-### 2.6 Reservation coverage changes
+### 2.6 `order_current_owners`
 
-Keep `stock_reservations` and its states, lock coordinator, audit fields, money fields, and exact product/variant/size identities. Replace the pre-payment dependency on final quote truth for new cohorts:
+This one-row-per-order projection is the single post-claim authorization source; order and aggregate `customer_id` values remain immutable original ownership evidence.
 
-- add `checkout_estimate_selection_id uuid NULL FK checkout_shipping_estimate_selections(id) ON DELETE RESTRICT`.
-- retain existing `quote_id`, `quote_selection_id`, `quote_option_id`, `intent_id` as nullable **legacy/final-quote binding columns** during compatibility; do not drop in the expand release.
-- add `inventory_subject_kind varchar(20) NOT NULL` allowed `product`, `product_variant`, `size_stock` and `inventory_subject_id uuid NOT NULL`; keep existing identity columns as audit snapshots and require exact consistency.
-- add unique `(order_item_id, checkout_estimate_selection_id)` for new checkout reservations.
-- binding check: exactly one binding family is populated: all new checkout-selection fields for `domestic_checkout_v1`, or all legacy final-quote fields for existing bridge records. Never infer cohort from which family is null.
-- reservation `currency`/unit price must match the order-item snapshot, not estimate shipping amount.
+- `order_id uuid PK FK orders(id) ON DELETE RESTRICT`.
+- `original_customer_id uuid NOT NULL FK users(id) ON DELETE RESTRICT`; equals immutable `orders.customer_id` and, for guest orders, permanently preserves the original guest-created owner.
+- `current_authenticated_user_id uuid NULL FK users(id) ON DELETE RESTRICT`; null until claim.
+- `claim_capability_id uuid NULL UNIQUE`, added as `DEFERRABLE INITIALLY DEFERRED` FK to `order_guest_capabilities(id) ON DELETE RESTRICT` after both tables exist.
+- `claim_idempotency_key varchar(200) NULL`, `claimed_at timestamptz NULL`, `created_at timestamptz NOT NULL`, `row_version integer NOT NULL DEFAULT 1`.
+- unique `(order_id, original_customer_id)` supports capability ownership. A shape check requires all claim fields null or all non-null. A trigger requires original identity to equal the order, forbids its mutation, permits only the one null-to-user claim transition, and rejects delete.
 
-Add `order_inventory_coverage` for made-to-order and completeness proof:
+Claim locks through the global coordinator, validates the one-time claim capability, and atomically sets `current_authenticated_user_id`, capability identity/idempotency identity, and database-clock `claimed_at`, while revoking **all** order guest capabilities. Same capability/idempotency key and same user replay returns success; any different user or changed identity is a generic conflict. Every estimate create/read/select, payment initialize/read, order read/cancel, and claim endpoint applies exactly one rule: an authenticated actor must equal `COALESCE(order_current_owners.current_authenticated_user_id, orders.customer_id)`; while no authenticated owner is projected, a valid exact-order/scope capability may authorize only its scope. After claim, capabilities never authorize.
 
-- `order_item_id uuid PK FK order_items(id) ON DELETE RESTRICT`, `order_id uuid NOT NULL`, `coverage_kind varchar(30) NOT NULL` allowed `stock_reservation`, `made_to_order_no_stock`, `coverage_id uuid NULL` (reservation ID for stock-managed; null for MTO), `made_to_order_snapshot boolean NOT NULL`, `created_at`.
-- checks enforce stock-managed rows reference exactly one reservation and MTO rows have no reservation plus `made_to_order_snapshot=true`.
-- unique `(order_id, order_item_id)` and index `(order_id, coverage_kind)`.
+### 2.7 Immutable order-item inventory snapshot
 
-### 2.7 Payment attempt compatibility
+Add to `order_items`:
 
-For `payment_attempts`:
+- `inventory_policy varchar(30) NULL` during expand/backfill, then non-null for `domestic_checkout_v1`; allowed `stock_managed`, `made_to_order`.
+- `inventory_subject_kind varchar(20) NULL`, `inventory_subject_id uuid NULL`; stock-managed requires exactly one `product`, `product_variant`, or `size_stock` identity; MTO requires both null.
+- `inventory_source_product_id uuid NULL`, `inventory_source_catalogue_version varchar(100) NULL`, `inventory_source_evidence_hash char(64) NULL`, and `inventory_policy_snapshot_at timestamptz NULL` during expand/backfill, required together for every `domestic_checkout_v1` item, capturing the server catalogue row/version and normalized evidence used at order creation. Historical legacy/quarantine nulls are permitted only where positive evidence cannot support a snapshot.
+- unique `(id, order_id)` (in addition to existing `(id, order_id, vendor_id)`) and unique `(id, order_id, inventory_policy)` for composite ownership.
 
-- add `checkout_estimate_selection_id uuid NULL FK ... ON DELETE RESTRICT` and immutable `workflow_cohort varchar(40) NULL`.
-- make final `quote_id`, `quote_selection_id`, `quote_option_id`, `intent_id` nullable only after new checks exist.
-- binding check keyed by persisted cohort: `domestic_checkout_v1` requires checkout selection and forbids final-quote fields; `legacy_pre_bridge` retains current binding or true legacy payment behavior.
-- `amount` equals the locked order `total_amount`; `currency` equals order currency. Client amount/currency are ignored.
-- `payment_attempt_reservations` remains exact immutable membership. Completeness validator requires every `stock_reservation` coverage row and no extra reservation; MTO coverage is proven separately.
+A database trigger makes all snapshot fields immutable after insert and verifies subject ancestry against the source product when inserted. Reservation/coverage checks use only this frozen snapshot, never mutable current product flags. Flipping a product between stock-managed and MTO after order creation therefore cannot change existing coverage, availability, payment readiness, or fulfilment behavior.
+
+### 2.8 Reservation coverage changes and relational topology
+
+Keep `stock_reservations` states, coordinator/audit fields, and exact product/variant/size evidence. For new checkout reservations:
+
+- add immutable `workflow_cohort`, `checkout_estimate_selection_id`, and canonical `inventory_subject_kind`/`inventory_subject_id` columns.
+- add unique `(id, order_id, order_item_id, checkout_estimate_selection_id)` and FK `(order_item_id, order_id) -> order_items(id, order_id) ON DELETE RESTRICT`.
+- FK `(checkout_estimate_selection_id, order_id) -> checkout_shipping_estimate_selections(id, order_id) ON DELETE RESTRICT` and trigger requiring the reservation subject/policy to equal the frozen order-item snapshot.
+- retain final `quote_id`, `quote_selection_id`, `quote_option_id`, `intent_id` only as the legacy/final-quote family. The binding check requires exactly the cohort-specific family; no all-null or mixed family is valid.
+- existing reservation `unit_price numeric(18,4)` and `line_amount numeric(18,4)` columns remain for legacy compatibility, but `domestic_checkout_v1` rows must be two-decimal quantized, within the order's `numeric(10,2)` maximum, and equal the order-item snapshot exactly; currency also equals the order item.
+
+`order_inventory_coverage` is the completeness proof:
+
+- `order_item_id uuid PK`, `order_id uuid NOT NULL`, `checkout_estimate_selection_id uuid NOT NULL`, `inventory_policy varchar(30) NOT NULL`, `reservation_id uuid NULL`, `created_at timestamptz NOT NULL`.
+- FK `(order_item_id, order_id, inventory_policy) -> order_items(id, order_id, inventory_policy) ON DELETE RESTRICT`.
+- FK `(checkout_estimate_selection_id, order_id) -> checkout_shipping_estimate_selections(id, order_id) ON DELETE RESTRICT`.
+- stock-managed rows require `reservation_id` and composite FK `(reservation_id, order_id, order_item_id, checkout_estimate_selection_id) -> stock_reservations(id, order_id, order_item_id, checkout_estimate_selection_id) ON DELETE RESTRICT`; MTO rows require null reservation and are bound to the immutable selected prerequisite aggregate/version through selection/order plus the item's frozen `inventory_policy='made_to_order'`.
+- unique `(order_id, order_item_id)` and index `(order_id, inventory_policy)`.
+
+A deferred constraint trigger on order prerequisite completion proves exactly one coverage row for every order item, no extras, and exact selection/order ownership. Direct SQL cannot cross-link customers because estimates and selections retain immutable original customer equal to the order, enforced by ownership triggers; authorization uses the current-owner projection, not mutable aggregate FKs.
+
+The intentional FK cycle is inserted in this order within one transaction: order and items -> owner projection -> estimate/options -> selection -> reservations -> coverage -> set order selection/completion. Only the order-pointer FK and capability/owner claim FK are deferred; all ownership FKs are immediate. Deletes are `RESTRICT`; pre-payment cancellation terminalizes/releases rows rather than deleting them. Migration creation order omits cyclic FKs until target tables exist, then adds them `NOT VALID`, validates them, and installs immutability triggers last.
+
+### 2.9 Payment attempt compatibility and money contract
+
+Canonical order transaction storage remains `numeric(10,2)` for orders, order items, estimates, and selections; this milestone does not expand it. Existing bridge reservation/attempt columns remain `numeric(18,4)` for legacy compatibility and are not narrowed, but new `domestic_checkout_v1` values must equal their two-decimal order snapshots (`value = round(value, 2)`) and be `<= 99,999,999.99`. Inputs are parsed as decimal, converted/discounted/taxed only at the existing server-defined stages, and each persisted component is quantized once to `0.01` using `ROUND_HALF_UP` before totals are summed. No binary float participates. DB checks reject non-finite, negative where forbidden, excess scale for enforced rows, or order-total overflow; arithmetic uses widened expressions and rejects overflow before assignment. Provider minor units derive from the final persisted attempt amount. NGN and USD retain their existing one-currency-per-order semantics; no implicit FX or mixed-currency arithmetic is introduced.
+
+For `payment_attempts`, add immutable `workflow_cohort` and `checkout_estimate_selection_id`; add unique `(id, order_id, checkout_estimate_selection_id)`, FK `(checkout_estimate_selection_id, order_id) -> checkout_shipping_estimate_selections(id, order_id) ON DELETE RESTRICT`, and a trigger requiring attempt `customer_id = orders.customer_id`, cohort equality, and currency equality. Make final quote fields nullable only after this matrix check exists:
+
+| Attempt cohort/form | Checkout selection | Final quote fields | Permitted |
+|---|---:|---:|---|
+| `domestic_checkout_v1` | non-null and composite-owned by attempt order | all null | yes |
+| `legacy_pre_bridge` bridge attempt | null | all four non-null and mutually owned | yes |
+| `legacy_pre_bridge` no attempt | no row | n/a | yes; absence is not a binding form |
+| `legacy_ambiguous_quarantined` | n/a | n/a | no new attempt permitted |
+| any cohort, all-null attempt binding | null | all null | no |
+| any cohort, mixed binding | any | partial/mixed | no |
+
+No separate all-null attempt form is required. Existing bridge attempts are positively backfilled `legacy_pre_bridge`; orders with no attempt remain orders with no attempt. Attempt amount/currency must equal the locked quantized order total/currency. `payment_attempt_reservations` remains exact immutable membership and gains denormalized immutable `order_id`/`checkout_estimate_selection_id` plus composite FKs to `(attempt_id, order_id, checkout_estimate_selection_id)` and `(reservation_id, order_id, order_item_id, checkout_estimate_selection_id)`; every stock coverage reservation is included once, no extra reservation is included, and MTO coverage is excluded.
 
 No existing final quote table is renamed or repurposed.
 
 ## 3. Migration and deployment sequence
 
-### 3.1 Expand (gates off)
+### 3.1 Expand and compatibility-writer start (gates off)
 
-1. Add nullable order cohort/policy/access/selection/completion columns and immutable-write guards that permit null historical values.
-2. Create checkout estimate, option, selection, guest-capability, and inventory-coverage tables.
-3. Add nullable checkout-selection/cohort columns to reservations/attempts; add new subject columns nullable initially.
-4. Add `NOT VALID` FKs/checks where table scans/locking could be material; create indexes concurrently in a separate non-transactional Alembic revision if production size warrants it.
-5. Deploy code capable of reading both old and new shapes with all gates false. No new cohort is emitted.
+1. Add nullable order cohort/policy/access/selection/completion columns and additive order-item snapshot columns; create classification/quarantine, owner, estimate, option, selection, capability, and coverage tables.
+2. Add nullable checkout/cohort/subject columns to reservations/attempts and install the cohort binding checks before making legacy final-quote fields nullable. Add cyclic composite FKs only after both targets exist.
+3. Add `NOT VALID` FKs/checks where validation scans could be material; create indexes concurrently in a separate non-transactional revision when required.
+4. Deploy the **compatibility writer** at recorded release ID and database-clock `compatibility_writer_started_at`. From that instant every insert, including gate-off/ineligible orders, writes a non-null immutable cohort/policy/access mode, owner projection, and applicable item inventory snapshots. Gates remain false, so no `domestic_checkout_v1` is emitted; ordinary new rows are positively `legacy_pre_bridge`.
+5. Record the writer release, timestamp, migration revision, and deployment identity in an append-only `order_workflow_migration_runs` row. A database trigger rejects any post-start order insert with null classification, closing the concurrent-insert gap before backfill starts.
 
-Rollback boundary: before any `domestic_checkout_v1` order exists, code may roll back and additive tables/columns may remain inert. Do not downgrade/drop populated audit tables in production.
+Before the compatibility writer starts, code can roll back and additive objects remain inert. Once classified rows exist, rollback is code-only: the old version may read existing columns but must not overwrite them; schema downgrade refuses while migration/classification/audit rows exist.
 
-### 3.2 Historical backfill/classification
+### 3.2 High-watermark backfill and quarantine closure
 
-Create an auditable classification job/table, not a single inference query:
+At backfill start, capture the maximum existing `(created_at, id)` tuple using database-observed values as the immutable high-watermark in the migration-run row. Process only rows whose tuple is `<=` that watermark, ordered by `(created_at, id)`, in bounded `FOR UPDATE SKIP LOCKED` batches. Concurrent later inserts are already classified by the compatibility writer and are excluded from backfill.
 
-- `order_workflow_classifications(order_id PK, cohort, policy_version, access_mode, evidence_kind, evidence_reference, classified_at, classified_by, notes_hash)`.
-- Deterministic evidence sources: order creation timestamp relative to recorded activation event; an explicit release/deployment marker; existing payment/quote/reservation provenance; authenticated vs guest-created ownership evidence. The exact activation timestamp/release marker must be supplied by operations before running.
-- Ambiguous rows go to `classification_required` operational output and remain unenforced. They are not classified from missing quote, reservation, attempt, capability, or shipment rows.
-- Backfill `legacy_pre_bridge` only from positive evidence. New cohort assignment occurs only at order insertion after gate/cohort decision.
+`order_workflow_classifications(order_id PK, cohort, policy_version, access_mode, evidence_kind, evidence_reference, migration_run_id, classified_at, classified_by, notes_hash)` is append-only and has a composite FK/check requiring its values to equal the immutable order columns. Classification is total and positive:
 
-Stop if the activation marker or ambiguous-row disposition is unavailable. Do not manufacture reservation/deduction provenance for historical rows (consistent with migration `f9...` comments 202–207).
+- exact release/deployment, existing bridge provenance, and ownership evidence may classify `legacy_pre_bridge`;
+- every historical row not deterministically resolvable is positively classified `legacy_ambiguous_quarantined` with `evidence_kind='migration_ambiguity_quarantine'`, migration run/reference, and notes hash; it is not guessed or left null;
+- missing quote/reservation/attempt/capability/shipment records are never cohort evidence;
+- no historical row is classified `domestic_checkout_v1`.
 
-### 3.3 Validate
+The classifier uses `INSERT ... ON CONFLICT (order_id) DO NOTHING`, then compares the existing immutable result with the deterministic candidate; exact replay succeeds and any mismatch aborts. Reruns resume from the last committed batch and reconcile counts rather than rewriting evidence. Classification rows and order cohort/policy/access fields reject update/delete. Backfill item inventory snapshots only when existing immutable order/catalog evidence proves the subject/policy; otherwise the entire order is quarantined rather than inventing item truth.
 
-1. Reconcile counts: every order has one positive classification; no ambiguous row is forced.
-2. Backfill new subject-kind/ID only where exact existing reservation columns prove identity.
-3. Validate `NOT VALID` constraints in bounded operations.
-4. Prove no new-cohort attempt lacks selection or complete coverage; prove no selected estimate is expired/superseded or mismatched.
-5. Set order cohort/policy/access columns `NOT NULL` only after reconciliation.
+### 3.3 Cutover, validation, and exact fixtures
 
-### 3.4 Later contract
+1. Reconcile exactly: `orders = classifications`, zero null cohort/policy/access rows, every pre-watermark row classified, every post-writer row classified at insert, and every ambiguous row in the positive quarantine cohort.
+2. Validate all `NOT VALID` ownership/money/binding constraints; prove no enforced attempt lacks its selected estimate or exact coverage.
+3. Set order cohort/policy/access columns `NOT NULL`; set item snapshot fields non-null only for enforced cohorts. Keep legacy/quarantine-compatible nullability where historical evidence cannot support values.
+4. Record `classification_cutover_at`, validated constraint names, row counts, and high-watermark completion in the append-only migration run. Only then remove nullable-reader compatibility; missing-record fallback is forbidden.
 
-Only after all deployed code writes/reads the new model and historical evidence is reconciled:
+Acceptance fixtures are exact: (a) evidenced pre-writer order -> `legacy_pre_bridge`; (b) ambiguous pre-writer order -> `legacy_ambiguous_quarantined` plus quarantine evidence; (c) insert immediately before watermark is backfilled once; (d) concurrent insert after writer start is writer-classified and skipped by backfill; (e) crash after one batch then rerun yields identical rows/hashes/counts; (f) changed rerun evidence aborts; (g) upgrade/downgrade/upgrade before writer start succeeds; (h) downgrade after classification data exists refuses without deleting anything; (i) code rollback/roll-forward preserves classifications and the upgraded writer resumes without duplicate evidence; (j) final `NOT NULL` validation succeeds with no guessed row.
 
-- remove fallback based on missing records;
-- make new reservation subject and attempt cohort fields non-null where applicable;
-- optionally move old final-quote reservation/attempt binding to an archived compatibility table;
-- drop old columns/constraints only in a separately approved destructive migration.
+### 3.4 Later contract and reversibility
 
-Safe rollback after new orders exist is **operational**, not schema downgrade: turn gate off for new order assignment while continuing to process existing `domestic_checkout_v1` orders under their immutable policy. Never reinterpret in-flight orders as legacy, delete capabilities/reservations, or re-enable pre-payment side effects.
+Only after all deployed code uses the new model and validation is recorded may a separate approved contract migration archive old binding columns. Destructive downgrade/drop is never the rollback mechanism.
+
+Safe rollback after compatibility-writer start is operational: gates remain/turn off for new enforced assignment while compatibility writing continues; existing `domestic_checkout_v1`, legacy, and quarantine cohorts retain immutable policy. Never reinterpret in-flight orders, delete evidence/capabilities/reservations, or restore pre-payment side effects.
 
 ## 4. Guest security contract
 
-### Issuance
+### Issuance and key rotation
 
-- On guest order creation, generate at least 256 random bits using a CSPRNG.
-- Return an opaque value containing capability row ID plus random secret once, over TLS. Store only HMAC-SHA-256 digest with a deployment-managed pepper distinct from JWT/payment secrets.
-- Set `orders.checkout_access_mode='guest_capability'`; bind each capability to exact order, guest customer identity, scope, and expiry.
-- Never place token in URL/query, analytics, exception text, email logs, or database plaintext. Frontend keeps checkout token in memory or session storage only; claim/read links require a separate one-time scoped token.
+- On guest order creation, generate a 32-byte CSPRNG secret and return the bounded row-ID-plus-secret credential once over TLS.
+- Store HMAC-SHA-256(secret) using the deployment-managed checkout capability pepper selected by `pepper_key_version`; this key set is distinct from JWT/payment secrets. Configuration contains exactly one active version and at most one previous version during a bounded rotation window.
+- New/rotated capabilities always use the active version. Verification uses only the stored row's declared version, never “try every key.” Previous-version rows remain valid only until their normal expiry or the rotation deadline. Removing/retiring a key makes rows with that version uniformly unavailable; retirement requires revoking/counting all unexpired rows first and is auditable.
+- Never place raw credential, secret, digest, token fragment, email, or provider payload in URL/query, analytics, exception text, logs, traces, metrics labels, or outbox. Frontend keeps the credential only in memory or session storage and sends it in the scoped header.
 
 ### Verification and anti-enumeration
 
-- Require both order ID and bearer capability; constant-time digest comparison after indexed digest lookup.
-- Verify scope, order/customer binding, expiry, revocation, replacement, and cohort inside the order row lock.
-- Unknown order, wrong owner, wrong token/scope, revoked, and expired return the same generic `404 checkout not available`; rate-limit by network and digest prefix without logging raw credentials.
-- UUID/order number/email alone never authorizes quote, selection, reservation, payment initialization, order read, or claim.
+The only algorithm is: parse and length-bound the public row UUID plus 32-byte secret -> load capability by primary-key row ID -> obtain the one configured key matching stored `pepper_key_version` -> compute HMAC -> constant-time compare -> acquire the Section 5 coordinator/row locks -> validate exact scope, order, immutable original owner, current-owner projection, cohort, expiry, revocation, replacement, and lifecycle. There is no digest lookup and no alternate algorithm.
+
+Malformed ID/secret, missing row, unknown/retired key version, wrong secret/scope/order/owner, claimed/revoked/replaced/expired credential all return the same generic `404 checkout not available`, response shape, cache policy, and bounded timing posture. The implementation performs a dummy HMAC and equivalent authorization work for pre-row failures and adds small fixed/jittered minimum latency outside the transaction; tests compare latency distributions within a documented tolerance, not exact nanoseconds. Rate limiting keys on a keyed HMAC of `(normalized network prefix, parsed row ID-or-fixed sentinel, route family)` with a dedicated rate-limit key; it never includes raw token, digest, email, order number, or other PII.
+
+UUID/order number/email alone never authorizes any operation. Adversarial proofs cover malformed/oversized tokens, valid ID/wrong secret, swapped order/scope/owner, retired key, active/previous rotation, replay after claim/revocation, timing equivalence, rate-limit-key redaction, and application/database/log capture containing no raw credential or digest.
 
 ### Rotation/revocation
 
-- Rotate by creating a new capability and atomically revoking/linking the old; old token stops immediately.
-- Revoke checkout scope on cancellation, successful claim, detected compromise, or terminal payment beyond recovery policy.
-- Expiry is database-clock authoritative. Expired checkout capability cannot start a new attempt; authenticated provider evidence may still recover a previously started attempt under payment authorization rules.
+- Credential rotation creates a new active-key-version row and atomically revokes/links the old row; old credentials stop immediately.
+- Revoke checkout scope on cancellation, successful claim, compromise, or terminal payment beyond recovery policy.
+- Expiry is database-clock authoritative. Expired checkout capability cannot start an attempt; authenticated provider evidence may recover an already-started attempt under payment authorization rules.
 
 ### Claim
 
-- Claim requires an authenticated verified-email user plus a valid one-time `claim_order` capability; email equality alone is insufficient.
-- Lock capability, order, guest user, and target user in deterministic order. If order is already claimed, replay by same user succeeds; a different user receives generic conflict.
-- Set `claimed_by_user_id/claimed_at`, revoke all guest capabilities, transfer order ownership only through the approved service, and preserve immutable original guest customer identity in classification/audit metadata. Existing selections, reservations, attempts, and evidence remain order-bound; ownership FKs must be updated through one audited claim command or ownership must be represented by a separate current-owner projection. Pre-implementation decision: choose the latter (safer, no mutation of immutable aggregate ownership) unless repository-wide order ownership requirements prove otherwise.
+Claim is implemented in this milestone through `order_current_owners`; it is not an alternative. It requires an authenticated verified-email user plus a valid one-time `claim_order` capability—email equality alone is insufficient. The global lock order is used, Section 2.6 fields are written with database clock, all capabilities revoke atomically, immutable aggregate ownership remains unchanged, same-user/same-idempotency replay succeeds, and a different user gets a generic conflict.
 
 ## 5. Reservation state machine and locking
 
 The only reservation lifecycle states are `active/released/consumed/expired`; transitions are one-way from `active`, and terminal-state replays are idempotent.
 
-### States and transitions
+### States, effective claims, and transitions
+
+A reservation protects availability while `state='active'` and either (a) `expires_at > clock_timestamp()`, or (b) it belongs through `payment_attempt_reservations` to an attempt in `call_started`/`abandoned_unknown`, or to verified evidence whose stock finalization/recovery remains unresolved and whose `authorization_deadline_at >= clock_timestamp()`. This **effective inventory claim** is used identically by selection, catalogue writes, reconciliation, and expiry; wall-clock expiry alone never frees stock attached to started/unknown/unresolved money.
 
 | From | Command/event | To | Guard and effect |
 |---|---|---|---|
-| none | `select_checkout_estimate` | active | order/selection valid; all stock subjects locked; available = physical stock minus unexpired active reservations; create exact coverage atomically |
-| active | exact verified payment | consumed | attempt contains exact reservation set; decrement each physical stock subject once; set terminal reason/time; enqueue post-payment outbox |
-| active | customer/admin cancel before verified payment | released | no verified/unknown-live payment outcome; restore availability by ending claim only (no stock increment because reservation did not decrement) |
-| active | database-clock TTL elapsed and no live/unknown attempt | expired | terminalize idempotently; no stock mutation |
-| active | payment failure with terminal authenticated evidence | released | terminal failure and no competing started/unknown attempt |
-| active | late verified success inside authorization/recovery deadline | consumed | serialize against expiry/release; if released/expired, reacquire exact stock atomically or route to paid-stock-exception without overselling |
-| consumed | replay/cancel/failure | consumed | immutable inventory truth; refund/cancellation is a separate compensated restock policy, never state reversal |
-| released/expired | duplicate release/expiry | same | idempotent replay |
+| none | `select_checkout_estimate` | active | order/selection valid; all subjects locked; available = physical stock minus all effective claims; create exact coverage atomically |
+| active | exact verified payment | consumed | exact membership; decrement physical stock once; persist payment/order/outbox atomically |
+| active | cancel or terminal authenticated failure | released | no verified, started, unknown, or unresolved attempt; end claim only, never increment physical stock |
+| active | expiry worker | expired | TTL elapsed and effective-claim predicate is false under locks; no stock mutation |
+| active | late verified success | consumed or exception | serialize; consume if claim/reacquisition succeeds, otherwise preserve money truth and hold via exception |
+| consumed | replay/cancel/failure | consumed | immutable; refund/restock is separate compensation |
+| released/expired | duplicate terminal command | same | idempotent replay |
+
+The expiry worker selects candidates but re-evaluates the effective predicate after the full coordinator lock. Protected expired rows remain `active` with an audit observation and next reconciliation time; they are terminalized only after provider reconciliation proves failure/no acceptance or the authorization/recovery policy closes. Unknown provider acceptance is never converted to failure by timeout alone. Reconciliation terminalizes the attempt first from authenticated evidence, then consumes or releases/expires reservations in the same ordered transaction.
 
 ### Coverage
 
-- Product without detailed variant: reserve `products.total_stock` by `(product, product_id)`.
-- `ProductVariant`: reserve `product_variants.stock` by `(product_variant, variant_id)` and include parent product lock.
-- `SizeStock`: reserve `size_stocks.stock` by `(size_stock, size_stock_id)` and include variation and parent product locks.
-- Made-to-order: no fake stock of `999999`; snapshot `made_to_order_no_stock` coverage. Payment may proceed only if every line has exactly one coverage row.
-- Duplicate cart lines for the same subject are aggregated for availability while retaining per-order-item reservation/coverage identity.
+- Product without detailed variant: reserve frozen `(product, product_id)` against `products.total_stock`.
+- `ProductVariant`: reserve frozen `(product_variant, variant_id)` and include parent product coordinator key.
+- `SizeStock`: reserve frozen `(size_stock, size_stock_id)` and include variation and parent product keys.
+- Made-to-order: exact MTO coverage from the immutable order-item snapshot; no fake stock.
+- Duplicate lines aggregate by frozen inventory subject for availability while retaining per-item reservation/coverage identity.
 
-### Lock order and concurrency
+### One global lock order
 
-Canonical transaction order:
+Every selection, payment initialization, verification, terminal failure, cancellation, expiry, catalogue update, late recovery, claim, and reconciliation first builds the **complete** key set and calls the existing `coordinate_stock_payment_write` once. The database function's canonical ordering—`subject_kind COLLATE "C", subject_id`—is the sole global order; callers must not acquire overlapping business row locks before it. The complete namespace is `order`, `product`, `variation`, `product_variant`, `size_stock`, `reservation`, `payment_attempt`; capability/owner rows are locked only after the coordinator because they have no coordinator kind, in `(table name, UUID)` order. After coordinator acquisition, rows are locked in that same key order, then selection/coverage/membership/evidence/outbox rows by UUID. This replaces all prose orderings such as “order then attempt” or “catalogue rows first.”
 
-1. order coordinator/order row;
-2. product IDs ascending;
-3. variation IDs ascending;
-4. product-variant IDs ascending;
-5. size-stock IDs ascending;
-6. reservation IDs ascending;
-7. payment-attempt ID.
+Availability checks, effective-claim checks, inserts, terminalization, and stock mutation occur in one transaction. Unique idempotency identities replay the same result; changed fingerprints conflict. Serialization/deadlock retries are bounded at service boundary and leave no partial rows.
 
-Use the existing `stock_payment_lock_coordinator` namespace and sorted UUIDs. Availability and inserts occur in one transaction under locks. A partial reservation set rolls back fully. Unique idempotency identities replay the same result; same key with different request fingerprint is `409`. Serialization/deadlock failures may retry a bounded number with jitter at service boundary; retry exhaustion returns `409/503` without partial rows. TTL values use bounded settings and database clock; exact production duration remains an explicit operations decision.
+### Cancellation, late payment, and required races
 
-### Cancellation and late payment
+Cancellation and expiry use the same complete coordinator set and effective-claim predicate. `call_started`/`abandoned_unknown` blocks release until authenticated reconciliation or policy closure. Late authenticated success always records money truth; inside recovery it consumes an effective claim or atomically reacquires without negative stock, otherwise emits `paid_stock_exception`; after deadline it emits `late_payment_exception`. Neither exception starts vendors.
 
-Cancellation locks order then attempt then reservation subjects. A `call_started` or `abandoned_unknown` attempt blocks destructive cancellation/release until provider outcome reconciliation or authorization deadline. A late success:
-
-- before authorization deadline: attempts atomic reacquisition if reservation expired/released; if unavailable, mark payment verified and create `paid_stock_exception` outbox for human refund/substitution—never decrement below zero and never notify vendor to start;
-- after deadline: still record authenticated money truth idempotently, block fulfilment, and route to `late_payment_exception`; do not discard or mislabel received funds.
+Two-connection proofs are mandatory: last-unit selection versus selection; selection versus catalogue stock decrease/policy flip; expiry versus verification; cancellation versus provider-start; terminal failure versus late webhook; reconciliation versus catalogue delete/update; and two workers handling the same expired protected reservation. Each proof must force the lock wait, assert one legal winner/serialized outcome, no deadlock, no negative stock, no prematurely freed effective claim, and idempotent replay.
 
 ## 6. Verified-payment side effects and outbox
 
@@ -333,7 +362,15 @@ Exact boundary: in the same database transaction that validates immutable paymen
 2. update payment/order truth;
 3. insert one outbox row keyed `payment_verified_start_order:{attempt_id}`.
 
-A worker claims with `FOR UPDATE SKIP LOCKED`, creates vendor pickup/notification/production commands idempotently using unique `(source_event_id, effect_kind, subject_id)`, then marks processed. Crash before commit replays; crash after effect commit is deduplicated. Email is sent only from a durable notification record and records provider/message identity. Outbox failure leaves paid order visible as `post_payment_processing_pending`; operators can replay without replaying payment or stock consumption.
+The guarantees are deliberately narrower than global “exactly once”:
+
+1. **Atomic database event:** authenticated payment truth, exact stock consumption (or exception truth), order state, and one uniquely keyed outbox insertion commit in one PostgreSQL transaction or none commits.
+2. **Database-derived commands are effectively once:** outbox replay may execute repeatedly, but each pickup/notification/MTO command has unique `(source_event_id, effect_kind, subject_id)` identity and converges to one durable database command.
+3. **External delivery is not exactly once:** email/payment-provider acceptance is at-least-once when the adapter proves idempotency with a stable provider key; otherwise a timeout after send is `unknown_outcome`, is reconciled by provider/message identity, and is never blindly resent. Without provider idempotency or a queryable acceptance receipt, staff resolves the unknown outcome.
+
+A worker claims with `FOR UPDATE SKIP LOCKED`, persists/replays database commands, and marks processed only after command persistence. Outbox failure leaves `post_payment_processing_pending`; replay never replays payment or stock consumption. Email is sent only from a durable notification delivery row carrying source identity, adapter idempotency capability, attempt number, provider/message identity when known, and `pending/sent/failed/unknown_outcome` state.
+
+Crash-window tests cover: before atomic transaction commit (nothing); after payment evidence write but forced rollback (nothing); after atomic commit before worker claim (event remains); after worker claim before command commit (lease/replay); after command commit before outbox processed mark (unique command deduplicates); before external send (safe retry); provider accepted then client timed out (unknown, reconciliation/no blind retry); provider rejected with authenticated terminal response (bounded retry policy); and provider-idempotent retry returning the same message identity.
 
 Final quote/booking is not emitted by this outbox event; later hub/package readiness drives it independently.
 
@@ -346,8 +383,9 @@ Introduce `DOMESTIC_CHECKOUT_PREREQUISITES_ENABLED: bool = False` plus a strict 
 | gate off | `legacy_pre_bridge` | established checkout remains available; no new prerequisites inferred; this is compatibility, not permission to reinterpret an enforced order |
 | gate on + eligible authenticated domestic order | `domestic_checkout_v1` | estimate selection + complete coverage required before bridge initialization |
 | gate on + eligible guest domestic order | `domestic_checkout_v1` | same, authorized by scoped guest capability |
-| gate on + ineligible geography/currency/cohort | `legacy_pre_bridge` or checkout unavailable according to explicit rollout policy | assignment is persisted at creation; no mid-order flip |
-| historical order | positively backfilled classification | behavior follows persisted cohort, never current gate and never missing-record inference |
+| gate on + ineligible geography/currency/cohort | checkout unavailable; no order created | no silent compatibility downgrade after activation |
+| historical evidenced order | `legacy_pre_bridge` | restrictive compatibility follows persisted cohort, never missing-record inference |
+| historical ambiguous order | `legacy_ambiguous_quarantined` | staff-only audited read/cancel/refund/reconciliation; no new payment or fulfilment |
 | gate later off | existing enforced order remains enforced | kill switch stops assigning new cohort/provider start as configured but preserves recovery/cancel/release for in-flight orders |
 | authenticated claim of guest order | unchanged | cohort/policy immutable; authorization projection changes, prerequisites do not restart |
 
@@ -390,7 +428,7 @@ Responses expose `workflow_cohort`, prerequisite status, estimate expiry, select
 - **Made-to-order:** explicit no-stock coverage; no synthetic quantity; production instruction only after verified payment.
 - **NGN/USD:** each order, estimate, option, selection, reservation, and attempt uses one uppercase order currency. Conversion rate/policy is snapshotted server-side at order creation. No mixed-currency arithmetic and no frontend-derived provider amount.
 - **Guest claim:** cohort and financial/inventory bindings survive; all guest capabilities revoke atomically; same-user replay succeeds.
-- **Payment failure:** authenticated terminal failure releases active reservations exactly once if no unknown outcome remains; no vendor/fulfilment effects.
+- **Payment failure:** authenticated terminal failure idempotently converges reservations to released if no unknown outcome remains; no vendor/fulfilment effects.
 - **Payment late success:** record money truth; consume/reacquire only without oversell; otherwise exception outbox and fulfilment hold.
 - **Estimate expiry:** cannot select; create a new superseding estimate. Existing selection remains valid only through reservation/payment windows encoded at selection; expiry semantics after selection must be explicit in service and tests.
 - **Reservation expiry:** no new payment initialization; started payment remains in reconciliation/grace state; expiry worker cannot race terminal verification.
@@ -398,6 +436,8 @@ Responses expose `workflow_cohort`, prerequisite status, estimate expiry, select
 - **Final packed variance:** staff hold by safe default; no silent charge, refund, or shipment booking.
 
 ## 10. Milestones 2–5
+
+Each milestone is independently inert and reversible by false-default gates/adapters: Milestone 2 adds no runtime route behavior; Milestone 3 routes execute only for explicitly assigned enforced cohorts while payment/provider transport remains disabled; Milestone 4 uses mocked/disabled external adapters and gate-off preserves in-flight recovery; Milestone 5 changes UI sequencing only against those gated APIs. Rollback means disabling new assignment/UI exposure while preserving immutable rows and recovery—not dropping schema, reclassifying orders, or restoring unsafe pre-payment side effects.
 
 ### Milestone 2: Additive schema, classification tooling, and gate
 
@@ -415,7 +455,7 @@ Responses expose `workflow_cohort`, prerequisite status, estimate expiry, select
 - Create `shopsoma-backend/app/services/orders/workflow_classification.py`
 - Create tests listed in Section 12
 
-**Acceptance:** migrations upgrade/downgrade/upgrade on PostgreSQL; gates default false/empty; exact DDL/model parity; explicit positive-evidence classification with ambiguous quarantine; no legacy behavior change; no historical inference from missing rows.
+**Acceptance:** pre-writer upgrade/downgrade/upgrade succeeds and populated downgrade refuses safely; compatibility writer/high-watermark/concurrent inserts/idempotent reruns close every row into positive immutable classification, including `legacy_ambiguous_quarantined`; exact DDL/model parity; owner projection, composite topology, item inventory snapshot, money/binding matrix, capability key version, and direct-SQL constraints install inertly; gates remain false/empty; no runtime checkout behavior or missing-record inference changes.
 
 **Verification:**
 
@@ -442,7 +482,7 @@ Responses expose `workflow_cohort`, prerequisite status, estimate expiry, select
 - Modify `shopsoma-backend/app/main.py`
 - Add future tests in Section 12
 
-**Acceptance:** enforced create-order has no decrement/pickup/notification; explicit selection creates all-or-none exact coverage; MTO represented explicitly; guest endpoints require scoped hashed capability; deterministic concurrency prevents oversell; cancellation/expiry are idempotent; gate-off and historical paths remain unchanged.
+**Acceptance:** enforced create-order has no decrement/pickup/notification; explicit selection creates all-or-none composite-owned coverage from frozen item policy; catalogue flips do not reinterpret orders; guest endpoints use the sole row-ID/HMAC/key-version protocol and canonical owner projection; direct SQL cross-links fail; the global coordinator order/effective-claim predicate prevents oversell or premature release in two-connection races; cancellation/expiry are idempotent; gates remain inert and quarantine is restrictive.
 
 **Verification:**
 
@@ -453,7 +493,7 @@ Responses expose `workflow_cohort`, prerequisite status, estimate expiry, select
 
 **Stop:** any enforced order can reach payment-ready without exact coverage; UUID/email authorizes guest access; stock can go negative; pre-payment side effect remains.
 
-### Milestone 4: Payment bridge and exactly-once post-payment boundary
+### Milestone 4: Payment bridge and atomic/effectively-once post-payment boundary
 
 **Goal:** Bind initialization and verified-payment finalization to persisted cohort/selection/coverage and release post-payment work through a narrow durable outbox.
 
@@ -467,11 +507,11 @@ Responses expose `workflow_cohort`, prerequisite status, estimate expiry, select
 - Modify vendor pickup/notification entry points currently invoked by `app/api/v1/orders.py`
 - Add Alembic revision and future tests in Section 12
 
-**Acceptance:** initialization uses only locked server total/currency; exact reservation membership required; verified payment consumes/decrements once and inserts one outbox event atomically; retries cannot duplicate stock/pickup/vendor/production effects; failure/late success/unknown outcome follow Section 5; existing enforced cohorts remain recoverable when gate turns off.
+**Acceptance:** initialization uses only locked, two-decimal, `ROUND_HALF_UP` server total/currency and the cohort binding matrix; exact reservation membership required; verified payment truth/stock/outbox are one atomic database event; database commands are effectively once by unique source identity; external sends are at-least-once or reconciled unknown outcomes and never blindly retried; crash-window and boundary/overflow proofs pass; existing enforced cohorts remain recoverable when gate turns off.
 
 **Verification:**
 
-- `cd shopsoma-backend && pytest -q tests/test_checkout_payment_bridge_prerequisites.py tests/test_verified_payment_inventory.py tests/test_checkout_outbox_exactly_once.py tests/test_checkout_late_payment.py tests/test_payment_fulfilment_bridge_contract.py`
+- `cd shopsoma-backend && pytest -q tests/test_checkout_payment_bridge_prerequisites.py tests/test_verified_payment_inventory.py tests/test_checkout_outbox_delivery_guarantees.py tests/test_checkout_late_payment.py tests/test_payment_fulfilment_bridge_contract.py`
 - `cd shopsoma-backend && ruff check app tests && black --check app tests`
 
 **Non-goals:** real Stripe/Paystack calls in tests, DHL call/booking, broad generic outbox platform.
@@ -490,7 +530,7 @@ Responses expose `workflow_cohort`, prerequisite status, estimate expiry, select
 - Create/modify checkout tests under `shopsoma-frontend/src/pages/checkout/` or repository-established test location
 - Add backend end-to-end contract tests under `shopsoma-backend/tests/`
 
-**Acceptance:** no auto-selection; multiple options require a customer action; guest capability never enters URL/log output; stale/expiry/stock failures are recoverable and truthful; provider widget receives initialization response amount/currency; authenticated and guest mocked journeys pass for NGN and schema-compatible USD; no external network.
+**Acceptance:** no auto-selection; multiple options require a customer action; every endpoint uses the canonical current-owner/capability rule; guest credentials never enter URL/log output; stale/expiry/stock failures are truthful; provider widget receives quantized initialization amount/currency; authenticated, guest, claim/replay, NGN, and schema-compatible USD mocked journeys pass; all external adapters remain disabled.
 
 **Verification:**
 
@@ -515,10 +555,10 @@ Responses expose `workflow_cohort`, prerequisite status, estimate expiry, select
 | option substitution/client amount tamper | composite FKs; server option snapshot; initialization ignores client money | 409 or ignored client fields; no provider call |
 | multiple options auto-selected | API requires option ID; frontend explicit action | no selection/payment readiness until action |
 | concurrent final selection | order lock + unique order selection | one commit; identical idempotent replay or 409 |
-| two carts reserve last unit | deterministic coordinator/stock row locks; active-reservation subtraction | one succeeds; one 409; no negative stock |
+| two carts reserve last unit | complete coordinator set plus effective-claim subtraction | one succeeds; one 409; no negative stock |
 | partial multi-line reservation | one DB transaction + completeness check | full rollback |
 | deadlock/serialization failure | canonical lock order, bounded service retry | clean retry then 409/503; no partial state |
-| expiry races payment verification | order -> attempt -> reservation lock order; DB clock | one terminal path; success reconciled/exceptioned without oversell |
+| expiry races payment verification | sole coordinator `subject_kind COLLATE "C", subject_id` order; DB clock | one terminal path; success reconciled/exceptioned without oversell |
 | cancellation races provider call | started/unknown attempt blocks release | reconcile before cancellation completion |
 | duplicate webhook/verification | unique external evidence and outbox idempotency | replay result; one stock consumption/event |
 | crash after payment truth before vendor work | payment + stock + outbox atomic transaction | worker resumes durable event |
@@ -540,12 +580,21 @@ Each named test must initially fail because the stated behavior is absent.
 - `test_checkout_estimate_is_distinct_from_sealed_customer_quote`: absent pre-payment aggregate.
 - `test_estimate_option_money_and_currency_are_constrained`: absent estimate option table/checks.
 - `test_selection_composite_fks_prevent_cross_order_option_substitution`: absent composite binding.
+- `test_direct_sql_order_pointer_cannot_reference_another_order_selection`: absent composite order pointer.
+- `test_direct_sql_coverage_cannot_cross_link_order_item_reservation_or_selection`: absent full composite ownership topology.
+- `test_order_item_inventory_policy_snapshot_is_immutable`: absent frozen policy/source evidence.
+- `test_catalogue_policy_flip_does_not_change_existing_order_coverage`: current mutable catalogue can be consulted.
 - `test_reservation_requires_exactly_one_binding_family`: current reservation only supports final quote binding.
 - `test_made_to_order_line_requires_explicit_non_stock_coverage`: absent coverage table.
+- `test_money_scale_rounding_maximum_and_overflow_constraints`: absent canonical two-decimal boundary contract.
+- `test_payment_attempt_binding_matrix_rejects_all_null_mixed_and_quarantine_forms`: absent cohort matrix.
 
 ### `shopsoma-backend/tests/test_checkout_prerequisite_migration.py`
 
 - `test_expand_upgrade_downgrade_upgrade_preserves_legacy_rows`: absent revisions.
+- `test_populated_classification_refuses_destructive_downgrade_and_roll_forward_is_stable`: absent rollback guard.
+- `test_compatibility_writer_classifies_concurrent_insert_outside_backfill_watermark`: absent writer/cutover protocol.
+- `test_backfill_crash_rerun_is_idempotent_and_changed_candidate_aborts`: absent immutable rerun contract.
 - `test_constraints_install_not_valid_then_validate`: absent staged constraints.
 - `test_populated_new_audit_tables_block_destructive_rollback`: absent safe rollback guard/runbook assertion.
 
@@ -554,6 +603,8 @@ Each named test must initially fail because the stated behavior is absent.
 - `test_missing_bridge_records_never_classifies_legacy_order`: current bridge falls back from missing attempt/selection.
 - `test_positive_release_evidence_classifies_legacy_order`: absent classifier.
 - `test_ambiguous_history_is_quarantined_not_guessed`: absent quarantine.
+- `test_quarantined_order_has_positive_evidence_and_restrictive_behavior`: absent immutable quarantine cohort.
+- `test_every_order_is_classified_at_final_not_null_cutover`: current historical representation is nullable.
 - `test_gate_change_does_not_change_existing_order_cohort`: absent immutable cohort.
 
 ### `shopsoma-backend/tests/test_guest_checkout_capability.py`
@@ -562,9 +613,15 @@ Each named test must initially fail because the stated behavior is absent.
 - `test_uuid_or_email_without_capability_cannot_access_order`: current guest ownership is a passwordless user identity without this capability boundary.
 - `test_capability_is_order_scope_and_ttl_bound`: absent binding.
 - `test_wrong_expired_revoked_and_unknown_tokens_are_indistinguishable`: absent anti-enumeration.
+- `test_row_id_then_hmac_protocol_rejects_malformed_oversized_and_swapped_tokens`: absent bounded sole algorithm.
+- `test_active_previous_and_retired_pepper_versions_have_defined_behavior`: absent key-version rotation.
+- `test_capability_failures_have_uniform_timing_and_rate_limit_keys_are_redacted`: absent timing/rate-limit posture.
+- `test_no_raw_token_or_digest_reaches_logs_traces_metrics_or_outbox`: absent end-to-end redaction proof.
 - `test_rotation_revokes_old_token_atomically`: absent rotation.
 - `test_claim_requires_authenticated_user_and_one_time_claim_scope`: absent claim capability.
 - `test_claim_revokes_all_guest_capabilities_without_restarting_checkout`: absent claim lifecycle.
+- `test_claim_owner_projection_same_user_replays_and_different_user_conflicts`: absent canonical projection.
+- `test_all_order_endpoints_use_current_owner_projection_after_claim`: existing routes use order customer identity.
 
 ### `shopsoma-backend/tests/test_checkout_estimate_api.py`
 
@@ -582,6 +639,8 @@ Each named test must initially fail because the stated behavior is absent.
 - `test_cancel_before_provider_start_releases_without_incrementing_stock`: current stock was already decremented.
 - `test_started_or_unknown_payment_blocks_release`: prerequisite cancellation integration absent.
 - `test_expiry_uses_database_clock_and_preserves_started_recovery`: absent sequence.
+- `test_effective_claim_protects_expired_started_unknown_and_unresolved_attempts`: absent effective predicate.
+- `test_expiry_worker_terminalizes_only_after_reconciliation_or_policy_closure`: absent worker rule.
 
 ### `shopsoma-backend/tests/test_checkout_reservation_concurrency.py`
 
@@ -590,6 +649,9 @@ Each named test must initially fail because the stated behavior is absent.
 - `test_concurrent_size_stock_reservation_uses_product_variation_size_lock_order`: absent flow.
 - `test_multi_line_failure_rolls_back_every_reservation`: absent atomic selection/reservation.
 - `test_deadlock_retry_exhaustion_leaves_no_partial_coverage`: absent bounded orchestration.
+- `test_expiry_vs_verification_serializes_without_releasing_effective_claim`: absent two-connection proof.
+- `test_catalogue_update_vs_selection_uses_same_global_coordinator_order`: absent unified order.
+- `test_failure_vs_late_webhook_and_reconciliation_vs_catalogue_update_are_safe`: absent race proofs.
 
 ### `shopsoma-backend/tests/test_order_creation_side_effect_gate.py`
 
@@ -605,6 +667,8 @@ Each named test must initially fail because the stated behavior is absent.
 - `test_new_cohort_cannot_fall_back_when_prerequisite_record_is_missing`: current `_ensure_bridge_attempt` can return legacy fallback.
 - `test_exact_attempt_membership_excludes_mto_coverage_and_includes_all_stock_reservations`: absent new coverage contract.
 - `test_gate_off_does_not_reinterpret_existing_enforced_order`: absent cohort binding.
+- `test_attempt_matrix_distinguishes_no_attempt_from_existing_legacy_bridge_attempt`: absent explicit matrix.
+- `test_amount_is_quantized_round_half_up_and_provider_minor_units_match`: absent canonical rounding contract.
 
 ### `shopsoma-backend/tests/test_verified_payment_inventory.py`
 
@@ -613,12 +677,15 @@ Each named test must initially fail because the stated behavior is absent.
 - `test_failed_payment_releases_without_vendor_side_effect`: absent release integration.
 - `test_amount_currency_reference_mismatch_changes_nothing`: bridge validation exists; atomic reservation/outbox assertion absent.
 
-### `shopsoma-backend/tests/test_checkout_outbox_exactly_once.py`
+### `shopsoma-backend/tests/test_checkout_outbox_delivery_guarantees.py`
 
 - `test_payment_stock_and_outbox_commit_atomically`: outbox absent.
 - `test_duplicate_payment_evidence_inserts_one_start_order_event`: outbox absent.
 - `test_worker_crash_replay_deduplicates_pickup_notification_and_mto_command`: absent durable effects.
 - `test_outbox_payload_contains_no_token_provider_payload_or_pii`: outbox absent.
+- `test_database_commands_are_effectively_once_by_unique_source_identity`: absent durable command identity.
+- `test_external_unknown_acceptance_is_reconciled_not_blindly_retried`: absent delivery state contract.
+- `test_each_payment_outbox_and_external_send_crash_window_converges_safely`: absent crash-window coverage.
 
 ### `shopsoma-backend/tests/test_checkout_late_payment.py`
 
@@ -643,17 +710,18 @@ Each named test must initially fail because the stated behavior is absent.
 - `recovers_from_stale_estimate_and_stock_conflict_without_silent_switch`: absent flow.
 - `keeps_guest_capability_out_of_url_and_clears_after_claim_or_completion`: absent capability flow.
 
-## 13. Explicit pre-implementation decisions and safe defaults
+## 13. Activation-only decisions and safe disabled defaults
 
-These do not block this architecture; they block activation if unresolved:
+These decisions do not alter Milestones 2–5 schema/security contracts and do not block inert implementation; they must be approved before any production cohort activation:
 
-1. **Cohort eligibility:** exact domestic geography, account/cohort allowlist, order cap, and whether USD participates. Safe default: empty allowlist/0%, Nigeria only, NGN only.
-2. **TTL values:** checkout estimate, guest read/claim, reservation, payment, and authorization grace. Safe enforcement: bounded settings using database clock; no unbounded token/reservation.
-3. **Packed variance:** party bearing estimate-vs-final difference and thresholds. Safe default: fulfilment hold and staff reconciliation; no silent charge/refund.
-4. **Guest ownership claim representation:** safe default is immutable original customer plus current-owner projection, pending repository-wide ownership audit.
-5. **Late paid/no-stock customer remedy:** refund vs substitution SLA. Safe default: hold, alert staff, no vendor start, no negative stock.
-6. **Tax treatment of shipping estimate and FX source/version:** must be finance-approved and snapshotted. Preserve current server tax/FX behavior until explicitly changed; never recompute historical orders.
-7. **Gate-off policy for otherwise eligible new customers:** compatibility legacy path versus checkout unavailable. Safe launch default is checkout unavailable for pilot-targeted eligibility if prerequisites cannot complete; do not silently downgrade an order after creation.
+1. **Cohort eligibility:** exact domestic geography, account allowlist, order cap, and USD participation. Disabled default: empty allowlist, 0%, Nigeria/NGN eligibility only when later approved.
+2. **Durations:** concrete estimate, capability read/claim, reservation, payment, authorization/recovery, and pepper-rotation windows within the locked schema bounds. Invalid/unset values fail closed.
+3. **Packed variance:** commercial bearer and hold thresholds. Default: fulfilment hold/staff reconciliation; no silent charge/refund.
+4. **Late paid/no-stock remedy:** refund versus substitution SLA. Default: hold/alert, no vendor start, no negative stock.
+5. **Tax and FX activation policy:** finance-approved shipping-tax treatment and FX source/version. Existing server behavior is snapshotted; historical orders are never recomputed.
+6. **External adapter guarantees:** provider-specific idempotency and acceptance-query evidence. Until proven per adapter, unknown outcomes require reconciliation/staff action and are not resent.
+
+Schema-blocking choices are not deferred: ambiguous history uses `legacy_ambiguous_quarantined`; current ownership uses `order_current_owners`; inventory policy is frozen per item; money remains two-decimal `numeric(10,2)`/`ROUND_HALF_UP`; ineligible orders after activation are unavailable rather than silently downgraded.
 
 ## 14. Explicit non-goals
 
