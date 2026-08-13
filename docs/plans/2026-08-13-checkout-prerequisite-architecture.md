@@ -217,7 +217,9 @@ The intentional FK cycle is inserted in this order within one transaction: order
 
 ### 2.9 Payment attempt compatibility and money contract
 
-Canonical order transaction storage remains `numeric(10,2)` for orders, order items, estimates, and selections; this milestone does not expand it. Existing bridge reservation/attempt columns remain `numeric(18,4)` for legacy compatibility and are not narrowed, but new `domestic_checkout_v1` values must equal their two-decimal order snapshots (`value = round(value, 2)`) and be `<= 99,999,999.99`. Inputs are parsed as decimal, converted/discounted/taxed only at the existing server-defined stages, and each persisted component is quantized once to `0.01` using `ROUND_HALF_UP` before totals are summed. No binary float participates. DB checks reject non-finite, negative where forbidden, excess scale for enforced rows, or order-total overflow; arithmetic uses widened expressions and rejects overflow before assignment. Provider minor units derive from the final persisted attempt amount. NGN and USD retain their existing one-currency-per-order semantics; no implicit FX or mixed-currency arithmetic is introduced.
+Canonical order transaction storage remains `numeric(10,2)` for orders, order items, estimates, and selections; this milestone does not expand it. Existing bridge reservation/attempt columns remain `numeric(18,4)` for legacy compatibility and are not narrowed, but new `domestic_checkout_v1` values must equal their two-decimal order snapshots (`value = round(value, 2)`) and be `<= 99,999,999.99`. Inputs are parsed as decimal, converted/discounted/taxed only at the existing server-defined stages, and each persisted component is quantized once to `0.01` using `ROUND_HALF_UP` before totals are summed. No binary float participates. DB checks reject non-finite, negative where forbidden, excess scale for enforced rows, or order-total overflow; arithmetic uses widened expressions and rejects overflow before assignment. NGN and USD retain their existing one-currency-per-order semantics; no implicit FX or mixed-currency arithmetic is introduced.
+
+Provider minor-unit conversion starts only from the already persisted and validated `payment_attempts.amount`/currency pair. For this milestone both NGN and USD have exponent `2`: compute `minor_units = Decimal(attempt.amount) * Decimal(100)` exactly, require that result already be integral, and convert that integral Decimal to the provider request integer without a second rounding or truncation step and without ever passing through binary float. Unsupported currency/exponent mappings fail closed. Before transport, each provider adapter must also reject a result outside its explicitly configured accepted integer range; repository evidence does not establish provider maxima, so implementation must supply reviewed adapter configuration/constants and the adapter remains disabled/fail-closed until they are set. The provider request amount integer must equal this computed result. Initialization and verification use the same conversion contract, and verification accepts payment only when the provider integer and currency reconcile exactly to the persisted attempt amount and currency.
 
 For `payment_attempts`, add immutable `workflow_cohort` and `checkout_estimate_selection_id`; add unique `(id, order_id, checkout_estimate_selection_id)`, FK `(checkout_estimate_selection_id, order_id) -> checkout_shipping_estimate_selections(id, order_id) ON DELETE RESTRICT`, and a trigger requiring attempt `customer_id = orders.customer_id`, cohort equality, and currency equality. Make final quote fields nullable only after this matrix check exists:
 
@@ -230,7 +232,14 @@ For `payment_attempts`, add immutable `workflow_cohort` and `checkout_estimate_s
 | any cohort, all-null attempt binding | null | all null | no |
 | any cohort, mixed binding | any | partial/mixed | no |
 
-No separate all-null attempt form is required. Existing bridge attempts are positively backfilled `legacy_pre_bridge`; orders with no attempt remain orders with no attempt. Attempt amount/currency must equal the locked quantized order total/currency. `payment_attempt_reservations` remains exact immutable membership and gains denormalized immutable `order_id`/`checkout_estimate_selection_id` plus composite FKs to `(attempt_id, order_id, checkout_estimate_selection_id)` and `(reservation_id, order_id, order_item_id, checkout_estimate_selection_id)`; every stock coverage reservation is included once, no extra reservation is included, and MTO coverage is excluded.
+No separate all-null attempt form is required. Existing bridge attempts are positively backfilled `legacy_pre_bridge`; orders with no attempt remain orders with no attempt. Attempt amount/currency must equal the locked quantized order total/currency.
+
+`payment_attempt_reservations` remains exact immutable membership and gains immutable denormalized `order_id`, `order_item_id`, and `checkout_estimate_selection_id` columns. At membership insertion these values are copied from the locked attempt/reservation rows; neither membership keys nor copied values can be updated. Its exact source-to-target tuples are:
+
+- `(attempt_id, order_id, checkout_estimate_selection_id) -> payment_attempts(id, order_id, checkout_estimate_selection_id) ON DELETE RESTRICT`;
+- `(reservation_id, order_id, order_item_id, checkout_estimate_selection_id) -> stock_reservations(id, order_id, order_item_id, checkout_estimate_selection_id) ON DELETE RESTRICT`.
+
+The FK targets therefore require UNIQUE constraints/indexes on `payment_attempts(id, order_id, checkout_estimate_selection_id)` and `stock_reservations(id, order_id, order_item_id, checkout_estimate_selection_id)` exactly as specified above; a prefix or separate single-column indexes are insufficient FK targets. Every stock coverage reservation is included once, no extra reservation is included, and MTO coverage is excluded.
 
 No existing final quote table is renamed or repurposed.
 
@@ -507,7 +516,7 @@ Each milestone is independently inert and reversible by false-default gates/adap
 - Modify vendor pickup/notification entry points currently invoked by `app/api/v1/orders.py`
 - Add Alembic revision and future tests in Section 12
 
-**Acceptance:** initialization uses only locked, two-decimal, `ROUND_HALF_UP` server total/currency and the cohort binding matrix; exact reservation membership required; verified payment truth/stock/outbox are one atomic database event; database commands are effectively once by unique source identity; external sends are at-least-once or reconciled unknown outcomes and never blindly retried; crash-window and boundary/overflow proofs pass; existing enforced cohorts remain recoverable when gate turns off.
+**Acceptance:** initialization uses only the locked, persisted, two-decimal, `ROUND_HALF_UP` server attempt amount/currency and the cohort binding matrix; provider minor units use the exact no-float/no-second-rounding conversion and adapter range gate in Section 2.9; exact reservation membership required; verified payment truth/stock/outbox are one atomic database event; database commands are effectively once by unique source identity; external sends are at-least-once or reconciled unknown outcomes and never blindly retried; crash-window and boundary/overflow proofs pass; existing enforced cohorts remain recoverable when gate turns off.
 
 **Verification:**
 
@@ -588,6 +597,8 @@ Each named test must initially fail because the stated behavior is absent.
 - `test_made_to_order_line_requires_explicit_non_stock_coverage`: absent coverage table.
 - `test_money_scale_rounding_maximum_and_overflow_constraints`: absent canonical two-decimal boundary contract.
 - `test_payment_attempt_binding_matrix_rejects_all_null_mixed_and_quarantine_forms`: absent cohort matrix.
+- `test_direct_sql_attempt_membership_rejects_wrong_order_item_or_selection_and_accepts_exact_tuple`: absent full-arity child columns/composite FK topology; independently prove wrong order, wrong item, and wrong selection rejection plus exact membership acceptance.
+- `test_payment_attempt_membership_orm_and_alembic_ddl_have_identical_columns_constraints_and_indexes`: absent ORM/Alembic parity for immutable denormalized columns, both source-to-target FKs, and both required UNIQUE targets.
 
 ### `shopsoma-backend/tests/test_checkout_prerequisite_migration.py`
 
@@ -666,9 +677,13 @@ Each named test must initially fail because the stated behavior is absent.
 - `test_initialization_uses_locked_order_amount_and_currency_only`: service has server truth but checkout still supplies/uses client review money.
 - `test_new_cohort_cannot_fall_back_when_prerequisite_record_is_missing`: current `_ensure_bridge_attempt` can return legacy fallback.
 - `test_exact_attempt_membership_excludes_mto_coverage_and_includes_all_stock_reservations`: absent new coverage contract.
+- `test_exact_attempt_membership_rejects_wrong_order_item_and_selection`: absent full-arity membership ownership contract at the service boundary.
 - `test_gate_off_does_not_reinterpret_existing_enforced_order`: absent cohort binding.
 - `test_attempt_matrix_distinguishes_no_attempt_from_existing_legacy_bridge_attempt`: absent explicit matrix.
-- `test_amount_is_quantized_round_half_up_and_provider_minor_units_match`: absent canonical rounding contract.
+- `test_provider_minor_units_exact_decimal_boundaries_and_range`: absent exact conversion proof for `0.01`, midpoint-sensitive `10.05`, `99,999,999.99`, the configured provider maximum, and maximum plus one.
+- `test_provider_minor_units_reject_unsupported_currency_or_exponent`: absent fail-closed currency/exponent contract.
+- `test_provider_minor_units_never_use_binary_float_or_second_rounding`: absent no-float/no-rounding conversion contract.
+- `test_provider_request_and_verification_reconcile_same_attempt_integer_and_currency`: absent exact initialization/verification parity with persisted attempt truth.
 
 ### `shopsoma-backend/tests/test_verified_payment_inventory.py`
 
