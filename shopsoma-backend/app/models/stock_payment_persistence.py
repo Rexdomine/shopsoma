@@ -15,6 +15,7 @@ from sqlalchemy import (
     DateTime,
     FetchedValue,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     Numeric,
@@ -73,25 +74,29 @@ class StockReservation(Base):
     customer_id = Column(
         _UUID, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )
+    workflow_cohort = Column(String(40), nullable=True)
+    checkout_estimate_selection_id = Column(_UUID, nullable=True)
+    inventory_subject_kind = Column(String(20), nullable=True)
+    inventory_subject_id = Column(_UUID, nullable=True)
     quote_id = Column(
         _UUID,
         ForeignKey("customer_shipping_quotes.id", ondelete="RESTRICT"),
-        nullable=False,
+        nullable=True,
     )
     quote_selection_id = Column(
         _UUID,
         ForeignKey("customer_shipping_quote_selections.id", ondelete="RESTRICT"),
-        nullable=False,
+        nullable=True,
     )
     quote_option_id = Column(
         _UUID,
         ForeignKey("customer_shipping_quote_options.id", ondelete="RESTRICT"),
-        nullable=False,
+        nullable=True,
     )
     intent_id = Column(
         _UUID,
         ForeignKey("outbound_shipment_intents.id", ondelete="RESTRICT"),
-        nullable=False,
+        nullable=True,
     )
     product_id = Column(
         _UUID, ForeignKey("products.id", ondelete="RESTRICT"), nullable=False
@@ -123,6 +128,40 @@ class StockReservation(Base):
     updated_at = Column(DateTime(timezone=True), nullable=False, server_default=_NOW)
 
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["order_item_id", "order_id"],
+            ["order_items.id", "order_items.order_id"],
+            name="fk_stock_reservations_order_item",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["checkout_estimate_selection_id", "order_id"],
+            [
+                "checkout_shipping_estimate_selections.id",
+                "checkout_shipping_estimate_selections.order_id",
+            ],
+            name="fk_stock_reservations_checkout_selection",
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "workflow_cohort IS NULL OR workflow_cohort IN ('legacy_pre_bridge','legacy_ambiguous_quarantined','domestic_checkout_v1')",
+            name="ck_stock_reservations_workflow_cohort",
+        ),
+        CheckConstraint(
+            "workflow_cohort IS NULL OR (workflow_cohort='legacy_pre_bridge' AND checkout_estimate_selection_id IS NULL AND quote_id IS NOT NULL AND quote_selection_id IS NOT NULL AND quote_option_id IS NOT NULL AND intent_id IS NOT NULL) OR (workflow_cohort='domestic_checkout_v1' AND checkout_estimate_selection_id IS NOT NULL AND quote_id IS NULL AND quote_selection_id IS NULL AND quote_option_id IS NULL AND intent_id IS NULL AND inventory_subject_kind IN ('product','product_variant','size_stock') AND inventory_subject_id IS NOT NULL)",
+            name="ck_stock_reservations_binding_family",
+        ),
+        CheckConstraint(
+            "workflow_cohort IS NULL OR workflow_cohort<>'domestic_checkout_v1' OR (unit_price=round(unit_price,2) AND line_amount=round(line_amount,2) AND unit_price<=99999999.99 AND line_amount<=99999999.99)",
+            name="ck_stock_reservations_checkout_money",
+        ),
+        UniqueConstraint(
+            "id",
+            "order_id",
+            "order_item_id",
+            "checkout_estimate_selection_id",
+            name="uq_stock_reservations_checkout_membership_target",
+        ),
         CheckConstraint("quantity > 0", name="ck_stock_reservations_quantity"),
         CheckConstraint(
             "unit_price NOT IN ('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric) "
@@ -183,25 +222,27 @@ class PaymentAttempt(Base):
     customer_id = Column(
         _UUID, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )
+    workflow_cohort = Column(String(40), nullable=True)
+    checkout_estimate_selection_id = Column(_UUID, nullable=True)
     quote_id = Column(
         _UUID,
         ForeignKey("customer_shipping_quotes.id", ondelete="RESTRICT"),
-        nullable=False,
+        nullable=True,
     )
     quote_selection_id = Column(
         _UUID,
         ForeignKey("customer_shipping_quote_selections.id", ondelete="RESTRICT"),
-        nullable=False,
+        nullable=True,
     )
     quote_option_id = Column(
         _UUID,
         ForeignKey("customer_shipping_quote_options.id", ondelete="RESTRICT"),
-        nullable=False,
+        nullable=True,
     )
     intent_id = Column(
         _UUID,
         ForeignKey("outbound_shipment_intents.id", ondelete="RESTRICT"),
-        nullable=False,
+        nullable=True,
     )
     amount = Column(Numeric(18, 4), nullable=False)
     currency = Column(String(3), nullable=False)
@@ -241,6 +282,29 @@ class PaymentAttempt(Base):
     updated_at = Column(DateTime(timezone=True), nullable=False, server_default=_NOW)
 
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["checkout_estimate_selection_id", "order_id"],
+            [
+                "checkout_shipping_estimate_selections.id",
+                "checkout_shipping_estimate_selections.order_id",
+            ],
+            name="fk_payment_attempts_checkout_selection",
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "(workflow_cohort='legacy_pre_bridge' AND checkout_estimate_selection_id IS NULL AND quote_id IS NOT NULL AND quote_selection_id IS NOT NULL AND quote_option_id IS NOT NULL AND intent_id IS NOT NULL) OR (workflow_cohort='domestic_checkout_v1' AND checkout_estimate_selection_id IS NOT NULL AND quote_id IS NULL AND quote_selection_id IS NULL AND quote_option_id IS NULL AND intent_id IS NULL)",
+            name="ck_payment_attempts_binding_family",
+        ),
+        CheckConstraint(
+            "workflow_cohort<>'domestic_checkout_v1' OR (amount=round(amount,2) AND amount<=99999999.99)",
+            name="ck_payment_attempts_checkout_money",
+        ),
+        UniqueConstraint(
+            "id",
+            "order_id",
+            "checkout_estimate_selection_id",
+            name="uq_payment_attempts_checkout_membership_target",
+        ),
         CheckConstraint(
             "amount NOT IN ('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric) "
             "AND amount > 0 AND currency ~ '^[A-Z]{3}$'",
@@ -320,8 +384,40 @@ class PaymentAttemptReservation(Base):
         ForeignKey("stock_reservations.id", ondelete="RESTRICT"),
         primary_key=True,
     )
+    order_id = Column(_UUID, nullable=False)
+    order_item_id = Column(_UUID, nullable=False)
+    checkout_estimate_selection_id = Column(_UUID, nullable=False)
     creation_txid = Column(BigInteger, nullable=False, server_default=FetchedValue())
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=_NOW)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["attempt_id", "order_id", "checkout_estimate_selection_id"],
+            [
+                "payment_attempts.id",
+                "payment_attempts.order_id",
+                "payment_attempts.checkout_estimate_selection_id",
+            ],
+            name="fk_payment_attempt_reservations_attempt",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            [
+                "reservation_id",
+                "order_id",
+                "order_item_id",
+                "checkout_estimate_selection_id",
+            ],
+            [
+                "stock_reservations.id",
+                "stock_reservations.order_id",
+                "stock_reservations.order_item_id",
+                "stock_reservations.checkout_estimate_selection_id",
+            ],
+            name="fk_payment_attempt_reservations_reservation",
+            ondelete="RESTRICT",
+        ),
+    )
 
 
 class PaymentAttemptEvidence(Base):

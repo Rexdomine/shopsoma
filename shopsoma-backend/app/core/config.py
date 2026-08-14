@@ -115,6 +115,40 @@ class Settings(BaseSettings):
     DHL_DOMESTIC_PAYMENT_WINDOW_SECONDS: int = Field(default=1800, ge=300, le=3600)
     DHL_DOMESTIC_AUTH_GRACE_SECONDS: int = Field(default=900, ge=60, le=1800)
 
+    # Checkout prerequisites remain inert until a separately approved rollout.
+    DOMESTIC_CHECKOUT_PREREQUISITES_ENABLED: bool = False
+    DOMESTIC_CHECKOUT_COHORT_ALLOWLIST: str = ""
+    DOMESTIC_CHECKOUT_COHORT_PERCENTAGE: int = Field(default=0, ge=0, le=100)
+    CHECKOUT_CAPABILITY_ACTIVE_PEPPER_VERSION: Optional[int] = None
+    CHECKOUT_CAPABILITY_ACTIVE_PEPPER: SecretStr = SecretStr("")
+    CHECKOUT_CAPABILITY_PREVIOUS_PEPPER_VERSION: Optional[int] = None
+    CHECKOUT_CAPABILITY_PREVIOUS_PEPPER: SecretStr = SecretStr("")
+
+    @property
+    def domestic_checkout_cohort_ids(self) -> frozenset[UUID]:
+        raw = self.DOMESTIC_CHECKOUT_COHORT_ALLOWLIST
+        if not raw:
+            return frozenset()
+        values = raw.split(",")
+        if any(value != value.strip() or not value for value in values):
+            return frozenset()
+        try:
+            parsed = tuple(UUID(value) for value in values)
+        except ValueError:
+            return frozenset()
+        if len(set(parsed)) != len(parsed) or any(
+            str(item) != raw_item for item, raw_item in zip(parsed, values)
+        ):
+            return frozenset()
+        return frozenset(parsed)
+
+    @property
+    def checkout_capability_configured(self) -> bool:
+        return bool(
+            self.CHECKOUT_CAPABILITY_ACTIVE_PEPPER_VERSION
+            and self.CHECKOUT_CAPABILITY_ACTIVE_PEPPER.get_secret_value()
+        )
+
     @property
     def dhl_base_url(self) -> str:
         """Return the fixed official MyDHL API URL for the selected environment."""
