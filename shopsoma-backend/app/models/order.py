@@ -15,10 +15,11 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    event,
     text,
 )
 from sqlalchemy.dialects.postgresql import UUID, JSONB
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import Session, relationship
 from sqlalchemy.sql import func
 import uuid
 import enum
@@ -281,3 +282,34 @@ class OrderItem(Base):
 
     def __repr__(self):
         return f"<OrderItem {self.product_title} x{self.quantity}>"
+
+
+@event.listens_for(Session, "before_flush")
+def _write_gate_off_order_compatibility(session, _flush_context, _instances) -> None:
+    """Classify new ordinary orders and project ownership in one transaction."""
+    from app.models.order_guest_capability import OrderCurrentOwner
+
+    new_orders = [row for row in session.new if isinstance(row, Order)]
+    pending_owner_ids = {
+        row.order_id for row in session.new if isinstance(row, OrderCurrentOwner)
+    }
+
+    for order in new_orders:
+        if order.id is None:
+            order.id = uuid.uuid4()
+        if order.workflow_cohort is None and order.workflow_policy_version is None:
+            order.workflow_cohort = "legacy_pre_bridge"
+            order.workflow_policy_version = "legacy_pre_bridge_v1"
+        if (
+            order.checkout_access_mode is None
+            and order.workflow_cohort == "legacy_pre_bridge"
+        ):
+            order.checkout_access_mode = "authenticated"
+        if order.id not in pending_owner_ids:
+            session.add(
+                OrderCurrentOwner(
+                    order_id=order.id,
+                    original_customer_id=order.customer_id,
+                )
+            )
+            pending_owner_ids.add(order.id)

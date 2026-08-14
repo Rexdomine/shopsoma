@@ -816,6 +816,9 @@ async def create_order(
     new_order = Order(
         order_number=generate_order_number(),
         customer_id=customer_id_for_order,
+        checkout_access_mode=(
+            "authenticated" if current_user is not None else "guest_capability"
+        ),
         shipping_address_id=shipping_address_id,
         billing_address_id=billing_address_id,
         currency=checkout_currency,
