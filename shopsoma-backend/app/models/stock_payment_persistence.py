@@ -384,13 +384,21 @@ class PaymentAttemptReservation(Base):
         ForeignKey("stock_reservations.id", ondelete="RESTRICT"),
         primary_key=True,
     )
-    order_id = Column(_UUID, nullable=False)
-    order_item_id = Column(_UUID, nullable=False)
-    checkout_estimate_selection_id = Column(_UUID, nullable=False)
+    membership_family = Column(String(30), nullable=False, server_default="legacy_f9")
+    order_id = Column(_UUID, nullable=True)
+    order_item_id = Column(_UUID, nullable=True)
+    checkout_estimate_selection_id = Column(_UUID, nullable=True)
     creation_txid = Column(BigInteger, nullable=False, server_default=FetchedValue())
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=_NOW)
 
     __table_args__ = (
+        CheckConstraint(
+            "(membership_family='legacy_f9' AND order_id IS NULL AND "
+            "order_item_id IS NULL AND checkout_estimate_selection_id IS NULL) OR "
+            "(membership_family='domestic_checkout_v1' AND order_id IS NOT NULL AND "
+            "order_item_id IS NOT NULL AND checkout_estimate_selection_id IS NOT NULL)",
+            name="ck_payment_attempt_reservations_family_truth",
+        ),
         ForeignKeyConstraint(
             ["attempt_id", "order_id", "checkout_estimate_selection_id"],
             [

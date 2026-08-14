@@ -17,6 +17,7 @@ from sqlalchemy import (
     UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import BYTEA, UUID
+from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
 from app.core.base import Base
@@ -97,7 +98,7 @@ class OrderCurrentOwner(Base):
     __tablename__ = "order_current_owners"
 
     order_id = Column(
-        _UUID, ForeignKey("orders.id", ondelete="RESTRICT"), primary_key=True
+        _UUID, ForeignKey("orders.id", ondelete="CASCADE"), primary_key=True
     )
     original_customer_id = Column(
         _UUID, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
@@ -110,6 +111,8 @@ class OrderCurrentOwner(Base):
     claimed_at = Column(DateTime(timezone=True))
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=_NOW)
     row_version = Column(Integer, nullable=False, server_default="1")
+
+    order = relationship("Order", back_populates="current_owner")
 
     __table_args__ = (
         ForeignKeyConstraint(

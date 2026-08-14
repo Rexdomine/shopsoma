@@ -8,6 +8,7 @@ from sqlalchemy import func, select
 
 from app.models.order import Order
 from app.models.order_guest_capability import OrderCurrentOwner
+from app.models.user import User, UserRole
 
 
 def _order(customer_id, **overrides) -> Order:
@@ -64,6 +65,37 @@ async def test_guest_order_write_preserves_guest_ownership_in_legacy_truth(
     owner = await db_session.get(OrderCurrentOwner, order.id)
     assert owner is not None
     assert owner.original_customer_id == order.customer_id
+
+
+@pytest.mark.asyncio
+async def test_bulk_order_flush_inserts_generated_owners_after_pending_orders(
+    db_session, customer_user
+) -> None:
+    pending_customer = User(
+        id=uuid.uuid4(),
+        email=f"compat-{uuid.uuid4().hex}@test.com",
+        full_name="Compatibility Customer",
+        role=UserRole.CUSTOMER,
+        email_verified=True,
+        is_active=True,
+    )
+    orders = [
+        _order(customer_user["user"].id),
+        _order(pending_customer.id),
+        _order(customer_user["user"].id),
+    ]
+    db_session.add_all([pending_customer, *orders])
+
+    await db_session.flush()
+
+    owners = (
+        await db_session.scalars(
+            select(OrderCurrentOwner).where(
+                OrderCurrentOwner.order_id.in_([order.id for order in orders])
+            )
+        )
+    ).all()
+    assert {owner.order_id for owner in owners} == {order.id for order in orders}
 
 
 @pytest.mark.asyncio

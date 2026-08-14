@@ -175,6 +175,12 @@ class Order(Base):
     payments = relationship("Payment", back_populates="order")
     returns = relationship("Return", back_populates="order")
     pickups = relationship("VendorPickup", back_populates="order")
+    current_owner = relationship(
+        "OrderCurrentOwner",
+        back_populates="order",
+        uselist=False,
+        passive_deletes="all",
+    )
 
     def __repr__(self):
         return f"<Order {self.order_number}>"
@@ -308,7 +314,7 @@ def _write_gate_off_order_compatibility(session, _flush_context, _instances) -> 
         if order.id not in pending_owner_ids:
             session.add(
                 OrderCurrentOwner(
-                    order_id=order.id,
+                    order=order,
                     original_customer_id=order.customer_id,
                 )
             )

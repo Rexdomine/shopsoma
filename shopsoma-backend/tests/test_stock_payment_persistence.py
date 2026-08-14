@@ -167,6 +167,10 @@ RESERVATION_COLUMNS = {
     "id",
     "order_id",
     "order_item_id",
+    "workflow_cohort",
+    "checkout_estimate_selection_id",
+    "inventory_subject_kind",
+    "inventory_subject_id",
     "customer_id",
     "quote_id",
     "quote_selection_id",
@@ -195,6 +199,8 @@ RESERVATION_COLUMNS = {
 ATTEMPT_COLUMNS = {
     "id",
     "order_id",
+    "workflow_cohort",
+    "checkout_estimate_selection_id",
     "customer_id",
     "quote_id",
     "quote_selection_id",
@@ -226,6 +232,10 @@ ATTEMPT_COLUMNS = {
 MEMBERSHIP_COLUMNS = {
     "attempt_id",
     "reservation_id",
+    "membership_family",
+    "order_id",
+    "order_item_id",
+    "checkout_estimate_selection_id",
     "creation_txid",
     "created_at",
 }

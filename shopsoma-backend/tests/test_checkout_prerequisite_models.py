@@ -70,8 +70,18 @@ def test_composite_topology_contains_exact_membership_targets() -> None:
     )
 
     membership = PaymentAttemptReservation.__table__
-    assert {"order_id", "order_item_id", "checkout_estimate_selection_id"} <= set(
-        membership.columns.keys()
+    assert {
+        "membership_family",
+        "order_id",
+        "order_item_id",
+        "checkout_estimate_selection_id",
+    } <= set(membership.columns.keys())
+    assert membership.c.membership_family.nullable is False
+    assert membership.c.order_id.nullable is True
+    assert membership.c.order_item_id.nullable is True
+    assert membership.c.checkout_estimate_selection_id.nullable is True
+    assert "ck_payment_attempt_reservations_family_truth" in _constraint_names(
+        membership
     )
     assert "uq_payment_attempts_checkout_membership_target" in _constraint_names(
         PaymentAttempt.__table__
@@ -109,6 +119,17 @@ def test_composite_topology_contains_exact_membership_targets() -> None:
             "stock_reservations.checkout_estimate_selection_id",
         ),
     ) in tuples
+
+
+def test_current_owner_is_an_order_dependent_projection() -> None:
+    from app.models.order_guest_capability import OrderCurrentOwner
+
+    order_foreign_key = next(
+        fk
+        for fk in OrderCurrentOwner.__table__.foreign_key_constraints
+        if tuple(element.parent.name for element in fk.elements) == ("order_id",)
+    )
+    assert order_foreign_key.ondelete == "CASCADE"
 
 
 def test_schema_models_name_every_check_unique_and_composite_fk() -> None:

@@ -14,7 +14,10 @@ from sqlalchemy.engine import make_url
 
 
 REVISION = "e8c0a2d4f6b8"
-HEAD = "f9d1b3e5a7c9"
+HEAD = "a2b3c4d5e6f7"
+HEAD_PARENT = "a1b2c3d4e5f6"
+HEAD_GRANDPARENT = "a0b1c2d3e4f5"
+F9_REVISION = "f9d1b3e5a7c9"
 PARENT = "d7b9f1c3e5a8"
 MIGRATION = (
     Path(__file__).parents[1]
@@ -50,7 +53,10 @@ def test_customer_quote_revision_is_single_linear_head_and_owns_explicit_ddl() -
     config.set_main_option("script_location", str(root / "alembic"))
     script = ScriptDirectory.from_config(config)
     assert script.get_heads() == [HEAD]
-    assert script.get_revision(HEAD).down_revision == REVISION
+    assert script.get_revision(HEAD).down_revision == HEAD_PARENT
+    assert script.get_revision(HEAD_PARENT).down_revision == HEAD_GRANDPARENT
+    assert script.get_revision(HEAD_GRANDPARENT).down_revision == F9_REVISION
+    assert script.get_revision(F9_REVISION).down_revision == REVISION
     revision = script.get_revision(REVISION)
     assert revision is not None and revision.down_revision == PARENT
 

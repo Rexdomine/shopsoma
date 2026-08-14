@@ -633,6 +633,7 @@ def test_postgresql_head_has_exact_orm_ddl_parity(disposable_m2_database) -> Non
             "intent_id",
         },
         "payment_attempt_reservations": {
+            "membership_family",
             "order_id",
             "order_item_id",
             "checkout_estimate_selection_id",
@@ -1025,6 +1026,83 @@ def test_postgresql_inventory_snapshot_and_original_owner_are_immutable(
     engine.dispose()
 
 
+def test_postgresql_order_delete_cascades_only_its_owner_projection(
+    disposable_m2_database,
+) -> None:
+    app_url, sync_url = disposable_m2_database
+    _run_alembic(app_url, "upgrade", REVISIONS[-1])
+    engine = create_engine(sync_url)
+    with engine.begin() as connection:
+        first = {"order": uuid.uuid4(), "customer": uuid.uuid4()}
+        second = {"order": uuid.uuid4(), "customer": uuid.uuid4()}
+        other_customer = uuid.uuid4()
+        for position, ids in enumerate((first, second), start=1):
+            connection.execute(
+                text(
+                    "INSERT INTO users (id,email,full_name,role,is_guest_created) "
+                    "VALUES (:customer,:email,'Owner projection customer','CUSTOMER',false)"
+                ),
+                {**ids, "email": f"m2-owner-{uuid.uuid4().hex}@example.test"},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO orders (id,order_number,customer_id,workflow_cohort,"
+                    "workflow_policy_version,checkout_access_mode,subtotal,shipping_cost,"
+                    "tax_amount,discount_amount,total_amount,currency,payment_status,"
+                    "fulfillment_status) VALUES (:order,:number,:customer,"
+                    "'domestic_checkout_v1','domestic_checkout_v1','authenticated',"
+                    "10,0,0,0,10,'NGN','PENDING','order_received')"
+                ),
+                {**ids, "number": f"M2-OWNER-{position}-{uuid.uuid4().hex[:8]}"},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO order_current_owners (order_id,original_customer_id) "
+                    "VALUES (:order,:customer)"
+                ),
+                ids,
+            )
+        connection.execute(
+            text(
+                "INSERT INTO users (id,email,full_name,role,is_guest_created) "
+                "VALUES (:customer,:email,'Other owner','CUSTOMER',false)"
+            ),
+            {
+                "customer": other_customer,
+                "email": f"m2-other-owner-{uuid.uuid4().hex}@example.test",
+            },
+        )
+
+        _assert_rejected(
+            connection,
+            "DELETE FROM order_current_owners WHERE order_id=:order",
+            first,
+        )
+        _assert_rejected(
+            connection,
+            "UPDATE order_current_owners SET original_customer_id=:other "
+            "WHERE order_id=:order",
+            {**first, "other": other_customer},
+        )
+        connection.execute(text("DELETE FROM orders WHERE id=:order"), first)
+
+        assert (
+            connection.scalar(
+                text("SELECT count(*) FROM order_current_owners WHERE order_id=:order"),
+                first,
+            )
+            == 0
+        )
+        assert (
+            connection.scalar(
+                text("SELECT count(*) FROM order_current_owners WHERE order_id=:order"),
+                second,
+            )
+            == 1
+        )
+    engine.dispose()
+
+
 def test_postgresql_compatibility_backfill_can_establish_initial_inventory_snapshot(
     disposable_m2_database,
 ) -> None:
@@ -1085,9 +1163,9 @@ def test_f9_triggers_accept_valid_domestic_binding_family(
         connection.execute(
             text(
                 "INSERT INTO payment_attempt_reservations "
-                "(attempt_id,reservation_id,order_id,order_item_id,"
+                "(attempt_id,reservation_id,membership_family,order_id,order_item_id,"
                 "checkout_estimate_selection_id) VALUES "
-                "(:attempt,:reservation,:order,:item,:selection)"
+                "(:attempt,:reservation,'domestic_checkout_v1',:order,:item,:selection)"
             ),
             ids,
         )
@@ -1128,9 +1206,9 @@ def test_postgresql_direct_sql_ownership_and_binding_matrix(
     )
     membership_insert = (
         "INSERT INTO payment_attempt_reservations "
-        "(attempt_id,reservation_id,order_id,order_item_id,"
+        "(attempt_id,reservation_id,membership_family,order_id,order_item_id,"
         "checkout_estimate_selection_id) VALUES "
-        "(:attempt,:reservation,:order,:item,:selection)"
+        "(:attempt,:reservation,'domestic_checkout_v1',:order,:item,:selection)"
     )
 
     with engine.begin() as connection:
@@ -1242,4 +1320,81 @@ def test_postgresql_direct_sql_ownership_and_binding_matrix(
             connection.scalar(text("SELECT count(*) FROM payment_attempt_reservations"))
             == 2
         )
+    engine.dispose()
+
+
+def test_postgresql_membership_families_preserve_f9_and_reject_mixed_shapes(
+    disposable_m2_database,
+) -> None:
+    app_url, sync_url = disposable_m2_database
+    _run_alembic(app_url, "upgrade", REVISIONS[-1])
+    engine = create_engine(sync_url)
+    with engine.begin() as connection:
+        ids = _install_domestic_tuple(connection)
+        ids["attempt"] = uuid.uuid4()
+        _insert_domestic_reservation(connection, ids)
+        _insert_domestic_attempt(connection, ids)
+
+        connection.execute(
+            text(
+                "INSERT INTO payment_attempt_reservations (attempt_id,reservation_id) "
+                "VALUES (:attempt,:reservation)"
+            ),
+            ids,
+        )
+        assert connection.execute(
+            text(
+                "SELECT membership_family,order_id,order_item_id,"
+                "checkout_estimate_selection_id FROM payment_attempt_reservations "
+                "WHERE attempt_id=:attempt AND reservation_id=:reservation"
+            ),
+            ids,
+        ).one() == ("legacy_f9", None, None, None)
+        _assert_rejected(
+            connection,
+            "UPDATE payment_attempt_reservations SET membership_family='legacy_f9' "
+            "WHERE attempt_id=:attempt AND reservation_id=:reservation",
+            ids,
+        )
+        _assert_rejected(
+            connection,
+            "DELETE FROM payment_attempt_reservations "
+            "WHERE attempt_id=:attempt AND reservation_id=:reservation",
+            ids,
+        )
+
+        complete = _install_domestic_tuple(connection)
+        complete.update(attempt=uuid.uuid4(), reservation=uuid.uuid4())
+        _insert_domestic_reservation(connection, complete)
+        _insert_domestic_attempt(connection, complete)
+        connection.execute(
+            text(
+                "INSERT INTO payment_attempt_reservations "
+                "(attempt_id,reservation_id,membership_family,order_id,order_item_id,"
+                "checkout_estimate_selection_id) VALUES "
+                "(:attempt,:reservation,'domestic_checkout_v1',:order,:item,:selection)"
+            ),
+            complete,
+        )
+        connection.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+        for family, order_id, item_id, selection_id in (
+            ("legacy_f9", ids["order"], None, None),
+            ("domestic_checkout_v1", ids["order"], None, ids["selection"]),
+            ("unknown", None, None, None),
+        ):
+            _assert_rejected(
+                connection,
+                "INSERT INTO payment_attempt_reservations "
+                "(attempt_id,reservation_id,membership_family,order_id,order_item_id,"
+                "checkout_estimate_selection_id) VALUES "
+                "(:attempt,:reservation,:family,:order,:item,:selection)",
+                {
+                    **ids,
+                    "family": family,
+                    "order": order_id,
+                    "item": item_id,
+                    "selection": selection_id,
+                },
+            )
     engine.dispose()
