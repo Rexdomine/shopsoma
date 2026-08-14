@@ -19,6 +19,24 @@ MIGRATION = (
     / "versions"
     / "f9d1b3e5a7c9_add_stock_payment_persistence.py"
 )
+CURRENT_SCHEMA_MIGRATIONS = (
+    (MIGRATION, "f9d1b3e5a7c9", "e8c0a2d4f6b8"),
+    (
+        MIGRATION.parent / "a0b1c2d3e4f5_checkout_prerequisite_expand.py",
+        "a0b1c2d3e4f5",
+        "f9d1b3e5a7c9",
+    ),
+    (
+        MIGRATION.parent / "a1b2c3d4e5f6_checkout_prerequisite_classify.py",
+        "a1b2c3d4e5f6",
+        "a0b1c2d3e4f5",
+    ),
+    (
+        MIGRATION.parent / "a2b3c4d5e6f7_checkout_prerequisite_validate.py",
+        "a2b3c4d5e6f7",
+        "a1b2c3d4e5f6",
+    ),
+)
 
 
 def _source() -> str:
@@ -75,7 +93,22 @@ def test_lane_2a_4b_migration_names_match_orm_constraints_and_indexes() -> None:
         StockReservation,
     )
 
-    source = _source()
+    sources = []
+    for path, revision, down_revision in CURRENT_SCHEMA_MIGRATIONS:
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        assignments = {
+            node.targets[0].id: ast.literal_eval(node.value)
+            for node in tree.body
+            if isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id in {"revision", "down_revision"}
+        }
+        assert assignments == {"revision": revision, "down_revision": down_revision}
+        sources.append(source)
+    authoritative_source = "\n".join(sources)
+
     for model in (
         StockReservation,
         PaymentAttempt,
@@ -84,9 +117,9 @@ def test_lane_2a_4b_migration_names_match_orm_constraints_and_indexes() -> None:
     ):
         for constraint in model.__table__.constraints:
             if constraint.name:
-                assert constraint.name in source
+                assert constraint.name in authoritative_source
         for index in model.__table__.indexes:
-            assert index.name in source
+            assert index.name in authoritative_source
 
 
 def test_lane_2a_4b_model_trigger_ddl_exactly_matches_frozen_migration() -> None:
