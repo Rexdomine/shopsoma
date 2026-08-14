@@ -296,6 +296,13 @@ def _write_gate_off_order_compatibility(session, _flush_context, _instances) -> 
     from app.models.order_guest_capability import OrderCurrentOwner
 
     new_orders = [row for row in session.new if isinstance(row, Order)]
+    database_owner_authority_active = False
+    if new_orders and session.get_bind().dialect.name == "postgresql":
+        database_owner_authority_active = bool(
+            session.execute(
+                text("SELECT EXISTS (SELECT 1 FROM order_workflow_migration_runs)")
+            ).scalar_one()
+        )
     pending_owner_ids = {
         row.order_id for row in session.new if isinstance(row, OrderCurrentOwner)
     }
@@ -311,7 +318,7 @@ def _write_gate_off_order_compatibility(session, _flush_context, _instances) -> 
             and order.workflow_cohort == "legacy_pre_bridge"
         ):
             order.checkout_access_mode = "authenticated"
-        if order.id not in pending_owner_ids:
+        if not database_owner_authority_active and order.id not in pending_owner_ids:
             session.add(
                 OrderCurrentOwner(
                     order=order,

@@ -7,6 +7,7 @@ from sqlalchemy import (
     CHAR,
     CheckConstraint,
     Column,
+    DDL,
     DateTime,
     ForeignKey,
     ForeignKeyConstraint,
@@ -16,10 +17,15 @@ from sqlalchemy import (
     String,
     UniqueConstraint,
 )
+from sqlalchemy import event
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
 
 from app.core.base import Base
+from app.models.checkout_prerequisite_ddl import (
+    M2_CHECKOUT_DROP_DDL,
+    M2_CHECKOUT_TRIGGER_DDL,
+)
 
 _UUID = UUID(as_uuid=True)
 _NOW = func.statement_timestamp()
@@ -255,3 +261,7 @@ class OrderInventoryCoverage(Base):
         ),
         Index("ix_order_inventory_coverage_policy", "order_id", "inventory_policy"),
     )
+
+
+event.listen(Base.metadata, "after_create", DDL(M2_CHECKOUT_TRIGGER_DDL))
+event.listen(Base.metadata, "before_drop", DDL(M2_CHECKOUT_DROP_DDL))

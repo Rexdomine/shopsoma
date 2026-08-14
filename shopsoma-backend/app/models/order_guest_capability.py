@@ -116,9 +116,9 @@ class OrderCurrentOwner(Base):
 
     __table_args__ = (
         ForeignKeyConstraint(
-            ["claim_capability_id"],
-            ["order_guest_capabilities.id"],
-            name="fk_order_current_owners_claim_capability",
+            ["claim_capability_id", "order_id"],
+            ["order_guest_capabilities.id", "order_guest_capabilities.order_id"],
+            name="fk_order_current_owners_claim_capability_order",
             ondelete="RESTRICT",
             deferrable=True,
             initially="DEFERRED",
@@ -183,6 +183,7 @@ class OrderGuestCapability(Base):
         UniqueConstraint(
             "replaced_by_id", name="uq_order_guest_capabilities_replacement"
         ),
+        UniqueConstraint("id", "order_id", name="uq_order_guest_capabilities_id_order"),
         Index(
             "ix_order_guest_capabilities_scope_expiry",
             "order_id",

@@ -363,6 +363,8 @@ def test_lane_2a_4b_models_expose_database_enforced_contracts() -> None:
 async def test_lane_2a_4b_schema_installs_all_authoritative_triggers(
     db_session,
 ) -> None:
+    from app.models.stock_payment_persistence import STOCK_PAYMENT_TRIGGER_DDLS
+
     function_names = [
         "validate_stock_reservation_write",
         "protect_reserved_inventory",
@@ -383,7 +385,7 @@ async def test_lane_2a_4b_schema_installs_all_authoritative_triggers(
     )
     assert functions == set(function_names)
 
-    trigger_names = [
+    frozen_f9_trigger_names = [
         "trg_stock_reservations_validate",
         "trg_products_reserved_inventory",
         "trg_product_variants_reserved_inventory",
@@ -397,6 +399,29 @@ async def test_lane_2a_4b_schema_installs_all_authoritative_triggers(
         "trg_payment_attempt_reservations_exact_set",
         "trg_payment_attempt_evidence_validate",
     ]
+    frozen_f9_ddl = "\n".join(STOCK_PAYMENT_TRIGGER_DDLS)
+    for trigger_name in frozen_f9_trigger_names:
+        assert f"TRIGGER {trigger_name}" in frozen_f9_ddl
+
+    current_trigger_names = [
+        "trg_products_reserved_inventory",
+        "trg_product_variants_reserved_inventory",
+        "trg_size_stocks_reserved_inventory",
+        "trg_variations_reserved_inventory",
+        "trg_order_items_reserved_truth",
+        "trg_orders_reserved_payment_truth",
+        "trg_payment_attempt_reservations_validate",
+        "trg_payment_attempts_exact_reservations",
+        "trg_payment_attempt_reservations_exact_set",
+        "trg_payment_attempt_evidence_validate",
+        "trg_payment_attempt_reservations_validate_domestic",
+        "trg_stock_reservations_validate_legacy",
+        "trg_stock_reservations_validate_delete",
+        "trg_stock_reservations_validate_domestic",
+        "trg_payment_attempts_validate_legacy",
+        "trg_payment_attempts_validate_delete",
+        "trg_payment_attempts_validate_domestic",
+    ]
     triggers = set(
         (
             await db_session.execute(
@@ -404,11 +429,11 @@ async def test_lane_2a_4b_schema_installs_all_authoritative_triggers(
                     "SELECT tgname FROM pg_trigger WHERE NOT tgisinternal "
                     "AND tgname = ANY(:names)"
                 ),
-                {"names": trigger_names},
+                {"names": current_trigger_names},
             )
         ).scalars()
     )
-    assert triggers == set(trigger_names)
+    assert triggers == set(current_trigger_names)
 
 
 @pytest.mark.asyncio
