@@ -272,38 +272,44 @@ def test_f9_program_is_preserved_and_downgrade_restores_exact_topology(
         head_triggers = trigger_program(connection)
     assert installed_functions == expected_functions
     assert installed_triggers == expected_triggers
-    assert (
-        head_triggers[("stock_reservations", "trg_stock_reservations_validate_legacy")][
-            0
-        ]
-        == "validate_stock_reservation_write"
-    )
+    for operation in ("insert", "update"):
+        assert (
+            head_triggers[
+                (
+                    "stock_reservations",
+                    f"trg_stock_reservations_validate_legacy_{operation}",
+                )
+            ][0]
+            == "validate_stock_reservation_write"
+        )
     assert (
         head_triggers[("stock_reservations", "trg_stock_reservations_validate_delete")][
             0
         ]
         == "validate_stock_reservation_write"
     )
-    assert (
-        head_triggers[("payment_attempts", "trg_payment_attempts_validate_legacy")][0]
-        == "validate_payment_attempt_write"
-    )
+    for operation in ("insert", "update"):
+        assert (
+            head_triggers[
+                (
+                    "payment_attempts",
+                    f"trg_payment_attempts_validate_legacy_{operation}",
+                )
+            ][0]
+            == "validate_payment_attempt_write"
+        )
     assert (
         head_triggers[("payment_attempts", "trg_payment_attempts_validate_delete")][0]
         == "validate_payment_attempt_write"
     )
-    assert (
-        "INSERT OR UPDATE"
-        in head_triggers[
-            ("stock_reservations", "trg_stock_reservations_validate_legacy")
-        ][1]
-    )
-    assert (
-        "INSERT OR UPDATE"
-        in head_triggers[("payment_attempts", "trg_payment_attempts_validate_legacy")][
-            1
-        ]
-    )
+    for table in ("stock_reservations", "payment_attempts"):
+        for operation in ("insert", "update"):
+            definition = head_triggers[
+                (table, f"trg_{table}_validate_legacy_{operation}")
+            ][1]
+            assert f"BEFORE {operation.upper()}" in definition
+            if operation == "insert":
+                assert "old.workflow_cohort" not in definition.lower()
     assert (
         "BEFORE DELETE"
         in head_triggers[
@@ -965,7 +971,9 @@ def test_finding3_postgresql_migration_and_orm_catalogs_have_exact_parity(
         migrated.dispose()
 
 
-def _install_domestic_tuple(connection, *, include_selection=True):
+def _install_domestic_tuple(
+    connection, *, include_selection=True, estimate_expiry="30 minutes"
+):
     ids = {
         name: uuid.uuid4()
         for name in (
@@ -1041,7 +1049,7 @@ def _install_domestic_tuple(connection, *, include_selection=True):
             "source_kind,source_command,idempotency_key,request_fingerprint,schema_version,"
             "created_by_actor_type,created_by_actor_id) VALUES "
             "(:estimate,:order,:customer,:hash,:hash,'NGN',1800,"
-            "statement_timestamp()+interval '30 minutes','static_domestic_rate',"
+            "clock_timestamp()+CAST(:estimate_expiry AS interval),'static_domestic_rate',"
             "'create_estimate',:estimate_key,:hash,'v1','customer',:actor)"
         ),
         {
@@ -1049,6 +1057,7 @@ def _install_domestic_tuple(connection, *, include_selection=True):
             "hash": "b" * 64,
             "estimate_key": f"e-{uuid.uuid4().hex}",
             "actor": str(ids["customer"]),
+            "estimate_expiry": estimate_expiry,
         },
     )
     connection.execute(
@@ -1111,6 +1120,126 @@ def _assert_deferred_rejected(connection, statement, parameters) -> None:
         connection.execute(text("SET CONSTRAINTS ALL DEFERRED"))
 
 
+def _wait_until_database_time_reaches(engine, deadline) -> None:
+    while True:
+        with engine.connect() as observer:
+            if observer.scalar(
+                text("SELECT clock_timestamp() >= :deadline"), {"deadline": deadline}
+            ):
+                return
+
+
+def test_final_repair_migration_run_truth_is_set_once(disposable_m2_database) -> None:
+    app_url, sync_url = disposable_m2_database
+    _run_alembic(app_url, "upgrade", REVISIONS[-1])
+    engine = create_engine(sync_url)
+    run = uuid.uuid4()
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO order_workflow_migration_runs "
+                "(id,compatibility_writer_release_id,compatibility_writer_started_at,"
+                "migration_revision,deployment_identity,high_watermark_created_at,"
+                "high_watermark_order_id) VALUES "
+                "(:run,'writer',clock_timestamp(),'a1b2c3d4e5f6','deployment',"
+                "clock_timestamp(),:watermark)"
+            ),
+            {"run": run, "watermark": uuid.uuid4()},
+        )
+        for assignment in (
+            "id=:value",
+            "compatibility_writer_release_id='other'",
+            "compatibility_writer_started_at=compatibility_writer_started_at+interval '1 second'",
+            "migration_revision='other'",
+            "deployment_identity='other'",
+            "high_watermark_created_at=high_watermark_created_at+interval '1 second'",
+            "high_watermark_order_id=:value",
+            "created_at=created_at+interval '1 second'",
+        ):
+            _assert_rejected(
+                connection,
+                f"UPDATE order_workflow_migration_runs SET {assignment} WHERE id=:run",
+                {"run": run, "value": uuid.uuid4()},
+            )
+        for assignment in (
+            "classification_cutover_at=clock_timestamp()",
+            "classified_row_count=0",
+            "validated_constraints='exact'",
+        ):
+            _assert_rejected(
+                connection,
+                f"UPDATE order_workflow_migration_runs SET {assignment} WHERE id=:run",
+                {"run": run},
+            )
+        connection.execute(
+            text(
+                "UPDATE order_workflow_migration_runs SET "
+                "classification_cutover_at=clock_timestamp(),classified_row_count=0,"
+                "validated_constraints='exact' WHERE id=:run"
+            ),
+            {"run": run},
+        )
+        for assignment in (
+            "classification_cutover_at=NULL",
+            "classification_cutover_at=classification_cutover_at+interval '1 second'",
+            "classified_row_count=NULL",
+            "classified_row_count=1",
+            "validated_constraints=NULL",
+            "validated_constraints='rewritten'",
+            "deployment_identity=deployment_identity",
+        ):
+            _assert_rejected(
+                connection,
+                f"UPDATE order_workflow_migration_runs SET {assignment} WHERE id=:run",
+                {"run": run},
+            )
+    engine.dispose()
+
+
+def test_final_repair_completed_order_item_insert_requires_exact_coverage(
+    disposable_m2_database,
+) -> None:
+    app_url, sync_url = disposable_m2_database
+    _run_alembic(app_url, "upgrade", REVISIONS[-1])
+    engine = create_engine(sync_url)
+    with engine.begin() as connection:
+        ids = _install_domestic_tuple(connection)
+        _insert_domestic_reservation(connection, ids)
+        connection.execute(
+            text(
+                "INSERT INTO order_inventory_coverage "
+                "(order_item_id,order_id,checkout_estimate_selection_id,inventory_policy,"
+                "reservation_id) VALUES (:item,:order,:selection,'stock_managed',:reservation)"
+            ),
+            ids,
+        )
+        connection.execute(
+            text(
+                "UPDATE orders SET checkout_prerequisites_completed_at=clock_timestamp() "
+                "WHERE id=:order"
+            ),
+            ids,
+        )
+        connection.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+        _assert_deferred_rejected(
+            connection,
+            "INSERT INTO order_items "
+            "(id,order_id,product_id,vendor_id,product_title,quantity,unit_price,subtotal,"
+            "currency,commission_rate,commission_amount,vendor_payout,fulfillment_status,"
+            "inventory_policy,inventory_subject_kind,inventory_subject_id,"
+            "inventory_source_product_id,inventory_source_catalogue_version,"
+            "inventory_source_evidence_hash,inventory_policy_snapshot_at) "
+            "SELECT :new_item,order_id,product_id,vendor_id,product_title,quantity,unit_price,"
+            "subtotal,currency,commission_rate,commission_amount,vendor_payout,fulfillment_status,"
+            "inventory_policy,inventory_subject_kind,inventory_subject_id,"
+            "inventory_source_product_id,inventory_source_catalogue_version,"
+            "inventory_source_evidence_hash,inventory_policy_snapshot_at "
+            "FROM order_items WHERE id=:item",
+            {**ids, "new_item": uuid.uuid4()},
+        )
+    engine.dispose()
+
+
 def _insert_domestic_reservation(connection, ids):
     connection.execute(
         text(
@@ -1151,6 +1280,194 @@ def _insert_domestic_attempt(connection, ids):
             "key": f"pay-{uuid.uuid4().hex}",
         },
     )
+
+
+def test_final_repair_estimate_expiry_is_sampled_after_authoritative_locks(
+    disposable_m2_database,
+) -> None:
+    app_url, sync_url = disposable_m2_database
+    _run_alembic(app_url, "upgrade", REVISIONS[-1])
+    engine = create_engine(sync_url)
+    with engine.begin() as connection:
+        ids = _install_domestic_tuple(
+            connection, include_selection=False, estimate_expiry="2 seconds"
+        )
+        deadline = connection.scalar(
+            text(
+                "SELECT expires_at FROM checkout_shipping_estimates WHERE id=:estimate"
+            ),
+            ids,
+        )
+    blocker = engine.connect()
+    blocker_tx = blocker.begin()
+    blocker.execute(text("SELECT 1 FROM orders WHERE id=:order FOR UPDATE"), ids)
+    started = Event()
+    application_name = f"final-estimate-expiry-{uuid.uuid4().hex}"
+
+    def select_estimate() -> str:
+        with engine.connect() as worker:
+            worker.execute(
+                text("SET application_name=:name"), {"name": application_name}
+            )
+            transaction = worker.begin_nested()
+            started.set()
+            try:
+                worker.execute(
+                    text(
+                        "INSERT INTO checkout_shipping_estimate_selections "
+                        "(id,estimate_id,option_id,order_id,customer_id,selected_by_actor_type,"
+                        "selected_by_actor_id,shipping_amount,currency,source_command,"
+                        "idempotency_key,selected_at) VALUES (:selection,:estimate,:option,"
+                        ":order,:customer,'customer',:actor,1,'NGN','select_estimate',:key,"
+                        "statement_timestamp())"
+                    ),
+                    {
+                        **ids,
+                        "actor": str(ids["customer"]),
+                        "key": f"post-lock-{uuid.uuid4().hex}",
+                    },
+                )
+                transaction.commit()
+                return "committed"
+            except DBAPIError:
+                transaction.rollback()
+                return "rejected"
+
+    try:
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(select_estimate)
+            assert started.wait(timeout=2)
+            _wait_until_postgres_worker_is_lock_blocked(engine, application_name)
+            _wait_until_database_time_reaches(engine, deadline)
+            blocker_tx.commit()
+            assert future.result(timeout=5) == "rejected"
+    finally:
+        if blocker_tx.is_active:
+            blocker_tx.rollback()
+        blocker.close()
+    engine.dispose()
+
+
+def test_final_repair_guest_claim_expiry_is_sampled_after_authoritative_locks(
+    disposable_m2_database,
+) -> None:
+    app_url, sync_url = disposable_m2_database
+    _run_alembic(app_url, "upgrade", REVISIONS[-1])
+    engine = create_engine(sync_url)
+    with engine.begin() as connection:
+        ids = _install_f4_owner(connection)
+        deadline = connection.scalar(
+            text("SELECT clock_timestamp()+interval '2 seconds'")
+        )
+        capability = _insert_f4_capability(connection, ids, expires_at=deadline)
+        sibling = _insert_f4_capability(connection, ids, scope="read_order")
+        claimant = uuid.uuid4()
+        connection.execute(
+            text(
+                "INSERT INTO users (id,email,full_name,role,is_guest_created) "
+                "VALUES (:id,:email,'Expiry claimant','CUSTOMER',false)"
+            ),
+            {"id": claimant, "email": f"expiry-{uuid.uuid4().hex}@example.test"},
+        )
+    blocker = engine.connect()
+    blocker_tx = blocker.begin()
+    blocker.execute(
+        text("SELECT 1 FROM order_current_owners WHERE order_id=:order FOR UPDATE"), ids
+    )
+    started = Event()
+    application_name = f"final-capability-expiry-{uuid.uuid4().hex}"
+
+    def claim() -> str:
+        with engine.connect() as worker:
+            worker.execute(
+                text("SET application_name=:name"), {"name": application_name}
+            )
+            transaction = worker.begin_nested()
+            started.set()
+            try:
+                _claim_f4(worker, ids, capability, claimant, "post-lock-expiry")
+                transaction.commit()
+                return "committed"
+            except DBAPIError:
+                transaction.rollback()
+                return "rejected"
+
+    try:
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(claim)
+            assert started.wait(timeout=2)
+            _wait_until_postgres_worker_is_lock_blocked(engine, application_name)
+            _wait_until_database_time_reaches(engine, deadline)
+            blocker_tx.commit()
+            assert future.result(timeout=5) == "rejected"
+    finally:
+        if blocker_tx.is_active:
+            blocker_tx.rollback()
+        blocker.close()
+    with engine.connect() as connection:
+        assert connection.execute(
+            text(
+                "SELECT current_authenticated_user_id,claim_capability_id,claimed_at,row_version "
+                "FROM order_current_owners WHERE order_id=:order"
+            ),
+            ids,
+        ).one() == (None, None, None, 1)
+        assert connection.execute(
+            text(
+                "SELECT count(*) FILTER (WHERE revoked_at IS NOT NULL),"
+                "count(*) FILTER (WHERE claimed_at IS NOT NULL) "
+                "FROM order_guest_capabilities WHERE id IN (:capability,:sibling)"
+            ),
+            {"capability": capability, "sibling": sibling},
+        ).one() == (0, 0)
+    engine.dispose()
+
+
+def test_final_repair_domestic_rows_cannot_switch_trigger_family(
+    disposable_m2_database,
+) -> None:
+    app_url, sync_url = disposable_m2_database
+    _run_alembic(app_url, "upgrade", REVISIONS[-1])
+    engine = create_engine(sync_url)
+    with engine.begin() as connection:
+        ids = _install_domestic_tuple(connection)
+        ids["attempt"] = uuid.uuid4()
+        _insert_domestic_reservation(connection, ids)
+        _insert_domestic_attempt(connection, ids)
+        connection.execute(
+            text(
+                "INSERT INTO payment_attempt_reservations "
+                "(attempt_id,reservation_id,membership_family,order_id,order_item_id,"
+                "checkout_estimate_selection_id) VALUES "
+                "(:attempt,:reservation,'domestic_checkout_v1',:order,:item,:selection)"
+            ),
+            ids,
+        )
+        for table, target, assignment, expected in (
+            (
+                "stock_reservations",
+                ids["reservation"],
+                "workflow_cohort=NULL,order_item_id=NULL,checkout_estimate_selection_id=NULL,"
+                "inventory_subject_kind=NULL,inventory_subject_id=NULL",
+                "stock reservation identity is immutable",
+            ),
+            (
+                "payment_attempts",
+                ids["attempt"],
+                "workflow_cohort=NULL,checkout_estimate_selection_id=NULL",
+                "payment attempt identity is immutable",
+            ),
+        ):
+            savepoint = connection.begin_nested()
+            try:
+                with pytest.raises(DBAPIError, match=expected):
+                    connection.execute(
+                        text(f"UPDATE {table} SET {assignment} WHERE id=:target"),
+                        {"target": target},
+                    )
+            finally:
+                savepoint.rollback()
+    engine.dispose()
 
 
 def test_finding5_domestic_reservation_allows_active_to_released(
@@ -1801,12 +2118,16 @@ def _normalized_finding5_program(connection):
     ]
     trigger_names = [
         "trg_payment_attempt_reservations_validate_domestic",
-        "trg_stock_reservations_validate_legacy",
+        "trg_stock_reservations_validate_legacy_insert",
+        "trg_stock_reservations_validate_legacy_update",
         "trg_stock_reservations_validate_delete",
-        "trg_stock_reservations_validate_domestic",
-        "trg_payment_attempts_validate_legacy",
+        "trg_stock_reservations_validate_domestic_insert",
+        "trg_stock_reservations_validate_domestic_update",
+        "trg_payment_attempts_validate_legacy_insert",
+        "trg_payment_attempts_validate_legacy_update",
         "trg_payment_attempts_validate_delete",
-        "trg_payment_attempts_validate_domestic",
+        "trg_payment_attempts_validate_domestic_insert",
+        "trg_payment_attempts_validate_domestic_update",
     ]
     functions = dict(
         connection.execute(
@@ -1850,7 +2171,7 @@ def test_finding5_postgresql_migration_and_orm_lifecycle_programs_have_exact_par
         with migrated.connect() as left, model_engine.connect() as right:
             migrated_program = _normalized_finding5_program(left)
             assert len(migrated_program[0]) == 3
-            assert len(migrated_program[1]) == 7
+            assert len(migrated_program[1]) == 11
             assert migrated_program == _normalized_finding5_program(right)
     finally:
         model_engine.dispose()

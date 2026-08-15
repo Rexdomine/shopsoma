@@ -53,7 +53,8 @@ BEGIN
 END $$;
 CREATE TRIGGER trg_payment_attempt_reservations_validate_domestic BEFORE INSERT ON payment_attempt_reservations FOR EACH ROW WHEN (NEW.membership_family='domestic_checkout_v1') EXECUTE FUNCTION validate_domestic_checkout_membership_write();
 DROP TRIGGER trg_stock_reservations_validate ON stock_reservations;
-CREATE TRIGGER trg_stock_reservations_validate_legacy BEFORE INSERT OR UPDATE ON stock_reservations FOR EACH ROW WHEN (NEW.workflow_cohort IS DISTINCT FROM 'domestic_checkout_v1') EXECUTE FUNCTION validate_stock_reservation_write();
+CREATE TRIGGER trg_stock_reservations_validate_legacy_insert BEFORE INSERT ON stock_reservations FOR EACH ROW WHEN (NEW.workflow_cohort IS DISTINCT FROM 'domestic_checkout_v1') EXECUTE FUNCTION validate_stock_reservation_write();
+CREATE TRIGGER trg_stock_reservations_validate_legacy_update BEFORE UPDATE ON stock_reservations FOR EACH ROW WHEN (OLD.workflow_cohort IS DISTINCT FROM 'domestic_checkout_v1' AND NEW.workflow_cohort IS DISTINCT FROM 'domestic_checkout_v1') EXECUTE FUNCTION validate_stock_reservation_write();
 CREATE TRIGGER trg_stock_reservations_validate_delete BEFORE DELETE ON stock_reservations FOR EACH ROW EXECUTE FUNCTION validate_stock_reservation_write();
 CREATE FUNCTION validate_domestic_checkout_reservation_write() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE item record; now_at timestamptz := statement_timestamp();
@@ -135,9 +136,11 @@ BEGIN
  THEN RAISE EXCEPTION 'domestic checkout reservation subject binding is invalid'; END IF;
  RETURN NEW;
 END $$;
-CREATE TRIGGER trg_stock_reservations_validate_domestic BEFORE INSERT OR UPDATE ON stock_reservations FOR EACH ROW WHEN (NEW.workflow_cohort='domestic_checkout_v1') EXECUTE FUNCTION validate_domestic_checkout_reservation_write();
+CREATE TRIGGER trg_stock_reservations_validate_domestic_insert BEFORE INSERT ON stock_reservations FOR EACH ROW WHEN (NEW.workflow_cohort='domestic_checkout_v1') EXECUTE FUNCTION validate_domestic_checkout_reservation_write();
+CREATE TRIGGER trg_stock_reservations_validate_domestic_update BEFORE UPDATE ON stock_reservations FOR EACH ROW WHEN (OLD.workflow_cohort='domestic_checkout_v1' OR NEW.workflow_cohort='domestic_checkout_v1') EXECUTE FUNCTION validate_domestic_checkout_reservation_write();
 DROP TRIGGER trg_payment_attempts_validate ON payment_attempts;
-CREATE TRIGGER trg_payment_attempts_validate_legacy BEFORE INSERT OR UPDATE ON payment_attempts FOR EACH ROW WHEN (NEW.workflow_cohort IS DISTINCT FROM 'domestic_checkout_v1') EXECUTE FUNCTION validate_payment_attempt_write();
+CREATE TRIGGER trg_payment_attempts_validate_legacy_insert BEFORE INSERT ON payment_attempts FOR EACH ROW WHEN (NEW.workflow_cohort IS DISTINCT FROM 'domestic_checkout_v1') EXECUTE FUNCTION validate_payment_attempt_write();
+CREATE TRIGGER trg_payment_attempts_validate_legacy_update BEFORE UPDATE ON payment_attempts FOR EACH ROW WHEN (OLD.workflow_cohort IS DISTINCT FROM 'domestic_checkout_v1' AND NEW.workflow_cohort IS DISTINCT FROM 'domestic_checkout_v1') EXECUTE FUNCTION validate_payment_attempt_write();
 CREATE TRIGGER trg_payment_attempts_validate_delete BEFORE DELETE ON payment_attempts FOR EACH ROW EXECUTE FUNCTION validate_payment_attempt_write();
 CREATE FUNCTION validate_domestic_checkout_payment_attempt_write() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE authoritative record; earliest_reservation_expiry timestamptz; now_at timestamptz := clock_timestamp();
@@ -318,7 +321,8 @@ BEGIN
  NEW.row_version:=1; NEW.creation_txid:=txid_current();
  RETURN NEW;
 END $$;
-CREATE TRIGGER trg_payment_attempts_validate_domestic BEFORE INSERT OR UPDATE ON payment_attempts FOR EACH ROW WHEN (NEW.workflow_cohort='domestic_checkout_v1') EXECUTE FUNCTION validate_domestic_checkout_payment_attempt_write();
+CREATE TRIGGER trg_payment_attempts_validate_domestic_insert BEFORE INSERT ON payment_attempts FOR EACH ROW WHEN (NEW.workflow_cohort='domestic_checkout_v1') EXECUTE FUNCTION validate_domestic_checkout_payment_attempt_write();
+CREATE TRIGGER trg_payment_attempts_validate_domestic_update BEFORE UPDATE ON payment_attempts FOR EACH ROW WHEN (OLD.workflow_cohort='domestic_checkout_v1' OR NEW.workflow_cohort='domestic_checkout_v1') EXECUTE FUNCTION validate_domestic_checkout_payment_attempt_write();
 """
     )
 
@@ -328,7 +332,7 @@ def downgrade() -> None:
         "DO $$ BEGIN IF EXISTS(SELECT 1 FROM order_workflow_migration_runs) OR EXISTS(SELECT 1 FROM order_guest_capabilities) OR EXISTS(SELECT 1 FROM checkout_shipping_estimates) THEN RAISE EXCEPTION 'refusing destructive Milestone 2 downgrade: compatibility writer or audit data exists'; END IF; END $$"
     )
     op.execute(
-        "DROP TRIGGER trg_payment_attempt_reservations_validate_domestic ON payment_attempt_reservations; DROP FUNCTION validate_domestic_checkout_membership_write(); DROP TRIGGER trg_payment_attempts_validate_domestic ON payment_attempts; DROP FUNCTION validate_domestic_checkout_payment_attempt_write(); DROP TRIGGER trg_payment_attempts_validate_delete ON payment_attempts; DROP TRIGGER trg_payment_attempts_validate_legacy ON payment_attempts; CREATE TRIGGER trg_payment_attempts_validate BEFORE INSERT OR UPDATE OR DELETE ON payment_attempts FOR EACH ROW EXECUTE FUNCTION validate_payment_attempt_write(); DROP TRIGGER trg_stock_reservations_validate_domestic ON stock_reservations; DROP FUNCTION validate_domestic_checkout_reservation_write(); DROP TRIGGER trg_stock_reservations_validate_delete ON stock_reservations; DROP TRIGGER trg_stock_reservations_validate_legacy ON stock_reservations; CREATE TRIGGER trg_stock_reservations_validate BEFORE INSERT OR UPDATE OR DELETE ON stock_reservations FOR EACH ROW EXECUTE FUNCTION validate_stock_reservation_write()"
+        "DROP TRIGGER trg_payment_attempt_reservations_validate_domestic ON payment_attempt_reservations; DROP FUNCTION validate_domestic_checkout_membership_write(); DROP TRIGGER trg_payment_attempts_validate_domestic_update ON payment_attempts; DROP TRIGGER trg_payment_attempts_validate_domestic_insert ON payment_attempts; DROP FUNCTION validate_domestic_checkout_payment_attempt_write(); DROP TRIGGER trg_payment_attempts_validate_delete ON payment_attempts; DROP TRIGGER trg_payment_attempts_validate_legacy_update ON payment_attempts; DROP TRIGGER trg_payment_attempts_validate_legacy_insert ON payment_attempts; CREATE TRIGGER trg_payment_attempts_validate BEFORE INSERT OR UPDATE OR DELETE ON payment_attempts FOR EACH ROW EXECUTE FUNCTION validate_payment_attempt_write(); DROP TRIGGER trg_stock_reservations_validate_domestic_update ON stock_reservations; DROP TRIGGER trg_stock_reservations_validate_domestic_insert ON stock_reservations; DROP FUNCTION validate_domestic_checkout_reservation_write(); DROP TRIGGER trg_stock_reservations_validate_delete ON stock_reservations; DROP TRIGGER trg_stock_reservations_validate_legacy_update ON stock_reservations; DROP TRIGGER trg_stock_reservations_validate_legacy_insert ON stock_reservations; CREATE TRIGGER trg_stock_reservations_validate BEFORE INSERT OR UPDATE OR DELETE ON stock_reservations FOR EACH ROW EXECUTE FUNCTION validate_stock_reservation_write()"
     )
     op.execute(
         r"""

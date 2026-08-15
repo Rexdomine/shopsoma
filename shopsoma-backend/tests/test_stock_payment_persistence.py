@@ -415,25 +415,38 @@ async def test_lane_2a_4b_schema_installs_all_authoritative_triggers(
         "trg_payment_attempt_reservations_exact_set",
         "trg_payment_attempt_evidence_validate",
         "trg_payment_attempt_reservations_validate_domestic",
-        "trg_stock_reservations_validate_legacy",
+        "trg_stock_reservations_validate_legacy_insert",
+        "trg_stock_reservations_validate_legacy_update",
         "trg_stock_reservations_validate_delete",
-        "trg_stock_reservations_validate_domestic",
-        "trg_payment_attempts_validate_legacy",
+        "trg_stock_reservations_validate_domestic_insert",
+        "trg_stock_reservations_validate_domestic_update",
+        "trg_payment_attempts_validate_legacy_insert",
+        "trg_payment_attempts_validate_legacy_update",
         "trg_payment_attempts_validate_delete",
-        "trg_payment_attempts_validate_domestic",
+        "trg_payment_attempts_validate_domestic_insert",
+        "trg_payment_attempts_validate_domestic_update",
     ]
-    triggers = set(
+    trigger_definitions = dict(
         (
             await db_session.execute(
                 text(
-                    "SELECT tgname FROM pg_trigger WHERE NOT tgisinternal "
-                    "AND tgname = ANY(:names)"
+                    "SELECT tgname,pg_get_triggerdef(oid,true) FROM pg_trigger "
+                    "WHERE NOT tgisinternal AND tgname = ANY(:names)"
                 ),
                 {"names": current_trigger_names},
             )
-        ).scalars()
+        ).all()
     )
-    assert triggers == set(current_trigger_names)
+    assert set(trigger_definitions) == set(current_trigger_names)
+
+    insert_trigger_names = [
+        "trg_stock_reservations_validate_legacy_insert",
+        "trg_stock_reservations_validate_domestic_insert",
+        "trg_payment_attempts_validate_legacy_insert",
+        "trg_payment_attempts_validate_domestic_insert",
+    ]
+    for trigger_name in insert_trigger_names:
+        assert "OLD." not in trigger_definitions[trigger_name]
 
 
 @pytest.mark.asyncio

@@ -60,6 +60,33 @@ DO $$ DECLARE run_row record; BEGIN
   END IF;
  END IF;
 END $$;
+CREATE FUNCTION protect_order_workflow_migration_run() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ IF TG_OP='DELETE' THEN
+  RAISE EXCEPTION 'workflow migration run mission truth is immutable';
+ END IF;
+ IF (OLD.id,OLD.compatibility_writer_release_id,OLD.compatibility_writer_started_at,
+     OLD.migration_revision,OLD.deployment_identity,OLD.high_watermark_created_at,
+     OLD.high_watermark_order_id,OLD.created_at)
+    IS DISTINCT FROM
+    (NEW.id,NEW.compatibility_writer_release_id,NEW.compatibility_writer_started_at,
+     NEW.migration_revision,NEW.deployment_identity,NEW.high_watermark_created_at,
+     NEW.high_watermark_order_id,NEW.created_at) THEN
+  RAISE EXCEPTION 'workflow migration run mission truth is immutable';
+ END IF;
+ IF OLD.classification_cutover_at IS NULL
+    AND OLD.validated_constraints IS NULL
+    AND OLD.classified_row_count IS NULL
+    AND NEW.classification_cutover_at IS NOT NULL
+    AND NEW.validated_constraints IS NOT NULL
+    AND NEW.classified_row_count IS NOT NULL THEN
+  RETURN NEW;
+ END IF;
+ RAISE EXCEPTION 'workflow migration run finalization is set once';
+END $$;
+CREATE TRIGGER trg_order_workflow_migration_runs_truth
+BEFORE UPDATE OR DELETE ON order_workflow_migration_runs
+FOR EACH ROW EXECUTE FUNCTION protect_order_workflow_migration_run();
 ALTER TABLE orders ADD CONSTRAINT uq_orders_workflow_truth UNIQUE(id,workflow_cohort,workflow_policy_version,checkout_access_mode), ADD CONSTRAINT ck_orders_workflow_cohort CHECK(workflow_cohort IN ('legacy_pre_bridge','legacy_ambiguous_quarantined','domestic_checkout_v1')) NOT VALID, ADD CONSTRAINT ck_orders_workflow_policy_version CHECK(workflow_policy_version ~ '^[!-~]{1,40}$') NOT VALID, ADD CONSTRAINT ck_orders_checkout_access_mode CHECK(checkout_access_mode IN ('authenticated','guest_capability','legacy_quarantined') AND ((workflow_cohort='legacy_ambiguous_quarantined' AND workflow_policy_version='legacy_quarantine_v1' AND checkout_access_mode='legacy_quarantined') OR (workflow_cohort<>'legacy_ambiguous_quarantined' AND checkout_access_mode<>'legacy_quarantined'))) NOT VALID;
 ALTER TABLE order_workflow_classifications ADD CONSTRAINT fk_order_workflow_classifications_order_truth FOREIGN KEY(order_id,cohort,policy_version,access_mode) REFERENCES orders(id,workflow_cohort,workflow_policy_version,checkout_access_mode) ON DELETE RESTRICT NOT VALID;
 ALTER TABLE orders VALIDATE CONSTRAINT ck_orders_workflow_cohort; ALTER TABLE orders VALIDATE CONSTRAINT ck_orders_workflow_policy_version; ALTER TABLE orders VALIDATE CONSTRAINT ck_orders_checkout_access_mode; ALTER TABLE orders VALIDATE CONSTRAINT fk_orders_checkout_estimate_selection; ALTER TABLE order_items VALIDATE CONSTRAINT ck_order_items_inventory_policy; ALTER TABLE order_items VALIDATE CONSTRAINT ck_order_items_inventory_subject; ALTER TABLE order_items VALIDATE CONSTRAINT ck_order_items_inventory_source; ALTER TABLE stock_reservations VALIDATE CONSTRAINT fk_stock_reservations_order_item; ALTER TABLE stock_reservations VALIDATE CONSTRAINT fk_stock_reservations_checkout_selection; ALTER TABLE stock_reservations VALIDATE CONSTRAINT ck_stock_reservations_workflow_cohort; ALTER TABLE stock_reservations VALIDATE CONSTRAINT ck_stock_reservations_binding_family; ALTER TABLE stock_reservations VALIDATE CONSTRAINT ck_stock_reservations_checkout_money; ALTER TABLE payment_attempts VALIDATE CONSTRAINT fk_payment_attempts_checkout_selection; ALTER TABLE payment_attempts VALIDATE CONSTRAINT ck_payment_attempts_binding_family; ALTER TABLE payment_attempts VALIDATE CONSTRAINT ck_payment_attempts_checkout_money; ALTER TABLE order_workflow_classifications VALIDATE CONSTRAINT fk_order_workflow_classifications_order_truth;
@@ -128,7 +155,7 @@ FOR EACH ROW EXECUTE FUNCTION validate_checkout_estimate_option_write();
 
 CREATE FUNCTION validate_checkout_estimate_selection_write() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE authoritative_order record; estimate record; selected_option record;
-DECLARE database_now timestamptz := statement_timestamp();
+DECLARE database_now timestamptz;
 BEGIN
  IF TG_OP <> 'INSERT' THEN
   RAISE EXCEPTION 'checkout estimate selection is immutable audit';
@@ -137,6 +164,7 @@ BEGIN
  INTO authoritative_order FROM orders WHERE id=NEW.order_id FOR UPDATE;
  SELECT * INTO estimate FROM checkout_shipping_estimates
  WHERE id=NEW.estimate_id FOR UPDATE;
+ database_now:=clock_timestamp();
  SELECT amount,currency INTO selected_option FROM checkout_shipping_estimate_options
  WHERE id=NEW.option_id AND estimate_id=NEW.estimate_id;
  IF authoritative_order.customer_id IS DISTINCT FROM NEW.customer_id
@@ -146,7 +174,7 @@ BEGIN
     OR NOT FOUND OR estimate.order_id IS DISTINCT FROM NEW.order_id
     OR estimate.customer_id IS DISTINCT FROM NEW.customer_id
     OR estimate.currency IS DISTINCT FROM NEW.currency
-    OR estimate.expires_at < database_now
+    OR estimate.expires_at <= database_now
     OR NEW.selected_at < estimate.created_at OR NEW.selected_at > database_now
     OR selected_option.amount IS DISTINCT FROM NEW.shipping_amount
     OR selected_option.currency IS DISTINCT FROM NEW.currency
@@ -235,21 +263,14 @@ CREATE CONSTRAINT TRIGGER trg_order_items_inventory_snapshot_completion
 AFTER INSERT OR UPDATE ON order_items DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW EXECUTE FUNCTION validate_order_item_inventory_snapshot_completion();
 
-CREATE FUNCTION validate_checkout_prerequisite_completion() RETURNS trigger LANGUAGE plpgsql AS $$
-DECLARE target_order_id uuid; authoritative_order record; selected record;
+CREATE FUNCTION validate_checkout_prerequisite_order(target_order_id uuid) RETURNS void LANGUAGE plpgsql AS $$
+DECLARE authoritative_order record; selected record;
 DECLARE item_count bigint; coverage_count bigint; invalid_count bigint;
 BEGIN
- IF TG_TABLE_NAME='orders' THEN
-  target_order_id:=COALESCE(NEW.id,OLD.id);
- ELSIF TG_TABLE_NAME='checkout_shipping_estimate_selections' THEN
-  target_order_id:=COALESCE(NEW.order_id,OLD.order_id);
- ELSE
-  target_order_id:=COALESCE(NEW.order_id,OLD.order_id);
- END IF;
  SELECT * INTO authoritative_order FROM orders WHERE id=target_order_id FOR UPDATE;
  IF NOT FOUND OR authoritative_order.workflow_cohort<>'domestic_checkout_v1'
     OR authoritative_order.checkout_prerequisites_completed_at IS NULL THEN
-  RETURN COALESCE(NEW,OLD);
+  RETURN;
  END IF;
  SELECT s.id,s.order_id,s.customer_id,s.selected_at INTO selected
  FROM checkout_shipping_estimate_selections s
@@ -280,6 +301,21 @@ BEGIN
  IF item_count=0 OR coverage_count<>item_count OR invalid_count<>0 THEN
   RAISE EXCEPTION 'checkout prerequisite completion requires exact inventory coverage';
  END IF;
+END $$;
+CREATE FUNCTION validate_checkout_prerequisite_completion() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE target_order_id uuid;
+BEGIN
+ IF TG_TABLE_NAME='orders' THEN
+  target_order_id:=COALESCE(NEW.id,OLD.id);
+ ELSE
+  target_order_id:=COALESCE(NEW.order_id,OLD.order_id);
+ END IF;
+ IF TG_TABLE_NAME='order_items' THEN
+  IF TG_OP='UPDATE' AND OLD.order_id IS DISTINCT FROM NEW.order_id THEN
+   PERFORM validate_checkout_prerequisite_order(OLD.order_id);
+  END IF;
+ END IF;
+ PERFORM validate_checkout_prerequisite_order(target_order_id);
  RETURN COALESCE(NEW,OLD);
 END $$;
 CREATE CONSTRAINT TRIGGER trg_orders_checkout_completion
@@ -294,6 +330,10 @@ CREATE CONSTRAINT TRIGGER trg_checkout_selection_completion
 AFTER INSERT OR UPDATE OR DELETE ON checkout_shipping_estimate_selections
 DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
 EXECUTE FUNCTION validate_checkout_prerequisite_completion();
+CREATE CONSTRAINT TRIGGER trg_order_items_checkout_completion
+AFTER INSERT OR UPDATE OR DELETE ON order_items
+DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
+EXECUTE FUNCTION validate_checkout_prerequisite_completion();
 """
     )
     op.execute(
@@ -302,7 +342,7 @@ DROP TRIGGER IF EXISTS order_guest_capabilities_no_delete ON order_guest_capabil
 DROP TRIGGER IF EXISTS order_current_owners_identity_immutable ON order_current_owners;
 DROP FUNCTION IF EXISTS protect_order_current_owner();
 CREATE FUNCTION validate_order_guest_capability_write() RETURNS trigger LANGUAGE plpgsql AS $$
-DECLARE database_now timestamptz := statement_timestamp(); replacement record;
+DECLARE database_now timestamptz := statement_timestamp(); expiry_now timestamptz; replacement record;
 BEGIN
  IF TG_OP='DELETE' THEN RAISE EXCEPTION 'guest capability cannot be deleted'; END IF;
  IF TG_OP='INSERT' THEN
@@ -330,9 +370,13 @@ BEGIN
     AND NEW.row_version=OLD.row_version+1
     AND NEW.last_used_at=database_now
     AND (OLD.last_used_at IS NULL OR NEW.last_used_at>=OLD.last_used_at)
-    AND NEW.last_used_at>=NEW.created_at AND NEW.expires_at>database_now
+    AND NEW.last_used_at>=NEW.created_at
     AND NEW.revoked_at IS NULL AND NEW.replaced_by_id IS NULL
     AND NEW.claimed_by_user_id IS NULL THEN
+  expiry_now:=clock_timestamp();
+  IF NEW.expires_at<=expiry_now THEN
+   RAISE EXCEPTION 'guest capability is expired';
+  END IF;
   RETURN NEW;
  END IF;
  IF OLD.revoked_at IS NULL AND NEW.revoked_at=database_now
@@ -353,12 +397,13 @@ BEGIN
   SELECT order_id,original_customer_id,scope,created_at,expires_at,revoked_at,
          replaced_by_id,claimed_by_user_id INTO replacement
   FROM order_guest_capabilities WHERE id=NEW.replaced_by_id FOR UPDATE;
+  expiry_now:=clock_timestamp();
   IF NOT FOUND OR NEW.replaced_by_id=NEW.id
      OR replacement.order_id IS DISTINCT FROM NEW.order_id
      OR replacement.original_customer_id IS DISTINCT FROM NEW.original_customer_id
      OR replacement.scope IS DISTINCT FROM NEW.scope
      OR replacement.created_at<NEW.created_at OR replacement.created_at>database_now
-     OR replacement.expires_at<=database_now OR replacement.revoked_at IS NOT NULL
+     OR replacement.expires_at<=expiry_now OR replacement.revoked_at IS NOT NULL
      OR replacement.replaced_by_id IS NOT NULL OR replacement.claimed_by_user_id IS NOT NULL THEN
    RAISE EXCEPTION 'guest capability replacement is invalid';
   END IF;
@@ -380,6 +425,7 @@ BEFORE INSERT OR UPDATE OR DELETE ON order_guest_capabilities
 FOR EACH ROW EXECUTE FUNCTION validate_order_guest_capability_write();
 CREATE FUNCTION validate_order_current_owner_claim() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE order_customer uuid; capability record; database_now timestamptz := statement_timestamp();
+DECLARE expiry_now timestamptz;
 BEGIN
  IF TG_OP='DELETE' THEN
   IF pg_trigger_depth()>1 THEN RETURN OLD; END IF;
@@ -414,11 +460,12 @@ BEGIN
   RAISE EXCEPTION 'order claim transition is invalid';
  END IF;
  PERFORM 1 FROM order_guest_capabilities WHERE order_id=NEW.order_id ORDER BY id FOR UPDATE;
+ expiry_now:=clock_timestamp();
  SELECT * INTO capability FROM order_guest_capabilities
   WHERE id=NEW.claim_capability_id AND order_id=NEW.order_id;
  IF NOT FOUND OR capability.original_customer_id IS DISTINCT FROM NEW.original_customer_id
     OR capability.scope<>'claim_order' OR capability.created_at>database_now
-    OR capability.expires_at<=database_now OR capability.revoked_at IS NOT NULL
+    OR capability.expires_at<=expiry_now OR capability.revoked_at IS NOT NULL
     OR capability.replaced_by_id IS NOT NULL OR capability.claimed_by_user_id IS NOT NULL
     OR capability.claimed_at IS NOT NULL THEN
   RAISE EXCEPTION 'claim capability is not active for this order';
@@ -446,10 +493,12 @@ def downgrade() -> None:
         "DO $$ BEGIN IF EXISTS(SELECT 1 FROM order_workflow_classifications) OR EXISTS(SELECT 1 FROM order_workflow_migration_runs) THEN RAISE EXCEPTION 'refusing destructive Milestone 2 downgrade: compatibility writer/new audit data exists'; END IF; END $$"
     )
     op.execute(
+        "DROP TRIGGER trg_order_items_checkout_completion ON order_items; "
         "DROP TRIGGER trg_checkout_selection_completion ON checkout_shipping_estimate_selections; "
         "DROP TRIGGER trg_checkout_coverage_completion ON order_inventory_coverage; "
         "DROP TRIGGER trg_orders_checkout_completion ON orders; "
         "DROP FUNCTION validate_checkout_prerequisite_completion(); "
+        "DROP FUNCTION validate_checkout_prerequisite_order(uuid); "
         "DROP TRIGGER trg_order_items_inventory_snapshot_completion ON order_items; "
         "DROP FUNCTION validate_order_item_inventory_snapshot_completion(); "
         "DROP TRIGGER trg_order_items_inventory_snapshot ON order_items; "
@@ -459,7 +508,9 @@ def downgrade() -> None:
         "DROP TRIGGER trg_checkout_estimate_options_truth ON checkout_shipping_estimate_options; "
         "DROP FUNCTION validate_checkout_estimate_option_write(); "
         "DROP TRIGGER trg_checkout_estimates_truth ON checkout_shipping_estimates; "
-        "DROP FUNCTION validate_checkout_estimate_write()"
+        "DROP FUNCTION validate_checkout_estimate_write(); "
+        "DROP TRIGGER trg_order_workflow_migration_runs_truth ON order_workflow_migration_runs; "
+        "DROP FUNCTION protect_order_workflow_migration_run()"
     )
     op.execute(
         "DROP TRIGGER trg_order_current_owners_claim ON order_current_owners; "
