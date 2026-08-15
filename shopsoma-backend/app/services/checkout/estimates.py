@@ -14,7 +14,8 @@ from app.models.checkout_shipping_estimate import (
     CheckoutShippingEstimateOption,
     CheckoutShippingEstimateSelection,
 )
-from app.models.order import Order
+from app.models.address import Address
+from app.models.order import Order, OrderItem
 from app.models.shipping_rate import ShippingRate
 
 _CENT = Decimal("0.01")
@@ -70,14 +71,50 @@ def order_snapshot(order: Order) -> tuple[str, str]:
 async def load_checkout_order(
     db, order_id, *, for_update: bool = False
 ) -> Order | None:
+    if for_update:
+        # Canonical checkout lock order starts with the aggregate root, then its
+        # destination, then every item in stable UUID order. Callers retain
+        # these locks before owner/coordinator/inventory/estimate/option locks.
+        order = (
+            await db.execute(
+                select(Order).where(Order.id == order_id).with_for_update()
+            )
+        ).scalar_one_or_none()
+        if not order:
+            return None
+        if order.shipping_address_id:
+            await db.execute(
+                select(Address.id)
+                .where(Address.id == order.shipping_address_id)
+                .with_for_update()
+            )
+        await db.execute(
+            select(OrderItem.id)
+            .where(OrderItem.order_id == order.id)
+            .order_by(OrderItem.id)
+            .with_for_update()
+        )
+        return await reload_checkout_order(db, order)
+
     statement = (
         select(Order)
         .options(selectinload(Order.items), selectinload(Order.shipping_address))
         .where(Order.id == order_id)
     )
-    if for_update:
-        statement = statement.with_for_update()
     return (await db.execute(statement)).scalar_one_or_none()
+
+
+async def reload_checkout_order(db, order: Order) -> Order:
+    """Replace cached aggregate state with fresh PostgreSQL row values."""
+    db.expire(order, ["shipping_address", "items"])
+    return (
+        await db.execute(
+            select(Order)
+            .options(selectinload(Order.items), selectinload(Order.shipping_address))
+            .where(Order.id == order.id)
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one()
 
 
 async def create_estimate(

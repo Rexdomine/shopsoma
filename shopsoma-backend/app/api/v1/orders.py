@@ -433,13 +433,15 @@ async def review_order(
 
     if review_data.shipping_address_id:
         # Authenticated user with saved address
+        if current_user is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Authentication required for a saved shipping address",
+            )
         address_query = select(Address).where(
-            Address.id == review_data.shipping_address_id
+            Address.id == review_data.shipping_address_id,
+            Address.user_id == current_user.id,
         )
-
-        # If user is authenticated, verify address ownership
-        if current_user:
-            address_query = address_query.where(Address.user_id == current_user.id)
 
         address_result = await db.execute(address_query)
         shipping_address = address_result.scalar_one_or_none()
@@ -674,15 +676,15 @@ async def create_order(
 
     if order_data.shipping_address_id:
         # Authenticated user with saved address
-        shipping_addr_query = select(Address).where(
-            Address.id == order_data.shipping_address_id
-        )
-
-        # If user is authenticated, verify address ownership
-        if current_user:
-            shipping_addr_query = shipping_addr_query.where(
-                Address.user_id == current_user.id
+        if current_user is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Authentication required for a saved shipping address",
             )
+        shipping_addr_query = select(Address).where(
+            Address.id == order_data.shipping_address_id,
+            Address.user_id == current_user.id,
+        )
 
         shipping_result = await db.execute(shipping_addr_query)
         shipping_address = shipping_result.scalar_one_or_none()
@@ -697,9 +699,7 @@ async def create_order(
         billing_address_id = (
             order_data.billing_address_id or order_data.shipping_address_id
         )
-        customer_id_for_order = (
-            current_user.id if current_user else shipping_address.user_id
-        )
+        customer_id_for_order = current_user.id
 
     elif order_data.guest_address:
         if not order_data.customer_email:
@@ -713,22 +713,21 @@ async def create_order(
         )
         guest_user = user_result.scalar_one_or_none()
 
-        if not guest_user:
-            guest_user = User(
-                email=order_data.customer_email,
-                full_name=order_data.guest_address.full_name,
-                hashed_password=None,
-                is_active=True,
-                role=UserRole.CUSTOMER,
-                is_guest_created=True,
+        if guest_user:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="An account already uses this email; log in to continue",
             )
-            db.add(guest_user)
-            await db.flush()
-        else:
-            if not guest_user.full_name and order_data.guest_address.full_name:
-                guest_user.full_name = order_data.guest_address.full_name
-            if not guest_user.hashed_password:
-                guest_user.is_guest_created = True
+        guest_user = User(
+            email=order_data.customer_email,
+            full_name=order_data.guest_address.full_name,
+            hashed_password=None,
+            is_active=True,
+            role=UserRole.CUSTOMER,
+            is_guest_created=True,
+        )
+        db.add(guest_user)
+        await db.flush()
 
         guest_addr = Address(
             user_id=guest_user.id, **order_data.guest_address.model_dump()

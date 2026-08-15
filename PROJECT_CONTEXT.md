@@ -2,7 +2,7 @@
 
 Last verified: 2026-08-15
 Branch: `fix/payment-bridge-canonical-gate-stabilization`
-Parent: `95c62c46d8e9519c7ccc20340c7d3dc5a3a53527`
+Repair parent: `116616897085b0ca1999223d3173661f58538e41`
 
 ## Milestone 3 closure checkpoint
 
@@ -10,12 +10,19 @@ The recovered Milestone 3 implementation now covers the order-first domestic che
 
 Production boundaries remain inert for enforced orders: no Payment, VendorPickup, VendorNotification, email/provider/DHL call, fulfilment action, or physical stock decrement occurs before the prerequisite branch returns.
 
+## Milestone 3 NightWing repair checkpoint
+
+The two blocking review findings are repaired without changing M2 migrations or triggers. Saved shipping addresses now require an authenticated exact owner, guest checkout rejects every pre-existing email identity before writes, authenticated orders receive no guest secret, and new guest orders retain one-time plaintext/digest-only capability behavior.
+
+Selection now uses the documented lock order `order -> shipping address -> order items -> owner/capability -> coordinator -> inventory -> estimate -> option`. After every potentially waiting lock is held, the route expires/reloads the authoritative order aggregate, rechecks destination and order snapshot hashes, then samples PostgreSQL `clock_timestamp()` before any prerequisite mutation.
+
 ## Verified gates
 
-- `tests/test_checkout_estimate_api.py`: 9 passed.
-- M2 preservation selection (checkout prerequisite migration/models; stock payment persistence/coordinator/blockers; orders/admin deletion; guest capability): 107 passed.
+- New ownership negatives and real PostgreSQL address/item lock-wait regressions plus same-order convergence: 7 passed.
+- Complete `tests/test_checkout_estimate_api.py`: 14 passed.
+- Exact prior M2 preservation selection (checkout prerequisite migration/models; stock payment persistence/coordinator/blockers; orders/admin deletion; guest capability): 107 passed.
 - Black check, Flake8 fatal selections `E9,F63,F7,F82`, compileall, and `git diff --check`: passed on all changed Python paths.
-- Final scope/path and redacted secret/plaintext scans are required immediately before the single local child commit.
+- Final changed-path, secret/private-key/plaintext, and forbidden production-boundary scans: passed with zero hits.
 
 ## Safety boundary
 

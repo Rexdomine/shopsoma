@@ -17,7 +17,7 @@ from app.models.checkout_shipping_estimate import (
 from app.models.order import Order
 from app.models.product import Product, ProductVariant, SizeStock
 from app.models.stock_payment_persistence import StockReservation
-from app.services.checkout.estimates import order_snapshot
+from app.services.checkout.estimates import order_snapshot, reload_checkout_order
 
 _CENT = Decimal("0.01")
 _EFFECTIVE_CLAIM_SQL = text(
@@ -194,14 +194,24 @@ async def select_estimate_option(
             .with_for_update()
         )
     ).scalar_one_or_none()
+    # Every potentially waiting lock is now held. Discard ORM relationship
+    # cache state, reload authoritative rows, and validate the locked snapshot.
+    order = await reload_checkout_order(db, order)
+    destination_hash, snapshot_hash = order_snapshot(order)
     database_now = await db.scalar(select(text("clock_timestamp()")))
     if (
         not estimate
         or not option
         or estimate.order_id != order.id
         or option.estimate_id != estimate.id
-        or estimate.expires_at <= database_now
     ):
+        raise HTTPException(status_code=409, detail="expired checkout estimate")
+    if (
+        estimate.destination_snapshot_hash != destination_hash
+        or estimate.order_snapshot_hash != snapshot_hash
+    ):
+        raise HTTPException(status_code=409, detail="stale checkout estimate")
+    if estimate.expires_at <= database_now:
         raise HTTPException(status_code=409, detail="expired checkout estimate")
 
     selection = CheckoutShippingEstimateSelection(

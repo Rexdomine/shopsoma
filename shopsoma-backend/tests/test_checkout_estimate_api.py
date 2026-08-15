@@ -28,6 +28,7 @@ from app.models.payment import Payment
 from app.models.product import ModerationStatus, Product, ProductStatus
 from app.models.shipping_rate import ShippingRate
 from app.models.stock_payment_persistence import StockReservation
+from app.models.user import User
 from app.models import VendorNotification
 from app.models.vendor_pickup import VendorPickup
 from tests.conftest import TestSessionLocal, test_engine
@@ -150,6 +151,7 @@ async def _create_authenticated_estimate(
         },
     )
     assert created.status_code == 201, created.text
+    assert created.json()["checkout_capability"] is None
     order_id = created.json()["id"]
     estimate_response = await client.post(
         f"/api/v1/orders/{order_id}/checkout-estimates",
@@ -160,9 +162,16 @@ async def _create_authenticated_estimate(
 
 
 async def _assert_no_prerequisite_writes(db_session, order_id):
+    db_session.expire_all()
     order = await db_session.get(Order, uuid.UUID(order_id))
     assert order.checkout_estimate_selection_id is None
     assert order.checkout_prerequisites_completed_at is None
+    assert Decimal(order.shipping_cost) == Decimal("0.00")
+    assert Decimal(order.total_amount) == (
+        Decimal(order.subtotal)
+        + Decimal(order.tax_amount)
+        - Decimal(order.discount_amount)
+    )
     assert (
         await db_session.scalar(
             select(func.count()).select_from(CheckoutShippingEstimateSelection)
@@ -178,6 +187,101 @@ async def _assert_no_prerequisite_writes(db_session, order_id):
         )
         == 0
     )
+
+
+async def _write_counts(db_session):
+    return {
+        "addresses": await db_session.scalar(select(func.count()).select_from(Address)),
+        "capabilities": await db_session.scalar(
+            select(func.count()).select_from(OrderGuestCapability)
+        ),
+        "orders": await db_session.scalar(select(func.count()).select_from(Order)),
+        "users": await db_session.scalar(select(func.count()).select_from(User)),
+    }
+
+
+async def _wait_for_route_lock(application_name: str):
+    async with test_engine.connect() as observer:
+        for _ in range(300):
+            waiting = await observer.scalar(
+                text(
+                    "SELECT count(*) FROM pg_stat_activity "
+                    "WHERE application_name=:name AND wait_event_type='Lock'"
+                ),
+                {"name": application_name},
+            )
+            if waiting:
+                return
+            await asyncio.sleep(0.02)
+        activity = (
+            await observer.execute(
+                text(
+                    "SELECT state, wait_event_type, wait_event "
+                    "FROM pg_stat_activity WHERE application_name=:name"
+                ),
+                {"name": application_name},
+            )
+        ).all()
+    raise AssertionError(
+        f"production route lock wait not observed; activity={activity}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_unauthenticated_saved_address_is_rejected_without_writes(
+    client, db_session, vendor_user, customer_user
+):
+    address, product = await _domestic_catalogue(db_session, vendor_user, customer_user)
+    before = await _write_counts(db_session)
+
+    response = await client.post(
+        "/api/v1/orders",
+        json={
+            "items": [{"product_id": str(product.id), "quantity": 1}],
+            "shipping_address_id": str(address.id),
+            "currency": "NGN",
+        },
+    )
+
+    assert response.status_code in {401, 403}
+    assert await _write_counts(db_session) == before
+
+
+@pytest.mark.asyncio
+async def test_other_users_saved_address_is_rejected_without_writes(
+    client, db_session, vendor_user, customer_user
+):
+    address, product = await _domestic_catalogue(db_session, vendor_user, customer_user)
+    before = await _write_counts(db_session)
+
+    response = await client.post(
+        "/api/v1/orders",
+        headers=vendor_user["headers"],
+        json={
+            "items": [{"product_id": str(product.id), "quantity": 1}],
+            "shipping_address_id": str(address.id),
+            "currency": "NGN",
+        },
+    )
+
+    assert response.status_code in {403, 404}
+    assert await _write_counts(db_session) == before
+
+
+@pytest.mark.asyncio
+async def test_guest_email_matching_password_account_requires_login_without_writes(
+    client, db_session, vendor_user, customer_user
+):
+    _, product = await _domestic_catalogue(db_session, vendor_user)
+    before = await _write_counts(db_session)
+
+    response = await client.post(
+        "/api/v1/orders",
+        json=_guest_order_payload(product.id, customer_user["user"].email),
+    )
+
+    assert response.status_code in {409, 401, 403}
+    assert await _write_counts(db_session) == before
 
 
 @pytest.mark.asyncio
@@ -375,6 +479,7 @@ async def test_guest_capability_is_issued_once_and_authorizes_only_its_order(
     )
     assert created.status_code == 201, created.text
     payload = created.json()
+    assert list(payload).count("checkout_capability") == 1
     capability = payload["checkout_capability"]
     assert capability and len(capability) >= 32
 
@@ -699,6 +804,107 @@ async def test_stale_destination_snapshot_rolls_back_through_selection_route(
         f"/options/{estimate['options'][0]['id']}/select",
         headers={**customer_user["headers"], "X-Idempotency-Key": "stale-selection"},
     )
+
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"] == "stale checkout estimate"
+    await _assert_no_prerequisite_writes(db_session, order_id)
+
+
+@pytest.mark.asyncio
+async def test_address_change_committed_during_selection_lock_wait_fails_closed(
+    client, db_session, vendor_user, customer_user, monkeypatch
+):
+    address, product = await _domestic_catalogue(db_session, vendor_user, customer_user)
+    monkeypatch.setattr(settings, "DOMESTIC_CHECKOUT_PREREQUISITES_ENABLED", True)
+    monkeypatch.setattr(
+        settings, "DOMESTIC_CHECKOUT_COHORT_ALLOWLIST", str(customer_user["user"].id)
+    )
+    order_id, estimate = await _create_authenticated_estimate(
+        client, customer_user, address, product, key="waiting-address-estimate"
+    )
+    option_id = estimate["options"][0]["id"]
+    application_name = f"m3-waiting-address-{uuid.uuid4().hex}"
+    blocker = await test_engine.connect()
+    blocker_tx = await blocker.begin()
+    await blocker.execute(
+        text("UPDATE addresses SET city='Abuja' WHERE id=:id"), {"id": address.id}
+    )
+    await blocker.execute(
+        text("SELECT 1 FROM checkout_shipping_estimates WHERE id=:id FOR UPDATE"),
+        {"id": estimate["id"]},
+    )
+    try:
+        async with _isolated_route_client(application_name) as contender:
+            selection_task = asyncio.create_task(
+                contender.post(
+                    f"/api/v1/orders/{order_id}/checkout-estimates/{estimate['id']}"
+                    f"/options/{option_id}/select",
+                    headers={
+                        **customer_user["headers"],
+                        "X-Idempotency-Key": "waiting-address-selection",
+                    },
+                )
+            )
+            await _wait_for_route_lock(application_name)
+            await blocker_tx.commit()
+            response = await asyncio.wait_for(selection_task, timeout=3)
+    finally:
+        if blocker_tx.is_active:
+            await blocker_tx.rollback()
+        await blocker.close()
+
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"] == "stale checkout estimate"
+    await _assert_no_prerequisite_writes(db_session, order_id)
+
+
+@pytest.mark.asyncio
+async def test_item_change_committed_during_selection_lock_wait_fails_closed(
+    client, db_session, vendor_user, customer_user, monkeypatch
+):
+    address, product = await _domestic_catalogue(db_session, vendor_user, customer_user)
+    monkeypatch.setattr(settings, "DOMESTIC_CHECKOUT_PREREQUISITES_ENABLED", True)
+    monkeypatch.setattr(
+        settings, "DOMESTIC_CHECKOUT_COHORT_ALLOWLIST", str(customer_user["user"].id)
+    )
+    order_id, estimate = await _create_authenticated_estimate(
+        client, customer_user, address, product, key="waiting-item-estimate"
+    )
+    option_id = estimate["options"][0]["id"]
+    application_name = f"m3-waiting-item-{uuid.uuid4().hex}"
+    blocker = await test_engine.connect()
+    blocker_tx = await blocker.begin()
+    await blocker.execute(
+        text(
+            "UPDATE order_items "
+            "SET unit_price=unit_price + 1, subtotal=subtotal + 1 "
+            "WHERE order_id=:order_id"
+        ),
+        {"order_id": order_id},
+    )
+    await blocker.execute(
+        text("SELECT 1 FROM checkout_shipping_estimates WHERE id=:id FOR UPDATE"),
+        {"id": estimate["id"]},
+    )
+    try:
+        async with _isolated_route_client(application_name) as contender:
+            selection_task = asyncio.create_task(
+                contender.post(
+                    f"/api/v1/orders/{order_id}/checkout-estimates/{estimate['id']}"
+                    f"/options/{option_id}/select",
+                    headers={
+                        **customer_user["headers"],
+                        "X-Idempotency-Key": "waiting-item-selection",
+                    },
+                )
+            )
+            await _wait_for_route_lock(application_name)
+            await blocker_tx.commit()
+            response = await asyncio.wait_for(selection_task, timeout=3)
+    finally:
+        if blocker_tx.is_active:
+            await blocker_tx.rollback()
+        await blocker.close()
 
     assert response.status_code == 409, response.text
     assert response.json()["detail"] == "stale checkout estimate"
