@@ -664,19 +664,8 @@ async def test_selection_rechecks_database_clock_after_waiting_for_estimate_lock
                     },
                 )
             )
+            await _wait_for_route_lock(application_name)
             async with test_engine.connect() as observer:
-                for _ in range(100):
-                    waiting = await observer.scalar(
-                        text(
-                            "SELECT count(*) FROM pg_stat_activity "
-                            "WHERE application_name=:name AND wait_event_type='Lock'"
-                        ),
-                        {"name": application_name},
-                    )
-                    if waiting:
-                        break
-                    await asyncio.sleep(0.02)
-                assert waiting == 1
                 while (
                     await observer.scalar(select(text("clock_timestamp()")))
                     <= estimate_expires_at
