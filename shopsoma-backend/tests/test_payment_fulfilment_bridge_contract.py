@@ -316,8 +316,8 @@ async def test_created_attempt_replay_does_not_duplicate_attempt_or_membership(
     )
     assert len(attempts) == 1
     assert memberships == [reservation.id]
-    assert len(calls) == 2
-    assert calls[0]["idempotency_key"] == calls[1]["idempotency_key"]
+    assert len(calls) == 1
+    assert calls[0]["idempotency_key"].endswith(":payment-intent")
 
 
 @pytest.mark.asyncio
@@ -666,7 +666,7 @@ async def test_bridge_initialization_legally_starts_attempt_then_finalizes(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("provider", ["stripe", "paystack"])
-async def test_initialization_retry_replays_only_stripe(
+async def test_initialization_retry_returns_persisted_provider_session(
     db_session,
     vendor_user,
     customer_user,
@@ -769,7 +769,7 @@ async def test_initialization_retry_replays_only_stripe(
     if provider == "stripe":
         assert retry is not None and retry.status is True
         assert retry.payment_intent_id == first.payment_intent_id
-        assert provider_calls == 2
+        assert provider_calls == 1
     else:
         assert retry.status is True
         assert retry.reference == first.reference
@@ -2238,7 +2238,7 @@ async def test_production_initialize_creates_terminal_attempt_successor_before_p
             db=db_session,
         )
         assert retry.payment_intent_id == response.payment_intent_id
-        assert observed["provider_calls"] == 2
+        assert observed["provider_calls"] == 1
     else:
         retry = await payments.initialize_payment(
             PaymentInitializeRequest(

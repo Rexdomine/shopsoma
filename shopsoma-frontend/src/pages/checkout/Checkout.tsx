@@ -99,6 +99,7 @@ export default function Checkout() {
   const [paymentMethod, setPaymentMethod] = useState<PaymentGateway>('paystack');
   const [stripeClientSecret, setStripeClientSecret] = useState<string>('');
   const [stripePaymentIntentId, setStripePaymentIntentId] = useState<string>('');
+  const [currentPaymentGateway, setCurrentPaymentGateway] = useState<PaymentGateway | null>(null);
   const [showStripePaymentModal, setShowStripePaymentModal] = useState(false);
   const [currentOrderId, setCurrentOrderId] = useState<string>('');
   const [enforcedOrder, setEnforcedOrder] = useState<Order | null>(null);
@@ -402,7 +403,31 @@ export default function Checkout() {
     order: Order,
     paymentData: InitializePaymentResponse,
   ) => {
-    if (paymentMethod === 'paystack') {
+    const gateway = paymentData.payment_gateway;
+    const hasCanonicalTruth = paymentData.status === true
+      && typeof paymentData.reference === 'string'
+      && paymentData.reference.trim().length > 0
+      && typeof paymentData.amount === 'string'
+      && Number.isFinite(Number(paymentData.amount))
+      && Number(paymentData.amount) > 0
+      && Number.isSafeInteger(paymentData.amount_minor)
+      && paymentData.amount_minor > 0
+      && (paymentData.currency === 'NGN' || paymentData.currency === 'USD');
+    if (!hasCanonicalTruth) {
+      throw new Error('Payment initialization response is incomplete');
+    }
+
+    if (gateway === 'paystack') {
+      const payload = paymentData.provider_payload;
+      if (
+        !payload
+        || typeof payload.access_code !== 'string'
+        || !payload.access_code.trim()
+        || typeof payload.authorization_url !== 'string'
+        || !payload.authorization_url.trim()
+      ) {
+        throw new Error('Payment initialization response is incomplete');
+      }
       const widgetTruth = buildPaystackWidgetConfig(paymentData, {
         key: import.meta.env.VITE_PAYSTACK_PUBLIC_KEY,
         email: email || 'guest@shopsoma.com',
@@ -412,7 +437,7 @@ export default function Checkout() {
         callback: (response: { reference: string }) => {
           paymentService.verifyPayment({
             reference: response.reference,
-            payment_gateway: 'paystack',
+            payment_gateway: gateway,
           }).then(() => {
             clearCheckoutCapability();
             CartService.clearCart();
@@ -430,14 +455,25 @@ export default function Checkout() {
         },
       });
       handler.openIframe();
-    } else if (paymentMethod === 'stripe') {
-      setStripeClientSecret(paymentData.provider_payload?.client_secret ?? paymentData.client_secret ?? '');
-      setStripePaymentIntentId(paymentData.provider_payload?.payment_intent_id ?? paymentData.payment_intent_id ?? '');
+    } else if (gateway === 'stripe') {
+      const payload = paymentData.provider_payload;
+      if (
+        !payload
+        || typeof payload.client_secret !== 'string'
+        || !payload.client_secret.trim()
+        || typeof payload.payment_intent_id !== 'string'
+        || !payload.payment_intent_id.trim()
+      ) {
+        throw new Error('Payment initialization response is incomplete');
+      }
+      setStripeClientSecret(payload.client_secret);
+      setStripePaymentIntentId(payload.payment_intent_id);
+      setCurrentPaymentGateway(gateway);
       setCurrentOrderId(order.id);
       setShowStripePaymentModal(true);
       setIsCreatingOrder(false);
     } else {
-      throw new Error(`Unsupported payment gateway: ${paymentMethod}`);
+      throw new Error(`Unsupported payment gateway: ${gateway}`);
     }
   };
 
@@ -555,10 +591,13 @@ export default function Checkout() {
 
   const handleStripePaymentSuccess = async () => {
     try {
+      if (currentPaymentGateway !== 'stripe') {
+        throw new Error('Payment initialization response is incomplete');
+      }
       // Verify payment with backend
       await paymentService.verifyPayment({
         payment_intent_id: stripePaymentIntentId,
-        payment_gateway: 'stripe',
+        payment_gateway: currentPaymentGateway,
       });
 
       // Clear cart and navigate to success

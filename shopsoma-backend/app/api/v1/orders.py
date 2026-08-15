@@ -58,7 +58,7 @@ def _domestic_checkout_is_enforced(
     """Assign only explicitly eligible new orders; absence never implies domestic."""
     if not settings.DOMESTIC_CHECKOUT_PREREQUISITES_ENABLED:
         return False
-    if country.casefold() != "nigeria" or currency != "NGN":
+    if country.casefold() != "nigeria" or currency not in SUPPORTED_ORDER_CURRENCIES:
         return False
     if customer_id in settings.domestic_checkout_cohort_ids:
         return True

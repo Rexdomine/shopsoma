@@ -136,6 +136,14 @@ async def _initialize_stripe_payment(
         if truth.bridge_applied:
             # Every Stripe SDK boundary follows the committed attempt fence.
             await db.commit()
+            stored_session = await _stored_stripe_initialization_session(
+                db,
+                order=order,
+                attempt_id=truth.attempt_id,
+                reference=truth.provider_reference,
+            )
+            if stored_session is not None:
+                return stored_session
         # Ensure Stripe customer exists so saved cards can be reused
         user_query = select(User).where(User.id == order.customer_id)
         user_result = await db.execute(user_query)
@@ -209,12 +217,37 @@ async def _initialize_stripe_payment(
                 amount=truth.amount,
                 currency=truth.currency,
                 status=TransactionStatus.PENDING,
-                gateway_response={"payment_intent": intent.id},
+                gateway_response={
+                    "payment_intent": intent.id,
+                    "client_secret": intent.client_secret,
+                    "shopsoma_payment_reference": truth.provider_reference,
+                },
             )
             db.add(payment)
             await db.commit()
-        elif payment.order_id != order.id:
-            raise PaymentTruthMismatch("verified payment truth does not match")
+        else:
+            if (
+                payment.order_id != order.id
+                or payment.payment_gateway != PaymentGateway.STRIPE
+                or payment.payment_method != "stripe"
+                or payment.amount != truth.amount
+                or payment.currency != truth.currency
+            ):
+                raise PaymentTruthMismatch("verified payment truth does not match")
+            response = payment.gateway_response
+            stored_reference = (
+                response.get("shopsoma_payment_reference")
+                if isinstance(response, dict)
+                else None
+            )
+            if stored_reference not in {None, truth.provider_reference}:
+                raise PaymentTruthMismatch("verified payment truth does not match")
+            payment.gateway_response = {
+                "payment_intent": intent.id,
+                "client_secret": intent.client_secret,
+                "shopsoma_payment_reference": truth.provider_reference,
+            }
+            await db.commit()
 
         return PaymentInitializeResponse(
             status=True,
@@ -239,6 +272,70 @@ async def _initialize_stripe_payment(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=f"Stripe error: {str(e)}",
         )
+
+
+async def _stored_stripe_initialization_session(
+    db: AsyncSession, *, order: Order, attempt_id: UUID | None, reference: str | None
+) -> PaymentInitializeResponse | None:
+    attempt = await db.get(PaymentAttempt, attempt_id)
+    if (
+        attempt is None
+        or attempt.order_id != order.id
+        or attempt.provider != "stripe"
+        or attempt.provider_reference != reference
+    ):
+        raise PaymentTruthMismatch("stored payment attempt truth does not match")
+    candidates = list(
+        await db.scalars(
+            select(Payment).where(
+                Payment.order_id == order.id,
+                Payment.payment_gateway == PaymentGateway.STRIPE,
+            )
+        )
+    )
+    matching = [
+        payment
+        for payment in candidates
+        if isinstance(payment.gateway_response, dict)
+        and payment.gateway_response.get("shopsoma_payment_reference") == reference
+    ]
+    if not matching:
+        return None
+    if len(matching) != 1:
+        raise PaymentTruthMismatch("stored payment initialization truth does not match")
+    payment = matching[0]
+    response = payment.gateway_response
+    payment_intent_id = response.get("payment_intent")
+    client_secret = response.get("client_secret")
+    valid = (
+        payment.payment_method == "stripe"
+        and payment.amount == attempt.amount
+        and payment.currency == attempt.currency
+        and payment.status == TransactionStatus.PENDING
+        and isinstance(payment_intent_id, str)
+        and bool(payment_intent_id)
+        and payment.transaction_id == payment_intent_id
+        and isinstance(client_secret, str)
+        and bool(client_secret)
+    )
+    if not valid:
+        raise PaymentTruthMismatch("stored payment initialization truth does not match")
+    amount_in_cents = int(payment.amount * 100)
+    return PaymentInitializeResponse(
+        status=True,
+        message="Stripe Payment Intent created successfully",
+        client_secret=client_secret,
+        payment_intent_id=payment_intent_id,
+        payment_gateway="stripe",
+        reference=reference,
+        amount=payment.amount,
+        amount_minor=amount_in_cents,
+        currency=payment.currency,
+        provider_payload={
+            "client_secret": client_secret,
+            "payment_intent_id": payment_intent_id,
+        },
+    )
 
 
 def _paystack_definitive_absence(payload: object) -> bool:

@@ -12,6 +12,9 @@ const mocks = vi.hoisted(() => ({
   selectCheckoutEstimateOption: vi.fn(),
   initializePayment: vi.fn(),
   verifyPayment: vi.fn(),
+  buildPaystackWidgetConfig: vi.fn(),
+  stripeFormProps: vi.fn(),
+  stripeElementsProps: vi.fn(),
   clearCart: vi.fn(),
   auth: {
     isAuthenticated: true,
@@ -35,11 +38,17 @@ vi.mock('../../components/layout/Layout', () => ({
   default: ({ children }: { children: ReactNode }) => <div>{children}</div>,
 }));
 vi.mock('../../components/payment/StripePaymentForm', () => ({
-  default: () => <div>Stripe form</div>,
+  default: (props: unknown) => {
+    mocks.stripeFormProps(props);
+    return <div>Stripe form</div>;
+  },
 }));
 vi.mock('@stripe/stripe-js', () => ({ loadStripe: vi.fn(() => Promise.resolve(null)) }));
 vi.mock('@stripe/react-stripe-js', () => ({
-  Elements: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  Elements: (props: { children: ReactNode }) => {
+    mocks.stripeElementsProps(props);
+    return <div>{props.children}</div>;
+  },
 }));
 vi.mock('../../context/AuthContext', () => ({
   useAuth: () => mocks.auth,
@@ -71,7 +80,7 @@ vi.mock('../../services/paymentService', () => ({
     initializePayment: mocks.initializePayment,
     verifyPayment: mocks.verifyPayment,
   },
-  buildPaystackWidgetConfig: vi.fn(),
+  buildPaystackWidgetConfig: mocks.buildPaystackWidgetConfig,
 }));
 
 import Checkout from './Checkout';
@@ -104,7 +113,7 @@ const estimate = {
   }],
 };
 
-async function reachPaymentStep() {
+async function reachPaymentStep(selectStripe = true) {
   render(<MemoryRouter><Checkout /></MemoryRouter>);
   await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
   fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
@@ -112,7 +121,7 @@ async function reachPaymentStep() {
   const continueButtons = screen.getAllByRole('button', { name: 'Continue' });
   fireEvent.click(continueButtons[continueButtons.length - 1]);
   await waitFor(() => expect(mocks.reviewOrder).toHaveBeenCalled());
-  fireEvent.click(screen.getByRole('radio', { name: /Stripe/ }));
+  if (selectStripe) fireEvent.click(screen.getByRole('radio', { name: /Stripe/ }));
   fireEvent.click(screen.getAllByRole('button', { name: 'Purchase' })[0]);
   await waitFor(() => expect(mocks.createOrder).toHaveBeenCalled());
 }
@@ -128,6 +137,14 @@ describe('Checkout M5 sequencing and recovery', () => {
     mocks.createOrder.mockResolvedValue(order);
     mocks.createCheckoutEstimate.mockResolvedValue(estimate);
     mocks.selectCheckoutEstimateOption.mockResolvedValue({ ...estimate, selected_option: estimate.options[0] });
+    mocks.buildPaystackWidgetConfig.mockImplementation((initialization, customer) => ({
+      key: customer.key,
+      email: customer.email,
+      amount: initialization.amount_minor,
+      currency: initialization.currency,
+      ref: initialization.reference,
+      access_code: initialization.provider_payload?.access_code,
+    }));
     mocks.initializePayment.mockResolvedValue({
       status: true, message: 'ready', payment_gateway: 'stripe', reference: 'server-ref',
       amount: '62500.00', amount_minor: 6250000, currency: 'NGN',
@@ -178,5 +195,75 @@ describe('Checkout M5 sequencing and recovery', () => {
     await waitFor(() => expect(alert).toHaveBeenCalledWith(expect.stringMatching(/not complete.*retry/i)));
     expect(screen.getByRole('button', { name: 'Continue to payment' })).toBeEnabled();
     expect(screen.queryByText('Stripe form')).not.toBeInTheDocument();
+  });
+
+  it('opens only returned Stripe truth when local preference is Paystack', async () => {
+    const paystackSetup = vi.fn();
+    window.PaystackPop = { setup: paystackSetup };
+    await reachPaymentStep(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Select Standard delivery' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Continue to payment' }));
+
+    expect(await screen.findByText('Stripe form')).toBeInTheDocument();
+    expect(paystackSetup).not.toHaveBeenCalled();
+    expect(mocks.stripeElementsProps).toHaveBeenCalledWith(expect.objectContaining({
+      options: { clientSecret: 'secret' },
+    }));
+    expect(mocks.stripeFormProps).toHaveBeenCalledWith(expect.objectContaining({
+      isProcessing: false,
+    }));
+  });
+
+  it('opens only returned Paystack truth and consumes canonical payment fields', async () => {
+    const openIframe = vi.fn();
+    const paystackSetup = vi.fn(() => ({ openIframe }));
+    window.PaystackPop = { setup: paystackSetup };
+    const returned = {
+      status: true, message: 'ready', payment_gateway: 'paystack', reference: 'canonical-ref',
+      amount: '101.25', amount_minor: 10125, currency: 'USD',
+      provider_payload: { access_code: 'canonical-access', authorization_url: 'https://provider.invalid/session' },
+    };
+    mocks.initializePayment.mockResolvedValueOnce(returned);
+    await reachPaymentStep(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Select Standard delivery' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Continue to payment' }));
+
+    await waitFor(() => expect(openIframe).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText('Stripe form')).not.toBeInTheDocument();
+    expect(mocks.buildPaystackWidgetConfig).toHaveBeenCalledWith(returned, expect.objectContaining({
+      email: 'buyer@example.com',
+    }));
+    expect(paystackSetup).toHaveBeenCalledWith(expect.objectContaining({
+      amount: 10125,
+      currency: 'USD',
+      ref: 'canonical-ref',
+      access_code: 'canonical-access',
+    }));
+  });
+
+  it.each([
+    ['unsupported gateway', { payment_gateway: 'unknown' }],
+    ['missing Stripe payload', { payment_gateway: 'stripe', provider_payload: undefined }],
+    ['malformed Stripe payload', { payment_gateway: 'stripe', provider_payload: { client_secret: '', payment_intent_id: 42 } }],
+    ['missing Paystack payload', { payment_gateway: 'paystack', provider_payload: undefined }],
+  ])('fails closed for %s and leaves payment retryable', async (_label, override) => {
+    const openIframe = vi.fn();
+    const paystackSetup = vi.fn(() => ({ openIframe }));
+    window.PaystackPop = { setup: paystackSetup };
+    mocks.initializePayment.mockResolvedValueOnce({
+      status: true, message: 'ready', reference: 'server-ref', amount: '62500.00',
+      amount_minor: 6250000, currency: 'NGN',
+      provider_payload: { client_secret: 'secret', payment_intent_id: 'pi-1', access_code: 'access' },
+      ...override,
+    });
+    await reachPaymentStep(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Select Standard delivery' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Continue to payment' }));
+
+    await waitFor(() => expect(alert).toHaveBeenCalledWith(expect.stringMatching(/failed to initialize|incomplete|unsupported/i)));
+    expect(paystackSetup).not.toHaveBeenCalled();
+    expect(openIframe).not.toHaveBeenCalled();
+    expect(screen.queryByText('Stripe form')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Continue to payment' })).toBeEnabled();
   });
 });
