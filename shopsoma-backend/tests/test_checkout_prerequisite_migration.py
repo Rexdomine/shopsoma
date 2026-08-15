@@ -28,6 +28,7 @@ REVISIONS = (
     "a1b2c3d4e5f6",
     "a2b3c4d5e6f7",
 )
+MILESTONE_FOUR_REVISION = "b3c4d5e6f7a8"
 
 
 def _script():
@@ -44,7 +45,9 @@ def test_milestone_two_revisions_are_sequential_from_current_head() -> None:
         REVISIONS[0],
         REVISIONS[1],
     ]
-    assert script.get_current_head() == REVISIONS[-1]
+    milestone_four = script.get_revision(MILESTONE_FOUR_REVISION)
+    assert milestone_four.down_revision == REVISIONS[-1]
+    assert script.get_current_head() == MILESTONE_FOUR_REVISION
 
 
 def test_expand_validate_contract_and_safe_downgrade_are_frozen() -> None:

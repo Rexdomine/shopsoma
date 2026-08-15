@@ -11,7 +11,7 @@ import uuid
 import pytest
 from httpx import ASGITransport, AsyncClient
 from pydantic import SecretStr
-from sqlalchemy import func, select, text
+from sqlalchemy import event, func, select, text
 
 from app.core.config import settings
 from app.core.database import get_db
@@ -31,6 +31,7 @@ from app.models.stock_payment_persistence import StockReservation
 from app.models.user import User
 from app.models import VendorNotification
 from app.models.vendor_pickup import VendorPickup
+from app.services.checkout import estimates as checkout_estimates
 from tests.conftest import TestSessionLocal, test_engine
 
 
@@ -861,6 +862,30 @@ async def test_item_change_committed_during_selection_lock_wait_fails_closed(
     )
     option_id = estimate["options"][0]["id"]
     application_name = f"m3-waiting-item-{uuid.uuid4().hex}"
+    route_lock_started = asyncio.Event()
+    mutation_committed = asyncio.Event()
+    event_loop = asyncio.get_running_loop()
+    original_reload = checkout_estimates.reload_checkout_order
+
+    def signal_route_lock_start(
+        _connection, _cursor, statement, _parameters, _context, _executemany
+    ):
+        normalized = " ".join(statement.lower().split())
+        if "from orders" in normalized and "for update" in normalized:
+            event_loop.call_soon_threadsafe(route_lock_started.set)
+
+    async def assert_mutation_committed_before_reload(db, order):
+        assert mutation_committed.is_set()
+        return await original_reload(db, order)
+
+    monkeypatch.setattr(
+        checkout_estimates,
+        "reload_checkout_order",
+        assert_mutation_committed_before_reload,
+    )
+    event.listen(
+        test_engine.sync_engine, "before_cursor_execute", signal_route_lock_start
+    )
     blocker = await test_engine.connect()
     blocker_tx = await blocker.begin()
     await blocker.execute(
@@ -887,10 +912,15 @@ async def test_item_change_committed_during_selection_lock_wait_fails_closed(
                     },
                 )
             )
-            await _wait_for_route_lock(application_name)
+            await asyncio.wait_for(route_lock_started.wait(), timeout=3)
+            assert not selection_task.done()
             await blocker_tx.commit()
+            mutation_committed.set()
             response = await asyncio.wait_for(selection_task, timeout=3)
     finally:
+        event.remove(
+            test_engine.sync_engine, "before_cursor_execute", signal_route_lock_start
+        )
         if blocker_tx.is_active:
             await blocker_tx.rollback()
         await blocker.close()

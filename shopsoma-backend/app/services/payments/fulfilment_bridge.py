@@ -10,16 +10,20 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from sqlalchemy import select, text
+from sqlalchemy import select, text, update
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.checkout_shipping_estimate import (
+    CheckoutShippingEstimateSelection,
+    OrderInventoryCoverage,
+)
 from app.models.customer_shipping_quote import (
     CustomerShippingQuote,
     CustomerShippingQuoteOption,
     CustomerShippingQuoteSelection,
 )
-from app.models.order import FulfillmentStatus, Order, PaymentStatus
+from app.models.order import FulfillmentStatus, Order, OrderItem, PaymentStatus
 from app.models.package_custody import (
     HubPackage,
     HubPackageSeal,
@@ -27,12 +31,14 @@ from app.models.package_custody import (
     OutboundShipmentIntentInvalidation,
 )
 from app.models.payment import Payment, PaymentGateway, TransactionStatus
+from app.models.product import Product, ProductVariant, SizeStock
 from app.models.stock_payment_persistence import (
     PaymentAttempt,
     PaymentAttemptEvidence,
     PaymentAttemptReservation,
     StockReservation,
 )
+from app.services.checkout.outbox import enqueue_checkout_event
 from app.services.shipping.capabilities import DomesticShippingCapabilities
 
 
@@ -122,7 +128,8 @@ async def payment_initialization_truth(
     legacy_amount, legacy_currency = authoritative_gateway_amount(
         order.total_amount, order.currency
     )
-    if not capabilities.quote_enforcement_enabled:
+    persisted_domestic = order.workflow_cohort == "domestic_checkout_v1"
+    if not persisted_domestic and not capabilities.quote_enforcement_enabled:
         return PaymentInitializationTruth(
             False, legacy_amount, legacy_currency, None, None, None
         )
@@ -183,6 +190,11 @@ async def _ensure_bridge_attempt(
     attempt = await active_bridge_attempt(session, order_id=order.id, lock=True)
     if attempt is not None and attempt.state not in {"failed", "expired"}:
         return attempt
+
+    if locked_order.workflow_cohort == "domestic_checkout_v1":
+        return await _ensure_domestic_bridge_attempt(
+            session, order=locked_order, provider=provider, predecessor=attempt
+        )
 
     active_reservations = list(
         await session.scalars(
@@ -277,6 +289,124 @@ async def _ensure_bridge_attempt(
         await session.execute(text("SET CONSTRAINTS ALL DEFERRED"))
     except DBAPIError as exc:
         raise PaymentBridgeError("payment attempt subject binding is invalid") from exc
+    return attempt
+
+
+async def _ensure_domestic_bridge_attempt(
+    session: AsyncSession,
+    *,
+    order: Order,
+    provider: str,
+    predecessor: PaymentAttempt | None,
+) -> PaymentAttempt:
+    """Bind one attempt to the complete persisted M3 selection and coverage cohort."""
+    selection_id = order.checkout_estimate_selection_id
+    if selection_id is None or order.checkout_prerequisites_completed_at is None:
+        raise PaymentBridgeError("payment attempt prerequisites are incomplete")
+    selection = await session.scalar(
+        select(CheckoutShippingEstimateSelection).where(
+            CheckoutShippingEstimateSelection.id == selection_id,
+            CheckoutShippingEstimateSelection.order_id == order.id,
+            CheckoutShippingEstimateSelection.customer_id == order.customer_id,
+            CheckoutShippingEstimateSelection.currency == order.currency,
+        )
+    )
+    if selection is None:
+        raise PaymentBridgeError("payment attempt subject binding is invalid")
+
+    items = list(
+        await session.scalars(
+            select(OrderItem)
+            .where(OrderItem.order_id == order.id)
+            .order_by(OrderItem.id)
+            .with_for_update()
+        )
+    )
+    coverage = list(
+        await session.scalars(
+            select(OrderInventoryCoverage)
+            .where(OrderInventoryCoverage.order_id == order.id)
+            .order_by(OrderInventoryCoverage.order_item_id)
+            .with_for_update()
+        )
+    )
+    by_item = {row.order_item_id: row for row in coverage}
+    if not items or len(by_item) != len(items):
+        raise PaymentBridgeError("payment attempt prerequisites are incomplete")
+
+    reservation_ids = []
+    for item in items:
+        row = by_item.get(item.id)
+        valid = (
+            row is not None
+            and row.checkout_estimate_selection_id == selection_id
+            and row.inventory_policy == item.inventory_policy
+            and (
+                (
+                    item.inventory_policy == "stock_managed"
+                    and row.reservation_id is not None
+                )
+                or (
+                    item.inventory_policy == "made_to_order"
+                    and row.reservation_id is None
+                )
+            )
+        )
+        if not valid:
+            raise PaymentBridgeError("payment attempt prerequisites are incomplete")
+        if row.reservation_id is not None:
+            reservation_ids.append(row.reservation_id)
+
+    reservations = list(
+        await session.scalars(
+            select(StockReservation)
+            .where(StockReservation.id.in_(reservation_ids))
+            .order_by(StockReservation.id)
+            .with_for_update()
+        )
+    )
+    database_now = await session.scalar(text("SELECT clock_timestamp()"))
+    if len(reservations) != len(reservation_ids) or any(
+        reservation.order_id != order.id
+        or reservation.checkout_estimate_selection_id != selection_id
+        or reservation.state != "active"
+        or reservation.expires_at <= database_now
+        or by_item[reservation.order_item_id].reservation_id != reservation.id
+        for reservation in reservations
+    ):
+        raise PaymentBridgeError("payment attempt subject binding is invalid")
+
+    attempt_id = uuid.uuid4()
+    attempt = PaymentAttempt(
+        id=attempt_id,
+        order_id=order.id,
+        customer_id=order.customer_id,
+        workflow_cohort="domestic_checkout_v1",
+        checkout_estimate_selection_id=selection_id,
+        amount=order.total_amount,
+        currency=order.currency,
+        provider=provider,
+        provider_reference=f"shopsoma-{provider}-{attempt_id.hex}",
+        supersedes_attempt_id=predecessor.id if predecessor is not None else None,
+        source_command="initialize_checkout_payment",
+        idempotency_key=f"initialize:{order.id}:{provider}:{attempt_id.hex}",
+    )
+    session.add(attempt)
+    await session.flush()
+    session.add_all(
+        PaymentAttemptReservation(
+            attempt_id=attempt.id,
+            reservation_id=reservation.id,
+            membership_family="domestic_checkout_v1",
+            order_id=order.id,
+            order_item_id=reservation.order_item_id,
+            checkout_estimate_selection_id=selection_id,
+        )
+        for reservation in reservations
+    )
+    await session.flush()
+    await session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+    await session.execute(text("SET CONSTRAINTS ALL DEFERRED"))
     return attempt
 
 
@@ -490,6 +620,70 @@ def _evidence_hash(payload: dict[str, Any]) -> str:
     return hashlib.sha256(encoded.encode()).hexdigest()
 
 
+async def _attempt_reservations(
+    session: AsyncSession, *, attempt_id: uuid.UUID
+) -> list[StockReservation]:
+    return list(
+        await session.scalars(
+            select(StockReservation)
+            .join(
+                PaymentAttemptReservation,
+                PaymentAttemptReservation.reservation_id == StockReservation.id,
+            )
+            .where(PaymentAttemptReservation.attempt_id == attempt_id)
+            .order_by(StockReservation.id)
+            .with_for_update()
+        )
+    )
+
+
+async def _decrement_reserved_inventory(
+    session: AsyncSession, *, reservations: list[StockReservation]
+) -> None:
+    grouped: dict[tuple[str, uuid.UUID], int] = {}
+    for reservation in reservations:
+        key = (reservation.inventory_subject_kind, reservation.inventory_subject_id)
+        grouped[key] = grouped.get(key, 0) + reservation.quantity
+    models = {
+        "product": (Product, Product.total_stock),
+        "product_variant": (ProductVariant, ProductVariant.stock),
+        "size_stock": (SizeStock, SizeStock.stock),
+    }
+    for (kind, subject_id), quantity in sorted(grouped.items(), key=lambda row: row[0]):
+        model, stock_column = models[kind]
+        decremented = await session.scalar(
+            update(model)
+            .where(model.id == subject_id, stock_column >= quantity)
+            .values({stock_column.key: stock_column - quantity})
+            .returning(model.id)
+        )
+        if decremented is None:
+            raise PaymentBridgeError("verified payment inventory is unavailable")
+
+
+async def _enqueue_payment_event(
+    session: AsyncSession,
+    *,
+    attempt: PaymentAttempt,
+    event_type: str,
+    reason_code: str | None = None,
+) -> None:
+    payload = {
+        "version": 1,
+        "order_id": str(attempt.order_id),
+        "workflow_cohort": attempt.workflow_cohort,
+    }
+    if reason_code is not None:
+        payload["reason_code"] = reason_code
+    await enqueue_checkout_event(
+        session,
+        event_type=event_type,
+        source_id=attempt.id,
+        order_id=attempt.order_id,
+        payload=payload,
+    )
+
+
 async def finalize_verified_payment(
     session: AsyncSession,
     *,
@@ -531,6 +725,20 @@ async def finalize_verified_payment(
     )
     if attempt.provider != provider:
         raise PaymentTruthMismatch("verified payment truth does not match")
+
+    if attempt.state == "failed":
+        observed_at = observed_at or datetime.now(timezone.utc)
+        replay = payment.status == TransactionStatus.COMPLETED
+        payment.status = TransactionStatus.COMPLETED
+        payment.completed_at = observed_at
+        order.payment_status = PaymentStatus.PAID
+        await _enqueue_payment_event(
+            session,
+            attempt=attempt,
+            event_type="late_payment_exception",
+            reason_code="reservation_released",
+        )
+        return PaymentFinalizationResult(True, replay, order)
 
     if attempt.state == "verified":
         if payment.status != TransactionStatus.COMPLETED:
@@ -606,6 +814,20 @@ async def finalize_verified_payment(
     attempt.terminal_evidence_id = evidence.id
     attempt.row_version += 1
     await session.flush()
+
+    if attempt.workflow_cohort == "domestic_checkout_v1":
+        reservations = await _attempt_reservations(session, attempt_id=attempt.id)
+        if not reservations or any(row.state != "active" for row in reservations):
+            raise PaymentBridgeError("verified payment inventory is unavailable")
+        await _decrement_reserved_inventory(session, reservations=reservations)
+        for reservation in reservations:
+            reservation.state = "consumed"
+            reservation.terminal_reason = "authenticated_payment_verified"
+            reservation.row_version += 1
+        await session.flush()
+        await _enqueue_payment_event(
+            session, attempt=attempt, event_type="payment_verified_start_order"
+        )
 
     payment.status = TransactionStatus.COMPLETED
     payment.completed_at = observed_at
@@ -719,6 +941,18 @@ async def finalize_failed_payment(
     attempt.terminal_evidence_id = evidence.id
     attempt.row_version += 1
     await session.flush()
+
+    if attempt.workflow_cohort == "domestic_checkout_v1":
+        reservations = await _attempt_reservations(session, attempt_id=attempt.id)
+        for reservation in reservations:
+            if reservation.state == "active":
+                reservation.state = "released"
+                reservation.terminal_reason = "authenticated_payment_failed"
+                reservation.row_version += 1
+        await session.flush()
+        await _enqueue_payment_event(
+            session, attempt=attempt, event_type="payment_failed_release"
+        )
 
     payment.status = TransactionStatus.FAILED
     payment.failed_at = observed_at

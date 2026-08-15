@@ -61,14 +61,7 @@ async def initialize_payment(
 
     Supports both Paystack (NGN) and Stripe (NGN, USD) payment gateways.
     """
-    # Validate payment gateway and currency combination
-    if payment_data.payment_gateway == "paystack" and payment_data.currency != "NGN":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Paystack only supports NGN currency. Current currency: {payment_data.currency}",
-        )
-
-    # Get order
+    # Get order before interpreting client money; enforced cohorts use persisted truth.
     order_query = (
         select(Order)
         .options(selectinload(Order.items))
@@ -88,7 +81,17 @@ async def initialize_payment(
         )
 
     order_currency = (order.currency or "NGN").upper()
-    if payment_data.currency != order_currency:
+    enforced = order.workflow_cohort == "domestic_checkout_v1"
+    if (
+        not enforced
+        and payment_data.payment_gateway == "paystack"
+        and payment_data.currency != "NGN"
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Paystack only supports NGN currency. Current currency: {payment_data.currency}",
+        )
+    if not enforced and payment_data.currency != order_currency:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"This order must be paid in {order_currency}.",
