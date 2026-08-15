@@ -18,6 +18,8 @@ from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.api.v1 import payments
+from app.core.config import settings
+from app.models.checkout_shipping_estimate import OrderInventoryCoverage
 from app.models.order import FulfillmentStatus, Order, PaymentStatus
 from app.models.payment import Payment, PaymentGateway, TransactionStatus
 from app.models.stock_payment_persistence import (
@@ -37,6 +39,7 @@ from app.services.payments.fulfilment_bridge import (
     validate_verified_payment_truth,
 )
 from app.services.shipping.capabilities import DomesticShippingCapabilities
+from tests.test_checkout_estimate_api import _domestic_catalogue
 
 
 def _load_stock_helpers():
@@ -108,6 +111,96 @@ async def _unattempted_route_subject(db_session, vendor_user, customer_user):
     db_session.add(reservation)
     await db_session.commit()
     return graph, quote, option, selection, reservation
+
+
+@pytest.mark.asyncio
+async def test_production_initialize_rejects_enforced_usd_paystack_before_provider_or_session_truth(
+    client, db_session, vendor_user, customer_user, monkeypatch
+) -> None:
+    customer_email = customer_user["user"].email
+    address, product = await _domestic_catalogue(db_session, vendor_user, customer_user)
+    monkeypatch.setattr(settings, "DOMESTIC_CHECKOUT_PREREQUISITES_ENABLED", True)
+    monkeypatch.setattr(
+        settings,
+        "DOMESTIC_CHECKOUT_COHORT_ALLOWLIST",
+        str(customer_user["user"].id),
+    )
+    created = await client.post(
+        "/api/v1/orders",
+        headers=customer_user["headers"],
+        json={
+            "items": [{"product_id": str(product.id), "quantity": 1}],
+            "shipping_address_id": str(address.id),
+            "currency": "USD",
+        },
+    )
+    assert created.status_code == 201, created.text
+    order_id = uuid.UUID(created.json()["id"])
+    estimated = await client.post(
+        f"/api/v1/orders/{order_id}/checkout-estimates",
+        headers={
+            **customer_user["headers"],
+            "X-Idempotency-Key": f"usd-estimate-{uuid.uuid4()}",
+        },
+    )
+    assert estimated.status_code == 201, estimated.text
+    estimate = estimated.json()
+    selected = await client.post(
+        f"/api/v1/orders/{order_id}/checkout-estimates/{estimate['id']}"
+        f"/options/{estimate['options'][0]['id']}/select",
+        headers={
+            **customer_user["headers"],
+            "X-Idempotency-Key": f"usd-select-{uuid.uuid4()}",
+        },
+    )
+    assert selected.status_code == 200, selected.text
+    db_session.expire_all()
+    order = await db_session.get(Order, order_id)
+    assert order is not None
+    assert order.currency == "USD"
+    assert order.checkout_estimate_selection_id is not None
+    assert (
+        await db_session.scalar(
+            select(func.count(OrderInventoryCoverage.order_item_id)).where(
+                OrderInventoryCoverage.order_id == order_id,
+                OrderInventoryCoverage.reservation_id.is_not(None),
+            )
+        )
+        == 1
+    )
+    _PaystackInitializationClient.calls = 0
+    _PaystackInitializationClient.lookup_calls = 0
+    monkeypatch.setattr(payments.httpx, "AsyncClient", _PaystackInitializationClient)
+
+    response = await client.post(
+        "/api/v1/payments/initialize",
+        headers=customer_user["headers"],
+        json={
+            "order_id": str(order_id),
+            "email": customer_email,
+            "payment_gateway": "paystack",
+            "currency": "NGN",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "Paystack only supports NGN" in response.json()["detail"]
+    assert _PaystackInitializationClient.calls == 0
+    assert _PaystackInitializationClient.lookup_calls == 0
+    assert (
+        await db_session.scalar(
+            select(func.count(PaymentAttempt.id)).where(
+                PaymentAttempt.order_id == order_id
+            )
+        )
+        == 0
+    )
+    assert (
+        await db_session.scalar(
+            select(func.count(Payment.id)).where(Payment.order_id == order_id)
+        )
+        == 0
+    )
 
 
 @pytest.mark.asyncio

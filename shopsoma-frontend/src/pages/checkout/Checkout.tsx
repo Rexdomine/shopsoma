@@ -45,6 +45,20 @@ const ALL_PAYMENT_OPTIONS: { id: PaymentGateway; name: string; icon: string; sup
 
 const stripePromise = loadStripe(import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY || '');
 
+const CURRENCY_PRECISION: Record<Currency, number> = { NGN: 2, USD: 2 };
+
+const hasExactMinorUnitTruth = (amount: string, amountMinor: number, currency: Currency) => {
+  if (!Number.isSafeInteger(amountMinor) || amountMinor <= 0) return false;
+  const match = /^(0|[1-9]\d*)(?:\.(\d+))?$/.exec(amount);
+  if (!match) return false;
+  const precision = CURRENCY_PRECISION[currency];
+  const fraction = match[2] ?? '';
+  if (fraction.length > precision) return false;
+  const exactMinorDigits = `${match[1]}${fraction.padEnd(precision, '0')}`
+    .replace(/^0+(?=\d)/, '');
+  return exactMinorDigits === String(amountMinor);
+};
+
 export default function Checkout() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -404,17 +418,25 @@ export default function Checkout() {
     paymentData: InitializePaymentResponse,
   ) => {
     const gateway = paymentData.payment_gateway;
+    const supportedCurrency = paymentData.currency === 'NGN' || paymentData.currency === 'USD';
     const hasCanonicalTruth = paymentData.status === true
       && typeof paymentData.reference === 'string'
       && paymentData.reference.trim().length > 0
       && typeof paymentData.amount === 'string'
-      && Number.isFinite(Number(paymentData.amount))
-      && Number(paymentData.amount) > 0
-      && Number.isSafeInteger(paymentData.amount_minor)
-      && paymentData.amount_minor > 0
-      && (paymentData.currency === 'NGN' || paymentData.currency === 'USD');
+      && supportedCurrency
+      && hasExactMinorUnitTruth(
+        paymentData.amount,
+        paymentData.amount_minor,
+        paymentData.currency,
+      );
     if (!hasCanonicalTruth) {
       throw new Error('Payment initialization response is incomplete');
+    }
+    const gatewaySupportsCurrency = gateway === 'paystack'
+      ? paymentData.currency === 'NGN'
+      : gateway === 'stripe' && (paymentData.currency === 'NGN' || paymentData.currency === 'USD');
+    if (!gatewaySupportsCurrency) {
+      throw new Error('Unsupported payment gateway/currency combination');
     }
 
     if (gateway === 'paystack') {

@@ -27,3 +27,11 @@ Selection now uses the documented lock order `order -> shipping address -> order
 ## Safety boundary
 
 Do not push, mutate a PR, merge, deploy, run a production migration, call a carrier/provider, perform a DHL action, or activate any feature without Rex's explicit approval. Canonical sequence remains 2A-3D followed by 2A-4A; do not infer macro-phase jumps.
+
+## NightWing M5 final repair checkpoint (uncommitted)
+
+The bounded M5 repair now rejects Paystack whenever the canonical order currency is not NGN, including `domestic_checkout_v1`, before payment-attempt or provider/session creation. Checkout also fails closed before either provider UI opens when gateway/currency compatibility is invalid or the canonical decimal amount does not exactly match its safe integer two-decimal minor-unit value.
+
+Frontend focused and full verification is green: Checkout 11/11, full Vitest 43/43, TypeScript/Vite build, and ESLint (0 errors; 252 existing warnings). Changed Python files pass Black, fatal Flake8 (`E9,F63,F7,F82`), compileall, diff, changed-path, and added-line secret/live-provider scans.
+
+Backend route/contract execution remains unverified locally because PostgreSQL is unavailable (`127.0.0.1:5432` refused), Docker has no daemon/socket, and the bundled PostgreSQL runtime requires a guarded inherited library path. Do not commit this repair until the new enforced-USD Paystack route regression and complete payment bridge contract suite pass against PostgreSQL.

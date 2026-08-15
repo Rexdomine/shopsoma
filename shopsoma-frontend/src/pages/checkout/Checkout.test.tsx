@@ -214,7 +214,7 @@ describe('Checkout M5 sequencing and recovery', () => {
     }));
   });
 
-  it('opens only returned Paystack truth and consumes canonical payment fields', async () => {
+  it('fails closed when returned Paystack truth uses USD', async () => {
     const openIframe = vi.fn();
     const paystackSetup = vi.fn(() => ({ openIframe }));
     window.PaystackPop = { setup: paystackSetup };
@@ -228,21 +228,18 @@ describe('Checkout M5 sequencing and recovery', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Select Standard delivery' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Continue to payment' }));
 
-    await waitFor(() => expect(openIframe).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(alert).toHaveBeenCalledWith(expect.stringMatching(/unsupported/i)));
+    expect(openIframe).not.toHaveBeenCalled();
+    expect(paystackSetup).not.toHaveBeenCalled();
+    expect(mocks.buildPaystackWidgetConfig).not.toHaveBeenCalled();
     expect(screen.queryByText('Stripe form')).not.toBeInTheDocument();
-    expect(mocks.buildPaystackWidgetConfig).toHaveBeenCalledWith(returned, expect.objectContaining({
-      email: 'buyer@example.com',
-    }));
-    expect(paystackSetup).toHaveBeenCalledWith(expect.objectContaining({
-      amount: 10125,
-      currency: 'USD',
-      ref: 'canonical-ref',
-      access_code: 'canonical-access',
-    }));
+    expect(screen.getByRole('button', { name: 'Continue to payment' })).toBeEnabled();
   });
 
   it.each([
     ['unsupported gateway', { payment_gateway: 'unknown' }],
+    ['unsupported Stripe currency', { payment_gateway: 'stripe', currency: 'EUR' }],
+    ['contradictory amount and minor truth', { amount: '62500.01', amount_minor: 6250000 }],
     ['missing Stripe payload', { payment_gateway: 'stripe', provider_payload: undefined }],
     ['malformed Stripe payload', { payment_gateway: 'stripe', provider_payload: { client_secret: '', payment_intent_id: 42 } }],
     ['missing Paystack payload', { payment_gateway: 'paystack', provider_payload: undefined }],
