@@ -165,6 +165,41 @@ export interface Order {
   fulfillment_status: string;
   created_at: string;
   items: Array<any>;
+  workflow_cohort: string;
+  checkout_access_mode: string;
+  checkout_estimate_selection_id?: string | null;
+  checkout_prerequisites_completed_at?: string | null;
+  checkout_capability?: string | null;
+}
+
+export interface CheckoutEstimateOption {
+  id: string;
+  option_key: string;
+  service_code: string;
+  service_label: string;
+  amount: string;
+  currency: 'NGN' | 'USD';
+  min_delivery_days: number | null;
+  max_delivery_days: number | null;
+}
+
+export interface CheckoutEstimate {
+  id: string;
+  order_id: string;
+  currency: 'NGN' | 'USD';
+  expires_at: string;
+  options: CheckoutEstimateOption[];
+  selected_option: CheckoutEstimateOption | null;
+  server_payable_total: string;
+}
+
+function checkoutHeaders(capability?: string, idempotencyKey?: string) {
+  return {
+    headers: {
+      ...(idempotencyKey ? { 'X-Idempotency-Key': idempotencyKey } : {}),
+      ...(capability ? { 'X-ShopSoma-Checkout-Capability': capability } : {}),
+    },
+  };
 }
 
 /**
@@ -233,6 +268,34 @@ export const checkoutService = {
   // Create order
   async createOrder(data: CreateOrderData): Promise<Order> {
     const response = await api.post('/orders', data);
+    return response.data;
+  },
+
+  async createCheckoutEstimate(
+    orderId: string,
+    idempotencyKey: string,
+    capability?: string,
+  ): Promise<CheckoutEstimate> {
+    const response = await api.post(
+      `/orders/${orderId}/checkout-estimates`,
+      undefined,
+      checkoutHeaders(capability, idempotencyKey),
+    );
+    return response.data;
+  },
+
+  async selectCheckoutEstimateOption(
+    orderId: string,
+    estimateId: string,
+    optionId: string,
+    idempotencyKey: string,
+    capability?: string,
+  ): Promise<CheckoutEstimate> {
+    const response = await api.post(
+      `/orders/${orderId}/checkout-estimates/${estimateId}/options/${optionId}/select`,
+      undefined,
+      checkoutHeaders(capability, idempotencyKey),
+    );
     return response.data;
   },
 

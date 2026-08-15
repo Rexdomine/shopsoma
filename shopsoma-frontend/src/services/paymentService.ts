@@ -30,7 +30,7 @@ export interface InitializePaymentPayload {
   order_id: string;
   email: string;
   payment_gateway: PaymentGateway;
-  currency: Currency;
+  currency?: Currency;
   callback_url?: string;
 }
 
@@ -44,6 +44,32 @@ export interface InitializePaymentResponse {
   payment_intent_id?: string;
   checkout_url?: string;
   payment_gateway: string;
+  amount: string;
+  amount_minor: number;
+  currency: Currency;
+  provider_payload?: {
+    authorization_url?: string;
+    access_code?: string;
+    client_secret?: string;
+    payment_intent_id?: string;
+  };
+}
+
+export function buildPaystackWidgetConfig(
+  initialization: InitializePaymentResponse,
+  customer: { email: string; key: string },
+) {
+  if (!initialization.reference || !Number.isSafeInteger(initialization.amount_minor)) {
+    throw new Error('Payment initialization response is incomplete');
+  }
+  return {
+    key: customer.key,
+    email: customer.email,
+    amount: initialization.amount_minor,
+    currency: initialization.currency,
+    ref: initialization.reference,
+    access_code: initialization.provider_payload?.access_code ?? initialization.access_code,
+  };
 }
 
 export interface VerifyPaymentPayload {
@@ -62,8 +88,12 @@ export const paymentService = {
   /**
    * Initialize a payment session for an order
    */
-  async initializePayment(payload: InitializePaymentPayload): Promise<InitializePaymentResponse> {
-    const response = await api.post('/payments/initialize', payload);
+  async initializePayment(payload: InitializePaymentPayload, capability?: string): Promise<InitializePaymentResponse> {
+    const response = await api.post(
+      '/payments/initialize',
+      payload,
+      capability ? { headers: { 'X-ShopSoma-Checkout-Capability': capability } } : undefined,
+    );
     return response.data;
   },
 

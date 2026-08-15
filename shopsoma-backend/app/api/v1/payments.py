@@ -40,6 +40,7 @@ from app.services.payments.fulfilment_bridge import (
     recover_payment_mapping,
 )
 from app.services.shipping.capabilities import domestic_shipping_capabilities
+from app.services.checkout.capabilities import authorize_checkout_actor
 from sqlalchemy.orm import selectinload
 
 router = APIRouter(prefix="/payments", tags=["Payments"])
@@ -55,6 +56,9 @@ async def initialize_payment(
     payment_data: PaymentInitializeRequest,
     current_user: Optional[User] = Depends(get_optional_user),
     db: AsyncSession = Depends(get_db),
+    checkout_capability: Optional[str] = Header(
+        None, alias="X-ShopSoma-Checkout-Capability"
+    ),
 ):
     """
     Initialize a payment for an order
@@ -68,10 +72,6 @@ async def initialize_payment(
         .where(Order.id == payment_data.order_id)
     )
 
-    # If authenticated, verify order ownership
-    if current_user:
-        order_query = order_query.where(Order.customer_id == current_user.id)
-
     order_result = await db.execute(order_query)
     order = order_result.scalar_one_or_none()
 
@@ -82,6 +82,17 @@ async def initialize_payment(
 
     order_currency = (order.currency or "NGN").upper()
     enforced = order.workflow_cohort == "domestic_checkout_v1"
+    if enforced:
+        await authorize_checkout_actor(
+            db,
+            order=order,
+            current_user=current_user,
+            token=checkout_capability,
+        )
+    elif current_user and order.customer_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Order not found"
+        )
     if (
         not enforced
         and payment_data.payment_gateway == "paystack"
@@ -211,6 +222,14 @@ async def _initialize_stripe_payment(
             client_secret=intent.client_secret,
             payment_intent_id=intent.id,
             payment_gateway="stripe",
+            reference=truth.provider_reference,
+            amount=truth.amount,
+            amount_minor=amount_in_cents,
+            currency=truth.currency,
+            provider_payload={
+                "client_secret": intent.client_secret,
+                "payment_intent_id": intent.id,
+            },
         )
 
     except PaymentBridgeError as e:
@@ -369,6 +388,13 @@ async def _stored_paystack_initialization_session(
         access_code=access_code,
         reference=stored_reference,
         payment_gateway="paystack",
+        amount=payment.amount,
+        amount_minor=int(payment.amount * 100),
+        currency=payment.currency,
+        provider_payload={
+            "authorization_url": authorization_url,
+            "access_code": access_code,
+        },
     )
 
 
@@ -583,6 +609,13 @@ async def _initialize_paystack_payment(
                 access_code=data["access_code"],
                 reference=data["reference"],
                 payment_gateway="paystack",
+                amount=truth.amount,
+                amount_minor=amount_in_kobo,
+                currency=truth.currency,
+                provider_payload={
+                    "authorization_url": data["authorization_url"],
+                    "access_code": data["access_code"],
+                },
             )
 
         except HTTPException:
