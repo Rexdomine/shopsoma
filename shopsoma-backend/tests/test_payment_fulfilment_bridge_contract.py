@@ -779,6 +779,103 @@ async def test_initialization_retry_replays_only_stripe(
     assert retry_truth == first_truth
 
 
+@pytest.mark.asyncio
+async def test_paystack_initialization_reference_mismatch_reconciles_without_duplicate_post(
+    db_session, vendor_user, customer_user, monkeypatch
+) -> None:
+    graph, attempt = await _pending_route_attempt(
+        db_session, vendor_user, customer_user, "paystack"
+    )
+    monkeypatch.setattr(
+        payments,
+        "domestic_shipping_capabilities",
+        lambda settings: DomesticShippingCapabilities(True, True, False),
+    )
+    monkeypatch.setattr(
+        payments, "PAYSTACK_SECRET_KEY", "sk_" + "test_" + "mismatch-fixture"
+    )
+
+    class Response:
+        status_code = 200
+        text = ""
+
+        def json(self):
+            return {
+                "status": True,
+                "data": {
+                    "authorization_url": "https://paystack.invalid/authorize",
+                    "access_code": "access-code",
+                    "reference": "foreign-reference",
+                },
+            }
+
+    class VerifyResponse:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "status": True,
+                "data": {
+                    "status": "pending",
+                    "reference": attempt.provider_reference,
+                },
+            }
+
+    class Client:
+        post_calls = 0
+        get_references = []
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def post(self, *args, **kwargs):
+            type(self).post_calls += 1
+            return Response()
+
+        async def get(self, url, **kwargs):
+            type(self).get_references.append(url.rsplit("/", 1)[-1])
+            return VerifyResponse()
+
+    monkeypatch.setattr(payments.httpx, "AsyncClient", Client)
+    request = PaymentInitializeRequest(
+        order_id=graph["order"].id,
+        email=customer_user["user"].email,
+        payment_gateway="paystack",
+        currency=attempt.currency,
+        callback_url=None,
+    )
+
+    with pytest.raises(HTTPException) as first_error:
+        await payments._initialize_paystack_payment(request, graph["order"], db_session)
+    await db_session.rollback()
+    assert first_error.value.status_code == 503
+    assert (
+        await db_session.scalar(
+            select(func.count(Payment.id)).where(Payment.order_id == graph["order"].id)
+        )
+        == 0
+    )
+
+    with pytest.raises(HTTPException) as retry_error:
+        await payments._initialize_paystack_payment(request, graph["order"], db_session)
+    assert retry_error.value.status_code == 503
+    assert Client.post_calls == 1
+    assert Client.get_references
+    assert set(Client.get_references) == {attempt.provider_reference}
+    assert (
+        await db_session.scalar(
+            select(func.count(Payment.id)).where(Payment.order_id == graph["order"].id)
+        )
+        == 0
+    )
+
+
 async def _pending_route_attempt(db_session, vendor_user, customer_user, provider):
     stock = _load_stock_helpers()
     graph, intent, quote, option, selection, sku = await stock._checkout_subject(

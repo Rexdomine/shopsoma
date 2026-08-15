@@ -646,12 +646,27 @@ async def test_selection_rechecks_database_clock_after_waiting_for_estimate_lock
     assert estimate_expires_at <= database_now + timedelta(seconds=2)
     option_id = estimate["options"][0]["id"]
     application_name = f"m3-estimate-expiry-{uuid.uuid4().hex}"
+    estimate_lock_started = asyncio.Event()
+    event_loop = asyncio.get_running_loop()
+
+    def signal_estimate_lock_start(
+        _connection, _cursor, statement, _parameters, _context, _executemany
+    ):
+        normalized = " ".join(statement.lower().split())
+        if (
+            "from checkout_shipping_estimates" in normalized
+            and "for update" in normalized
+        ):
+            event_loop.call_soon_threadsafe(estimate_lock_started.set)
 
     blocker = await test_engine.connect()
     blocker_tx = await blocker.begin()
     await blocker.execute(
         text("SELECT 1 FROM checkout_shipping_estimates WHERE id=:id FOR UPDATE"),
         {"id": estimate["id"]},
+    )
+    event.listen(
+        test_engine.sync_engine, "before_cursor_execute", signal_estimate_lock_start
     )
     try:
         async with _isolated_route_client(application_name) as contender:
@@ -665,16 +680,21 @@ async def test_selection_rechecks_database_clock_after_waiting_for_estimate_lock
                     },
                 )
             )
-            await _wait_for_route_lock(application_name)
-            async with test_engine.connect() as observer:
-                while (
-                    await observer.scalar(select(text("clock_timestamp()")))
-                    <= estimate_expires_at
-                ):
-                    await asyncio.sleep(0.02)
+            await asyncio.wait_for(estimate_lock_started.wait(), timeout=3)
+            assert blocker_tx.is_active
+            assert not selection_task.done()
+            route_entered_at = await blocker.scalar(select(text("clock_timestamp()")))
+            assert route_entered_at < estimate_expires_at
+            database_now = await blocker.scalar(select(text("clock_timestamp()")))
+            while database_now <= estimate_expires_at:
+                database_now = await blocker.scalar(select(text("clock_timestamp()")))
+            assert database_now > estimate_expires_at
             await blocker_tx.commit()
             response = await asyncio.wait_for(selection_task, timeout=3)
     finally:
+        event.remove(
+            test_engine.sync_engine, "before_cursor_execute", signal_estimate_lock_start
+        )
         if blocker_tx.is_active:
             await blocker_tx.rollback()
         await blocker.close()

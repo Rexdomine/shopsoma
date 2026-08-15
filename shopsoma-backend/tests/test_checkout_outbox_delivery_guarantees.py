@@ -17,6 +17,7 @@ from app.services.checkout.outbox import (
     claim_checkout_events,
     complete_checkout_event,
     enqueue_checkout_event,
+    fail_checkout_event,
 )
 from tests.test_stock_payment_persistence import _checkout_subject
 
@@ -66,6 +67,7 @@ async def test_expired_claim_is_recovered_without_duplicate_effect_identity(
         db_session,
         event_id=event.id,
         owner="worker-b",
+        claim_token=recovered[0].claim_token,
         effect_identity=effect_identity,
     )
     await db_session.commit()
@@ -147,6 +149,92 @@ async def test_two_connections_skip_locked_and_claim_each_event_once(
     )
     assert {event.claim_owner for event in claimed} == {"worker-a", "worker-b"}
     assert all(event.attempt_count == 1 for event in claimed)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("terminal_action", ["complete", "fail"])
+async def test_same_owner_reclaim_fences_stale_claim_generation(
+    db_session, vendor_user, customer_user, terminal_action
+):
+    graph, *_ = await _checkout_subject(db_session, vendor_user, customer_user)
+    event = await enqueue_checkout_event(
+        db_session,
+        event_type="payment_verified_start_order",
+        source_id=uuid.uuid4(),
+        order_id=graph["order"].id,
+        payload={
+            "version": 1,
+            "order_id": str(graph["order"].id),
+            "workflow_cohort": "legacy_pre_bridge",
+        },
+    )
+    await db_session.commit()
+
+    sessions = async_sessionmaker(bind=db_session.bind, expire_on_commit=False)
+    claimed_at = datetime.now(timezone.utc)
+    async with sessions() as first_session:
+        first_claim = await claim_checkout_events(
+            first_session,
+            owner="worker-x",
+            now=claimed_at,
+            limit=1,
+            lease_seconds=30,
+        )
+        token_a = first_claim[0].claim_token
+        await first_session.commit()
+
+    async with sessions() as second_session:
+        second_claim = await claim_checkout_events(
+            second_session,
+            owner="worker-x",
+            now=claimed_at + timedelta(seconds=31),
+            limit=1,
+            lease_seconds=30,
+        )
+        token_b = second_claim[0].claim_token
+        await second_session.commit()
+
+    assert token_a != token_b
+    async with sessions() as stale_session:
+        with pytest.raises(ValueError, match="claim is not owned"):
+            await complete_checkout_event(
+                stale_session,
+                event_id=event.id,
+                owner="worker-x",
+                claim_token=token_a,
+                effect_identity=event.effect_identity,
+            )
+        with pytest.raises(ValueError, match="claim is not owned"):
+            await fail_checkout_event(
+                stale_session,
+                event_id=event.id,
+                owner="worker-x",
+                claim_token=token_a,
+                failure_code="delivery_failed",
+            )
+
+    async with sessions() as current_session:
+        if terminal_action == "complete":
+            terminal_event = await complete_checkout_event(
+                current_session,
+                event_id=event.id,
+                owner="worker-x",
+                claim_token=token_b,
+                effect_identity=event.effect_identity,
+            )
+        else:
+            terminal_event = await fail_checkout_event(
+                current_session,
+                event_id=event.id,
+                owner="worker-x",
+                claim_token=token_b,
+                failure_code="delivery_failed",
+            )
+        await current_session.commit()
+
+    assert terminal_event.status == (
+        "completed" if terminal_action == "complete" else "failed"
+    )
 
 
 def test_outbox_migration_matches_orm_and_real_upgrade_downgrade_cycle() -> None:

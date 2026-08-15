@@ -109,13 +109,16 @@ async def test_real_initialization_routes_bind_m3_truth_and_ignore_client_curren
             status_code = 200
             text = ""
 
+            def __init__(self, reference):
+                self.reference = reference
+
             def json(self):
                 return {
                     "status": True,
                     "data": {
                         "authorization_url": "https://paystack.invalid/authorize",
                         "access_code": "m4",
-                        "reference": "m4-paystack-reference",
+                        "reference": self.reference,
                     },
                 }
 
@@ -128,7 +131,7 @@ async def test_real_initialization_routes_bind_m3_truth_and_ignore_client_curren
 
             async def post(self, _url, **kwargs):
                 observed.update(kwargs["json"])
-                return Response()
+                return Response(kwargs["json"]["reference"])
 
         monkeypatch.setattr(payments.httpx, "AsyncClient", Client)
 

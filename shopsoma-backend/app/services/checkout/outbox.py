@@ -154,6 +154,7 @@ async def complete_checkout_event(
     *,
     event_id: uuid.UUID,
     owner: str,
+    claim_token: uuid.UUID,
     effect_identity: str,
 ) -> CheckoutOutboxEvent:
     event = await session.scalar(
@@ -161,7 +162,13 @@ async def complete_checkout_event(
         .where(CheckoutOutboxEvent.id == event_id)
         .with_for_update()
     )
-    if event is None or event.status != "claimed" or event.claim_owner != owner:
+    if (
+        event is None
+        or event.status != "claimed"
+        or event.claim_owner != owner
+        or event.claim_token != claim_token
+        or event.claim_expires_at <= datetime.now(timezone.utc)
+    ):
         raise ValueError("checkout outbox claim is not owned")
     if event.effect_identity != effect_identity:
         raise ValueError("checkout outbox effect identity mismatch")
@@ -180,6 +187,7 @@ async def fail_checkout_event(
     *,
     event_id: uuid.UUID,
     owner: str,
+    claim_token: uuid.UUID,
     failure_code: str,
 ) -> CheckoutOutboxEvent:
     event = await session.scalar(
@@ -187,7 +195,13 @@ async def fail_checkout_event(
         .where(CheckoutOutboxEvent.id == event_id)
         .with_for_update()
     )
-    if event is None or event.status != "claimed" or event.claim_owner != owner:
+    if (
+        event is None
+        or event.status != "claimed"
+        or event.claim_owner != owner
+        or event.claim_token != claim_token
+        or event.claim_expires_at <= datetime.now(timezone.utc)
+    ):
         raise ValueError("checkout outbox claim is not owned")
     event.status = "failed"
     event.claim_owner = None

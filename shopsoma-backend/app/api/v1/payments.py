@@ -4,7 +4,7 @@ import hmac
 import hashlib
 import re
 import stripe
-from typing import Optional
+from typing import Optional, cast
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Header
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -496,6 +496,19 @@ async def _initialize_paystack_payment(
                         status_code=status.HTTP_400_BAD_REQUEST, detail=error_message
                     )
 
+            if not isinstance(paystack_response, dict):
+                if truth.bridge_applied:
+                    await _reconcile_paystack_initialization(
+                        client,
+                        reference=reference,
+                        headers=headers,
+                        db=db,
+                    )
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Payment initialization outcome is not definitive",
+                )
+
             if not paystack_response.get("status"):
                 error_message = paystack_response.get(
                     "message", "Payment initialization failed"
@@ -523,6 +536,31 @@ async def _initialize_paystack_payment(
                     detail="Payment initialization outcome is not definitive",
                 )
 
+            data = paystack_response.get("data")
+            valid_session = (
+                isinstance(data, dict)
+                and isinstance(data.get("reference"), str)
+                and bool(data["reference"].strip())
+                and data["reference"] == reference
+                and isinstance(data.get("authorization_url"), str)
+                and bool(data["authorization_url"].strip())
+                and isinstance(data.get("access_code"), str)
+                and bool(data["access_code"].strip())
+            )
+            if not valid_session:
+                if truth.bridge_applied:
+                    await _reconcile_paystack_initialization(
+                        client,
+                        reference=reference,
+                        headers=headers,
+                        db=db,
+                    )
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Payment initialization outcome is not definitive",
+                )
+            data = cast(dict, data)
+
             # Create payment record
             payment = Payment(
                 order_id=order.id,
@@ -538,7 +576,6 @@ async def _initialize_paystack_payment(
             db.add(payment)
             await db.commit()
 
-            data = paystack_response["data"]
             return PaymentInitializeResponse(
                 status=True,
                 message="Payment session created successfully",
