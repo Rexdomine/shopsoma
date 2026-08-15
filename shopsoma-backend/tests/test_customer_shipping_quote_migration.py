@@ -14,7 +14,8 @@ from sqlalchemy.engine import make_url
 
 
 REVISION = "e8c0a2d4f6b8"
-HEAD = "b3c4d5e6f7a8"
+HEAD = "c4d5e6f7a8b9"
+CURRENT_HEAD_PARENT = "b3c4d5e6f7a8"
 PREVIOUS_HEAD = "a2b3c4d5e6f7"
 HEAD_PARENT = "a1b2c3d4e5f6"
 HEAD_GRANDPARENT = "a0b1c2d3e4f5"
@@ -54,7 +55,8 @@ def test_customer_quote_revision_is_single_linear_head_and_owns_explicit_ddl() -
     config.set_main_option("script_location", str(root / "alembic"))
     script = ScriptDirectory.from_config(config)
     assert script.get_heads() == [HEAD]
-    assert script.get_revision(HEAD).down_revision == PREVIOUS_HEAD
+    assert script.get_revision(HEAD).down_revision == CURRENT_HEAD_PARENT
+    assert script.get_revision(CURRENT_HEAD_PARENT).down_revision == PREVIOUS_HEAD
     assert script.get_revision(PREVIOUS_HEAD).down_revision == HEAD_PARENT
     assert script.get_revision(HEAD_PARENT).down_revision == HEAD_GRANDPARENT
     assert script.get_revision(HEAD_GRANDPARENT).down_revision == F9_REVISION

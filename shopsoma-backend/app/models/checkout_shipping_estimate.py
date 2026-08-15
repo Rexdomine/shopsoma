@@ -120,7 +120,7 @@ class CheckoutShippingEstimateOption(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "amount NOT IN ('NaN'::numeric,'Infinity'::numeric,'-Infinity'::numeric) AND amount > 0 AND amount <= 99999999.99 AND currency ~ '^[A-Z]{3}$'",
+            "amount NOT IN ('NaN'::numeric,'Infinity'::numeric,'-Infinity'::numeric) AND amount >= 0 AND amount <= 99999999.99 AND currency ~ '^[A-Z]{3}$'",
             name="ck_checkout_estimate_options_money",
         ),
         CheckConstraint(
@@ -187,7 +187,7 @@ class CheckoutShippingEstimateSelection(Base):
             ondelete="RESTRICT",
         ),
         CheckConstraint(
-            "shipping_amount NOT IN ('NaN'::numeric,'Infinity'::numeric,'-Infinity'::numeric) AND shipping_amount > 0 AND shipping_amount <= 99999999.99 AND currency ~ '^[A-Z]{3}$'",
+            "shipping_amount NOT IN ('NaN'::numeric,'Infinity'::numeric,'-Infinity'::numeric) AND shipping_amount >= 0 AND shipping_amount <= 99999999.99 AND currency ~ '^[A-Z]{3}$'",
             name="ck_checkout_estimate_selections_money",
         ),
         CheckConstraint(

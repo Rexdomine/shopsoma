@@ -16,6 +16,7 @@ from app.models.checkout_shipping_estimate import (
 )
 from app.models.address import Address
 from app.models.order import Order, OrderItem
+from app.models.setting import Setting
 from app.models.shipping_rate import ShippingRate
 
 _CENT = Decimal("0.01")
@@ -138,6 +139,29 @@ async def create_estimate(
             raise HTTPException(status_code=409, detail="idempotency conflict")
         return existing
 
+    usd_to_ngn_rate = None
+    if order.currency == "USD":
+        rate_setting = await db.scalar(
+            select(Setting).where(Setting.key == "exchange_rate_usd_to_ngn")
+        )
+        try:
+            usd_to_ngn_rate = Decimal(str(rate_setting.value))
+        except (ArithmeticError, ValueError, TypeError, AttributeError) as exc:
+            raise HTTPException(
+                status_code=503, detail="authoritative exchange rate unavailable"
+            ) from exc
+        if not usd_to_ngn_rate.is_finite() or usd_to_ngn_rate <= 0:
+            raise HTTPException(
+                status_code=503, detail="authoritative exchange rate unavailable"
+            )
+
+    def ngn_in_order_currency(value) -> Decimal:
+        amount = Decimal(value)
+        if order.currency == "USD":
+            assert usd_to_ngn_rate is not None
+            amount /= usd_to_ngn_rate
+        return amount.quantize(_CENT, rounding=ROUND_HALF_UP)
+
     rates = (
         (
             await db.execute(
@@ -149,14 +173,6 @@ async def create_estimate(
                         ShippingRate.state == order.shipping_address.state,
                         ShippingRate.state.is_(None),
                     ),
-                    or_(
-                        ShippingRate.min_order_value.is_(None),
-                        ShippingRate.min_order_value <= order.subtotal,
-                    ),
-                    or_(
-                        ShippingRate.max_order_value.is_(None),
-                        ShippingRate.max_order_value >= order.subtotal,
-                    ),
                 )
                 .order_by(ShippingRate.priority, ShippingRate.id)
             )
@@ -164,6 +180,18 @@ async def create_estimate(
         .scalars()
         .all()
     )
+    rates = [
+        rate
+        for rate in rates
+        if (
+            rate.min_order_value is None
+            or ngn_in_order_currency(rate.min_order_value) <= order.subtotal
+        )
+        and (
+            rate.max_order_value is None
+            or ngn_in_order_currency(rate.max_order_value) >= order.subtotal
+        )
+    ]
     if not rates:
         raise HTTPException(status_code=503, detail="no eligible estimate options")
     database_now = await db.scalar(select(text("statement_timestamp()")))
@@ -188,7 +216,7 @@ async def create_estimate(
     db.add(estimate)
     await db.flush()
     for rate in rates:
-        amount = Decimal(rate.base_rate).quantize(_CENT, rounding=ROUND_HALF_UP)
+        amount = ngn_in_order_currency(rate.base_rate)
         db.add(
             CheckoutShippingEstimateOption(
                 estimate_id=estimate.id,

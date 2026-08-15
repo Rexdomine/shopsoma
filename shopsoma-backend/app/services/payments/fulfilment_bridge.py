@@ -6,15 +6,17 @@ import hashlib
 import json
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from sqlalchemy import select, text, update
+from sqlalchemy import select, text, tuple_, update
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.address import Address
 from app.models.checkout_shipping_estimate import (
+    CheckoutShippingEstimate,
     CheckoutShippingEstimateSelection,
     OrderInventoryCoverage,
 )
@@ -39,6 +41,8 @@ from app.models.stock_payment_persistence import (
     StockReservation,
 )
 from app.services.checkout.outbox import enqueue_checkout_event
+from app.services.checkout.estimates import order_snapshot, reload_checkout_order
+from app.services.checkout.reservations import _coordinator_keys, _lock_and_available
 from app.services.shipping.capabilities import DomesticShippingCapabilities
 
 
@@ -303,6 +307,13 @@ async def _ensure_domestic_bridge_attempt(
     selection_id = order.checkout_estimate_selection_id
     if selection_id is None or order.checkout_prerequisites_completed_at is None:
         raise PaymentBridgeError("payment attempt prerequisites are incomplete")
+    if order.shipping_address_id is None:
+        raise PaymentBridgeError("payment attempt prerequisites are incomplete")
+    await session.execute(
+        select(Address.id)
+        .where(Address.id == order.shipping_address_id)
+        .with_for_update()
+    )
     selection = await session.scalar(
         select(CheckoutShippingEstimateSelection).where(
             CheckoutShippingEstimateSelection.id == selection_id,
@@ -322,6 +333,15 @@ async def _ensure_domestic_bridge_attempt(
             .with_for_update()
         )
     )
+    order = await reload_checkout_order(session, order)
+    estimate = await session.get(CheckoutShippingEstimate, selection.estimate_id)
+    destination_hash, snapshot_hash = order_snapshot(order)
+    if (
+        estimate is None
+        or estimate.destination_snapshot_hash != destination_hash
+        or estimate.order_snapshot_hash != snapshot_hash
+    ):
+        raise PaymentBridgeError("payment attempt prerequisites are stale")
     coverage = list(
         await session.scalars(
             select(OrderInventoryCoverage)
@@ -356,6 +376,101 @@ async def _ensure_domestic_bridge_attempt(
             raise PaymentBridgeError("payment attempt prerequisites are incomplete")
         if row.reservation_id is not None:
             reservation_ids.append(row.reservation_id)
+
+    if predecessor is not None and predecessor.state in {"failed", "expired"}:
+        prior_reservations = list(
+            await session.scalars(
+                select(StockReservation)
+                .where(StockReservation.id.in_(reservation_ids))
+                .order_by(StockReservation.id)
+                .with_for_update()
+            )
+        )
+        if prior_reservations and all(
+            reservation.state in {"released", "expired"}
+            for reservation in prior_reservations
+        ):
+            stock_items = [
+                item for item in items if item.inventory_policy == "stock_managed"
+            ]
+            reservation_pairs = [(item, uuid.uuid4()) for item in stock_items]
+            subjects = {
+                (item.inventory_subject_kind, item.inventory_subject_id)
+                for item in stock_items
+            }
+            existing_ids = (
+                list(
+                    await session.scalars(
+                        select(StockReservation.id).where(
+                            StockReservation.state == "active",
+                            tuple_(
+                                StockReservation.inventory_subject_kind,
+                                StockReservation.inventory_subject_id,
+                            ).in_(subjects),
+                        )
+                    )
+                )
+                if subjects
+                else []
+            )
+            await session.execute(
+                text("SELECT coordinate_stock_payment_write(CAST(:keys AS jsonb))"),
+                {
+                    "keys": json.dumps(
+                        _coordinator_keys(order, reservation_pairs, existing_ids)
+                    )
+                },
+            )
+            required = {}
+            for item in stock_items:
+                key = (item.inventory_subject_kind, item.inventory_subject_id)
+                required[key] = required.get(key, 0) + item.quantity
+            for item in stock_items:
+                key = (item.inventory_subject_kind, item.inventory_subject_id)
+                if key in required:
+                    if await _lock_and_available(session, item) < required[key]:
+                        raise PaymentBridgeError("insufficient stock for payment retry")
+                    required.pop(key)
+            database_now = await session.scalar(text("SELECT clock_timestamp()"))
+            creation_txid = await session.scalar(text("SELECT txid_current()"))
+            reservation_ids = []
+            for item, reservation_id in reservation_pairs:
+                replacement = StockReservation(
+                    id=reservation_id,
+                    order_id=order.id,
+                    order_item_id=item.id,
+                    customer_id=order.customer_id,
+                    workflow_cohort=order.workflow_cohort,
+                    checkout_estimate_selection_id=selection_id,
+                    inventory_subject_kind=item.inventory_subject_kind,
+                    inventory_subject_id=item.inventory_subject_id,
+                    product_id=item.inventory_source_product_id,
+                    variant_id=(
+                        item.inventory_subject_id
+                        if item.inventory_subject_kind == "product_variant"
+                        else None
+                    ),
+                    size_stock_id=(
+                        item.inventory_subject_id
+                        if item.inventory_subject_kind == "size_stock"
+                        else None
+                    ),
+                    quantity=item.quantity,
+                    unit_price=item.unit_price,
+                    line_amount=item.subtotal,
+                    currency=item.currency,
+                    ttl_seconds=1800,
+                    expires_at=database_now + timedelta(seconds=1800),
+                    state="active",
+                    source_command="retry_checkout_payment",
+                    idempotency_key=f"retry:{predecessor.id}:{item.id}",
+                    creation_txid=creation_txid,
+                )
+                session.add(replacement)
+                await session.flush()
+                by_item[item.id].reservation_id = replacement.id
+                reservation_ids.append(replacement.id)
+            await session.flush()
 
     reservations = list(
         await session.scalars(

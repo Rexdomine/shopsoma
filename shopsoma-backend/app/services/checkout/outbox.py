@@ -214,9 +214,45 @@ async def fail_checkout_event(
     return event
 
 
+async def retry_checkout_event(
+    session: AsyncSession,
+    *,
+    event_id: uuid.UUID,
+    owner: str,
+    claim_token: uuid.UUID,
+    delay_seconds: int = 30,
+) -> CheckoutOutboxEvent:
+    """Release an owned claim for a bounded delayed retry."""
+    if delay_seconds < 1 or delay_seconds > 900:
+        raise ValueError("invalid checkout outbox retry delay")
+    event = await session.scalar(
+        select(CheckoutOutboxEvent)
+        .where(CheckoutOutboxEvent.id == event_id)
+        .with_for_update()
+    )
+    now = datetime.now(timezone.utc)
+    if (
+        event is None
+        or event.status != "claimed"
+        or event.claim_owner != owner
+        or event.claim_token != claim_token
+        or event.claim_expires_at <= now
+    ):
+        raise ValueError("checkout outbox claim is not owned")
+    event.status = "pending"
+    event.claim_owner = None
+    event.claim_token = None
+    event.claim_expires_at = None
+    event.available_at = now + timedelta(seconds=delay_seconds)
+    event.updated_at = now
+    await session.flush()
+    return event
+
+
 __all__ = [
     "claim_checkout_events",
     "complete_checkout_event",
     "enqueue_checkout_event",
     "fail_checkout_event",
+    "retry_checkout_event",
 ]

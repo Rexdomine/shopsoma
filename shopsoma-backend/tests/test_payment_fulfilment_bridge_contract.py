@@ -22,6 +22,7 @@ from app.core.config import settings
 from app.models.checkout_shipping_estimate import OrderInventoryCoverage
 from app.models.order import FulfillmentStatus, Order, PaymentStatus
 from app.models.payment import Payment, PaymentGateway, TransactionStatus
+from app.models.setting import Setting
 from app.models.stock_payment_persistence import (
     PaymentAttempt,
     PaymentAttemptEvidence,
@@ -118,19 +119,30 @@ async def test_production_initialize_rejects_enforced_usd_paystack_before_provid
     client, db_session, vendor_user, customer_user, monkeypatch
 ) -> None:
     customer_email = customer_user["user"].email
+    customer_id = customer_user["user"].id
     address, product = await _domestic_catalogue(db_session, vendor_user, customer_user)
+    address_id = address.id
+    product_id = product.id
+    db_session.add(
+        Setting(
+            key="exchange_rate_usd_to_ngn",
+            value="833",
+            description="Authoritative test rate",
+        )
+    )
+    await db_session.commit()
     monkeypatch.setattr(settings, "DOMESTIC_CHECKOUT_PREREQUISITES_ENABLED", True)
     monkeypatch.setattr(
         settings,
         "DOMESTIC_CHECKOUT_COHORT_ALLOWLIST",
-        str(customer_user["user"].id),
+        str(customer_id),
     )
     created = await client.post(
         "/api/v1/orders",
         headers=customer_user["headers"],
         json={
-            "items": [{"product_id": str(product.id), "quantity": 1}],
-            "shipping_address_id": str(address.id),
+            "items": [{"product_id": str(product_id), "quantity": 1}],
+            "shipping_address_id": str(address_id),
             "currency": "USD",
         },
     )

@@ -29,6 +29,7 @@ REVISIONS = (
     "a2b3c4d5e6f7",
 )
 MILESTONE_FOUR_REVISION = "b3c4d5e6f7a8"
+CURRENT_HEAD_REVISION = "c4d5e6f7a8b9"
 
 
 def _script():
@@ -47,7 +48,9 @@ def test_milestone_two_revisions_are_sequential_from_current_head() -> None:
     ]
     milestone_four = script.get_revision(MILESTONE_FOUR_REVISION)
     assert milestone_four.down_revision == REVISIONS[-1]
-    assert script.get_current_head() == MILESTONE_FOUR_REVISION
+    current = script.get_revision(CURRENT_HEAD_REVISION)
+    assert current.down_revision == MILESTONE_FOUR_REVISION
+    assert script.get_current_head() == CURRENT_HEAD_REVISION
 
 
 def test_expand_validate_contract_and_safe_downgrade_are_frozen() -> None:
@@ -946,7 +949,7 @@ def test_finding3_postgresql_migration_and_orm_catalogs_have_exact_parity(
     from app.core.base import Base
 
     app_url, sync_url = disposable_m2_database
-    _run_alembic(app_url, "upgrade", REVISIONS[-1])
+    _run_alembic(app_url, "upgrade", CURRENT_HEAD_REVISION)
     migrated = create_engine(sync_url)
     model_database = f"shopsoma_m2_model_{uuid.uuid4().hex[:12]}"
     admin_url = sync_url.set(database="postgres")
