@@ -1,4 +1,5 @@
 """Order schemas"""
+
 from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any
 from uuid import UUID
@@ -10,6 +11,7 @@ from app.models.order import PaymentStatus, FulfillmentStatus
 # Order Item Schemas
 class OrderItemBase(BaseModel):
     """Base order item schema"""
+
     product_id: UUID
     variant_id: Optional[UUID] = None
     quantity: int = Field(..., gt=0, description="Quantity")
@@ -17,11 +19,13 @@ class OrderItemBase(BaseModel):
 
 class OrderItemCreate(OrderItemBase):
     """Schema for creating an order item"""
+
     pass
 
 
 class OrderItemResponse(BaseModel):
     """Schema for order item response"""
+
     id: UUID
     order_id: UUID
     product_id: UUID
@@ -47,6 +51,7 @@ class OrderItemResponse(BaseModel):
 # Guest Address Schema
 class GuestAddressData(BaseModel):
     """Guest checkout address data"""
+
     full_name: str
     phone_number: str
     address_line1: str
@@ -60,19 +65,31 @@ class GuestAddressData(BaseModel):
 # Order Schemas
 class OrderCreate(BaseModel):
     """Schema for creating an order"""
+
     items: list[OrderItemCreate] = Field(..., min_length=1, description="Order items")
     shipping_address_id: Optional[UUID] = Field(None, description="Shipping address ID")
-    billing_address_id: Optional[UUID] = Field(None, description="Billing address ID (defaults to shipping)")
-    guest_address: Optional[GuestAddressData] = Field(None, description="Guest checkout address data")
-    customer_email: Optional[str] = Field(None, description="Customer email for guest checkout")
-    customer_notes: Optional[str] = Field(None, max_length=1000, description="Customer notes")
-    shipping_rate_id: Optional[UUID] = Field(None, description="Selected shipping rate ID")
+    billing_address_id: Optional[UUID] = Field(
+        None, description="Billing address ID (defaults to shipping)"
+    )
+    guest_address: Optional[GuestAddressData] = Field(
+        None, description="Guest checkout address data"
+    )
+    customer_email: Optional[str] = Field(
+        None, description="Customer email for guest checkout"
+    )
+    customer_notes: Optional[str] = Field(
+        None, max_length=1000, description="Customer notes"
+    )
+    shipping_rate_id: Optional[UUID] = Field(
+        None, description="Selected shipping rate ID"
+    )
     promo_code: Optional[str] = Field(None, description="Promo code to apply")
     currency: str = Field("NGN", pattern="^(NGN|USD)$", description="Checkout currency")
 
 
 class OrderSummary(BaseModel):
     """Order summary for review before creation"""
+
     currency: str = Field("NGN", pattern="^(NGN|USD)$")
     subtotal: Decimal
     shipping_cost: Decimal
@@ -85,6 +102,7 @@ class OrderSummary(BaseModel):
 
 class OrderReviewRequest(BaseModel):
     """Request schema for order review/preview"""
+
     items: list[OrderItemCreate] = Field(..., min_length=1)
     shipping_address_id: Optional[UUID] = None
     guest_address: Optional[GuestAddressData] = None
@@ -95,6 +113,7 @@ class OrderReviewRequest(BaseModel):
 
 class OrderReviewResponse(BaseModel):
     """Response schema for order review"""
+
     summary: OrderSummary
     items: list[Dict[str, Any]]  # Product details with pricing
     shipping_rate: Optional[Dict[str, Any]]
@@ -103,6 +122,7 @@ class OrderReviewResponse(BaseModel):
 
 class OrderUpdate(BaseModel):
     """Schema for updating an order (admin)"""
+
     payment_status: Optional[PaymentStatus] = None
     fulfillment_status: Optional[FulfillmentStatus] = None
     delivery_provider: Optional[str] = Field(None, max_length=50)
@@ -113,9 +133,16 @@ class OrderUpdate(BaseModel):
 
 class OrderResponse(BaseModel):
     """Schema for order response"""
+
     id: UUID
     order_number: str
     customer_id: UUID
+    workflow_cohort: str
+    workflow_policy_version: str
+    checkout_access_mode: str
+    checkout_estimate_selection_id: Optional[UUID] = None
+    checkout_prerequisites_completed_at: Optional[datetime] = None
+    checkout_capability: Optional[str] = None
     currency: Optional[str] = None
     shipping_address_id: Optional[UUID]
     billing_address_id: Optional[UUID]
@@ -145,6 +172,7 @@ class OrderResponse(BaseModel):
 
 class OrderListResponse(BaseModel):
     """Schema for list of orders"""
+
     orders: list[OrderResponse]
     total: int
     page: int
@@ -153,4 +181,7 @@ class OrderListResponse(BaseModel):
 
 class OrderCancelRequest(BaseModel):
     """Schema for cancelling an order"""
-    cancellation_reason: str = Field(..., min_length=1, max_length=500, description="Reason for cancellation")
+
+    cancellation_reason: str = Field(
+        ..., min_length=1, max_length=500, description="Reason for cancellation"
+    )
