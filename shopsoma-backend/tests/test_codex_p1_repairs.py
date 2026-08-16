@@ -1,11 +1,13 @@
 """Production-faithful regressions for the consolidated Codex P1 repair ledger."""
 
+import asyncio
 from decimal import Decimal
 from types import SimpleNamespace
 import uuid
 
 import pytest
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, text
+from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.models.checkout_outbox import CheckoutOutboxEvent
 from app.models.checkout_shipping_estimate import (
@@ -20,7 +22,7 @@ from app.models.shipping_rate import ShippingRate
 from app.models.stock_payment_persistence import PaymentAttempt, StockReservation
 from app.models.vendor_pickup import VendorNotification, VendorPickup
 from app.services.checkout.outbox import enqueue_checkout_event
-from tests.conftest import TestSessionLocal
+from tests.conftest import TestSessionLocal, _ASYNC_TEST_DATABASE_URL
 from tests.test_checkout_estimate_api import _domestic_catalogue
 from tests.test_checkout_payment_bridge_prerequisites import create_enforced_checkout
 
@@ -417,6 +419,67 @@ def test_checkout_outbox_task_is_registered_on_production_worker_entrypoint():
     assert "app.tasks.checkout_outbox.dispatch_checkout_outbox" in celery_app.tasks
     schedule = celery_app.conf.beat_schedule["dispatch-checkout-outbox"]
     assert schedule["task"] == "app.tasks.checkout_outbox.dispatch_checkout_outbox"
+
+
+def test_checkout_outbox_sync_ticks_dispose_pooled_engine_between_event_loops(
+    monkeypatch,
+):
+    from app.tasks import checkout_outbox
+
+    pooled_engine = create_async_engine(
+        _ASYNC_TEST_DATABASE_URL, pool_size=1, max_overflow=0
+    )
+    progress = []
+
+    async def database_tick():
+        async with pooled_engine.connect() as connection:
+            progress.append(await connection.scalar(text("SELECT 1")))
+        return {"progress": len(progress)}
+
+    monkeypatch.setattr(checkout_outbox, "engine", pooled_engine, raising=False)
+    monkeypatch.setattr(checkout_outbox, "dispatch_checkout_events_once", database_tick)
+
+    try:
+        previous_loop = asyncio.get_event_loop()
+    except RuntimeError:
+        previous_loop = None
+    try:
+        assert checkout_outbox.dispatch_checkout_outbox() == {"progress": 1}
+        assert checkout_outbox.dispatch_checkout_outbox() == {"progress": 2}
+        assert progress == [1, 1]
+    finally:
+        if previous_loop is not None:
+            asyncio.set_event_loop(previous_loop)
+
+
+def test_checkout_outbox_sync_tick_disposes_engine_when_dispatch_raises(monkeypatch):
+    from app.tasks import checkout_outbox
+
+    disposed_on = []
+
+    class TrackedEngine:
+        async def dispose(self):
+            disposed_on.append(asyncio.get_running_loop())
+
+    async def failed_tick():
+        raise RuntimeError("dispatch failed")
+
+    monkeypatch.setattr(checkout_outbox, "engine", TrackedEngine(), raising=False)
+    monkeypatch.setattr(checkout_outbox, "dispatch_checkout_events_once", failed_tick)
+
+    try:
+        previous_loop = asyncio.get_event_loop()
+    except RuntimeError:
+        previous_loop = None
+    try:
+        with pytest.raises(RuntimeError, match="dispatch failed"):
+            checkout_outbox.dispatch_checkout_outbox()
+    finally:
+        if previous_loop is not None:
+            asyncio.set_event_loop(previous_loop)
+
+    assert len(disposed_on) == 1
+    assert disposed_on[0].is_closed()
 
 
 @pytest.mark.asyncio

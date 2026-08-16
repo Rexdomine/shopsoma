@@ -3,7 +3,7 @@
 import asyncio
 import socket
 
-from app.core.database import AsyncSessionLocal
+from app.core.database import AsyncSessionLocal, engine
 from app.services.checkout.outbox import (
     claim_checkout_events,
     complete_checkout_event,
@@ -62,6 +62,14 @@ async def dispatch_checkout_events_once(
     return counts
 
 
+async def _dispatch_checkout_outbox_tick() -> dict[str, int]:
+    """Run one tick and release loop-bound pooled connections before loop close."""
+    try:
+        return await dispatch_checkout_events_once()
+    finally:
+        await engine.dispose()
+
+
 def dispatch_checkout_outbox() -> dict[str, int]:
     """Synchronous Celery boundary around one bounded async dispatch tick."""
-    return asyncio.run(dispatch_checkout_events_once())
+    return asyncio.run(_dispatch_checkout_outbox_tick())
