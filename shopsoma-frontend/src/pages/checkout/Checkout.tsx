@@ -470,6 +470,18 @@ export default function Checkout() {
             navigate(`${ROUTES.ORDER_SUCCESS}?orderId=${order.id}&payment=success`);
           }).catch((error) => {
             console.error('Payment verification error:', error);
+            if (order.checkout_access_mode === 'guest_capability' && checkoutCapability) {
+              const terminalAuthorization = error.response?.status === 404 || error.response?.status === 410;
+              setIsCreatingOrder(false);
+              if (terminalAuthorization) {
+                clearCheckoutCapability();
+                alert('Checkout access expired. Payment recovery is no longer available.');
+              } else {
+                setPaymentRetryAvailable(true);
+                alert('We could not confirm your payment yet. Your saved order is still available; retry payment to reconcile it.');
+              }
+              return;
+            }
             navigate(`${ROUTES.ORDER_SUCCESS}?orderId=${order.id}&payment=verification_failed`);
           });
         },
@@ -1206,7 +1218,7 @@ export default function Checkout() {
                       {paymentRetryAvailable && enforcedOrder?.checkout_access_mode === 'guest_capability' && checkoutCapability && (
                         <div className="space-y-2" role="status">
                           <p className="text-sm text-amber-700">
-                            Payment was not completed. Your order is saved and ready to retry.
+                            Payment was not completed, or we could not confirm your payment yet. Your order is saved and ready to retry.
                           </p>
                           <button
                             type="button"

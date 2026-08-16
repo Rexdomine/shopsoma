@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -113,8 +113,21 @@ const estimate = {
   }],
 };
 
+function CheckoutTestRoutes() {
+  const location = useLocation();
+  return (
+    <>
+      <div data-testid="checkout-location">{`${location.pathname}${location.search}${location.hash}`}</div>
+      <Routes>
+        <Route path="/checkout" element={<Checkout />} />
+        <Route path="/order-success" element={<div>Order success route</div>} />
+      </Routes>
+    </>
+  );
+}
+
 async function reachPaymentStep(selectStripe = true) {
-  render(<MemoryRouter><Checkout /></MemoryRouter>);
+  render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
   await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
   fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
   await screen.findByText('Standard');
@@ -160,6 +173,15 @@ async function openEnforcedPaystack() {
       return config;
     },
   };
+}
+
+function useGuestCapability(capability: string) {
+  mocks.createOrder.mockResolvedValueOnce({
+    ...order,
+    customer_id: null,
+    checkout_access_mode: 'guest_capability',
+    checkout_capability: capability,
+  });
 }
 
 describe('Checkout M5 sequencing and recovery', () => {
@@ -281,14 +303,76 @@ describe('Checkout M5 sequencing and recovery', () => {
     expect(mocks.createOrder).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps guest Paystack callback HTTP 503 recovery on Checkout and retries the saved order', async () => {
+    const capability = 'callback-503-capability';
+    useGuestCapability(capability);
+    const localStorageSpy = vi.spyOn(window.localStorage, 'setItem');
+    const sessionStorageSpy = vi.spyOn(window.sessionStorage, 'setItem');
+    mocks.verifyPayment.mockRejectedValueOnce({ response: { status: 503 } });
+    const { getConfig } = await openEnforcedPaystack();
+
+    getConfig().callback({ reference: 'callback-503-ref' });
+
+    expect(await screen.findByText(/could not confirm your payment yet/i)).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Checkout' })).toBeInTheDocument();
+    expect(screen.getByTestId('checkout-location')).toHaveTextContent('/checkout');
+    fireEvent.click(screen.getByRole('button', { name: 'Retry payment' }));
+    await waitFor(() => expect(mocks.initializePayment).toHaveBeenCalledTimes(2));
+    expect(mocks.initializePayment).toHaveBeenLastCalledWith(expect.objectContaining({
+      order_id: 'order-1',
+      payment_gateway: 'paystack',
+    }), capability);
+    expect(mocks.createOrder).toHaveBeenCalledTimes(1);
+    expect(mocks.createCheckoutEstimate).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('checkout-location').textContent).not.toContain(capability);
+    expect(localStorageSpy).not.toHaveBeenCalledWith(expect.anything(), capability);
+    expect(sessionStorageSpy).not.toHaveBeenCalledWith(expect.anything(), capability);
+  });
+
+  it('keeps guest Paystack callback network recovery on Checkout and retries the saved order', async () => {
+    const capability = 'callback-network-capability';
+    useGuestCapability(capability);
+    mocks.verifyPayment.mockRejectedValueOnce(new Error('Network Error'));
+    const { getConfig } = await openEnforcedPaystack();
+
+    getConfig().callback({ reference: 'callback-network-ref' });
+
+    expect(await screen.findByText(/could not confirm your payment yet/i)).toBeInTheDocument();
+    expect(screen.getByTestId('checkout-location')).toHaveTextContent('/checkout');
+    fireEvent.click(screen.getByRole('button', { name: 'Retry payment' }));
+    await waitFor(() => expect(mocks.initializePayment).toHaveBeenCalledTimes(2));
+    expect(mocks.initializePayment).toHaveBeenLastCalledWith(expect.objectContaining({
+      order_id: 'order-1',
+      payment_gateway: 'paystack',
+    }), capability);
+    expect(mocks.createOrder).toHaveBeenCalledTimes(1);
+    expect(mocks.createCheckoutEstimate).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([404, 410])('fails closed after guest Paystack callback terminal status %s', async (status) => {
+    const capability = `callback-terminal-${status}-capability`;
+    useGuestCapability(capability);
+    mocks.verifyPayment.mockRejectedValueOnce({
+      response: { status, data: { detail: 'Checkout access expired' } },
+    });
+    const { getConfig } = await openEnforcedPaystack();
+
+    getConfig().callback({ reference: `callback-terminal-${status}-ref` });
+
+    await waitFor(() => expect(alert).toHaveBeenCalledWith(expect.stringMatching(/expired|no longer available/i)));
+    expect(screen.getByRole('heading', { name: 'Checkout' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Retry payment' })).not.toBeInTheDocument();
+    expect(screen.getByTestId('checkout-location')).toHaveTextContent('/checkout');
+    expect(mocks.initializePayment).toHaveBeenCalledTimes(1);
+    expect(mocks.createOrder).toHaveBeenCalledTimes(1);
+    expect(mocks.createCheckoutEstimate).toHaveBeenCalledTimes(1);
+  });
+
   it('clears guest capability after verified Paystack success', async () => {
     const capability = 'successful-capability';
-    mocks.createOrder.mockResolvedValueOnce({
-      ...order,
-      customer_id: null,
-      checkout_access_mode: 'guest_capability',
-      checkout_capability: capability,
-    });
+    useGuestCapability(capability);
+    const localStorageSpy = vi.spyOn(window.localStorage, 'setItem');
+    const sessionStorageSpy = vi.spyOn(window.sessionStorage, 'setItem');
     mocks.verifyPayment.mockResolvedValueOnce({ status: true });
     const { getConfig } = await openEnforcedPaystack();
     getConfig().onClose();
@@ -297,7 +381,12 @@ describe('Checkout M5 sequencing and recovery', () => {
     getConfig().callback({ reference: 'canonical-ref' });
 
     await waitFor(() => expect(mocks.verifyPayment).toHaveBeenCalled());
-    await waitFor(() => expect(screen.queryByRole('button', { name: 'Retry payment' })).not.toBeInTheDocument());
+    await screen.findByText('Order success route');
+    expect(screen.queryByRole('button', { name: 'Retry payment' })).not.toBeInTheDocument();
+    expect(screen.getByTestId('checkout-location')).toHaveTextContent('/order-success?orderId=order-1&payment=success');
+    expect(screen.getByTestId('checkout-location').textContent).not.toContain(capability);
+    expect(localStorageSpy).not.toHaveBeenCalledWith(expect.anything(), capability);
+    expect(sessionStorageSpy).not.toHaveBeenCalledWith(expect.anything(), capability);
   });
 
   it('keeps authenticated Paystack cancellation on the existing completed-order route', async () => {
