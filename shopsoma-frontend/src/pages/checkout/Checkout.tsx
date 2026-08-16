@@ -421,6 +421,11 @@ export default function Checkout() {
     clearCheckoutCapability();
     setEnforcedOrder(null);
     setCheckoutEstimate(null);
+    setShowStripePaymentModal(false);
+    setStripeClientSecret('');
+    setStripePaymentIntentId('');
+    setCurrentPaymentGateway(null);
+    setCurrentOrderId('');
   };
 
   const openInitializedPayment = (
@@ -678,9 +683,21 @@ export default function Checkout() {
       CartService.clearCart();
       setShowStripePaymentModal(false);
       navigate(`${ROUTES.ORDER_SUCCESS}?orderId=${currentOrderId}&payment=success`);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Payment verification error:', error);
       setShowStripePaymentModal(false);
+      if (enforcedOrder?.checkout_access_mode === 'guest_capability' && checkoutCapability) {
+        const terminalAuthorization = error.response?.status === 404 || error.response?.status === 410;
+        setIsCreatingOrder(false);
+        if (terminalAuthorization) {
+          discardExpiredCheckout();
+          alert('Checkout access expired. Payment recovery is no longer available.');
+        } else {
+          setPaymentRetryAvailable(true);
+          alert('We could not confirm your payment yet. Your saved order is still available; retry payment to reconcile it.');
+        }
+        return;
+      }
       navigate(`${ROUTES.ORDER_SUCCESS}?orderId=${currentOrderId}&payment=verification_failed`);
     }
   };
