@@ -20,7 +20,11 @@ from app.models.setting import Setting
 from app.models.order import FulfillmentStatus, Order, PaymentStatus
 from app.models.product import Product
 from app.models.shipping_rate import ShippingRate
-from app.models.stock_payment_persistence import PaymentAttempt, StockReservation
+from app.models.stock_payment_persistence import (
+    PaymentAttempt,
+    PaymentAttemptEvidence,
+    StockReservation,
+)
 from app.models.vendor_pickup import VendorNotification, VendorPickup
 from app.services.checkout.outbox import enqueue_checkout_event
 from tests.conftest import TestSessionLocal, _ASYNC_TEST_DATABASE_URL
@@ -80,8 +84,9 @@ async def test_authenticated_unpaid_enforced_cancellation_releases_reservation_w
 
 
 @pytest.mark.asyncio
-async def test_enforced_cancellation_rejects_call_started_and_late_success_finalizes_once(
-    client, db_session, vendor_user, customer_user, monkeypatch
+@pytest.mark.parametrize("unresolved_state", ["call_started", "abandoned_unknown"])
+async def test_enforced_cancellation_rejects_unresolved_attempt_and_late_success_finalizes_once(
+    client, db_session, vendor_user, customer_user, monkeypatch, unresolved_state
 ):
     from tests.test_verified_payment_inventory import initialize_stripe, verify_stripe
 
@@ -96,8 +101,44 @@ async def test_enforced_cancellation_rejects_call_started_and_late_success_final
         customer_user,
         monkeypatch,
         order,
-        transaction_id="pi_cancel_unresolved",
+        transaction_id=f"pi_cancel_{unresolved_state}",
     )
+    if unresolved_state == "abandoned_unknown":
+        persisted_attempt = await db_session.get(PaymentAttempt, attempt.id)
+        await db_session.execute(text("SET LOCAL session_replication_role = replica"))
+        await db_session.execute(
+            text(
+                "UPDATE payment_attempts "
+                "SET claim_expires_at=clock_timestamp() - interval '1 second' "
+                "WHERE id=:attempt_id"
+            ),
+            {"attempt_id": attempt.id},
+        )
+        await db_session.execute(text("SET LOCAL session_replication_role = origin"))
+        unknown_evidence = PaymentAttemptEvidence(
+            attempt_id=attempt.id,
+            source="cancellation_regression",
+            event_id=f"unknown:{attempt.id.hex}",
+            evidence_type="outcome_unknown",
+            provider=persisted_attempt.provider,
+            provider_reference=persisted_attempt.provider_reference,
+            evidence_hash=uuid.uuid4().hex * 2,
+            observed_at=await db_session.scalar(text("SELECT clock_timestamp()")),
+        )
+        db_session.add(unknown_evidence)
+        await db_session.flush()
+        await db_session.execute(
+            text("SELECT coordinate_payment_attempt_write(:attempt_id, :order_id)"),
+            {"attempt_id": attempt.id, "order_id": order_id},
+        )
+        await db_session.execute(
+            text("SELECT set_config('shopsoma.payment_lease_token', :token, true)"),
+            {"token": str(persisted_attempt.lease_token)},
+        )
+        persisted_attempt.state = "abandoned_unknown"
+        persisted_attempt.terminal_evidence_id = unknown_evidence.id
+        persisted_attempt.row_version += 1
+        await db_session.commit()
     db_session.expire_all()
     reservation = await db_session.scalar(
         select(StockReservation).where(StockReservation.order_id == order_id)
@@ -107,8 +148,21 @@ async def test_enforced_cancellation_rejects_call_started_and_late_success_final
     payment_before = await db_session.scalar(
         select(Payment).where(Payment.order_id == order_id)
     )
-    attempt_version = attempt_before.row_version
-    payment_status = payment_before.status
+    attempt_before_cancel = (
+        attempt_before.state,
+        attempt_before.lease_token,
+        attempt_before.claim_expires_at,
+        attempt_before.terminal_evidence_id,
+        attempt_before.terminal_at,
+        attempt_before.row_version,
+    )
+    payment_before_cancel = (
+        payment_before.status,
+        payment_before.gateway_response,
+        payment_before.completed_at,
+        payment_before.failed_at,
+        payment_before.failure_reason,
+    )
 
     first_cancel = await client.post(
         f"/api/v1/orders/{order_id}/cancel",
@@ -134,9 +188,22 @@ async def test_enforced_cancellation_rejects_call_started_and_late_success_final
     assert persisted_order.cancelled_at is None
     assert persisted_order.cancellation_reason is None
     assert persisted_reservation.state == "active"
-    assert persisted_attempt.state == "call_started"
-    assert persisted_attempt.row_version == attempt_version
-    assert persisted_payment.status == payment_status
+    assert (
+        persisted_attempt.state,
+        persisted_attempt.lease_token,
+        persisted_attempt.claim_expires_at,
+        persisted_attempt.terminal_evidence_id,
+        persisted_attempt.terminal_at,
+        persisted_attempt.row_version,
+    ) == attempt_before_cancel
+    assert persisted_attempt.state == unresolved_state
+    assert (
+        persisted_payment.status,
+        persisted_payment.gateway_response,
+        persisted_payment.completed_at,
+        persisted_payment.failed_at,
+        persisted_payment.failure_reason,
+    ) == payment_before_cancel
     assert product.total_stock == stock_before
 
     first_success = await verify_stripe(client, monkeypatch, attempt)
@@ -146,11 +213,22 @@ async def test_enforced_cancellation_rejects_call_started_and_late_success_final
     db_session.expire_all()
     persisted_order = await db_session.get(Order, order_id)
     persisted_reservation = await db_session.get(StockReservation, reservation_id)
+    persisted_attempt = await db_session.get(PaymentAttempt, attempt.id)
     await db_session.refresh(product)
     assert persisted_order.payment_status == PaymentStatus.PAID
     assert persisted_order.fulfillment_status == FulfillmentStatus.ORDER_RECEIVED
     assert persisted_reservation.state == "consumed"
     assert persisted_reservation.row_version == 2
+    assert persisted_attempt.state == "verified"
+    assert (
+        await db_session.scalar(
+            select(func.count(PaymentAttemptEvidence.id)).where(
+                PaymentAttemptEvidence.attempt_id == attempt.id,
+                PaymentAttemptEvidence.evidence_type == "payment_verified",
+            )
+        )
+        == 1
+    )
     assert product.total_stock == stock_before - persisted_reservation.quantity
 
 

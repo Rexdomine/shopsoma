@@ -1618,7 +1618,7 @@ async def cancel_order(
             select(PaymentAttempt)
             .where(
                 PaymentAttempt.order_id == order.id,
-                PaymentAttempt.state == "call_started",
+                PaymentAttempt.state.in_({"call_started", "abandoned_unknown"}),
             )
             .with_for_update()
         )
