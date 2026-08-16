@@ -616,7 +616,14 @@ export default function Checkout() {
     if (!enforcedOrder) throw new Error('Checkout order is unavailable');
     const requestKey = newIdempotencyKey('estimate');
     setEstimateRequestKey(requestKey);
-    return checkoutService.createCheckoutEstimate(enforcedOrder.id, requestKey, checkoutCapability);
+    try {
+      return await checkoutService.createCheckoutEstimate(enforcedOrder.id, requestKey, checkoutCapability);
+    } catch (error: any) {
+      if (error.response?.status === 404 || error.response?.status === 410) {
+        discardExpiredCheckout();
+      }
+      throw error;
+    }
   };
 
   const recoverCheckoutEstimate = async () => {
@@ -639,13 +646,20 @@ export default function Checkout() {
     const identity = `${estimateId}:${optionId}`;
     const selectionKey = selectionKeys.get(identity) ?? newIdempotencyKey('selection');
     selectionKeys.set(identity, selectionKey);
-    return checkoutService.selectCheckoutEstimateOption(
-      enforcedOrder.id,
-      estimateId,
-      optionId,
-      selectionKey,
-      checkoutCapability,
-    );
+    try {
+      return await checkoutService.selectCheckoutEstimateOption(
+        enforcedOrder.id,
+        estimateId,
+        optionId,
+        selectionKey,
+        checkoutCapability,
+      );
+    } catch (error: any) {
+      if (error.response?.status === 404 || error.response?.status === 410) {
+        discardExpiredCheckout();
+      }
+      throw error;
+    }
   };
 
   const handleStripePaymentSuccess = async () => {

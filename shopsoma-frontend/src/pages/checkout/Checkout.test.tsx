@@ -386,6 +386,68 @@ describe('Checkout M5 sequencing and recovery', () => {
     expect(mocks.initializePayment).toHaveBeenCalledTimes(1);
   });
 
+  it.each([404, 410])('creates a fresh guest order after delivery selection terminal status %s', async (status) => {
+    const capability = `selection-terminal-${status}-capability`;
+    const replacementCapability = `selection-replacement-${status}-capability`;
+    useGuestCapability(capability);
+    mocks.createOrder.mockResolvedValueOnce({
+      ...order,
+      id: `selection-replacement-order-${status}`,
+      customer_id: null,
+      checkout_access_mode: 'guest_capability',
+      checkout_capability: replacementCapability,
+    });
+    await reachPaymentStep(false);
+    mocks.selectCheckoutEstimateOption.mockRejectedValueOnce({
+      isAxiosError: true,
+      response: { status, data: { detail: 'Checkout access expired' } },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Select Standard delivery' }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Select Standard delivery' })).not.toBeInTheDocument());
+    fireEvent.click(screen.getAllByRole('button', { name: 'Purchase' })[0]);
+
+    await waitFor(() => expect(mocks.createOrder).toHaveBeenCalledTimes(2));
+    expect(mocks.createCheckoutEstimate).toHaveBeenLastCalledWith(
+      `selection-replacement-order-${status}`,
+      expect.stringMatching(/^estimate-/),
+      replacementCapability,
+    );
+  });
+
+  it.each([404, 410])('creates a fresh guest order when conflict refresh returns terminal status %s', async (status) => {
+    const capability = `refresh-terminal-${status}-capability`;
+    const replacementCapability = `refresh-replacement-${status}-capability`;
+    useGuestCapability(capability);
+    mocks.createOrder.mockResolvedValueOnce({
+      ...order,
+      id: `refresh-replacement-order-${status}`,
+      customer_id: null,
+      checkout_access_mode: 'guest_capability',
+      checkout_capability: replacementCapability,
+    });
+    await reachPaymentStep(false);
+    mocks.selectCheckoutEstimateOption.mockRejectedValueOnce({
+      isAxiosError: true,
+      response: { status: 409, data: { detail: 'stale checkout estimate' } },
+    });
+    mocks.createCheckoutEstimate.mockRejectedValueOnce({
+      isAxiosError: true,
+      response: { status, data: { detail: 'Checkout access expired' } },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Select Standard delivery' }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Select Standard delivery' })).not.toBeInTheDocument());
+    fireEvent.click(screen.getAllByRole('button', { name: 'Purchase' })[0]);
+
+    await waitFor(() => expect(mocks.createOrder).toHaveBeenCalledTimes(2));
+    expect(mocks.createCheckoutEstimate).toHaveBeenLastCalledWith(
+      `refresh-replacement-order-${status}`,
+      expect.stringMatching(/^estimate-/),
+      replacementCapability,
+    );
+  });
+
   it('clears guest capability after verified Paystack success', async () => {
     const capability = 'successful-capability';
     useGuestCapability(capability);

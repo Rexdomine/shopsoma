@@ -36,9 +36,20 @@ export default function CheckoutEstimateSelector({
       setEstimate(selected);
     } catch (caught) {
       if (axios.isAxiosError(caught) && caught.response?.status === 409) {
-        const replacement = await refreshEstimate();
-        setEstimate(replacement);
-        setError('Delivery options changed. Review and explicitly select an available option.');
+        try {
+          const replacement = await refreshEstimate();
+          setEstimate(replacement);
+          setError('Delivery options changed. Review and explicitly select an available option.');
+        } catch (refreshError) {
+          if (
+            axios.isAxiosError(refreshError)
+            && (refreshError.response?.status === 404 || refreshError.response?.status === 410)
+          ) {
+            setError('Checkout access expired. Start a new checkout to continue.');
+          } else {
+            setError('Delivery options are still unavailable. Please retry.');
+          }
+        }
       } else if (axios.isAxiosError(caught) && caught.response?.status === 503) {
         setError('Delivery selection is temporarily unavailable. Please retry.');
       } else {

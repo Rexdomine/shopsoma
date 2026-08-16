@@ -103,4 +103,19 @@ describe('CheckoutEstimateSelector', () => {
     expect(onSelectionConfirmed).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: 'Continue to payment' })).toBeDisabled();
   });
+
+  it.each([404, 410])('handles terminal status %s from a conflict refresh without an unhandled rejection', async (status) => {
+    const conflict = { isAxiosError: true, response: { status: 409 } };
+    const terminal = { isAxiosError: true, response: { status } };
+    const selectOption = vi.fn().mockRejectedValue(conflict);
+    const refreshEstimate = vi.fn().mockRejectedValue(terminal);
+    const { onSelectionConfirmed } = renderSelector({ selectOption, refreshEstimate });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Select Standard delivery' }));
+
+    expect(await screen.findByText(/Checkout access expired/i)).toBeInTheDocument();
+    expect(refreshEstimate).toHaveBeenCalledTimes(1);
+    expect(onSelectionConfirmed).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Continue to payment' })).toBeDisabled();
+  });
 });
