@@ -138,3 +138,20 @@ def test_render_blueprint_wires_canonical_checkout_outbox_consumers() -> None:
     ).lower()
     for forbidden in ("dhl", "stripe", "paystack", "email", "brevo", "shipbubble"):
         assert forbidden not in wired_text
+
+
+def test_render_checkout_consumers_share_supported_python_runtime_without_changing_web() -> (
+    None
+):
+    blueprint = yaml.safe_load((ROOT / "render.yaml").read_text(encoding="utf-8"))
+    services = {service["name"]: service for service in blueprint["services"]}
+    worker = services["shopsoma-staging-checkout-outbox-worker"]
+    beat = services["shopsoma-staging-checkout-outbox-beat"]
+    web = services["shopsoma-staging-api"]
+
+    worker_version = env_by_key(worker)["PYTHON_VERSION"]["value"]
+    beat_version = env_by_key(beat)["PYTHON_VERSION"]["value"]
+
+    assert worker_version == beat_version
+    assert tuple(map(int, str(worker_version).split("."))) >= (3, 10)
+    assert env_by_key(web)["PYTHON_VERSION"]["value"] == "3.9.18"

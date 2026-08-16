@@ -119,6 +119,7 @@ export default function Checkout() {
   const [enforcedOrder, setEnforcedOrder] = useState<Order | null>(null);
   const [checkoutEstimate, setCheckoutEstimate] = useState<CheckoutEstimate | null>(null);
   const [checkoutCapability, setCheckoutCapability] = useState<string | undefined>();
+  const [paymentRetryAvailable, setPaymentRetryAvailable] = useState(false);
   const [, setEstimateRequestKey] = useState<string>('');
   const [selectionKeys] = useState(() => new Map<string, string>());
 
@@ -411,7 +412,10 @@ export default function Checkout() {
     }
   };
 
-  const clearCheckoutCapability = () => setCheckoutCapability(undefined);
+  const clearCheckoutCapability = () => {
+    setCheckoutCapability(undefined);
+    setPaymentRetryAvailable(false);
+  };
 
   const openInitializedPayment = (
     order: Order,
@@ -470,8 +474,13 @@ export default function Checkout() {
           });
         },
         onClose: () => {
-          clearCheckoutCapability();
           setIsCreatingOrder(false);
+          if (order.checkout_access_mode === 'guest_capability') {
+            setPaymentRetryAvailable(true);
+            alert('Payment cancelled. Your order is saved; retry payment when you are ready.');
+            return;
+          }
+          clearCheckoutCapability();
           alert('Payment cancelled. You can retry payment from your orders page.');
           navigate(`${ROUTES.ORDER_SUCCESS}?orderId=${order.id}&payment=cancelled`);
         },
@@ -500,6 +509,7 @@ export default function Checkout() {
   };
 
   const initializeOrderPayment = async (order: Order, capability?: string) => {
+    setPaymentRetryAvailable(false);
     setIsCreatingOrder(true);
     try {
       const enforced = order.workflow_cohort === 'domestic_checkout_v1';
@@ -512,7 +522,12 @@ export default function Checkout() {
       }, enforced ? capability : undefined);
       openInitializedPayment(order, paymentData);
     } catch (error: any) {
-      if (error.response?.status === 404) clearCheckoutCapability();
+      const terminalAuthorization = error.response?.status === 404 || error.response?.status === 410;
+      if (terminalAuthorization) {
+        clearCheckoutCapability();
+      } else if (order.checkout_access_mode === 'guest_capability' && capability) {
+        setPaymentRetryAvailable(true);
+      }
       const retryable = error.response?.status === 503;
       alert(retryable
         ? 'Payment setup is temporarily unavailable. Your order is not complete; please retry.'
@@ -1185,6 +1200,21 @@ export default function Checkout() {
                             className="w-full py-2 border border-primary text-primary text-sm font-semibold disabled:opacity-50"
                           >
                             {isCreatingOrder ? 'Retrying delivery options…' : 'Retry delivery options'}
+                          </button>
+                        </div>
+                      )}
+                      {paymentRetryAvailable && enforcedOrder?.checkout_access_mode === 'guest_capability' && checkoutCapability && (
+                        <div className="space-y-2" role="status">
+                          <p className="text-sm text-amber-700">
+                            Payment was not completed. Your order is saved and ready to retry.
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => void initializeOrderPayment(enforcedOrder, checkoutCapability)}
+                            disabled={isCreatingOrder}
+                            className="w-full py-2 border border-primary text-primary text-sm font-semibold disabled:opacity-50"
+                          >
+                            {isCreatingOrder ? 'Retrying payment…' : 'Retry payment'}
                           </button>
                         </div>
                       )}

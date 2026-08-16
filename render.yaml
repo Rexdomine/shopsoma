@@ -101,7 +101,7 @@ services:
     startCommand: "cd shopsoma-backend && celery -A app.celery_app:celery_app worker --loglevel=info"
     envVars:
       - key: PYTHON_VERSION
-        value: 3.9.18
+        value: 3.11.11
       - key: ENVIRONMENT
         value: staging
       - key: DATABASE_URL
@@ -156,7 +156,7 @@ services:
     startCommand: "cd shopsoma-backend && celery -A app.celery_app:celery_app beat --loglevel=info"
     envVars:
       - key: PYTHON_VERSION
-        value: 3.9.18
+        value: 3.11.11
       - key: ENVIRONMENT
         value: staging
       - key: DATABASE_URL

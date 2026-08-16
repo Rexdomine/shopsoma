@@ -126,6 +126,42 @@ async function reachPaymentStep(selectStripe = true) {
   await waitFor(() => expect(mocks.createOrder).toHaveBeenCalled());
 }
 
+const paystackInitialization = {
+  status: true, message: 'ready', payment_gateway: 'paystack', reference: 'canonical-ref',
+  amount: '62500.00', amount_minor: 6250000, currency: 'NGN',
+  provider_payload: {
+    access_code: 'canonical-access',
+    authorization_url: 'https://provider.invalid/session',
+  },
+};
+
+type PaystackTestConfig = {
+  onClose: () => void;
+  callback: (response: { reference: string }) => void;
+};
+
+async function openEnforcedPaystack() {
+  const openIframe = vi.fn();
+  let config: PaystackTestConfig | undefined;
+  const paystackSetup = vi.fn((receivedConfig: PaystackTestConfig) => {
+    config = receivedConfig;
+    return { openIframe };
+  });
+  window.PaystackPop = { setup: paystackSetup };
+  mocks.initializePayment.mockResolvedValue(paystackInitialization);
+  await reachPaymentStep(false);
+  fireEvent.click(screen.getByRole('button', { name: 'Select Standard delivery' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Continue to payment' }));
+  await waitFor(() => expect(openIframe).toHaveBeenCalled());
+  return {
+    openIframe,
+    getConfig: () => {
+      if (!config) throw new Error('Paystack config was not captured');
+      return config;
+    },
+  };
+}
+
 describe('Checkout M5 sequencing and recovery', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -195,6 +231,82 @@ describe('Checkout M5 sequencing and recovery', () => {
     await waitFor(() => expect(alert).toHaveBeenCalledWith(expect.stringMatching(/not complete.*retry/i)));
     expect(screen.getByRole('button', { name: 'Continue to payment' })).toBeEnabled();
     expect(screen.queryByText('Stripe form')).not.toBeInTheDocument();
+  });
+
+  it('keeps a guest Paystack capability in memory and retries the same order after close', async () => {
+    const capability = 'guest-capability-never-persist';
+    mocks.createOrder.mockResolvedValueOnce({
+      ...order,
+      customer_id: null,
+      checkout_access_mode: 'guest_capability',
+      checkout_capability: capability,
+    });
+    const storageSpy = vi.spyOn(Storage.prototype, 'setItem');
+
+    const { getConfig } = await openEnforcedPaystack();
+    getConfig().onClose();
+
+    const retry = await screen.findByRole('button', { name: 'Retry payment' });
+    expect(screen.getByRole('heading', { name: 'Checkout' })).toBeInTheDocument();
+    expect(mocks.createOrder).toHaveBeenCalledTimes(1);
+    expect(storageSpy).not.toHaveBeenCalledWith(expect.anything(), capability);
+
+    fireEvent.click(retry);
+    await waitFor(() => expect(mocks.initializePayment).toHaveBeenCalledTimes(2));
+    expect(mocks.initializePayment).toHaveBeenLastCalledWith({
+      order_id: 'order-1', email: 'buyer@example.com', payment_gateway: 'paystack',
+      callback_url: `${window.location.origin}/payment/verify`,
+    }, capability);
+    expect(mocks.createOrder).toHaveBeenCalledTimes(1);
+    expect(mocks.createCheckoutEstimate).toHaveBeenCalledTimes(1);
+    expect(storageSpy).not.toHaveBeenCalledWith(expect.anything(), capability);
+  });
+
+  it.each([404, 410])('clears guest capability after terminal payment initialization status %s', async (status) => {
+    const capability = 'terminal-capability';
+    mocks.createOrder.mockResolvedValueOnce({
+      ...order,
+      customer_id: null,
+      checkout_access_mode: 'guest_capability',
+      checkout_capability: capability,
+    });
+    const { getConfig } = await openEnforcedPaystack();
+    getConfig().onClose();
+    mocks.initializePayment.mockRejectedValueOnce({ response: { status, data: { detail: 'Checkout access expired' } } });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry payment' }));
+
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Retry payment' })).not.toBeInTheDocument());
+    expect(mocks.initializePayment).toHaveBeenLastCalledWith(expect.any(Object), capability);
+    expect(mocks.createOrder).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears guest capability after verified Paystack success', async () => {
+    const capability = 'successful-capability';
+    mocks.createOrder.mockResolvedValueOnce({
+      ...order,
+      customer_id: null,
+      checkout_access_mode: 'guest_capability',
+      checkout_capability: capability,
+    });
+    mocks.verifyPayment.mockResolvedValueOnce({ status: true });
+    const { getConfig } = await openEnforcedPaystack();
+    getConfig().onClose();
+    expect(await screen.findByRole('button', { name: 'Retry payment' })).toBeEnabled();
+
+    getConfig().callback({ reference: 'canonical-ref' });
+
+    await waitFor(() => expect(mocks.verifyPayment).toHaveBeenCalled());
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Retry payment' })).not.toBeInTheDocument());
+  });
+
+  it('keeps authenticated Paystack cancellation on the existing completed-order route', async () => {
+    const { getConfig } = await openEnforcedPaystack();
+
+    getConfig().onClose();
+
+    expect(alert).toHaveBeenCalledWith('Payment cancelled. You can retry payment from your orders page.');
+    expect(screen.queryByRole('button', { name: 'Retry payment' })).not.toBeInTheDocument();
   });
 
   it('opens only returned Stripe truth when local preference is Paystack', async () => {
