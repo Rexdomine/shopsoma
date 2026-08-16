@@ -17,7 +17,8 @@ from app.models.checkout_shipping_estimate import (
 )
 from app.models.payment import Payment
 from app.models.setting import Setting
-from app.models.order import PaymentStatus
+from app.models.order import FulfillmentStatus, Order, PaymentStatus
+from app.models.product import Product
 from app.models.shipping_rate import ShippingRate
 from app.models.stock_payment_persistence import PaymentAttempt, StockReservation
 from app.models.vendor_pickup import VendorNotification, VendorPickup
@@ -25,6 +26,90 @@ from app.services.checkout.outbox import enqueue_checkout_event
 from tests.conftest import TestSessionLocal, _ASYNC_TEST_DATABASE_URL
 from tests.test_checkout_estimate_api import _domestic_catalogue
 from tests.test_checkout_payment_bridge_prerequisites import create_enforced_checkout
+
+
+@pytest.mark.asyncio
+async def test_authenticated_unpaid_enforced_cancellation_releases_reservation_without_restoring_stock(
+    client, db_session, vendor_user, customer_user, monkeypatch
+):
+    order, product = await create_enforced_checkout(
+        client, db_session, vendor_user, customer_user, monkeypatch
+    )
+    order_id = order.id
+    product_id = product.id
+    stock_before = product.total_stock
+    reservation = await db_session.scalar(
+        select(StockReservation).where(StockReservation.order_id == order_id)
+    )
+    assert reservation.state == "active"
+    reservation_id = reservation.id
+
+    cancelled = await client.post(
+        f"/api/v1/orders/{order_id}/cancel",
+        headers=customer_user["headers"],
+        json={"cancellation_reason": "Changed my mind"},
+    )
+    replay = await client.post(
+        f"/api/v1/orders/{order_id}/cancel",
+        headers=customer_user["headers"],
+        json={"cancellation_reason": "Replay"},
+    )
+
+    assert cancelled.status_code == 200, cancelled.text
+    assert replay.status_code == 400, replay.text
+    db_session.expire_all()
+    persisted_order = await db_session.get(Order, order_id)
+    persisted_product = await db_session.get(Product, product_id)
+    persisted_reservation = await db_session.get(StockReservation, reservation_id)
+    assert persisted_order.fulfillment_status == FulfillmentStatus.CANCELLED
+    assert persisted_product.total_stock == stock_before
+    assert persisted_reservation.state == "released"
+    assert persisted_reservation.terminal_reason == "checkout_cancelled"
+    assert persisted_reservation.terminal_at is not None
+    assert persisted_reservation.row_version == 2
+    assert (
+        await db_session.scalar(
+            text(
+                "SELECT claimed_txid IS NOT NULL FROM stock_payment_lock_coordinator "
+                "WHERE subject_kind='reservation' AND subject_id=:reservation_id"
+            ),
+            {"reservation_id": reservation_id},
+        )
+        is True
+    )
+
+
+@pytest.mark.asyncio
+async def test_authenticated_legacy_cancellation_keeps_physical_stock_restoration(
+    client, db_session, vendor_user, customer_user, monkeypatch
+):
+    from app.core.config import settings
+
+    address, product = await _domestic_catalogue(db_session, vendor_user, customer_user)
+    stock_before = product.total_stock
+    monkeypatch.setattr(settings, "DOMESTIC_CHECKOUT_PREREQUISITES_ENABLED", False)
+    created = await client.post(
+        "/api/v1/orders",
+        headers=customer_user["headers"],
+        json={
+            "items": [{"product_id": str(product.id), "quantity": 1}],
+            "shipping_address_id": str(address.id),
+            "currency": "NGN",
+        },
+    )
+    assert created.status_code == 201, created.text
+    await db_session.refresh(product)
+    assert product.total_stock == stock_before - 1
+
+    cancelled = await client.post(
+        f"/api/v1/orders/{created.json()['id']}/cancel",
+        headers=customer_user["headers"],
+        json={"cancellation_reason": "Legacy control"},
+    )
+
+    assert cancelled.status_code == 200, cancelled.text
+    await db_session.refresh(product)
+    assert product.total_stock == stock_before
 
 
 @pytest.mark.asyncio

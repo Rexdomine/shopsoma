@@ -91,6 +91,53 @@ async def _lock_and_available(db, item) -> int:
     return int(physical) - int(claimed or 0)
 
 
+async def release_active_order_reservations(db, *, order: Order) -> None:
+    """Release an enforced checkout's logical stock claims without restoring stock."""
+    reservation_ids = list(
+        await db.scalars(
+            select(StockReservation.id)
+            .where(
+                StockReservation.order_id == order.id,
+                StockReservation.state == "active",
+            )
+            .order_by(StockReservation.id)
+        )
+    )
+    if not reservation_ids:
+        return
+
+    items_by_id = {item.id: item for item in order.items}
+    reservations = list(
+        await db.scalars(
+            select(StockReservation)
+            .where(StockReservation.id.in_(reservation_ids))
+            .order_by(StockReservation.id)
+        )
+    )
+    reservation_pairs = [
+        (items_by_id[reservation.order_item_id], reservation.id)
+        for reservation in reservations
+    ]
+    await db.execute(
+        text("SELECT coordinate_stock_payment_write(CAST(:keys AS jsonb))"),
+        {"keys": json.dumps(_coordinator_keys(order, reservation_pairs, []))},
+    )
+    locked_reservations = list(
+        await db.scalars(
+            select(StockReservation)
+            .where(StockReservation.id.in_(reservation_ids))
+            .order_by(StockReservation.id)
+            .with_for_update()
+        )
+    )
+    for reservation in locked_reservations:
+        if reservation.state == "active":
+            reservation.state = "released"
+            reservation.terminal_reason = "checkout_cancelled"
+            reservation.row_version += 1
+    await db.flush()
+
+
 async def select_estimate_option(
     db,
     *,

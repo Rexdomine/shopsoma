@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { flushSync } from 'react-dom';
 import { buildPaystackWidgetConfig, type PaymentGateway, type InitializePaymentResponse } from '../../services/paymentService';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import Layout from '../../components/layout/Layout';
@@ -58,6 +59,20 @@ const hasExactMinorUnitTruth = (amount: string, amountMinor: number, currency: C
     .replace(/^0+(?=\d)/, '');
   return exactMinorDigits === String(amountMinor);
 };
+
+const isValidServerMoney = (amount: unknown, allowZero: boolean) => {
+  if (typeof amount !== 'string' || !/^(0|[1-9]\d*)(?:\.\d{1,2})?$/.test(amount)) return false;
+  const parsed = Number(amount);
+  return Number.isFinite(parsed) && (allowZero ? parsed >= 0 : parsed > 0);
+};
+
+const formatServerMoney = (amount: string, currency: Currency) =>
+  new Intl.NumberFormat('en-NG', {
+    style: 'currency',
+    currency,
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(Number(amount));
 
 export default function Checkout() {
   const navigate = useNavigate();
@@ -1236,7 +1251,21 @@ export default function Checkout() {
                           selectOption={selectCheckoutOption}
                           refreshEstimate={refreshCheckoutEstimate}
                           onSelectionConfirmed={(selectedEstimate) => {
-                            setCheckoutEstimate(selectedEstimate);
+                            const selectedOption = selectedEstimate.selected_option;
+                            const validSelectedTruth = Boolean(
+                              selectedOption
+                              && (selectedEstimate.currency === 'NGN' || selectedEstimate.currency === 'USD')
+                              && selectedOption.currency === selectedEstimate.currency
+                              && typeof selectedOption.service_label === 'string'
+                              && selectedOption.service_label.trim()
+                              && isValidServerMoney(selectedOption.amount, true)
+                              && isValidServerMoney(selectedEstimate.server_payable_total, false)
+                            );
+                            if (!validSelectedTruth) {
+                              alert('Selected delivery pricing is invalid. Please refresh and select again.');
+                              return;
+                            }
+                            flushSync(() => setCheckoutEstimate(selectedEstimate));
                             void initializeOrderPayment(enforcedOrder, checkoutCapability);
                           }}
                         />
@@ -1340,8 +1369,10 @@ export default function Checkout() {
                   <span>{formatPrice(orderReview?.summary.subtotal ?? cartSubtotalInSelectedCurrency, orderReview ? reviewSummaryCurrency : currency)}</span>
                 </div>
                 <div className="flex items-center justify-between">
-                  <span>Shipping cost</span>
-                  <span>{formatPrice(orderReview?.summary.shipping_cost ?? Number(shippingRateInSelectedCurrency), orderReview ? reviewSummaryCurrency : currency)}</span>
+                  <span>{checkoutEstimate?.selected_option?.service_label ?? 'Shipping cost'}</span>
+                  <span>{checkoutEstimate?.selected_option
+                    ? formatServerMoney(checkoutEstimate.selected_option.amount, checkoutEstimate.selected_option.currency)
+                    : formatPrice(orderReview?.summary.shipping_cost ?? Number(shippingRateInSelectedCurrency), orderReview ? reviewSummaryCurrency : currency)}</span>
                 </div>
                 <div className="flex items-center justify-between">
                   <span>Tax (VAT 7.5%)</span>
@@ -1383,7 +1414,9 @@ export default function Checkout() {
               </div>
               <div className="flex items-center justify-between text-sm font-semibold text-gray-800 border-t border-gray-200 pt-3">
                 <span>Total</span>
-                <span>{formatPrice(calculateCheckoutTotal(), orderReview ? reviewSummaryCurrency : currency)}</span>
+                <span>{checkoutEstimate?.selected_option
+                  ? formatServerMoney(checkoutEstimate.server_payable_total, checkoutEstimate.currency)
+                  : formatPrice(calculateCheckoutTotal(), orderReview ? reviewSummaryCurrency : currency)}</span>
               </div>
               <button
                 className={`w-full py-3 rounded-sm text-sm font-semibold ${

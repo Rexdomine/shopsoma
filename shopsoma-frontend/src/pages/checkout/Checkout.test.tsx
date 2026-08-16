@@ -245,6 +245,85 @@ describe('Checkout M5 sequencing and recovery', () => {
     expect(mocks.createCheckoutEstimate.mock.invocationCallOrder[0]).toBeLessThan(mocks.initializePayment.mock.invocationCallOrder[0]);
   });
 
+  it('commits selected server shipping and payable truth before Paystack opens', async () => {
+    const selectedEstimate = {
+      ...estimate,
+      server_payable_total: '75250.00',
+      selected_option: {
+        ...estimate.options[0],
+        service_label: 'Express delivery',
+        amount: '10000.00',
+      },
+    };
+    mocks.selectCheckoutEstimateOption.mockResolvedValueOnce(selectedEstimate);
+    mocks.initializePayment.mockResolvedValueOnce({
+      ...paystackInitialization,
+      amount: '75250.00',
+      amount_minor: 7525000,
+    });
+    const visibleAtProviderOpen = vi.fn();
+    window.PaystackPop = {
+      setup: vi.fn(() => ({
+        openIframe: () => visibleAtProviderOpen(document.body.textContent),
+      })),
+    };
+    await reachPaymentStep(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Select Standard delivery' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Continue to payment' }));
+
+    await waitFor(() => expect(visibleAtProviderOpen).toHaveBeenCalledTimes(1));
+    const visible = visibleAtProviderOpen.mock.calls[0][0];
+    expect(visible).toContain('Express delivery');
+    expect(visible).toContain('₦10,000.00');
+    expect(visible).toContain('₦75,250.00');
+  });
+
+  it('commits selected server shipping and payable truth before Stripe renders', async () => {
+    const selectedEstimate = {
+      ...estimate,
+      server_payable_total: '75250.00',
+      selected_option: {
+        ...estimate.options[0],
+        service_label: 'Express delivery',
+        amount: '10000.00',
+      },
+    };
+    mocks.selectCheckoutEstimateOption.mockResolvedValueOnce(selectedEstimate);
+    mocks.initializePayment.mockResolvedValueOnce({
+      status: true, message: 'ready', payment_gateway: 'stripe', reference: 'server-ref',
+      amount: '75250.00', amount_minor: 7525000, currency: 'NGN',
+      provider_payload: { client_secret: 'secret', payment_intent_id: 'pi-selected' },
+    });
+    await reachPaymentStep(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Select Standard delivery' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Continue to payment' }));
+
+    expect(await screen.findByText('Stripe form')).toBeInTheDocument();
+    expect(screen.getByText('Express delivery')).toBeInTheDocument();
+    expect(screen.getByText('₦10,000.00')).toBeInTheDocument();
+    expect(screen.getByText('₦75,250.00')).toBeInTheDocument();
+  });
+
+  it('does not initialize or open a provider for malformed selected payable truth', async () => {
+    mocks.selectCheckoutEstimateOption.mockResolvedValueOnce({
+      ...estimate,
+      server_payable_total: 'not-money',
+      selected_option: estimate.options[0],
+    });
+    const openIframe = vi.fn();
+    const paystackSetup = vi.fn(() => ({ openIframe }));
+    window.PaystackPop = { setup: paystackSetup };
+    await reachPaymentStep(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Select Standard delivery' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Continue to payment' }));
+
+    await waitFor(() => expect(alert).toHaveBeenCalledWith(expect.stringMatching(/delivery.*invalid/i)));
+    expect(mocks.initializePayment).not.toHaveBeenCalled();
+    expect(paystackSetup).not.toHaveBeenCalled();
+    expect(openIframe).not.toHaveBeenCalled();
+    expect(screen.queryByText('Stripe form')).not.toBeInTheDocument();
+  });
+
   it('offers truthful estimate recovery after the order is persisted and estimate creation fails', async () => {
     mocks.createCheckoutEstimate.mockRejectedValueOnce({ response: { status: 503, data: { detail: 'temporarily unavailable' } } });
     await reachPaymentStep();

@@ -45,6 +45,7 @@ from app.services.vendor_notification_service import VendorNotificationService
 from app.services.commission import get_vendor_commission_rate
 from app.core.config import settings
 from app.services.checkout.capabilities import issue_checkout_capability
+from app.services.checkout.reservations import release_active_order_reservations
 
 router = APIRouter(prefix="/orders", tags=["Orders"])
 MIN_ORDER_AMOUNT_NGN = Decimal("60000.00")
@@ -1561,7 +1562,12 @@ async def cancel_order(
     """
     Cancel an order (only if not yet shipped)
     """
-    query = select(Order).options(selectinload(Order.items)).where(Order.id == order_id)
+    query = (
+        select(Order)
+        .options(selectinload(Order.items))
+        .where(Order.id == order_id)
+        .with_for_update()
+    )
     result = await db.execute(query)
     order = result.scalar_one_or_none()
 
@@ -1598,6 +1604,16 @@ async def cancel_order(
     order.fulfillment_status = FulfillmentStatus.CANCELLED
     order.cancelled_at = datetime.now()
     order.cancellation_reason = cancel_data.cancellation_reason
+
+    unpaid_enforced_checkout = (
+        order.workflow_cohort == "domestic_checkout_v1"
+        and order.payment_status != PaymentStatus.PAID
+    )
+    if unpaid_enforced_checkout:
+        await release_active_order_reservations(db, order=order)
+        await db.commit()
+        refreshed_result = await db.execute(query)
+        return refreshed_result.scalar_one()
 
     size_stock_ids = [
         UUID(str(item.variant_details["size_stock_id"]))
