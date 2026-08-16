@@ -688,10 +688,13 @@ export default function Checkout() {
         throw new Error('Payment initialization response is incomplete');
       }
       // Verify payment with backend
-      await paymentService.verifyPayment({
+      const verification = await paymentService.verifyPayment({
         payment_intent_id: stripePaymentIntentId,
         payment_gateway: currentPaymentGateway,
       });
+      if (verification.status !== true) {
+        throw new Error('Payment verification is not complete');
+      }
 
       // Clear cart and navigate to success
       clearCheckoutCapability();

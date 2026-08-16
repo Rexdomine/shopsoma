@@ -710,25 +710,35 @@ async def create_order(
             )
 
         user_result = await db.execute(
-            select(User).where(User.email == order_data.customer_email)
+            select(User)
+            .where(User.email == order_data.customer_email)
+            .with_for_update()
         )
         guest_user = user_result.scalar_one_or_none()
 
         if guest_user:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="An account already uses this email; log in to continue",
+            reusable_passwordless_guest = (
+                guest_user.role == UserRole.CUSTOMER
+                and guest_user.is_guest_created is True
+                and guest_user.hashed_password is None
+                and guest_user.is_active is True
             )
-        guest_user = User(
-            email=order_data.customer_email,
-            full_name=order_data.guest_address.full_name,
-            hashed_password=None,
-            is_active=True,
-            role=UserRole.CUSTOMER,
-            is_guest_created=True,
-        )
-        db.add(guest_user)
-        await db.flush()
+            if not reusable_passwordless_guest:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="An account already uses this email; log in to continue",
+                )
+        else:
+            guest_user = User(
+                email=order_data.customer_email,
+                full_name=order_data.guest_address.full_name,
+                hashed_password=None,
+                is_active=True,
+                role=UserRole.CUSTOMER,
+                is_guest_created=True,
+            )
+            db.add(guest_user)
+            await db.flush()
 
         guest_addr = Address(
             user_id=guest_user.id, **order_data.guest_address.model_dump()

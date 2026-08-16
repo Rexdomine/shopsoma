@@ -593,6 +593,33 @@ describe('Checkout M5 sequencing and recovery', () => {
     expect(sessionStorageSpy).not.toHaveBeenCalledWith(expect.anything(), capability);
   });
 
+  it('keeps guest Stripe recovery on the same order when verification returns HTTP 200 status false', async () => {
+    const capability = 'stripe-processing-capability';
+    const localStorageSpy = vi.spyOn(window.localStorage, 'setItem');
+    const sessionStorageSpy = vi.spyOn(window.sessionStorage, 'setItem');
+    mocks.verifyPayment.mockResolvedValueOnce({ status: false, message: 'processing' });
+    const stripeForm = await openEnforcedGuestStripe(capability);
+
+    await stripeForm.onSuccess();
+
+    expect(await screen.findByText(/could not confirm your payment yet/i)).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Checkout' })).toBeInTheDocument();
+    expect(screen.getByTestId('checkout-location')).toHaveTextContent('/checkout');
+    expect(mocks.clearCart).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry payment' }));
+
+    await waitFor(() => expect(mocks.initializePayment).toHaveBeenCalledTimes(2));
+    expect(mocks.initializePayment).toHaveBeenLastCalledWith(expect.objectContaining({
+      order_id: 'order-1',
+      payment_gateway: 'stripe',
+    }), capability);
+    expect(mocks.createOrder).toHaveBeenCalledTimes(1);
+    expect(mocks.createCheckoutEstimate).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('checkout-location').textContent).not.toContain(capability);
+    expect(localStorageSpy).not.toHaveBeenCalledWith(expect.anything(), capability);
+    expect(sessionStorageSpy).not.toHaveBeenCalledWith(expect.anything(), capability);
+  });
+
   it.each([404, 410])('discards guest Stripe recovery after terminal verification status %s and creates a fresh order', async (status) => {
     const capability = `stripe-terminal-${status}-capability`;
     const replacementCapability = `stripe-replacement-${status}-capability`;

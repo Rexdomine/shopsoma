@@ -28,7 +28,7 @@ from app.models.payment import Payment
 from app.models.product import ModerationStatus, Product, ProductStatus
 from app.models.shipping_rate import ShippingRate
 from app.models.stock_payment_persistence import StockReservation
-from app.models.user import User
+from app.models.user import User, UserRole
 from app.models import VendorNotification
 from app.models.vendor_pickup import VendorPickup
 from app.services.checkout import estimates as checkout_estimates
@@ -558,6 +558,175 @@ async def test_guest_capability_is_issued_once_and_authorizes_only_its_order(
         headers={"X-ShopSoma-Checkout-Capability": expired_token},
     )
     assert expired.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_expired_guest_can_create_replacement_order_with_same_passwordless_identity(
+    client, db_session, vendor_user, monkeypatch
+):
+    _, product = await _domestic_catalogue(db_session, vendor_user)
+    email = "replacement-guest@example.test"
+    pepper = "replacement-route-test-pepper"
+    monkeypatch.setattr(settings, "DOMESTIC_CHECKOUT_PREREQUISITES_ENABLED", True)
+    monkeypatch.setattr(settings, "DOMESTIC_CHECKOUT_COHORT_PERCENTAGE", 100)
+    monkeypatch.setattr(settings, "CHECKOUT_CAPABILITY_ACTIVE_PEPPER_VERSION", 7)
+    monkeypatch.setattr(
+        settings, "CHECKOUT_CAPABILITY_ACTIVE_PEPPER", SecretStr(pepper)
+    )
+
+    original = await client.post(
+        "/api/v1/orders", json=_guest_order_payload(product.id, email)
+    )
+    assert original.status_code == 201
+    original_payload = original.json()
+    original_order_id = uuid.UUID(original_payload["id"])
+    original_customer_id = uuid.UUID(original_payload["customer_id"])
+    issued_capability = original_payload["checkout_capability"]
+    persisted_capability = (
+        await db_session.execute(
+            select(OrderGuestCapability).where(
+                OrderGuestCapability.order_id == original_order_id
+            )
+        )
+    ).scalar_one()
+    database_now = await db_session.scalar(select(text("clock_timestamp()")))
+    persisted_capability.revoked_at = func.statement_timestamp()
+    persisted_capability.row_version += 1
+    original_capability = "expired-replacement-capability-with-sufficient-entropy"
+    db_session.add(
+        OrderGuestCapability(
+            order_id=original_order_id,
+            original_customer_id=original_customer_id,
+            scope="checkout_prerequisites",
+            token_digest=hmac.new(
+                pepper.encode(), original_capability.encode(), hashlib.sha256
+            ).digest(),
+            pepper_key_version=7,
+            created_at=database_now - timedelta(days=1),
+            expires_at=database_now - timedelta(microseconds=1),
+        )
+    )
+    await db_session.commit()
+
+    revoked_issued = await client.get(
+        f"/api/v1/orders/{original_payload['id']}/checkout-estimates",
+        headers={"X-ShopSoma-Checkout-Capability": issued_capability},
+    )
+    assert revoked_issued.status_code == 404
+    expired = await client.get(
+        f"/api/v1/orders/{original_payload['id']}/checkout-estimates",
+        headers={"X-ShopSoma-Checkout-Capability": original_capability},
+    )
+    assert expired.status_code == 404
+
+    replacement = await client.post(
+        "/api/v1/orders", json=_guest_order_payload(product.id, email)
+    )
+    assert replacement.status_code == 201
+    replacement_payload = replacement.json()
+    replacement_capability = replacement_payload["checkout_capability"]
+    assert uuid.UUID(replacement_payload["customer_id"]) == original_customer_id
+    assert replacement_payload["id"] != original_payload["id"]
+    assert replacement_capability != original_capability
+
+    replacement_access = await client.get(
+        f"/api/v1/orders/{replacement_payload['id']}/checkout-estimates",
+        headers={"X-ShopSoma-Checkout-Capability": replacement_capability},
+    )
+    assert replacement_access.status_code == 200
+    replacement_on_original = await client.get(
+        f"/api/v1/orders/{original_payload['id']}/checkout-estimates",
+        headers={"X-ShopSoma-Checkout-Capability": replacement_capability},
+    )
+    assert replacement_on_original.status_code == 404
+    original_on_replacement = await client.get(
+        f"/api/v1/orders/{replacement_payload['id']}/checkout-estimates",
+        headers={"X-ShopSoma-Checkout-Capability": original_capability},
+    )
+    assert original_on_replacement.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_guest_order_rejects_password_bearing_same_email_account(
+    client, db_session, vendor_user
+):
+    _, product = await _domestic_catalogue(db_session, vendor_user)
+    email = "registered-replacement@example.test"
+    db_session.add(
+        User(
+            email=email,
+            full_name="Registered Customer",
+            hashed_password="registered-password-hash",
+            role=UserRole.CUSTOMER,
+            is_active=True,
+            is_guest_created=True,
+        )
+    )
+    await db_session.commit()
+
+    response = await client.post(
+        "/api/v1/orders", json=_guest_order_payload(product.id, email)
+    )
+
+    assert response.status_code == 409
+    assert (
+        response.json()["detail"]
+        == "An account already uses this email; log in to continue"
+    )
+
+
+@pytest.mark.asyncio
+async def test_concurrent_guest_replacements_reuse_one_identity_with_order_bound_capabilities(
+    client, db_session, vendor_user, monkeypatch
+):
+    _, product = await _domestic_catalogue(db_session, vendor_user)
+    email = "concurrent-replacement@example.test"
+    monkeypatch.setattr(settings, "DOMESTIC_CHECKOUT_PREREQUISITES_ENABLED", True)
+    monkeypatch.setattr(settings, "DOMESTIC_CHECKOUT_COHORT_PERCENTAGE", 100)
+    monkeypatch.setattr(settings, "CHECKOUT_CAPABILITY_ACTIVE_PEPPER_VERSION", 7)
+    monkeypatch.setattr(
+        settings,
+        "CHECKOUT_CAPABILITY_ACTIVE_PEPPER",
+        SecretStr("concurrent-replacement-test-pepper"),
+    )
+    original = await client.post(
+        "/api/v1/orders", json=_guest_order_payload(product.id, email)
+    )
+    assert original.status_code == 201
+    original_customer_id = original.json()["customer_id"]
+
+    async with _isolated_route_client("concurrent-guest-replacements") as route_client:
+        responses = await asyncio.gather(
+            route_client.post(
+                "/api/v1/orders", json=_guest_order_payload(product.id, email)
+            ),
+            route_client.post(
+                "/api/v1/orders", json=_guest_order_payload(product.id, email)
+            ),
+        )
+
+    assert [response.status_code for response in responses] == [201, 201]
+    payloads = [response.json() for response in responses]
+    assert {payload["customer_id"] for payload in payloads} == {original_customer_id}
+    assert len({payload["id"] for payload in payloads}) == 2
+    assert len({payload["checkout_capability"] for payload in payloads}) == 2
+    assert (
+        await db_session.scalar(
+            select(func.count()).select_from(User).where(User.email == email)
+        )
+        == 1
+    )
+    for own, other in ((payloads[0], payloads[1]), (payloads[1], payloads[0])):
+        own_access = await client.get(
+            f"/api/v1/orders/{own['id']}/checkout-estimates",
+            headers={"X-ShopSoma-Checkout-Capability": own["checkout_capability"]},
+        )
+        cross_order_access = await client.get(
+            f"/api/v1/orders/{other['id']}/checkout-estimates",
+            headers={"X-ShopSoma-Checkout-Capability": own["checkout_capability"]},
+        )
+        assert own_access.status_code == 200
+        assert cross_order_access.status_code == 404
 
 
 @pytest.mark.asyncio
