@@ -417,6 +417,12 @@ export default function Checkout() {
     setPaymentRetryAvailable(false);
   };
 
+  const discardExpiredCheckout = () => {
+    clearCheckoutCapability();
+    setEnforcedOrder(null);
+    setCheckoutEstimate(null);
+  };
+
   const openInitializedPayment = (
     order: Order,
     paymentData: InitializePaymentResponse,
@@ -474,7 +480,7 @@ export default function Checkout() {
               const terminalAuthorization = error.response?.status === 404 || error.response?.status === 410;
               setIsCreatingOrder(false);
               if (terminalAuthorization) {
-                clearCheckoutCapability();
+                discardExpiredCheckout();
                 alert('Checkout access expired. Payment recovery is no longer available.');
               } else {
                 setPaymentRetryAvailable(true);
@@ -536,7 +542,7 @@ export default function Checkout() {
     } catch (error: any) {
       const terminalAuthorization = error.response?.status === 404 || error.response?.status === 410;
       if (terminalAuthorization) {
-        clearCheckoutCapability();
+        discardExpiredCheckout();
       } else if (order.checkout_access_mode === 'guest_capability' && capability) {
         setPaymentRetryAvailable(true);
       }
@@ -598,7 +604,9 @@ export default function Checkout() {
       setCheckoutEstimate(estimate);
       setIsCreatingOrder(false);
     } catch (error: any) {
-      if (error.response?.status === 404) clearCheckoutCapability();
+      if (error.response?.status === 404 || error.response?.status === 410) {
+        discardExpiredCheckout();
+      }
       alert(error.response?.data?.detail || error.message || 'Failed to create order. Please try again.');
       setIsCreatingOrder(false);
     }
@@ -617,7 +625,9 @@ export default function Checkout() {
       const estimate = await refreshCheckoutEstimate();
       setCheckoutEstimate(estimate);
     } catch (error: any) {
-      if (error.response?.status === 404) clearCheckoutCapability();
+      if (error.response?.status === 404 || error.response?.status === 410) {
+        discardExpiredCheckout();
+      }
       alert(error.response?.data?.detail || 'Delivery options are still unavailable. Please retry.');
     } finally {
       setIsCreatingOrder(false);

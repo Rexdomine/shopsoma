@@ -351,7 +351,15 @@ describe('Checkout M5 sequencing and recovery', () => {
 
   it.each([404, 410])('fails closed after guest Paystack callback terminal status %s', async (status) => {
     const capability = `callback-terminal-${status}-capability`;
+    const replacementCapability = `replacement-${status}-capability`;
     useGuestCapability(capability);
+    mocks.createOrder.mockResolvedValueOnce({
+      ...order,
+      id: `replacement-order-${status}`,
+      customer_id: null,
+      checkout_access_mode: 'guest_capability',
+      checkout_capability: replacementCapability,
+    });
     mocks.verifyPayment.mockRejectedValueOnce({
       response: { status, data: { detail: 'Checkout access expired' } },
     });
@@ -366,6 +374,16 @@ describe('Checkout M5 sequencing and recovery', () => {
     expect(mocks.initializePayment).toHaveBeenCalledTimes(1);
     expect(mocks.createOrder).toHaveBeenCalledTimes(1);
     expect(mocks.createCheckoutEstimate).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Purchase' })[0]);
+
+    await waitFor(() => expect(mocks.createOrder).toHaveBeenCalledTimes(2));
+    expect(mocks.createCheckoutEstimate).toHaveBeenLastCalledWith(
+      `replacement-order-${status}`,
+      expect.stringMatching(/^estimate-/),
+      replacementCapability,
+    );
+    expect(mocks.initializePayment).toHaveBeenCalledTimes(1);
   });
 
   it('clears guest capability after verified Paystack success', async () => {
