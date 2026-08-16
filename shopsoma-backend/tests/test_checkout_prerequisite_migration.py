@@ -29,7 +29,8 @@ REVISIONS = (
     "a2b3c4d5e6f7",
 )
 MILESTONE_FOUR_REVISION = "b3c4d5e6f7a8"
-CURRENT_HEAD_REVISION = "c4d5e6f7a8b9"
+FREE_SHIPPING_REVISION = "c4d5e6f7a8b9"
+CURRENT_HEAD_REVISION = "d5e6f7a8b9c0"
 
 
 def _script():
@@ -48,8 +49,10 @@ def test_milestone_two_revisions_are_sequential_from_current_head() -> None:
     ]
     milestone_four = script.get_revision(MILESTONE_FOUR_REVISION)
     assert milestone_four.down_revision == REVISIONS[-1]
+    free_shipping = script.get_revision(FREE_SHIPPING_REVISION)
+    assert free_shipping.down_revision == MILESTONE_FOUR_REVISION
     current = script.get_revision(CURRENT_HEAD_REVISION)
-    assert current.down_revision == MILESTONE_FOUR_REVISION
+    assert current.down_revision == FREE_SHIPPING_REVISION
     assert script.get_current_head() == CURRENT_HEAD_REVISION
 
 
@@ -2121,6 +2124,8 @@ def _normalized_finding5_program(connection):
         "validate_domestic_checkout_membership_write",
         "validate_domestic_checkout_reservation_write",
         "validate_domestic_checkout_payment_attempt_write",
+        "validate_payment_attempt_exact_reservations",
+        "protect_reserved_order",
     ]
     trigger_names = [
         "trg_payment_attempt_reservations_validate_domestic",
@@ -2163,7 +2168,7 @@ def test_finding5_postgresql_migration_and_orm_lifecycle_programs_have_exact_par
     from app.core.base import Base
 
     app_url, sync_url = disposable_m2_database
-    _run_alembic(app_url, "upgrade", REVISIONS[-1])
+    _run_alembic(app_url, "upgrade", CURRENT_HEAD_REVISION)
     migrated = create_engine(sync_url)
     database = f"shopsoma_m2_f5_model_{uuid.uuid4().hex[:12]}"
     admin = create_engine(
@@ -2176,7 +2181,7 @@ def test_finding5_postgresql_migration_and_orm_lifecycle_programs_have_exact_par
         Base.metadata.create_all(model_engine)
         with migrated.connect() as left, model_engine.connect() as right:
             migrated_program = _normalized_finding5_program(left)
-            assert len(migrated_program[0]) == 3
+            assert len(migrated_program[0]) == 5
             assert len(migrated_program[1]) == 11
             assert migrated_program == _normalized_finding5_program(right)
     finally:

@@ -752,6 +752,30 @@ async def _attempt_reservations(
     )
 
 
+async def _attempt_requires_stock_reservations(
+    session: AsyncSession, *, attempt: PaymentAttempt
+) -> bool:
+    """Return whether immutable selected coverage includes stock-managed items."""
+    if (
+        attempt.workflow_cohort != "domestic_checkout_v1"
+        or attempt.checkout_estimate_selection_id is None
+    ):
+        return True
+    return (
+        await session.scalar(
+            select(OrderInventoryCoverage.order_item_id)
+            .where(
+                OrderInventoryCoverage.order_id == attempt.order_id,
+                OrderInventoryCoverage.checkout_estimate_selection_id
+                == attempt.checkout_estimate_selection_id,
+                OrderInventoryCoverage.inventory_policy == "stock_managed",
+            )
+            .limit(1)
+        )
+        is not None
+    )
+
+
 async def _decrement_reserved_inventory(
     session: AsyncSession, *, reservations: list[StockReservation]
 ) -> None:
@@ -818,8 +842,23 @@ async def finalize_verified_payment(
     if order is None:
         raise PaymentBridgeError("payment order was not found")
 
-    attempt = await active_bridge_attempt(session, order_id=order.id, lock=True)
+    attempt = await session.scalar(
+        select(PaymentAttempt)
+        .where(
+            PaymentAttempt.order_id == order.id,
+            PaymentAttempt.provider == provider,
+            PaymentAttempt.provider_reference == provider_reference,
+        )
+        .with_for_update()
+    )
     if attempt is None:
+        bridge_attempt_exists = await session.scalar(
+            select(PaymentAttempt.id)
+            .where(PaymentAttempt.order_id == order.id)
+            .limit(1)
+        )
+        if bridge_attempt_exists is not None:
+            raise PaymentTruthMismatch("verified payment truth does not match")
         replay = payment.status == TransactionStatus.COMPLETED
         if not replay:
             payment.status = TransactionStatus.COMPLETED
@@ -828,6 +867,8 @@ async def finalize_verified_payment(
             order.fulfillment_status = FulfillmentStatus.PREPARING_FOR_PICKUP
         return PaymentFinalizationResult(False, replay, order)
 
+    if payment.payment_gateway.value != provider:
+        raise PaymentTruthMismatch("verified payment truth does not match")
     if observed_amount is None or observed_currency is None:
         raise PaymentTruthMismatch("verified payment truth does not match")
     validate_verified_payment_truth(
@@ -846,6 +887,13 @@ async def finalize_verified_payment(
         replay = payment.status == TransactionStatus.COMPLETED
         payment.status = TransactionStatus.COMPLETED
         payment.completed_at = observed_at
+        await session.flush()
+        await session.execute(
+            text(
+                "SELECT set_config('shopsoma.late_payment_attempt_id', :attempt_id, true)"
+            ),
+            {"attempt_id": str(attempt.id)},
+        )
         order.payment_status = PaymentStatus.PAID
         await _enqueue_payment_event(
             session,
@@ -932,7 +980,12 @@ async def finalize_verified_payment(
 
     if attempt.workflow_cohort == "domestic_checkout_v1":
         reservations = await _attempt_reservations(session, attempt_id=attempt.id)
-        if not reservations or any(row.state != "active" for row in reservations):
+        requires_reservations = await _attempt_requires_stock_reservations(
+            session, attempt=attempt
+        )
+        if (requires_reservations and not reservations) or any(
+            row.state != "active" for row in reservations
+        ):
             raise PaymentBridgeError("verified payment inventory is unavailable")
         await _decrement_reserved_inventory(session, reservations=reservations)
         for reservation in reservations:

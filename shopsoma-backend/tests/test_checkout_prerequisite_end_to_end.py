@@ -84,9 +84,18 @@ async def test_authenticated_order_estimate_selection_reservation_mock_payment_r
 
 
 async def create_enforced_guest_checkout(
-    client, db_session, vendor_user, monkeypatch, *, email="guest-m5@example.com"
+    client,
+    db_session,
+    vendor_user,
+    monkeypatch,
+    *,
+    email="guest-m5@example.com",
+    made_to_order=False,
 ):
     _, product = await _domestic_catalogue(db_session, vendor_user)
+    product.made_to_order = made_to_order
+    product.total_stock = 0 if made_to_order else product.total_stock
+    await db_session.commit()
     monkeypatch.setattr(settings, "DOMESTIC_CHECKOUT_PREREQUISITES_ENABLED", True)
     monkeypatch.setattr(settings, "DOMESTIC_CHECKOUT_COHORT_PERCENTAGE", 100)
     monkeypatch.setattr(settings, "CHECKOUT_CAPABILITY_ACTIVE_PEPPER_VERSION", 7)
@@ -236,6 +245,92 @@ async def test_enforced_guest_capability_initializes_from_server_truth(
         "client_secret": "secret_m5_guest",
         "payment_intent_id": "pi_m5_guest",
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ["stripe", "paystack"])
+async def test_guest_made_to_order_only_initializes_once_without_reservations(
+    client, db_session, vendor_user, monkeypatch, provider
+):
+    order, capability, email = await create_enforced_guest_checkout(
+        client,
+        db_session,
+        vendor_user,
+        monkeypatch,
+        email=f"guest-mto-{provider}@example.com",
+        made_to_order=True,
+    )
+    customer = await db_session.get(User, order.customer_id)
+    provider_calls = 0
+    if provider == "stripe":
+        customer.stripe_customer_id = "cus_mto_guest"
+
+        def create_intent(**_kwargs):
+            nonlocal provider_calls
+            provider_calls += 1
+            return SimpleNamespace(id="pi_mto_guest", client_secret="secret_mto_guest")
+
+        monkeypatch.setattr(payments.stripe.PaymentIntent, "create", create_intent)
+    else:
+        monkeypatch.setattr(payments, "PAYSTACK_SECRET_KEY", "sk_test_placeholder")
+
+        class Response:
+            status_code = 200
+            text = ""
+
+            def __init__(self, reference):
+                self.reference = reference
+
+            def json(self):
+                return {
+                    "status": True,
+                    "data": {
+                        "authorization_url": "https://paystack.invalid/mto-guest",
+                        "access_code": "mto-guest",
+                        "reference": self.reference,
+                    },
+                }
+
+        class Client:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return None
+
+            async def post(self, _url, **kwargs):
+                nonlocal provider_calls
+                provider_calls += 1
+                return Response(kwargs["json"]["reference"])
+
+        monkeypatch.setattr(payments.httpx, "AsyncClient", Client)
+    await db_session.commit()
+    headers = {"X-ShopSoma-Checkout-Capability": capability}
+    body = {
+        "order_id": str(order.id),
+        "email": email,
+        "payment_gateway": provider,
+        "currency": "NGN",
+    }
+
+    first = await client.post("/api/v1/payments/initialize", headers=headers, json=body)
+    replay = await client.post(
+        "/api/v1/payments/initialize", headers=headers, json=body
+    )
+
+    assert first.status_code == replay.status_code == 200, first.text
+    attempt = await db_session.scalar(
+        select(PaymentAttempt).where(PaymentAttempt.order_id == order.id)
+    )
+    assert provider_calls == 1
+    assert (
+        await db_session.scalar(
+            select(func.count(PaymentAttemptReservation.attempt_id)).where(
+                PaymentAttemptReservation.attempt_id == attempt.id
+            )
+        )
+        == 0
+    )
 
 
 async def _create_select_initialize_usd_route_journey(

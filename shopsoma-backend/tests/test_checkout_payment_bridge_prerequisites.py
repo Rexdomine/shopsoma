@@ -29,9 +29,11 @@ async def create_enforced_checkout(
     *,
     quantity=1,
     select_option=True,
+    made_to_order=False,
 ):
     address, product = await _domestic_catalogue(db_session, vendor_user, customer_user)
-    product.total_stock = max(product.total_stock, quantity)
+    product.made_to_order = made_to_order
+    product.total_stock = 0 if made_to_order else max(product.total_stock, quantity)
     await db_session.commit()
     monkeypatch.setattr(settings, "DOMESTIC_CHECKOUT_PREREQUISITES_ENABLED", True)
     monkeypatch.setattr(
@@ -270,3 +272,90 @@ async def test_gate_off_does_not_strand_existing_enforced_attempt(
         },
     )
     assert replay.status_code == 200, replay.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ["stripe", "paystack"])
+async def test_authenticated_made_to_order_only_initializes_without_reservations(
+    client, db_session, vendor_user, customer_user, monkeypatch, provider
+):
+    order, _ = await create_enforced_checkout(
+        client,
+        db_session,
+        vendor_user,
+        customer_user,
+        monkeypatch,
+        made_to_order=True,
+    )
+    provider_calls = 0
+    if provider == "stripe":
+        customer_user["user"].stripe_customer_id = "cus_mto_auth"
+
+        def create_intent(**_kwargs):
+            nonlocal provider_calls
+            provider_calls += 1
+            return SimpleNamespace(id="pi_mto_auth", client_secret="secret_mto_auth")
+
+        monkeypatch.setattr(payments.stripe.PaymentIntent, "create", create_intent)
+    else:
+        monkeypatch.setattr(payments, "PAYSTACK_SECRET_KEY", "sk_test_placeholder")
+
+        class Response:
+            status_code = 200
+            text = ""
+
+            def __init__(self, reference):
+                self.reference = reference
+
+            def json(self):
+                return {
+                    "status": True,
+                    "data": {
+                        "authorization_url": "https://paystack.invalid/mto-auth",
+                        "access_code": "mto-auth",
+                        "reference": self.reference,
+                    },
+                }
+
+        class Client:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return None
+
+            async def post(self, _url, **kwargs):
+                nonlocal provider_calls
+                provider_calls += 1
+                return Response(kwargs["json"]["reference"])
+
+        monkeypatch.setattr(payments.httpx, "AsyncClient", Client)
+    await db_session.commit()
+
+    body = {
+        "order_id": str(order.id),
+        "email": customer_user["user"].email,
+        "payment_gateway": provider,
+        "currency": "NGN",
+    }
+    first = await client.post(
+        "/api/v1/payments/initialize", headers=customer_user["headers"], json=body
+    )
+    replay = await client.post(
+        "/api/v1/payments/initialize", headers=customer_user["headers"], json=body
+    )
+
+    assert first.status_code == replay.status_code == 200, first.text
+    attempt = await db_session.scalar(
+        select(PaymentAttempt).where(PaymentAttempt.order_id == order.id)
+    )
+    assert provider_calls == 1
+    assert attempt.expires_at <= attempt.authorization_deadline_at
+    assert (
+        await db_session.scalar(
+            select(func.count(PaymentAttemptReservation.attempt_id)).where(
+                PaymentAttemptReservation.attempt_id == attempt.id
+            )
+        )
+        == 0
+    )
