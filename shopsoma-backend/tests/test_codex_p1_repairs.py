@@ -443,6 +443,7 @@ async def test_verified_event_dispatches_vendor_start_effects_exactly_once(
 
     from app.tasks.checkout_outbox import dispatch_checkout_events_once
 
+    await db_session.refresh(order, ["items"])
     expected_pickups = len(order.items)
     order_id = order.id
     first = await dispatch_checkout_events_once(
