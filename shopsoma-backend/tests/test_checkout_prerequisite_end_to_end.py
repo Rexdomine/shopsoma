@@ -14,6 +14,7 @@ from app.models.order import Order
 from app.models.checkout_shipping_estimate import OrderInventoryCoverage
 from app.models.order_guest_capability import OrderGuestCapability
 from app.models.payment import Payment
+from app.models.setting import Setting
 from app.models.stock_payment_persistence import (
     PaymentAttempt,
     PaymentAttemptReservation,
@@ -243,6 +244,14 @@ async def _create_select_initialize_usd_route_journey(
     address, product = await _domestic_catalogue(
         db_session, vendor_user, None if guest else customer_user
     )
+    db_session.add(
+        Setting(
+            key="exchange_rate_usd_to_ngn",
+            value="833",
+            description="Authoritative test rate",
+        )
+    )
+    await db_session.commit()
     monkeypatch.setattr(settings, "DOMESTIC_CHECKOUT_PREREQUISITES_ENABLED", True)
     monkeypatch.setattr(
         payments,
