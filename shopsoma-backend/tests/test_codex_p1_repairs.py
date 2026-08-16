@@ -80,6 +80,81 @@ async def test_authenticated_unpaid_enforced_cancellation_releases_reservation_w
 
 
 @pytest.mark.asyncio
+async def test_enforced_cancellation_rejects_call_started_and_late_success_finalizes_once(
+    client, db_session, vendor_user, customer_user, monkeypatch
+):
+    from tests.test_verified_payment_inventory import initialize_stripe, verify_stripe
+
+    order, product = await create_enforced_checkout(
+        client, db_session, vendor_user, customer_user, monkeypatch
+    )
+    order_id = order.id
+    stock_before = product.total_stock
+    attempt = await initialize_stripe(
+        client,
+        db_session,
+        customer_user,
+        monkeypatch,
+        order,
+        transaction_id="pi_cancel_unresolved",
+    )
+    db_session.expire_all()
+    reservation = await db_session.scalar(
+        select(StockReservation).where(StockReservation.order_id == order_id)
+    )
+    reservation_id = reservation.id
+    attempt_before = await db_session.get(PaymentAttempt, attempt.id)
+    payment_before = await db_session.scalar(
+        select(Payment).where(Payment.order_id == order_id)
+    )
+    attempt_version = attempt_before.row_version
+    payment_status = payment_before.status
+
+    first_cancel = await client.post(
+        f"/api/v1/orders/{order_id}/cancel",
+        headers=customer_user["headers"],
+        json={"cancellation_reason": "Changed my mind"},
+    )
+    replay_cancel = await client.post(
+        f"/api/v1/orders/{order_id}/cancel",
+        headers=customer_user["headers"],
+        json={"cancellation_reason": "Try again"},
+    )
+
+    assert first_cancel.status_code == replay_cancel.status_code == 409
+    db_session.expire_all()
+    persisted_order = await db_session.get(Order, order_id)
+    persisted_reservation = await db_session.get(StockReservation, reservation_id)
+    persisted_attempt = await db_session.get(PaymentAttempt, attempt.id)
+    persisted_payment = await db_session.scalar(
+        select(Payment).where(Payment.order_id == order_id)
+    )
+    await db_session.refresh(product)
+    assert persisted_order.fulfillment_status == FulfillmentStatus.ORDER_RECEIVED
+    assert persisted_order.cancelled_at is None
+    assert persisted_order.cancellation_reason is None
+    assert persisted_reservation.state == "active"
+    assert persisted_attempt.state == "call_started"
+    assert persisted_attempt.row_version == attempt_version
+    assert persisted_payment.status == payment_status
+    assert product.total_stock == stock_before
+
+    first_success = await verify_stripe(client, monkeypatch, attempt)
+    replay_success = await verify_stripe(client, monkeypatch, attempt)
+
+    assert first_success.status_code == replay_success.status_code == 200
+    db_session.expire_all()
+    persisted_order = await db_session.get(Order, order_id)
+    persisted_reservation = await db_session.get(StockReservation, reservation_id)
+    await db_session.refresh(product)
+    assert persisted_order.payment_status == PaymentStatus.PAID
+    assert persisted_order.fulfillment_status == FulfillmentStatus.ORDER_RECEIVED
+    assert persisted_reservation.state == "consumed"
+    assert persisted_reservation.row_version == 2
+    assert product.total_stock == stock_before - persisted_reservation.quantity
+
+
+@pytest.mark.asyncio
 async def test_authenticated_legacy_cancellation_keeps_physical_stock_restoration(
     client, db_session, vendor_user, customer_user, monkeypatch
 ):

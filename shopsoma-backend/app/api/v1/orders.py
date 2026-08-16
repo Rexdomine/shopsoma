@@ -28,7 +28,10 @@ from app.models.address import Address
 from app.models.shipping_rate import ShippingRate
 from app.models.vendor import Vendor
 from app.models.setting import Setting
-from app.models.stock_payment_persistence import coordinate_catalog_write
+from app.models.stock_payment_persistence import (
+    PaymentAttempt,
+    coordinate_catalog_write,
+)
 from app.schemas.order import (
     OrderCreate,
     OrderUpdate,
@@ -1609,6 +1612,21 @@ async def cancel_order(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Order is already cancelled"
         )
+
+    if order.workflow_cohort == "domestic_checkout_v1":
+        unresolved_attempt = await db.scalar(
+            select(PaymentAttempt)
+            .where(
+                PaymentAttempt.order_id == order.id,
+                PaymentAttempt.state == "call_started",
+            )
+            .with_for_update()
+        )
+        if unresolved_attempt is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Cannot cancel order while payment outcome is unresolved",
+            )
 
     # Cancel order
     order.fulfillment_status = FulfillmentStatus.CANCELLED
