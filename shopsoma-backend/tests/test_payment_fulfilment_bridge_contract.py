@@ -1664,6 +1664,69 @@ async def test_paystack_nonterminal_verify_rejects_foreign_existing_mapping(
 
 
 @pytest.mark.asyncio
+async def test_finalize_verified_payment_locks_order_before_attempt() -> None:
+    order_id = uuid.uuid4()
+    attempt_id = uuid.uuid4()
+    order = Order(id=order_id)
+    attempt = PaymentAttempt(
+        id=attempt_id,
+        order_id=order_id,
+        provider="paystack",
+        provider_reference="attempt-reference",
+        amount=Decimal("10.00"),
+        currency="NGN",
+        state="call_started",
+    )
+    payment = Payment(
+        order_id=order_id,
+        transaction_id="provider-object-id",
+        amount=Decimal("10.00"),
+        currency="NGN",
+        payment_gateway=PaymentGateway.PAYSTACK,
+        payment_method="paystack",
+        status=TransactionStatus.PENDING,
+    )
+    calls: list[tuple[str, bool]] = []
+
+    class FakeSession:
+        async def scalar(self, stmt):
+            entity = stmt.column_descriptions[0]["entity"].__name__
+            locked = stmt._for_update_arg is not None
+            calls.append((entity, locked))
+            if len(calls) == 1:
+                assert (entity, locked) == ("PaymentAttempt", False)
+                return attempt
+            if len(calls) == 2:
+                assert (entity, locked) == ("Order", True)
+                return order
+            if len(calls) == 3:
+                assert (entity, locked) == ("PaymentAttempt", True)
+                return attempt
+            raise AssertionError(f"unexpected scalar call sequence: {calls}")
+
+        async def scalars(self, stmt):  # pragma: no cover - this path should not run
+            raise AssertionError(f"unexpected scalars call: {stmt}")
+
+    with pytest.raises(PaymentTruthMismatch, match="verified payment truth does not match"):
+        await finalize_verified_payment(
+            FakeSession(),
+            payment=payment,
+            provider="paystack",
+            provider_reference="attempt-reference",
+            observed_amount=None,
+            observed_currency=None,
+            event_id="evt-lock-order",
+            evidence_payload={},
+        )
+
+    assert calls == [
+        ("PaymentAttempt", False),
+        ("Order", True),
+        ("PaymentAttempt", True),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_paystack_pending_verify_does_not_regress_completed_truth(
     db_session, vendor_user, customer_user, monkeypatch
 ) -> None:

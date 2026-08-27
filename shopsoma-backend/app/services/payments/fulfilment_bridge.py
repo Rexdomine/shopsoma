@@ -916,14 +916,23 @@ async def finalize_verified_payment(
 ) -> PaymentFinalizationResult:
     """Atomically finalize legacy or bridge payment truth without provider calls."""
     attempt = await session.scalar(
-        select(PaymentAttempt)
-        .where(
+        select(PaymentAttempt).where(
             PaymentAttempt.provider == provider,
             PaymentAttempt.provider_reference == provider_reference,
         )
-        .with_for_update()
+    )
+    order_id = attempt.order_id if attempt is not None else payment.order_id
+    order = await session.scalar(
+        select(Order).where(Order.id == order_id).with_for_update()
     )
     if attempt is not None:
+        attempt = await session.scalar(
+            select(PaymentAttempt)
+            .where(PaymentAttempt.id == attempt.id)
+            .with_for_update()
+        )
+        if attempt is None:
+            raise PaymentTruthMismatch("verified payment truth does not match")
         await _validate_attempt_payment_mapping(
             session,
             payment=payment,
@@ -931,10 +940,24 @@ async def finalize_verified_payment(
             provider=provider,
             evidence_payload=evidence_payload,
         )
-    order_id = attempt.order_id if attempt is not None else payment.order_id
-    order = await session.scalar(
-        select(Order).where(Order.id == order_id).with_for_update()
-    )
+    else:
+        attempt = await session.scalar(
+            select(PaymentAttempt)
+            .where(
+                PaymentAttempt.order_id == order.id,
+                PaymentAttempt.provider == provider,
+                PaymentAttempt.provider_reference == provider_reference,
+            )
+            .with_for_update()
+        )
+        if attempt is not None:
+            await _validate_attempt_payment_mapping(
+                session,
+                payment=payment,
+                attempt=attempt,
+                provider=provider,
+                evidence_payload=evidence_payload,
+            )
     if order is None:
         raise PaymentBridgeError("payment order was not found")
 
