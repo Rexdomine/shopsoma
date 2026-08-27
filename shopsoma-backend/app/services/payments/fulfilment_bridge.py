@@ -91,6 +91,57 @@ def validate_verified_payment_truth(
         raise PaymentTruthMismatch("verified payment truth does not match")
 
 
+def _authenticated_provider_object_id(
+    provider: str, evidence_payload: dict[str, Any]
+) -> object | None:
+    if provider == "stripe":
+        if "id" in evidence_payload:
+            return evidence_payload["id"]
+        return evidence_payload.get("payment_intent_id")
+    if provider == "paystack":
+        return evidence_payload.get("reference")
+    return evidence_payload.get("id")
+
+
+async def _validate_attempt_payment_mapping(
+    session: AsyncSession,
+    *,
+    payment: Payment,
+    attempt: PaymentAttempt,
+    provider: str,
+    evidence_payload: dict[str, Any],
+) -> None:
+    """Fail closed unless local mapping belongs to the exact evidenced attempt."""
+    provider_object_id = _authenticated_provider_object_id(provider, evidence_payload)
+    gateway = getattr(payment.payment_gateway, "value", payment.payment_gateway)
+    if (
+        payment.order_id != attempt.order_id
+        or (
+            provider_object_id is not None
+            and (
+                not isinstance(provider_object_id, str)
+                or not provider_object_id
+                or payment.transaction_id != provider_object_id
+            )
+        )
+        or payment.amount != attempt.amount
+        or payment.currency != attempt.currency
+        or gateway != provider
+        or payment.payment_method != provider
+    ):
+        raise PaymentTruthMismatch("verified payment truth does not match")
+    if attempt.state == "failed":
+        successor_order_ids = list(
+            await session.scalars(
+                select(PaymentAttempt.order_id).where(
+                    PaymentAttempt.supersedes_attempt_id == attempt.id
+                )
+            )
+        )
+        if any(order_id != attempt.order_id for order_id in successor_order_ids):
+            raise PaymentTruthMismatch("verified payment truth does not match")
+
+
 def bridge_fulfilment_status(
     *,
     paid: bool,
@@ -351,7 +402,13 @@ async def _ensure_domestic_bridge_attempt(
         )
     )
     by_item = {row.order_item_id: row for row in coverage}
-    if not items or len(by_item) != len(items):
+    item_ids = {item.id for item in items}
+    if (
+        not items
+        or len(coverage) != len(items)
+        or len(by_item) != len(coverage)
+        or set(by_item) != item_ids
+    ):
         raise PaymentBridgeError("payment attempt prerequisites are incomplete")
 
     reservation_ids = []
@@ -376,6 +433,8 @@ async def _ensure_domestic_bridge_attempt(
             raise PaymentBridgeError("payment attempt prerequisites are incomplete")
         if row.reservation_id is not None:
             reservation_ids.append(row.reservation_id)
+    if len(set(reservation_ids)) != len(reservation_ids):
+        raise PaymentBridgeError("payment attempt subject binding is invalid")
 
     if predecessor is not None and predecessor.state in {"failed", "expired"}:
         prior_reservations = list(
@@ -486,6 +545,8 @@ async def _ensure_domestic_bridge_attempt(
         or reservation.checkout_estimate_selection_id != selection_id
         or reservation.state != "active"
         or reservation.expires_at <= database_now
+        or reservation.order_item_id not in by_item
+        or by_item[reservation.order_item_id].inventory_policy != "stock_managed"
         or by_item[reservation.order_item_id].reservation_id != reservation.id
         for reservation in reservations
     ):
@@ -563,8 +624,26 @@ async def recover_payment_mapping(
         raise PaymentRecoveryUnavailable(
             "authenticated payment evidence cannot be durably associated"
         )
-    payment = await session.scalar(
-        select(Payment).where(Payment.transaction_id == transaction_id)
+    correlated_payments = list(
+        await session.scalars(
+            select(Payment)
+            .where(
+                Payment.gateway_response["shopsoma_payment_reference"].astext
+                == provider_reference
+            )
+            .with_for_update()
+        )
+    )
+    if len(correlated_payments) > 1:
+        raise PaymentTruthMismatch("verified payment truth does not match")
+    payment = (
+        correlated_payments[0]
+        if correlated_payments
+        else await session.scalar(
+            select(Payment)
+            .where(Payment.transaction_id == transaction_id)
+            .with_for_update()
+        )
     )
     if payment is None:
         payment = Payment(
@@ -836,21 +915,29 @@ async def finalize_verified_payment(
     observed_at: datetime | None = None,
 ) -> PaymentFinalizationResult:
     """Atomically finalize legacy or bridge payment truth without provider calls."""
-    order = await session.scalar(
-        select(Order).where(Order.id == payment.order_id).with_for_update()
-    )
-    if order is None:
-        raise PaymentBridgeError("payment order was not found")
-
     attempt = await session.scalar(
         select(PaymentAttempt)
         .where(
-            PaymentAttempt.order_id == order.id,
             PaymentAttempt.provider == provider,
             PaymentAttempt.provider_reference == provider_reference,
         )
         .with_for_update()
     )
+    if attempt is not None:
+        await _validate_attempt_payment_mapping(
+            session,
+            payment=payment,
+            attempt=attempt,
+            provider=provider,
+            evidence_payload=evidence_payload,
+        )
+    order_id = attempt.order_id if attempt is not None else payment.order_id
+    order = await session.scalar(
+        select(Order).where(Order.id == order_id).with_for_update()
+    )
+    if order is None:
+        raise PaymentBridgeError("payment order was not found")
+
     if attempt is None:
         bridge_attempt_exists = await session.scalar(
             select(PaymentAttempt.id)
@@ -867,8 +954,6 @@ async def finalize_verified_payment(
             order.fulfillment_status = FulfillmentStatus.PREPARING_FOR_PICKUP
         return PaymentFinalizationResult(False, replay, order)
 
-    if payment.payment_gateway.value != provider:
-        raise PaymentTruthMismatch("verified payment truth does not match")
     if observed_amount is None or observed_currency is None:
         raise PaymentTruthMismatch("verified payment truth does not match")
     validate_verified_payment_truth(

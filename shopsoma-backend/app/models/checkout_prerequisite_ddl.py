@@ -570,15 +570,21 @@ BEGIN
         OR ar.checkout_estimate_selection_id IS DISTINCT FROM OLD.checkout_estimate_selection_id
         OR sr.order_id IS DISTINCT FROM OLD.order_id
         OR sr.checkout_estimate_selection_id IS DISTINCT FROM OLD.checkout_estimate_selection_id
-        OR sr.state<>'active' OR sr.expires_at<=now_at))
+        OR sr.state<>'active' OR sr.expires_at<=now_at
+        OR NOT EXISTS(SELECT 1 FROM order_inventory_coverage coverage
+          WHERE coverage.order_id=OLD.order_id
+            AND coverage.checkout_estimate_selection_id=OLD.checkout_estimate_selection_id
+            AND coverage.inventory_policy='stock_managed'
+            AND coverage.order_item_id=ar.order_item_id
+            AND coverage.reservation_id=ar.reservation_id)))
       OR EXISTS(
-       SELECT 1 FROM stock_reservations sr
-       WHERE sr.order_id=OLD.order_id
-         AND sr.checkout_estimate_selection_id=OLD.checkout_estimate_selection_id
-         AND sr.workflow_cohort='domestic_checkout_v1'
-         AND sr.state='active' AND sr.expires_at>now_at
+       SELECT 1 FROM order_inventory_coverage coverage
+       WHERE coverage.order_id=OLD.order_id
+         AND coverage.checkout_estimate_selection_id=OLD.checkout_estimate_selection_id
+         AND coverage.inventory_policy='stock_managed'
          AND NOT EXISTS(SELECT 1 FROM payment_attempt_reservations ar
-                        WHERE ar.attempt_id=OLD.id AND ar.reservation_id=sr.id))
+                        WHERE ar.attempt_id=OLD.id
+                          AND ar.reservation_id=coverage.reservation_id))
    THEN RAISE EXCEPTION 'payment call requires live authoritative reservations'; END IF;
    NEW.call_started_at:=now_at;
    NEW.claim_expires_at:=now_at+NEW.claim_ttl_seconds*interval '1 second';
@@ -715,8 +721,9 @@ CREATE TRIGGER trg_payment_attempts_validate_domestic_update BEFORE UPDATE ON pa
 CREATE OR REPLACE FUNCTION validate_payment_attempt_exact_reservations() RETURNS trigger AS $$
 DECLARE
     target_attempt uuid; attempt_order uuid; attempt_workflow text;
-    attempt_selection uuid; requires_stock_reservations boolean;
-    missing_count bigint; extra_count bigint; composition_mismatch_count bigint;
+    attempt_selection uuid; item_count bigint; coverage_count bigint;
+    invalid_count bigint; missing_count bigint; extra_count bigint;
+    composition_mismatch_count bigint;
 BEGIN
     IF TG_TABLE_NAME = 'payment_attempts' THEN target_attempt := NEW.id;
     ELSE target_attempt := NEW.attempt_id; END IF;
@@ -724,18 +731,44 @@ BEGIN
       INTO attempt_order,attempt_workflow,attempt_selection
       FROM payment_attempts pa WHERE pa.id = target_attempt;
     IF attempt_workflow='domestic_checkout_v1' THEN
-        requires_stock_reservations:=EXISTS(
-            SELECT 1 FROM order_inventory_coverage coverage
-             WHERE coverage.order_id=attempt_order
-               AND coverage.checkout_estimate_selection_id=attempt_selection
-               AND coverage.inventory_policy='stock_managed');
-        IF NOT requires_stock_reservations THEN
-            IF EXISTS(SELECT 1 FROM payment_attempt_reservations
-                       WHERE attempt_id=target_attempt) THEN
-                RAISE EXCEPTION 'payment attempt must cover the exact active reservation set';
-            END IF;
-            RETURN NULL;
+        SELECT count(*) INTO item_count FROM order_items WHERE order_id=attempt_order;
+        SELECT count(*) INTO coverage_count FROM order_inventory_coverage
+         WHERE order_id=attempt_order;
+        SELECT count(*) INTO invalid_count FROM order_items oi
+        LEFT JOIN order_inventory_coverage coverage
+          ON coverage.order_id=oi.order_id AND coverage.order_item_id=oi.id
+        LEFT JOIN stock_reservations sr ON sr.id=coverage.reservation_id
+        WHERE oi.order_id=attempt_order AND (
+          coverage.order_item_id IS NULL
+          OR coverage.checkout_estimate_selection_id IS DISTINCT FROM attempt_selection
+          OR coverage.inventory_policy IS DISTINCT FROM oi.inventory_policy
+          OR (oi.inventory_policy='made_to_order' AND coverage.reservation_id IS NOT NULL)
+          OR (oi.inventory_policy='stock_managed' AND (
+              sr.id IS NULL OR sr.order_id IS DISTINCT FROM attempt_order
+              OR sr.order_item_id IS DISTINCT FROM oi.id
+              OR sr.checkout_estimate_selection_id IS DISTINCT FROM attempt_selection
+              OR sr.state IS DISTINCT FROM 'active'
+              OR sr.expires_at<=statement_timestamp())));
+        SELECT count(*) INTO missing_count FROM order_inventory_coverage coverage
+         WHERE coverage.order_id=attempt_order
+           AND coverage.checkout_estimate_selection_id=attempt_selection
+           AND coverage.inventory_policy='stock_managed'
+           AND NOT EXISTS(SELECT 1 FROM payment_attempt_reservations ar
+             WHERE ar.attempt_id=target_attempt
+               AND ar.reservation_id=coverage.reservation_id);
+        SELECT count(*) INTO extra_count FROM payment_attempt_reservations ar
+         WHERE ar.attempt_id=target_attempt AND NOT EXISTS(
+           SELECT 1 FROM order_inventory_coverage coverage
+           WHERE coverage.order_id=attempt_order
+             AND coverage.checkout_estimate_selection_id=attempt_selection
+             AND coverage.inventory_policy='stock_managed'
+             AND coverage.order_item_id=ar.order_item_id
+             AND coverage.reservation_id=ar.reservation_id);
+        IF item_count=0 OR coverage_count<>item_count OR invalid_count<>0
+           OR missing_count<>0 OR extra_count<>0 THEN
+            RAISE EXCEPTION 'payment attempt must cover exact stock-managed coverage';
         END IF;
+        RETURN NULL;
     END IF;
     SELECT count(*) INTO missing_count FROM stock_reservations sr
      WHERE sr.order_id=attempt_order AND sr.state='active'

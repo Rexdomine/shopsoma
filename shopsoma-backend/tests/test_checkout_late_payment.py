@@ -19,6 +19,23 @@ from tests.test_checkout_payment_bridge_prerequisites import create_enforced_che
 from tests.test_verified_payment_inventory import initialize_stripe
 
 
+# Canonical payment identity table (authenticated evidence is provider-returned
+# callback data or a signature-verified webhook payload):
+#
+# Path                         Provider object key      Attempt correlation
+# Stripe callback             intent.id (`pi_...`)     metadata reference
+# Stripe webhook              payment_intent.id        metadata reference
+# Paystack callback/webhook    data.reference           data.reference/metadata
+# Missing-map recovery         authenticated key above  exact fenced attempt
+# Claim-expiry/completed replay same as originating path exact fenced attempt
+# Late predecessor success     predecessor object key   predecessor metadata ref
+#
+# Payment.transaction_id is always the provider object mapping key. Provider and
+# payment_method use canonical lower-case names. Attempt/order bind amount,
+# currency, and order; signed/retrieved provider evidence authoritatively binds
+# the provider object and internal attempt reference without equating them.
+
+
 @pytest.fixture(autouse=True)
 def _disable_receipt_email(monkeypatch):
     async def successful_receipt(**_kwargs):
@@ -27,6 +44,56 @@ def _disable_receipt_email(monkeypatch):
     monkeypatch.setattr(
         payments.email_service, "send_payment_receipt_email", successful_receipt
     )
+
+
+class _AuthenticatedStripeWebhookRequest:
+    async def body(self):
+        return b'{"authenticated":true}'
+
+
+@pytest.mark.asyncio
+async def test_stripe_webhook_preserves_distinct_provider_object_and_attempt_reference(
+    client, db_session, vendor_user, customer_user, monkeypatch
+):
+    order, _ = await create_enforced_checkout(
+        client, db_session, vendor_user, customer_user, monkeypatch
+    )
+    attempt = await initialize_stripe(
+        client,
+        db_session,
+        customer_user,
+        monkeypatch,
+        order,
+        transaction_id="pi_distinct_webhook_object",
+    )
+    assert attempt.provider_transaction_id != attempt.provider_reference
+    intent = SimpleNamespace(
+        id=attempt.provider_transaction_id,
+        amount_received=int(Decimal(attempt.amount) * 100),
+        currency=attempt.currency.lower(),
+        metadata={"shopsoma_payment_reference": attempt.provider_reference},
+    )
+    event = SimpleNamespace(
+        id="evt_distinct_webhook_object",
+        type="payment_intent.succeeded",
+        data=SimpleNamespace(object=intent),
+    )
+    monkeypatch.setattr(payments.settings, "STRIPE_WEBHOOK_SECRET", "test-secret")
+    monkeypatch.setattr(
+        payments.stripe.Webhook, "construct_event", lambda **_kwargs: event
+    )
+
+    response = await payments.stripe_webhook(
+        _AuthenticatedStripeWebhookRequest(), "test-signature", db_session
+    )
+
+    assert response == {"status": "success"}
+    persisted_payment = await db_session.scalar(
+        select(Payment).where(Payment.transaction_id == attempt.provider_transaction_id)
+    )
+    persisted_attempt = await db_session.get(PaymentAttempt, attempt.id)
+    assert persisted_payment.status == TransactionStatus.COMPLETED
+    assert persisted_attempt.state == "verified"
 
 
 @pytest.mark.asyncio
@@ -261,3 +328,177 @@ async def test_late_predecessor_success_resolves_exact_attempt_without_mutating_
     )
     await db_session.refresh(product)
     assert product.total_stock == initial_stock
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mismatch",
+    ["reference", "amount", "currency", "method", "provider", "order"],
+)
+async def test_late_predecessor_success_rejects_corrupt_existing_mapping_without_mutation(
+    client,
+    db_session,
+    vendor_user,
+    customer_user,
+    monkeypatch,
+    mismatch,
+):
+    order, _ = await create_enforced_checkout(
+        client, db_session, vendor_user, customer_user, monkeypatch
+    )
+    order_id = order.id
+    customer_email = customer_user["user"].email
+    predecessor = await initialize_stripe(
+        client,
+        db_session,
+        customer_user,
+        monkeypatch,
+        order,
+        transaction_id=f"pi_mapping_{mismatch}",
+    )
+    failed_intent = SimpleNamespace(
+        id=predecessor.provider_transaction_id,
+        status="canceled",
+        amount=int(Decimal(predecessor.amount) * 100),
+        currency=predecessor.currency.lower(),
+        metadata={"shopsoma_payment_reference": predecessor.provider_reference},
+        last_payment_error=SimpleNamespace(message="Canceled"),
+    )
+    monkeypatch.setattr(
+        payments.stripe.PaymentIntent, "retrieve", lambda _value: failed_intent
+    )
+    failed = await client.post(
+        "/api/v1/payments/verify",
+        json={
+            "payment_gateway": "stripe",
+            "payment_intent_id": predecessor.provider_transaction_id,
+        },
+    )
+    assert failed.status_code == 200, failed.text
+    monkeypatch.setattr(
+        payments.stripe.PaymentIntent,
+        "create",
+        lambda **_kwargs: SimpleNamespace(
+            id=f"pi_successor_{mismatch}", client_secret="successor_secret"
+        ),
+    )
+    initialized = await client.post(
+        "/api/v1/payments/initialize",
+        headers=customer_user["headers"],
+        json={
+            "order_id": str(order.id),
+            "email": customer_email,
+            "payment_gateway": "stripe",
+            "currency": "NGN",
+        },
+    )
+    assert initialized.status_code == 200, initialized.text
+    successor = await db_session.scalar(
+        select(PaymentAttempt).where(
+            PaymentAttempt.supersedes_attempt_id == predecessor.id
+        )
+    )
+    mapping = await db_session.scalar(
+        select(Payment).where(
+            Payment.transaction_id == predecessor.provider_transaction_id
+        )
+    )
+    successor_id = successor.id
+    mapping_id = mapping.id
+    if mismatch == "reference":
+        mapping.transaction_id = f"corrupt_{mapping.transaction_id}"
+    elif mismatch == "amount":
+        mapping.amount += Decimal("1.00")
+    elif mismatch == "currency":
+        mapping.currency = "USD"
+    elif mismatch == "method":
+        mapping.payment_method = "paystack"
+    elif mismatch == "provider":
+        mapping.payment_gateway = "paystack"
+    else:
+        await db_session.refresh(vendor_user["vendor"])
+        await db_session.refresh(customer_user["user"])
+        other_order, _ = await create_enforced_checkout(
+            client, db_session, vendor_user, customer_user, monkeypatch
+        )
+        mapping.order_id = other_order.id
+    await db_session.commit()
+    db_session.expire_all()
+    order_before = await db_session.get(Order, order_id)
+    successor_before = await db_session.get(PaymentAttempt, successor_id)
+    mapping_before = await db_session.get(Payment, mapping_id)
+    event_count_before = await db_session.scalar(
+        select(func.count(CheckoutOutboxEvent.id)).where(
+            CheckoutOutboxEvent.order_id == order_id
+        )
+    )
+    snapshots = (
+        (order_before.payment_status, order_before.fulfillment_status),
+        (
+            successor_before.state,
+            successor_before.provider_reference,
+            successor_before.lease_token,
+            successor_before.row_version,
+        ),
+        (
+            mapping_before.order_id,
+            mapping_before.transaction_id,
+            mapping_before.payment_gateway,
+            mapping_before.payment_method,
+            mapping_before.amount,
+            mapping_before.currency,
+            mapping_before.status,
+        ),
+    )
+    succeeded_intent = SimpleNamespace(
+        id=predecessor.provider_transaction_id,
+        status="succeeded",
+        amount=int(Decimal(predecessor.amount) * 100),
+        amount_received=int(Decimal(predecessor.amount) * 100),
+        currency=predecessor.currency.lower(),
+        metadata={"shopsoma_payment_reference": predecessor.provider_reference},
+    )
+    monkeypatch.setattr(
+        payments.stripe.PaymentIntent, "retrieve", lambda _value: succeeded_intent
+    )
+
+    response = await client.post(
+        "/api/v1/payments/verify",
+        json={
+            "payment_gateway": "stripe",
+            "payment_intent_id": predecessor.provider_transaction_id,
+        },
+    )
+
+    assert response.status_code == 409, response.text
+    db_session.expire_all()
+    persisted_order = await db_session.get(Order, order_id)
+    persisted_successor = await db_session.get(PaymentAttempt, successor_id)
+    persisted_mapping = await db_session.get(Payment, mapping_id)
+    assert (
+        persisted_order.payment_status,
+        persisted_order.fulfillment_status,
+    ) == snapshots[0]
+    assert (
+        persisted_successor.state,
+        persisted_successor.provider_reference,
+        persisted_successor.lease_token,
+        persisted_successor.row_version,
+    ) == snapshots[1]
+    assert (
+        persisted_mapping.order_id,
+        persisted_mapping.transaction_id,
+        persisted_mapping.payment_gateway,
+        persisted_mapping.payment_method,
+        persisted_mapping.amount,
+        persisted_mapping.currency,
+        persisted_mapping.status,
+    ) == snapshots[2]
+    assert (
+        await db_session.scalar(
+            select(func.count(CheckoutOutboxEvent.id)).where(
+                CheckoutOutboxEvent.order_id == order_id
+            )
+        )
+        == event_count_before
+    )

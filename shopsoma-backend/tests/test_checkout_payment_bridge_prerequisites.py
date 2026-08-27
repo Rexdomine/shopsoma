@@ -11,6 +11,7 @@ from app.api.v1 import payments
 from app.core.config import settings
 from app.models.checkout_shipping_estimate import OrderInventoryCoverage
 from app.models.order import Order
+from app.models.product import ModerationStatus, Product, ProductStatus
 from app.models.stock_payment_persistence import (
     PaymentAttempt,
     PaymentAttemptReservation,
@@ -79,6 +80,74 @@ async def create_enforced_checkout(
     order = await db_session.get(Order, uuid.UUID(order_id))
     await db_session.refresh(order)
     return order, product
+
+
+async def create_mixed_enforced_checkout(
+    client, db_session, vendor_user, customer_user, monkeypatch
+):
+    address, stock_product = await _domestic_catalogue(
+        db_session, vendor_user, customer_user
+    )
+    made_to_order = Product(
+        id=uuid.uuid4(),
+        vendor_id=vendor_user["vendor"].id,
+        title="Payment bridge made-to-order line",
+        description="Mixed-cart payment membership contract",
+        base_price=Decimal("80000.00"),
+        currency="NGN",
+        total_stock=0,
+        made_to_order=True,
+        status=ProductStatus.ACTIVE,
+        moderation_status=ModerationStatus.APPROVED,
+    )
+    db_session.add(made_to_order)
+    await db_session.commit()
+    monkeypatch.setattr(settings, "DOMESTIC_CHECKOUT_PREREQUISITES_ENABLED", True)
+    monkeypatch.setattr(
+        settings,
+        "DOMESTIC_CHECKOUT_COHORT_ALLOWLIST",
+        str(customer_user["user"].id),
+    )
+    monkeypatch.setattr(
+        payments,
+        "domestic_shipping_capabilities",
+        lambda _settings: DomesticShippingCapabilities(True, True, False),
+    )
+    created = await client.post(
+        "/api/v1/orders",
+        headers=customer_user["headers"],
+        json={
+            "items": [
+                {"product_id": str(stock_product.id), "quantity": 1},
+                {"product_id": str(made_to_order.id), "quantity": 1},
+            ],
+            "shipping_address_id": str(address.id),
+            "currency": "NGN",
+        },
+    )
+    assert created.status_code == 201, created.text
+    order_id = created.json()["id"]
+    estimated = await client.post(
+        f"/api/v1/orders/{order_id}/checkout-estimates",
+        headers={
+            **customer_user["headers"],
+            "X-Idempotency-Key": f"estimate-{uuid.uuid4()}",
+        },
+    )
+    assert estimated.status_code == 201, estimated.text
+    estimate = estimated.json()
+    selected = await client.post(
+        f"/api/v1/orders/{order_id}/checkout-estimates/{estimate['id']}"
+        f"/options/{estimate['options'][0]['id']}/select",
+        headers={
+            **customer_user["headers"],
+            "X-Idempotency-Key": f"select-{uuid.uuid4()}",
+        },
+    )
+    assert selected.status_code == 200, selected.text
+    order = await db_session.get(Order, uuid.UUID(order_id))
+    await db_session.refresh(order)
+    return order
 
 
 @pytest.mark.asyncio
@@ -359,3 +428,55 @@ async def test_authenticated_made_to_order_only_initializes_without_reservations
         )
         == 0
     )
+
+
+@pytest.mark.asyncio
+async def test_mixed_order_initializes_with_exact_stock_coverage_membership(
+    client, db_session, vendor_user, customer_user, monkeypatch
+):
+    order = await create_mixed_enforced_checkout(
+        client, db_session, vendor_user, customer_user, monkeypatch
+    )
+    customer_user["user"].stripe_customer_id = "cus_mixed_membership"
+    provider_calls = 0
+
+    def create_intent(**_kwargs):
+        nonlocal provider_calls
+        provider_calls += 1
+        return SimpleNamespace(id="pi_mixed_membership", client_secret="secret_mixed")
+
+    monkeypatch.setattr(payments.stripe.PaymentIntent, "create", create_intent)
+    await db_session.commit()
+    response = await client.post(
+        "/api/v1/payments/initialize",
+        headers=customer_user["headers"],
+        json={
+            "order_id": str(order.id),
+            "email": customer_user["user"].email,
+            "payment_gateway": "stripe",
+            "currency": "NGN",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    attempt = await db_session.scalar(
+        select(PaymentAttempt).where(PaymentAttempt.order_id == order.id)
+    )
+    memberships = set(
+        await db_session.scalars(
+            select(PaymentAttemptReservation.reservation_id).where(
+                PaymentAttemptReservation.attempt_id == attempt.id
+            )
+        )
+    )
+    stock_coverage = set(
+        await db_session.scalars(
+            select(OrderInventoryCoverage.reservation_id).where(
+                OrderInventoryCoverage.order_id == order.id,
+                OrderInventoryCoverage.inventory_policy == "stock_managed",
+            )
+        )
+    )
+    assert provider_calls == 1
+    assert memberships == stock_coverage
+    assert None not in memberships
