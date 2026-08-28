@@ -217,6 +217,14 @@ async def test_stored_paystack_pending_recovery_state_returns_none(gateway_respo
     assert result is None
 
 
+def test_effective_claim_sql_bounds_unresolved_attempts_by_authorization_deadline():
+    module = _load_module(RESERVATIONS_PATH, "reservations_deadline_followup")
+    normalized = " ".join(str(module._EFFECTIVE_CLAIM_SQL).split())
+    assert "pa.state IN ('call_started','abandoned_unknown') AND pa.authorization_deadline_at>=clock_timestamp()" in normalized
+    assert "OR (pa.state='verified' AND pa.authorization_deadline_at>=clock_timestamp())" in normalized
+    assert "pa.state IN ('call_started','abandoned_unknown') OR (pa.state='verified'" not in normalized
+
+
 @pytest.mark.asyncio
 async def test_shared_inventory_subjects_are_checked_once(monkeypatch):
     module = _load_module(RESERVATIONS_PATH, "reservations_followup")

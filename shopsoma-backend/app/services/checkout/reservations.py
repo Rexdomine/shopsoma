@@ -33,7 +33,10 @@ _EFFECTIVE_CLAIM_SQL = text(
           JOIN payment_attempts pa ON pa.id=par.attempt_id
           WHERE par.reservation_id=sr.id
             AND (
-              pa.state IN ('call_started','abandoned_unknown')
+              (
+                pa.state IN ('call_started','abandoned_unknown')
+                AND pa.authorization_deadline_at>=clock_timestamp()
+              )
               OR (pa.state='verified' AND pa.authorization_deadline_at>=clock_timestamp())
             )
         )
