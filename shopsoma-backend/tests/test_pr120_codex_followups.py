@@ -3,7 +3,9 @@ from __future__ import annotations
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 from decimal import Decimal
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+import sys
 
 import pytest
 from fastapi import HTTPException
@@ -13,12 +15,14 @@ ROOT = Path(__file__).parents[1]
 DEPLOY_PATH = ROOT / "run_checkout_prerequisite_deploy.py"
 PAYMENTS_PATH = ROOT / "app" / "api" / "v1" / "payments.py"
 RESERVATIONS_PATH = ROOT / "app" / "services" / "checkout" / "reservations.py"
+BRIDGE_PATH = ROOT / "app" / "services" / "payments" / "fulfilment_bridge.py"
 
 
 def _load_module(path: Path, name: str):
     spec = spec_from_file_location(name, path)
     assert spec is not None and spec.loader is not None
     module = module_from_spec(spec)
+    sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
 
@@ -215,6 +219,60 @@ async def test_stored_paystack_pending_recovery_state_returns_none(gateway_respo
     )
 
     assert result is None
+
+
+@pytest.mark.asyncio
+async def test_expired_call_started_attempt_is_closed_before_replay(monkeypatch):
+    module = _load_module(BRIDGE_PATH, "bridge_attempt_expiry_followup")
+    predecessor = SimpleNamespace(
+        id="attempt-1",
+        state="call_started",
+        authorization_deadline_at=datetime.now(timezone.utc) - timedelta(seconds=5),
+        row_version=7,
+    )
+    locked_order = SimpleNamespace(id="order-1", workflow_cohort="domestic_checkout_v1")
+    observed = {}
+
+    class FakeSession:
+        def __init__(self):
+            self.flush_calls = 0
+
+        async def scalar(self, statement):
+            sql = str(statement)
+            if "SELECT clock_timestamp()" in sql:
+                return datetime.now(timezone.utc)
+            return locked_order
+
+        async def flush(self):
+            self.flush_calls += 1
+
+    session = FakeSession()
+
+    async def fake_active_bridge_attempt(_session, *, order_id, lock=False):
+        assert order_id == "order-1"
+        assert lock is True
+        return predecessor
+
+    async def fake_ensure_domestic_bridge_attempt(_session, *, order, provider, predecessor):
+        observed["order"] = order
+        observed["provider"] = provider
+        observed["predecessor"] = predecessor
+        return "NEW-ATTEMPT"
+
+    monkeypatch.setattr(module, "active_bridge_attempt", fake_active_bridge_attempt)
+    monkeypatch.setattr(
+        module, "_ensure_domestic_bridge_attempt", fake_ensure_domestic_bridge_attempt
+    )
+
+    result = await module._ensure_bridge_attempt(
+        session, order=locked_order, provider="stripe"
+    )
+
+    assert result == "NEW-ATTEMPT"
+    assert predecessor.state == "expired"
+    assert predecessor.row_version == 8
+    assert session.flush_calls == 1
+    assert observed["predecessor"] is predecessor
 
 
 def test_effective_claim_sql_bounds_unresolved_attempts_by_authorization_deadline():

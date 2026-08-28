@@ -285,8 +285,18 @@ async def _ensure_bridge_attempt(
         raise PaymentBridgeError("payment order was not found")
 
     attempt = await active_bridge_attempt(session, order_id=order.id, lock=True)
-    if attempt is not None and attempt.state not in {"failed", "expired"}:
-        return attempt
+    if attempt is not None:
+        database_now = await session.scalar(text("SELECT clock_timestamp()"))
+        if (
+            attempt.state == "call_started"
+            and attempt.authorization_deadline_at is not None
+            and attempt.authorization_deadline_at < database_now
+        ):
+            attempt.state = "expired"
+            attempt.row_version += 1
+            await session.flush()
+        elif attempt.state not in {"failed", "expired"}:
+            return attempt
 
     if locked_order.workflow_cohort == "domestic_checkout_v1":
         return await _ensure_domestic_bridge_attempt(
