@@ -29,9 +29,16 @@ def test_deploy_entrypoint_runs_staged_upgrade_then_classification_then_heads(mo
         "postgresql+asyncpg://user:pass@localhost/db"
     )
 
+    class LockContext:
+        def __enter__(self):
+            calls.append(("lock_enter",))
+        def __exit__(self, exc_type, exc, tb):
+            calls.append(("lock_exit",))
+
     monkeypatch.setattr(module.command, "upgrade", lambda _config, revision: calls.append(("upgrade", revision)))
     monkeypatch.setattr(module, "create_engine", lambda url: calls.append(("create_engine", url)) or engine)
     monkeypatch.setattr(module, "_cutover_already_complete", lambda _engine: False)
+    monkeypatch.setattr(module, "_hold_cutover_validation_lock", lambda _engine: LockContext())
     monkeypatch.setattr(module, "start_workflow_classification_run", lambda _engine, identity: calls.append(("start", identity.migration_revision)) or run_id)
 
     batches = iter([2, 1, 0])
@@ -47,9 +54,11 @@ def test_deploy_entrypoint_runs_staged_upgrade_then_classification_then_heads(mo
         ("batch", run_id, 250),
         ("batch", run_id, 250),
         ("batch", run_id, 250),
+        ("lock_enter",),
         ("finalize", run_id),
-        ("dispose",),
         ("upgrade", "heads"),
+        ("lock_exit",),
+        ("dispose",),
     ]
 
 

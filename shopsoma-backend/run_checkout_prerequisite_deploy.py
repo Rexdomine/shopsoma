@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import socket
+from contextlib import contextmanager
 from pathlib import Path
 
 from alembic import command
@@ -71,6 +72,33 @@ def _cutover_already_complete(engine) -> bool:
     )
 
 
+@contextmanager
+def _hold_cutover_validation_lock(engine):
+    connection = engine.connect()
+    transaction = connection.begin()
+    try:
+        connection.execute(text("LOCK TABLE orders IN SHARE ROW EXCLUSIVE MODE"))
+        connection.execute(
+            text(
+                "LOCK TABLE order_workflow_classifications "
+                "IN SHARE ROW EXCLUSIVE MODE"
+            )
+        )
+        connection.execute(
+            text(
+                "LOCK TABLE order_current_owners "
+                "IN SHARE ROW EXCLUSIVE MODE"
+            )
+        )
+        yield
+        transaction.commit()
+    except Exception:
+        transaction.rollback()
+        raise
+    finally:
+        connection.close()
+
+
 def run(*, database_url: str | None = None, batch_size: int = DEFAULT_BATCH_SIZE) -> None:
     database_url = database_url or os.environ["DATABASE_URL"]
     config = _alembic_config(database_url)
@@ -81,7 +109,10 @@ def run(*, database_url: str | None = None, batch_size: int = DEFAULT_BATCH_SIZE
             run_id = start_workflow_classification_run(engine, _identity())
             while classify_workflow_batch(engine, run_id, batch_size=batch_size):
                 pass
-            finalize_workflow_classification(engine, run_id)
+            with _hold_cutover_validation_lock(engine):
+                finalize_workflow_classification(engine, run_id)
+                command.upgrade(config, "heads")
+            return
     finally:
         engine.dispose()
     command.upgrade(config, "heads")

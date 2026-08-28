@@ -24,6 +24,7 @@ from app.models.shipping_rate import ShippingRate
 from app.models.stock_payment_persistence import (
     PaymentAttempt,
     PaymentAttemptEvidence,
+    PaymentAttemptReservation,
     StockReservation,
 )
 from app.models.vendor_pickup import OrderType, VendorNotification, VendorPickup
@@ -607,8 +608,16 @@ async def test_failed_payment_retry_re_reserves_exact_stock_once_before_provider
             OrderInventoryCoverage.order_id == order_id
         )
     )
+    retried_membership = set(
+        await db_session.scalars(
+            select(PaymentAttemptReservation.reservation_id).where(
+                PaymentAttemptReservation.attempt_id == attempts[-1].id
+            )
+        )
+    )
     assert [row.state for row in reservations] == ["released", "active"]
-    assert coverage_reservation_id == reservations[-1].id
+    assert coverage_reservation_id == reservations[0].id
+    assert retried_membership == {reservations[-1].id}
     assert len(attempts) == 2
     assert attempts[-1].supersedes_attempt_id == attempts[0].id
     assert sorted(

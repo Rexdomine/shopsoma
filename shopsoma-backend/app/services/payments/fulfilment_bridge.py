@@ -453,6 +453,7 @@ async def _ensure_domestic_bridge_attempt(
     ):
         raise PaymentBridgeError("payment attempt prerequisites are incomplete")
 
+    effective_reservation_ids: dict[uuid.UUID, uuid.UUID] = {}
     reservation_ids = []
     for item in items:
         row = by_item.get(item.id)
@@ -474,6 +475,7 @@ async def _ensure_domestic_bridge_attempt(
         if not valid:
             raise PaymentBridgeError("payment attempt prerequisites are incomplete")
         if row.reservation_id is not None:
+            effective_reservation_ids[item.id] = row.reservation_id
             reservation_ids.append(row.reservation_id)
     if len(set(reservation_ids)) != len(reservation_ids):
         raise PaymentBridgeError("payment attempt subject binding is invalid")
@@ -569,7 +571,7 @@ async def _ensure_domestic_bridge_attempt(
                 )
                 session.add(replacement)
                 await session.flush()
-                by_item[item.id].reservation_id = replacement.id
+                effective_reservation_ids[item.id] = replacement.id
                 reservation_ids.append(replacement.id)
             await session.flush()
 
@@ -589,7 +591,7 @@ async def _ensure_domestic_bridge_attempt(
         or reservation.expires_at <= database_now
         or reservation.order_item_id not in by_item
         or by_item[reservation.order_item_id].inventory_policy != "stock_managed"
-        or by_item[reservation.order_item_id].reservation_id != reservation.id
+        or effective_reservation_ids.get(reservation.order_item_id) != reservation.id
         for reservation in reservations
     ):
         raise PaymentBridgeError("payment attempt subject binding is invalid")
