@@ -32,10 +32,11 @@ def test_deploy_entrypoint_runs_staged_upgrade_then_classification_then_heads(mo
     class LockContext:
         def __enter__(self):
             calls.append(("lock_enter",))
+            return "LOCKED-CONNECTION"
         def __exit__(self, exc_type, exc, tb):
             calls.append(("lock_exit",))
 
-    monkeypatch.setattr(module.command, "upgrade", lambda _config, revision: calls.append(("upgrade", revision)))
+    monkeypatch.setattr(module.command, "upgrade", lambda config, revision: calls.append(("upgrade", revision, config.attributes.get("connection"))))
     monkeypatch.setattr(module, "create_engine", lambda url: calls.append(("create_engine", url)) or engine)
     monkeypatch.setattr(module, "_cutover_already_complete", lambda _engine: False)
     monkeypatch.setattr(module, "_hold_cutover_validation_lock", lambda _engine: LockContext())
@@ -48,7 +49,7 @@ def test_deploy_entrypoint_runs_staged_upgrade_then_classification_then_heads(mo
     module.run(database_url="postgresql+asyncpg://user:pass@localhost/db", batch_size=250)
 
     assert calls == [
-        ("upgrade", module.PREPARE_REVISION),
+        ("upgrade", module.PREPARE_REVISION, None),
         ("create_engine", expected_engine_url),
         ("start", module.VALIDATE_REVISION),
         ("batch", run_id, 250),
@@ -56,7 +57,7 @@ def test_deploy_entrypoint_runs_staged_upgrade_then_classification_then_heads(mo
         ("batch", run_id, 250),
         ("lock_enter",),
         ("finalize", run_id),
-        ("upgrade", "heads"),
+        ("upgrade", "heads", "LOCKED-CONNECTION"),
         ("lock_exit",),
         ("dispose",),
     ]
@@ -75,7 +76,7 @@ def test_deploy_entrypoint_skips_classification_after_recorded_cutover(monkeypat
         "postgresql+asyncpg://user:pass@localhost/db"
     )
 
-    monkeypatch.setattr(module.command, "upgrade", lambda _config, revision: calls.append(("upgrade", revision)))
+    monkeypatch.setattr(module.command, "upgrade", lambda config, revision: calls.append(("upgrade", revision, config.attributes.get("connection"))))
     monkeypatch.setattr(module, "create_engine", lambda url: calls.append(("create_engine", url)) or engine)
     monkeypatch.setattr(module, "_cutover_already_complete", lambda _engine: True)
     monkeypatch.setattr(module, "start_workflow_classification_run", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("classification must be skipped after cutover")))
@@ -85,8 +86,8 @@ def test_deploy_entrypoint_skips_classification_after_recorded_cutover(monkeypat
     module.run(database_url="postgresql+asyncpg://user:pass@localhost/db", batch_size=250)
 
     assert calls == [
-        ("upgrade", module.PREPARE_REVISION),
+        ("upgrade", module.PREPARE_REVISION, None),
         ("create_engine", expected_engine_url),
         ("dispose",),
-        ("upgrade", "heads"),
+        ("upgrade", "heads", None),
     ]

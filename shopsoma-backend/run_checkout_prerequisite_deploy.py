@@ -90,7 +90,7 @@ def _hold_cutover_validation_lock(engine):
                 "IN SHARE ROW EXCLUSIVE MODE"
             )
         )
-        yield
+        yield connection
         transaction.commit()
     except Exception:
         transaction.rollback()
@@ -109,9 +109,13 @@ def run(*, database_url: str | None = None, batch_size: int = DEFAULT_BATCH_SIZE
             run_id = start_workflow_classification_run(engine, _identity())
             while classify_workflow_batch(engine, run_id, batch_size=batch_size):
                 pass
-            with _hold_cutover_validation_lock(engine):
+            with _hold_cutover_validation_lock(engine) as locked_connection:
                 finalize_workflow_classification(engine, run_id)
-                command.upgrade(config, "heads")
+                config.attributes["connection"] = locked_connection
+                try:
+                    command.upgrade(config, "heads")
+                finally:
+                    config.attributes.pop("connection", None)
             return
     finally:
         engine.dispose()
