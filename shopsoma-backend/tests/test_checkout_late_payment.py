@@ -502,3 +502,101 @@ async def test_late_predecessor_success_rejects_corrupt_existing_mapping_without
         )
         == event_count_before
     )
+
+
+@pytest.mark.asyncio
+async def test_failed_predecessor_redelivery_replays_failed_terminal_state_after_successor_init(
+    client,
+    db_session,
+    vendor_user,
+    customer_user,
+    monkeypatch,
+):
+    order, _ = await create_enforced_checkout(
+        client, db_session, vendor_user, customer_user, monkeypatch
+    )
+    customer_email = customer_user["user"].email
+    predecessor = await initialize_stripe(
+        client,
+        db_session,
+        customer_user,
+        monkeypatch,
+        order,
+        transaction_id="pi_failed_predecessor_redelivery",
+    )
+    failed_intent = SimpleNamespace(
+        id=predecessor.provider_transaction_id,
+        status="canceled",
+        amount=int(Decimal(predecessor.amount) * 100),
+        currency=predecessor.currency.lower(),
+        metadata={"shopsoma_payment_reference": predecessor.provider_reference},
+        last_payment_error=SimpleNamespace(message="Canceled"),
+    )
+    monkeypatch.setattr(
+        payments.stripe.PaymentIntent, "retrieve", lambda _value: failed_intent
+    )
+    first_failed = await client.post(
+        "/api/v1/payments/verify",
+        json={
+            "payment_gateway": "stripe",
+            "payment_intent_id": predecessor.provider_transaction_id,
+        },
+    )
+    assert first_failed.status_code == 200, first_failed.text
+
+    monkeypatch.setattr(
+        payments.stripe.PaymentIntent,
+        "create",
+        lambda **_kwargs: SimpleNamespace(
+            id="pi_successor_after_failed_redelivery", client_secret="successor_secret"
+        ),
+    )
+    initialized = await client.post(
+        "/api/v1/payments/initialize",
+        headers=customer_user["headers"],
+        json={
+            "order_id": str(order.id),
+            "email": customer_email,
+            "payment_gateway": "stripe",
+            "currency": "NGN",
+        },
+    )
+    assert initialized.status_code == 200, initialized.text
+    successor = await db_session.scalar(
+        select(PaymentAttempt).where(
+            PaymentAttempt.supersedes_attempt_id == predecessor.id
+        )
+    )
+    assert successor is not None
+    successor_id = successor.id
+    successor_snapshot = (
+        successor.state,
+        successor.provider_reference,
+        successor.lease_token,
+        successor.row_version,
+    )
+
+    replay_failed = await client.post(
+        "/api/v1/payments/verify",
+        json={
+            "payment_gateway": "stripe",
+            "payment_intent_id": predecessor.provider_transaction_id,
+        },
+    )
+
+    assert replay_failed.status_code == 200, replay_failed.text
+    db_session.expire_all()
+    persisted_successor = await db_session.get(PaymentAttempt, successor_id)
+    persisted_predecessor_payment = await db_session.scalar(
+        select(Payment).where(
+            Payment.transaction_id == predecessor.provider_transaction_id
+        )
+    )
+    assert (
+        persisted_successor.state,
+        persisted_successor.provider_reference,
+        persisted_successor.lease_token,
+        persisted_successor.row_version,
+    ) == successor_snapshot
+    assert persisted_predecessor_payment is not None
+    assert persisted_predecessor_payment.status == TransactionStatus.FAILED

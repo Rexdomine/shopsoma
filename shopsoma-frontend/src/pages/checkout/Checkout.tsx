@@ -443,6 +443,14 @@ export default function Checkout() {
     setCurrentOrderId('');
   };
 
+  const isTerminalGuestCheckoutConflict = (error: any) => {
+    const detail = String(error?.response?.data?.detail || '').toLowerCase();
+    return error?.response?.status === 409 && (
+      detail === 'payment attempt subject binding is invalid'
+      || detail === 'payment attempt prerequisites are stale'
+    );
+  };
+
   const openInitializedPayment = (
     order: Order,
     paymentData: InitializePaymentResponse,
@@ -560,8 +568,10 @@ export default function Checkout() {
       }, enforced ? capability : undefined);
       openInitializedPayment(order, paymentData);
     } catch (error: any) {
-      const terminalAuthorization = error.response?.status === 404 || error.response?.status === 410;
-      if (terminalAuthorization) {
+      const terminalCheckout = error.response?.status === 404
+        || error.response?.status === 410
+        || isTerminalGuestCheckoutConflict(error);
+      if (terminalCheckout) {
         discardExpiredCheckout();
       } else if (order.checkout_access_mode === 'guest_capability' && capability) {
         setPaymentRetryAvailable(true);

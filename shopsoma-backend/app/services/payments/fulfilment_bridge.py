@@ -1128,14 +1128,38 @@ async def finalize_failed_payment(
     observed_at: datetime | None = None,
 ) -> PaymentFinalizationResult:
     """Atomically finalize authenticated provider failure and payment truth."""
-    order = await session.scalar(
-        select(Order).where(Order.id == payment.order_id).with_for_update()
+    attempt = await session.scalar(
+        select(PaymentAttempt).where(
+            PaymentAttempt.provider == provider,
+            PaymentAttempt.provider_reference == provider_reference,
+        )
     )
+    order_id = attempt.order_id if attempt is not None else payment.order_id
+    order = await session.scalar(select(Order).where(Order.id == order_id).with_for_update())
+    if attempt is not None:
+        attempt = await session.scalar(
+            select(PaymentAttempt)
+            .where(PaymentAttempt.id == attempt.id)
+            .with_for_update()
+        )
+        if attempt is None:
+            raise PaymentTruthMismatch("verified payment truth does not match")
+        await _validate_attempt_payment_mapping(
+            session,
+            payment=payment,
+            attempt=attempt,
+            provider=provider,
+            evidence_payload=evidence_payload,
+        )
     if order is None:
         raise PaymentBridgeError("payment order was not found")
 
-    attempt = await active_bridge_attempt(session, order_id=order.id, lock=True)
     if attempt is None:
+        bridge_attempt_exists = await session.scalar(
+            select(PaymentAttempt.id).where(PaymentAttempt.order_id == order.id).limit(1)
+        )
+        if bridge_attempt_exists is not None:
+            raise PaymentTruthMismatch("verified payment truth does not match")
         replay = payment.status in {
             TransactionStatus.FAILED,
             TransactionStatus.COMPLETED,
@@ -1147,8 +1171,6 @@ async def finalize_failed_payment(
             order.payment_status = PaymentStatus.FAILED
         return PaymentFinalizationResult(False, replay, order)
 
-    if attempt.provider != provider or attempt.provider_reference != provider_reference:
-        raise PaymentTruthMismatch("verified payment truth does not match")
     if attempt.state == "verified" or payment.status == TransactionStatus.COMPLETED:
         return PaymentFinalizationResult(True, True, order)
     if attempt.state == "failed":

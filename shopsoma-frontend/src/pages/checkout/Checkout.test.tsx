@@ -397,6 +397,41 @@ describe('Checkout M5 sequencing and recovery', () => {
     expect(mocks.createOrder).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    'payment attempt subject binding is invalid',
+    'payment attempt prerequisites are stale',
+  ])('creates a fresh guest order after terminal payment initialization conflict "%s"', async (detail) => {
+    const capability = `terminal-conflict-${detail}`;
+    const replacementCapability = `replacement-${detail}`;
+    mockGuestCapability(capability);
+    mocks.createOrder.mockResolvedValueOnce({
+      ...order,
+      id: `replacement-order-${detail}`,
+      customer_id: null,
+      checkout_access_mode: 'guest_capability',
+      checkout_capability: replacementCapability,
+    });
+    await reachPaymentStep(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Select Standard delivery' }));
+    mocks.initializePayment.mockRejectedValueOnce({ response: { status: 409, data: { detail } } });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Continue to payment' }));
+
+    await waitFor(() => expect(alert).toHaveBeenCalledWith(detail));
+    expect(screen.queryByRole('button', { name: 'Retry payment' })).not.toBeInTheDocument();
+    expect(mocks.createOrder).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Purchase' })[0]);
+
+    await waitFor(() => expect(mocks.createOrder).toHaveBeenCalledTimes(2));
+    expect(mocks.createCheckoutEstimate).toHaveBeenLastCalledWith(
+      `replacement-order-${detail}`,
+      expect.stringMatching(/^estimate-/),
+      replacementCapability,
+    );
+    expect(mocks.initializePayment).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps guest Paystack callback HTTP 503 recovery on Checkout and retries the saved order', async () => {
     const capability = 'callback-503-capability';
     mockGuestCapability(capability);
