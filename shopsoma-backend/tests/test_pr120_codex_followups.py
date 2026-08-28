@@ -168,7 +168,27 @@ async def test_reconcile_paystack_initialization_recovers_pending_mapping(monkey
 
 
 @pytest.mark.asyncio
-async def test_stored_paystack_pending_recovery_state_returns_none(monkeypatch):
+@pytest.mark.parametrize(
+    "gateway_response",
+    [
+        {
+            "reference": "ref-123",
+            "status": "processing",
+            "amount": 15500,
+            "currency": "NGN",
+        },
+        {
+            "status": True,
+            "data": {
+                "reference": "ref-123",
+                "status": "processing",
+                "amount": 15500,
+                "currency": "NGN",
+            },
+        },
+    ],
+)
+async def test_stored_paystack_pending_recovery_state_returns_none(gateway_response):
     module = _load_module(PAYMENTS_PATH, "payments_pending_session")
     order = SimpleNamespace(id="order-1", total_amount=Decimal("155.00"), currency="NGN")
     attempt = SimpleNamespace(order_id="order-1", provider="paystack", provider_reference="ref-123")
@@ -178,12 +198,7 @@ async def test_stored_paystack_pending_recovery_state_returns_none(monkeypatch):
         payment_method="paystack",
         amount=Decimal("155.00"),
         currency="NGN",
-        gateway_response={
-            "reference": "ref-123",
-            "status": "processing",
-            "amount": 15500,
-            "currency": "NGN",
-        },
+        gateway_response=gateway_response,
     )
 
     class FakeDB:

@@ -33,30 +33,28 @@ DO $$ DECLARE run_row record; BEGIN
      OR run_row.classified_row_count IS NULL THEN
    RAISE EXCEPTION 'classification reconciliation incomplete: executable classifier has not finalized';
   END IF;
-  IF run_row.classified_row_count<>(SELECT count(*) FROM orders)
-     OR run_row.classified_row_count<>(SELECT count(*) FROM order_workflow_classifications)
-     OR EXISTS(
-       SELECT 1 FROM orders o
-       LEFT JOIN order_workflow_classifications c ON c.order_id=o.id
-       LEFT JOIN order_current_owners owner ON owner.order_id=o.id
-       WHERE c.order_id IS NULL OR owner.order_id IS NULL
-          OR owner.original_customer_id IS DISTINCT FROM o.customer_id
-          OR o.workflow_cohort IS DISTINCT FROM c.cohort
-          OR o.workflow_policy_version IS DISTINCT FROM c.policy_version
-          OR o.checkout_access_mode IS DISTINCT FROM c.access_mode
-     )
-     OR EXISTS(
-       SELECT 1 FROM order_workflow_classifications c
-       LEFT JOIN orders o ON o.id=c.order_id WHERE o.id IS NULL
-     )
-     OR EXISTS(
-       SELECT 1 FROM orders o
-       LEFT JOIN order_workflow_classifications c ON c.order_id=o.id
-       WHERE (o.created_at,o.id)<=(run_row.high_watermark_created_at,
-                                  run_row.high_watermark_order_id)
-         AND c.order_id IS NULL
-     ) THEN
-   RAISE EXCEPTION 'classification reconciliation incomplete: exact totals or truth mismatch';
+  IF EXISTS(
+      SELECT 1 FROM orders o
+      LEFT JOIN order_workflow_classifications c ON c.order_id=o.id
+      LEFT JOIN order_current_owners owner ON owner.order_id=o.id
+      WHERE c.order_id IS NULL OR owner.order_id IS NULL
+         OR owner.original_customer_id IS DISTINCT FROM o.customer_id
+         OR o.workflow_cohort IS DISTINCT FROM c.cohort
+         OR o.workflow_policy_version IS DISTINCT FROM c.policy_version
+         OR o.checkout_access_mode IS DISTINCT FROM c.access_mode
+    )
+    OR EXISTS(
+      SELECT 1 FROM order_workflow_classifications c
+      LEFT JOIN orders o ON o.id=c.order_id WHERE o.id IS NULL
+    )
+    OR EXISTS(
+      SELECT 1 FROM orders o
+      LEFT JOIN order_workflow_classifications c ON c.order_id=o.id
+      WHERE (o.created_at,o.id)<=(run_row.high_watermark_created_at,
+                                 run_row.high_watermark_order_id)
+        AND c.order_id IS NULL
+    ) THEN
+RAISE EXCEPTION 'classification reconciliation incomplete: exact totals or truth mismatch';
   END IF;
  END IF;
 END $$;

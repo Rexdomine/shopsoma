@@ -354,6 +354,20 @@ def _paystack_definitive_absence(payload: object) -> bool:
     )
 
 
+def _paystack_pending_payload(response: object) -> dict[str, object] | None:
+    if not isinstance(response, dict):
+        return None
+    data = response.get("data")
+    if isinstance(data, dict) and response.get("status") is True:
+        pending_status = data.get("status")
+        if pending_status in {"ongoing", "pending", "processing", "queued"}:
+            return data
+    pending_status = response.get("status")
+    if pending_status in {"ongoing", "pending", "processing", "queued"}:
+        return response
+    return None
+
+
 async def _reconcile_paystack_initialization(
     client: httpx.AsyncClient,
     *,
@@ -481,9 +495,10 @@ async def _stored_paystack_initialization_session(
         return None
     response = payment.gateway_response
     data = response.get("data") if isinstance(response, dict) else None
-    if isinstance(response, dict) and not isinstance(data, dict):
-        pending_reference = response.get("reference")
-        pending_status = response.get("status")
+    pending_payload = _paystack_pending_payload(response)
+    if pending_payload is not None:
+        pending_reference = pending_payload.get("reference")
+        pending_status = pending_payload.get("status")
         pending_valid = (
             payment.order_id == order.id
             and payment.payment_gateway == PaymentGateway.PAYSTACK
