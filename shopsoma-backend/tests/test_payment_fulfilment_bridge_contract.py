@@ -659,6 +659,63 @@ async def test_legacy_finalization_is_idempotent_and_preserves_checkout_behavior
 
 
 @pytest.mark.asyncio
+async def test_quarantined_verified_capture_is_held_for_manual_reconciliation(
+    db_session, vendor_user, customer_user
+) -> None:
+    graph, _quote, _option, _selection, _reservation = await _unattempted_route_subject(
+        db_session, vendor_user, customer_user
+    )
+    order = graph["order"]
+    order.workflow_cohort = "legacy_ambiguous_quarantined"
+    order.workflow_policy_version = "legacy_quarantine_v1"
+    order.checkout_access_mode = "legacy_quarantined"
+
+    payment = Payment(
+        order_id=order.id,
+        transaction_id=f"legacy-provider-{uuid.uuid4().hex}",
+        payment_gateway=PaymentGateway.STRIPE,
+        payment_method="stripe",
+        amount=order.total_amount,
+        currency=order.currency,
+        status=TransactionStatus.PENDING,
+    )
+    db_session.add(payment)
+    await db_session.flush()
+
+    first = await finalize_verified_payment(
+        db_session,
+        payment=payment,
+        provider="stripe",
+        provider_reference=payment.transaction_id,
+        observed_amount=payment.amount,
+        observed_currency=payment.currency,
+        event_id="quarantine-verify-1",
+        evidence_payload={"verified": True},
+    )
+    second = await finalize_verified_payment(
+        db_session,
+        payment=payment,
+        provider="stripe",
+        provider_reference=payment.transaction_id,
+        observed_amount=payment.amount,
+        observed_currency=payment.currency,
+        event_id="quarantine-verify-2",
+        evidence_payload={"transport": "webhook", "verified": True},
+    )
+
+    await db_session.refresh(order)
+    await db_session.refresh(payment)
+
+    assert first.bridge_applied is False and first.replay is False
+    assert second.bridge_applied is False and second.replay is True
+    assert payment.status == TransactionStatus.COMPLETED
+    assert order.payment_status == PaymentStatus.PENDING
+    assert order.fulfillment_status == FulfillmentStatus.ORDER_RECEIVED
+    assert order.admin_notes is not None
+    assert "[payment-reconciliation:quarantined_verified_capture]" in order.admin_notes
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("provider", ["stripe", "paystack"])
 async def test_bridge_initialization_legally_starts_attempt_then_finalizes(
     db_session,

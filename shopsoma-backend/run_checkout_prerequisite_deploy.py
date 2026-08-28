@@ -8,7 +8,7 @@ from pathlib import Path
 
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
 
 from app.services.orders.workflow_classification import (
@@ -51,16 +51,37 @@ def _identity() -> ClassificationRunIdentity:
     )
 
 
+def _cutover_already_complete(engine) -> bool:
+    with engine.begin() as connection:
+        run = connection.execute(
+            text(
+                "SELECT classification_cutover_at, classified_row_count, validated_constraints "
+                "FROM order_workflow_migration_runs "
+                "WHERE migration_revision=:revision "
+                "ORDER BY classification_cutover_at DESC NULLS LAST, compatibility_writer_started_at DESC "
+                "LIMIT 1"
+            ),
+            {"revision": VALIDATE_REVISION},
+        ).one_or_none()
+    return bool(
+        run is not None
+        and run.classification_cutover_at is not None
+        and run.classified_row_count is not None
+        and run.validated_constraints == "exact order/classification/owner reconciliation"
+    )
+
+
 def run(*, database_url: str | None = None, batch_size: int = DEFAULT_BATCH_SIZE) -> None:
     database_url = database_url or os.environ["DATABASE_URL"]
     config = _alembic_config(database_url)
     command.upgrade(config, PREPARE_REVISION)
     engine = create_engine(_sync_database_url(database_url))
     try:
-        run_id = start_workflow_classification_run(engine, _identity())
-        while classify_workflow_batch(engine, run_id, batch_size=batch_size):
-            pass
-        finalize_workflow_classification(engine, run_id)
+        if not _cutover_already_complete(engine):
+            run_id = start_workflow_classification_run(engine, _identity())
+            while classify_workflow_batch(engine, run_id, batch_size=batch_size):
+                pass
+            finalize_workflow_classification(engine, run_id)
     finally:
         engine.dispose()
     command.upgrade(config, "heads")

@@ -55,11 +55,11 @@ async def start_verified_order_fulfilment(session, *, order_id) -> None:
                 if item.inventory_policy == "made_to_order"
                 else OrderType.RTW
             )
-            estimated_production_days = 7 if order_type == OrderType.MADE_TO_ORDER else None
-            scheduled_at = datetime.now(timezone.utc) + (
-                timedelta(days=estimated_production_days)
-                if estimated_production_days is not None
-                else timedelta(hours=48)
+            estimated_production_days = None
+            scheduled_at = (
+                None
+                if order_type == OrderType.MADE_TO_ORDER
+                else datetime.now(timezone.utc) + timedelta(hours=48)
             )
             session.add(
                 VendorPickup(
@@ -69,6 +69,11 @@ async def start_verified_order_fulfilment(session, *, order_id) -> None:
                     order_type=order_type,
                     estimated_production_days=estimated_production_days,
                     scheduled_pickup_date=scheduled_at,
+                    admin_notes=(
+                        "Made-to-order pickup remains unscheduled until staff or vendor confirms production readiness."
+                        if order_type == OrderType.MADE_TO_ORDER
+                        else None
+                    ),
                     pickup_address=vendor.business_address,
                     pickup_contact_phone=vendor.business_phone,
                     status=PickupStatus.SCHEDULED,

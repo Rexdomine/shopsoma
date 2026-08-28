@@ -25,9 +25,13 @@ def test_deploy_entrypoint_runs_staged_upgrade_then_classification_then_heads(mo
             calls.append(("dispose",))
 
     engine = Engine()
+    expected_engine_url = module._sync_database_url(
+        "postgresql+asyncpg://user:pass@localhost/db"
+    )
 
     monkeypatch.setattr(module.command, "upgrade", lambda _config, revision: calls.append(("upgrade", revision)))
     monkeypatch.setattr(module, "create_engine", lambda url: calls.append(("create_engine", url)) or engine)
+    monkeypatch.setattr(module, "_cutover_already_complete", lambda _engine: False)
     monkeypatch.setattr(module, "start_workflow_classification_run", lambda _engine, identity: calls.append(("start", identity.migration_revision)) or run_id)
 
     batches = iter([2, 1, 0])
@@ -38,12 +42,42 @@ def test_deploy_entrypoint_runs_staged_upgrade_then_classification_then_heads(mo
 
     assert calls == [
         ("upgrade", module.PREPARE_REVISION),
-        ("create_engine", "postgresql://user:pass@localhost/db"),
+        ("create_engine", expected_engine_url),
         ("start", module.VALIDATE_REVISION),
         ("batch", run_id, 250),
         ("batch", run_id, 250),
         ("batch", run_id, 250),
         ("finalize", run_id),
+        ("dispose",),
+        ("upgrade", "heads"),
+    ]
+
+
+def test_deploy_entrypoint_skips_classification_after_recorded_cutover(monkeypatch):
+    module = _load_module()
+    calls = []
+
+    class Engine:
+        def dispose(self):
+            calls.append(("dispose",))
+
+    engine = Engine()
+    expected_engine_url = module._sync_database_url(
+        "postgresql+asyncpg://user:pass@localhost/db"
+    )
+
+    monkeypatch.setattr(module.command, "upgrade", lambda _config, revision: calls.append(("upgrade", revision)))
+    monkeypatch.setattr(module, "create_engine", lambda url: calls.append(("create_engine", url)) or engine)
+    monkeypatch.setattr(module, "_cutover_already_complete", lambda _engine: True)
+    monkeypatch.setattr(module, "start_workflow_classification_run", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("classification must be skipped after cutover")))
+    monkeypatch.setattr(module, "classify_workflow_batch", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("classification batches must be skipped after cutover")))
+    monkeypatch.setattr(module, "finalize_workflow_classification", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("finalize must be skipped after cutover")))
+
+    module.run(database_url="postgresql+asyncpg://user:pass@localhost/db", batch_size=250)
+
+    assert calls == [
+        ("upgrade", module.PREPARE_REVISION),
+        ("create_engine", expected_engine_url),
         ("dispose",),
         ("upgrade", "heads"),
     ]

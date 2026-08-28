@@ -796,7 +796,7 @@ def test_checkout_outbox_sync_tick_disposes_engine_when_dispatch_raises(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_late_payment_exception_dispatch_fails_durably_in_outbox(
+async def test_late_payment_exception_dispatch_records_reconciliation_hold_durably(
     client, db_session, vendor_user, customer_user, monkeypatch
 ):
     order, _ = await create_enforced_checkout(
@@ -815,6 +815,7 @@ async def test_late_payment_exception_dispatch_fails_durably_in_outbox(
         },
     )
     event_id = event.id
+    order_id = order.id
     await db_session.commit()
 
     from app.tasks.checkout_outbox import dispatch_checkout_events_once
@@ -823,14 +824,15 @@ async def test_late_payment_exception_dispatch_fails_durably_in_outbox(
         session_factory=TestSessionLocal, owner="test-worker", limit=10
     )
 
-    assert result == {"claimed": 1, "completed": 0, "retried": 0, "failed": 1}
+    assert result == {"claimed": 1, "completed": 1, "retried": 0, "failed": 0}
     db_session.expire_all()
     persisted = await db_session.get(CheckoutOutboxEvent, event_id)
-    assert persisted.status == "failed"
-    assert (
-        persisted.failure_code
-        == "late-payment:reservation_released:manual-reconciliation-required"
-    )
+    order = await db_session.get(Order, order_id)
+    assert persisted.status == "completed"
+    assert persisted.failure_code is None
+    assert order is not None
+    assert order.admin_notes is not None
+    assert "[payment-reconciliation:late_payment_reservation_released]" in order.admin_notes
 
 
 @pytest.mark.asyncio
@@ -890,7 +892,7 @@ async def test_verified_event_dispatches_vendor_start_effects_exactly_once(
 
 
 @pytest.mark.asyncio
-async def test_verified_event_marks_made_to_order_pickup_with_custom_timeline(
+async def test_verified_event_marks_made_to_order_pickup_as_unscheduled_vendor_timeline(
     client, db_session, vendor_user, customer_user, monkeypatch
 ):
     order, _ = await create_enforced_checkout(
@@ -930,5 +932,7 @@ async def test_verified_event_marks_made_to_order_pickup_with_custom_timeline(
         select(VendorPickup).where(VendorPickup.order_item_id == item_id)
     )
     assert pickup.order_type == OrderType.MADE_TO_ORDER
-    assert pickup.estimated_production_days == 7
-    assert pickup.scheduled_pickup_date >= datetime.now(timezone.utc) + timedelta(days=6)
+    assert pickup.estimated_production_days is None
+    assert pickup.scheduled_pickup_date is None
+    assert pickup.admin_notes is not None
+    assert "production readiness" in pickup.admin_notes

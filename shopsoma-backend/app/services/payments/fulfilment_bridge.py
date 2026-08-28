@@ -172,6 +172,48 @@ class PaymentInitializationTruth:
     provider_call_required: bool = True
 
 
+_RECONCILIATION_HOLD_MESSAGES: dict[str, str] = {
+    "quarantined_verified_capture": (
+        "Authenticated payment captured for quarantined legacy order. "
+        "Manual staff reconciliation is required before fulfilment."
+    ),
+    "late_payment_reservation_released": (
+        "Authenticated late payment captured after inventory reservation was released. "
+        "Manual staff reconciliation is required before fulfilment or refund."
+    ),
+    "late_payment_stock_unavailable": (
+        "Authenticated late payment captured after inventory became unavailable. "
+        "Manual staff reconciliation is required before fulfilment or refund."
+    ),
+}
+
+
+def _reconciliation_hold_note(*, code: str, observed_at: datetime) -> str:
+    message = _RECONCILIATION_HOLD_MESSAGES[code]
+    return (
+        f"[{observed_at.isoformat()}] [payment-reconciliation:{code}] {message}"
+    )
+
+
+async def record_payment_reconciliation_hold(
+    session: AsyncSession,
+    *,
+    order: Order,
+    code: str,
+    observed_at: datetime | None = None,
+) -> None:
+    """Append one durable admin-visible reconciliation hold note idempotently."""
+    observed_at = observed_at or datetime.now(timezone.utc)
+    marker = f"[payment-reconciliation:{code}]"
+    note = _reconciliation_hold_note(code=code, observed_at=observed_at)
+    if order.admin_notes:
+        if marker in order.admin_notes:
+            return
+        order.admin_notes = f"{order.admin_notes}\n\n{note}"
+    else:
+        order.admin_notes = note
+
+
 async def payment_initialization_truth(
     session: AsyncSession,
     *,
@@ -970,6 +1012,17 @@ async def finalize_verified_payment(
         if bridge_attempt_exists is not None:
             raise PaymentTruthMismatch("verified payment truth does not match")
         replay = payment.status == TransactionStatus.COMPLETED
+        if order.workflow_cohort == "legacy_ambiguous_quarantined":
+            if not replay:
+                payment.status = TransactionStatus.COMPLETED
+                payment.completed_at = datetime.now(timezone.utc)
+                await record_payment_reconciliation_hold(
+                    session,
+                    order=order,
+                    code="quarantined_verified_capture",
+                    observed_at=payment.completed_at,
+                )
+            return PaymentFinalizationResult(False, replay, order)
         if not replay:
             payment.status = TransactionStatus.COMPLETED
             payment.completed_at = datetime.now(timezone.utc)
