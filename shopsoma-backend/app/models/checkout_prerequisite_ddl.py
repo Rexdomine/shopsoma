@@ -599,7 +599,7 @@ BEGIN
                AND sr.order_item_id=coverage.order_item_id
                AND sr.checkout_estimate_selection_id=OLD.checkout_estimate_selection_id
                AND sr.state='active'
-               AND sr.expires_at>now_at))
+               AND sr.expires_at>now_at)))
    THEN RAISE EXCEPTION 'payment call requires live authoritative reservations'; END IF;
    NEW.call_started_at:=now_at;
    NEW.claim_expires_at:=now_at+NEW.claim_ttl_seconds*interval '1 second';

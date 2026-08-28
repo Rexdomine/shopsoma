@@ -293,7 +293,16 @@ async def _ensure_bridge_attempt(
             and attempt.authorization_deadline_at < database_now
         ):
             attempt.state = "expired"
+            attempt.terminal_reason = "authorization_deadline_elapsed"
+            attempt.terminal_at = database_now
             attempt.row_version += 1
+            reservations = await _attempt_reservations(session, attempt_id=attempt.id)
+            for reservation in reservations:
+                if reservation.state == "active":
+                    reservation.state = "expired"
+                    reservation.terminal_reason = "authorization_deadline_elapsed"
+                    reservation.terminal_at = database_now
+                    reservation.row_version += 1
             await session.flush()
         elif attempt.state not in {"failed", "expired"}:
             return attempt
@@ -1071,7 +1080,7 @@ async def finalize_verified_payment(
             )
         return PaymentFinalizationResult(True, replay, order)
 
-    if attempt.state == "failed":
+    if attempt.state in {"failed", "expired"}:
         observed_at = observed_at or datetime.now(timezone.utc)
         replay = payment.status == TransactionStatus.COMPLETED
         payment.status = TransactionStatus.COMPLETED

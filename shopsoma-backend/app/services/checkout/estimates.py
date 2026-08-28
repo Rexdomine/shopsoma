@@ -7,7 +7,7 @@ import json
 
 from fastapi import HTTPException, status
 from sqlalchemy import and_, or_, select, text
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import aliased, selectinload
 
 from app.models.checkout_shipping_estimate import (
     CheckoutShippingEstimate,
@@ -139,6 +139,32 @@ async def create_estimate(
             raise HTTPException(status_code=409, detail="idempotency conflict")
         return existing
 
+    successor_estimate = aliased(CheckoutShippingEstimate)
+    selection = aliased(CheckoutShippingEstimateSelection)
+    current_unselected_leaf = (
+        await db.execute(
+            select(CheckoutShippingEstimate)
+            .where(
+                CheckoutShippingEstimate.order_id == order.id,
+                CheckoutShippingEstimate.customer_id == order.customer_id,
+                ~select(successor_estimate.id)
+                .where(
+                    successor_estimate.supersedes_estimate_id
+                    == CheckoutShippingEstimate.id
+                )
+                .exists(),
+                ~select(selection.id)
+                .where(selection.estimate_id == CheckoutShippingEstimate.id)
+                .exists(),
+            )
+            .order_by(
+                CheckoutShippingEstimate.created_at.desc(),
+                CheckoutShippingEstimate.id.desc(),
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
     usd_to_ngn_rate = None
     if order.currency == "USD":
         rate_setting = await db.scalar(
@@ -199,6 +225,9 @@ async def create_estimate(
     estimate = CheckoutShippingEstimate(
         order_id=order.id,
         customer_id=order.customer_id,
+        supersedes_estimate_id=(
+            current_unselected_leaf.id if current_unselected_leaf is not None else None
+        ),
         destination_snapshot_hash=destination_hash,
         order_snapshot_hash=snapshot_hash,
         currency=order.currency,
@@ -206,7 +235,11 @@ async def create_estimate(
         expires_at=database_now + _estimate_expiry_delta(ttl),
         source_kind="static_domestic_rate",
         source_reference="shipping_rates:v1",
-        source_command="create_checkout_estimate",
+        source_command=(
+            "refresh_checkout_estimate"
+            if current_unselected_leaf is not None
+            else "create_checkout_estimate"
+        ),
         idempotency_key=idempotency_key,
         request_fingerprint=fingerprint,
         schema_version="checkout_estimate_v1",

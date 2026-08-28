@@ -15,6 +15,7 @@ ROOT = Path(__file__).parents[1]
 DEPLOY_PATH = ROOT / "run_checkout_prerequisite_deploy.py"
 PAYMENTS_PATH = ROOT / "app" / "api" / "v1" / "payments.py"
 RESERVATIONS_PATH = ROOT / "app" / "services" / "checkout" / "reservations.py"
+ESTIMATES_PATH = ROOT / "app" / "services" / "checkout" / "estimates.py"
 BRIDGE_PATH = ROOT / "app" / "services" / "payments" / "fulfilment_bridge.py"
 
 
@@ -228,10 +229,18 @@ async def test_expired_call_started_attempt_is_closed_before_replay(monkeypatch)
         id="attempt-1",
         state="call_started",
         authorization_deadline_at=datetime.now(timezone.utc) - timedelta(seconds=5),
+        terminal_reason=None,
+        terminal_at=None,
         row_version=7,
     )
     locked_order = SimpleNamespace(id="order-1", workflow_cohort="domestic_checkout_v1")
     observed = {}
+    reservation = SimpleNamespace(
+        state="active",
+        terminal_reason=None,
+        terminal_at=None,
+        row_version=4,
+    )
 
     class FakeSession:
         def __init__(self):
@@ -260,6 +269,11 @@ async def test_expired_call_started_attempt_is_closed_before_replay(monkeypatch)
         return "NEW-ATTEMPT"
 
     monkeypatch.setattr(module, "active_bridge_attempt", fake_active_bridge_attempt)
+    monkeypatch.setattr(module, "_attempt_reservations", lambda *_args, **_kwargs: None)
+    async def fake_attempt_reservations(_session, *, attempt_id):
+        assert attempt_id == "attempt-1"
+        return [reservation]
+    monkeypatch.setattr(module, "_attempt_reservations", fake_attempt_reservations)
     monkeypatch.setattr(
         module, "_ensure_domestic_bridge_attempt", fake_ensure_domestic_bridge_attempt
     )
@@ -270,7 +284,13 @@ async def test_expired_call_started_attempt_is_closed_before_replay(monkeypatch)
 
     assert result == "NEW-ATTEMPT"
     assert predecessor.state == "expired"
+    assert predecessor.terminal_reason == "authorization_deadline_elapsed"
+    assert predecessor.terminal_at is not None
     assert predecessor.row_version == 8
+    assert reservation.state == "expired"
+    assert reservation.terminal_reason == "authorization_deadline_elapsed"
+    assert reservation.terminal_at == predecessor.terminal_at
+    assert reservation.row_version == 5
     assert session.flush_calls == 1
     assert observed["predecessor"] is predecessor
 
@@ -309,3 +329,165 @@ async def test_shared_inventory_subjects_are_checked_once(monkeypatch):
             raise HTTPException(status_code=409, detail="insufficient stock")
 
     assert seen == [("product", "A"), ("product", "B")]
+
+
+@pytest.mark.asyncio
+async def test_finalize_verified_payment_routes_expired_attempt_to_late_payment_exception(monkeypatch):
+    module = _load_module(BRIDGE_PATH, "bridge_expired_verification_followup")
+    order = SimpleNamespace(
+        id="order-1",
+        workflow_cohort="domestic_checkout_v1",
+        payment_status=module.PaymentStatus.PENDING,
+        fulfillment_status=module.FulfillmentStatus.ORDER_RECEIVED,
+    )
+    payment = SimpleNamespace(
+        status=module.TransactionStatus.PENDING,
+        completed_at=None,
+        order_id="order-1",
+    )
+    attempt = SimpleNamespace(
+        id="attempt-1",
+        order_id="order-1",
+        amount=Decimal("155.00"),
+        currency="NGN",
+        provider_reference="ref-123",
+        provider="paystack",
+        state="expired",
+    )
+    events = []
+    session_calls = []
+
+    class FakeSession:
+        async def scalar(self, statement):
+            sql = str(statement)
+            if "FROM payment_attempts" in sql:
+                return attempt
+            if "FROM orders" in sql:
+                return order
+            return None
+
+        async def flush(self):
+            session_calls.append("flush")
+
+        async def execute(self, statement, params=None):
+            session_calls.append((str(statement), params))
+            return None
+
+    async def fake_validate(*_args, **_kwargs):
+        return None
+
+    async def fake_enqueue(session, *, attempt, event_type, reason_code):
+        events.append((attempt.id, event_type, reason_code))
+
+    monkeypatch.setattr(module, "_validate_attempt_payment_mapping", fake_validate)
+    monkeypatch.setattr(module, "_enqueue_payment_event", fake_enqueue)
+
+    result = await module.finalize_verified_payment(
+        FakeSession(),
+        payment=payment,
+        provider="paystack",
+        provider_reference="ref-123",
+        event_id="evt-1",
+        evidence_payload={"ok": True},
+        observed_amount=Decimal("155.00"),
+        observed_currency="NGN",
+        observed_at=datetime.now(timezone.utc),
+    )
+
+    assert result.bridge_applied is True
+    assert result.replay is False
+    assert result.order is order
+    assert payment.status == module.TransactionStatus.COMPLETED
+    assert payment.completed_at is not None
+    assert order.payment_status == module.PaymentStatus.PAID
+    assert events == [("attempt-1", "late_payment_exception", "reservation_released")]
+
+
+def test_create_estimate_refresh_supersedes_current_unselected_leaf(monkeypatch):
+    module = _load_module(ESTIMATES_PATH, "estimates_refresh_followup")
+    predecessor = SimpleNamespace(id="estimate-1")
+    captured = {}
+
+    class FakeResult:
+        def __init__(self, value):
+            self._value = value
+
+        def scalar_one_or_none(self):
+            return self._value
+
+        def scalars(self):
+            return self
+
+        def all(self):
+            if isinstance(self._value, list):
+                return self._value
+            if self._value is None:
+                return []
+            return [self._value]
+
+    class FakeDB:
+        def add(self, obj):
+            if obj.__class__.__name__ == "CheckoutShippingEstimate":
+                captured["estimate"] = obj
+
+        async def execute(self, statement):
+            sql = str(statement)
+            if "FROM checkout_shipping_estimates" in sql and "source_command = :source_command_1" in sql:
+                return FakeResult(None)
+            if "FROM checkout_shipping_estimates" in sql and "ORDER BY checkout_shipping_estimates.created_at DESC" in sql:
+                return FakeResult(predecessor)
+            if "FROM shipping_rates" in sql:
+                rate = SimpleNamespace(
+                    id="rate-1",
+                    is_active=True,
+                    country="NG",
+                    state=None,
+                    priority=1,
+                    min_order_value=None,
+                    max_order_value=None,
+                    base_rate=Decimal("2500.00"),
+                    name="Standard",
+                    min_delivery_days=2,
+                    max_delivery_days=5,
+                )
+                return FakeResult(rate)
+            raise AssertionError(sql)
+
+        async def scalar(self, statement):
+            sql = str(statement)
+            if "statement_timestamp()" in sql:
+                return datetime.now(timezone.utc)
+            raise AssertionError(sql)
+
+        async def flush(self):
+            estimate = captured.get("estimate")
+            if estimate is not None and getattr(estimate, "id", None) is None:
+                estimate.id = "estimate-2"
+
+    order = SimpleNamespace(
+        id="order-1",
+        customer_id="customer-1",
+        workflow_cohort="domestic_checkout_v1",
+        currency="NGN",
+        subtotal=Decimal("155000.00"),
+        shipping_address=SimpleNamespace(country="NG", state="Lagos"),
+    )
+
+    monkeypatch.setattr(module, "order_snapshot", lambda _order: ("dest-hash", "snap-hash"))
+    monkeypatch.setattr(module, "_hash", lambda payload: "f" * 64)
+    monkeypatch.setattr(module, "_estimate_expiry_delta", lambda ttl: timedelta(seconds=ttl))
+
+    import asyncio
+    estimate = asyncio.run(
+        module.create_estimate(
+            FakeDB(),
+            order=order,
+            actor_type="customer",
+            actor_id="customer-1",
+            idempotency_key="estimate-2",
+        )
+    )
+
+    assert estimate is captured["estimate"]
+    assert estimate.supersedes_estimate_id == "estimate-1"
+    assert estimate.source_command == "refresh_checkout_estimate"
