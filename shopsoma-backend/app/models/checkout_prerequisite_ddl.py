@@ -613,6 +613,14 @@ BEGIN
    NEW.lease_token:=NULL; NEW.call_started_at:=NULL; NEW.claim_expires_at:=NULL;
    NEW.terminal_at:=now_at; NEW.updated_at:=now_at; RETURN NEW;
   END IF;
+  IF OLD.state='call_started' AND NEW.state='expired' THEN
+   now_at:=clock_timestamp();
+   IF now_at<OLD.authorization_deadline_at THEN RAISE EXCEPTION 'payment authorization deadline has not elapsed'; END IF;
+   IF NEW.terminal_evidence_id IS NOT NULL THEN
+   RAISE EXCEPTION 'payment attempt transition is illegal'; END IF;
+   NEW.lease_token:=NULL; NEW.call_started_at:=NULL; NEW.claim_expires_at:=NULL;
+   NEW.terminal_evidence_id:=NULL; NEW.terminal_at:=now_at; NEW.updated_at:=now_at; RETURN NEW;
+  END IF;
   IF NEW.state IN ('failed','verified','abandoned_unknown') THEN
    IF NEW.terminal_evidence_id IS NULL
       OR NEW.terminal_at IS DISTINCT FROM OLD.terminal_at
