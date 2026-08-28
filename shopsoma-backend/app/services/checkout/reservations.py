@@ -214,16 +214,14 @@ async def select_estimate_option(
     )
 
     required = {}
+    subject_examples = {}
     for item in stock_items:
         key = (item.inventory_subject_kind, item.inventory_subject_id)
         required[key] = required.get(key, 0) + item.quantity
-    for item in stock_items:
-        key = (item.inventory_subject_kind, item.inventory_subject_id)
-        if await _lock_and_available(db, item) < required[key]:
+        subject_examples.setdefault(key, item)
+    for key, required_quantity in required.items():
+        if await _lock_and_available(db, subject_examples[key]) < required_quantity:
             raise HTTPException(status_code=409, detail="insufficient stock")
-        required.pop(key)
-        if not required:
-            break
 
     # Coordinator and inventory locks can wait. Re-read immutable quote truth
     # under lock and sample the database clock only after the final lock.

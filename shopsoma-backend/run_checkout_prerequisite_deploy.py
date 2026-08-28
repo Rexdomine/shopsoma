@@ -57,18 +57,28 @@ def _database_revision_includes(config: Config, engine, revision: str) -> bool:
     with engine.connect() as connection:
         if not inspect(connection).has_table("alembic_version"):
             return False
-        current_revision = connection.execute(
-            text("SELECT version_num FROM alembic_version")
-        ).scalar_one_or_none()
-    if current_revision is None:
+        current_revisions = list(
+            connection.execute(text("SELECT version_num FROM alembic_version"))
+            .scalars()
+            .all()
+        )
+    if not current_revisions:
         return False
     script = ScriptDirectory.from_config(config)
-    current = script.get_revision(current_revision)
-    while current is not None:
+    pending = [script.get_revision(current) for current in current_revisions]
+    seen: set[str] = set()
+    while pending:
+        current = pending.pop()
+        if current is None or current.revision in seen:
+            continue
         if current.revision == revision:
             return True
-        down_revisions = [value for value in current._normalized_down_revisions if value]
-        current = script.get_revision(down_revisions[0]) if down_revisions else None
+        seen.add(current.revision)
+        pending.extend(
+            script.get_revision(value)
+            for value in current._normalized_down_revisions
+            if value
+        )
     return False
 
 

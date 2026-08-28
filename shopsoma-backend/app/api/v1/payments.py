@@ -415,10 +415,33 @@ async def _reconcile_paystack_initialization(
         )
 
     transaction_data = provider_response.get("data", {})
-    if (
-        not provider_response.get("status")
-        or transaction_data.get("status") != "failed"
-    ):
+    transaction_status = transaction_data.get("status")
+    if provider_response.get("status") and transaction_status in {
+        "ongoing",
+        "pending",
+        "processing",
+        "queued",
+    }:
+        observed_amount = (
+            Decimal(transaction_data["amount"]) / 100
+            if transaction_data.get("amount") is not None
+            else None
+        )
+        await recover_pending_payment_mapping(
+            db,
+            provider="paystack",
+            provider_reference=transaction_data.get("reference", reference),
+            transaction_id=transaction_data.get("reference", reference),
+            observed_amount=observed_amount,
+            observed_currency=transaction_data.get("currency"),
+            evidence_payload=transaction_data,
+        )
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Payment initialization is still pending",
+        )
+    if not provider_response.get("status") or transaction_status != "failed":
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Payment initialization outcome is not definitive",
