@@ -990,6 +990,22 @@ async def finalize_verified_payment(
     if attempt.provider != provider:
         raise PaymentTruthMismatch("verified payment truth does not match")
 
+    if order.payment_status == PaymentStatus.PAID and attempt.state in {
+        "call_started",
+        "abandoned_unknown",
+    }:
+        replay = payment.status == TransactionStatus.COMPLETED
+        if not replay:
+            payment.status = TransactionStatus.COMPLETED
+            payment.completed_at = observed_at or datetime.now(timezone.utc)
+            await _enqueue_payment_event(
+                session,
+                attempt=attempt,
+                event_type="late_payment_exception",
+                reason_code="reservation_released",
+            )
+        return PaymentFinalizationResult(True, replay, order)
+
     if attempt.state == "failed":
         observed_at = observed_at or datetime.now(timezone.utc)
         replay = payment.status == TransactionStatus.COMPLETED
@@ -1168,7 +1184,8 @@ async def finalize_failed_payment(
             payment.status = TransactionStatus.FAILED
             payment.failed_at = observed_at or datetime.now(timezone.utc)
             payment.failure_reason = failure_reason
-            order.payment_status = PaymentStatus.FAILED
+            if order.payment_status != PaymentStatus.PAID:
+                order.payment_status = PaymentStatus.FAILED
         return PaymentFinalizationResult(False, replay, order)
 
     if attempt.state == "verified" or payment.status == TransactionStatus.COMPLETED:
@@ -1177,7 +1194,8 @@ async def finalize_failed_payment(
         payment.status = TransactionStatus.FAILED
         payment.failed_at = attempt.terminal_at
         payment.failure_reason = failure_reason
-        order.payment_status = PaymentStatus.FAILED
+        if order.payment_status != PaymentStatus.PAID:
+            order.payment_status = PaymentStatus.FAILED
         return PaymentFinalizationResult(True, True, order)
     if attempt.state not in {"call_started", "abandoned_unknown"}:
         raise PaymentBridgeError("payment attempt is not ready for verification")
@@ -1255,5 +1273,6 @@ async def finalize_failed_payment(
     payment.status = TransactionStatus.FAILED
     payment.failed_at = observed_at
     payment.failure_reason = failure_reason
-    order.payment_status = PaymentStatus.FAILED
+    if order.payment_status != PaymentStatus.PAID:
+        order.payment_status = PaymentStatus.FAILED
     return PaymentFinalizationResult(True, False, order)
