@@ -481,6 +481,20 @@ async def _stored_paystack_initialization_session(
         return None
     response = payment.gateway_response
     data = response.get("data") if isinstance(response, dict) else None
+    if isinstance(response, dict) and not isinstance(data, dict):
+        pending_reference = response.get("reference")
+        pending_status = response.get("status")
+        pending_valid = (
+            payment.order_id == order.id
+            and payment.payment_gateway == PaymentGateway.PAYSTACK
+            and payment.payment_method == "paystack"
+            and payment.amount == order.total_amount
+            and payment.currency == order.currency
+            and pending_reference == reference
+            and pending_status in {"ongoing", "pending", "processing", "queued"}
+        )
+        if pending_valid:
+            return None
     authorization_url = (
         data.get("authorization_url") if isinstance(data, dict) else None
     )

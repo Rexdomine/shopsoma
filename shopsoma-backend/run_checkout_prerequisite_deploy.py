@@ -136,12 +136,22 @@ def run(*, database_url: str | None = None, batch_size: int = DEFAULT_BATCH_SIZE
     try:
         if not _database_revision_includes(config, engine, PREPARE_REVISION):
             command.upgrade(config, PREPARE_REVISION)
-        if not _cutover_already_complete(engine):
+        cutover_complete = _cutover_already_complete(engine)
+        validate_applied = _database_revision_includes(config, engine, VALIDATE_REVISION)
+        if not cutover_complete:
             run_id = start_workflow_classification_run(engine, _identity())
             while classify_workflow_batch(engine, run_id, batch_size=batch_size):
                 pass
             with _hold_cutover_validation_lock(engine) as locked_connection:
                 finalize_workflow_classification(engine, run_id)
+                config.attributes["connection"] = locked_connection
+                try:
+                    command.upgrade(config, "heads")
+                finally:
+                    config.attributes.pop("connection", None)
+            return
+        if not validate_applied:
+            with _hold_cutover_validation_lock(engine) as locked_connection:
                 config.attributes["connection"] = locked_connection
                 try:
                     command.upgrade(config, "heads")

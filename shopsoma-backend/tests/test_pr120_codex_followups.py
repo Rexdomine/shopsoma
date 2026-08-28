@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
+from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
@@ -73,6 +74,44 @@ def test_database_revision_includes_handles_multiple_heads(monkeypatch):
     assert module._database_revision_includes(object(), FakeEngine(), "missing") is False
 
 
+def test_deploy_entrypoint_reacquires_lock_when_cutover_complete_but_validation_missing(monkeypatch):
+    module = _load_module(DEPLOY_PATH, "checkout_prerequisite_deploy_relock")
+    calls = []
+
+    class Engine:
+        def dispose(self):
+            calls.append(("dispose",))
+
+    class LockContext:
+        def __enter__(self):
+            calls.append(("lock_enter",))
+            return "LOCKED-CONNECTION"
+
+        def __exit__(self, exc_type, exc, tb):
+            calls.append(("lock_exit",))
+
+    monkeypatch.setattr(module, "create_engine", lambda url: calls.append(("create_engine", url)) or Engine())
+    monkeypatch.setattr(module.command, "upgrade", lambda config, revision: calls.append(("upgrade", revision, config.attributes.get("connection"))))
+    monkeypatch.setattr(module, "_cutover_already_complete", lambda _engine: True)
+    monkeypatch.setattr(module, "_hold_cutover_validation_lock", lambda _engine: LockContext())
+    monkeypatch.setattr(module, "start_workflow_classification_run", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("classification must stay skipped")))
+    monkeypatch.setattr(module, "classify_workflow_batch", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("classification batches must stay skipped")))
+    monkeypatch.setattr(module, "finalize_workflow_classification", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("finalize must stay skipped")))
+    monkeypatch.setattr(module, "_database_revision_includes", lambda _config, _engine, revision: calls.append(("includes", revision)) or (revision == module.PREPARE_REVISION))
+
+    module.run(database_url="postgresql+asyncpg://user:pass@localhost/db")
+
+    assert calls == [
+        ("create_engine", module._sync_database_url("postgresql+asyncpg://user:pass@localhost/db")),
+        ("includes", module.PREPARE_REVISION),
+        ("includes", module.VALIDATE_REVISION),
+        ("lock_enter",),
+        ("upgrade", "heads", "LOCKED-CONNECTION"),
+        ("lock_exit",),
+        ("dispose",),
+    ]
+
+
 @pytest.mark.asyncio
 async def test_reconcile_paystack_initialization_recovers_pending_mapping(monkeypatch):
     module = _load_module(PAYMENTS_PATH, "payments_followup")
@@ -126,6 +165,41 @@ async def test_reconcile_paystack_initialization_recovers_pending_mapping(monkey
     assert recover_call[2]["observed_amount"] == module.Decimal("155")
     assert recover_call[2]["observed_currency"] == "NGN"
     assert calls[-1] == ("commit",)
+
+
+@pytest.mark.asyncio
+async def test_stored_paystack_pending_recovery_state_returns_none(monkeypatch):
+    module = _load_module(PAYMENTS_PATH, "payments_pending_session")
+    order = SimpleNamespace(id="order-1", total_amount=Decimal("155.00"), currency="NGN")
+    attempt = SimpleNamespace(order_id="order-1", provider="paystack", provider_reference="ref-123")
+    payment = SimpleNamespace(
+        order_id="order-1",
+        payment_gateway=module.PaymentGateway.PAYSTACK,
+        payment_method="paystack",
+        amount=Decimal("155.00"),
+        currency="NGN",
+        gateway_response={
+            "reference": "ref-123",
+            "status": "processing",
+            "amount": 15500,
+            "currency": "NGN",
+        },
+    )
+
+    class FakeDB:
+        async def get(self, model, value):
+            assert model is module.PaymentAttempt
+            assert value == "attempt-1"
+            return attempt
+
+        async def scalar(self, stmt):
+            return payment
+
+    result = await module._stored_paystack_initialization_session(
+        FakeDB(), order=order, attempt_id="attempt-1", reference="ref-123"
+    )
+
+    assert result is None
 
 
 @pytest.mark.asyncio

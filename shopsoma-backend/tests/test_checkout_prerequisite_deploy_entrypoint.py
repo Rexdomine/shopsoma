@@ -53,6 +53,7 @@ def test_deploy_entrypoint_runs_staged_upgrade_then_classification_then_heads(mo
         ("create_engine", expected_engine_url),
         ("includes", module.PREPARE_REVISION),
         ("upgrade", module.PREPARE_REVISION, None),
+        ("includes", module.VALIDATE_REVISION),
         ("start", module.VALIDATE_REVISION),
         ("batch", run_id, 250),
         ("batch", run_id, 250),
@@ -91,6 +92,7 @@ def test_deploy_entrypoint_skips_classification_after_recorded_cutover(monkeypat
     assert calls == [
         ("create_engine", expected_engine_url),
         ("includes", module.PREPARE_REVISION),
+        ("includes", module.VALIDATE_REVISION),
         ("dispose",),
         ("upgrade", "heads", None),
     ]
