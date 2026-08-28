@@ -289,7 +289,7 @@ async def test_expired_call_started_attempt_is_closed_before_replay(monkeypatch)
     assert predecessor.row_version == 8
     assert reservation.state == "expired"
     assert reservation.terminal_reason == "authorization_deadline_elapsed"
-    assert reservation.terminal_at == predecessor.terminal_at
+    assert reservation.terminal_at is None
     assert reservation.row_version == 5
     assert session.flush_calls == 1
     assert observed["predecessor"] is predecessor
@@ -432,7 +432,7 @@ def test_create_estimate_refresh_supersedes_current_unselected_leaf(monkeypatch)
 
         async def execute(self, statement):
             sql = str(statement)
-            if "FROM checkout_shipping_estimates" in sql and "source_command = :source_command_1" in sql:
+            if "FROM checkout_shipping_estimates" in sql and "source_command IN" in sql:
                 return FakeResult(None)
             if "FROM checkout_shipping_estimates" in sql and "ORDER BY checkout_shipping_estimates.created_at DESC" in sql:
                 return FakeResult(predecessor)
@@ -491,3 +491,47 @@ def test_create_estimate_refresh_supersedes_current_unselected_leaf(monkeypatch)
     assert estimate is captured["estimate"]
     assert estimate.supersedes_estimate_id == "estimate-1"
     assert estimate.source_command == "refresh_checkout_estimate"
+
+
+def test_create_estimate_replays_refresh_idempotency_key(monkeypatch):
+    module = _load_module(ESTIMATES_PATH, "estimates_refresh_replay_followup")
+    existing = SimpleNamespace(
+        request_fingerprint="f" * 64,
+        source_command="refresh_checkout_estimate",
+        idempotency_key="estimate-2",
+    )
+
+    class FakeResult:
+        def __init__(self, value):
+            self._value = value
+
+        def scalar_one_or_none(self):
+            return self._value
+
+    class FakeDB:
+        async def execute(self, statement):
+            sql = str(statement)
+            assert "source_command IN" in sql
+            return FakeResult(existing)
+
+    order = SimpleNamespace(
+        id="order-1",
+        customer_id="customer-1",
+        workflow_cohort="domestic_checkout_v1",
+    )
+
+    monkeypatch.setattr(module, "order_snapshot", lambda _order: ("dest-hash", "snap-hash"))
+    monkeypatch.setattr(module, "_hash", lambda payload: "f" * 64)
+
+    import asyncio
+    replay = asyncio.run(
+        module.create_estimate(
+            FakeDB(),
+            order=order,
+            actor_type="customer",
+            actor_id="customer-1",
+            idempotency_key="estimate-2",
+        )
+    )
+
+    assert replay is existing

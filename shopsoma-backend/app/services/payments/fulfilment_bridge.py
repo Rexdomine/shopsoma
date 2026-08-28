@@ -301,7 +301,6 @@ async def _ensure_bridge_attempt(
                 if reservation.state == "active":
                     reservation.state = "expired"
                     reservation.terminal_reason = "authorization_deadline_elapsed"
-                    reservation.terminal_at = database_now
                     reservation.row_version += 1
             await session.flush()
         elif attempt.state not in {"failed", "expired"}:

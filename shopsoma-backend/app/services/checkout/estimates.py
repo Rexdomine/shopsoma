@@ -127,7 +127,9 @@ async def create_estimate(
         await db.execute(
             select(CheckoutShippingEstimate).where(
                 CheckoutShippingEstimate.customer_id == order.customer_id,
-                CheckoutShippingEstimate.source_command == "create_checkout_estimate",
+                CheckoutShippingEstimate.source_command.in_(
+                    ["create_checkout_estimate", "refresh_checkout_estimate"]
+                ),
                 CheckoutShippingEstimate.idempotency_key == idempotency_key,
             )
         )
