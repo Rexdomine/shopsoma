@@ -194,16 +194,22 @@ BEGIN
  SELECT count(*) INTO coverage_count FROM order_inventory_coverage WHERE order_id=target_order_id;
  SELECT count(*) INTO invalid_count FROM order_items oi
  LEFT JOIN order_inventory_coverage c ON c.order_item_id=oi.id AND c.order_id=oi.order_id
- LEFT JOIN stock_reservations r ON r.id=c.reservation_id
  WHERE oi.order_id=target_order_id
    AND (c.order_item_id IS NULL
         OR c.checkout_estimate_selection_id IS DISTINCT FROM selected.id
         OR c.inventory_policy IS DISTINCT FROM oi.inventory_policy
-        OR (oi.inventory_policy='stock_managed'
-            AND (r.id IS NULL OR r.order_id IS DISTINCT FROM oi.order_id
-                 OR r.order_item_id IS DISTINCT FROM oi.id
-                 OR r.checkout_estimate_selection_id IS DISTINCT FROM selected.id
-                 OR r.state IS DISTINCT FROM 'active'))
+        OR (oi.inventory_policy='stock_managed' AND NOT EXISTS(
+            SELECT 1 FROM payment_attempt_reservations ar
+            JOIN stock_reservations r ON r.id=ar.reservation_id
+            WHERE ar.order_id=oi.order_id
+              AND ar.order_item_id=oi.id
+              AND ar.checkout_estimate_selection_id=selected.id
+              AND ar.membership_family='domestic_checkout_v1'
+              AND r.order_id=oi.order_id
+              AND r.order_item_id=oi.id
+              AND r.checkout_estimate_selection_id=selected.id
+              AND r.state='active'
+              AND r.expires_at>statement_timestamp()))
         OR (oi.inventory_policy='made_to_order' AND c.reservation_id IS NOT NULL));
  IF item_count=0 OR coverage_count<>item_count OR invalid_count<>0 THEN
   RAISE EXCEPTION 'checkout prerequisite completion requires exact inventory coverage';
@@ -575,16 +581,25 @@ BEGIN
           WHERE coverage.order_id=OLD.order_id
             AND coverage.checkout_estimate_selection_id=OLD.checkout_estimate_selection_id
             AND coverage.inventory_policy='stock_managed'
-            AND coverage.order_item_id=ar.order_item_id
-            AND coverage.reservation_id=ar.reservation_id)))
+            AND coverage.order_item_id=ar.order_item_id))
       OR EXISTS(
        SELECT 1 FROM order_inventory_coverage coverage
        WHERE coverage.order_id=OLD.order_id
          AND coverage.checkout_estimate_selection_id=OLD.checkout_estimate_selection_id
          AND coverage.inventory_policy='stock_managed'
-         AND NOT EXISTS(SELECT 1 FROM payment_attempt_reservations ar
-                        WHERE ar.attempt_id=OLD.id
-                          AND ar.reservation_id=coverage.reservation_id))
+         AND NOT EXISTS(
+             SELECT 1 FROM payment_attempt_reservations ar
+             JOIN stock_reservations sr ON sr.id=ar.reservation_id
+             WHERE ar.attempt_id=OLD.id
+               AND ar.membership_family='domestic_checkout_v1'
+               AND ar.order_id=OLD.order_id
+               AND ar.order_item_id=coverage.order_item_id
+               AND ar.checkout_estimate_selection_id=OLD.checkout_estimate_selection_id
+               AND sr.order_id=OLD.order_id
+               AND sr.order_item_id=coverage.order_item_id
+               AND sr.checkout_estimate_selection_id=OLD.checkout_estimate_selection_id
+               AND sr.state='active'
+               AND sr.expires_at>now_at))
    THEN RAISE EXCEPTION 'payment call requires live authoritative reservations'; END IF;
    NEW.call_started_at:=now_at;
    NEW.claim_expires_at:=now_at+NEW.claim_ttl_seconds*interval '1 second';
@@ -737,33 +752,56 @@ BEGIN
         SELECT count(*) INTO invalid_count FROM order_items oi
         LEFT JOIN order_inventory_coverage coverage
           ON coverage.order_id=oi.order_id AND coverage.order_item_id=oi.id
-        LEFT JOIN stock_reservations sr ON sr.id=coverage.reservation_id
         WHERE oi.order_id=attempt_order AND (
           coverage.order_item_id IS NULL
           OR coverage.checkout_estimate_selection_id IS DISTINCT FROM attempt_selection
           OR coverage.inventory_policy IS DISTINCT FROM oi.inventory_policy
           OR (oi.inventory_policy='made_to_order' AND coverage.reservation_id IS NOT NULL)
-          OR (oi.inventory_policy='stock_managed' AND (
-              sr.id IS NULL OR sr.order_id IS DISTINCT FROM attempt_order
-              OR sr.order_item_id IS DISTINCT FROM oi.id
-              OR sr.checkout_estimate_selection_id IS DISTINCT FROM attempt_selection
-              OR sr.state IS DISTINCT FROM 'active'
-              OR sr.expires_at<=statement_timestamp())));
+          OR (oi.inventory_policy='stock_managed' AND NOT EXISTS(
+              SELECT 1 FROM payment_attempt_reservations ar
+              JOIN stock_reservations sr ON sr.id=ar.reservation_id
+              WHERE ar.attempt_id=target_attempt
+                AND ar.membership_family='domestic_checkout_v1'
+                AND ar.order_id=attempt_order
+                AND ar.order_item_id=oi.id
+                AND ar.checkout_estimate_selection_id=attempt_selection
+                AND sr.order_id=attempt_order
+                AND sr.order_item_id=oi.id
+                AND sr.checkout_estimate_selection_id=attempt_selection
+                AND sr.state='active'
+                AND sr.expires_at>statement_timestamp())));
         SELECT count(*) INTO missing_count FROM order_inventory_coverage coverage
          WHERE coverage.order_id=attempt_order
            AND coverage.checkout_estimate_selection_id=attempt_selection
            AND coverage.inventory_policy='stock_managed'
            AND NOT EXISTS(SELECT 1 FROM payment_attempt_reservations ar
+             JOIN stock_reservations sr ON sr.id=ar.reservation_id
              WHERE ar.attempt_id=target_attempt
-               AND ar.reservation_id=coverage.reservation_id);
+               AND ar.membership_family='domestic_checkout_v1'
+               AND ar.order_id=attempt_order
+               AND ar.order_item_id=coverage.order_item_id
+               AND ar.checkout_estimate_selection_id=attempt_selection
+               AND sr.order_id=attempt_order
+               AND sr.order_item_id=coverage.order_item_id
+               AND sr.checkout_estimate_selection_id=attempt_selection
+               AND sr.state='active'
+               AND sr.expires_at>statement_timestamp());
         SELECT count(*) INTO extra_count FROM payment_attempt_reservations ar
          WHERE ar.attempt_id=target_attempt AND NOT EXISTS(
            SELECT 1 FROM order_inventory_coverage coverage
+           JOIN stock_reservations sr ON sr.id=ar.reservation_id
            WHERE coverage.order_id=attempt_order
              AND coverage.checkout_estimate_selection_id=attempt_selection
              AND coverage.inventory_policy='stock_managed'
              AND coverage.order_item_id=ar.order_item_id
-             AND coverage.reservation_id=ar.reservation_id);
+             AND ar.membership_family='domestic_checkout_v1'
+             AND ar.order_id=attempt_order
+             AND ar.checkout_estimate_selection_id=attempt_selection
+             AND sr.order_id=attempt_order
+             AND sr.order_item_id=ar.order_item_id
+             AND sr.checkout_estimate_selection_id=attempt_selection
+             AND sr.state='active'
+             AND sr.expires_at>statement_timestamp());
         IF item_count=0 OR coverage_count<>item_count OR invalid_count<>0
            OR missing_count<>0 OR extra_count<>0 THEN
             RAISE EXCEPTION 'payment attempt must cover exact stock-managed coverage';

@@ -88,16 +88,25 @@ BEGIN
           WHERE coverage.order_id=OLD.order_id
             AND coverage.checkout_estimate_selection_id=OLD.checkout_estimate_selection_id
             AND coverage.inventory_policy='stock_managed'
-            AND coverage.order_item_id=ar.order_item_id
-            AND coverage.reservation_id=ar.reservation_id)))
+            AND coverage.order_item_id=ar.order_item_id))
       OR EXISTS(
        SELECT 1 FROM order_inventory_coverage coverage
        WHERE coverage.order_id=OLD.order_id
          AND coverage.checkout_estimate_selection_id=OLD.checkout_estimate_selection_id
          AND coverage.inventory_policy='stock_managed'
-         AND NOT EXISTS(SELECT 1 FROM payment_attempt_reservations ar
-                        WHERE ar.attempt_id=OLD.id
-                          AND ar.reservation_id=coverage.reservation_id))
+         AND NOT EXISTS(
+             SELECT 1 FROM payment_attempt_reservations ar
+             JOIN stock_reservations sr ON sr.id=ar.reservation_id
+             WHERE ar.attempt_id=OLD.id
+               AND ar.membership_family='domestic_checkout_v1'
+               AND ar.order_id=OLD.order_id
+               AND ar.order_item_id=coverage.order_item_id
+               AND ar.checkout_estimate_selection_id=OLD.checkout_estimate_selection_id
+               AND sr.order_id=OLD.order_id
+               AND sr.order_item_id=coverage.order_item_id
+               AND sr.checkout_estimate_selection_id=OLD.checkout_estimate_selection_id
+               AND sr.state='active'
+               AND sr.expires_at>now_at))
    THEN RAISE EXCEPTION 'payment call requires live authoritative reservations'; END IF;
    NEW.call_started_at:=now_at;
    NEW.claim_expires_at:=now_at+NEW.claim_ttl_seconds*interval '1 second';

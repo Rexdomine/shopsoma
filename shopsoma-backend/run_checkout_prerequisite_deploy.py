@@ -9,7 +9,8 @@ from pathlib import Path
 
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import create_engine, text
+from alembic.script import ScriptDirectory
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import make_url
 
 from app.services.orders.workflow_classification import (
@@ -50,6 +51,25 @@ def _identity() -> ClassificationRunIdentity:
         or os.environ.get("RENDER_SERVICE_ID")
         or socket.gethostname(),
     )
+
+
+def _database_revision_includes(config: Config, engine, revision: str) -> bool:
+    with engine.connect() as connection:
+        if not inspect(connection).has_table("alembic_version"):
+            return False
+        current_revision = connection.execute(
+            text("SELECT version_num FROM alembic_version")
+        ).scalar_one_or_none()
+    if current_revision is None:
+        return False
+    script = ScriptDirectory.from_config(config)
+    current = script.get_revision(current_revision)
+    while current is not None:
+        if current.revision == revision:
+            return True
+        down_revisions = [value for value in current._normalized_down_revisions if value]
+        current = script.get_revision(down_revisions[0]) if down_revisions else None
+    return False
 
 
 def _cutover_already_complete(engine) -> bool:
@@ -102,9 +122,10 @@ def _hold_cutover_validation_lock(engine):
 def run(*, database_url: str | None = None, batch_size: int = DEFAULT_BATCH_SIZE) -> None:
     database_url = database_url or os.environ["DATABASE_URL"]
     config = _alembic_config(database_url)
-    command.upgrade(config, PREPARE_REVISION)
     engine = create_engine(_sync_database_url(database_url))
     try:
+        if not _database_revision_includes(config, engine, PREPARE_REVISION):
+            command.upgrade(config, PREPARE_REVISION)
         if not _cutover_already_complete(engine):
             run_id = start_workflow_classification_run(engine, _identity())
             while classify_workflow_batch(engine, run_id, batch_size=batch_size):
