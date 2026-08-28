@@ -4,6 +4,7 @@ import asyncio
 import socket
 
 from app.core.database import AsyncSessionLocal, engine
+from app.models.checkout_outbox import CheckoutOutboxEvent
 from app.services.checkout.outbox import (
     claim_checkout_events,
     complete_checkout_event,
@@ -11,6 +12,20 @@ from app.services.checkout.outbox import (
     retry_checkout_event,
 )
 from app.services.orders.vendor_fulfilment import start_verified_order_fulfilment
+
+
+class LatePaymentExceptionRequiresReview(RuntimeError):
+    """Late payment exception needs durable staff reconciliation."""
+
+
+async def _route_late_payment_exception(session, *, event: CheckoutOutboxEvent) -> None:
+    payload = event.payload if isinstance(event.payload, dict) else {}
+    reason_code = payload.get("reason_code")
+    if reason_code not in {"reservation_released", "stock_unavailable"}:
+        raise ValueError("late payment exception payload truth mismatch")
+    raise LatePaymentExceptionRequiresReview(
+        f"late-payment:{reason_code}:manual-reconciliation-required"
+    )
 
 
 async def dispatch_checkout_events_once(
@@ -30,6 +45,8 @@ async def dispatch_checkout_events_once(
                     await start_verified_order_fulfilment(
                         session, order_id=event.order_id
                     )
+                elif event.event_type == "late_payment_exception":
+                    await _route_late_payment_exception(session, event=event)
                 await complete_checkout_event(
                     session,
                     event_id=event.id,
@@ -39,6 +56,17 @@ async def dispatch_checkout_events_once(
                 )
                 await session.commit()
                 counts["completed"] += 1
+        except LatePaymentExceptionRequiresReview as error:
+            async with session_factory() as session:
+                await fail_checkout_event(
+                    session,
+                    event_id=event.id,
+                    owner=owner,
+                    claim_token=event.claim_token,
+                    failure_code=str(error),
+                )
+                counts["failed"] += 1
+                await session.commit()
         except Exception:
             async with session_factory() as session:
                 if event.attempt_count < 3:

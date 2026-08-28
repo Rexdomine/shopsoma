@@ -1,6 +1,7 @@
 """Production-faithful regressions for the consolidated Codex P1 repair ledger."""
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from types import SimpleNamespace
 import uuid
@@ -25,7 +26,7 @@ from app.models.stock_payment_persistence import (
     PaymentAttemptEvidence,
     StockReservation,
 )
-from app.models.vendor_pickup import VendorNotification, VendorPickup
+from app.models.vendor_pickup import OrderType, VendorNotification, VendorPickup
 from app.services.checkout.outbox import enqueue_checkout_event
 from tests.conftest import TestSessionLocal, _ASYNC_TEST_DATABASE_URL
 from tests.test_checkout_estimate_api import _domestic_catalogue
@@ -81,6 +82,36 @@ async def test_authenticated_unpaid_enforced_cancellation_releases_reservation_w
         )
         is True
     )
+
+
+@pytest.mark.asyncio
+async def test_paid_made_to_order_cancellation_does_not_restore_stock(
+    client, db_session, vendor_user, customer_user, monkeypatch
+):
+    order, product = await create_enforced_checkout(
+        client,
+        db_session,
+        vendor_user,
+        customer_user,
+        monkeypatch,
+        made_to_order=True,
+    )
+    order_id = order.id
+    product_id = product.id
+    stock_before = product.total_stock
+    order.payment_status = PaymentStatus.PAID
+    await db_session.commit()
+
+    cancelled = await client.post(
+        f"/api/v1/orders/{order_id}/cancel",
+        headers=customer_user["headers"],
+        json={"cancellation_reason": "Vendor cannot fulfil"},
+    )
+
+    assert cancelled.status_code == 200, cancelled.text
+    db_session.expire_all()
+    persisted_product = await db_session.get(Product, product_id)
+    assert persisted_product.total_stock == stock_before
 
 
 @pytest.mark.asyncio
@@ -651,6 +682,50 @@ async def test_failed_payment_retry_with_insufficient_stock_rolls_back_before_pr
     )
 
 
+@pytest.mark.asyncio
+async def test_quarantined_legacy_order_rejects_payment_initialization_before_provider(
+    client, db_session, vendor_user, customer_user, monkeypatch
+):
+    from app.api.v1 import payments
+
+    order, _ = await create_enforced_checkout(
+        client, db_session, vendor_user, customer_user, monkeypatch
+    )
+    order_id = order.id
+    order.workflow_cohort = "legacy_ambiguous_quarantined"
+    order.workflow_policy_version = "legacy_quarantine_v1"
+    order.checkout_access_mode = "legacy_quarantined"
+    await db_session.commit()
+
+    provider_calls = 0
+
+    def forbidden_provider(**_kwargs):
+        nonlocal provider_calls
+        provider_calls += 1
+        raise AssertionError("provider boundary must remain closed")
+
+    monkeypatch.setattr(payments.stripe.PaymentIntent, "create", forbidden_provider)
+    response = await client.post(
+        "/api/v1/payments/initialize",
+        headers=customer_user["headers"],
+        json={
+            "order_id": str(order_id),
+            "email": customer_user["user"].email,
+            "payment_gateway": "stripe",
+            "currency": "NGN",
+        },
+    )
+
+    assert response.status_code == 409, response.text
+    assert provider_calls == 0
+    assert (
+        await db_session.scalar(
+            select(func.count(PaymentAttempt.id)).where(PaymentAttempt.order_id == order_id)
+        )
+        == 0
+    )
+
+
 def test_checkout_outbox_task_is_registered_on_production_worker_entrypoint():
     from app.celery_app import celery_app
 
@@ -721,6 +796,44 @@ def test_checkout_outbox_sync_tick_disposes_engine_when_dispatch_raises(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_late_payment_exception_dispatch_fails_durably_in_outbox(
+    client, db_session, vendor_user, customer_user, monkeypatch
+):
+    order, _ = await create_enforced_checkout(
+        client, db_session, vendor_user, customer_user, monkeypatch
+    )
+    event = await enqueue_checkout_event(
+        db_session,
+        event_type="late_payment_exception",
+        source_id=uuid.uuid4(),
+        order_id=order.id,
+        payload={
+            "version": 1,
+            "order_id": str(order.id),
+            "workflow_cohort": "domestic_checkout_v1",
+            "reason_code": "reservation_released",
+        },
+    )
+    event_id = event.id
+    await db_session.commit()
+
+    from app.tasks.checkout_outbox import dispatch_checkout_events_once
+
+    result = await dispatch_checkout_events_once(
+        session_factory=TestSessionLocal, owner="test-worker", limit=10
+    )
+
+    assert result == {"claimed": 1, "completed": 0, "retried": 0, "failed": 1}
+    db_session.expire_all()
+    persisted = await db_session.get(CheckoutOutboxEvent, event_id)
+    assert persisted.status == "failed"
+    assert (
+        persisted.failure_code
+        == "late-payment:reservation_released:manual-reconciliation-required"
+    )
+
+
+@pytest.mark.asyncio
 async def test_verified_event_dispatches_vendor_start_effects_exactly_once(
     client, db_session, vendor_user, customer_user, monkeypatch
 ):
@@ -774,3 +887,48 @@ async def test_verified_event_dispatches_vendor_start_effects_exactly_once(
     )
     persisted = await db_session.get(CheckoutOutboxEvent, event_id)
     assert persisted.status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_verified_event_marks_made_to_order_pickup_with_custom_timeline(
+    client, db_session, vendor_user, customer_user, monkeypatch
+):
+    order, _ = await create_enforced_checkout(
+        client,
+        db_session,
+        vendor_user,
+        customer_user,
+        monkeypatch,
+        made_to_order=True,
+    )
+    await db_session.refresh(order, ["items"])
+    item = order.items[0]
+    item_id = item.id
+    event = await enqueue_checkout_event(
+        db_session,
+        event_type="payment_verified_start_order",
+        source_id=uuid.uuid4(),
+        order_id=order.id,
+        payload={
+            "version": 1,
+            "order_id": str(order.id),
+            "workflow_cohort": "domestic_checkout_v1",
+        },
+    )
+    order.payment_status = PaymentStatus.PAID
+    await db_session.commit()
+
+    from app.tasks.checkout_outbox import dispatch_checkout_events_once
+
+    result = await dispatch_checkout_events_once(
+        session_factory=TestSessionLocal, owner="test-worker", limit=10
+    )
+
+    assert result == {"claimed": 1, "completed": 1, "retried": 0, "failed": 0}
+    db_session.expire_all()
+    pickup = await db_session.scalar(
+        select(VendorPickup).where(VendorPickup.order_item_id == item_id)
+    )
+    assert pickup.order_type == OrderType.MADE_TO_ORDER
+    assert pickup.estimated_production_days == 7
+    assert pickup.scheduled_pickup_date >= datetime.now(timezone.utc) + timedelta(days=6)

@@ -81,6 +81,11 @@ async def initialize_payment(
         )
 
     order_currency = (order.currency or "NGN").upper()
+    if order.workflow_cohort == "legacy_ambiguous_quarantined":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Quarantined legacy orders cannot initialize customer payments",
+        )
     enforced = order.workflow_cohort == "domestic_checkout_v1"
     if enforced:
         await authorize_checkout_actor(

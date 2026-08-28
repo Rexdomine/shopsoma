@@ -41,7 +41,6 @@ async def start_verified_order_fulfilment(session, *, order_id) -> None:
             )
         )
     }
-    scheduled_at = datetime.now(timezone.utc) + timedelta(hours=48)
     vendors = {}
     for item in order.items:
         vendor = vendors.get(item.vendor_id)
@@ -51,12 +50,24 @@ async def start_verified_order_fulfilment(session, *, order_id) -> None:
                 raise ValueError("verified order vendor is unavailable")
             vendors[item.vendor_id] = vendor
         if item.id not in existing_pickups:
+            order_type = (
+                OrderType.MADE_TO_ORDER
+                if item.inventory_policy == "made_to_order"
+                else OrderType.RTW
+            )
+            estimated_production_days = 7 if order_type == OrderType.MADE_TO_ORDER else None
+            scheduled_at = datetime.now(timezone.utc) + (
+                timedelta(days=estimated_production_days)
+                if estimated_production_days is not None
+                else timedelta(hours=48)
+            )
             session.add(
                 VendorPickup(
                     vendor_id=item.vendor_id,
                     order_id=order.id,
                     order_item_id=item.id,
-                    order_type=OrderType.RTW,
+                    order_type=order_type,
+                    estimated_production_days=estimated_production_days,
                     scheduled_pickup_date=scheduled_at,
                     pickup_address=vendor.business_address,
                     pickup_contact_phone=vendor.business_phone,

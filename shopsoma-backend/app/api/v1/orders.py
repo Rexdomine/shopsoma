@@ -1661,8 +1661,10 @@ async def cancel_order(
         allow_missing_size_stock_ids=True,
     )
 
-    # Restore stock
+    # Restore only stock-managed inventory that was actually consumed.
     for item in order.items:
+        if item.inventory_policy == "made_to_order":
+            continue
         if item.variant_id:
             await db.execute(
                 update(ProductVariant)

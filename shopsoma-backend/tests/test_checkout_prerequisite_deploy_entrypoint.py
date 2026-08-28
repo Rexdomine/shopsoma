@@ -1,0 +1,49 @@
+from importlib.util import module_from_spec, spec_from_file_location
+from pathlib import Path
+import uuid
+
+
+ROOT = Path(__file__).parents[1]
+SCRIPT_PATH = ROOT / "run_checkout_prerequisite_deploy.py"
+
+
+def _load_module():
+    spec = spec_from_file_location("checkout_prerequisite_deploy", SCRIPT_PATH)
+    assert spec is not None and spec.loader is not None
+    module = module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_deploy_entrypoint_runs_staged_upgrade_then_classification_then_heads(monkeypatch):
+    module = _load_module()
+    calls = []
+    run_id = uuid.uuid4()
+
+    class Engine:
+        def dispose(self):
+            calls.append(("dispose",))
+
+    engine = Engine()
+
+    monkeypatch.setattr(module.command, "upgrade", lambda _config, revision: calls.append(("upgrade", revision)))
+    monkeypatch.setattr(module, "create_engine", lambda url: calls.append(("create_engine", url)) or engine)
+    monkeypatch.setattr(module, "start_workflow_classification_run", lambda _engine, identity: calls.append(("start", identity.migration_revision)) or run_id)
+
+    batches = iter([2, 1, 0])
+    monkeypatch.setattr(module, "classify_workflow_batch", lambda _engine, seen_run_id, batch_size: calls.append(("batch", seen_run_id, batch_size)) or next(batches))
+    monkeypatch.setattr(module, "finalize_workflow_classification", lambda _engine, seen_run_id: calls.append(("finalize", seen_run_id)) or 3)
+
+    module.run(database_url="postgresql+asyncpg://user:pass@localhost/db", batch_size=250)
+
+    assert calls == [
+        ("upgrade", module.PREPARE_REVISION),
+        ("create_engine", "postgresql://user:pass@localhost/db"),
+        ("start", module.VALIDATE_REVISION),
+        ("batch", run_id, 250),
+        ("batch", run_id, 250),
+        ("batch", run_id, 250),
+        ("finalize", run_id),
+        ("dispose",),
+        ("upgrade", "heads"),
+    ]
