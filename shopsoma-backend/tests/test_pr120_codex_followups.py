@@ -486,6 +486,7 @@ async def test_finalize_verified_payment_routes_expired_attempt_to_late_payment_
         provider="paystack",
         provider_reference="ref-456",
         lease_token="lease-2",
+        claim_expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
         terminal_reason=None,
         terminal_at=None,
         terminal_evidence_id=None,
@@ -494,10 +495,10 @@ async def test_finalize_verified_payment_routes_expired_attempt_to_late_payment_
     intermediary = SimpleNamespace(
         id="attempt-mid",
         order_id="order-1",
-        state="expired",
+        state="abandoned_unknown",
         provider="paystack",
         provider_reference="ref-mid",
-        lease_token="lease-mid",
+        lease_token=None,
         terminal_reason="authorization_deadline_elapsed",
         terminal_at=datetime.now(timezone.utc),
         terminal_evidence_id="evidence-mid",
@@ -576,9 +577,9 @@ async def test_finalize_verified_payment_routes_expired_attempt_to_late_payment_
     assert result.order is order
     assert payment.status == module.TransactionStatus.COMPLETED
     assert order.payment_status == module.PaymentStatus.PAID
-    assert successor.state == "abandoned_unknown"
+    assert successor.state == "failed"
     assert successor.terminal_reason == "superseded_by_late_verified_capture"
-    assert successor.terminal_at == payment.completed_at
+    assert successor.terminal_at is None
     assert successor.row_version == 4
     assert successor.terminal_evidence_id is not None
     assert successor_reservation.state == "released"

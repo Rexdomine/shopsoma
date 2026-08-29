@@ -1025,41 +1025,39 @@ async def _terminalize_active_successor_attempts(
     if not active_descendants:
         return
     for successor_attempt in active_descendants:
+        failure_evidence = PaymentAttemptEvidence(
+            attempt_id=successor_attempt.id,
+            source="payment.success_reconciliation",
+            event_id=(
+                f"{successor_attempt.provider}:late-capture-closeout:{predecessor.id}:{successor_attempt.id}"
+            ),
+            evidence_type="payment_failed",
+            provider=successor_attempt.provider,
+            provider_reference=successor_attempt.provider_reference,
+            evidence_hash=_evidence_hash(
+                {
+                    "reason": "superseded_by_late_verified_capture",
+                    "predecessor_attempt_id": str(predecessor.id),
+                    "successor_attempt_id": str(successor_attempt.id),
+                }
+            ),
+            observed_at=observed_at,
+        )
+        session.add(failure_evidence)
+        await session.flush()
+        await session.execute(
+            text("SELECT coordinate_payment_attempt_write(:attempt_id, :order_id)"),
+            {"attempt_id": successor_attempt.id, "order_id": order.id},
+        )
         if successor_attempt.state == "call_started":
-            unknown_evidence = PaymentAttemptEvidence(
-                attempt_id=successor_attempt.id,
-                source="payment.success_reconciliation",
-                event_id=(
-                    f"{successor_attempt.provider}:late-capture-closeout:{predecessor.id}:{successor_attempt.id}"
-                ),
-                evidence_type="outcome_unknown",
-                provider=successor_attempt.provider,
-                provider_reference=successor_attempt.provider_reference,
-                evidence_hash=_evidence_hash(
-                    {
-                        "reason": "superseded_by_late_verified_capture",
-                        "predecessor_attempt_id": str(predecessor.id),
-                        "successor_attempt_id": str(successor_attempt.id),
-                    }
-                ),
-                observed_at=observed_at,
-            )
-            session.add(unknown_evidence)
-            await session.flush()
-            await session.execute(
-                text("SELECT coordinate_payment_attempt_write(:attempt_id, :order_id)"),
-                {"attempt_id": successor_attempt.id, "order_id": order.id},
-            )
             await session.execute(
                 text("SELECT set_config('shopsoma.payment_lease_token', :token, true)"),
                 {"token": str(successor_attempt.lease_token)},
             )
-            successor_attempt.state = "abandoned_unknown"
-            successor_attempt.terminal_evidence_id = unknown_evidence.id
-            successor_attempt.row_version += 1
-            await session.flush()
+        successor_attempt.state = "failed"
+        successor_attempt.terminal_evidence_id = failure_evidence.id
         successor_attempt.terminal_reason = "superseded_by_late_verified_capture"
-        successor_attempt.terminal_at = observed_at
+        successor_attempt.row_version += 1
         reservations = await _attempt_reservations(session, attempt_id=successor_attempt.id)
         for reservation in reservations:
             if reservation.state == "active":
