@@ -1025,6 +1025,48 @@ async def _terminalize_active_successor_attempts(
     if not active_descendants:
         return
     for successor_attempt in active_descendants:
+        failure_observed_at = observed_at
+        if (
+            successor_attempt.state == "call_started"
+            and successor_attempt.claim_expires_at is not None
+            and observed_at >= successor_attempt.claim_expires_at
+        ):
+            unknown_observed_at = max(observed_at, successor_attempt.claim_expires_at)
+            unknown_evidence = PaymentAttemptEvidence(
+                attempt_id=successor_attempt.id,
+                source="payment.success_reconciliation",
+                event_id=(
+                    f"{successor_attempt.provider}:late-capture-expired-closeout:{predecessor.id}:{successor_attempt.id}"
+                ),
+                evidence_type="outcome_unknown",
+                provider=successor_attempt.provider,
+                provider_reference=successor_attempt.provider_reference,
+                evidence_hash=_evidence_hash(
+                    {
+                        "reason": "superseded_by_late_verified_capture",
+                        "predecessor_attempt_id": str(predecessor.id),
+                        "successor_attempt_id": str(successor_attempt.id),
+                        "lease_state": "expired",
+                    }
+                ),
+                observed_at=unknown_observed_at,
+            )
+            session.add(unknown_evidence)
+            await session.flush()
+            await session.execute(
+                text("SELECT coordinate_payment_attempt_write(:attempt_id, :order_id)"),
+                {"attempt_id": successor_attempt.id, "order_id": order.id},
+            )
+            await session.execute(
+                text("SELECT set_config('shopsoma.payment_lease_token', :token, true)"),
+                {"token": str(successor_attempt.lease_token)},
+            )
+            successor_attempt.state = "abandoned_unknown"
+            successor_attempt.terminal_evidence_id = unknown_evidence.id
+            successor_attempt.row_version += 1
+            await session.flush()
+            failure_observed_at = max(datetime.now(timezone.utc), unknown_observed_at + timedelta(seconds=1))
+
         failure_evidence = PaymentAttemptEvidence(
             attempt_id=successor_attempt.id,
             source="payment.success_reconciliation",
@@ -1041,7 +1083,7 @@ async def _terminalize_active_successor_attempts(
                     "successor_attempt_id": str(successor_attempt.id),
                 }
             ),
-            observed_at=observed_at,
+            observed_at=failure_observed_at,
         )
         session.add(failure_evidence)
         await session.flush()

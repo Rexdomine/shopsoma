@@ -586,6 +586,123 @@ async def test_finalize_verified_payment_routes_expired_attempt_to_late_payment_
     assert successor_reservation.terminal_reason == "superseded_by_late_verified_capture"
     assert successor_reservation.terminal_at is None
     assert successor_reservation.row_version == 10
+    assert [obj.evidence_type for obj in added] == ["payment_failed"]
+    assert events == [("attempt-1", "late_payment_exception", "reservation_released")]
+
+
+@pytest.mark.asyncio
+async def test_finalize_verified_payment_routes_expired_successor_lease_through_unknown_then_failed(monkeypatch):
+    module = _load_module(BRIDGE_PATH, "bridge_expired_successor_lease_followup")
+    now = datetime.now(timezone.utc)
+    order = SimpleNamespace(
+        id="order-1",
+        workflow_cohort="domestic_checkout_v1",
+        payment_status=module.PaymentStatus.PENDING,
+        fulfillment_status=module.FulfillmentStatus.ORDER_RECEIVED,
+    )
+    payment = SimpleNamespace(
+        status=module.TransactionStatus.PENDING,
+        completed_at=None,
+        order_id="order-1",
+    )
+    attempt = SimpleNamespace(
+        id="attempt-1",
+        order_id="order-1",
+        amount=Decimal("155.00"),
+        currency="NGN",
+        provider_reference="ref-123",
+        provider="paystack",
+        state="expired",
+        workflow_cohort="domestic_checkout_v1",
+    )
+    successor = SimpleNamespace(
+        id="attempt-2",
+        order_id="order-1",
+        state="call_started",
+        provider="paystack",
+        provider_reference="ref-456",
+        lease_token="lease-2",
+        claim_expires_at=now - timedelta(minutes=5),
+        terminal_reason=None,
+        terminal_at=None,
+        terminal_evidence_id=None,
+        row_version=3,
+    )
+    successor_reservation = SimpleNamespace(
+        state="active",
+        terminal_reason=None,
+        terminal_at=None,
+        row_version=9,
+    )
+    events = []
+    session_calls = []
+    added = []
+
+    class FakeSession:
+        async def scalar(self, statement):
+            sql = " ".join(str(statement).split())
+            if "FROM payment_attempts" in sql and "payment_attempts.provider = :provider_1" in sql and "payment_attempts.provider_reference = :provider_reference_1" in sql:
+                return attempt
+            if "FROM payment_attempts" in sql and "payment_attempts.id = :id_1" in sql and "FOR UPDATE" in sql:
+                return attempt
+            if "FROM orders" in sql:
+                return order
+            return None
+
+        async def scalars(self, statement):
+            sql = " ".join(str(statement).split())
+            if "WITH RECURSIVE attempt_lineage" in sql and "FROM payment_attempts JOIN attempt_lineage" in sql:
+                return iter([successor])
+            raise AssertionError(sql)
+
+        def add(self, obj):
+            added.append(obj)
+
+        async def flush(self):
+            for index, obj in enumerate(added, start=1):
+                if getattr(obj, "id", None) is None:
+                    obj.id = f"evidence-{index}"
+            session_calls.append("flush")
+
+        async def execute(self, statement, params=None):
+            session_calls.append((str(statement), params))
+            return None
+
+    async def fake_validate(*_args, **_kwargs):
+        return None
+
+    async def fake_enqueue(session, *, attempt, event_type, reason_code):
+        events.append((attempt.id, event_type, reason_code))
+
+    async def fake_attempt_reservations(_session, *, attempt_id):
+        assert attempt_id == "attempt-2"
+        return [successor_reservation]
+
+    monkeypatch.setattr(module, "_validate_attempt_payment_mapping", fake_validate)
+    monkeypatch.setattr(module, "_enqueue_payment_event", fake_enqueue)
+    monkeypatch.setattr(module, "_attempt_reservations", fake_attempt_reservations)
+
+    result = await module.finalize_verified_payment(
+        FakeSession(),
+        payment=payment,
+        provider="paystack",
+        provider_reference="ref-123",
+        event_id="evt-1",
+        evidence_payload={"ok": True},
+        observed_amount=Decimal("155.00"),
+        observed_currency="NGN",
+        observed_at=now,
+    )
+
+    assert result.bridge_applied is True
+    assert payment.status == module.TransactionStatus.COMPLETED
+    assert successor.state == "failed"
+    assert successor.terminal_reason == "superseded_by_late_verified_capture"
+    assert successor.terminal_evidence_id == "evidence-2"
+    assert successor.row_version == 5
+    assert successor_reservation.state == "released"
+    assert [obj.evidence_type for obj in added] == ["outcome_unknown", "payment_failed"]
+    assert any("set_config('shopsoma.payment_lease_token'" in call[0] for call in session_calls if isinstance(call, tuple))
     assert events == [("attempt-1", "late_payment_exception", "reservation_released")]
 
 
