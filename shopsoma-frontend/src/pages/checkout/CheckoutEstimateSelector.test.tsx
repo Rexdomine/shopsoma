@@ -8,6 +8,7 @@ const estimate = (options = 1): CheckoutEstimate => ({
   order_id: 'order-1',
   currency: 'NGN',
   expires_at: '2099-08-15T12:00:00Z',
+  server_tax_amount: '0.00',
   server_payable_total: '12500.00',
   selected_option: null,
   options: Array.from({ length: options }, (_, index) => ({

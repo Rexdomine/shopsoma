@@ -300,5 +300,6 @@ async def estimate_payload(
         "expires_at": estimate.expires_at,
         "options": options,
         "selected_option": selected,
+        "server_tax_amount": order.tax_amount,
         "server_payable_total": order.total_amount,
     }

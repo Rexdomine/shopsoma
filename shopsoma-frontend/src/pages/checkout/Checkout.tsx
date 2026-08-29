@@ -790,6 +790,9 @@ export default function Checkout() {
   // Calculate tax and total for checkout display (before order review is available)
   const TAX_RATE = 0.075; // 7.5% VAT
   const calculateCheckoutTax = () => {
+    if (checkoutEstimate?.selected_option && isValidServerMoney(checkoutEstimate.server_tax_amount, true)) {
+      return Number(checkoutEstimate.server_tax_amount);
+    }
     if (orderReview) return orderReview.summary.tax_amount;
     // Calculate tax on subtotal (before order review is created)
     const subtotal = cartSubtotalInSelectedCurrency;

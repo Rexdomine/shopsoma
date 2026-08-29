@@ -29,4 +29,5 @@ class CheckoutEstimateResponse(BaseModel):
     expires_at: datetime
     options: list[CheckoutEstimateOptionResponse]
     selected_option: Optional[CheckoutEstimateOptionResponse] = None
+    server_tax_amount: Decimal
     server_payable_total: Decimal

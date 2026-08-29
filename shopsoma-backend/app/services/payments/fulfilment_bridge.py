@@ -675,12 +675,22 @@ async def recover_payment_mapping(
 ) -> tuple[Payment, PaymentFinalizationResult]:
     """Recover and finalize one mapping under the immutable attempt lock."""
     attempt = await session.scalar(
-        select(PaymentAttempt)
-        .where(
+        select(PaymentAttempt).where(
             PaymentAttempt.provider == provider,
             PaymentAttempt.provider_reference == provider_reference,
         )
-        .with_for_update()
+    )
+    if attempt is None:
+        raise PaymentRecoveryUnavailable(
+            "authenticated payment evidence cannot be durably associated"
+        )
+    order = await session.scalar(
+        select(Order).where(Order.id == attempt.order_id).with_for_update()
+    )
+    if order is None:
+        raise PaymentBridgeError("payment order was not found")
+    attempt = await session.scalar(
+        select(PaymentAttempt).where(PaymentAttempt.id == attempt.id).with_for_update()
     )
     if attempt is None:
         raise PaymentRecoveryUnavailable(
@@ -964,6 +974,37 @@ async def _enqueue_payment_event(
     )
 
 
+async def _terminalize_active_successor_attempts(
+    session: AsyncSession, *, order: Order, predecessor: PaymentAttempt, observed_at: datetime
+) -> None:
+    successors = list(
+        await session.scalars(
+            select(PaymentAttempt)
+            .where(
+                PaymentAttempt.order_id == order.id,
+                PaymentAttempt.supersedes_attempt_id == predecessor.id,
+                PaymentAttempt.state.in_(("call_started", "abandoned_unknown")),
+            )
+            .order_by(PaymentAttempt.created_at.asc(), PaymentAttempt.id.asc())
+            .with_for_update()
+        )
+    )
+    if not successors:
+        return
+    for successor in successors:
+        successor.state = "failed"
+        successor.terminal_reason = "superseded_by_late_verified_capture"
+        successor.terminal_at = observed_at
+        successor.row_version += 1
+        reservations = await _attempt_reservations(session, attempt_id=successor.id)
+        for reservation in reservations:
+            if reservation.state == "active":
+                reservation.state = "released"
+                reservation.terminal_reason = "superseded_by_late_verified_capture"
+                reservation.row_version += 1
+    await session.flush()
+
+
 async def finalize_verified_payment(
     session: AsyncSession,
     *,
@@ -1084,6 +1125,9 @@ async def finalize_verified_payment(
         replay = payment.status == TransactionStatus.COMPLETED
         payment.status = TransactionStatus.COMPLETED
         payment.completed_at = observed_at
+        await _terminalize_active_successor_attempts(
+            session, order=order, predecessor=attempt, observed_at=observed_at
+        )
         await session.flush()
         await session.execute(
             text(

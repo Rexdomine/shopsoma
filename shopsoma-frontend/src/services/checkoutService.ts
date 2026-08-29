@@ -190,6 +190,7 @@ export interface CheckoutEstimate {
   expires_at: string;
   options: CheckoutEstimateOption[];
   selected_option: CheckoutEstimateOption | null;
+  server_tax_amount: string;
   server_payable_total: string;
 }
 

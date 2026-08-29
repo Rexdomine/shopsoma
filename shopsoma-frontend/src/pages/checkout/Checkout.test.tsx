@@ -106,7 +106,7 @@ const order = {
 };
 const estimate = {
   id: 'estimate-1', order_id: 'order-1', currency: 'NGN', expires_at: '2099-01-01T00:00:00Z',
-  server_payable_total: '62500.00', selected_option: null,
+  server_tax_amount: '0.00', server_payable_total: '62500.00', selected_option: null,
   options: [{
     id: 'option-1', option_key: 'standard', service_code: 'static_standard', service_label: 'Standard delivery',
     amount: '2500.00', currency: 'NGN', min_delivery_days: 3, max_delivery_days: 5,
@@ -245,9 +245,10 @@ describe('Checkout M5 sequencing and recovery', () => {
     expect(mocks.createCheckoutEstimate.mock.invocationCallOrder[0]).toBeLessThan(mocks.initializePayment.mock.invocationCallOrder[0]);
   });
 
-  it('commits selected server shipping and payable truth before Paystack opens', async () => {
+  it('commits selected server shipping, tax, and payable truth before Paystack opens', async () => {
     const selectedEstimate = {
       ...estimate,
+      server_tax_amount: '5250.00',
       server_payable_total: '75250.00',
       selected_option: {
         ...estimate.options[0],
@@ -275,12 +276,14 @@ describe('Checkout M5 sequencing and recovery', () => {
     const visible = visibleAtProviderOpen.mock.calls[0][0];
     expect(visible).toContain('Express delivery');
     expect(visible).toContain('₦10,000.00');
+    expect(visible).toContain('₦5,250');
     expect(visible).toContain('₦75,250.00');
   });
 
-  it('commits selected server shipping and payable truth before Stripe renders', async () => {
+  it('commits selected server shipping, tax, and payable truth before Stripe renders', async () => {
     const selectedEstimate = {
       ...estimate,
+      server_tax_amount: '5250.00',
       server_payable_total: '75250.00',
       selected_option: {
         ...estimate.options[0],
@@ -301,6 +304,7 @@ describe('Checkout M5 sequencing and recovery', () => {
     expect(await screen.findByText('Stripe form')).toBeInTheDocument();
     expect(screen.getByText('Express delivery')).toBeInTheDocument();
     expect(screen.getByText('₦10,000.00')).toBeInTheDocument();
+    expect(screen.getByText('₦5,250')).toBeInTheDocument();
     expect(screen.getByText('₦75,250.00')).toBeInTheDocument();
   });
 

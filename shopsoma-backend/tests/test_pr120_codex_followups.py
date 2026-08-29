@@ -332,6 +332,73 @@ async def test_shared_inventory_subjects_are_checked_once(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_recover_payment_mapping_locks_order_before_attempt(monkeypatch):
+    module = _load_module(BRIDGE_PATH, "bridge_recover_lock_order_followup")
+    attempt = SimpleNamespace(id="attempt-1", order_id="order-1", amount=Decimal("155.00"), currency="NGN")
+    order = SimpleNamespace(id="order-1")
+    payment = SimpleNamespace(order_id="order-1")
+    calls = []
+
+    class FakeScalarResult:
+        def __init__(self, value):
+            self.value = value
+
+    class FakeSession:
+        async def scalar(self, statement):
+            sql = " ".join(str(statement).split())
+            if "FROM payment_attempts" in sql and "provider_reference" in sql and "FOR UPDATE" not in sql:
+                calls.append("attempt_lookup")
+                return attempt
+            if "FROM orders" in sql and "FOR UPDATE" in sql:
+                calls.append("order_lock")
+                return order
+            if "FROM payment_attempts" in sql and "id = :id_1" in sql and "FOR UPDATE" in sql:
+                calls.append("attempt_lock")
+                return attempt
+            if "FROM payments" in sql and "gateway_response" in sql:
+                calls.append("payment_by_reference")
+                return None
+            if "FROM payments" in sql and "transaction_id = :transaction_id_1" in sql:
+                calls.append("payment_by_tx")
+                return payment
+            raise AssertionError(sql)
+
+        async def scalars(self, statement):
+            sql = " ".join(str(statement).split())
+            if "FROM payments" in sql and "gateway_response" in sql:
+                calls.append("payment_by_reference")
+                return iter([payment])
+            raise AssertionError(str(statement))
+
+        def add(self, _obj):
+            raise AssertionError("new payment should not be created")
+
+        async def flush(self):
+            calls.append("flush")
+
+    async def fake_finalize(session, **kwargs):
+        calls.append(("finalize", kwargs["payment"], kwargs["provider_reference"]))
+        return "FINALIZED"
+
+    monkeypatch.setattr(module, "finalize_verified_payment", fake_finalize)
+
+    payment_result, result = await module.recover_payment_mapping(
+        FakeSession(),
+        provider="paystack",
+        provider_reference="ref-123",
+        transaction_id="tx-123",
+        observed_amount=Decimal("155.00"),
+        observed_currency="NGN",
+        event_id="evt-1",
+        evidence_payload={"reference": "ref-123"},
+    )
+
+    assert payment_result is payment
+    assert result == "FINALIZED"
+    assert calls[:3] == ["attempt_lookup", "order_lock", "attempt_lock"]
+
+
+@pytest.mark.asyncio
 async def test_finalize_verified_payment_routes_expired_attempt_to_late_payment_exception(monkeypatch):
     module = _load_module(BRIDGE_PATH, "bridge_expired_verification_followup")
     order = SimpleNamespace(
@@ -353,6 +420,21 @@ async def test_finalize_verified_payment_routes_expired_attempt_to_late_payment_
         provider_reference="ref-123",
         provider="paystack",
         state="expired",
+        workflow_cohort="domestic_checkout_v1",
+    )
+    successor = SimpleNamespace(
+        id="attempt-2",
+        order_id="order-1",
+        state="call_started",
+        terminal_reason=None,
+        terminal_at=None,
+        row_version=3,
+    )
+    successor_reservation = SimpleNamespace(
+        state="active",
+        terminal_reason=None,
+        terminal_at=None,
+        row_version=9,
     )
     events = []
     session_calls = []
@@ -365,6 +447,12 @@ async def test_finalize_verified_payment_routes_expired_attempt_to_late_payment_
             if "FROM orders" in sql:
                 return order
             return None
+
+        async def scalars(self, statement):
+            sql = " ".join(str(statement).split())
+            if "FROM payment_attempts" in sql and "supersedes_attempt_id = :supersedes_attempt_id_1" in sql:
+                return iter([successor])
+            raise AssertionError(sql)
 
         async def flush(self):
             session_calls.append("flush")
@@ -379,8 +467,13 @@ async def test_finalize_verified_payment_routes_expired_attempt_to_late_payment_
     async def fake_enqueue(session, *, attempt, event_type, reason_code):
         events.append((attempt.id, event_type, reason_code))
 
+    async def fake_attempt_reservations(_session, *, attempt_id):
+        assert attempt_id == "attempt-2"
+        return [successor_reservation]
+
     monkeypatch.setattr(module, "_validate_attempt_payment_mapping", fake_validate)
     monkeypatch.setattr(module, "_enqueue_payment_event", fake_enqueue)
+    monkeypatch.setattr(module, "_attempt_reservations", fake_attempt_reservations)
 
     result = await module.finalize_verified_payment(
         FakeSession(),
@@ -397,9 +490,17 @@ async def test_finalize_verified_payment_routes_expired_attempt_to_late_payment_
     assert result.bridge_applied is True
     assert result.replay is False
     assert result.order is order
+    assert result.order is order
     assert payment.status == module.TransactionStatus.COMPLETED
-    assert payment.completed_at is not None
     assert order.payment_status == module.PaymentStatus.PAID
+    assert successor.state == "failed"
+    assert successor.terminal_reason == "superseded_by_late_verified_capture"
+    assert successor.terminal_at == payment.completed_at
+    assert successor.row_version == 4
+    assert successor_reservation.state == "released"
+    assert successor_reservation.terminal_reason == "superseded_by_late_verified_capture"
+    assert successor_reservation.terminal_at is None
+    assert successor_reservation.row_version == 10
     assert events == [("attempt-1", "late_payment_exception", "reservation_released")]
 
 
