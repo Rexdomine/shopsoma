@@ -13,6 +13,7 @@ from typing import Any
 from sqlalchemy import select, text, tuple_, update
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from app.models.address import Address
 from app.models.checkout_shipping_estimate import (
@@ -813,11 +814,25 @@ async def recover_failed_payment_mapping(
 ) -> tuple[Payment, PaymentFinalizationResult]:
     """Recover one lost mapping and atomically apply authenticated failure truth."""
     attempt = await session.scalar(
-        select(PaymentAttempt)
-        .where(
+        select(PaymentAttempt).where(
             PaymentAttempt.provider == provider,
             PaymentAttempt.provider_reference == provider_reference,
         )
+    )
+    if attempt is None:
+        raise PaymentRecoveryUnavailable(
+            "authenticated payment evidence cannot be durably associated"
+        )
+    order = await session.scalar(
+        select(Order).where(Order.id == attempt.order_id).with_for_update()
+    )
+    if order is None:
+        raise PaymentRecoveryUnavailable(
+            "authenticated payment evidence cannot be durably associated"
+        )
+    attempt = await session.scalar(
+        select(PaymentAttempt)
+        .where(PaymentAttempt.id == attempt.id)
         .with_for_update()
     )
     if attempt is None:
@@ -977,26 +992,75 @@ async def _enqueue_payment_event(
 async def _terminalize_active_successor_attempts(
     session: AsyncSession, *, order: Order, predecessor: PaymentAttempt, observed_at: datetime
 ) -> None:
-    successors = list(
+    lineage = (
+        select(
+            PaymentAttempt.id.label("id"),
+            PaymentAttempt.supersedes_attempt_id.label("supersedes_attempt_id"),
+            PaymentAttempt.created_at.label("created_at"),
+        )
+        .where(PaymentAttempt.id == predecessor.id)
+        .cte(name="attempt_lineage", recursive=True)
+    )
+    successor = aliased(PaymentAttempt)
+    lineage = lineage.union_all(
+        select(
+            successor.id.label("id"),
+            successor.supersedes_attempt_id.label("supersedes_attempt_id"),
+            successor.created_at.label("created_at"),
+        ).where(successor.supersedes_attempt_id == lineage.c.id)
+    )
+    active_descendants = list(
         await session.scalars(
             select(PaymentAttempt)
+            .join(lineage, PaymentAttempt.id == lineage.c.id)
             .where(
                 PaymentAttempt.order_id == order.id,
-                PaymentAttempt.supersedes_attempt_id == predecessor.id,
+                PaymentAttempt.id != predecessor.id,
                 PaymentAttempt.state.in_(("call_started", "abandoned_unknown")),
             )
-            .order_by(PaymentAttempt.created_at.asc(), PaymentAttempt.id.asc())
+            .order_by(lineage.c.created_at.asc(), PaymentAttempt.id.asc())
             .with_for_update()
         )
     )
-    if not successors:
+    if not active_descendants:
         return
-    for successor in successors:
-        successor.state = "failed"
-        successor.terminal_reason = "superseded_by_late_verified_capture"
-        successor.terminal_at = observed_at
-        successor.row_version += 1
-        reservations = await _attempt_reservations(session, attempt_id=successor.id)
+    for successor_attempt in active_descendants:
+        if successor_attempt.state == "call_started":
+            unknown_evidence = PaymentAttemptEvidence(
+                attempt_id=successor_attempt.id,
+                source="payment.success_reconciliation",
+                event_id=(
+                    f"{successor_attempt.provider}:late-capture-closeout:{predecessor.id}:{successor_attempt.id}"
+                ),
+                evidence_type="outcome_unknown",
+                provider=successor_attempt.provider,
+                provider_reference=successor_attempt.provider_reference,
+                evidence_hash=_evidence_hash(
+                    {
+                        "reason": "superseded_by_late_verified_capture",
+                        "predecessor_attempt_id": str(predecessor.id),
+                        "successor_attempt_id": str(successor_attempt.id),
+                    }
+                ),
+                observed_at=observed_at,
+            )
+            session.add(unknown_evidence)
+            await session.flush()
+            await session.execute(
+                text("SELECT coordinate_payment_attempt_write(:attempt_id, :order_id)"),
+                {"attempt_id": successor_attempt.id, "order_id": order.id},
+            )
+            await session.execute(
+                text("SELECT set_config('shopsoma.payment_lease_token', :token, true)"),
+                {"token": str(successor_attempt.lease_token)},
+            )
+            successor_attempt.state = "abandoned_unknown"
+            successor_attempt.terminal_evidence_id = unknown_evidence.id
+            successor_attempt.row_version += 1
+            await session.flush()
+        successor_attempt.terminal_reason = "superseded_by_late_verified_capture"
+        successor_attempt.terminal_at = observed_at
+        reservations = await _attempt_reservations(session, attempt_id=successor_attempt.id)
         for reservation in reservations:
             if reservation.state == "active":
                 reservation.state = "released"
