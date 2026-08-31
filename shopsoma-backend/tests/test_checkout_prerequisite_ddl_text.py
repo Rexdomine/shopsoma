@@ -37,16 +37,26 @@ def test_checkout_prerequisite_ddl_uses_selection_reservation_window_for_attempt
     normalized = " ".join(M2_CHECKOUT_TRIGGER_DDL.split())
     assert "authoritative.estimate_expires_at<=now_at" not in normalized
     assert "s.selected_at AS selection_selected_at" in normalized
-    assert "IF (NOT requires_stock_reservations) AND authoritative.selection_selected_at + NEW.payment_window_seconds*interval '1 second' <= now_at THEN RAISE EXCEPTION 'domestic payment attempt binding is invalid'; END IF;" in normalized
-    assert "NEW.expires_at:=LEAST( now_at+NEW.payment_window_seconds*interval '1 second', COALESCE( earliest_reservation_expiry, authoritative.selection_selected_at + NEW.payment_window_seconds*interval '1 second'));" in normalized
+    assert "DECLARE predecessor record; renewable_deadline_at timestamptz;" in normalized
+    assert "renewable_deadline_at:=authoritative.selection_selected_at + NEW.payment_window_seconds*interval '1 second';" in normalized
+    assert "IF (NOT requires_stock_reservations) AND NEW.supersedes_attempt_id IS NOT NULL THEN" in normalized
+    assert "predecessor.state NOT IN ('failed','expired')" in normalized
+    assert "renewable_deadline_at:=GREATEST( renewable_deadline_at, predecessor.terminal_at + NEW.payment_window_seconds*interval '1 second');" in normalized
+    assert "IF (NOT requires_stock_reservations) AND renewable_deadline_at <= now_at THEN RAISE EXCEPTION 'domestic payment attempt binding is invalid'; END IF;" in normalized
+    assert "NEW.expires_at:=LEAST( now_at+NEW.payment_window_seconds*interval '1 second', COALESCE( earliest_reservation_expiry, renewable_deadline_at));" in normalized
 
 
 def test_repair_migration_keeps_selection_reservation_window_for_attempt_expiry() -> None:
     normalized = " ".join(REPAIR_MIGRATION.read_text().split())
     assert "authoritative.estimate_expires_at<=now_at" not in normalized
     assert normalized.count("s.selected_at AS selection_selected_at") >= 2
-    assert normalized.count("IF (NOT requires_stock_reservations) AND authoritative.selection_selected_at + NEW.payment_window_seconds*interval '1 second' <= now_at THEN RAISE EXCEPTION 'domestic payment attempt binding is invalid'; END IF;") >= 2
-    assert normalized.count("COALESCE( earliest_reservation_expiry, authoritative.selection_selected_at + NEW.payment_window_seconds*interval '1 second'))") >= 2
+    assert normalized.count("DECLARE predecessor record; renewable_deadline_at timestamptz;") >= 2
+    assert normalized.count("renewable_deadline_at:=authoritative.selection_selected_at + NEW.payment_window_seconds*interval '1 second';") >= 2
+    assert normalized.count("IF (NOT requires_stock_reservations) AND NEW.supersedes_attempt_id IS NOT NULL THEN") >= 2
+    assert normalized.count("predecessor.state NOT IN ('failed','expired')") >= 2
+    assert normalized.count("renewable_deadline_at:=GREATEST( renewable_deadline_at, predecessor.terminal_at + NEW.payment_window_seconds*interval '1 second');") >= 2
+    assert normalized.count("IF (NOT requires_stock_reservations) AND renewable_deadline_at <= now_at THEN RAISE EXCEPTION 'domestic payment attempt binding is invalid'; END IF;") >= 2
+    assert normalized.count("COALESCE( earliest_reservation_expiry, renewable_deadline_at)") >= 2
 
 
 def test_repair_migration_declares_requires_stock_reservations_in_both_trigger_copies() -> None:

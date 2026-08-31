@@ -14,6 +14,7 @@ depends_on = None
 _UPGRADE_SQL = r"""CREATE OR REPLACE FUNCTION validate_domestic_checkout_payment_attempt_write() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE authoritative record; earliest_reservation_expiry timestamptz; now_at timestamptz := clock_timestamp();
 DECLARE evidence record; previous_evidence record; presented_lease_token text;
+DECLARE predecessor record; renewable_deadline_at timestamptz;
 DECLARE requires_stock_reservations boolean;
 BEGIN
  IF TG_OP='UPDATE' THEN
@@ -244,9 +245,26 @@ IF NOT FOUND OR authoritative.customer_id<>NEW.customer_id
     AND workflow_cohort='domestic_checkout_v1' AND state='active' AND expires_at>now_at;
  IF requires_stock_reservations AND earliest_reservation_expiry IS NULL
  THEN RAISE EXCEPTION 'payment attempt requires active reservations'; END IF;
+ renewable_deadline_at:=authoritative.selection_selected_at
+   + NEW.payment_window_seconds*interval '1 second';
+ IF (NOT requires_stock_reservations) AND NEW.supersedes_attempt_id IS NOT NULL THEN
+  SELECT pa.order_id,pa.checkout_estimate_selection_id,pa.customer_id,pa.state,pa.terminal_at
+    INTO predecessor
+    FROM payment_attempts pa
+   WHERE pa.id=NEW.supersedes_attempt_id
+   FOR UPDATE;
+  IF NOT FOUND OR predecessor.order_id IS DISTINCT FROM NEW.order_id
+     OR predecessor.checkout_estimate_selection_id IS DISTINCT FROM NEW.checkout_estimate_selection_id
+     OR predecessor.customer_id IS DISTINCT FROM NEW.customer_id
+     OR predecessor.state NOT IN ('failed','expired')
+     OR predecessor.terminal_at IS NULL
+  THEN RAISE EXCEPTION 'domestic payment attempt binding is invalid'; END IF;
+  renewable_deadline_at:=GREATEST(
+    renewable_deadline_at,
+    predecessor.terminal_at + NEW.payment_window_seconds*interval '1 second');
+ END IF;
  IF (NOT requires_stock_reservations)
-    AND authoritative.selection_selected_at
-        + NEW.payment_window_seconds*interval '1 second' <= now_at
+    AND renewable_deadline_at <= now_at
  THEN RAISE EXCEPTION 'domestic payment attempt binding is invalid'; END IF;
  IF EXISTS(SELECT 1 FROM payment_attempts WHERE order_id=NEW.order_id AND state IN ('pending','call_started'))
  THEN RAISE EXCEPTION 'payment attempt already active for order'; END IF;
@@ -255,8 +273,7 @@ IF NOT FOUND OR authoritative.customer_id<>NEW.customer_id
    now_at+NEW.payment_window_seconds*interval '1 second',
    COALESCE(
      earliest_reservation_expiry,
-     authoritative.selection_selected_at
-       + NEW.payment_window_seconds*interval '1 second'));
+     renewable_deadline_at));
  NEW.authorization_deadline_at:=NEW.expires_at+NEW.authorization_grace_seconds*interval '1 second';
  NEW.row_version:=1; NEW.creation_txid:=txid_current();
  RETURN NEW;
@@ -414,6 +431,7 @@ $$ LANGUAGE plpgsql;"""
 _DOWNGRADE_SQL = r"""CREATE OR REPLACE FUNCTION validate_domestic_checkout_payment_attempt_write() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE authoritative record; earliest_reservation_expiry timestamptz; now_at timestamptz := clock_timestamp();
 DECLARE evidence record; previous_evidence record; presented_lease_token text;
+DECLARE predecessor record; renewable_deadline_at timestamptz;
 DECLARE requires_stock_reservations boolean;
 BEGIN
  IF TG_OP='UPDATE' THEN
@@ -595,9 +613,26 @@ IF NOT FOUND OR authoritative.customer_id<>NEW.customer_id
     AND workflow_cohort='domestic_checkout_v1' AND state='active' AND expires_at>now_at;
  IF requires_stock_reservations AND earliest_reservation_expiry IS NULL
  THEN RAISE EXCEPTION 'payment attempt requires active reservations'; END IF;
+ renewable_deadline_at:=authoritative.selection_selected_at
+   + NEW.payment_window_seconds*interval '1 second';
+ IF (NOT requires_stock_reservations) AND NEW.supersedes_attempt_id IS NOT NULL THEN
+  SELECT pa.order_id,pa.checkout_estimate_selection_id,pa.customer_id,pa.state,pa.terminal_at
+    INTO predecessor
+    FROM payment_attempts pa
+   WHERE pa.id=NEW.supersedes_attempt_id
+   FOR UPDATE;
+  IF NOT FOUND OR predecessor.order_id IS DISTINCT FROM NEW.order_id
+     OR predecessor.checkout_estimate_selection_id IS DISTINCT FROM NEW.checkout_estimate_selection_id
+     OR predecessor.customer_id IS DISTINCT FROM NEW.customer_id
+     OR predecessor.state NOT IN ('failed','expired')
+     OR predecessor.terminal_at IS NULL
+  THEN RAISE EXCEPTION 'domestic payment attempt binding is invalid'; END IF;
+  renewable_deadline_at:=GREATEST(
+    renewable_deadline_at,
+    predecessor.terminal_at + NEW.payment_window_seconds*interval '1 second');
+ END IF;
  IF (NOT requires_stock_reservations)
-    AND authoritative.selection_selected_at
-        + NEW.payment_window_seconds*interval '1 second' <= now_at
+    AND renewable_deadline_at <= now_at
  THEN RAISE EXCEPTION 'domestic payment attempt binding is invalid'; END IF;
  IF EXISTS(SELECT 1 FROM payment_attempts WHERE order_id=NEW.order_id AND state IN ('pending','call_started'))
  THEN RAISE EXCEPTION 'payment attempt already active for order'; END IF;
@@ -606,8 +641,7 @@ IF NOT FOUND OR authoritative.customer_id<>NEW.customer_id
    now_at+NEW.payment_window_seconds*interval '1 second',
    COALESCE(
      earliest_reservation_expiry,
-     authoritative.selection_selected_at
-       + NEW.payment_window_seconds*interval '1 second'));
+     renewable_deadline_at));
  NEW.authorization_deadline_at:=NEW.expires_at+NEW.authorization_grace_seconds*interval '1 second';
  NEW.row_version:=1; NEW.creation_txid:=txid_current();
  RETURN NEW;
