@@ -414,6 +414,7 @@ $$ LANGUAGE plpgsql;"""
 _DOWNGRADE_SQL = r"""CREATE OR REPLACE FUNCTION validate_domestic_checkout_payment_attempt_write() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE authoritative record; earliest_reservation_expiry timestamptz; now_at timestamptz := clock_timestamp();
 DECLARE evidence record; previous_evidence record; presented_lease_token text;
+DECLARE requires_stock_reservations boolean;
 BEGIN
  IF TG_OP='UPDATE' THEN
   IF OLD.state NOT IN ('pending','call_started','abandoned_unknown')

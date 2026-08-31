@@ -49,6 +49,11 @@ def test_repair_migration_keeps_selection_reservation_window_for_attempt_expiry(
     assert normalized.count("COALESCE( earliest_reservation_expiry, authoritative.selection_selected_at + NEW.payment_window_seconds*interval '1 second'))") >= 2
 
 
+def test_repair_migration_declares_requires_stock_reservations_in_both_trigger_copies() -> None:
+    normalized = " ".join(REPAIR_MIGRATION.read_text().split())
+    assert normalized.count("DECLARE requires_stock_reservations boolean;") >= 2
+
+
 def test_repair_migration_keeps_call_started_expiry_in_parity() -> None:
     normalized = " ".join(REPAIR_MIGRATION.read_text().split())
     assert "IF OLD.state='call_started' AND NEW.state='expired' THEN" in normalized
