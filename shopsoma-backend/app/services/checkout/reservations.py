@@ -14,7 +14,7 @@ from app.models.checkout_shipping_estimate import (
     CheckoutShippingEstimateSelection,
     OrderInventoryCoverage,
 )
-from app.models.order import Order
+from app.models.order import FulfillmentStatus, Order, PaymentStatus
 from app.models.product import Product, ProductVariant, SizeStock
 from app.models.stock_payment_persistence import StockReservation
 from app.services.checkout.estimates import order_snapshot, reload_checkout_order
@@ -247,6 +247,10 @@ async def select_estimate_option(
     order = await reload_checkout_order(db, order)
     destination_hash, snapshot_hash = order_snapshot(order)
     database_now = await db.scalar(select(text("clock_timestamp()")))
+    if order.payment_status == PaymentStatus.PAID:
+        raise HTTPException(status_code=409, detail="paid order cannot select checkout estimate")
+    if order.fulfillment_status == FulfillmentStatus.CANCELLED:
+        raise HTTPException(status_code=409, detail="cancelled order cannot select checkout estimate")
     if (
         not estimate
         or not option

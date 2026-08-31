@@ -232,7 +232,6 @@ BEGIN
     OR authoritative.selection_customer_id<>NEW.customer_id
     OR authoritative.total_amount<>NEW.amount OR authoritative.currency<>NEW.currency
     OR authoritative.payment_status='PAID' OR authoritative.fulfillment_status='cancelled'
-    OR authoritative.estimate_expires_at<=now_at
  THEN RAISE EXCEPTION 'domestic payment attempt binding is invalid'; END IF;
  requires_stock_reservations:=EXISTS(
    SELECT 1 FROM order_inventory_coverage coverage
@@ -249,7 +248,6 @@ BEGIN
  NEW.created_at:=now_at; NEW.updated_at:=now_at;
  NEW.expires_at:=LEAST(
    now_at+NEW.payment_window_seconds*interval '1 second',
-   authoritative.estimate_expires_at,
    COALESCE(earliest_reservation_expiry,authoritative.estimate_expires_at));
  NEW.authorization_deadline_at:=NEW.expires_at+NEW.authorization_grace_seconds*interval '1 second';
  NEW.row_version:=1; NEW.creation_txid:=txid_current();
@@ -569,10 +567,12 @@ BEGIN
     OR NEW.workflow_cohort<>'domestic_checkout_v1'
  THEN RAISE EXCEPTION 'payment attempt must start pending'; END IF;
  SELECT o.customer_id,o.total_amount,o.currency,o.payment_status,o.fulfillment_status,
-        s.order_id AS selection_order_id,s.customer_id AS selection_customer_id
+        s.order_id AS selection_order_id,s.customer_id AS selection_customer_id,
+        e.expires_at AS estimate_expires_at
    INTO authoritative
    FROM orders o
    JOIN checkout_shipping_estimate_selections s ON s.id=NEW.checkout_estimate_selection_id
+   JOIN checkout_shipping_estimates e ON e.id=s.estimate_id
   WHERE o.id=NEW.order_id FOR UPDATE OF o;
  IF NOT FOUND OR authoritative.customer_id<>NEW.customer_id
     OR authoritative.selection_order_id<>NEW.order_id
@@ -587,7 +587,7 @@ BEGIN
  IF EXISTS(SELECT 1 FROM payment_attempts WHERE order_id=NEW.order_id AND state IN ('pending','call_started'))
  THEN RAISE EXCEPTION 'payment attempt already active for order'; END IF;
  NEW.created_at:=now_at; NEW.updated_at:=now_at;
- NEW.expires_at:=LEAST(now_at+NEW.payment_window_seconds*interval '1 second',earliest_reservation_expiry);
+ NEW.expires_at:=LEAST(now_at+NEW.payment_window_seconds*interval '1 second',COALESCE(earliest_reservation_expiry,authoritative.estimate_expires_at));
  NEW.authorization_deadline_at:=NEW.expires_at+NEW.authorization_grace_seconds*interval '1 second';
  NEW.row_version:=1; NEW.creation_txid:=txid_current();
  RETURN NEW;

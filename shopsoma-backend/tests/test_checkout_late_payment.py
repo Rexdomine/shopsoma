@@ -389,8 +389,8 @@ async def test_late_predecessor_success_resolves_exact_attempt_without_mutating_
     assert (
         persisted_successor.provider,
         persisted_successor.provider_reference,
-        persisted_successor.lease_token,
-    ) == successor_identity[1:4]
+    ) == successor_identity[1:3]
+    assert persisted_successor.lease_token is None
     assert persisted_successor.row_version == successor_identity[4] + 1
     successor_failure_evidence = await db_session.get(
         PaymentAttemptEvidence, persisted_successor.terminal_evidence_id

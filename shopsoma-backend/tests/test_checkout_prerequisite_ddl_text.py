@@ -33,6 +33,18 @@ def test_checkout_prerequisite_ddl_uses_evidence_backed_late_capture_lease_exemp
     assert "NEW.terminal_reason='superseded_by_late_verified_capture'" not in normalized
 
 
+def test_checkout_prerequisite_ddl_uses_selection_reservation_window_for_attempt_expiry() -> None:
+    normalized = " ".join(M2_CHECKOUT_TRIGGER_DDL.split())
+    assert "authoritative.estimate_expires_at<=now_at" not in normalized
+    assert "NEW.expires_at:=LEAST( now_at+NEW.payment_window_seconds*interval '1 second', COALESCE(earliest_reservation_expiry,authoritative.estimate_expires_at));" in normalized
+
+
+def test_repair_migration_keeps_selection_reservation_window_for_attempt_expiry() -> None:
+    normalized = " ".join(REPAIR_MIGRATION.read_text().split())
+    assert "authoritative.estimate_expires_at<=now_at" not in normalized
+    assert "NEW.expires_at:=LEAST(now_at+NEW.payment_window_seconds*interval '1 second',COALESCE(earliest_reservation_expiry,authoritative.estimate_expires_at));" in normalized
+
+
 def test_repair_migration_keeps_call_started_expiry_in_parity() -> None:
     normalized = " ".join(REPAIR_MIGRATION.read_text().split())
     assert "IF OLD.state='call_started' AND NEW.state='expired' THEN" in normalized

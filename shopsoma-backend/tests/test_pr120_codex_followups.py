@@ -937,3 +937,104 @@ def test_create_estimate_replays_refresh_idempotency_key(monkeypatch):
     )
 
     assert replay is existing
+
+
+def test_select_estimate_option_rejects_cancelled_order_before_selection_mutation(monkeypatch):
+    module = _load_module(RESERVATIONS_PATH, "reservations_cancelled_selection_followup")
+
+    class FakeResult:
+        def __init__(self, value):
+            self._value = value
+
+        def scalar_one_or_none(self):
+            return self._value
+
+        def scalars(self):
+            return self
+
+        def all(self):
+            if self._value is None:
+                return []
+            if isinstance(self._value, list):
+                return self._value
+            return [self._value]
+
+    captured = []
+    estimate = SimpleNamespace(
+        id="estimate-1",
+        order_id="order-1",
+        destination_snapshot_hash="dest-hash",
+        order_snapshot_hash="snap-hash",
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=30),
+    )
+    option = SimpleNamespace(id="option-1", estimate_id="estimate-1", amount=Decimal("2500.00"), currency="NGN")
+    cancelled_order = SimpleNamespace(
+        id="order-1",
+        customer_id="customer-1",
+        checkout_prerequisites_completed_at=None,
+        payment_status="pending",
+        fulfillment_status=module.FulfillmentStatus.CANCELLED,
+        items=[],
+        subtotal=Decimal("155000.00"),
+        discount_amount=Decimal("0.00"),
+        shipping_cost=Decimal("0.00"),
+        tax_amount=Decimal("0.00"),
+        total_amount=Decimal("155000.00"),
+    )
+
+    class FakeDB:
+        async def execute(self, statement, *_args, **_kwargs):
+            sql = str(statement)
+            if "FROM checkout_shipping_estimate_selections" in sql and "idempotency_key" in sql:
+                return FakeResult(None)
+            if "coordinate_stock_payment_write" in sql:
+                return FakeResult(None)
+            if "FROM checkout_shipping_estimates" in sql:
+                return FakeResult(estimate)
+            if "FROM checkout_shipping_estimate_options" in sql:
+                return FakeResult(option)
+            raise AssertionError(sql)
+
+        async def get(self, model, identifier):
+            if model.__name__ == "CheckoutShippingEstimate":
+                assert identifier == "estimate-1"
+                return estimate
+            if model.__name__ == "CheckoutShippingEstimateOption":
+                assert identifier == "option-1"
+                return option
+            raise AssertionError((model.__name__, identifier))
+
+        async def scalar(self, statement):
+            sql = str(statement)
+            if "clock_timestamp()" in sql:
+                return datetime.now(timezone.utc)
+            raise AssertionError(sql)
+
+        def add(self, obj):
+            captured.append(obj)
+
+        async def flush(self):
+            raise AssertionError("flush should not run for cancelled orders")
+
+    async def fake_reload_checkout_order(_db, _order):
+        return cancelled_order
+
+    monkeypatch.setattr(module, "order_snapshot", lambda _order: ("dest-hash", "snap-hash"))
+    monkeypatch.setattr(module, "reload_checkout_order", fake_reload_checkout_order)
+
+    import asyncio
+
+    with pytest.raises(HTTPException, match="cancelled order cannot select checkout estimate"):
+        asyncio.run(
+            module.select_estimate_option(
+                FakeDB(),
+                order=cancelled_order,
+                estimate_id="estimate-1",
+                option_id="option-1",
+                actor_type="customer",
+                actor_id="customer-1",
+                idempotency_key="select-1",
+            )
+        )
+
+    assert captured == []
