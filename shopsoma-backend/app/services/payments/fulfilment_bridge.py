@@ -755,8 +755,8 @@ async def recover_pending_payment_mapping(
     observed_amount: object,
     observed_currency: str,
     evidence_payload: dict[str, Any],
-) -> Payment:
-    """Recover one attempt-bound mapping without changing terminal truth."""
+) -> Payment | None:
+    """Recover one attempt-bound mapping without inventing terminal/init truth."""
     attempt = await session.scalar(
         select(PaymentAttempt)
         .where(
@@ -785,20 +785,12 @@ async def recover_pending_payment_mapping(
         select(Payment).where(Payment.transaction_id == transaction_id)
     )
     if payment is None:
-        payment = Payment(
-            order_id=attempt.order_id,
-            transaction_id=transaction_id,
-            payment_gateway=PaymentGateway(provider),
-            payment_method=provider,
-            amount=attempt.amount,
-            currency=attempt.currency,
-            status=TransactionStatus.PENDING,
-            gateway_response=evidence_payload,
-        )
-        session.add(payment)
-        await session.flush()
-    elif payment.order_id != attempt.order_id:
+        return None
+    if payment.order_id != attempt.order_id:
         raise PaymentTruthMismatch("verified payment truth does not match")
+    if payment.payment_gateway != PaymentGateway(provider) or payment.payment_method != provider:
+        raise PaymentTruthMismatch("verified payment truth does not match")
+    payment.gateway_response = evidence_payload
     return payment
 
 
@@ -1230,9 +1222,6 @@ async def finalize_verified_payment(
         replay = payment.status == TransactionStatus.COMPLETED
         payment.status = TransactionStatus.COMPLETED
         payment.completed_at = observed_at
-        await _terminalize_active_successor_attempts(
-            session, order=order, predecessor=attempt, observed_at=observed_at
-        )
         await session.flush()
         await session.execute(
             text(

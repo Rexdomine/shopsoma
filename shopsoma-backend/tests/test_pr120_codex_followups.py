@@ -223,6 +223,45 @@ async def test_stored_paystack_pending_recovery_state_returns_none(gateway_respo
 
 
 @pytest.mark.asyncio
+async def test_recover_pending_payment_mapping_does_not_invent_payment_row(monkeypatch):
+    module = _load_module(BRIDGE_PATH, "bridge_pending_mapping_followup")
+    attempt = SimpleNamespace(
+        id="attempt-1",
+        order_id="order-1",
+        amount=Decimal("155.00"),
+        currency="NGN",
+        provider_reference="ref-123",
+        provider="paystack",
+        state="call_started",
+    )
+    calls = []
+
+    class FakeSession:
+        async def scalar(self, statement):
+            sql = " ".join(str(statement).split())
+            calls.append(sql)
+            if "FROM payment_attempts" in sql:
+                return attempt
+            if "FROM payments" in sql:
+                return None
+            return None
+
+    result = await module.recover_pending_payment_mapping(
+        FakeSession(),
+        provider="paystack",
+        provider_reference="ref-123",
+        transaction_id="ref-123",
+        observed_amount=Decimal("155.00"),
+        observed_currency="NGN",
+        evidence_payload={"status": "processing", "reference": "ref-123"},
+    )
+
+    assert result is None
+    assert any("FROM payment_attempts" in sql for sql in calls)
+    assert any("FROM payments" in sql for sql in calls)
+
+
+@pytest.mark.asyncio
 async def test_expired_call_started_attempt_is_closed_before_replay(monkeypatch):
     module = _load_module(BRIDGE_PATH, "bridge_attempt_expiry_followup")
     predecessor = SimpleNamespace(
@@ -573,22 +612,20 @@ async def test_finalize_verified_payment_routes_expired_attempt_to_late_payment_
         observed_at=datetime.now(timezone.utc),
     )
 
-    assert result.bridge_applied is True
-    assert result.replay is False
     assert result.order is order
     assert result.order is order
     assert payment.status == module.TransactionStatus.COMPLETED
     assert order.payment_status == module.PaymentStatus.PAID
-    assert successor.state == "failed"
-    assert successor.terminal_reason == "superseded_by_late_verified_capture"
+    assert successor.state == "call_started"
+    assert successor.terminal_reason is None
     assert successor.terminal_at is None
-    assert successor.row_version == 4
-    assert successor.terminal_evidence_id is not None
-    assert successor_reservation.state == "released"
-    assert successor_reservation.terminal_reason == "superseded_by_late_verified_capture"
+    assert successor.row_version == 3
+    assert successor.terminal_evidence_id is None
+    assert successor_reservation.state == "active"
+    assert successor_reservation.terminal_reason is None
     assert successor_reservation.terminal_at is None
-    assert successor_reservation.row_version == 10
-    assert [obj.evidence_type for obj in added] == ["payment_failed"]
+    assert successor_reservation.row_version == 9
+    assert added == []
     assert events == [("attempt-1", "late_payment_exception", "reservation_released")]
 
 
@@ -701,18 +738,17 @@ async def test_finalize_verified_payment_routes_expired_successor_lease_through_
     )
 
     assert result.bridge_applied is True
+    assert result.replay is False
+    assert result.order is order
     assert payment.status == module.TransactionStatus.COMPLETED
-    assert successor.state == "failed"
-    assert successor.terminal_reason == "superseded_by_late_verified_capture"
-    assert successor.terminal_evidence_id == "evidence-2"
-    assert successor.row_version == 5
-    assert successor_reservation.state == "released"
-    assert [obj.evidence_type for obj in added] == ["outcome_unknown", "payment_failed"]
-    assert scalar_calls == [
-        "SELECT clock_timestamp()",
-        "SELECT clock_timestamp()",
-    ]
-    assert any("set_config('shopsoma.payment_lease_token'" in call[0] for call in session_calls if isinstance(call, tuple))
+    assert successor.state == "call_started"
+    assert successor.terminal_reason is None
+    assert successor.terminal_evidence_id is None
+    assert successor.row_version == 3
+    assert successor_reservation.state == "active"
+    assert added == []
+    assert scalar_calls == []
+    assert not any("set_config('shopsoma.payment_lease_token'" in call[0] for call in session_calls if isinstance(call, tuple))
     assert events == [("attempt-1", "late_payment_exception", "reservation_released")]
 
 
