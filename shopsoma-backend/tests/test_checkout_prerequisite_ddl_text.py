@@ -36,13 +36,17 @@ def test_checkout_prerequisite_ddl_uses_evidence_backed_late_capture_lease_exemp
 def test_checkout_prerequisite_ddl_uses_selection_reservation_window_for_attempt_expiry() -> None:
     normalized = " ".join(M2_CHECKOUT_TRIGGER_DDL.split())
     assert "authoritative.estimate_expires_at<=now_at" not in normalized
-    assert "NEW.expires_at:=LEAST( now_at+NEW.payment_window_seconds*interval '1 second', COALESCE(earliest_reservation_expiry,authoritative.estimate_expires_at));" in normalized
+    assert "s.selected_at AS selection_selected_at" in normalized
+    assert "IF (NOT requires_stock_reservations) AND authoritative.selection_selected_at + NEW.payment_window_seconds*interval '1 second' <= now_at THEN RAISE EXCEPTION 'domestic payment attempt binding is invalid'; END IF;" in normalized
+    assert "NEW.expires_at:=LEAST( now_at+NEW.payment_window_seconds*interval '1 second', COALESCE( earliest_reservation_expiry, authoritative.selection_selected_at + NEW.payment_window_seconds*interval '1 second'));" in normalized
 
 
 def test_repair_migration_keeps_selection_reservation_window_for_attempt_expiry() -> None:
     normalized = " ".join(REPAIR_MIGRATION.read_text().split())
     assert "authoritative.estimate_expires_at<=now_at" not in normalized
-    assert "NEW.expires_at:=LEAST(now_at+NEW.payment_window_seconds*interval '1 second',COALESCE(earliest_reservation_expiry,authoritative.estimate_expires_at));" in normalized
+    assert normalized.count("s.selected_at AS selection_selected_at") >= 2
+    assert normalized.count("IF (NOT requires_stock_reservations) AND authoritative.selection_selected_at + NEW.payment_window_seconds*interval '1 second' <= now_at THEN RAISE EXCEPTION 'domestic payment attempt binding is invalid'; END IF;") >= 2
+    assert normalized.count("COALESCE( earliest_reservation_expiry, authoritative.selection_selected_at + NEW.payment_window_seconds*interval '1 second'))") >= 2
 
 
 def test_repair_migration_keeps_call_started_expiry_in_parity() -> None:
