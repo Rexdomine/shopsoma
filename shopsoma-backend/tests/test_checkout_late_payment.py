@@ -385,13 +385,24 @@ async def test_late_predecessor_success_resolves_exact_attempt_without_mutating_
     )
     assert provider_calls == 1
     assert persisted_order.payment_status == PaymentStatus.PAID
-    assert persisted_successor.state == successor_identity[0]
+    assert persisted_successor.state == "failed"
     assert (
         persisted_successor.provider,
         persisted_successor.provider_reference,
         persisted_successor.lease_token,
-        persisted_successor.row_version,
-    ) == successor_identity[1:]
+    ) == successor_identity[1:4]
+    assert persisted_successor.row_version == successor_identity[4] + 1
+    assert persisted_successor.terminal_reason == "superseded_by_late_verified_capture"
+    assert (
+        await db_session.scalar(
+            select(func.count(StockReservation.id)).where(
+                StockReservation.order_id == order_id,
+                StockReservation.state == "released",
+                StockReservation.terminal_reason == "superseded_by_late_verified_capture",
+            )
+        )
+        >= 1
+    )
     assert len(payments_for_order) == 2
     assert (
         sum(row.status == TransactionStatus.COMPLETED for row in payments_for_order)
@@ -457,7 +468,8 @@ async def test_late_predecessor_success_resolves_exact_attempt_without_mutating_
         )
     )
     assert persisted_order.payment_status == PaymentStatus.PAID
-    assert persisted_successor.state == successor_identity[0]
+    assert persisted_successor.state == "failed"
+    assert persisted_successor.terminal_reason == "superseded_by_late_verified_capture"
     assert [event.event_type for event in events].count("late_payment_exception") == 2
     assert (
         sum(row.status == TransactionStatus.COMPLETED for row in payments_for_order)

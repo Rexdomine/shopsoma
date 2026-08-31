@@ -2532,7 +2532,11 @@ BEGIN
             END IF;
             now_at := clock_timestamp();
             IF NEW.state IN ('failed', 'verified')
-               AND (OLD.claim_expires_at IS NULL OR now_at >= OLD.claim_expires_at) THEN
+               AND (OLD.claim_expires_at IS NULL OR now_at >= OLD.claim_expires_at)
+               AND NOT (
+                   NEW.state = 'failed'
+                   AND NEW.terminal_reason = 'superseded_by_late_verified_capture'
+               ) THEN
                 RAISE EXCEPTION 'payment claim lease expired';
             END IF;
         END IF;

@@ -17,6 +17,8 @@ PAYMENTS_PATH = ROOT / "app" / "api" / "v1" / "payments.py"
 RESERVATIONS_PATH = ROOT / "app" / "services" / "checkout" / "reservations.py"
 ESTIMATES_PATH = ROOT / "app" / "services" / "checkout" / "estimates.py"
 BRIDGE_PATH = ROOT / "app" / "services" / "payments" / "fulfilment_bridge.py"
+MODEL_DDL_PATH = ROOT / "app" / "models" / "stock_payment_persistence.py"
+MIGRATION_DDL_PATH = ROOT / "alembic" / "stock_payment_ddl_f9.py"
 
 
 def _load_module(path: Path, name: str):
@@ -115,6 +117,21 @@ def test_deploy_entrypoint_reacquires_lock_when_cutover_complete_but_validation_
         ("lock_exit",),
         ("dispose",),
     ]
+
+
+def test_successor_closeout_lease_expiry_exemption_stays_in_model_and_migration_ddl():
+    expected = """IF NEW.state IN ('failed', 'verified')
+               AND (OLD.claim_expires_at IS NULL OR now_at >= OLD.claim_expires_at)
+               AND NOT (
+                   NEW.state = 'failed'
+                   AND NEW.terminal_reason = 'superseded_by_late_verified_capture'
+               ) THEN"""
+
+    model_source = MODEL_DDL_PATH.read_text()
+    migration_source = MIGRATION_DDL_PATH.read_text()
+
+    assert expected in model_source
+    assert expected.replace("\n", "\\n\"\n    \"") in migration_source
 
 
 @pytest.mark.asyncio

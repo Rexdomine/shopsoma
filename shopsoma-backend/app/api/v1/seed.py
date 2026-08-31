@@ -4,11 +4,10 @@ Simple seeding endpoint - self-contained without external imports
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, text
-from datetime import datetime
 import uuid
 
 from app.core.database import get_db
-from app.models.product import Product, ProductVariant, ProductImage, ProductStatus, ModerationStatus
+from app.models.product import Product, ProductVariant, ProductImage, ModerationStatus
 from app.models.user import User, UserRole
 from app.models.vendor import Vendor, KYCStatus
 from app.core.security import get_password_hash
@@ -332,12 +331,6 @@ async def initialize_database(db: AsyncSession = Depends(get_db)):
 
     except Exception as e:
         await db.rollback()
-        import traceback
-        error_details = {
-            "error": str(e),
-            "type": type(e).__name__,
-            "traceback": traceback.format_exc()
-        }
         raise HTTPException(status_code=500, detail=f"Seeding failed: {str(e)}")
 
 
