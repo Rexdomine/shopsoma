@@ -26,6 +26,13 @@ def test_checkout_prerequisite_ddl_allows_call_started_to_expire_after_authoriza
     assert "NEW.terminal_evidence_id:=NULL; NEW.terminal_at:=now_at; NEW.updated_at:=now_at; RETURN NEW;" in normalized
 
 
+def test_checkout_prerequisite_ddl_uses_evidence_backed_late_capture_lease_exemption() -> None:
+    normalized = " ".join(M2_CHECKOUT_TRIGGER_DDL.split())
+    assert "AND OLD.supersedes_attempt_id IS NOT NULL" in normalized
+    assert "FROM payment_attempt_evidence pe WHERE pe.id=NEW.terminal_evidence_id AND pe.attempt_id=OLD.id AND pe.evidence_type='payment_failed' AND pe.source='payment.success_reconciliation'" in normalized
+    assert "NEW.terminal_reason='superseded_by_late_verified_capture'" not in normalized
+
+
 def test_repair_migration_keeps_call_started_expiry_in_parity() -> None:
     normalized = " ".join(REPAIR_MIGRATION.read_text().split())
     assert "IF OLD.state='call_started' AND NEW.state='expired' THEN" in normalized

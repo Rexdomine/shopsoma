@@ -641,7 +641,16 @@ BEGIN
       OR evidence.observed_at<OLD.claim_expires_at)
    THEN RAISE EXCEPTION 'payment attempt lease has not expired'; END IF;
    IF NEW.state IN ('failed','verified') AND OLD.state='call_started'
-      AND (now_at>=OLD.claim_expires_at OR evidence.created_at<OLD.call_started_at
+      AND ((now_at>=OLD.claim_expires_at AND NOT (
+           NEW.state='failed'
+           AND OLD.supersedes_attempt_id IS NOT NULL
+           AND EXISTS(
+            SELECT 1 FROM payment_attempt_evidence pe
+             WHERE pe.id=NEW.terminal_evidence_id
+               AND pe.attempt_id=OLD.id
+               AND pe.evidence_type='payment_failed'
+               AND pe.source='payment.success_reconciliation')
+      )) OR evidence.created_at<OLD.call_started_at
            OR evidence.observed_at<OLD.call_started_at)
    THEN RAISE EXCEPTION 'payment evidence chronology is invalid'; END IF;
    IF OLD.state='abandoned_unknown' THEN
