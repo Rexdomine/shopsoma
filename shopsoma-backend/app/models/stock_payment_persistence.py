@@ -2535,7 +2535,15 @@ BEGIN
                AND (OLD.claim_expires_at IS NULL OR now_at >= OLD.claim_expires_at)
                AND NOT (
                    NEW.state = 'failed'
-                   AND NEW.terminal_reason = 'superseded_by_late_verified_capture'
+                   AND OLD.supersedes_attempt_id IS NOT NULL
+                   AND EXISTS (
+                       SELECT 1
+                         FROM payment_attempt_evidence pe
+                        WHERE pe.id = NEW.terminal_evidence_id
+                          AND pe.attempt_id = OLD.id
+                          AND pe.evidence_type = 'payment_failed'
+                          AND pe.source = 'payment.success_reconciliation'
+                   )
                ) THEN
                 RAISE EXCEPTION 'payment claim lease expired';
             END IF;

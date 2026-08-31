@@ -127,7 +127,15 @@ def test_successor_closeout_lease_expiry_exemption_stays_in_model_and_migration_
                AND (OLD.claim_expires_at IS NULL OR now_at >= OLD.claim_expires_at)
                AND NOT (
                    NEW.state = 'failed'
-                   AND NEW.terminal_reason = 'superseded_by_late_verified_capture'
+                   AND OLD.supersedes_attempt_id IS NOT NULL
+                   AND EXISTS (
+                       SELECT 1
+                         FROM payment_attempt_evidence pe
+                        WHERE pe.id = NEW.terminal_evidence_id
+                          AND pe.attempt_id = OLD.id
+                          AND pe.evidence_type = 'payment_failed'
+                          AND pe.source = 'payment.success_reconciliation'
+                   )
                ) THEN"""
 
     model_source = MODEL_DDL_PATH.read_text()
@@ -135,6 +143,8 @@ def test_successor_closeout_lease_expiry_exemption_stays_in_model_and_migration_
 
     assert expected in model_source
     assert expected.replace("\n", "\\n\"\n    \"") in migration_source
+    assert "NEW.terminal_reason = 'superseded_by_late_verified_capture'" not in model_source
+    assert "NEW.terminal_reason = 'superseded_by_late_verified_capture'" not in migration_source
 
 
 def test_successor_closeout_lease_expiry_exemption_stays_in_final_repair_migration():
@@ -142,12 +152,19 @@ def test_successor_closeout_lease_expiry_exemption_stays_in_final_repair_migrati
     expected = """IF NEW.state IN ('failed','verified') AND OLD.state='call_started'
       AND ((now_at>=OLD.claim_expires_at AND NOT (
            NEW.state='failed'
-           AND NEW.terminal_reason='superseded_by_late_verified_capture'
+           AND OLD.supersedes_attempt_id IS NOT NULL
+           AND EXISTS(
+            SELECT 1 FROM payment_attempt_evidence pe
+             WHERE pe.id=NEW.terminal_evidence_id
+               AND pe.attempt_id=OLD.id
+               AND pe.evidence_type='payment_failed'
+               AND pe.source='payment.success_reconciliation')
       )) OR evidence.created_at<OLD.call_started_at
            OR evidence.observed_at<OLD.call_started_at)
    THEN RAISE EXCEPTION 'payment evidence chronology is invalid'; END IF;"""
 
     assert expected in final_migration_source
+    assert "NEW.terminal_reason='superseded_by_late_verified_capture'" not in final_migration_source
 
 
 @pytest.mark.asyncio
