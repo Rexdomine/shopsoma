@@ -1652,7 +1652,11 @@ async def cancel_order(
         and item.variant_details.get("size_stock_id")
     ]
     consumed_reservations = []
-    if order.payment_status == PaymentStatus.PAID:
+    paid_domestic_checkout = (
+        order.workflow_cohort == "domestic_checkout_v1"
+        and order.payment_status == PaymentStatus.PAID
+    )
+    if paid_domestic_checkout:
         consumed_reservations = (
             await db.scalars(
                 select(StockReservation).where(

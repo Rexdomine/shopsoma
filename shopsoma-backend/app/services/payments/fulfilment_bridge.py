@@ -1025,13 +1025,14 @@ async def _terminalize_active_successor_attempts(
     if not active_descendants:
         return
     for successor_attempt in active_descendants:
-        failure_observed_at = observed_at
+        transition_observed_at = await session.scalar(text("SELECT clock_timestamp()"))
+        failure_observed_at = transition_observed_at
         if (
             successor_attempt.state == "call_started"
             and successor_attempt.claim_expires_at is not None
-            and successor_attempt.claim_expires_at <= observed_at
+            and successor_attempt.claim_expires_at <= transition_observed_at
         ):
-            unknown_observed_at = await session.scalar(text("SELECT clock_timestamp()"))
+            unknown_observed_at = transition_observed_at
             unknown_evidence = PaymentAttemptEvidence(
                 attempt_id=successor_attempt.id,
                 source="payment.success_reconciliation",
