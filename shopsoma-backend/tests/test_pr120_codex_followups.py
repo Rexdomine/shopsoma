@@ -19,6 +19,9 @@ ESTIMATES_PATH = ROOT / "app" / "services" / "checkout" / "estimates.py"
 BRIDGE_PATH = ROOT / "app" / "services" / "payments" / "fulfilment_bridge.py"
 MODEL_DDL_PATH = ROOT / "app" / "models" / "stock_payment_persistence.py"
 MIGRATION_DDL_PATH = ROOT / "alembic" / "stock_payment_ddl_f9.py"
+FINAL_REPAIR_MIGRATION_PATH = (
+    ROOT / "alembic" / "versions" / "d5e6f7a8b9c0_repair_payment_bridge_canonical_gate.py"
+)
 
 
 def _load_module(path: Path, name: str):
@@ -132,6 +135,19 @@ def test_successor_closeout_lease_expiry_exemption_stays_in_model_and_migration_
 
     assert expected in model_source
     assert expected.replace("\n", "\\n\"\n    \"") in migration_source
+
+
+def test_successor_closeout_lease_expiry_exemption_stays_in_final_repair_migration():
+    final_migration_source = FINAL_REPAIR_MIGRATION_PATH.read_text()
+    expected = """IF NEW.state IN ('failed','verified') AND OLD.state='call_started'
+      AND ((now_at>=OLD.claim_expires_at AND NOT (
+           NEW.state='failed'
+           AND NEW.terminal_reason='superseded_by_late_verified_capture'
+      )) OR evidence.created_at<OLD.call_started_at
+           OR evidence.observed_at<OLD.call_started_at)
+   THEN RAISE EXCEPTION 'payment evidence chronology is invalid'; END IF;"""
+
+    assert expected in final_migration_source
 
 
 @pytest.mark.asyncio
