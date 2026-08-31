@@ -756,6 +756,7 @@ async def recover_pending_payment_mapping(
     observed_currency: str,
     evidence_payload: dict[str, Any],
     create_missing: bool = True,
+    require_authoritative_truth: bool = True,
 ) -> Payment | None:
     """Recover one attempt-bound pending mapping without inventing terminal truth."""
     attempt = await session.scalar(
@@ -770,14 +771,17 @@ async def recover_pending_payment_mapping(
         raise PaymentRecoveryUnavailable(
             "authenticated payment evidence cannot be durably associated"
         )
-    validate_verified_payment_truth(
-        expected_amount=attempt.amount,
-        expected_currency=attempt.currency,
-        expected_reference=attempt.provider_reference,
-        observed_amount=observed_amount,
-        observed_currency=observed_currency,
-        observed_reference=provider_reference,
-    )
+    if require_authoritative_truth or not (
+        observed_amount is None and observed_currency is None
+    ):
+        validate_verified_payment_truth(
+            expected_amount=attempt.amount,
+            expected_currency=attempt.currency,
+            expected_reference=attempt.provider_reference,
+            observed_amount=observed_amount,
+            observed_currency=observed_currency,
+            observed_reference=provider_reference,
+        )
     if attempt.state not in {"call_started", "abandoned_unknown"}:
         raise PaymentRecoveryUnavailable(
             "authenticated payment evidence cannot be durably associated"
@@ -1243,6 +1247,12 @@ async def finalize_verified_payment(
                 "SELECT set_config('shopsoma.late_payment_attempt_id', :attempt_id, true)"
             ),
             {"attempt_id": str(attempt.id)},
+        )
+        await _terminalize_active_successor_attempts(
+            session,
+            order=order,
+            predecessor=attempt,
+            observed_at=observed_at,
         )
         order.payment_status = PaymentStatus.PAID
         await _enqueue_payment_event(

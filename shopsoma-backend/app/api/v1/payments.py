@@ -450,6 +450,7 @@ async def _reconcile_paystack_initialization(
             observed_currency=transaction_data.get("currency"),
             evidence_payload=transaction_data,
             create_missing=False,
+            require_authoritative_truth=False,
         )
         await db.commit()
         raise HTTPException(

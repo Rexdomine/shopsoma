@@ -251,10 +251,11 @@ async def test_recover_pending_payment_mapping_does_not_invent_payment_row(monke
         provider="paystack",
         provider_reference="ref-123",
         transaction_id="ref-123",
-        observed_amount=Decimal("155.00"),
-        observed_currency="NGN",
+        observed_amount=None,
+        observed_currency=None,
         evidence_payload={"status": "processing", "reference": "ref-123"},
         create_missing=False,
+        require_authoritative_truth=False,
     )
 
     assert result is None
@@ -617,16 +618,17 @@ async def test_finalize_verified_payment_routes_expired_attempt_to_late_payment_
     assert result.order is order
     assert payment.status == module.TransactionStatus.COMPLETED
     assert order.payment_status == module.PaymentStatus.PAID
-    assert successor.state == "call_started"
-    assert successor.terminal_reason is None
+    assert successor.state == "failed"
+    assert successor.terminal_reason == "superseded_by_late_verified_capture"
     assert successor.terminal_at is None
-    assert successor.row_version == 3
-    assert successor.terminal_evidence_id is None
-    assert successor_reservation.state == "active"
-    assert successor_reservation.terminal_reason is None
+    assert successor.row_version == 4
+    assert successor.terminal_evidence_id == "evidence-1"
+    assert successor_reservation.state == "released"
+    assert successor_reservation.terminal_reason == "superseded_by_late_verified_capture"
     assert successor_reservation.terminal_at is None
-    assert successor_reservation.row_version == 9
-    assert added == []
+    assert successor_reservation.row_version == 10
+    assert len(added) == 1
+    assert added[0].evidence_type == "payment_failed"
     assert events == [("attempt-1", "late_payment_exception", "reservation_released")]
 
 
@@ -742,14 +744,16 @@ async def test_finalize_verified_payment_routes_expired_successor_lease_through_
     assert result.replay is False
     assert result.order is order
     assert payment.status == module.TransactionStatus.COMPLETED
-    assert successor.state == "call_started"
-    assert successor.terminal_reason is None
-    assert successor.terminal_evidence_id is None
-    assert successor.row_version == 3
-    assert successor_reservation.state == "active"
-    assert added == []
-    assert scalar_calls == []
-    assert not any("set_config('shopsoma.payment_lease_token'" in call[0] for call in session_calls if isinstance(call, tuple))
+    assert successor.state == "failed"
+    assert successor.terminal_reason == "superseded_by_late_verified_capture"
+    assert successor.terminal_evidence_id == "evidence-2"
+    assert successor.row_version == 5
+    assert successor_reservation.state == "released"
+    assert successor_reservation.terminal_reason == "superseded_by_late_verified_capture"
+    assert len(added) == 2
+    assert [obj.evidence_type for obj in added] == ["outcome_unknown", "payment_failed"]
+    assert scalar_calls == ["SELECT clock_timestamp()", "SELECT clock_timestamp()"]
+    assert any("set_config('shopsoma.payment_lease_token'" in call[0] for call in session_calls if isinstance(call, tuple))
     assert events == [("attempt-1", "late_payment_exception", "reservation_released")]
 
 
