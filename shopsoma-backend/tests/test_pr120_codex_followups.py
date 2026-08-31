@@ -320,7 +320,6 @@ async def test_expired_call_started_attempt_is_closed_before_replay(monkeypatch)
         id="attempt-1",
         state="call_started",
         authorization_deadline_at=datetime.now(timezone.utc) - timedelta(seconds=5),
-        terminal_reason=None,
         terminal_at=None,
         row_version=7,
     )
@@ -375,7 +374,7 @@ async def test_expired_call_started_attempt_is_closed_before_replay(monkeypatch)
 
     assert result == "NEW-ATTEMPT"
     assert predecessor.state == "expired"
-    assert predecessor.terminal_reason == "authorization_deadline_elapsed"
+    assert not hasattr(predecessor, "terminal_reason")
     assert predecessor.terminal_at is not None
     assert predecessor.row_version == 8
     assert reservation.state == "expired"
@@ -578,7 +577,6 @@ async def test_finalize_verified_payment_routes_expired_attempt_to_late_payment_
         provider_reference="ref-456",
         lease_token="lease-2",
         claim_expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
-        terminal_reason=None,
         terminal_at=None,
         terminal_evidence_id=None,
         row_version=3,
@@ -590,7 +588,6 @@ async def test_finalize_verified_payment_routes_expired_attempt_to_late_payment_
         provider="paystack",
         provider_reference="ref-mid",
         lease_token=None,
-        terminal_reason="authorization_deadline_elapsed",
         terminal_at=datetime.now(timezone.utc),
         terminal_evidence_id="evidence-mid",
         row_version=5,
@@ -669,7 +666,7 @@ async def test_finalize_verified_payment_routes_expired_attempt_to_late_payment_
     assert payment.status == module.TransactionStatus.COMPLETED
     assert order.payment_status == module.PaymentStatus.PAID
     assert successor.state == "failed"
-    assert successor.terminal_reason == "superseded_by_late_verified_capture"
+    assert not hasattr(successor, "terminal_reason")
     assert successor.terminal_at is None
     assert successor.row_version == 4
     assert successor.terminal_evidence_id == "evidence-1"
@@ -679,6 +676,7 @@ async def test_finalize_verified_payment_routes_expired_attempt_to_late_payment_
     assert successor_reservation.row_version == 10
     assert len(added) == 1
     assert added[0].evidence_type == "payment_failed"
+    assert added[0].source == "payment.success_reconciliation"
     assert events == [("attempt-1", "late_payment_exception", "reservation_released")]
 
 
@@ -715,7 +713,6 @@ async def test_finalize_verified_payment_routes_expired_successor_lease_through_
         provider_reference="ref-456",
         lease_token="lease-2",
         claim_expires_at=now - timedelta(minutes=5),
-        terminal_reason=None,
         terminal_at=None,
         terminal_evidence_id=None,
         row_version=3,
@@ -795,13 +792,14 @@ async def test_finalize_verified_payment_routes_expired_successor_lease_through_
     assert result.order is order
     assert payment.status == module.TransactionStatus.COMPLETED
     assert successor.state == "failed"
-    assert successor.terminal_reason == "superseded_by_late_verified_capture"
+    assert not hasattr(successor, "terminal_reason")
     assert successor.terminal_evidence_id == "evidence-2"
     assert successor.row_version == 5
     assert successor_reservation.state == "released"
     assert successor_reservation.terminal_reason == "superseded_by_late_verified_capture"
     assert len(added) == 2
     assert [obj.evidence_type for obj in added] == ["outcome_unknown", "payment_failed"]
+    assert [obj.source for obj in added] == ["payment.success_reconciliation", "payment.success_reconciliation"]
     assert scalar_calls == ["SELECT clock_timestamp()", "SELECT clock_timestamp()"]
     assert any("set_config('shopsoma.payment_lease_token'" in call[0] for call in session_calls if isinstance(call, tuple))
     assert events == [("attempt-1", "late_payment_exception", "reservation_released")]

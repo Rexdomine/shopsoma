@@ -294,7 +294,6 @@ async def _ensure_bridge_attempt(
             and attempt.authorization_deadline_at < database_now
         ):
             attempt.state = "expired"
-            attempt.terminal_reason = "authorization_deadline_elapsed"
             attempt.terminal_at = database_now
             attempt.row_version += 1
             reservations = await _attempt_reservations(session, attempt_id=attempt.id)
@@ -1110,7 +1109,6 @@ async def _terminalize_active_successor_attempts(
             )
         successor_attempt.state = "failed"
         successor_attempt.terminal_evidence_id = failure_evidence.id
-        successor_attempt.terminal_reason = "superseded_by_late_verified_capture"
         successor_attempt.row_version += 1
         reservations = await _attempt_reservations(session, attempt_id=successor_attempt.id)
         for reservation in reservations:
