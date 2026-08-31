@@ -281,24 +281,20 @@ BEGIN
  SELECT count(*) INTO item_count FROM order_items WHERE order_id=target_order_id;
  SELECT count(*) INTO coverage_count FROM order_inventory_coverage
   WHERE order_id=target_order_id;
- SELECT count(*) INTO invalid_count FROM order_items oi
- LEFT JOIN order_inventory_coverage c ON c.order_item_id=oi.id AND c.order_id=oi.order_id
+ SELECT count(*) INTO invalid_count
+ FROM order_items oi
+ LEFT JOIN order_inventory_coverage c ON c.order_item_id=oi.id
+  AND c.order_id=oi.order_id
+ LEFT JOIN stock_reservations r ON r.id=c.reservation_id
  WHERE oi.order_id=target_order_id
    AND (c.order_item_id IS NULL
         OR c.checkout_estimate_selection_id IS DISTINCT FROM selected.id
         OR c.inventory_policy IS DISTINCT FROM oi.inventory_policy
-        OR (oi.inventory_policy='stock_managed' AND NOT EXISTS(
-            SELECT 1 FROM payment_attempt_reservations ar
-            JOIN stock_reservations r ON r.id=ar.reservation_id
-            WHERE ar.order_id=oi.order_id
-              AND ar.order_item_id=oi.id
-              AND ar.checkout_estimate_selection_id=selected.id
-              AND ar.membership_family='domestic_checkout_v1'
-              AND r.order_id=oi.order_id
-              AND r.order_item_id=oi.id
-              AND r.checkout_estimate_selection_id=selected.id
-              AND r.state='active'
-              AND r.expires_at>statement_timestamp()))
+        OR (oi.inventory_policy='stock_managed'
+            AND (r.id IS NULL OR r.order_id IS DISTINCT FROM oi.order_id
+                 OR r.order_item_id IS DISTINCT FROM oi.id
+                 OR r.checkout_estimate_selection_id IS DISTINCT FROM selected.id
+                 OR r.state IS DISTINCT FROM 'active'))
         OR (oi.inventory_policy='made_to_order' AND c.reservation_id IS NOT NULL));
  IF item_count=0 OR coverage_count<>item_count OR invalid_count<>0 THEN
   RAISE EXCEPTION 'checkout prerequisite completion requires exact inventory coverage';

@@ -27,10 +27,10 @@ def test_validation_accepts_post_cutover_live_writer_rows() -> None:
     ) in source
 
 
-def test_validation_uses_replacement_aware_membership_for_exact_inventory_coverage() -> None:
+def test_validation_uses_active_reservation_truth_for_exact_inventory_coverage() -> None:
     source = _normalized_source()
-    assert "payment_attempt_reservations ar" in source
-    assert "JOIN stock_reservations r ON r.id=ar.reservation_id" in source
-    assert "ar.membership_family='domestic_checkout_v1'" in source
-    assert "r.expires_at>statement_timestamp()" in source
-    assert "LEFT JOIN stock_reservations r ON r.id=c.reservation_id" not in source
+    assert "LEFT JOIN stock_reservations r ON r.id=c.reservation_id" in source
+    assert "payment_attempt_reservations ar" not in source.split(
+        "validate_checkout_prerequisite_order(target_order_id uuid) RETURNS void LANGUAGE plpgsql AS $$",
+        1,
+    )[1].split("CREATE FUNCTION validate_checkout_prerequisite_completion()", 1)[0]

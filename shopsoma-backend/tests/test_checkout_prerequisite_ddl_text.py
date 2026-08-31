@@ -6,16 +6,16 @@ ROOT = Path(__file__).parents[1]
 REPAIR_MIGRATION = ROOT / "alembic" / "versions" / "d5e6f7a8b9c0_repair_payment_bridge_canonical_gate.py"
 
 
-def test_checkout_prerequisite_ddl_uses_replacement_aware_membership_validation() -> None:
+def test_checkout_prerequisite_ddl_uses_active_reservation_truth_for_selection_completion() -> None:
     normalized = " ".join(M2_CHECKOUT_TRIGGER_DDL.split())
-    assert "JOIN stock_reservations r ON r.id=ar.reservation_id" in normalized
-    assert "JOIN stock_reservations sr ON sr.id=ar.reservation_id" in normalized
+    assert "LEFT JOIN stock_reservations r ON r.id=c.reservation_id" in normalized
     assert "payment_attempt_reservations ar" in normalized
-    assert "ar.membership_family='domestic_checkout_v1'" in normalized
-    assert "r.expires_at>statement_timestamp()" in normalized
-    assert "sr.expires_at>now_at" in normalized
     assert "coverage.reservation_id=ar.reservation_id" not in normalized
     assert "c.reservation_id=ar.reservation_id" not in normalized
+    assert (
+        "validate_checkout_prerequisite_order(target_order_id uuid)"
+        in normalized
+    )
 
 
 def test_checkout_prerequisite_ddl_allows_call_started_to_expire_after_authorization_deadline() -> None:
