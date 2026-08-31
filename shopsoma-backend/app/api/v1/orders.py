@@ -30,6 +30,7 @@ from app.models.vendor import Vendor
 from app.models.setting import Setting
 from app.models.stock_payment_persistence import (
     PaymentAttempt,
+    StockReservation,
     coordinate_catalog_write,
 )
 from app.schemas.order import (
@@ -1650,6 +1651,20 @@ async def cancel_order(
         and item.variant_details
         and item.variant_details.get("size_stock_id")
     ]
+    consumed_reservations = []
+    if order.payment_status == PaymentStatus.PAID:
+        consumed_reservations = (
+            await db.scalars(
+                select(StockReservation).where(
+                    StockReservation.order_id == order.id,
+                    StockReservation.state == "consumed",
+                )
+            )
+        ).all()
+        if not consumed_reservations:
+            await db.commit()
+            refreshed_result = await db.execute(query)
+            return refreshed_result.scalar_one()
     extant_size_stock_ids = await coordinate_catalog_write(
         db,
         order_ids=[order.id],
@@ -1662,38 +1677,66 @@ async def cancel_order(
     )
 
     # Restore only stock-managed inventory that was actually consumed.
-    for item in order.items:
-        if item.inventory_policy == "made_to_order":
-            continue
-        if item.variant_id:
-            await db.execute(
-                update(ProductVariant)
-                .where(ProductVariant.id == item.variant_id)
-                .values(stock=ProductVariant.stock + item.quantity)
-            )
-            continue
+    if consumed_reservations:
+        for reservation in consumed_reservations:
+            if reservation.inventory_subject_kind == "size_stock" and reservation.size_stock_id:
+                size_stock_id = UUID(str(reservation.size_stock_id))
+                if size_stock_id in extant_size_stock_ids:
+                    await db.execute(
+                        update(SizeStock)
+                        .where(SizeStock.id == reservation.size_stock_id)
+                        .values(stock=SizeStock.stock + reservation.quantity)
+                    )
+                continue
+            if (
+                reservation.inventory_subject_kind == "product_variant"
+                and reservation.variant_id
+            ):
+                await db.execute(
+                    update(ProductVariant)
+                    .where(ProductVariant.id == reservation.variant_id)
+                    .values(stock=ProductVariant.stock + reservation.quantity)
+                )
+                continue
+            if reservation.inventory_subject_kind == "product" and reservation.product_id:
+                await db.execute(
+                    update(Product)
+                    .where(Product.id == reservation.product_id)
+                    .values(total_stock=Product.total_stock + reservation.quantity)
+                )
+    else:
+        for item in order.items:
+            if item.inventory_policy == "made_to_order":
+                continue
+            if item.variant_id:
+                await db.execute(
+                    update(ProductVariant)
+                    .where(ProductVariant.id == item.variant_id)
+                    .values(stock=ProductVariant.stock + item.quantity)
+                )
+                continue
 
-        size_stock_id = None
-        if item.variant_details:
-            size_stock_id = item.variant_details.get("size_stock_id")
+            size_stock_id = None
+            if item.variant_details:
+                size_stock_id = item.variant_details.get("size_stock_id")
 
-        if size_stock_id and UUID(str(size_stock_id)) in extant_size_stock_ids:
-            await db.execute(
-                update(SizeStock)
-                .where(SizeStock.id == size_stock_id)
-                .values(stock=SizeStock.stock + item.quantity)
-            )
-        elif size_stock_id:
-            # Product variation replacement intentionally preserves the historical
-            # SizeStock UUID as audit evidence. Do not transfer its cancelled units
-            # into a newly created inventory identity.
-            continue
-        else:
-            await db.execute(
-                update(Product)
-                .where(Product.id == item.product_id)
-                .values(total_stock=Product.total_stock + item.quantity)
-            )
+            if size_stock_id and UUID(str(size_stock_id)) in extant_size_stock_ids:
+                await db.execute(
+                    update(SizeStock)
+                    .where(SizeStock.id == size_stock_id)
+                    .values(stock=SizeStock.stock + item.quantity)
+                )
+            elif size_stock_id:
+                # Product variation replacement intentionally preserves the historical
+                # SizeStock UUID as audit evidence. Do not transfer its cancelled units
+                # into a newly created inventory identity.
+                continue
+            else:
+                await db.execute(
+                    update(Product)
+                    .where(Product.id == item.product_id)
+                    .values(total_stock=Product.total_stock + item.quantity)
+                )
 
     await db.commit()
     refreshed_result = await db.execute(query)

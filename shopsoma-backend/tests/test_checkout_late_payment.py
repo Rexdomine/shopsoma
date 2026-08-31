@@ -176,6 +176,87 @@ async def test_late_success_after_definitive_failure_is_paid_without_oversell(
 
 
 @pytest.mark.asyncio
+async def test_cancel_after_late_paid_released_reservation_does_not_restore_stock(
+    client, db_session, vendor_user, customer_user, monkeypatch
+):
+    order, product = await create_enforced_checkout(
+        client, db_session, vendor_user, customer_user, monkeypatch
+    )
+    order_id = order.id
+    initial_stock = product.total_stock
+    attempt = await initialize_stripe(
+        client,
+        db_session,
+        customer_user,
+        monkeypatch,
+        order,
+        transaction_id="pi_m4_late_cancel",
+    )
+    canceled = SimpleNamespace(
+        id=attempt.provider_transaction_id,
+        status="canceled",
+        amount=int(Decimal(attempt.amount) * 100),
+        currency=attempt.currency.lower(),
+        metadata={"shopsoma_payment_reference": attempt.provider_reference},
+        last_payment_error=SimpleNamespace(message="Canceled"),
+    )
+    monkeypatch.setattr(
+        payments.stripe.PaymentIntent, "retrieve", lambda _value: canceled
+    )
+    failed = await client.post(
+        "/api/v1/payments/verify",
+        json={
+            "payment_gateway": "stripe",
+            "payment_intent_id": attempt.provider_transaction_id,
+        },
+    )
+    assert failed.status_code == 200, failed.text
+    db_session.expire_all()
+    reservation = await db_session.scalar(
+        select(StockReservation).where(StockReservation.order_id == order_id)
+    )
+    assert reservation.state == "released"
+
+    succeeded = SimpleNamespace(
+        id=attempt.provider_transaction_id,
+        status="succeeded",
+        amount=int(Decimal(attempt.amount) * 100),
+        amount_received=int(Decimal(attempt.amount) * 100),
+        currency=attempt.currency.lower(),
+        metadata={"shopsoma_payment_reference": attempt.provider_reference},
+    )
+    monkeypatch.setattr(
+        payments.stripe.PaymentIntent, "retrieve", lambda _value: succeeded
+    )
+    late = await client.post(
+        "/api/v1/payments/verify",
+        json={
+            "payment_gateway": "stripe",
+            "payment_intent_id": attempt.provider_transaction_id,
+        },
+    )
+    assert late.status_code == 200, late.text
+
+    cancelled = await client.post(
+        f"/api/v1/orders/{order_id}/cancel",
+        headers=customer_user["headers"],
+        json={"cancellation_reason": "Late payment changed my mind"},
+    )
+    assert cancelled.status_code == 200, cancelled.text
+
+    db_session.expire_all()
+    persisted_order = await db_session.get(Order, order_id)
+    reservation = await db_session.scalar(
+        select(StockReservation).where(StockReservation.order_id == order_id)
+    )
+    await db_session.refresh(product)
+    assert persisted_order.payment_status == PaymentStatus.PAID
+    assert persisted_order.fulfillment_status == FulfillmentStatus.CANCELLED
+    assert reservation.state == "released"
+    assert product.total_stock == initial_stock
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("mapping_present", [True, False])
 async def test_late_predecessor_success_resolves_exact_attempt_without_mutating_successor(
     client,

@@ -1029,14 +1029,14 @@ async def _terminalize_active_successor_attempts(
         if (
             successor_attempt.state == "call_started"
             and successor_attempt.claim_expires_at is not None
-            and observed_at >= successor_attempt.claim_expires_at
+            and successor_attempt.claim_expires_at <= observed_at
         ):
-            unknown_observed_at = max(observed_at, successor_attempt.claim_expires_at)
+            unknown_observed_at = await session.scalar(text("SELECT clock_timestamp()"))
             unknown_evidence = PaymentAttemptEvidence(
                 attempt_id=successor_attempt.id,
                 source="payment.success_reconciliation",
                 event_id=(
-                    f"{successor_attempt.provider}:late-capture-expired-closeout:{predecessor.id}:{successor_attempt.id}"
+                    f"{successor_attempt.provider}:late-capture-expired-lease:{predecessor.id}:{successor_attempt.id}"
                 ),
                 evidence_type="outcome_unknown",
                 provider=successor_attempt.provider,
@@ -1046,7 +1046,7 @@ async def _terminalize_active_successor_attempts(
                         "reason": "superseded_by_late_verified_capture",
                         "predecessor_attempt_id": str(predecessor.id),
                         "successor_attempt_id": str(successor_attempt.id),
-                        "lease_state": "expired",
+                        "transition": "call_started_to_abandoned_unknown",
                     }
                 ),
                 observed_at=unknown_observed_at,
@@ -1065,7 +1065,7 @@ async def _terminalize_active_successor_attempts(
             successor_attempt.terminal_evidence_id = unknown_evidence.id
             successor_attempt.row_version += 1
             await session.flush()
-            failure_observed_at = max(datetime.now(timezone.utc), unknown_observed_at + timedelta(seconds=1))
+            failure_observed_at = await session.scalar(text("SELECT clock_timestamp()"))
 
         failure_evidence = PaymentAttemptEvidence(
             attempt_id=successor_attempt.id,

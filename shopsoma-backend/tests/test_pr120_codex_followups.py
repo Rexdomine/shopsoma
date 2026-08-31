@@ -636,11 +636,15 @@ async def test_finalize_verified_payment_routes_expired_successor_lease_through_
     )
     events = []
     session_calls = []
+    scalar_calls = []
     added = []
 
     class FakeSession:
         async def scalar(self, statement):
             sql = " ".join(str(statement).split())
+            if "SELECT clock_timestamp()" in sql:
+                scalar_calls.append("SELECT clock_timestamp()")
+                return now
             if "FROM payment_attempts" in sql and "payment_attempts.provider = :provider_1" in sql and "payment_attempts.provider_reference = :provider_reference_1" in sql:
                 return attempt
             if "FROM payment_attempts" in sql and "payment_attempts.id = :id_1" in sql and "FOR UPDATE" in sql:
@@ -702,6 +706,7 @@ async def test_finalize_verified_payment_routes_expired_successor_lease_through_
     assert successor.row_version == 5
     assert successor_reservation.state == "released"
     assert [obj.evidence_type for obj in added] == ["outcome_unknown", "payment_failed"]
+    assert scalar_calls == ["SELECT clock_timestamp()", "SELECT clock_timestamp()"]
     assert any("set_config('shopsoma.payment_lease_token'" in call[0] for call in session_calls if isinstance(call, tuple))
     assert events == [("attempt-1", "late_payment_exception", "reservation_released")]
 
