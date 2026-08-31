@@ -254,6 +254,7 @@ async def test_recover_pending_payment_mapping_does_not_invent_payment_row(monke
         observed_amount=Decimal("155.00"),
         observed_currency="NGN",
         evidence_payload={"status": "processing", "reference": "ref-123"},
+        create_missing=False,
     )
 
     assert result is None
