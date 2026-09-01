@@ -21,7 +21,7 @@ from app.schemas.shipping_rate import (
     ShippingCalculationResponse,
 )
 from app.api.dependencies import get_current_active_user
-from app.services.shipbubble_service import get_shipbubble_service, ShipBubbleError
+from app.services.shipbubble_service import get_shipbubble_service
 
 logger = logging.getLogger(__name__)
 

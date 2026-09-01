@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react';
-import type { PaymentGateway } from '../../services/paymentService';
+import { flushSync } from 'react-dom';
+import { buildPaystackWidgetConfig, type PaymentGateway, type InitializePaymentResponse } from '../../services/paymentService';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import Layout from '../../components/layout/Layout';
 import { ROUTES } from '../../config/constants';
-import { checkoutService, type Address, type ShippingRate, type OrderReview, type CreateAddressData } from '../../services/checkoutService';
+import { checkoutService, type Address, type ShippingRate, type OrderReview, type CreateAddressData, type CheckoutEstimate, type Order } from '../../services/checkoutService';
 import { CartService } from '../../services/cartService';
 import { paymentService } from '../../services/paymentService';
 import { useAuth } from '../../context/AuthContext';
@@ -14,6 +15,7 @@ import { convertCurrencyWithRates, formatPriceWithConversion, type Currency } fr
 import { loadStripe } from '@stripe/stripe-js';
 import { Elements } from '@stripe/react-stripe-js';
 import StripePaymentForm from '../../components/payment/StripePaymentForm';
+import CheckoutEstimateSelector from './CheckoutEstimateSelector';
 
 // Declare Paystack type
 declare global {
@@ -43,6 +45,34 @@ const ALL_PAYMENT_OPTIONS: { id: PaymentGateway; name: string; icon: string; sup
 ];
 
 const stripePromise = loadStripe(import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY || '');
+
+const CURRENCY_PRECISION: Record<Currency, number> = { NGN: 2, USD: 2 };
+
+const hasExactMinorUnitTruth = (amount: string, amountMinor: number, currency: Currency) => {
+  if (!Number.isSafeInteger(amountMinor) || amountMinor <= 0) return false;
+  const match = /^(0|[1-9]\d*)(?:\.(\d+))?$/.exec(amount);
+  if (!match) return false;
+  const precision = CURRENCY_PRECISION[currency];
+  const fraction = match[2] ?? '';
+  if (fraction.length > precision) return false;
+  const exactMinorDigits = `${match[1]}${fraction.padEnd(precision, '0')}`
+    .replace(/^0+(?=\d)/, '');
+  return exactMinorDigits === String(amountMinor);
+};
+
+const isValidServerMoney = (amount: unknown, allowZero: boolean) => {
+  if (typeof amount !== 'string' || !/^(0|[1-9]\d*)(?:\.\d{1,2})?$/.test(amount)) return false;
+  const parsed = Number(amount);
+  return Number.isFinite(parsed) && (allowZero ? parsed >= 0 : parsed > 0);
+};
+
+const formatServerMoney = (amount: string, currency: Currency) =>
+  new Intl.NumberFormat('en-NG', {
+    style: 'currency',
+    currency,
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(Number(amount));
 
 export default function Checkout() {
   const navigate = useNavigate();
@@ -98,8 +128,17 @@ export default function Checkout() {
   const [paymentMethod, setPaymentMethod] = useState<PaymentGateway>('paystack');
   const [stripeClientSecret, setStripeClientSecret] = useState<string>('');
   const [stripePaymentIntentId, setStripePaymentIntentId] = useState<string>('');
+  const [currentPaymentGateway, setCurrentPaymentGateway] = useState<PaymentGateway | null>(null);
   const [showStripePaymentModal, setShowStripePaymentModal] = useState(false);
   const [currentOrderId, setCurrentOrderId] = useState<string>('');
+  const [enforcedOrder, setEnforcedOrder] = useState<Order | null>(null);
+  const [checkoutEstimate, setCheckoutEstimate] = useState<CheckoutEstimate | null>(null);
+  const [checkoutCapability, setCheckoutCapability] = useState<string | undefined>();
+  const [paymentRetryAvailable, setPaymentRetryAvailable] = useState(false);
+  const [, setEstimateRequestKey] = useState<string>('');
+  const [selectionKeys] = useState(() => new Map<string, string>());
+
+  const newIdempotencyKey = (prefix: string) => `${prefix}-${crypto.randomUUID()}`;
 
   // Filter payment options based on currency
   const paymentOptions = ALL_PAYMENT_OPTIONS.filter(option =>
@@ -388,8 +427,165 @@ export default function Checkout() {
     }
   };
 
+  const clearCheckoutCapability = () => {
+    setCheckoutCapability(undefined);
+    setPaymentRetryAvailable(false);
+  };
+
+  const discardExpiredCheckout = () => {
+    clearCheckoutCapability();
+    setEnforcedOrder(null);
+    setCheckoutEstimate(null);
+    setShowStripePaymentModal(false);
+    setStripeClientSecret('');
+    setStripePaymentIntentId('');
+    setCurrentPaymentGateway(null);
+    setCurrentOrderId('');
+  };
+
+  const isTerminalGuestCheckoutConflict = (error: any) => {
+    const detail = String(error?.response?.data?.detail || '').toLowerCase();
+    return error?.response?.status === 409 && (
+      detail === 'payment attempt subject binding is invalid'
+      || detail === 'payment attempt prerequisites are stale'
+    );
+  };
+
+  const openInitializedPayment = (
+    order: Order,
+    paymentData: InitializePaymentResponse,
+  ) => {
+    const gateway = paymentData.payment_gateway;
+    const supportedCurrency = paymentData.currency === 'NGN' || paymentData.currency === 'USD';
+    const hasCanonicalTruth = paymentData.status === true
+      && typeof paymentData.reference === 'string'
+      && paymentData.reference.trim().length > 0
+      && typeof paymentData.amount === 'string'
+      && supportedCurrency
+      && hasExactMinorUnitTruth(
+        paymentData.amount,
+        paymentData.amount_minor,
+        paymentData.currency,
+      );
+    if (!hasCanonicalTruth) {
+      throw new Error('Payment initialization response is incomplete');
+    }
+    const gatewaySupportsCurrency = gateway === 'paystack'
+      ? paymentData.currency === 'NGN'
+      : gateway === 'stripe' && (paymentData.currency === 'NGN' || paymentData.currency === 'USD');
+    if (!gatewaySupportsCurrency) {
+      throw new Error('Unsupported payment gateway/currency combination');
+    }
+
+    if (gateway === 'paystack') {
+      const payload = paymentData.provider_payload;
+      if (
+        !payload
+        || typeof payload.access_code !== 'string'
+        || !payload.access_code.trim()
+        || typeof payload.authorization_url !== 'string'
+        || !payload.authorization_url.trim()
+      ) {
+        throw new Error('Payment initialization response is incomplete');
+      }
+      const widgetTruth = buildPaystackWidgetConfig(paymentData, {
+        key: import.meta.env.VITE_PAYSTACK_PUBLIC_KEY,
+        email: email || 'guest@shopsoma.com',
+      });
+      const handler = window.PaystackPop.setup({
+        ...widgetTruth,
+        callback: (response: { reference: string }) => {
+          paymentService.verifyPayment({
+            reference: response.reference,
+            payment_gateway: gateway,
+          }).then(() => {
+            clearCheckoutCapability();
+            CartService.clearCart();
+            navigate(`${ROUTES.ORDER_SUCCESS}?orderId=${order.id}&payment=success`);
+          }).catch((error) => {
+            console.error('Payment verification error:', error);
+            if (order.checkout_access_mode === 'guest_capability' && checkoutCapability) {
+              const terminalAuthorization = error.response?.status === 404 || error.response?.status === 410;
+              setIsCreatingOrder(false);
+              if (terminalAuthorization) {
+                discardExpiredCheckout();
+                alert('Checkout access expired. Payment recovery is no longer available.');
+              } else {
+                setPaymentRetryAvailable(true);
+                alert('We could not confirm your payment yet. Your saved order is still available; retry payment to reconcile it.');
+              }
+              return;
+            }
+            navigate(`${ROUTES.ORDER_SUCCESS}?orderId=${order.id}&payment=verification_failed`);
+          });
+        },
+        onClose: () => {
+          setIsCreatingOrder(false);
+          if (order.checkout_access_mode === 'guest_capability') {
+            setPaymentRetryAvailable(true);
+            alert('Payment cancelled. Your order is saved; retry payment when you are ready.');
+            return;
+          }
+          clearCheckoutCapability();
+          alert('Payment cancelled. You can retry payment from your orders page.');
+          navigate(`${ROUTES.ORDER_SUCCESS}?orderId=${order.id}&payment=cancelled`);
+        },
+      });
+      handler.openIframe();
+    } else if (gateway === 'stripe') {
+      const payload = paymentData.provider_payload;
+      if (
+        !payload
+        || typeof payload.client_secret !== 'string'
+        || !payload.client_secret.trim()
+        || typeof payload.payment_intent_id !== 'string'
+        || !payload.payment_intent_id.trim()
+      ) {
+        throw new Error('Payment initialization response is incomplete');
+      }
+      setStripeClientSecret(payload.client_secret);
+      setStripePaymentIntentId(payload.payment_intent_id);
+      setCurrentPaymentGateway(gateway);
+      setCurrentOrderId(order.id);
+      setShowStripePaymentModal(true);
+      setIsCreatingOrder(false);
+    } else {
+      throw new Error(`Unsupported payment gateway: ${gateway}`);
+    }
+  };
+
+  const initializeOrderPayment = async (order: Order, capability?: string) => {
+    setPaymentRetryAvailable(false);
+    setIsCreatingOrder(true);
+    try {
+      const enforced = order.workflow_cohort === 'domestic_checkout_v1';
+      const paymentData = await paymentService.initializePayment({
+        order_id: order.id,
+        email: email || 'guest@shopsoma.com',
+        payment_gateway: paymentMethod,
+        ...(enforced ? {} : { currency }),
+        callback_url: `${window.location.origin}/payment/verify`,
+      }, enforced ? capability : undefined);
+      openInitializedPayment(order, paymentData);
+    } catch (error: any) {
+      const terminalCheckout = error.response?.status === 404
+        || error.response?.status === 410
+        || isTerminalGuestCheckoutConflict(error);
+      if (terminalCheckout) {
+        discardExpiredCheckout();
+      } else if (order.checkout_access_mode === 'guest_capability' && capability) {
+        setPaymentRetryAvailable(true);
+      }
+      const retryable = error.response?.status === 503;
+      alert(retryable
+        ? 'Payment setup is temporarily unavailable. Your order is not complete; please retry.'
+        : error.response?.data?.detail || error.message || 'Failed to initialize payment.');
+      setIsCreatingOrder(false);
+    }
+  };
+
   const handlePurchase = async () => {
-    if (!selectedAddressId || !orderReview) return;
+    if (!selectedAddressId || !orderReview || enforcedOrder) return;
 
     setIsCreatingOrder(true);
     try {
@@ -398,11 +594,7 @@ export default function Checkout() {
         variant_id: item.variant?.id?.startsWith('default-') ? null : item.variant?.id,
         quantity: item.quantity,
       }));
-
-      // Get selected address
       const selectedAddress = addresses.find(addr => addr.id === selectedAddressId);
-
-      // Prepare order request based on guest vs authenticated user
       const orderRequest: any = {
         items,
         currency,
@@ -410,8 +602,7 @@ export default function Checkout() {
         promo_code: appliedPromo?.code,
       };
 
-      if (isGuestCheckout && selectedAddress && selectedAddress.id === 'guest-address') {
-        // For guest checkout, send address data and email directly
+      if (isGuestCheckout && selectedAddress?.id === 'guest-address') {
         orderRequest.guest_address = {
           full_name: selectedAddress.full_name,
           phone_number: selectedAddress.phone_number,
@@ -424,110 +615,117 @@ export default function Checkout() {
         };
         orderRequest.customer_email = email;
       } else {
-        // For authenticated users, send address ID
         orderRequest.shipping_address_id = selectedAddressId;
         orderRequest.billing_address_id = selectedAddressId;
       }
 
-      // Create order first
       const order = await checkoutService.createOrder(orderRequest);
-
-      // Initialize payment with selected gateway
-      const paymentData = await paymentService.initializePayment({
-        order_id: order.id,
-        email: email || 'guest@shopsoma.com',
-        payment_gateway: paymentMethod,
-        currency,
-        callback_url: `${window.location.origin}/payment/verify`,
-      });
-
-      // Initialize payment based on selected gateway
-      if (paymentMethod === 'paystack') {
-        // Open Paystack popup
-        const paystackPublicKey = import.meta.env.VITE_PAYSTACK_PUBLIC_KEY;
-        const handler = window.PaystackPop.setup({
-          key: paystackPublicKey,
-          email: email || 'guest@shopsoma.com',
-          amount: Math.round(orderReview.summary.total_amount * 100), // Amount in kobo
-          currency,
-          ref: paymentData.reference,
-          callback: (response: any) => {
-            // Payment successful - handle async operations
-            console.log('Payment successful:', response);
-
-            // Verify payment and navigate (fire and forget)
-            paymentService.verifyPayment({
-              reference: response.reference,
-              payment_gateway: 'paystack',
-            }).then(() => {
-              // Clear cart
-              CartService.clearCart();
-
-              // Navigate to order confirmation with success status
-              navigate(`${ROUTES.ORDER_SUCCESS}?orderId=${order.id}&payment=success`);
-            }).catch((error) => {
-              console.error('Payment verification error:', error);
-              navigate(`${ROUTES.ORDER_SUCCESS}?orderId=${order.id}&payment=verification_failed`);
-            });
-          },
-          onClose: () => {
-            console.log('Payment popup closed');
-            setIsCreatingOrder(false);
-            alert('Payment cancelled. You can retry payment from your orders page.');
-            navigate(`${ROUTES.ORDER_SUCCESS}?orderId=${order.id}&payment=cancelled`);
-          },
-        });
-
-        handler.openIframe();
-      } else if (paymentMethod === 'stripe') {
-        // Store client secret and show Stripe payment modal
-        setStripeClientSecret(paymentData.client_secret || '');
-        setStripePaymentIntentId(paymentData.payment_intent_id || '');
-        setCurrentOrderId(order.id);
-        setShowStripePaymentModal(true);
-        setIsCreatingOrder(false);
-      } else {
-        throw new Error(`Unsupported payment gateway: ${paymentMethod}`);
-      }
-    } catch (error: any) {
-      console.error('Error creating order:', error);
-
-      // Extract detailed error message
-      let errorMessage = 'Failed to create order. Please try again.';
-
-      if (error.response?.data?.detail) {
-        errorMessage = error.response.data.detail;
-      } else if (error.message) {
-        errorMessage = error.message;
+      if (order.workflow_cohort !== 'domestic_checkout_v1') {
+        await initializeOrderPayment(order);
+        return;
       }
 
-      // Log full error for debugging
-      console.error('Full error details:', {
-        message: error.message,
-        response: error.response?.data,
-        status: error.response?.status,
-      });
-
-      alert(errorMessage);
+      const capability = order.checkout_capability ?? undefined;
+      setCheckoutCapability(capability);
+      setEnforcedOrder(order);
+      const requestKey = newIdempotencyKey('estimate');
+      setEstimateRequestKey(requestKey);
+      const estimate = await checkoutService.createCheckoutEstimate(order.id, requestKey, capability);
+      setCheckoutEstimate(estimate);
       setIsCreatingOrder(false);
+    } catch (error: any) {
+      if (error.response?.status === 404 || error.response?.status === 410) {
+        discardExpiredCheckout();
+      }
+      alert(error.response?.data?.detail || error.message || 'Failed to create order. Please try again.');
+      setIsCreatingOrder(false);
+    }
+  };
+
+  const refreshCheckoutEstimate = async () => {
+    if (!enforcedOrder) throw new Error('Checkout order is unavailable');
+    const requestKey = newIdempotencyKey('estimate');
+    setEstimateRequestKey(requestKey);
+    try {
+      return await checkoutService.createCheckoutEstimate(enforcedOrder.id, requestKey, checkoutCapability);
+    } catch (error: any) {
+      if (error.response?.status === 404 || error.response?.status === 410) {
+        discardExpiredCheckout();
+      }
+      throw error;
+    }
+  };
+
+  const recoverCheckoutEstimate = async () => {
+    setIsCreatingOrder(true);
+    try {
+      const estimate = await refreshCheckoutEstimate();
+      setCheckoutEstimate(estimate);
+    } catch (error: any) {
+      if (error.response?.status === 404 || error.response?.status === 410) {
+        discardExpiredCheckout();
+      }
+      alert(error.response?.data?.detail || 'Delivery options are still unavailable. Please retry.');
+    } finally {
+      setIsCreatingOrder(false);
+    }
+  };
+
+  const selectCheckoutOption = async (estimateId: string, optionId: string) => {
+    if (!enforcedOrder) throw new Error('Checkout order is unavailable');
+    const identity = `${estimateId}:${optionId}`;
+    const selectionKey = selectionKeys.get(identity) ?? newIdempotencyKey('selection');
+    selectionKeys.set(identity, selectionKey);
+    try {
+      return await checkoutService.selectCheckoutEstimateOption(
+        enforcedOrder.id,
+        estimateId,
+        optionId,
+        selectionKey,
+        checkoutCapability,
+      );
+    } catch (error: any) {
+      if (error.response?.status === 404 || error.response?.status === 410) {
+        discardExpiredCheckout();
+      }
+      throw error;
     }
   };
 
   const handleStripePaymentSuccess = async () => {
     try {
+      if (currentPaymentGateway !== 'stripe') {
+        throw new Error('Payment initialization response is incomplete');
+      }
       // Verify payment with backend
-      await paymentService.verifyPayment({
+      const verification = await paymentService.verifyPayment({
         payment_intent_id: stripePaymentIntentId,
-        payment_gateway: 'stripe',
+        payment_gateway: currentPaymentGateway,
       });
+      if (verification.status !== true) {
+        throw new Error('Payment verification is not complete');
+      }
 
       // Clear cart and navigate to success
+      clearCheckoutCapability();
       CartService.clearCart();
       setShowStripePaymentModal(false);
       navigate(`${ROUTES.ORDER_SUCCESS}?orderId=${currentOrderId}&payment=success`);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Payment verification error:', error);
       setShowStripePaymentModal(false);
+      if (enforcedOrder?.checkout_access_mode === 'guest_capability' && checkoutCapability) {
+        const terminalAuthorization = error.response?.status === 404 || error.response?.status === 410;
+        setIsCreatingOrder(false);
+        if (terminalAuthorization) {
+          discardExpiredCheckout();
+          alert('Checkout access expired. Payment recovery is no longer available.');
+        } else {
+          setPaymentRetryAvailable(true);
+          alert('We could not confirm your payment yet. Your saved order is still available; retry payment to reconcile it.');
+        }
+        return;
+      }
       navigate(`${ROUTES.ORDER_SUCCESS}?orderId=${currentOrderId}&payment=verification_failed`);
     }
   };
@@ -578,7 +776,7 @@ export default function Checkout() {
   );
   const hasSelectedAddress = !!selectedAddressId;
   const hasSelectedShipping = !!selectedShippingRateId;
-  const canPurchase = step === 'payment' && hasEmail && hasSelectedAddress && hasSelectedShipping && orderReview;
+  const canPurchase = step === 'payment' && hasEmail && hasSelectedAddress && hasSelectedShipping && orderReview && !enforcedOrder;
 
   const selectedShippingRate = shippingRates.find(rate => rate.id === selectedShippingRateId);
   const shippingRateInSelectedCurrency = selectedShippingRate
@@ -592,6 +790,9 @@ export default function Checkout() {
   // Calculate tax and total for checkout display (before order review is available)
   const TAX_RATE = 0.075; // 7.5% VAT
   const calculateCheckoutTax = () => {
+    if (checkoutEstimate?.selected_option && isValidServerMoney(checkoutEstimate.server_tax_amount, true)) {
+      return Number(checkoutEstimate.server_tax_amount);
+    }
     if (orderReview) return orderReview.summary.tax_amount;
     // Calculate tax on subtotal (before order review is created)
     const subtotal = cartSubtotalInSelectedCurrency;
@@ -1060,6 +1261,61 @@ export default function Checkout() {
                   {renderStepTitle('Payment Method', step === 'payment')}
                   {step === 'payment' ? (
                     <div className="space-y-3">
+                      {enforcedOrder && checkoutEstimate && (
+                        <CheckoutEstimateSelector
+                          estimate={checkoutEstimate}
+                          selectOption={selectCheckoutOption}
+                          refreshEstimate={refreshCheckoutEstimate}
+                          onSelectionConfirmed={(selectedEstimate) => {
+                            const selectedOption = selectedEstimate.selected_option;
+                            const validSelectedTruth = Boolean(
+                              selectedOption
+                              && (selectedEstimate.currency === 'NGN' || selectedEstimate.currency === 'USD')
+                              && selectedOption.currency === selectedEstimate.currency
+                              && typeof selectedOption.service_label === 'string'
+                              && selectedOption.service_label.trim()
+                              && isValidServerMoney(selectedOption.amount, true)
+                              && isValidServerMoney(selectedEstimate.server_payable_total, false)
+                            );
+                            if (!validSelectedTruth) {
+                              alert('Selected delivery pricing is invalid. Please refresh and select again.');
+                              return;
+                            }
+                            flushSync(() => setCheckoutEstimate(selectedEstimate));
+                            void initializeOrderPayment(enforcedOrder, checkoutCapability);
+                          }}
+                        />
+                      )}
+                      {enforcedOrder && !checkoutEstimate && (
+                        <div className="space-y-2">
+                          <p role="status" className="text-sm text-amber-700">
+                            Your order was saved, but delivery options are not ready. Retry without creating another order.
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => void recoverCheckoutEstimate()}
+                            disabled={isCreatingOrder}
+                            className="w-full py-2 border border-primary text-primary text-sm font-semibold disabled:opacity-50"
+                          >
+                            {isCreatingOrder ? 'Retrying delivery options…' : 'Retry delivery options'}
+                          </button>
+                        </div>
+                      )}
+                      {paymentRetryAvailable && enforcedOrder?.checkout_access_mode === 'guest_capability' && checkoutCapability && (
+                        <div className="space-y-2" role="status">
+                          <p className="text-sm text-amber-700">
+                            Payment was not completed, or we could not confirm your payment yet. Your order is saved and ready to retry.
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => void initializeOrderPayment(enforcedOrder, checkoutCapability)}
+                            disabled={isCreatingOrder}
+                            className="w-full py-2 border border-primary text-primary text-sm font-semibold disabled:opacity-50"
+                          >
+                            {isCreatingOrder ? 'Retrying payment…' : 'Retry payment'}
+                          </button>
+                        </div>
+                      )}
                       {ALL_PAYMENT_OPTIONS.map((option) => {
                         const isSupported = option.supportedCurrencies.includes(currency);
                         return (
@@ -1129,8 +1385,10 @@ export default function Checkout() {
                   <span>{formatPrice(orderReview?.summary.subtotal ?? cartSubtotalInSelectedCurrency, orderReview ? reviewSummaryCurrency : currency)}</span>
                 </div>
                 <div className="flex items-center justify-between">
-                  <span>Shipping cost</span>
-                  <span>{formatPrice(orderReview?.summary.shipping_cost ?? Number(shippingRateInSelectedCurrency), orderReview ? reviewSummaryCurrency : currency)}</span>
+                  <span>{checkoutEstimate?.selected_option?.service_label ?? 'Shipping cost'}</span>
+                  <span>{checkoutEstimate?.selected_option
+                    ? formatServerMoney(checkoutEstimate.selected_option.amount, checkoutEstimate.selected_option.currency)
+                    : formatPrice(orderReview?.summary.shipping_cost ?? Number(shippingRateInSelectedCurrency), orderReview ? reviewSummaryCurrency : currency)}</span>
                 </div>
                 <div className="flex items-center justify-between">
                   <span>Tax (VAT 7.5%)</span>
@@ -1172,7 +1430,9 @@ export default function Checkout() {
               </div>
               <div className="flex items-center justify-between text-sm font-semibold text-gray-800 border-t border-gray-200 pt-3">
                 <span>Total</span>
-                <span>{formatPrice(calculateCheckoutTotal(), orderReview ? reviewSummaryCurrency : currency)}</span>
+                <span>{checkoutEstimate?.selected_option
+                  ? formatServerMoney(checkoutEstimate.server_payable_total, checkoutEstimate.currency)
+                  : formatPrice(calculateCheckoutTotal(), orderReview ? reviewSummaryCurrency : currency)}</span>
               </div>
               <button
                 className={`w-full py-3 rounded-sm text-sm font-semibold ${

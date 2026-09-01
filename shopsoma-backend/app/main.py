@@ -13,18 +13,49 @@ load_dotenv()
 # Basic logging configuration for app logs
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(
-    level=LOG_LEVEL,
-    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s"
+    level=LOG_LEVEL, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s"
 )
 logger = logging.getLogger(__name__)
 
 # Import routers
-from app.api.v1 import auth, products, images, admin, seed, cart, addresses, shipping_rates, shipping_quotes, orders, promo_codes, payments, users, wishlist, newsletter, preferences, payment_portals, vendors, vendor_activation, vendor_applications, vendor_payment_methods, categories, collections, designers, settings as settings_router, admin_orders, admin_returns, admin_payouts, websocket
+from app.api.v1 import (
+    auth,
+    products,
+    images,
+    admin,
+    seed,
+    cart,
+    addresses,
+    shipping_rates,
+    shipping_quotes,
+    orders,
+    checkout_estimates,
+    promo_codes,
+    payments,
+    users,
+    wishlist,
+    newsletter,
+    preferences,
+    payment_portals,
+    vendors,
+    vendor_activation,
+    vendor_applications,
+    vendor_payment_methods,
+    categories,
+    collections,
+    designers,
+    settings as settings_router,
+    admin_orders,
+    admin_returns,
+    admin_payouts,
+    websocket,
+)
 from app.core.config import settings
 
 # Import middleware
 from app.middleware.rate_limit import RateLimitMiddleware
 from app.middleware.security_headers import SecurityHeadersMiddleware
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -33,7 +64,11 @@ async def lifespan(app: FastAPI):
     logger.info("Shopsoma API starting")
     logger.info(
         "Storage backend: %s",
-        f"local ({Path(settings.LOCAL_UPLOAD_DIR).resolve()})" if settings.USE_LOCAL_STORAGE else f"object ({settings.S3_BUCKET_NAME})"
+        (
+            f"local ({Path(settings.LOCAL_UPLOAD_DIR).resolve()})"
+            if settings.USE_LOCAL_STORAGE
+            else f"object ({settings.S3_BUCKET_NAME})"
+        ),
     )
     # TODO: Initialize database connection pool
     # TODO: Initialize Redis connection
@@ -43,13 +78,14 @@ async def lifespan(app: FastAPI):
     # TODO: Close database connections
     # TODO: Close Redis connections
 
+
 app = FastAPI(
     title="Shopsoma API",
     description="Multi-vendor marketplace for African fashion",
     version="1.0.0",
     docs_url="/api/docs",
     redoc_url="/api/redoc",
-    lifespan=lifespan
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -58,7 +94,14 @@ app.add_middleware(
     allow_origin_regex=settings.ALLOWED_ORIGIN_REGEX,
     allow_credentials=False,
     allow_methods=["*"],
-    allow_headers=["Authorization", "Content-Type", "X-Requested-With", "X-Session-ID", "X-Idempotency-Key"],
+    allow_headers=[
+        "Authorization",
+        "Content-Type",
+        "X-Requested-With",
+        "X-Session-ID",
+        "X-Idempotency-Key",
+        "X-ShopSoma-Checkout-Capability",
+    ],
 )
 
 # Add security headers middleware
@@ -72,19 +115,22 @@ if settings.RATE_LIMIT_ENABLED:
         trusted_proxy_ips=settings.trusted_proxy_ips_list,
     )
 
+
 @app.get("/")
 async def root():
     """Root endpoint"""
     return {
         "message": "Welcome to Shopsoma API",
         "version": "1.0.0",
-        "status": "operational"
+        "status": "operational",
     }
+
 
 @app.get("/healthz")
 async def health_check():
     """Health check endpoint for Render"""
     return {"status": "healthy"}
+
 
 @app.get("/api/v1/health")
 async def api_health_check():
@@ -93,6 +139,7 @@ async def api_health_check():
         "status": "healthy",
         "version": "1.0.0",
     }
+
 
 # Include routers
 app.include_router(auth.router, prefix="/api/v1")
@@ -113,14 +160,21 @@ app.include_router(shipping_rates.router, prefix="/api/v1")
 app.include_router(shipping_quotes.router, prefix="/api/v1")
 app.include_router(promo_codes.router, prefix="/api/v1")
 app.include_router(orders.router, prefix="/api/v1")
+app.include_router(checkout_estimates.router, prefix="/api/v1")
 app.include_router(payments.router, prefix="/api/v1")
-app.include_router(payment_portals.router, prefix="/api/v1/payments", tags=["Payment Portals"])
+app.include_router(
+    payment_portals.router, prefix="/api/v1/payments", tags=["Payment Portals"]
+)
 app.include_router(wishlist.router, prefix="/api/v1")
 app.include_router(newsletter.router, prefix="/api/v1")
 app.include_router(preferences.router, prefix="/api/v1")
 app.include_router(vendors.router, prefix="/api/v1")
 app.include_router(vendor_activation.router, prefix="/api/v1")
-app.include_router(vendor_applications.router, prefix="/api/v1/vendor-applications", tags=["Vendor Applications"])
+app.include_router(
+    vendor_applications.router,
+    prefix="/api/v1/vendor-applications",
+    tags=["Vendor Applications"],
+)
 app.include_router(vendor_payment_methods.router, prefix="/api/v1")
 app.include_router(settings_router.router, prefix="/api/v1")
 app.include_router(websocket.router, prefix="/api/v1")
@@ -134,4 +188,5 @@ if settings.USE_LOCAL_STORAGE:
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)

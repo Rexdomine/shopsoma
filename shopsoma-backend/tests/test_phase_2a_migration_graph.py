@@ -14,11 +14,35 @@ def test_migration_graph_has_exactly_one_head() -> None:
 
     heads = script.get_heads()
 
-    assert heads == ["f9d1b3e5a7c9"]
+    assert heads == ["d5e6f7a8b9c0"]
 
-    stock_payment_revision = script.get_revision(heads[0])
+    repair_revision = script.get_revision(heads[0])
+    assert repair_revision is not None
+    assert repair_revision.down_revision == "c4d5e6f7a8b9"
+
+    free_shipping_revision = script.get_revision("c4d5e6f7a8b9")
+    assert free_shipping_revision is not None
+    assert free_shipping_revision.down_revision == "b3c4d5e6f7a8"
+
+    outbox_revision = script.get_revision("b3c4d5e6f7a8")
+    assert outbox_revision is not None
+    assert outbox_revision.down_revision == "a2b3c4d5e6f7"
+
+    stock_payment_revision = script.get_revision("a2b3c4d5e6f7")
     assert stock_payment_revision is not None
-    assert stock_payment_revision.down_revision == "e8c0a2d4f6b8"
+    assert stock_payment_revision.down_revision == "a1b2c3d4e5f6"
+
+    classify_revision = script.get_revision("a1b2c3d4e5f6")
+    assert classify_revision is not None
+    assert classify_revision.down_revision == "a0b1c2d3e4f5"
+
+    expand_revision = script.get_revision("a0b1c2d3e4f5")
+    assert expand_revision is not None
+    assert expand_revision.down_revision == "f9d1b3e5a7c9"
+
+    predecessor_revision = script.get_revision("f9d1b3e5a7c9")
+    assert predecessor_revision is not None
+    assert predecessor_revision.down_revision == "e8c0a2d4f6b8"
 
     quote_revision = script.get_revision("e8c0a2d4f6b8")
     assert quote_revision is not None

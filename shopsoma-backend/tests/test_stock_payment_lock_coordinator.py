@@ -1,5 +1,6 @@
 """Statement-level coordinator regressions for Lane 2A-4B."""
 
+import ast
 import json
 from pathlib import Path
 import uuid
@@ -16,6 +17,15 @@ from app.models.product import (
     Variation,
 )
 from app.models.stock_payment_persistence import coordinate_catalog_write
+
+
+def _imports_catalog_write_coordinator(source: str) -> bool:
+    return any(
+        isinstance(node, ast.ImportFrom)
+        and node.module == "app.models.stock_payment_persistence"
+        and any(alias.name == "coordinate_catalog_write" for alias in node.names)
+        for node in ast.walk(ast.parse(source))
+    )
 
 
 async def _catalog_subject(db_session, vendor_user):
@@ -348,15 +358,9 @@ def test_core_catalog_writers_use_explicit_preflight_or_document_fail_closed() -
     admin_source = (app_root / "admin.py").read_text()
     seed_source = (app_root / "seed.py").read_text()
 
-    assert (
-        "from app.models.stock_payment_persistence import coordinate_catalog_write"
-        in orders_source
-    )
+    assert _imports_catalog_write_coordinator(orders_source)
     assert orders_source.count("await coordinate_catalog_write(") >= 2
-    assert (
-        "from app.models.stock_payment_persistence import coordinate_catalog_write"
-        in admin_source
-    )
+    assert _imports_catalog_write_coordinator(admin_source)
     assert admin_source.count("await coordinate_catalog_write(") >= 2
     assert "unbounded reset intentionally fails closed" in admin_source
     assert "coordinator intentionally fails closed" in seed_source

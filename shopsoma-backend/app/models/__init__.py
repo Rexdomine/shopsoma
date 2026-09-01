@@ -82,7 +82,21 @@ from app.models.stock_payment_persistence import (
     PaymentAttempt,
     PaymentAttemptEvidence,
     PaymentAttemptReservation,
+    StockPaymentLockCoordinator,
     StockReservation,
+)
+from app.models.checkout_outbox import CheckoutOutboxEvent
+from app.models.checkout_shipping_estimate import (
+    CheckoutShippingEstimate,
+    CheckoutShippingEstimateOption,
+    CheckoutShippingEstimateSelection,
+    OrderInventoryCoverage,
+)
+from app.models.order_guest_capability import (
+    OrderCurrentOwner,
+    OrderGuestCapability,
+    OrderWorkflowClassification,
+    OrderWorkflowMigrationRun,
 )
 
 __all__ = [
@@ -157,4 +171,13 @@ __all__ = [
     "PaymentAttempt",
     "PaymentAttemptReservation",
     "PaymentAttemptEvidence",
+    "CheckoutOutboxEvent",
+    "CheckoutShippingEstimate",
+    "CheckoutShippingEstimateOption",
+    "CheckoutShippingEstimateSelection",
+    "OrderInventoryCoverage",
+    "OrderCurrentOwner",
+    "OrderGuestCapability",
+    "OrderWorkflowClassification",
+    "OrderWorkflowMigrationRun",
 ]

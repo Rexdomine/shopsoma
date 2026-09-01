@@ -282,14 +282,6 @@ def _session_database_schema() -> Generator[None, None, None]:
         TEST_DATABASE_LIFECYCLE.drop()
 
 
-@pytest.fixture(scope="session")
-def event_loop() -> Generator:
-    """Create event loop for async tests"""
-    loop = asyncio.get_event_loop_policy().new_event_loop()
-    yield loop
-    loop.close()
-
-
 @pytest.fixture(scope="function")
 async def db_session() -> AsyncGenerator[AsyncSession, None]:
     """Yield a real session after bounded committed-state cleanup; no outer rollback."""

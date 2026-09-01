@@ -2,9 +2,8 @@
 #
 # Notes:
 # - Staging/production should use object storage. Do not rely on local disk uploads.
-# - Critical API flows currently run synchronously. Redis/Celery are not required for checkout,
-#   payment verification, or webhook handling in the current codebase.
-# - Redis/Celery env vars are listed as optional placeholders only for future worker adoption.
+# - Checkout outbox delivery requires the managed key-value service, worker, and beat below.
+# - The outbox consumer performs internal fulfilment only; provider calls are not wired here.
 
 databases:
   - name: shopsoma-staging-db
@@ -14,6 +13,13 @@ databases:
     user: shopsoma_user
 
 services:
+  - type: keyvalue
+    name: shopsoma-staging-celery-redis
+    plan: starter
+    region: oregon
+    maxmemoryPolicy: noeviction
+    ipAllowList: []
+
   - type: web
     name: shopsoma-staging-api
     env: python
@@ -21,11 +27,11 @@ services:
     plan: starter
     branch: develop
     buildCommand: "cd shopsoma-backend && pip install -r requirements.txt"
-    startCommand: "cd shopsoma-backend && alembic upgrade heads && uvicorn app.main:app --host 0.0.0.0 --port $PORT"
+    startCommand: "cd shopsoma-backend && python run_checkout_prerequisite_deploy.py && uvicorn app.main:app --host 0.0.0.0 --port $PORT"
     healthCheckPath: /api/v1/health
     envVars:
       - key: PYTHON_VERSION
-        value: 3.9.18
+        value: 3.11.11
       - key: DATABASE_URL
         fromDatabase:
           name: shopsoma-staging-db
@@ -84,12 +90,116 @@ services:
         sync: false
       - key: CDN_BASE_URL
         sync: false
-      - key: REDIS_URL
-        sync: false
+
+  - type: worker
+    name: shopsoma-staging-checkout-outbox-worker
+    runtime: python
+    region: oregon
+    plan: starter
+    branch: develop
+    buildCommand: "cd shopsoma-backend && pip install -r requirements.txt"
+    startCommand: "cd shopsoma-backend && celery -A app.celery_app:celery_app worker --loglevel=info"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.11
+      - key: ENVIRONMENT
+        value: staging
+      - key: DATABASE_URL
+        fromDatabase:
+          name: shopsoma-staging-db
+          property: connectionString
       - key: CELERY_BROKER_URL
-        sync: false
+        fromService:
+          type: keyvalue
+          name: shopsoma-staging-celery-redis
+          property: connectionString
       - key: CELERY_RESULT_BACKEND
-        sync: false
+        fromService:
+          type: keyvalue
+          name: shopsoma-staging-celery-redis
+          property: connectionString
+      - key: SECRET_KEY
+        fromService:
+          type: web
+          name: shopsoma-staging-api
+          envVarKey: SECRET_KEY
+      - key: USE_LOCAL_STORAGE
+        value: false
+      - key: AWS_ACCESS_KEY_ID
+        fromService:
+          type: web
+          name: shopsoma-staging-api
+          envVarKey: AWS_ACCESS_KEY_ID
+      - key: AWS_SECRET_ACCESS_KEY
+        fromService:
+          type: web
+          name: shopsoma-staging-api
+          envVarKey: AWS_SECRET_ACCESS_KEY
+      - key: AWS_REGION
+        fromService:
+          type: web
+          name: shopsoma-staging-api
+          envVarKey: AWS_REGION
+      - key: S3_BUCKET_NAME
+        fromService:
+          type: web
+          name: shopsoma-staging-api
+          envVarKey: S3_BUCKET_NAME
+
+  - type: worker
+    name: shopsoma-staging-checkout-outbox-beat
+    runtime: python
+    region: oregon
+    plan: starter
+    branch: develop
+    buildCommand: "cd shopsoma-backend && pip install -r requirements.txt"
+    startCommand: "cd shopsoma-backend && celery -A app.celery_app:celery_app beat --loglevel=info"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.11
+      - key: ENVIRONMENT
+        value: staging
+      - key: DATABASE_URL
+        fromDatabase:
+          name: shopsoma-staging-db
+          property: connectionString
+      - key: CELERY_BROKER_URL
+        fromService:
+          type: keyvalue
+          name: shopsoma-staging-celery-redis
+          property: connectionString
+      - key: CELERY_RESULT_BACKEND
+        fromService:
+          type: keyvalue
+          name: shopsoma-staging-celery-redis
+          property: connectionString
+      - key: SECRET_KEY
+        fromService:
+          type: web
+          name: shopsoma-staging-api
+          envVarKey: SECRET_KEY
+      - key: USE_LOCAL_STORAGE
+        value: false
+      - key: AWS_ACCESS_KEY_ID
+        fromService:
+          type: web
+          name: shopsoma-staging-api
+          envVarKey: AWS_ACCESS_KEY_ID
+      - key: AWS_SECRET_ACCESS_KEY
+        fromService:
+          type: web
+          name: shopsoma-staging-api
+          envVarKey: AWS_SECRET_ACCESS_KEY
+      - key: AWS_REGION
+        fromService:
+          type: web
+          name: shopsoma-staging-api
+          envVarKey: AWS_REGION
+      - key: S3_BUCKET_NAME
+        fromService:
+          type: web
+          name: shopsoma-staging-api
+          envVarKey: S3_BUCKET_NAME
 
   - type: web
     name: shopsoma-staging

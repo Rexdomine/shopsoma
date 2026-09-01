@@ -376,12 +376,7 @@ async def test_pending_claim_rechecks_database_clock_after_row_lock_wait(
 
     try:
         await _coordinate_payment_attempt(db_session, attempt)
-        await db_session.execute(
-            text(
-                "ALTER TABLE payment_attempts DISABLE TRIGGER "
-                "trg_payment_attempts_validate"
-            )
-        )
+        await db_session.execute(text("SET LOCAL session_replication_role = replica"))
         await db_session.execute(
             text(
                 "UPDATE payment_attempts "
@@ -393,21 +388,11 @@ async def test_pending_claim_rechecks_database_clock_after_row_lock_wait(
             ),
             {"id": attempt.id},
         )
-        await db_session.execute(
-            text(
-                "ALTER TABLE payment_attempts ENABLE TRIGGER "
-                "trg_payment_attempts_validate"
-            )
-        )
+        await db_session.execute(text("SET LOCAL session_replication_role = origin"))
         await db_session.commit()
     finally:
         await db_session.rollback()
-        await db_session.execute(
-            text(
-                "ALTER TABLE payment_attempts ENABLE TRIGGER "
-                "trg_payment_attempts_validate"
-            )
-        )
+        await db_session.execute(text("SET LOCAL session_replication_role = origin"))
         await db_session.commit()
 
     factory = async_sessionmaker(bind=db_session.bind, expire_on_commit=False)

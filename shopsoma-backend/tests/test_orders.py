@@ -266,7 +266,8 @@ async def test_create_order_persists_item_currency(
     db_session: AsyncSession,
     vendor_user,
 ):
-    from app.models.order import OrderItem
+    from app.models.order import Order, OrderItem
+    from app.models.order_guest_capability import OrderCurrentOwner
     from app.models.product import Product, ProductStatus, ModerationStatus
     from app.models.shipping_rate import ShippingRate
     import uuid
@@ -324,6 +325,13 @@ async def test_create_order_persists_item_currency(
         await db_session.execute(select(OrderItem).where(OrderItem.order_id == data["id"]))
     ).scalar_one()
     assert persisted_item.currency == "USD"
+
+    persisted_order = await db_session.get(Order, data["id"])
+    persisted_owner = await db_session.get(OrderCurrentOwner, data["id"])
+    assert persisted_order.workflow_cohort == "legacy_pre_bridge"
+    assert persisted_order.workflow_policy_version == "legacy_pre_bridge_v1"
+    assert persisted_order.checkout_access_mode == "guest_capability"
+    assert persisted_owner.original_customer_id == persisted_order.customer_id
 
 
 @pytest.mark.asyncio

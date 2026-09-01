@@ -167,6 +167,10 @@ RESERVATION_COLUMNS = {
     "id",
     "order_id",
     "order_item_id",
+    "workflow_cohort",
+    "checkout_estimate_selection_id",
+    "inventory_subject_kind",
+    "inventory_subject_id",
     "customer_id",
     "quote_id",
     "quote_selection_id",
@@ -195,6 +199,8 @@ RESERVATION_COLUMNS = {
 ATTEMPT_COLUMNS = {
     "id",
     "order_id",
+    "workflow_cohort",
+    "checkout_estimate_selection_id",
     "customer_id",
     "quote_id",
     "quote_selection_id",
@@ -226,6 +232,10 @@ ATTEMPT_COLUMNS = {
 MEMBERSHIP_COLUMNS = {
     "attempt_id",
     "reservation_id",
+    "membership_family",
+    "order_id",
+    "order_item_id",
+    "checkout_estimate_selection_id",
     "creation_txid",
     "created_at",
 }
@@ -353,6 +363,8 @@ def test_lane_2a_4b_models_expose_database_enforced_contracts() -> None:
 async def test_lane_2a_4b_schema_installs_all_authoritative_triggers(
     db_session,
 ) -> None:
+    from app.models.stock_payment_persistence import STOCK_PAYMENT_TRIGGER_DDLS
+
     function_names = [
         "validate_stock_reservation_write",
         "protect_reserved_inventory",
@@ -373,7 +385,7 @@ async def test_lane_2a_4b_schema_installs_all_authoritative_triggers(
     )
     assert functions == set(function_names)
 
-    trigger_names = [
+    frozen_f9_trigger_names = [
         "trg_stock_reservations_validate",
         "trg_products_reserved_inventory",
         "trg_product_variants_reserved_inventory",
@@ -387,18 +399,54 @@ async def test_lane_2a_4b_schema_installs_all_authoritative_triggers(
         "trg_payment_attempt_reservations_exact_set",
         "trg_payment_attempt_evidence_validate",
     ]
-    triggers = set(
+    frozen_f9_ddl = "\n".join(STOCK_PAYMENT_TRIGGER_DDLS)
+    for trigger_name in frozen_f9_trigger_names:
+        assert f"TRIGGER {trigger_name}" in frozen_f9_ddl
+
+    current_trigger_names = [
+        "trg_products_reserved_inventory",
+        "trg_product_variants_reserved_inventory",
+        "trg_size_stocks_reserved_inventory",
+        "trg_variations_reserved_inventory",
+        "trg_order_items_reserved_truth",
+        "trg_orders_reserved_payment_truth",
+        "trg_payment_attempt_reservations_validate",
+        "trg_payment_attempts_exact_reservations",
+        "trg_payment_attempt_reservations_exact_set",
+        "trg_payment_attempt_evidence_validate",
+        "trg_payment_attempt_reservations_validate_domestic",
+        "trg_stock_reservations_validate_legacy_insert",
+        "trg_stock_reservations_validate_legacy_update",
+        "trg_stock_reservations_validate_delete",
+        "trg_stock_reservations_validate_domestic_insert",
+        "trg_stock_reservations_validate_domestic_update",
+        "trg_payment_attempts_validate_legacy_insert",
+        "trg_payment_attempts_validate_legacy_update",
+        "trg_payment_attempts_validate_delete",
+        "trg_payment_attempts_validate_domestic_insert",
+        "trg_payment_attempts_validate_domestic_update",
+    ]
+    trigger_definitions = dict(
         (
             await db_session.execute(
                 text(
-                    "SELECT tgname FROM pg_trigger WHERE NOT tgisinternal "
-                    "AND tgname = ANY(:names)"
+                    "SELECT tgname,pg_get_triggerdef(oid,true) FROM pg_trigger "
+                    "WHERE NOT tgisinternal AND tgname = ANY(:names)"
                 ),
-                {"names": trigger_names},
+                {"names": current_trigger_names},
             )
-        ).scalars()
+        ).all()
     )
-    assert triggers == set(trigger_names)
+    assert set(trigger_definitions) == set(current_trigger_names)
+
+    insert_trigger_names = [
+        "trg_stock_reservations_validate_legacy_insert",
+        "trg_stock_reservations_validate_domestic_insert",
+        "trg_payment_attempts_validate_legacy_insert",
+        "trg_payment_attempts_validate_domestic_insert",
+    ]
+    for trigger_name in insert_trigger_names:
+        assert "OLD." not in trigger_definitions[trigger_name]
 
 
 @pytest.mark.asyncio
