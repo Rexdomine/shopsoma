@@ -57,6 +57,7 @@ export default function AdminOrderDetail() {
   const [showPickupScheduleModal, setShowPickupScheduleModal] = useState(false);
   const [shadowQuoteResult, setShadowQuoteResult] = useState<ShadowQuoteResult | null>(null);
   const [runningShadowQuote, setRunningShadowQuote] = useState(false);
+  const [selectedShadowPackageId, setSelectedShadowPackageId] = useState('');
   const [pickupWindowData, setPickupWindowData] = useState({
     pickup_window_start: '',
     pickup_window_end: '',
@@ -82,6 +83,9 @@ export default function AdminOrderDetail() {
         tracking_number: data.tracking_number || '',
         estimated_delivery_date: data.estimated_delivery_date || '',
       });
+      setSelectedShadowPackageId(
+        data.ready_packages.length === 1 ? data.ready_packages[0].id : ''
+      );
     } catch (err) {
       console.error('Failed to load order:', err);
       error('Failed to load order details');
@@ -261,10 +265,14 @@ export default function AdminOrderDetail() {
 
   const handleRunShadowQuote = async () => {
     if (!order) return;
+    if (order.ready_packages.length > 1 && !selectedShadowPackageId) {
+      warning('Select a ready package before running the DHL sandbox shadow quote');
+      return;
+    }
 
     try {
       setRunningShadowQuote(true);
-      const result = await runShadowQuote(order.id);
+      const result = await runShadowQuote(order.id, selectedShadowPackageId || undefined);
       setShadowQuoteResult(result);
       success(`DHL sandbox shadow quote recorded (${result.result_kind})`);
     } catch (err) {
@@ -349,6 +357,21 @@ export default function AdminOrderDetail() {
             <CurrencySwitcher value={currentCurrency} onChange={setCurrency} />
             {order.fulfillment_status !== 'cancelled' && (
               <>
+                {order.ready_packages.length > 1 && (
+                  <select
+                    value={selectedShadowPackageId}
+                    onChange={(e) => setSelectedShadowPackageId(e.target.value)}
+                    disabled={runningShadowQuote || updating}
+                    className="px-3 py-2 border border-gray-300 rounded-lg bg-white text-sm disabled:opacity-50"
+                  >
+                    <option value="">Select ready package</option>
+                    {order.ready_packages.map((pkg) => (
+                      <option key={pkg.id} value={pkg.id}>
+                        {`Package ${pkg.id.slice(0, 8)} · ready ${new Date(pkg.ready_at).toLocaleString()}`}
+                      </option>
+                    ))}
+                  </select>
+                )}
                 <button
                   onClick={() => setShowCancelModal(true)}
                   disabled={updating}
@@ -367,7 +390,7 @@ export default function AdminOrderDetail() {
                 )}
                 <button
                   onClick={handleRunShadowQuote}
-                  disabled={runningShadowQuote || updating}
+                  disabled={runningShadowQuote || updating || order.ready_packages.length === 0}
                   className="px-4 py-2 border border-[#105E53] text-[#105E53] rounded-lg hover:bg-[#f1f8f6] disabled:opacity-50"
                 >
                   {runningShadowQuote ? 'Running Shadow Quote...' : 'Run DHL Sandbox Shadow Quote'}

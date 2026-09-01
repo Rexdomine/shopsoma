@@ -163,6 +163,17 @@ class PickupInfo(BaseModel):
         from_attributes = True
 
 
+class ReadyPackageInfo(BaseModel):
+    """Minimal ready-package metadata for admin shadow-quote selection."""
+    id: UUID
+    current_version: int
+    hub_id: UUID
+    ready_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
 class OrderListItem(BaseModel):
     """Order in list view"""
     id: UUID
@@ -222,6 +233,7 @@ class OrderDetail(BaseModel):
     # Items and Pickups
     items: List[OrderItemDetail]
     pickups: List[PickupInfo]
+    ready_packages: List[ReadyPackageInfo] = Field(default_factory=list)
 
     class Config:
         from_attributes = True

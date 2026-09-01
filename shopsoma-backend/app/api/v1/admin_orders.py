@@ -23,6 +23,7 @@ from app.models.vendor_pickup import VendorPickup, PickupStatus
 from app.models.product import Product
 from app.models.payment import Payment
 from app.models.setting import Setting
+from app.models.package_custody import HubPackage
 
 logger = logging.getLogger(__name__)
 from app.services.order_notification_service import OrderNotificationService
@@ -43,6 +44,7 @@ from app.schemas.admin_order import (
     AddressInfo,
     OrderItemDetail,
     PickupInfo,
+    ReadyPackageInfo,
     ShadowQuoteResult,
 )
 from app.services.admin_shadow_quote import (
@@ -456,6 +458,13 @@ async def get_order_detail(
         # Build response with detailed error tracking
         display_currency = resolve_order_currency(order)
         usd_to_ngn_rate = await _get_usd_to_ngn_rate(db)
+        ready_packages = (
+            await db.execute(
+                select(HubPackage)
+                .where(HubPackage.order_id == order.id, HubPackage.state == "ready")
+                .order_by(desc(HubPackage.ready_at), desc(HubPackage.created_at))
+            )
+        ).scalars().all()
         return OrderDetail(
         id=order.id,
         order_number=order.order_number,
@@ -505,6 +514,16 @@ async def get_order_detail(
                 admin_notes=pickup.admin_notes,
             )
             for pickup in order.pickups
+        ],
+        ready_packages=[
+            ReadyPackageInfo(
+                id=package.id,
+                current_version=package.current_version,
+                hub_id=package.hub_id,
+                ready_at=package.ready_at,
+            )
+            for package in ready_packages
+            if package.ready_at is not None
         ],
     )
     except ValueError as e:

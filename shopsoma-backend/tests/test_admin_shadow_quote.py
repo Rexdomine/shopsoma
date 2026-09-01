@@ -1,5 +1,5 @@
 import uuid
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
@@ -11,8 +11,14 @@ from app.models.domestic_rate_quote import (
     DomesticRateOffer,
     DomesticRateResponse,
 )
-from app.models.package_custody import OutboundShipmentIntent
-from app.services.admin_shadow_quote import ShadowQuoteError, run_admin_shadow_quote
+from app.models.package_custody import (
+    OutboundShipmentIntent,
+    OutboundShipmentIntentInvalidation,
+)
+from app.services.admin_shadow_quote import (
+    ShadowQuoteError,
+    run_admin_shadow_quote,
+)
 from app.services.dhl.rating import (
     DHLDomesticRateOffer,
     DHLDomesticRateResult,
@@ -24,7 +30,11 @@ from tests.test_package_custody_persistence import _ready_package
 
 
 class _FakeAdapter:
+    def __init__(self):
+        self.calls = []
+
     async def rate(self, resolved_hub, request):
+        self.calls.append((resolved_hub, request))
         return DHLDomesticRateResult(
             result_kind="success",
             offers=(
@@ -71,19 +81,26 @@ async def test_admin_shadow_quote_persists_lawful_evidence_and_floors_planned_sh
     from app.services import admin_shadow_quote as shadow_quote_service
 
     graph, package, seal, intent = await _subject(db_session, vendor_user, customer_user)
+    adapter = _FakeAdapter()
     monkeypatch.setattr(
         "app.services.admin_shadow_quote.create_sandbox_domestic_rate_adapter",
-        lambda **kwargs: _FakeAdapter(),
+        lambda **kwargs: adapter,
     )
 
-    frozen_today = date.today() + timedelta(days=5)
+    frozen_now = datetime.combine(
+        date.today() + timedelta(days=5),
+        datetime.min.time().replace(hour=13),
+        tzinfo=timezone.utc,
+    )
 
-    class _FutureDate(date):
+    class _FutureDateTime(datetime):
         @classmethod
-        def today(cls):
-            return frozen_today
+        def now(cls, tz=None):
+            if tz is None:
+                return frozen_now.replace(tzinfo=None)
+            return frozen_now.astimezone(tz)
 
-    monkeypatch.setattr(shadow_quote_service, "date", _FutureDate)
+    monkeypatch.setattr(shadow_quote_service, "datetime", _FutureDateTime)
     settings = _settings(graph["cohort"].id)
 
     result = await run_admin_shadow_quote(
@@ -123,11 +140,19 @@ async def test_admin_shadow_quote_persists_lawful_evidence_and_floors_planned_sh
     assert attempt.call_started_at is not None
     assert attempt.result_recorded_at is not None
     assert attempt.account_alias == "dhl-ng-sandbox"
-    assert attempt.planned_ship_date == frozen_today
+    assert attempt.planned_ship_date == frozen_now.date() + timedelta(days=1)
     assert response.completion_txid == attempt.completion_txid
     assert response.ttl_seconds == 1800
     assert offer.service_label == "DHL Sandbox Express"
     assert offer.total_amount == Decimal("4500.00")
+
+    resolved_hub, request = adapter.calls[0]
+    assert resolved_hub.contact_name == graph["hub"].contact_name
+    assert resolved_hub.phone == graph["hub"].contact_phone
+    assert resolved_hub.line1 == graph["hub"].address_line1
+    assert resolved_hub.city == graph["hub"].city
+    assert resolved_hub.state == graph["hub"].state
+    assert request.planned_ship_date == frozen_now.date() + timedelta(days=1)
 
 
 @pytest.mark.asyncio
@@ -193,6 +218,47 @@ async def test_admin_shadow_quote_requires_package_id_when_multiple_ready_packag
         )
     ).scalar_one()
     assert selected_attempt.package_id == package2.id
+
+
+@pytest.mark.asyncio
+async def test_admin_shadow_quote_rejects_invalidated_ready_package_intent(
+    monkeypatch, db_session, vendor_user, customer_user, admin_user
+):
+    graph, package, _seal, intent = await _subject(
+        db_session, vendor_user, customer_user
+    )
+    db_session.add(
+        OutboundShipmentIntentInvalidation(
+            intent_id=intent.id,
+            reason="repacked",
+            actor_type="system",
+            actor_id="shadow-quote-test",
+            source_command="repack_package",
+            idempotency_key=f"invalidate-{uuid.uuid4().hex}",
+            invalidated_at=datetime.now(timezone.utc),
+        )
+    )
+    await db_session.flush()
+    monkeypatch.setattr(
+        "app.services.admin_shadow_quote.create_sandbox_domestic_rate_adapter",
+        lambda **kwargs: _FakeAdapter(),
+    )
+
+    settings = _settings(graph["cohort"].id)
+
+    with pytest.raises(
+        ShadowQuoteError,
+        match="selected ready package outbound intent has been invalidated",
+    ):
+        await run_admin_shadow_quote(
+            db=db_session,
+            order_id=graph["order"].id,
+            ready_package_id=package.id,
+            admin=admin_user["user"],
+            settings=settings,
+            identity_key=b"shadow-pepper",
+            identity_key_version="checkout-capability-v7",
+        )
 
 
 @pytest.mark.asyncio

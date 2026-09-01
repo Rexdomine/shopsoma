@@ -7,9 +7,10 @@ No customer-facing endpoint; checkout remains closed.
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,6 +27,7 @@ from app.models.package_custody import (
     HubPackageSeal,
     HubPackageVersion,
     OutboundShipmentIntent,
+    OutboundShipmentIntentInvalidation,
 )
 from app.models.fulfillment_hub import FulfillmentHub
 from app.models.order import Order
@@ -59,6 +61,29 @@ from app.schemas.admin_order import ShadowQuoteResult
 
 class ShadowQuoteError(Exception):
     pass
+
+
+_LAGOS_TZ = ZoneInfo("Africa/Lagos")
+
+
+def _normalize_lagos_datetime(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=_LAGOS_TZ)
+    return value.astimezone(_LAGOS_TZ)
+
+
+def _planned_ship_date_for_shadow_quote(intent_created_at: datetime | None) -> date:
+    current_time = _normalize_lagos_datetime(datetime.now(_LAGOS_TZ))
+    planned_ship_date = current_time.date()
+    if intent_created_at is not None:
+        planned_ship_date = max(
+            planned_ship_date,
+            _normalize_lagos_datetime(intent_created_at).date(),
+        )
+    tender_at = datetime.combine(planned_ship_date, time(hour=12), tzinfo=_LAGOS_TZ)
+    if tender_at <= current_time:
+        planned_ship_date += timedelta(days=1)
+    return planned_ship_date
 
 
 async def run_admin_shadow_quote(
@@ -129,10 +154,27 @@ async def run_admin_shadow_quote(
             OutboundShipmentIntent.order_id == order_id,
             OutboundShipmentIntent.package_id == package.id,
             OutboundShipmentIntent.package_version == package.current_version,
+            ~select(OutboundShipmentIntentInvalidation.id)
+            .where(OutboundShipmentIntentInvalidation.intent_id == OutboundShipmentIntent.id)
+            .exists(),
         ).order_by(OutboundShipmentIntent.created_at.desc())
     )
     intent = intent_res.scalar_one_or_none()
     if intent is None:
+        invalidated_intent_res = await db.execute(
+            select(OutboundShipmentIntent.id).where(
+                OutboundShipmentIntent.order_id == order_id,
+                OutboundShipmentIntent.package_id == package.id,
+                OutboundShipmentIntent.package_version == package.current_version,
+                select(OutboundShipmentIntentInvalidation.id)
+                .where(OutboundShipmentIntentInvalidation.intent_id == OutboundShipmentIntent.id)
+                .exists(),
+            )
+        )
+        if invalidated_intent_res.scalar_one_or_none() is not None:
+            raise ShadowQuoteError(
+                "selected ready package outbound intent has been invalidated"
+            )
         raise ShadowQuoteError("no outbound shipment intent")
 
     # Active hub
@@ -218,19 +260,17 @@ async def run_admin_shadow_quote(
         package_version=package.current_version,
         destination=destination,
         package=package_ref,
-        contact_name=intent.destination_name,
-        phone=intent.destination_phone,
-        line1=intent.destination_address_line1,
-        line2=intent.destination_address_line2,
-        city=intent.destination_city,
-        state=intent.destination_state,
-        postal_code=intent.destination_postal_code,
-        country_code=destination_country_code,
+        contact_name=hub.contact_name,
+        phone=hub.contact_phone,
+        line1=hub.address_line1,
+        line2=hub.address_line2,
+        city=hub.city,
+        state=hub.state,
+        postal_code=hub.postal_code,
+        country_code=hub.country_code,
     )
 
-    planned_ship_date = date.today()
-    if intent.created_at is not None:
-        planned_ship_date = max(planned_ship_date, intent.created_at.date())
+    planned_ship_date = _planned_ship_date_for_shadow_quote(intent.created_at)
 
     request = DomesticRateRequest(
         origin=hub_ref,

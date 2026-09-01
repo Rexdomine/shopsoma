@@ -92,6 +92,13 @@ export interface PickupInfo {
   admin_notes?: string;
 }
 
+export interface ReadyPackageInfo {
+  id: string;
+  current_version: number;
+  hub_id: string;
+  ready_at: string;
+}
+
 export interface OrderListItem {
   id: string;
   order_number: string;
@@ -132,6 +139,7 @@ export interface OrderDetail {
   cancellation_reason?: string;
   items: OrderItemDetail[];
   pickups: PickupInfo[];
+  ready_packages: ReadyPackageInfo[];
 }
 
 export interface OrderStats {
@@ -345,10 +353,17 @@ export const processRefund = async (
 /**
  * Run admin-only DHL sandbox shadow quote
  */
-export const runShadowQuote = async (orderId: string): Promise<ShadowQuoteResult> => {
-  const response = await api.post<ShadowQuoteResult>(`/admin/orders/${orderId}/shadow-quote`, undefined, {
-    timeout: 30000,
-  });
+export const runShadowQuote = async (
+  orderId: string,
+  packageId?: string
+): Promise<ShadowQuoteResult> => {
+  const response = await api.post<ShadowQuoteResult>(
+    `/admin/orders/${orderId}/shadow-quote`,
+    undefined,
+    {
+      params: packageId ? { package_id: packageId } : undefined,
+    }
+  );
   return response.data;
 };
 
