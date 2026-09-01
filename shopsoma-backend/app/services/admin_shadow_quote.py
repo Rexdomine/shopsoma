@@ -66,6 +66,13 @@ class ShadowQuoteError(Exception):
 _LAGOS_TZ = ZoneInfo("Africa/Lagos")
 
 
+def _blank_optional_text_to_none(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
 def _normalize_lagos_datetime(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=_LAGOS_TZ)
@@ -237,38 +244,41 @@ async def run_admin_shadow_quote(
     )
 
     destination_country_code = intent.destination_country_code
-    destination = DomesticAddress(
-        contact_name=intent.destination_name,
-        phone=intent.destination_phone,
-        line1=intent.destination_address_line1,
-        line2=intent.destination_address_line2,
-        city=intent.destination_city,
-        state=intent.destination_state,
-        postal_code=intent.destination_postal_code,
-        country_code=destination_country_code,
-    )
+    try:
+        destination = DomesticAddress(
+            contact_name=intent.destination_name,
+            phone=intent.destination_phone,
+            line1=intent.destination_address_line1,
+            line2=_blank_optional_text_to_none(intent.destination_address_line2),
+            city=intent.destination_city,
+            state=intent.destination_state,
+            postal_code=_blank_optional_text_to_none(intent.destination_postal_code),
+            country_code=destination_country_code,
+        )
 
-    hub_ref = HubRef(id=hub.id)
+        hub_ref = HubRef(id=hub.id)
 
-    resolved = DHLResolvedHub(
-        hub=hub_ref,
-        hub_version=hub.version,
-        intent_id=intent.id,
-        order_id=order.id,
-        seal_id=seal.id,
-        package_id=package.id,
-        package_version=package.current_version,
-        destination=destination,
-        package=package_ref,
-        contact_name=hub.contact_name,
-        phone=hub.contact_phone,
-        line1=hub.address_line1,
-        line2=hub.address_line2,
-        city=hub.city,
-        state=hub.state,
-        postal_code=hub.postal_code,
-        country_code=hub.country_code,
-    )
+        resolved = DHLResolvedHub(
+            hub=hub_ref,
+            hub_version=hub.version,
+            intent_id=intent.id,
+            order_id=order.id,
+            seal_id=seal.id,
+            package_id=package.id,
+            package_version=package.current_version,
+            destination=destination,
+            package=package_ref,
+            contact_name=hub.contact_name,
+            phone=hub.contact_phone,
+            line1=hub.address_line1,
+            line2=_blank_optional_text_to_none(hub.address_line2),
+            city=hub.city,
+            state=hub.state,
+            postal_code=_blank_optional_text_to_none(hub.postal_code),
+            country_code=hub.country_code,
+        )
+    except ValueError as exc:
+        raise ShadowQuoteError("invalid shipment address details") from exc
 
     planned_ship_date = _planned_ship_date_for_shadow_quote(intent.created_at)
 

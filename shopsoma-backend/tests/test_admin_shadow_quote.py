@@ -217,6 +217,67 @@ async def test_admin_shadow_quote_records_call_start_before_provider_await(
 
 
 @pytest.mark.asyncio
+async def test_admin_shadow_quote_normalizes_blank_optional_hub_fields(
+    monkeypatch, db_session, vendor_user, customer_user, admin_user
+):
+    graph, _package, _seal, _intent = await _subject(
+        db_session, vendor_user, customer_user
+    )
+    graph["hub"].address_line2 = "   "
+    graph["hub"].postal_code = ""
+    await db_session.flush()
+
+    adapter = _FakeAdapter()
+    monkeypatch.setattr(
+        "app.services.admin_shadow_quote.create_sandbox_domestic_rate_adapter",
+        lambda **kwargs: adapter,
+    )
+
+    result = await run_admin_shadow_quote(
+        db=db_session,
+        order_id=graph["order"].id,
+        admin=admin_user["user"],
+        settings=_settings(graph["cohort"].id),
+        identity_key=b"shadow-pepper",
+        identity_key_version="checkout-capability-v7",
+    )
+
+    assert result.result_kind == "success"
+    resolved_hub, _request = adapter.calls[0]
+    assert resolved_hub.line2 is None
+    assert resolved_hub.postal_code is None
+
+
+@pytest.mark.asyncio
+async def test_admin_shadow_quote_translates_contract_validation_failures(
+    monkeypatch, db_session, vendor_user, customer_user, admin_user
+):
+    graph, _package, _seal, _intent = await _subject(
+        db_session, vendor_user, customer_user
+    )
+
+    class _BrokenDomesticAddress:
+        def __init__(self, *args, **kwargs):
+            raise ValueError("line2 must not be empty")
+
+    monkeypatch.setattr("app.services.admin_shadow_quote.DomesticAddress", _BrokenDomesticAddress)
+    monkeypatch.setattr(
+        "app.services.admin_shadow_quote.create_sandbox_domestic_rate_adapter",
+        lambda **kwargs: _FakeAdapter(),
+    )
+
+    with pytest.raises(ShadowQuoteError, match="invalid shipment address details"):
+        await run_admin_shadow_quote(
+            db=db_session,
+            order_id=graph["order"].id,
+            admin=admin_user["user"],
+            settings=_settings(graph["cohort"].id),
+            identity_key=b"shadow-pepper",
+            identity_key_version="checkout-capability-v7",
+        )
+
+
+@pytest.mark.asyncio
 async def test_admin_shadow_quote_requires_package_id_when_multiple_ready_packages(
     monkeypatch, db_session, vendor_user, customer_user, admin_user
 ):
