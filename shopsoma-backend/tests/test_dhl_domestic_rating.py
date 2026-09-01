@@ -164,7 +164,7 @@ def fingerprint(
         "resolved_hub": hub or resolved_hub(),
         "provider": "dhl",
         "environment": "sandbox",
-        "account_alias": "export-primary",
+        "account_alias": "dhl-ng-sandbox",
         "adapter_version": "dhl-rates-v1",
         "schema_version": "mydhl-rates-v1",
         "key_version": "test-key-v1",

@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_, or_, desc
 from sqlalchemy.orm import selectinload
 from typing import Optional, List
+from uuid import UUID
 from datetime import datetime, date, timedelta
 from decimal import Decimal
 import logging
@@ -13,6 +14,7 @@ import io
 import math
 
 from app.api.dependencies import get_db, get_current_admin
+from app.core.config import Settings, settings
 from app.models.user import User
 from app.models.order import Order, OrderItem, PaymentStatus, FulfillmentStatus
 from app.models.vendor import Vendor
@@ -41,9 +43,18 @@ from app.schemas.admin_order import (
     AddressInfo,
     OrderItemDetail,
     PickupInfo,
+    ShadowQuoteResult,
+)
+from app.services.admin_shadow_quote import (
+    run_admin_shadow_quote,
+    ShadowQuoteError,
 )
 
 router = APIRouter(prefix="/admin/orders", tags=["Admin Orders"])
+
+
+def get_app_settings() -> Settings:
+    return settings
 
 
 # ============================================================================
@@ -829,6 +840,56 @@ async def bulk_update_status(
 # ============================================================================
 # ORDER ACTIONS
 # ============================================================================
+
+@router.post("/{order_id}/shadow-quote", response_model=ShadowQuoteResult)
+async def create_shadow_quote(
+    order_id: str,
+    admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_app_settings),
+):
+    """Run an admin-only DHL sandbox shadow quote for a ready package."""
+
+    try:
+        parsed_order_id = UUID(order_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid order id",
+        ) from exc
+
+    if not settings.checkout_capability_configured:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Checkout capability fingerprinting is not configured",
+        )
+
+    pepper_version = settings.CHECKOUT_CAPABILITY_ACTIVE_PEPPER_VERSION
+    if pepper_version is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Checkout capability fingerprint version is not configured",
+        )
+
+    identity_key = settings.CHECKOUT_CAPABILITY_ACTIVE_PEPPER.get_secret_value().encode("utf-8")
+    identity_key_version = f"checkout-capability-v{pepper_version}"
+
+    try:
+        return await run_admin_shadow_quote(
+            db=db,
+            order_id=parsed_order_id,
+            admin=admin,
+            settings=settings,
+            identity_key=identity_key,
+            identity_key_version=identity_key_version,
+        )
+    except ShadowQuoteError as exc:
+        detail = str(exc)
+        status_code = status.HTTP_400_BAD_REQUEST
+        if detail == "order not found":
+            status_code = status.HTTP_404_NOT_FOUND
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+
 
 @router.post("/{order_id}/cancel")
 async def cancel_order(

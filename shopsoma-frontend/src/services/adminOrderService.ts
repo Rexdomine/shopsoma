@@ -217,6 +217,27 @@ export interface CancelOrderRequest {
   admin_notes?: string;
 }
 
+export interface ShadowQuoteOffer {
+  provider_product_code: string;
+  service_label: string;
+  currency: string;
+  total_amount: number;
+}
+
+export interface ShadowQuoteResult {
+  order_id: string;
+  shadow_quote_id: string;
+  result_kind: string;
+  environment: string;
+  adapter_version: string;
+  provider: string;
+  offers_count: number;
+  offers_redacted: ShadowQuoteOffer[];
+  gate_status: Record<string, boolean | string>;
+  quoted_at: string;
+  note: string;
+}
+
 // ============================================================================
 // API FUNCTIONS
 // ============================================================================
@@ -318,6 +339,16 @@ export const processRefund = async (
   data: RefundRequest
 ): Promise<{ success: boolean; message: string; order_id: string; order_number: string; refund_amount: number }> => {
   const response = await api.post(`/admin/orders/${orderId}/refund`, data);
+  return response.data;
+};
+
+/**
+ * Run admin-only DHL sandbox shadow quote
+ */
+export const runShadowQuote = async (orderId: string): Promise<ShadowQuoteResult> => {
+  const response = await api.post<ShadowQuoteResult>(`/admin/orders/${orderId}/shadow-quote`, undefined, {
+    timeout: 30000,
+  });
   return response.data;
 };
 

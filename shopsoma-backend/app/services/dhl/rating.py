@@ -23,7 +23,7 @@ from app.services.shipping.rate_identity import canonical_rate_fingerprint
 MYDHL_TEST_BASE_URL = "https://express.api.dhl.com/mydhlapi/test"
 ADAPTER_VERSION = "dhl-rates-v1"
 SCHEMA_VERSION = "mydhl-rates-v1"
-ACCOUNT_ALIAS = "export-primary"
+ACCOUNT_ALIAS = "dhl-ng-sandbox"
 _PRODUCT_CODE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,5}\Z")
 _LOCAL_PRODUCT_CODE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,2}\Z")
 _INTERNAL_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,99}\Z")

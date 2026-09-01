@@ -14,10 +14,12 @@ import {
   updateShippingInfo,
   cancelOrder,
   processRefund,
+  runShadowQuote,
 } from '../../services/adminOrderService';
 import type {
   OrderDetail,
   FulfillmentStatus,
+  ShadowQuoteResult,
 } from '../../services/adminOrderService';
 import { getStatusBadgeConfig } from '../../utils/orderStatusMessages';
 import { formatPriceWithConversion } from '../../utils/pricing';
@@ -53,6 +55,8 @@ export default function AdminOrderDetail() {
 
   // Pickup scheduling modal
   const [showPickupScheduleModal, setShowPickupScheduleModal] = useState(false);
+  const [shadowQuoteResult, setShadowQuoteResult] = useState<ShadowQuoteResult | null>(null);
+  const [runningShadowQuote, setRunningShadowQuote] = useState(false);
   const [pickupWindowData, setPickupWindowData] = useState({
     pickup_window_start: '',
     pickup_window_end: '',
@@ -255,6 +259,22 @@ export default function AdminOrderDetail() {
     }
   };
 
+  const handleRunShadowQuote = async () => {
+    if (!order) return;
+
+    try {
+      setRunningShadowQuote(true);
+      const result = await runShadowQuote(order.id);
+      setShadowQuoteResult(result);
+      success(`DHL sandbox shadow quote recorded (${result.result_kind})`);
+    } catch (err) {
+      console.error('Failed to run shadow quote:', err);
+      error('Failed to run DHL sandbox shadow quote');
+    } finally {
+      setRunningShadowQuote(false);
+    }
+  };
+
 
   if (loading) {
     return (
@@ -345,6 +365,13 @@ export default function AdminOrderDetail() {
                     Process Refund
                   </button>
                 )}
+                <button
+                  onClick={handleRunShadowQuote}
+                  disabled={runningShadowQuote || updating}
+                  className="px-4 py-2 border border-[#105E53] text-[#105E53] rounded-lg hover:bg-[#f1f8f6] disabled:opacity-50"
+                >
+                  {runningShadowQuote ? 'Running Shadow Quote...' : 'Run DHL Sandbox Shadow Quote'}
+                </button>
               </>
             )}
           </div>
@@ -637,6 +664,24 @@ export default function AdminOrderDetail() {
                 </button>
               </div>
               <div className="space-y-3 text-sm">
+                {shadowQuoteResult && (
+                  <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <div className="text-xs font-semibold uppercase tracking-wide text-emerald-700">
+                          DHL Sandbox Shadow Quote
+                        </div>
+                        <div className="text-sm text-emerald-900">
+                          {shadowQuoteResult.result_kind} · {shadowQuoteResult.offers_count} offer(s)
+                        </div>
+                      </div>
+                      <div className="text-xs text-emerald-700">
+                        {new Date(shadowQuoteResult.quoted_at).toLocaleString()}
+                      </div>
+                    </div>
+                    <div className="mt-2 text-sm text-emerald-900">{shadowQuoteResult.note}</div>
+                  </div>
+                )}
                 {order.shipping_address && (
                   <div>
                     <div className="text-gray-500">Recipient</div>
