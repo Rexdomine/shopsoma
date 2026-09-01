@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
@@ -54,6 +55,28 @@ class _FakeAdapter:
                 ),
             ),
         )
+
+
+class _InspectingDelayAdapter(_FakeAdapter):
+    def __init__(self, db_session, order_id):
+        super().__init__()
+        self._db_session = db_session
+        self._order_id = order_id
+        self.observed_call_started_at = None
+        self.observed_result_recorded_at = None
+
+    async def rate(self, resolved_hub, request):
+        attempt = (
+            await self._db_session.execute(
+                select(DomesticRateAttempt).where(
+                    DomesticRateAttempt.order_id == self._order_id
+                )
+            )
+        ).scalar_one()
+        self.observed_call_started_at = attempt.call_started_at
+        self.observed_result_recorded_at = attempt.result_recorded_at
+        await asyncio.sleep(0)
+        return await super().rate(resolved_hub, request)
 
 
 def _settings(cohort_id):
@@ -153,6 +176,44 @@ async def test_admin_shadow_quote_persists_lawful_evidence_and_floors_planned_sh
     assert resolved_hub.city == graph["hub"].city
     assert resolved_hub.state == graph["hub"].state
     assert request.planned_ship_date == frozen_now.date() + timedelta(days=1)
+
+
+@pytest.mark.asyncio
+async def test_admin_shadow_quote_records_call_start_before_provider_await(
+    monkeypatch, db_session, vendor_user, customer_user, admin_user
+):
+    graph, _package, _seal, _intent = await _subject(
+        db_session, vendor_user, customer_user
+    )
+    adapter = _InspectingDelayAdapter(db_session, graph["order"].id)
+    monkeypatch.setattr(
+        "app.services.admin_shadow_quote.create_sandbox_domestic_rate_adapter",
+        lambda **kwargs: adapter,
+    )
+
+    result = await run_admin_shadow_quote(
+        db=db_session,
+        order_id=graph["order"].id,
+        admin=admin_user["user"],
+        settings=_settings(graph["cohort"].id),
+        identity_key=b"shadow-pepper",
+        identity_key_version="checkout-capability-v7",
+    )
+
+    assert result.result_kind == "success"
+    assert adapter.observed_call_started_at is not None
+    assert adapter.observed_result_recorded_at is None
+
+    attempt = (
+        await db_session.execute(
+            select(DomesticRateAttempt).where(
+                DomesticRateAttempt.order_id == graph["order"].id
+            )
+        )
+    ).scalar_one()
+    assert attempt.call_started_at == adapter.observed_call_started_at
+    assert attempt.result_recorded_at is not None
+    assert attempt.result_recorded_at >= attempt.call_started_at
 
 
 @pytest.mark.asyncio

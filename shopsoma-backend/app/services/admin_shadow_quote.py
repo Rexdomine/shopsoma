@@ -326,7 +326,17 @@ async def run_admin_shadow_quote(
     db.add(attempt)
     await db.flush()
 
-    call_started_at = await db.scalar(text("SELECT clock_timestamp()"))
+    await db.execute(
+        text(
+            "UPDATE domestic_rate_attempts "
+            "SET call_started_at=clock_timestamp() "
+            "WHERE id=:attempt_id"
+        ),
+        {"attempt_id": attempt.id},
+    )
+    await db.refresh(attempt)
+    call_started_at = attempt.call_started_at
+
     result: DHLDomesticRateResult | None = None
     adapter_error = None
     try:
@@ -347,13 +357,12 @@ async def run_admin_shadow_quote(
     await db.execute(
         text(
             "UPDATE domestic_rate_attempts "
-            "SET call_started_at=:called, result_recorded_at=:recorded, "
+            "SET result_recorded_at=:recorded, "
             "classification=:classification, failure_code=:failure_code "
             "WHERE id=:attempt_id"
         ),
         {
             "attempt_id": attempt.id,
-            "called": call_started_at,
             "recorded": result_recorded_at,
             "classification": terminal_classification,
             "failure_code": failure_code,
