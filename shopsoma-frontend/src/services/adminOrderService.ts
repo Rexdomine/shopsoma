@@ -359,8 +359,11 @@ export const runShadowQuote = async (
 ): Promise<ShadowQuoteResult> => {
   const response = await api.post<ShadowQuoteResult>(
     `/admin/orders/${orderId}/shadow-quote`,
-    packageId ? { package_id: packageId } : undefined,
-    { timeout: 0 }
+    undefined,
+    {
+      params: packageId ? { package_id: packageId } : undefined,
+      timeout: 0,
+    }
   );
   return response.data;
 };
