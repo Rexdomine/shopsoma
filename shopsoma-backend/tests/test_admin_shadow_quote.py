@@ -5,6 +5,7 @@ from decimal import Decimal
 
 import pytest
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.core.config import Settings
 from app.models.domestic_rate_quote import (
@@ -60,21 +61,22 @@ class _FakeAdapter:
 class _InspectingDelayAdapter(_FakeAdapter):
     def __init__(self, db_session, order_id):
         super().__init__()
-        self._db_session = db_session
+        self._sessions = async_sessionmaker(bind=db_session.bind, expire_on_commit=False)
         self._order_id = order_id
         self.observed_call_started_at = None
         self.observed_result_recorded_at = None
 
     async def rate(self, resolved_hub, request):
-        attempt = (
-            await self._db_session.execute(
-                select(DomesticRateAttempt).where(
-                    DomesticRateAttempt.order_id == self._order_id
+        async with self._sessions() as observer:
+            attempt = (
+                await observer.execute(
+                    select(DomesticRateAttempt).where(
+                        DomesticRateAttempt.order_id == self._order_id
+                    )
                 )
-            )
-        ).scalar_one()
-        self.observed_call_started_at = attempt.call_started_at
-        self.observed_result_recorded_at = attempt.result_recorded_at
+            ).scalar_one()
+            self.observed_call_started_at = attempt.call_started_at
+            self.observed_result_recorded_at = attempt.result_recorded_at
         await asyncio.sleep(0)
         return await super().rate(resolved_hub, request)
 

@@ -304,7 +304,8 @@ async def run_admin_shadow_quote(
     claimed_at = await db.scalar(text("SELECT clock_timestamp()"))
     idempotency_key = f"shadow-admin-{str(admin.id)}-{str(order.id)}-{uuid.uuid4().hex}"
 
-    # Build pristine pending attempt; lifecycle completes via SQL update
+    # Build pristine pending attempt, then durably commit the claimed call-start
+    # transition before crossing the provider boundary.
     attempt = DomesticRateAttempt(
         id=uuid.uuid4(),
         intent_id=intent.id,
@@ -346,6 +347,7 @@ async def run_admin_shadow_quote(
     )
     await db.refresh(attempt)
     call_started_at = attempt.call_started_at
+    await db.commit()
 
     result: DHLDomesticRateResult | None = None
     adapter_error = None
