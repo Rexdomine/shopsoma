@@ -844,6 +844,7 @@ async def bulk_update_status(
 @router.post("/{order_id}/shadow-quote", response_model=ShadowQuoteResult)
 async def create_shadow_quote(
     order_id: str,
+    package_id: str | None = None,
     admin: User = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_app_settings),
@@ -857,6 +858,17 @@ async def create_shadow_quote(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Invalid order id",
         ) from exc
+
+    if package_id is not None:
+        try:
+            parsed_package_id = UUID(package_id)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Invalid package id",
+            ) from exc
+    else:
+        parsed_package_id = None
 
     if not settings.checkout_capability_configured:
         raise HTTPException(
@@ -882,6 +894,7 @@ async def create_shadow_quote(
             settings=settings,
             identity_key=identity_key,
             identity_key_version=identity_key_version,
+            ready_package_id=parsed_package_id,
         )
     except ShadowQuoteError as exc:
         detail = str(exc)

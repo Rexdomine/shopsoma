@@ -68,6 +68,7 @@ async def run_admin_shadow_quote(
     settings: Settings,
     identity_key: bytes,
     identity_key_version: str,
+    ready_package_id: uuid.UUID | None = None,
 ) -> ShadowQuoteResult:
     # Fail-closed sandbox gate check (before DB work)
     if settings.DHL_ENVIRONMENT != "sandbox":
@@ -82,14 +83,33 @@ async def run_admin_shadow_quote(
         raise ShadowQuoteError("order not found")
 
     # Authoritative ready package
-    pkg_res = await db.execute(
-        select(HubPackage).where(
-            HubPackage.order_id == order_id, HubPackage.state == "ready"
-        ).order_by(HubPackage.row_version.desc())
+    package_query = select(HubPackage).where(
+        HubPackage.order_id == order_id,
+        HubPackage.state == "ready",
     )
-    package = pkg_res.scalar_one_or_none()
-    if package is None:
-        raise ShadowQuoteError("no ready package for order")
+    if ready_package_id is not None:
+        package_query = package_query.where(HubPackage.id == ready_package_id)
+        pkg_res = await db.execute(package_query)
+        package = pkg_res.scalar_one_or_none()
+        if package is None:
+            raise ShadowQuoteError("selected ready package not found for order")
+    else:
+        pkg_res = await db.execute(
+            package_query.order_by(
+                HubPackage.ready_at.desc(),
+                HubPackage.row_version.desc(),
+                HubPackage.created_at.desc(),
+                HubPackage.id.desc(),
+            )
+        )
+        packages = pkg_res.scalars().all()
+        if not packages:
+            raise ShadowQuoteError("no ready package for order")
+        if len(packages) > 1:
+            raise ShadowQuoteError(
+                "multiple ready packages for order; package_id is required"
+            )
+        package = packages[0]
 
     # Active bound seal for package version
     seal_res = await db.execute(
@@ -208,11 +228,15 @@ async def run_admin_shadow_quote(
         country_code=destination_country_code,
     )
 
+    planned_ship_date = date.today()
+    if intent.created_at is not None:
+        planned_ship_date = max(planned_ship_date, intent.created_at.date())
+
     request = DomesticRateRequest(
         origin=hub_ref,
         destination=destination,
         package=package_ref,
-        planned_ship_date=intent.created_at.date() if intent.created_at else date.today(),
+        planned_ship_date=planned_ship_date,
     )
 
     fingerprint = canonical_rate_fingerprint(
@@ -262,17 +286,16 @@ async def run_admin_shadow_quote(
     db.add(attempt)
     await db.flush()
 
-    adapter = create_sandbox_domestic_rate_adapter(
-        config=settings,
-        transport=None,
-        identity_key=identity_key,
-        identity_key_version=identity_key_version,
-    )
-
     call_started_at = await db.scalar(text("SELECT clock_timestamp()"))
     result: DHLDomesticRateResult | None = None
     adapter_error = None
     try:
+        adapter = create_sandbox_domestic_rate_adapter(
+            config=settings,
+            transport=None,
+            identity_key=identity_key,
+            identity_key_version=identity_key_version,
+        )
         result = await adapter.rate(resolved, request)
     except DHLRateAdapterError as exc:
         adapter_error = exc
