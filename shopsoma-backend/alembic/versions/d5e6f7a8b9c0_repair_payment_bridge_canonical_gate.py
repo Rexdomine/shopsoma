@@ -608,6 +608,11 @@ IF NOT FOUND OR authoritative.customer_id<>NEW.customer_id
     OR authoritative.total_amount<>NEW.amount OR authoritative.currency<>NEW.currency
     OR authoritative.payment_status='PAID' OR authoritative.fulfillment_status='cancelled'
  THEN RAISE EXCEPTION 'domestic payment attempt binding is invalid'; END IF;
+ requires_stock_reservations:=EXISTS(
+   SELECT 1 FROM order_inventory_coverage coverage
+    WHERE coverage.order_id=NEW.order_id
+      AND coverage.checkout_estimate_selection_id=NEW.checkout_estimate_selection_id
+      AND coverage.inventory_policy='stock_managed');
  SELECT min(expires_at) INTO earliest_reservation_expiry FROM stock_reservations
   WHERE order_id=NEW.order_id AND checkout_estimate_selection_id=NEW.checkout_estimate_selection_id
     AND workflow_cohort='domestic_checkout_v1' AND state='active' AND expires_at>now_at;

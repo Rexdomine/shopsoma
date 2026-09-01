@@ -62,6 +62,7 @@ def test_repair_migration_keeps_selection_reservation_window_for_attempt_expiry(
 def test_repair_migration_declares_requires_stock_reservations_in_both_trigger_copies() -> None:
     normalized = " ".join(REPAIR_MIGRATION.read_text().split())
     assert normalized.count("DECLARE requires_stock_reservations boolean;") >= 2
+    assert normalized.count("requires_stock_reservations:=EXISTS( SELECT 1 FROM order_inventory_coverage coverage WHERE coverage.order_id=NEW.order_id AND coverage.checkout_estimate_selection_id=NEW.checkout_estimate_selection_id AND coverage.inventory_policy='stock_managed');") >= 2
 
 
 def test_repair_migration_keeps_call_started_expiry_in_parity() -> None:
