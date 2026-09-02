@@ -56,7 +56,8 @@ def _literal_assignment(name: str):
 
 def test_lane_3d_has_linear_phase_2b_child() -> None:
     graph = scripts()
-    assert graph.get_heads() == ["d5e6f7a8b9c0"]
+    assert graph.get_heads() == ["e6f7a8b9c0d1"]
+    assert graph.get_revision("e6f7a8b9c0d1").down_revision == "d5e6f7a8b9c0"
     assert graph.get_revision("f9d1b3e5a7c9").down_revision == "e8c0a2d4f6b8"
     assert graph.get_revision("e8c0a2d4f6b8").down_revision == "d7b9f1c3e5a8"
     assert graph.get_revision(REVISION).down_revision == PARENT
@@ -131,17 +132,23 @@ def test_lane_3d_trigger_bodies_have_exact_model_migration_parity() -> None:
         for statement in expected_triggers
         if statement.startswith("CREATE FUNCTION validate_outbound_intent_insert()")
     )
-    historical_without_evolved_intent = tuple(
+    current_custody_trigger = next(
+        statement
+        for statement in expected_triggers
+        if statement.startswith("CREATE FUNCTION validate_custody_event_insert()")
+    )
+    historical_without_evolved_intent_or_custody = tuple(
         statement
         for statement in historical_triggers
         if not statement.startswith("CREATE FUNCTION validate_outbound_intent_insert()")
+        and not statement.startswith("CREATE FUNCTION validate_custody_event_insert()")
     )
-    current_without_evolved_intent = tuple(
+    current_without_evolved_intent_or_custody = tuple(
         statement
         for statement in expected_triggers
-        if statement != current_intent_trigger
+        if statement not in (current_intent_trigger, current_custody_trigger)
     )
-    assert historical_without_evolved_intent == current_without_evolved_intent
+    assert historical_without_evolved_intent_or_custody == current_without_evolved_intent_or_custody
 
     domestic_revision = scripts().get_revision("c6a8e0f2b4d7")
     assert domestic_revision is not None
@@ -170,6 +177,15 @@ def test_lane_3d_trigger_bodies_have_exact_model_migration_parity() -> None:
         )
         == domestic_literal("_DESTINATION_SNAPSHOT_UPGRADE_DDLS")[-1]
     )
+    repair_source = (
+        Path(__file__).parents[1]
+        / "alembic"
+        / "versions"
+        / "e6f7a8b9c0d1_repair_domestic_rate_custody_guards.py"
+    ).read_text()
+    assert current_custody_trigger.replace(
+        "CREATE FUNCTION", "CREATE OR REPLACE FUNCTION", 1
+    ) in repair_source
     assert _literal_assignment("_DROP_FUNCTION_DDLS") == tuple(
         PACKAGE_CUSTODY_DROP_DDLS
     )

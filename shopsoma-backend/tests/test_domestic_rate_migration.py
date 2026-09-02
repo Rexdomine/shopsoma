@@ -17,11 +17,13 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 
 ROOT = Path(__file__).resolve().parents[1]
-HEAD = "d5e6f7a8b9c0"
-CURRENT_HEAD_PARENT = "c4d5e6f7a8b9"
-PREVIOUS_HEAD = "b3c4d5e6f7a8"
-HEAD_PARENT = "a2b3c4d5e6f7"
-HEAD_GRANDPARENT = "a1b2c3d4e5f6"
+HEAD = "e6f7a8b9c0d1"
+CURRENT_HEAD_PARENT = "d5e6f7a8b9c0"
+PREVIOUS_HEAD = "c4d5e6f7a8b9"
+HEAD_PARENT = "b3c4d5e6f7a8"
+HEAD_GRANDPARENT = "a2b3c4d5e6f7"
+HEAD_MIGRATION = ROOT / "alembic" / "versions" / f"{HEAD}_repair_domestic_rate_custody_guards.py"
+
 EXPAND_REVISION = "a0b1c2d3e4f5"
 F9_REVISION = "f9d1b3e5a7c9"
 QUOTE_REVISION = "e8c0a2d4f6b8"
@@ -152,11 +154,15 @@ def _literal(name: str, revision_id: str = REVISION):
 def test_domestic_rate_migration_is_the_single_linear_static_head() -> None:
     graph = _scripts()
     assert graph.get_heads() == [HEAD]
-    assert graph.get_revision(HEAD).down_revision == CURRENT_HEAD_PARENT
+    head_revision = graph.get_revision(HEAD)
+    assert head_revision is not None
+    assert Path(head_revision.path) == HEAD_MIGRATION
+    assert head_revision.down_revision == CURRENT_HEAD_PARENT
     assert graph.get_revision(CURRENT_HEAD_PARENT).down_revision == PREVIOUS_HEAD
     assert graph.get_revision(PREVIOUS_HEAD).down_revision == HEAD_PARENT
     assert graph.get_revision(HEAD_PARENT).down_revision == HEAD_GRANDPARENT
-    assert graph.get_revision(HEAD_GRANDPARENT).down_revision == EXPAND_REVISION
+    assert graph.get_revision(HEAD_GRANDPARENT).down_revision == "a1b2c3d4e5f6"
+    assert graph.get_revision("a1b2c3d4e5f6").down_revision == EXPAND_REVISION
     assert graph.get_revision(EXPAND_REVISION).down_revision == F9_REVISION
     assert graph.get_revision(F9_REVISION).down_revision == QUOTE_REVISION
     assert graph.get_revision(QUOTE_REVISION).down_revision == REVISION
@@ -188,6 +194,16 @@ def test_domestic_rate_migration_is_the_single_linear_static_head() -> None:
         if "ENABLE TRIGGER tr_outbound_shipment_intents_immutable" in statement
     )
     assert disable_index < backfill_index < enable_index
+
+
+def test_domestic_rate_repair_head_replaces_runtime_trigger_functions_on_upgrade() -> None:
+    source = HEAD_MIGRATION.read_text()
+    assert 'down_revision = "d5e6f7a8b9c0"' in source
+    assert source.count("CREATE OR REPLACE FUNCTION validate_domestic_rate_attempt_insert()") == 2
+    assert source.count("CREATE OR REPLACE FUNCTION validate_custody_event_insert()") == 2
+    assert "clock_timestamp() >= attempt.claim_expires_at" in source
+    assert "rate attempt cannot claim after custody handoff" in source
+    assert "custody handoff blocked by active rate attempt claim" in source
 
 
 def test_domestic_rate_lease_checks_and_functions_have_exact_model_parity() -> None:
@@ -235,7 +251,6 @@ def test_domestic_rate_lease_checks_and_functions_have_exact_model_parity() -> N
     )
 
     names = (
-        "validate_domestic_rate_attempt_insert",
         "validate_domestic_rate_attempt_mutation",
         "validate_domestic_rate_attempt_response_shape",
     )
@@ -246,7 +261,19 @@ def test_domestic_rate_lease_checks_and_functions_have_exact_model_parity() -> N
         for statement in DOMESTIC_RATE_TRIGGER_DDLS
         if any(f"CREATE FUNCTION {name}" in statement for name in names)
     )
-    assert _literal("_NEW_FUNCTION_DDLS") == model_functions
+    historical_functions = tuple(
+        statement
+        for statement in _literal("_NEW_FUNCTION_DDLS")
+        if any(f"CREATE OR REPLACE FUNCTION {name}" in statement for name in names)
+    )
+    assert historical_functions == model_functions
+    repair_source = HEAD_MIGRATION.read_text()
+    current_insert = next(
+        statement.replace("%%", "%").strip().replace("CREATE FUNCTION", "CREATE OR REPLACE FUNCTION", 1)
+        for statement in DOMESTIC_RATE_TRIGGER_DDLS
+        if "CREATE FUNCTION validate_domestic_rate_attempt_insert" in statement
+    )
+    assert current_insert in repair_source
 
 
 def test_domestic_rate_migration_contains_only_normalized_safe_evidence() -> None:

@@ -14,15 +14,15 @@ def test_migration_graph_has_exactly_one_head() -> None:
 
     heads = script.get_heads()
 
-    assert heads == ["d5e6f7a8b9c0"]
+    assert heads == ["e6f7a8b9c0d1"]
 
     repair_revision = script.get_revision(heads[0])
     assert repair_revision is not None
-    assert repair_revision.down_revision == "c4d5e6f7a8b9"
+    assert repair_revision.down_revision == "d5e6f7a8b9c0"
 
-    free_shipping_revision = script.get_revision("c4d5e6f7a8b9")
-    assert free_shipping_revision is not None
-    assert free_shipping_revision.down_revision == "b3c4d5e6f7a8"
+    previous_head_revision = script.get_revision("d5e6f7a8b9c0")
+    assert previous_head_revision is not None
+    assert previous_head_revision.down_revision == "c4d5e6f7a8b9"
 
     outbox_revision = script.get_revision("b3c4d5e6f7a8")
     assert outbox_revision is not None

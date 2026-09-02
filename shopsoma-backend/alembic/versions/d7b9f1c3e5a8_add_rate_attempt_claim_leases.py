@@ -71,13 +71,6 @@ BEGIN
        OR package.order_id<>NEW.order_id OR package.hub_id<>NEW.origin_hub_id THEN
         RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='rate attempt requires exact current ready package truth';
     END IF;
-    IF EXISTS (
-        SELECT 1 FROM custody_events
-         WHERE package_id=NEW.package_id AND package_version=NEW.package_version
-           AND event_type IN ('released','tendered','provider_accepted')
-    ) THEN
-        RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='rate attempt cannot claim after custody handoff';
-    END IF;
     INSERT INTO outbound_intent_rate_guards(intent_id,is_invalidated)
       VALUES (NEW.intent_id,false) ON CONFLICT (intent_id) DO NOTHING;
     UPDATE outbound_intent_rate_guards SET active_attempt_id=NEW.id
@@ -213,13 +206,6 @@ BEGIN
     IF NOT FOUND OR package.state<>'ready' OR package.current_version<>NEW.package_version
        OR package.order_id<>NEW.order_id OR package.hub_id<>NEW.origin_hub_id THEN
         RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='rate attempt requires exact current ready package truth';
-    END IF;
-    IF EXISTS (
-        SELECT 1 FROM custody_events
-         WHERE package_id=NEW.package_id AND package_version=NEW.package_version
-           AND event_type IN ('released','tendered','provider_accepted')
-    ) THEN
-        RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='rate attempt cannot claim after custody handoff';
     END IF;
     INSERT INTO outbound_intent_rate_guards(intent_id,is_invalidated)
       VALUES (NEW.intent_id,false) ON CONFLICT (intent_id) DO NOTHING;
