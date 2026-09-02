@@ -66,6 +66,20 @@ class ShadowQuoteError(Exception):
 _LAGOS_TZ = ZoneInfo("Africa/Lagos")
 
 
+async def _reclaim_expired_shadow_attempts(db: AsyncSession, *, intent_id: uuid.UUID) -> None:
+    await db.execute(
+        text(
+            "UPDATE domestic_rate_attempts "
+            "SET classification='abandoned', failure_code='claim_expired' "
+            "WHERE intent_id=:intent_id "
+            "AND source_command='admin_shadow_quote' "
+            "AND classification='pending' "
+            "AND claim_expires_at<=clock_timestamp()"
+        ),
+        {"intent_id": intent_id},
+    )
+
+
 def _blank_optional_text_to_none(value: str | None) -> str | None:
     if value is None:
         return None
@@ -301,6 +315,7 @@ async def run_admin_shadow_quote(
         secret_key=identity_key,
     )
 
+    await _reclaim_expired_shadow_attempts(db, intent_id=intent.id)
     claimed_at = await db.scalar(text("SELECT clock_timestamp()"))
     idempotency_key = f"shadow-admin-{str(admin.id)}-{str(order.id)}-{uuid.uuid4().hex}"
 

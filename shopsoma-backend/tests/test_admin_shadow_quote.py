@@ -4,7 +4,7 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.core.config import Settings
@@ -27,7 +27,7 @@ from app.services.dhl.rating import (
     DHLRateAdapterError,
 )
 from app.services.shipping.contracts import DomesticRate
-from tests.test_domestic_rate_persistence import _subject
+from tests.test_domestic_rate_persistence import _attempt, _subject
 from tests.test_package_custody_persistence import _ready_package
 
 
@@ -457,3 +457,72 @@ async def test_admin_shadow_quote_persists_failure_when_adapter_factory_rejects(
         )
     ).scalars().all()
     assert responses == []
+
+
+@pytest.mark.asyncio
+async def test_admin_shadow_quote_reclaims_expired_pending_shadow_attempt_before_retry(
+    monkeypatch, db_session, vendor_user, customer_user, admin_user
+):
+    graph, package, seal, intent = await _subject(
+        db_session, vendor_user, customer_user
+    )
+    stale_attempt = _attempt(
+        graph,
+        package,
+        seal,
+        intent,
+        await db_session.scalar(text("SELECT clock_timestamp()")),
+        initiating_actor_type="admin",
+        initiating_actor_id=str(admin_user["user"].id),
+        source_command="admin_shadow_quote",
+        idempotency_key=f"stale-shadow-{uuid.uuid4().hex}",
+        claim_ttl_seconds=1,
+    )
+    db_session.add(stale_attempt)
+    await db_session.flush()
+    await db_session.execute(
+        text(
+            "UPDATE domestic_rate_attempts SET call_started_at=clock_timestamp() "
+            "WHERE id=:id"
+        ),
+        {"id": stale_attempt.id},
+    )
+    await db_session.commit()
+    await db_session.execute(text("SELECT pg_sleep(1.05)"))
+
+    adapter = _FakeAdapter()
+    monkeypatch.setattr(
+        "app.services.admin_shadow_quote.create_sandbox_domestic_rate_adapter",
+        lambda **kwargs: adapter,
+    )
+
+    result = await run_admin_shadow_quote(
+        db=db_session,
+        order_id=graph["order"].id,
+        admin=admin_user["user"],
+        settings=_settings(graph["cohort"].id),
+        identity_key=b"shadow-pepper",
+        identity_key_version="checkout-capability-v7",
+        ready_package_id=package.id,
+    )
+
+    assert result.result_kind == "success"
+    attempts = (
+        await db_session.execute(
+            select(DomesticRateAttempt)
+            .where(DomesticRateAttempt.order_id == graph["order"].id)
+            .order_by(DomesticRateAttempt.created_at, DomesticRateAttempt.id)
+            .execution_options(populate_existing=True)
+        )
+    ).scalars().all()
+    assert len(attempts) == 2
+    reclaimed, current = attempts
+    assert reclaimed.id == stale_attempt.id
+    assert reclaimed.classification == "abandoned"
+    assert reclaimed.failure_code == "claim_expired"
+    assert reclaimed.result_recorded_at is not None
+    assert reclaimed.completion_txid is not None
+    assert current.id != reclaimed.id
+    assert current.source_command == "admin_shadow_quote"
+    assert current.classification == "success"
+    assert current.result_recorded_at is not None

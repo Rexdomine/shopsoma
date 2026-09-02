@@ -217,6 +217,85 @@ async def _case_create_quote_fails_closed_for_gate_currency_and_stale_subject(
         )
 
 
+async def _case_create_quote_rejects_admin_shadow_rate_evidence(
+    db_session, vendor_user, customer_user
+) -> None:
+    from app.models.domestic_rate_quote import DomesticRateOffer, DomesticRateResponse
+    from app.services.shipping.customer_quotes import (
+        CustomerShippingQuoteService,
+        ShippingQuoteUnavailable,
+    )
+
+    domestic = _domestic_helpers()
+    graph, package, seal, intent = await domestic._subject(
+        db_session, vendor_user, customer_user
+    )
+    claimed = await db_session.scalar(text("SELECT clock_timestamp()"))
+    attempt = domestic._attempt(
+        graph,
+        package,
+        seal,
+        intent,
+        claimed,
+        initiating_actor_type="admin",
+        initiating_actor_id="shadow-admin-test",
+        source_command="admin_shadow_quote",
+        idempotency_key=f"shadow-rate-{uuid.uuid4().hex}",
+    )
+    received = await domestic._complete_attempt(db_session, attempt, "success")
+    response = DomesticRateResponse(
+        attempt_id=attempt.id,
+        result_kind="success",
+        received_at=received,
+        expires_at=received + timedelta(hours=1),
+        ttl_seconds=3600,
+    )
+    db_session.add(response)
+    await db_session.flush()
+    db_session.add_all(
+        (
+            DomesticRateOffer(
+                response_id=response.id,
+                provider_product_code="N",
+                provider_service_code="DOM-N",
+                service_label="DHL Domestic Express",
+                total_amount=Decimal("1234.5600"),
+                currency="NGN",
+                transit_days=2,
+                delivery_date=attempt.planned_ship_date + timedelta(days=2),
+            ),
+            DomesticRateOffer(
+                response_id=response.id,
+                provider_product_code="N",
+                provider_service_code="DOM-P",
+                service_label="DHL Domestic Priority",
+                total_amount=Decimal("2234.0000"),
+                currency="NGN",
+                transit_days=1,
+                delivery_date=attempt.planned_ship_date + timedelta(days=1),
+            ),
+        )
+    )
+    await db_session.flush()
+    await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+    await db_session.execute(text("SET CONSTRAINTS ALL DEFERRED"))
+    await db_session.commit()
+
+    service = CustomerShippingQuoteService(
+        db_session,
+        capabilities=_capabilities(),
+        quote_ttl_seconds=1800,
+    )
+    with pytest.raises(
+        ShippingQuoteUnavailable, match="eligible shipping rates are unavailable"
+    ):
+        await service.create_quote(
+            order_id=graph["order"].id,
+            customer_id=customer_user["user"].id,
+            idempotency_key="reject-shadow-evidence",
+        )
+
+
 async def _case_selection_revalidates_eligibility_and_replay_conflicts(
     db_session, vendor_user, customer_user
 ) -> None:
@@ -458,6 +537,9 @@ async def test_secure_shipping_quote_experience_end_to_end(
         db_session, vendor_user, customer_user
     )
     await _case_create_quote_fails_closed_for_gate_currency_and_stale_subject(
+        db_session, vendor_user, customer_user
+    )
+    await _case_create_quote_rejects_admin_shadow_rate_evidence(
         db_session, vendor_user, customer_user
     )
     await _case_selection_revalidates_eligibility_and_replay_conflicts(
