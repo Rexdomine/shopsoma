@@ -87,17 +87,33 @@ class _Phase4Helpers:
             package_id=package.id,
             package_version=1,
             seal_id=seal.id,
-            outbound_state="tendered",
+            origin_hub_id=graph["hub"].id,
+            provider="dhl",
+            environment="sandbox",
+            account_alias="sandbox-alias-001",
+            initiating_actor_type="admin",
+            initiating_actor_id=str(admin.id),
+            source_command="create_dhl_booking",
+            idempotency_key="phase4-handoff-subject-001",
             request_fingerprint=hashlib.sha256(b"test-booking").hexdigest(),
+            fingerprint_key_version="v1",
+            planned_ship_date=datetime.now(UTC).date(),
+            adapter_version="phase4-v1",
+            schema_version="v1",
+            canonicalization_version="v1",
+            claimed_at=datetime.now(UTC),
+            claim_ttl_seconds=300,
+            claim_expires_at=datetime.now(UTC) + timedelta(seconds=300),
+            classification="success",
+            outbound_state="booked",
             provider_reference="PR-REF-001",
             tracking_number="DHL123456789",
             label_media_type="application/pdf",
             label_sha256=hashlib.sha256(b"test-label").hexdigest(),
             label_content=b"PDF_LABEL_CONTENT",
-            idempotency_key="phase4-handoff-subject-001",
-            booked_at=datetime.now(UTC),
-            operator_id=admin.id,
-            recorded_at=datetime.now(UTC),
+            label_received_at=datetime.now(UTC),
+            result_recorded_at=datetime.now(UTC),
+            completion_txid=1,
         )
         db_session.add(booking)
         await db_session.flush()
@@ -454,12 +470,9 @@ async def test_shipment_guard_prevents_duplicate_booking_row(
     )
 
     guard = OutboundIntentShipmentGuard(
-        id=uuid.uuid4(),
         intent_id=intent.id,
-        package_id=package.id,
-        package_version=1,
-        recorded_at=datetime.now(UTC),
-        recorded_by=str(admin_user["user"].id),
+        active_booking_id=uuid.uuid4(),
+        booking_blocked_reason=None,
     )
     db_session.add(guard)
     await db_session.flush()
@@ -467,12 +480,9 @@ async def test_shipment_guard_prevents_duplicate_booking_row(
     # Second guard for same intent+package must violate unique constraint
     with pytest.raises(__import__("sqlalchemy.exc").IntegrityError):
         guard2 = OutboundIntentShipmentGuard(
-            id=uuid.uuid4(),
-            intent_id=intent.id,  # same intent
-            package_id=package.id,  # same package
-            package_version=1,
-            recorded_at=datetime.now(UTC),
-            recorded_by=str(admin_user["user"].id),
+            intent_id=intent.id,  # same intent — must violate PK uniqueness
+            active_booking_id=uuid.uuid4(),
+            booking_blocked_reason=None,
         )
         db_session.add(guard2)
         await db_session.flush()
