@@ -127,6 +127,7 @@ class OrderItemDetail(BaseModel):
     product_image_url: Optional[str] = None
     variant_details: Optional[dict]
     unit_price: Decimal
+    currency: str
     quantity: int
     subtotal: Decimal
     commission_rate: Decimal
@@ -162,12 +163,24 @@ class PickupInfo(BaseModel):
         from_attributes = True
 
 
+class ReadyPackageInfo(BaseModel):
+    """Minimal ready-package metadata for admin shadow-quote selection."""
+    id: UUID
+    current_version: int
+    hub_id: UUID
+    ready_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
 class OrderListItem(BaseModel):
     """Order in list view"""
     id: UUID
     order_number: str
     customer: CustomerInfo
     total_amount: Decimal
+    currency: str
     payment_status: PaymentStatus
     fulfillment_status: FulfillmentStatus
     created_at: datetime
@@ -189,6 +202,7 @@ class OrderDetail(BaseModel):
     billing_address: Optional[AddressInfo]
 
     # Pricing
+    currency: str
     subtotal: Decimal
     shipping_cost: Decimal
     tax_amount: Decimal
@@ -219,6 +233,7 @@ class OrderDetail(BaseModel):
     # Items and Pickups
     items: List[OrderItemDetail]
     pickups: List[PickupInfo]
+    ready_packages: List[ReadyPackageInfo] = Field(default_factory=list)
 
     class Config:
         from_attributes = True
@@ -238,6 +253,85 @@ class OrderStats(BaseModel):
     average_order_value: Decimal
     orders_today: int
     revenue_today: Decimal
+
+
+class ShadowQuoteResult(BaseModel):
+    """Redacted operator-safe shadow quote evidence summary (no credentials, no raw payload)."""
+    order_id: UUID
+    shadow_quote_id: UUID
+    result_kind: str = Field(..., pattern="^(success|no_service|failed)$")
+    environment: str
+    adapter_version: str
+    provider: str = "dhl"
+    offers_count: int = 0
+    offers_redacted: List[dict] = Field(default_factory=list)
+    gate_status: dict = Field(default_factory=dict)
+    quoted_at: datetime
+    note: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class DHLBookingRequest(BaseModel):
+    intent_id: UUID
+    package_id: UUID
+    package_version: int = Field(..., ge=1)
+    seal_id: UUID
+    idempotency_key: str = Field(..., min_length=1, max_length=200)
+
+
+class DHLBookingResult(BaseModel):
+    booking_id: UUID
+    order_id: UUID
+    intent_id: UUID
+    result_kind: str = Field(..., pattern="^(booked|failure|unknown|pending)$")
+    outbound_state: str
+    provider_reference: Optional[str] = None
+    tracking_number: Optional[str] = None
+    label_media_type: Optional[str] = None
+    label_sha256: Optional[str] = None
+    booked_at: Optional[datetime] = None
+    note: Optional[str] = None
+    replayed: bool = False
+
+    class Config:
+        from_attributes = True
+
+
+class DHLHandoffRequest(BaseModel):
+    occurred_at: datetime
+    idempotency_key: str = Field(..., min_length=1, max_length=200)
+    counterparty: str = Field(..., min_length=1, max_length=120)
+    evidence_ref: str = Field(..., min_length=1, max_length=200)
+    evidence_sha256: str = Field(..., min_length=64, max_length=64)
+
+
+class DHLHandoffResult(BaseModel):
+    booking_id: UUID
+    outbound_state: str
+    occurred_at: datetime
+    custody_event_id: UUID
+
+    class Config:
+        from_attributes = True
+
+
+class DHLTrackingRefreshRequest(BaseModel):
+    booking_id: UUID
+    idempotency_key: str = Field(..., min_length=1, max_length=200)
+
+
+class DHLTrackingRefreshResult(BaseModel):
+    booking_id: UUID
+    tracking_number: str
+    outbound_state: str
+    customer_status: str
+    observations_recorded: int
+    refreshed_at: datetime
+
+    class Config:
+        from_attributes = True
 
 
 class PaginatedOrders(BaseModel):

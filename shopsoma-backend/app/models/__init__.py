@@ -1,4 +1,5 @@
 """Database models"""
+
 from app.models.user import User
 from app.models.vendor import Vendor
 from app.models.category import Category
@@ -16,11 +17,92 @@ from app.models.promo_code import PromoCode
 from app.models.wishlist import Wishlist
 from app.models.manage_preference import ManagePreference
 from app.models.vendor_asset import VendorAsset
-from app.models.vendor_pickup import VendorPickup, VendorNotification, PickupStatus, OrderType
+from app.models.vendor_pickup import (
+    VendorPickup,
+    VendorNotification,
+    PickupStatus,
+    OrderType,
+)
 from app.models.vendor_otp import VendorOTP
 from app.models.vendor_application import VendorApplication
 from app.models.vendor_payment_method import VendorPaymentMethod
 from app.models.setting import Setting
+from app.models.fulfillment_hub import FulfillmentHub
+from app.models.product_logistics_profile import (
+    LogisticsProfileSource,
+    LogisticsVerificationStatus,
+    ProductLogisticsProfile,
+)
+from app.models.fulfillment_cohort import (
+    CohortItemAllocation,
+    FulfillmentCohort,
+    FulfillmentReadinessType,
+)
+from app.models.inbound_transfer import (
+    InboundTransfer,
+    InboundTransferItemAllocation,
+)
+from app.models.hub_quality import (
+    DiscrepancyType,
+    EvidencePurpose,
+    HubDiscrepancy,
+    HubEvidence,
+    HubEvidenceRetentionEvent,
+    HubQCInspection,
+    HubQCSession,
+    HubReceiptItem,
+    HubReceiptSession,
+    HubRemediation,
+    QCDecision,
+    QuarantineDisposition,
+    RemediationAction,
+    RemediationState,
+)
+from app.models.package_custody import (
+    CustodyEvent,
+    CustodyStream,
+    HubPackage,
+    HubPackageItem,
+    HubPackageSeal,
+    HubPackageVersion,
+    OutboundShipmentIntent,
+    OutboundShipmentIntentInvalidation,
+)
+from app.models.domestic_rate_quote import (
+    DomesticRateAttempt,
+    DomesticRateOffer,
+    DomesticRateResponse,
+)
+from app.models.dhl_shipment import (
+    OutboundIntentShipmentGuard,
+    OutboundShipmentBooking,
+    OutboundShipmentTrackingSnapshot,
+)
+from app.models.customer_shipping_quote import (
+    CustomerShippingQuote,
+    CustomerShippingQuoteOption,
+    CustomerShippingQuoteSelection,
+)
+from app.models.stock_payment_persistence import (
+    PaymentAttempt,
+    PaymentAttemptEvidence,
+    PaymentAttemptReservation,
+    StockPaymentLockCoordinator,
+    StockReservation,
+)
+from app.models.checkout_outbox import CheckoutOutboxEvent
+from app.models.checkout_shipping_estimate import (
+    CheckoutShippingEstimate,
+    CheckoutShippingEstimateOption,
+    CheckoutShippingEstimateSelection,
+    OrderInventoryCoverage,
+)
+from app.models.order_guest_capability import (
+    OrderCurrentOwner,
+    OrderGuestCapability,
+    OrderWorkflowClassification,
+    OrderWorkflowMigrationRun,
+)
 
 __all__ = [
     "User",
@@ -53,4 +135,57 @@ __all__ = [
     "PickupStatus",
     "OrderType",
     "Setting",
+    "FulfillmentHub",
+    "LogisticsProfileSource",
+    "LogisticsVerificationStatus",
+    "ProductLogisticsProfile",
+    "CohortItemAllocation",
+    "FulfillmentCohort",
+    "FulfillmentReadinessType",
+    "InboundTransfer",
+    "InboundTransferItemAllocation",
+    "DiscrepancyType",
+    "EvidencePurpose",
+    "HubDiscrepancy",
+    "HubEvidence",
+    "HubEvidenceRetentionEvent",
+    "HubQCInspection",
+    "HubQCSession",
+    "HubReceiptItem",
+    "HubReceiptSession",
+    "HubRemediation",
+    "QCDecision",
+    "QuarantineDisposition",
+    "RemediationAction",
+    "RemediationState",
+    "HubPackage",
+    "HubPackageVersion",
+    "HubPackageItem",
+    "HubPackageSeal",
+    "CustodyStream",
+    "CustodyEvent",
+    "OutboundShipmentIntent",
+    "OutboundShipmentIntentInvalidation",
+    "DomesticRateAttempt",
+    "DomesticRateResponse",
+    "DomesticRateOffer",
+    "OutboundIntentShipmentGuard",
+    "OutboundShipmentBooking",
+    "OutboundShipmentTrackingSnapshot",
+    "CustomerShippingQuote",
+    "CustomerShippingQuoteOption",
+    "CustomerShippingQuoteSelection",
+    "StockReservation",
+    "PaymentAttempt",
+    "PaymentAttemptReservation",
+    "PaymentAttemptEvidence",
+    "CheckoutOutboxEvent",
+    "CheckoutShippingEstimate",
+    "CheckoutShippingEstimateOption",
+    "CheckoutShippingEstimateSelection",
+    "OrderInventoryCoverage",
+    "OrderCurrentOwner",
+    "OrderGuestCapability",
+    "OrderWorkflowClassification",
+    "OrderWorkflowMigrationRun",
 ]

@@ -2,9 +2,10 @@
 from fastapi import APIRouter, Depends, Query, HTTPException, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, and_, or_, desc
+from sqlalchemy import select, func, and_, or_, desc, exists
 from sqlalchemy.orm import selectinload
 from typing import Optional, List
+from uuid import UUID
 from datetime import datetime, date, timedelta
 from decimal import Decimal
 import logging
@@ -13,12 +14,16 @@ import io
 import math
 
 from app.api.dependencies import get_db, get_current_admin
+from app.core.config import Settings, settings
 from app.models.user import User
 from app.models.order import Order, OrderItem, PaymentStatus, FulfillmentStatus
 from app.models.vendor import Vendor
 from app.models.address import Address
 from app.models.vendor_pickup import VendorPickup, PickupStatus
 from app.models.product import Product
+from app.models.payment import Payment
+from app.models.setting import Setting
+from app.models.package_custody import HubPackage, CustodyEvent
 
 logger = logging.getLogger(__name__)
 from app.services.order_notification_service import OrderNotificationService
@@ -39,9 +44,38 @@ from app.schemas.admin_order import (
     AddressInfo,
     OrderItemDetail,
     PickupInfo,
+    ReadyPackageInfo,
+    ShadowQuoteResult,
+    DHLBookingRequest,
+    DHLBookingResult,
+    DHLHandoffRequest,
+    DHLHandoffResult,
+    DHLTrackingRefreshRequest,
+    DHLTrackingRefreshResult,
+)
+from app.services.admin_shadow_quote import (
+    run_admin_shadow_quote,
+    ShadowQuoteConflictError,
+    ShadowQuoteError,
+)
+from app.services.dhl.shipments import (
+    BookingCommand,
+    HandoffCommand,
+    TrackingRefreshCommand,
+    ShipmentPhase4ConflictError,
+    ShipmentPhase4Error,
+    ShipmentPhase4ReconciliationRequiredError,
+    book_outbound_shipment,
+    get_shipment_label,
+    record_collection_handoff,
+    refresh_tracking,
 )
 
 router = APIRouter(prefix="/admin/orders", tags=["Admin Orders"])
+
+
+def get_app_settings() -> Settings:
+    return settings
 
 
 # ============================================================================
@@ -108,6 +142,120 @@ def build_address_info(address: Address) -> AddressInfo:
     except AttributeError as e:
         # Log detailed error for debugging
         raise ValueError(f"Error building address info for address {address.id}: Missing attribute {str(e)}") from e
+
+
+def resolve_order_currency(order: Order) -> str:
+    """Prefer the latest payment currency for admin display, then fall back to the order row."""
+    payments = list(getattr(order, "payments", []) or [])
+    if payments:
+        latest_payment = max(
+            payments,
+            key=lambda payment: payment.created_at or datetime.min,
+        )
+        if latest_payment.currency:
+            return latest_payment.currency.upper()
+
+    return (getattr(order, "currency", None) or "NGN").upper()
+
+
+def _normalize_currency(currency: Optional[str]) -> str:
+    normalized = (currency or "NGN").upper()
+    return normalized if normalized in {"NGN", "USD"} else "NGN"
+
+
+async def _get_usd_to_ngn_rate(db: AsyncSession) -> Decimal:
+    result = await db.execute(
+        select(Setting).where(Setting.key == "exchange_rate_usd_to_ngn")
+    )
+    rate_setting = result.scalar_one_or_none()
+    if not rate_setting:
+        return Decimal("833")
+
+    try:
+        return Decimal(str(rate_setting.value))
+    except (ArithmeticError, ValueError, TypeError):
+        return Decimal("833")
+
+
+def _convert_currency(amount: Decimal, from_currency: str, to_currency: str, usd_to_ngn_rate: Decimal) -> Decimal:
+    source = _normalize_currency(from_currency)
+    target = _normalize_currency(to_currency)
+
+    if source == target:
+        return amount
+    if source == "USD" and target == "NGN":
+        return (amount * usd_to_ngn_rate).quantize(Decimal("0.01"))
+    if source == "NGN" and target == "USD":
+        return (amount / usd_to_ngn_rate).quantize(Decimal("0.01"))
+    return amount
+
+
+def _should_use_product_currency_for_legacy_item(item: OrderItem, display_currency: str) -> bool:
+    product = getattr(item, "product", None)
+    if not product or not getattr(product, "currency", None):
+        return False
+
+    product_currency = _normalize_currency(product.currency)
+    item_currency = _normalize_currency(getattr(item, "currency", None) or display_currency)
+    if product_currency == display_currency or item_currency != display_currency:
+        return False
+
+    product_base_price = getattr(product, "base_price", None)
+    if product_base_price is None:
+        return False
+
+    item_unit_price = Decimal(str(item.unit_price or "0"))
+    item_subtotal = Decimal(str(item.subtotal or "0"))
+    expected_subtotal = (Decimal(str(product_base_price)) * Decimal(item.quantity or 0)).quantize(Decimal("0.01"))
+
+    return (
+        item_unit_price.quantize(Decimal("0.01")) == Decimal(str(product_base_price)).quantize(Decimal("0.01"))
+        or item_subtotal.quantize(Decimal("0.01")) == expected_subtotal
+    )
+
+
+def _resolve_admin_item_amounts(item: OrderItem, display_currency: str, usd_to_ngn_rate: Decimal) -> tuple[Decimal, Decimal, str]:
+    source_currency = _normalize_currency(getattr(item, "currency", None) or display_currency)
+
+    if _should_use_product_currency_for_legacy_item(item, display_currency):
+        source_currency = _normalize_currency(item.product.currency)
+
+    unit_price = _convert_currency(
+        Decimal(str(item.unit_price or "0")),
+        source_currency,
+        display_currency,
+        usd_to_ngn_rate,
+    )
+    subtotal = _convert_currency(
+        Decimal(str(item.subtotal or "0")),
+        source_currency,
+        display_currency,
+        usd_to_ngn_rate,
+    )
+    return unit_price, subtotal, display_currency
+
+
+def _build_admin_order_item_detail(item: OrderItem, display_currency: str, usd_to_ngn_rate: Decimal) -> OrderItemDetail:
+    unit_price, subtotal, item_currency = _resolve_admin_item_amounts(item, display_currency, usd_to_ngn_rate)
+    return OrderItemDetail(
+        id=item.id,
+        product_id=item.product_id,
+        product_title=item.product_title,
+        product_image_url=(
+            next((img.thumbnail_url or img.image_url for img in item.product.images if img.is_primary), None)
+            or (item.product.images[0].thumbnail_url or item.product.images[0].image_url if item.product.images else None)
+        ) if hasattr(item, 'product') and item.product else None,
+        variant_details=item.variant_details,
+        unit_price=unit_price,
+        currency=item_currency,
+        quantity=item.quantity,
+        subtotal=subtotal,
+        commission_rate=item.commission_rate,
+        commission_amount=item.commission_amount,
+        vendor_payout=item.vendor_payout,
+        fulfillment_status=item.fulfillment_status,
+        vendor=build_vendor_info(item.vendor),
+    )
 
 
 # ============================================================================
@@ -209,6 +357,7 @@ async def list_orders(
     query = select(Order).options(
         selectinload(Order.customer),
         selectinload(Order.items).selectinload(OrderItem.vendor),
+        selectinload(Order.payments),
     )
 
     # Apply filters
@@ -262,6 +411,7 @@ async def list_orders(
     # Build response
     orders_data = []
     for order in orders:
+        display_currency = resolve_order_currency(order)
         # Count unique vendors and total items
         vendor_ids = set()
         item_count = 0
@@ -275,6 +425,7 @@ async def list_orders(
                 order_number=order.order_number,
                 customer=build_customer_info(order.customer),
                 total_amount=order.total_amount,
+                currency=display_currency,
                 payment_status=order.payment_status,
                 fulfillment_status=order.fulfillment_status,
                 created_at=order.created_at,
@@ -310,6 +461,7 @@ async def get_order_detail(
             selectinload(Order.billing_address),
             selectinload(Order.items).selectinload(OrderItem.vendor).selectinload(Vendor.user),
             selectinload(Order.items).selectinload(OrderItem.product).selectinload(Product.images),
+            selectinload(Order.payments),
             selectinload(Order.pickups),
         )
 
@@ -323,12 +475,30 @@ async def get_order_detail(
             )
 
         # Build response with detailed error tracking
+        display_currency = resolve_order_currency(order)
+        usd_to_ngn_rate = await _get_usd_to_ngn_rate(db)
+        ready_packages = (
+            await db.execute(
+                select(HubPackage)
+                .where(
+                    HubPackage.order_id == order.id,
+                    HubPackage.state == "ready",
+                    ~exists().where(
+                        CustodyEvent.package_id == HubPackage.id,
+                        CustodyEvent.package_version == HubPackage.current_version,
+                        CustodyEvent.event_type.in_(("released", "tendered", "provider_accepted")),
+                    ),
+                )
+                .order_by(desc(HubPackage.ready_at), desc(HubPackage.created_at))
+            )
+        ).scalars().all()
         return OrderDetail(
         id=order.id,
         order_number=order.order_number,
         customer=build_customer_info(order.customer),
         shipping_address=build_address_info(order.shipping_address) if order.shipping_address else None,
         billing_address=build_address_info(order.billing_address) if order.billing_address else None,
+        currency=display_currency,
         subtotal=order.subtotal,
         shipping_cost=order.shipping_cost,
         tax_amount=order.tax_amount,
@@ -348,25 +518,7 @@ async def get_order_detail(
         cancelled_at=order.cancelled_at,
         cancellation_reason=order.cancellation_reason,
         items=[
-            OrderItemDetail(
-                id=item.id,
-                product_id=item.product_id,
-                product_title=item.product_title,
-                product_image_url=(
-                    # Get primary image or first image
-                    next((img.thumbnail_url or img.image_url for img in item.product.images if img.is_primary), None)
-                    or (item.product.images[0].thumbnail_url or item.product.images[0].image_url if item.product.images else None)
-                ) if hasattr(item, 'product') and item.product else None,
-                variant_details=item.variant_details,
-                unit_price=item.unit_price,
-                quantity=item.quantity,
-                subtotal=item.subtotal,
-                commission_rate=item.commission_rate,
-                commission_amount=item.commission_amount,
-                vendor_payout=item.vendor_payout,
-                fulfillment_status=item.fulfillment_status,
-                vendor=build_vendor_info(item.vendor),
-            )
+            _build_admin_order_item_detail(item, display_currency, usd_to_ngn_rate)
             for item in order.items
         ],
         pickups=[
@@ -389,6 +541,16 @@ async def get_order_detail(
                 admin_notes=pickup.admin_notes,
             )
             for pickup in order.pickups
+        ],
+        ready_packages=[
+            ReadyPackageInfo(
+                id=package.id,
+                current_version=package.current_version,
+                hub_id=package.hub_id,
+                ready_at=package.ready_at,
+            )
+            for package in ready_packages
+            if package.ready_at is not None
         ],
     )
     except ValueError as e:
@@ -429,6 +591,7 @@ async def update_order_status(
         selectinload(Order.shipping_address),
         selectinload(Order.billing_address),
         selectinload(Order.items).selectinload(OrderItem.vendor),
+        selectinload(Order.payments),
         selectinload(Order.pickups),
     )
 
@@ -723,6 +886,207 @@ async def bulk_update_status(
 # ============================================================================
 # ORDER ACTIONS
 # ============================================================================
+
+@router.post("/{order_id}/shadow-quote", response_model=ShadowQuoteResult)
+async def create_shadow_quote(
+    order_id: str,
+    package_id: str | None = None,
+    admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_app_settings),
+):
+    """Run an admin-only DHL sandbox shadow quote for a ready package."""
+
+    try:
+        parsed_order_id = UUID(order_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid order id",
+        ) from exc
+
+    if package_id is not None:
+        try:
+            parsed_package_id = UUID(package_id)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Invalid package id",
+            ) from exc
+    else:
+        parsed_package_id = None
+
+    if not settings.checkout_capability_configured:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Checkout capability fingerprinting is not configured",
+        )
+
+    pepper_version = settings.CHECKOUT_CAPABILITY_ACTIVE_PEPPER_VERSION
+    if pepper_version is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Checkout capability fingerprint version is not configured",
+        )
+
+    identity_key = settings.CHECKOUT_CAPABILITY_ACTIVE_PEPPER.get_secret_value().encode("utf-8")
+    identity_key_version = f"checkout-capability-v{pepper_version}"
+
+    try:
+        return await run_admin_shadow_quote(
+            db=db,
+            order_id=parsed_order_id,
+            admin=admin,
+            settings=settings,
+            identity_key=identity_key,
+            identity_key_version=identity_key_version,
+            ready_package_id=parsed_package_id,
+        )
+    except ShadowQuoteError as exc:
+        detail = str(exc)
+        status_code = status.HTTP_400_BAD_REQUEST
+        if isinstance(exc, ShadowQuoteConflictError):
+            status_code = status.HTTP_409_CONFLICT
+        elif detail == "order not found":
+            status_code = status.HTTP_404_NOT_FOUND
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
+@router.post("/{order_id}/dhl/bookings", response_model=DHLBookingResult)
+async def create_dhl_booking(
+    order_id: str,
+    payload: DHLBookingRequest,
+    admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_app_settings),
+):
+    try:
+        result = await book_outbound_shipment(
+            db,
+            order_id=UUID(order_id),
+            admin=admin,
+            settings=settings,
+            command=BookingCommand(
+                order_id=UUID(order_id),
+                intent_id=payload.intent_id,
+                package_id=payload.package_id,
+                package_version=payload.package_version,
+                seal_id=payload.seal_id,
+                idempotency_key=payload.idempotency_key,
+            ),
+        )
+        await db.commit()
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid order id") from exc
+    except ShipmentPhase4Error as exc:
+        detail = str(exc)
+        status_code = status.HTTP_400_BAD_REQUEST
+        if detail == "order not found":
+            status_code = status.HTTP_404_NOT_FOUND
+        elif isinstance(exc, ShipmentPhase4ReconciliationRequiredError):
+            status_code = status.HTTP_409_CONFLICT
+        elif isinstance(exc, ShipmentPhase4ConflictError):
+            status_code = status.HTTP_409_CONFLICT
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
+@router.get("/{order_id}/dhl/bookings/{booking_id}/label")
+async def download_dhl_label(
+    order_id: str,
+    booking_id: str,
+    admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        label = await get_shipment_label(
+            db,
+            order_id=UUID(order_id),
+            booking_id=UUID(booking_id),
+        )
+        return StreamingResponse(
+            io.BytesIO(label.content),
+            media_type=label.media_type,
+            headers={
+                "Content-Disposition": f'attachment; filename="{label.filename}"',
+                "X-Label-SHA256": label.sha256,
+            },
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid DHL resource id") from exc
+    except ShipmentPhase4Error as exc:
+        detail = str(exc)
+        status_code = status.HTTP_400_BAD_REQUEST if detail != "booking not found for order" else status.HTTP_404_NOT_FOUND
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
+@router.post("/{order_id}/dhl/bookings/{booking_id}/handoff", response_model=DHLHandoffResult)
+async def create_dhl_handoff(
+    order_id: str,
+    booking_id: str,
+    payload: DHLHandoffRequest,
+    admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        result = await record_collection_handoff(
+            db,
+            order_id=UUID(order_id),
+            admin=admin,
+            command=HandoffCommand(
+                booking_id=UUID(booking_id),
+                occurred_at=payload.occurred_at,
+                idempotency_key=payload.idempotency_key,
+                counterparty=payload.counterparty,
+                evidence_ref=payload.evidence_ref,
+                evidence_sha256=payload.evidence_sha256,
+            ),
+        )
+        await db.commit()
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid DHL resource id") from exc
+    except ShipmentPhase4Error as exc:
+        detail = str(exc)
+        status_code = status.HTTP_400_BAD_REQUEST
+        if detail == "booking not found for order":
+            status_code = status.HTTP_404_NOT_FOUND
+        elif isinstance(exc, ShipmentPhase4ConflictError):
+            status_code = status.HTTP_409_CONFLICT
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
+@router.post("/{order_id}/dhl/tracking-refresh", response_model=DHLTrackingRefreshResult)
+async def refresh_dhl_tracking(
+    order_id: str,
+    payload: DHLTrackingRefreshRequest,
+    admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_app_settings),
+):
+    try:
+        result = await refresh_tracking(
+            db,
+            order_id=UUID(order_id),
+            settings=settings,
+            command=TrackingRefreshCommand(
+                booking_id=payload.booking_id,
+                idempotency_key=payload.idempotency_key,
+            ),
+        )
+        await db.commit()
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid order id") from exc
+    except ShipmentPhase4Error as exc:
+        detail = str(exc)
+        status_code = status.HTTP_400_BAD_REQUEST
+        if detail == "booking not found for order":
+            status_code = status.HTTP_404_NOT_FOUND
+        elif isinstance(exc, ShipmentPhase4ConflictError):
+            status_code = status.HTTP_409_CONFLICT
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+
 
 @router.post("/{order_id}/cancel")
 async def cancel_order(
