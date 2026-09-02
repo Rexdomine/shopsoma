@@ -23,6 +23,8 @@ from app.models.domestic_rate_quote import (
     DomesticRateResponse,
 )
 from app.models.package_custody import (
+    CustodyEvent,
+    CustodyStream,
     HubPackage,
     HubPackageItem,
     HubPackageSeal,
@@ -151,28 +153,50 @@ async def run_admin_shadow_quote(
     identity_key_version: str,
     ready_package_id: uuid.UUID | None = None,
 ) -> ShadowQuoteResult:
-    # Fail-closed sandbox gate check (before DB work)
-    if settings.DHL_ENVIRONMENT != "sandbox":
-        raise ShadowQuoteError("sandbox adapter requires DHL_ENVIRONMENT=sandbox")
-    if settings.dhl_base_url != MYDHL_TEST_BASE_URL:
-        raise ShadowQuoteError("sandbox adapter requires fixed MyDHL test base URL")
-    if not settings.dhl_domestic_sandbox_cohort_ids:
-        raise ShadowQuoteError("sandbox adapter requires restricted cohort set")
-
     order = await db.get(Order, order_id)
     if not order:
         raise ShadowQuoteError("order not found")
 
     # Authoritative ready package
+    package_handoff_exists = (
+        select(CustodyEvent.id)
+        .where(
+            CustodyEvent.package_id == HubPackage.id,
+            CustodyEvent.package_version == HubPackage.current_version,
+            CustodyEvent.event_type.in_(("released", "tendered", "provider_accepted")),
+        )
+        .exists()
+    )
     package_query = select(HubPackage).where(
         HubPackage.order_id == order_id,
         HubPackage.state == "ready",
+        ~package_handoff_exists,
     )
     if ready_package_id is not None:
         package_query = package_query.where(HubPackage.id == ready_package_id)
         pkg_res = await db.execute(package_query)
         package = pkg_res.scalar_one_or_none()
         if package is None:
+            handed_off_res = await db.execute(
+                select(HubPackage.id).where(
+                    HubPackage.id == ready_package_id,
+                    HubPackage.order_id == order_id,
+                    HubPackage.state == "ready",
+                    select(CustodyEvent.id)
+                    .where(
+                        CustodyEvent.package_id == HubPackage.id,
+                        CustodyEvent.package_version == HubPackage.current_version,
+                        CustodyEvent.event_type.in_(
+                            ("released", "tendered", "provider_accepted")
+                        ),
+                    )
+                    .exists(),
+                )
+            )
+            if handed_off_res.scalar_one_or_none() is not None:
+                raise ShadowQuoteError(
+                    "selected ready package already crossed custody handoff"
+                )
             raise ShadowQuoteError("selected ready package not found for order")
     else:
         pkg_res = await db.execute(
@@ -232,6 +256,15 @@ async def run_admin_shadow_quote(
                 "selected ready package outbound intent has been invalidated"
             )
         raise ShadowQuoteError("no outbound shipment intent")
+
+    await _reclaim_expired_shadow_attempts(db, intent_id=intent.id)
+
+    if settings.DHL_ENVIRONMENT != "sandbox":
+        raise ShadowQuoteError("sandbox adapter requires DHL_ENVIRONMENT=sandbox")
+    if settings.dhl_base_url != MYDHL_TEST_BASE_URL:
+        raise ShadowQuoteError("sandbox adapter requires fixed MyDHL test base URL")
+    if not settings.dhl_domestic_sandbox_cohort_ids:
+        raise ShadowQuoteError("sandbox adapter requires restricted cohort set")
 
     # Active hub
     hub_res = await db.execute(
@@ -369,7 +402,6 @@ async def run_admin_shadow_quote(
     except DHLRateAdapterError as exc:
         raise ShadowQuoteError(str(exc)) from exc
 
-    await _reclaim_expired_shadow_attempts(db, intent_id=intent_id)
     claimed_at = await db.scalar(text("SELECT clock_timestamp()"))
     idempotency_key = f"shadow-admin-{str(admin.id)}-{str(order_db_id)}-{uuid.uuid4().hex}"
 

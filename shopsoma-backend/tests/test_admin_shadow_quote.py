@@ -16,6 +16,8 @@ from app.models.domestic_rate_quote import (
     DomesticRateResponse,
 )
 from app.models.package_custody import (
+    CustodyEvent,
+    CustodyStream,
     OutboundShipmentIntent,
     OutboundShipmentIntentInvalidation,
 )
@@ -498,6 +500,89 @@ async def test_admin_shadow_quote_rejects_adapter_factory_before_writing_attempt
 
 
 @pytest.mark.asyncio
+async def test_admin_shadow_quote_rejects_handed_off_ready_package_before_adapter(
+    monkeypatch, db_session, vendor_user, customer_user, admin_user
+):
+    graph, package, seal, _intent = await _subject(
+        db_session, vendor_user, customer_user
+    )
+
+    stream = CustodyStream(
+        cohort_id=graph["cohort"].id,
+        order_id=graph["order"].id,
+        vendor_id=graph["vendor_id"],
+        hub_id=graph["hub"].id,
+        package_id=package.id,
+        package_version=package.current_version,
+    )
+    db_session.add(stream)
+    await db_session.flush()
+
+    previous = None
+    occurred = seal.applied_at
+    for position, event_type in enumerate(("packed", "sealed", "staged", "released"), 1):
+        if event_type != "packed":
+            occurred += timedelta(microseconds=1)
+        event = CustodyEvent(
+            stream_id=stream.id,
+            version=position,
+            previous_event_id=None if previous is None else previous.id,
+            cohort_id=graph["cohort"].id,
+            order_id=graph["order"].id,
+            vendor_id=graph["vendor_id"],
+            hub_id=graph["hub"].id,
+            event_type=event_type,
+            actor_type="user",
+            actor_id=str(graph["operator_id"]),
+            source_system="shopsoma_hub",
+            source_command="record_custody",
+            idempotency_key=f"shadow-handoff-{event_type}-{uuid.uuid4().hex}",
+            occurred_at=occurred,
+            location="Lagos Hub",
+            package_id=package.id,
+            package_version=package.current_version,
+            seal_id=None if event_type == "packed" else seal.id,
+        )
+        db_session.add(event)
+        await db_session.flush()
+        previous = event
+
+    class _NeverRateAdapter:
+        def prepare_rate_payload(self, resolved_hub, request):
+            raise AssertionError("adapter preflight must not run after custody handoff")
+
+        async def rate(self, resolved_hub, request, prepared_payload=None):
+            raise AssertionError("provider rate() must not run after custody handoff")
+
+    monkeypatch.setattr(
+        "app.services.admin_shadow_quote.create_sandbox_domestic_rate_adapter",
+        lambda **kwargs: _NeverRateAdapter(),
+    )
+
+    with pytest.raises(
+        ShadowQuoteError, match="selected ready package already crossed custody handoff"
+    ):
+        await run_admin_shadow_quote(
+            db=db_session,
+            order_id=graph["order"].id,
+            ready_package_id=package.id,
+            admin=admin_user["user"],
+            settings=_settings(graph["cohort"].id),
+            identity_key=b"shadow-pepper",
+            identity_key_version="checkout-capability-v7",
+        )
+
+    attempts = (
+        await db_session.execute(
+            select(DomesticRateAttempt).where(
+                DomesticRateAttempt.order_id == graph["order"].id
+            )
+        )
+    ).scalars().all()
+    assert attempts == []
+
+
+@pytest.mark.asyncio
 async def test_admin_shadow_quote_reclaims_expired_pending_shadow_attempt_before_retry(
     monkeypatch, db_session, vendor_user, customer_user, admin_user
 ):
@@ -564,6 +649,73 @@ async def test_admin_shadow_quote_reclaims_expired_pending_shadow_attempt_before
     assert current.source_command == "admin_shadow_quote"
     assert current.classification == "success"
     assert current.result_recorded_at is not None
+
+
+@pytest.mark.asyncio
+async def test_admin_shadow_quote_reclaims_expired_attempt_before_provider_disabled_preflight(
+    db_session, vendor_user, customer_user, admin_user
+):
+    graph, package, seal, intent = await _subject(
+        db_session, vendor_user, customer_user
+    )
+    stale_attempt = _attempt(
+        graph,
+        package,
+        seal,
+        intent,
+        await db_session.scalar(text("SELECT clock_timestamp()")),
+        initiating_actor_type="admin",
+        initiating_actor_id=str(admin_user["user"].id),
+        source_command="admin_shadow_quote",
+        idempotency_key=f"stale-shadow-disabled-{uuid.uuid4().hex}",
+        claim_ttl_seconds=1,
+    )
+    db_session.add(stale_attempt)
+    await db_session.flush()
+    await db_session.execute(
+        text(
+            "UPDATE domestic_rate_attempts SET call_started_at=clock_timestamp() "
+            "WHERE id=:id"
+        ),
+        {"id": stale_attempt.id},
+    )
+    await db_session.commit()
+    await db_session.execute(text("SELECT pg_sleep(1.05)"))
+
+    disabled_settings = _settings(graph["cohort"].id)
+    disabled_settings.DHL_DOMESTIC_PROVIDER_CALLS_ENABLED = False
+
+    with pytest.raises(ShadowQuoteError, match="domestic DHL provider calls are disabled"):
+        await run_admin_shadow_quote(
+            db=db_session,
+            order_id=graph["order"].id,
+            admin=admin_user["user"],
+            settings=disabled_settings,
+            identity_key=b"shadow-pepper",
+            identity_key_version="checkout-capability-v7",
+            ready_package_id=package.id,
+        )
+
+    reclaimed = (
+        await db_session.execute(
+            select(DomesticRateAttempt)
+            .where(DomesticRateAttempt.id == stale_attempt.id)
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one()
+    assert reclaimed.classification == "abandoned"
+    assert reclaimed.failure_code == "claim_expired"
+    assert reclaimed.result_recorded_at is not None
+    assert reclaimed.completion_txid is not None
+
+    active_attempt_id = await db_session.scalar(
+        text(
+            "SELECT active_attempt_id FROM outbound_intent_rate_guards "
+            "WHERE intent_id=:intent_id"
+        ),
+        {"intent_id": intent.id},
+    )
+    assert active_attempt_id is None
 
 
 @pytest.mark.asyncio
