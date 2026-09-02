@@ -85,6 +85,36 @@ async def _reclaim_expired_shadow_attempts(db: AsyncSession, *, intent_id: uuid.
     )
 
 
+async def _has_live_active_claim(db: AsyncSession, *, intent_id: uuid.UUID) -> bool:
+    return bool(
+        await db.scalar(
+            text(
+                "SELECT 1 "
+                "FROM outbound_intent_rate_guards g "
+                "JOIN domestic_rate_attempts a ON a.id = g.active_attempt_id "
+                "WHERE g.intent_id=:intent_id "
+                "AND NOT g.is_invalidated "
+                "AND a.classification='pending' "
+                "AND a.claim_expires_at>clock_timestamp()"
+            ),
+            {"intent_id": intent_id},
+        )
+    )
+
+
+def _is_subject_truth_integrity_error(exc: IntegrityError) -> bool:
+    message = str(getattr(exc, "orig", exc))
+    return any(
+        fragment in message
+        for fragment in (
+            "rate attempt requires the active bound seal",
+            "rate attempt requires exact current ready package truth",
+            "rate attempt subject binding is invalid",
+            "rate attempt requires exact active hub version",
+        )
+    )
+
+
 def _blank_optional_text_to_none(value: str | None) -> str | None:
     if value is None:
         return None
@@ -320,21 +350,39 @@ async def run_admin_shadow_quote(
         secret_key=identity_key,
     )
 
-    await _reclaim_expired_shadow_attempts(db, intent_id=intent.id)
+    order_db_id = order.id
+    package_db_id = package.id
+    package_version = package.current_version
+    seal_id = seal.id
+    intent_id = intent.id
+    hub_id = hub.id
+    hub_version = hub.version
+
+    try:
+        adapter = create_sandbox_domestic_rate_adapter(
+            config=settings,
+            transport=None,
+            identity_key=identity_key,
+            identity_key_version=identity_key_version,
+        )
+    except DHLRateAdapterError as exc:
+        raise ShadowQuoteError(str(exc)) from exc
+
+    await _reclaim_expired_shadow_attempts(db, intent_id=intent_id)
     claimed_at = await db.scalar(text("SELECT clock_timestamp()"))
-    idempotency_key = f"shadow-admin-{str(admin.id)}-{str(order.id)}-{uuid.uuid4().hex}"
+    idempotency_key = f"shadow-admin-{str(admin.id)}-{str(order_db_id)}-{uuid.uuid4().hex}"
 
     # Build pristine pending attempt, then durably commit the claimed call-start
     # transition before crossing the provider boundary.
     attempt = DomesticRateAttempt(
         id=uuid.uuid4(),
-        intent_id=intent.id,
-        order_id=order.id,
-        package_id=package.id,
-        package_version=package.current_version,
-        seal_id=seal.id,
-        origin_hub_id=hub.id,
-        hub_version=hub.version,
+        intent_id=intent_id,
+        order_id=order_db_id,
+        package_id=package_db_id,
+        package_version=package_version,
+        seal_id=seal_id,
+        origin_hub_id=hub_id,
+        hub_version=hub_version,
         destination_country_code=destination_country_code,
         destination_snapshot_hash=intent.destination_snapshot_hash,
         provider="dhl",
@@ -357,7 +405,18 @@ async def run_admin_shadow_quote(
     try:
         db.add(attempt)
         await db.flush()
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        if await _has_live_active_claim(db, intent_id=intent_id):
+            raise ShadowQuoteConflictError("shadow quote already in progress") from exc
+        if _is_subject_truth_integrity_error(exc):
+            raise ShadowQuoteError("shadow quote subject changed before claim; refresh and retry") from exc
+        raise ShadowQuoteError("shadow quote evidence could not be recorded") from exc
 
+    result: DHLDomesticRateResult | None = None
+    adapter_error = None
+    try:
         await db.execute(
             text(
                 "UPDATE domestic_rate_attempts "
@@ -369,19 +428,6 @@ async def run_admin_shadow_quote(
         await db.refresh(attempt)
         call_started_at = attempt.call_started_at
         await db.commit()
-    except IntegrityError as exc:
-        await db.rollback()
-        raise ShadowQuoteConflictError("shadow quote already in progress") from exc
-
-    result: DHLDomesticRateResult | None = None
-    adapter_error = None
-    try:
-        adapter = create_sandbox_domestic_rate_adapter(
-            config=settings,
-            transport=None,
-            identity_key=identity_key,
-            identity_key_version=identity_key_version,
-        )
         result = await adapter.rate(resolved, request)
     except DHLRateAdapterError as exc:
         adapter_error = exc

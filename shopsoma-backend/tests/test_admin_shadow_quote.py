@@ -6,6 +6,7 @@ from decimal import Decimal
 import pytest
 from pydantic import SecretStr
 from sqlalchemy import select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.core.config import Settings, settings
@@ -412,7 +413,7 @@ async def test_admin_shadow_quote_rejects_non_allowlisted_cohort(
 
 
 @pytest.mark.asyncio
-async def test_admin_shadow_quote_persists_failure_when_adapter_factory_rejects(
+async def test_admin_shadow_quote_rejects_adapter_factory_before_writing_attempt(
     monkeypatch, db_session, vendor_user, customer_user, admin_user
 ):
     graph, _package, _seal, _intent = await _subject(
@@ -427,37 +428,24 @@ async def test_admin_shadow_quote_persists_failure_when_adapter_factory_rejects(
         _raise_adapter_error,
     )
 
-    result = await run_admin_shadow_quote(
-        db=db_session,
-        order_id=graph["order"].id,
-        admin=admin_user["user"],
-        settings=_settings(graph["cohort"].id),
-        identity_key=b"shadow-pepper",
-        identity_key_version="checkout-capability-v7",
-    )
+    with pytest.raises(ShadowQuoteError, match="domestic DHL provider calls are disabled"):
+        await run_admin_shadow_quote(
+            db=db_session,
+            order_id=graph["order"].id,
+            admin=admin_user["user"],
+            settings=_settings(graph["cohort"].id),
+            identity_key=b"shadow-pepper",
+            identity_key_version="checkout-capability-v7",
+        )
 
-    assert result.result_kind == "failed"
-    assert result.offers_count == 0
-    assert result.note == "adapter rate failed; evidence persisted with admin attribution"
-
-    attempt = (
+    attempts = (
         await db_session.execute(
             select(DomesticRateAttempt).where(
                 DomesticRateAttempt.order_id == graph["order"].id
             )
         )
-    ).scalar_one()
-    assert attempt.classification == "failure"
-    assert attempt.failure_code == "adapter_rate_failure"
-
-    responses = (
-        await db_session.execute(
-            select(DomesticRateResponse).where(
-                DomesticRateResponse.attempt_id == attempt.id
-            )
-        )
     ).scalars().all()
-    assert responses == []
+    assert attempts == []
 
 
 @pytest.mark.asyncio
@@ -559,12 +547,13 @@ async def test_admin_shadow_quote_raises_conflict_when_live_shadow_claim_exists(
     )
     await db_session.commit()
 
-    def _should_not_run_adapter(**kwargs):
-        raise AssertionError("provider adapter must not run after claim conflict")
+    class _NeverRateAdapter:
+        async def rate(self, resolved_hub, request):
+            raise AssertionError("provider rate() must not run after claim conflict")
 
     monkeypatch.setattr(
         "app.services.admin_shadow_quote.create_sandbox_domestic_rate_adapter",
-        _should_not_run_adapter,
+        lambda **kwargs: _NeverRateAdapter(),
     )
 
     with pytest.raises(ShadowQuoteError, match="shadow quote already in progress"):
@@ -624,12 +613,13 @@ async def test_admin_shadow_quote_endpoint_returns_conflict_for_live_shadow_clai
         SecretStr("shadow-pepper"),
     )
 
-    def _should_not_run_adapter(**kwargs):
-        raise AssertionError("provider adapter must not run after claim conflict")
+    class _NeverRateAdapter:
+        async def rate(self, resolved_hub, request):
+            raise AssertionError("provider rate() must not run after claim conflict")
 
     monkeypatch.setattr(
         "app.services.admin_shadow_quote.create_sandbox_domestic_rate_adapter",
-        _should_not_run_adapter,
+        lambda **kwargs: _NeverRateAdapter(),
     )
 
     response = await client.post(
@@ -640,3 +630,64 @@ async def test_admin_shadow_quote_endpoint_returns_conflict_for_live_shadow_clai
 
     assert response.status_code == 409, response.text
     assert response.json()["detail"] == "shadow quote already in progress"
+
+
+@pytest.mark.asyncio
+async def test_admin_shadow_quote_endpoint_returns_bad_request_for_stale_subject_truth(
+    client, monkeypatch, db_session, vendor_user, customer_user, admin_user
+):
+    graph, package, _seal, _intent = await _subject(
+        db_session, vendor_user, customer_user
+    )
+
+    original_flush = db_session.flush
+    injected = False
+
+    async def _flush_with_stale_subject(*args, **kwargs):
+        nonlocal injected
+        if not injected:
+            injected = True
+            raise IntegrityError(
+                "INSERT INTO domestic_rate_attempts ...",
+                None,
+                Exception("rate attempt subject binding is invalid"),
+            )
+        return await original_flush(*args, **kwargs)
+
+    monkeypatch.setattr(db_session, "flush", _flush_with_stale_subject)
+
+    monkeypatch.setattr(settings, "DHL_ENABLED", True)
+    monkeypatch.setattr(settings, "DHL_ENVIRONMENT", "sandbox")
+    monkeypatch.setattr(settings, "DHL_API_USERNAME", "sandbox-user")
+    monkeypatch.setattr(settings, "DHL_API_PASSWORD", "sandbox-pass")
+    monkeypatch.setattr(settings, "DHL_EXPORT_ACCOUNT_NUMBER", "123456789")
+    monkeypatch.setattr(settings, "DHL_DOMESTIC_PROVIDER_CALLS_ENABLED", True)
+    monkeypatch.setattr(settings, "DHL_DOMESTIC_QUOTE_TTL_SECONDS", 1800)
+    monkeypatch.setattr(settings, "DHL_DOMESTIC_SANDBOX_COHORT_IDS", str(graph["cohort"].id))
+    monkeypatch.setattr(settings, "CHECKOUT_CAPABILITY_ACTIVE_PEPPER_VERSION", 7)
+    monkeypatch.setattr(
+        settings,
+        "CHECKOUT_CAPABILITY_ACTIVE_PEPPER",
+        SecretStr("shadow-pepper"),
+    )
+
+    class _NeverRateAdapter:
+        async def rate(self, resolved_hub, request):
+            raise AssertionError("provider rate() must not run after stale subject drift")
+
+    monkeypatch.setattr(
+        "app.services.admin_shadow_quote.create_sandbox_domestic_rate_adapter",
+        lambda **kwargs: _NeverRateAdapter(),
+    )
+
+    response = await client.post(
+        f"/api/v1/admin/orders/{graph['order'].id}/shadow-quote",
+        headers=admin_user["headers"],
+        params={"package_id": str(package.id)},
+    )
+
+    assert response.status_code == 400, response.text
+    assert (
+        response.json()["detail"]
+        == "shadow quote subject changed before claim; refresh and retry"
+    )
