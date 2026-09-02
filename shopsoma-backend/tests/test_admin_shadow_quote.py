@@ -840,6 +840,84 @@ async def test_admin_shadow_quote_endpoint_returns_conflict_for_live_shadow_clai
 
 
 @pytest.mark.asyncio
+async def test_admin_shadow_quote_endpoint_persists_reclaim_before_provider_disabled_preflight(
+    client, monkeypatch, db_session, vendor_user, customer_user, admin_user
+):
+    graph, package, seal, intent = await _subject(
+        db_session, vendor_user, customer_user
+    )
+    stale_attempt = _attempt(
+        graph,
+        package,
+        seal,
+        intent,
+        await db_session.scalar(text("SELECT clock_timestamp()")),
+        initiating_actor_type="admin",
+        initiating_actor_id=str(admin_user["user"].id),
+        source_command="admin_shadow_quote",
+        idempotency_key=f"stale-shadow-endpoint-disabled-{uuid.uuid4().hex}",
+        claim_ttl_seconds=1,
+    )
+    db_session.add(stale_attempt)
+    await db_session.flush()
+    await db_session.execute(
+        text(
+            "UPDATE domestic_rate_attempts SET call_started_at=clock_timestamp() "
+            "WHERE id=:id"
+        ),
+        {"id": stale_attempt.id},
+    )
+    await db_session.commit()
+    await db_session.execute(text("SELECT pg_sleep(1.05)"))
+
+    monkeypatch.setattr(settings, "DHL_ENABLED", True)
+    monkeypatch.setattr(settings, "DHL_ENVIRONMENT", "sandbox")
+    monkeypatch.setattr(settings, "DHL_API_USERNAME", "sandbox-user")
+    monkeypatch.setattr(settings, "DHL_API_PASSWORD", "sandbox-pass")
+    monkeypatch.setattr(settings, "DHL_EXPORT_ACCOUNT_NUMBER", "123456789")
+    monkeypatch.setattr(settings, "DHL_DOMESTIC_PROVIDER_CALLS_ENABLED", False)
+    monkeypatch.setattr(settings, "DHL_DOMESTIC_QUOTE_TTL_SECONDS", 1800)
+    monkeypatch.setattr(settings, "DHL_DOMESTIC_SANDBOX_COHORT_IDS", str(graph["cohort"].id))
+    monkeypatch.setattr(settings, "CHECKOUT_CAPABILITY_ACTIVE_PEPPER_VERSION", 7)
+    monkeypatch.setattr(
+        settings,
+        "CHECKOUT_CAPABILITY_ACTIVE_PEPPER",
+        SecretStr("shadow-pepper"),
+    )
+
+    response = await client.post(
+        f"/api/v1/admin/orders/{graph['order'].id}/shadow-quote",
+        headers=admin_user["headers"],
+        params={"package_id": str(package.id)},
+    )
+
+    assert response.status_code == 400, response.text
+    assert response.json()["detail"] == "domestic DHL provider calls are disabled"
+
+    sessions = async_sessionmaker(bind=db_session.bind, expire_on_commit=False)
+    async with sessions() as verify_session:
+        reclaimed = (
+            await verify_session.execute(
+                select(DomesticRateAttempt)
+                .where(DomesticRateAttempt.id == stale_attempt.id)
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one()
+        assert reclaimed.classification == "abandoned"
+        assert reclaimed.failure_code == "claim_expired"
+        assert reclaimed.result_recorded_at is not None
+        assert reclaimed.completion_txid is not None
+        active_attempt_id = await verify_session.scalar(
+            text(
+                "SELECT active_attempt_id FROM outbound_intent_rate_guards "
+                "WHERE intent_id=:intent_id"
+            ),
+            {"intent_id": intent.id},
+        )
+        assert active_attempt_id is None
+
+
+@pytest.mark.asyncio
 async def test_admin_shadow_quote_endpoint_returns_bad_request_for_stale_subject_truth(
     client, monkeypatch, db_session, vendor_user, customer_user, admin_user
 ):

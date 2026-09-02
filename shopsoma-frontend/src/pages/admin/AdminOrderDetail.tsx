@@ -274,7 +274,11 @@ export default function AdminOrderDetail() {
       setRunningShadowQuote(true);
       const result = await runShadowQuote(order.id, selectedShadowPackageId || undefined);
       setShadowQuoteResult(result);
-      success(`DHL sandbox shadow quote recorded (${result.result_kind})`);
+      if (result.result_kind === 'failed') {
+        error(`DHL sandbox shadow quote failed: ${result.note}`);
+      } else {
+        success(`DHL sandbox shadow quote recorded (${result.result_kind})`);
+      }
     } catch (err) {
       console.error('Failed to run shadow quote:', err);
       error('Failed to run DHL sandbox shadow quote');
@@ -687,24 +691,36 @@ export default function AdminOrderDetail() {
                 </button>
               </div>
               <div className="space-y-3 text-sm">
-                {shadowQuoteResult && (
-                  <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3">
-                    <div className="flex items-center justify-between gap-3">
-                      <div>
-                        <div className="text-xs font-semibold uppercase tracking-wide text-emerald-700">
-                          DHL Sandbox Shadow Quote
+                {shadowQuoteResult && (() => {
+                  const failed = shadowQuoteResult.result_kind === 'failed';
+                  const containerClass = failed
+                    ? 'rounded-lg border border-red-200 bg-red-50 p-3'
+                    : 'rounded-lg border border-emerald-200 bg-emerald-50 p-3';
+                  const labelClass = failed
+                    ? 'text-xs font-semibold uppercase tracking-wide text-red-700'
+                    : 'text-xs font-semibold uppercase tracking-wide text-emerald-700';
+                  const bodyClass = failed ? 'text-sm text-red-900' : 'text-sm text-emerald-900';
+                  const timeClass = failed ? 'text-xs text-red-700' : 'text-xs text-emerald-700';
+
+                  return (
+                    <div className={containerClass}>
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <div className={labelClass}>
+                            DHL Sandbox Shadow Quote
+                          </div>
+                          <div className={bodyClass}>
+                            {shadowQuoteResult.result_kind} · {shadowQuoteResult.offers_count} offer(s)
+                          </div>
                         </div>
-                        <div className="text-sm text-emerald-900">
-                          {shadowQuoteResult.result_kind} · {shadowQuoteResult.offers_count} offer(s)
+                        <div className={timeClass}>
+                          {new Date(shadowQuoteResult.quoted_at).toLocaleString()}
                         </div>
                       </div>
-                      <div className="text-xs text-emerald-700">
-                        {new Date(shadowQuoteResult.quoted_at).toLocaleString()}
-                      </div>
+                      <div className={`mt-2 ${bodyClass}`}>{shadowQuoteResult.note}</div>
                     </div>
-                    <div className="mt-2 text-sm text-emerald-900">{shadowQuoteResult.note}</div>
-                  </div>
-                )}
+                  );
+                })()}
                 {order.shipping_address && (
                   <div>
                     <div className="text-gray-500">Recipient</div>

@@ -258,6 +258,7 @@ async def run_admin_shadow_quote(
         raise ShadowQuoteError("no outbound shipment intent")
 
     await _reclaim_expired_shadow_attempts(db, intent_id=intent.id)
+    await db.commit()
 
     if settings.DHL_ENVIRONMENT != "sandbox":
         raise ShadowQuoteError("sandbox adapter requires DHL_ENVIRONMENT=sandbox")
