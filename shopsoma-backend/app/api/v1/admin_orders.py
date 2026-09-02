@@ -2,7 +2,7 @@
 from fastapi import APIRouter, Depends, Query, HTTPException, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, and_, or_, desc
+from sqlalchemy import select, func, and_, or_, desc, exists
 from sqlalchemy.orm import selectinload
 from typing import Optional, List
 from uuid import UUID
@@ -23,7 +23,7 @@ from app.models.vendor_pickup import VendorPickup, PickupStatus
 from app.models.product import Product
 from app.models.payment import Payment
 from app.models.setting import Setting
-from app.models.package_custody import HubPackage
+from app.models.package_custody import HubPackage, CustodyEvent
 
 logger = logging.getLogger(__name__)
 from app.services.order_notification_service import OrderNotificationService
@@ -462,7 +462,15 @@ async def get_order_detail(
         ready_packages = (
             await db.execute(
                 select(HubPackage)
-                .where(HubPackage.order_id == order.id, HubPackage.state == "ready")
+                .where(
+                    HubPackage.order_id == order.id,
+                    HubPackage.state == "ready",
+                    ~exists().where(
+                        CustodyEvent.package_id == HubPackage.id,
+                        CustodyEvent.package_version == HubPackage.current_version,
+                        CustodyEvent.event_type.in_(("released", "tendered", "provider_accepted")),
+                    ),
+                )
                 .order_by(desc(HubPackage.ready_at), desc(HubPackage.created_at))
             )
         ).scalars().all()
