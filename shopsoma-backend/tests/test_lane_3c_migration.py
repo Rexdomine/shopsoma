@@ -27,7 +27,8 @@ def _scripts() -> ScriptDirectory:
 
 def test_lane_3c_has_linear_lane_3d_and_phase_2b_descendants() -> None:
     scripts = _scripts()
-    assert scripts.get_heads() == ["d5e6f7a8b9c0"]
+    assert scripts.get_heads() == ["e6f7a8b9c0d1"]
+    assert scripts.get_revision("e6f7a8b9c0d1").down_revision == "d5e6f7a8b9c0"
     assert scripts.get_revision("f9d1b3e5a7c9").down_revision == "e8c0a2d4f6b8"
     assert scripts.get_revision("e8c0a2d4f6b8").down_revision == "d7b9f1c3e5a8"
     assert scripts.get_revision(REVISION).down_revision == PARENT

@@ -1,9 +1,10 @@
 import uuid
+from datetime import timedelta
 from decimal import Decimal
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -312,3 +313,142 @@ async def test_admin_order_detail_normalizes_legacy_usd_item_amounts_for_ngn_ord
     assert payload["items"][0]["currency"] == "NGN"
     assert payload["items"][0]["unit_price"] == "249900.00"
     assert payload["items"][0]["subtotal"] == "249900.00"
+
+
+@pytest.mark.asyncio
+async def test_admin_order_detail_excludes_handed_off_ready_packages(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    admin_user,
+    customer_user,
+    vendor_user,
+):
+    from app.models.package_custody import CustodyEvent, CustodyStream
+    from tests.test_domestic_rate_persistence import _subject
+
+    graph, package, seal, _intent = await _subject(db_session, vendor_user, customer_user)
+    packed_at = await db_session.scalar(
+        text(
+            "SELECT packed_at FROM hub_package_versions "
+            "WHERE package_id=:package_id AND version=1"
+        ),
+        {"package_id": package.id},
+    )
+    ready_at = await db_session.scalar(
+        text("SELECT ready_at FROM hub_packages WHERE id=:package_id"),
+        {"package_id": package.id},
+    )
+
+    stream = CustodyStream(
+        cohort_id=graph["cohort"].id,
+        order_id=graph["order"].id,
+        vendor_id=graph["vendor_id"],
+        hub_id=graph["hub"].id,
+        package_id=package.id,
+        package_version=1,
+    )
+    db_session.add(stream)
+    await db_session.flush()
+
+    packed = CustodyEvent(
+        id=uuid.uuid4(),
+        stream_id=stream.id,
+        version=1,
+        cohort_id=graph["cohort"].id,
+        order_id=graph["order"].id,
+        vendor_id=graph["vendor_id"],
+        hub_id=graph["hub"].id,
+        event_type="packed",
+        actor_type="user",
+        actor_id=str(graph["operator_id"]),
+        source_system="shopsoma_hub",
+        source_command="record_custody",
+        idempotency_key=f"packed-{uuid.uuid4().hex}",
+        occurred_at=packed_at,
+        location="Lagos Hub",
+        package_id=package.id,
+        package_version=1,
+    )
+    db_session.add(packed)
+    await db_session.flush()
+
+    sealed = CustodyEvent(
+        id=uuid.uuid4(),
+        stream_id=stream.id,
+        version=2,
+        previous_event_id=packed.id,
+        cohort_id=graph["cohort"].id,
+        order_id=graph["order"].id,
+        vendor_id=graph["vendor_id"],
+        hub_id=graph["hub"].id,
+        event_type="sealed",
+        actor_type="user",
+        actor_id=str(graph["operator_id"]),
+        source_system="shopsoma_hub",
+        source_command="record_custody",
+        idempotency_key=f"sealed-{uuid.uuid4().hex}",
+        occurred_at=seal.applied_at,
+        location="Lagos Hub",
+        package_id=package.id,
+        package_version=1,
+        seal_id=seal.id,
+    )
+    db_session.add(sealed)
+    await db_session.flush()
+
+    staged = CustodyEvent(
+        id=uuid.uuid4(),
+        stream_id=stream.id,
+        version=3,
+        previous_event_id=sealed.id,
+        cohort_id=graph["cohort"].id,
+        order_id=graph["order"].id,
+        vendor_id=graph["vendor_id"],
+        hub_id=graph["hub"].id,
+        event_type="staged",
+        actor_type="user",
+        actor_id=str(graph["operator_id"]),
+        source_system="shopsoma_hub",
+        source_command="record_custody",
+        idempotency_key=f"staged-{uuid.uuid4().hex}",
+        occurred_at=ready_at,
+        location="Lagos Hub",
+        package_id=package.id,
+        package_version=1,
+        seal_id=seal.id,
+    )
+    db_session.add(staged)
+    await db_session.flush()
+
+    released = CustodyEvent(
+        id=uuid.uuid4(),
+        stream_id=stream.id,
+        version=4,
+        previous_event_id=staged.id,
+        cohort_id=graph["cohort"].id,
+        order_id=graph["order"].id,
+        vendor_id=graph["vendor_id"],
+        hub_id=graph["hub"].id,
+        event_type="released",
+        actor_type="user",
+        actor_id=str(graph["operator_id"]),
+        source_system="shopsoma_hub",
+        source_command="record_custody",
+        idempotency_key=f"released-{uuid.uuid4().hex}",
+        occurred_at=ready_at + timedelta(microseconds=1),
+        location="Lagos Hub",
+        package_id=package.id,
+        package_version=1,
+        seal_id=seal.id,
+    )
+    db_session.add(released)
+    await db_session.flush()
+
+    response = await client.get(
+        f"/api/v1/admin/orders/{graph['order'].id}",
+        headers=admin_user["headers"],
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ready_packages"] == []

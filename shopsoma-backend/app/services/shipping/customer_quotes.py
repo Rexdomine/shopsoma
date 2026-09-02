@@ -197,6 +197,7 @@ class CustomerShippingQuoteService:
                 .where(
                     DomesticRateAttempt.intent_id == intent_id,
                     DomesticRateAttempt.classification == "success",
+                    DomesticRateAttempt.source_command != "admin_shadow_quote",
                     DomesticRateResponse.result_kind == "success",
                     DomesticRateResponse.expires_at >= minimum_expiry,
                 )

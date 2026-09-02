@@ -163,6 +163,17 @@ class PickupInfo(BaseModel):
         from_attributes = True
 
 
+class ReadyPackageInfo(BaseModel):
+    """Minimal ready-package metadata for admin shadow-quote selection."""
+    id: UUID
+    current_version: int
+    hub_id: UUID
+    ready_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
 class OrderListItem(BaseModel):
     """Order in list view"""
     id: UUID
@@ -222,6 +233,7 @@ class OrderDetail(BaseModel):
     # Items and Pickups
     items: List[OrderItemDetail]
     pickups: List[PickupInfo]
+    ready_packages: List[ReadyPackageInfo] = Field(default_factory=list)
 
     class Config:
         from_attributes = True
@@ -241,6 +253,24 @@ class OrderStats(BaseModel):
     average_order_value: Decimal
     orders_today: int
     revenue_today: Decimal
+
+
+class ShadowQuoteResult(BaseModel):
+    """Redacted operator-safe shadow quote evidence summary (no credentials, no raw payload)."""
+    order_id: UUID
+    shadow_quote_id: UUID
+    result_kind: str = Field(..., pattern="^(success|no_service|failed)$")
+    environment: str
+    adapter_version: str
+    provider: str = "dhl"
+    offers_count: int = 0
+    offers_redacted: List[dict] = Field(default_factory=list)
+    gate_status: dict = Field(default_factory=dict)
+    quoted_at: datetime
+    note: Optional[str] = None
+
+    class Config:
+        from_attributes = True
 
 
 class PaginatedOrders(BaseModel):

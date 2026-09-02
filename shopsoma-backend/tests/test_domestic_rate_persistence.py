@@ -12,6 +12,8 @@ from sqlalchemy import CheckConstraint, UniqueConstraint, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.models.package_custody import CustodyEvent
+
 
 _PACKAGE_SPEC = importlib.util.spec_from_file_location(
     "rate_package_helpers",
@@ -333,6 +335,417 @@ async def test_attempt_rejects_destination_snapshot_not_derived_from_intent(
         async with db_session.begin_nested():
             db_session.add(attempt)
             await db_session.flush()
+
+
+@pytest.mark.asyncio
+async def test_attempt_rejects_subject_that_already_crossed_custody_handoff(
+    db_session, vendor_user, customer_user
+) -> None:
+    from app.models.package_custody import CustodyEvent, CustodyStream
+
+    graph, package, seal, intent = await _subject(db_session, vendor_user, customer_user)
+    packed_at = await db_session.scalar(
+        text(
+            "SELECT packed_at FROM hub_package_versions WHERE package_id=:id AND version=1"
+        ),
+        {"id": package.id},
+    )
+    ready_at = await db_session.scalar(
+        text("SELECT ready_at FROM hub_packages WHERE id=:id"),
+        {"id": package.id},
+    )
+    stream = CustodyStream(
+        cohort_id=graph["cohort"].id,
+        order_id=graph["order"].id,
+        vendor_id=graph["vendor_id"],
+        hub_id=graph["hub"].id,
+        package_id=package.id,
+        package_version=1,
+    )
+    db_session.add(stream)
+    await db_session.flush()
+
+    packed = CustodyEvent(
+        id=uuid.uuid4(),
+        stream_id=stream.id,
+        version=1,
+        cohort_id=graph["cohort"].id,
+        order_id=graph["order"].id,
+        vendor_id=graph["vendor_id"],
+        hub_id=graph["hub"].id,
+        event_type="packed",
+        actor_type="user",
+        actor_id=str(graph["operator_id"]),
+        source_system="shopsoma_hub",
+        source_command="record_custody",
+        idempotency_key=f"packed-{uuid.uuid4().hex}",
+        occurred_at=packed_at,
+        location="Lagos Hub",
+        package_id=package.id,
+        package_version=1,
+    )
+    db_session.add(packed)
+    await db_session.flush()
+
+    sealed = CustodyEvent(
+        id=uuid.uuid4(),
+        stream_id=stream.id,
+        version=2,
+        previous_event_id=packed.id,
+        cohort_id=graph["cohort"].id,
+        order_id=graph["order"].id,
+        vendor_id=graph["vendor_id"],
+        hub_id=graph["hub"].id,
+        event_type="sealed",
+        actor_type="user",
+        actor_id=str(graph["operator_id"]),
+        source_system="shopsoma_hub",
+        source_command="record_custody",
+        idempotency_key=f"sealed-{uuid.uuid4().hex}",
+        occurred_at=seal.applied_at,
+        location="Lagos Hub",
+        package_id=package.id,
+        package_version=1,
+        seal_id=seal.id,
+    )
+    db_session.add(sealed)
+    await db_session.flush()
+
+    staged = CustodyEvent(
+        id=uuid.uuid4(),
+        stream_id=stream.id,
+        version=3,
+        previous_event_id=sealed.id,
+        cohort_id=graph["cohort"].id,
+        order_id=graph["order"].id,
+        vendor_id=graph["vendor_id"],
+        hub_id=graph["hub"].id,
+        event_type="staged",
+        actor_type="user",
+        actor_id=str(graph["operator_id"]),
+        source_system="shopsoma_hub",
+        source_command="record_custody",
+        idempotency_key=f"staged-{uuid.uuid4().hex}",
+        occurred_at=ready_at,
+        location="Lagos Hub",
+        package_id=package.id,
+        package_version=1,
+        seal_id=seal.id,
+    )
+    db_session.add(staged)
+    await db_session.flush()
+
+    released = CustodyEvent(
+        id=uuid.uuid4(),
+        stream_id=stream.id,
+        version=4,
+        previous_event_id=staged.id,
+        cohort_id=graph["cohort"].id,
+        order_id=graph["order"].id,
+        vendor_id=graph["vendor_id"],
+        hub_id=graph["hub"].id,
+        event_type="released",
+        actor_type="user",
+        actor_id=str(graph["operator_id"]),
+        source_system="shopsoma_hub",
+        source_command="record_custody",
+        idempotency_key=f"released-{uuid.uuid4().hex}",
+        occurred_at=ready_at + timedelta(microseconds=1),
+        location="Lagos Hub",
+        package_id=package.id,
+        package_version=1,
+        seal_id=seal.id,
+    )
+    db_session.add(released)
+    await db_session.flush()
+
+    claimed = await db_session.scalar(text("SELECT clock_timestamp()"))
+    attempt = _attempt(graph, package, seal, intent, claimed)
+    with pytest.raises(IntegrityError, match="rate attempt cannot claim after custody handoff"):
+        async with db_session.begin_nested():
+            db_session.add(attempt)
+            await db_session.flush()
+
+
+@pytest.mark.asyncio
+async def test_custody_handoff_is_blocked_while_active_rate_claim_exists(
+    db_session, vendor_user, customer_user
+) -> None:
+    from app.models.package_custody import CustodyEvent, CustodyStream
+
+    graph, package, seal, intent = await _subject(db_session, vendor_user, customer_user)
+    claimed = await db_session.scalar(text("SELECT clock_timestamp()"))
+    attempt = _attempt(graph, package, seal, intent, claimed)
+    db_session.add(attempt)
+    await db_session.flush()
+
+    packed_at = await db_session.scalar(
+        text(
+            "SELECT packed_at FROM hub_package_versions WHERE package_id=:id AND version=1"
+        ),
+        {"id": package.id},
+    )
+    ready_at = await db_session.scalar(
+        text("SELECT ready_at FROM hub_packages WHERE id=:id"),
+        {"id": package.id},
+    )
+    stream = CustodyStream(
+        cohort_id=graph["cohort"].id,
+        order_id=graph["order"].id,
+        vendor_id=graph["vendor_id"],
+        hub_id=graph["hub"].id,
+        package_id=package.id,
+        package_version=1,
+    )
+    db_session.add(stream)
+    await db_session.flush()
+
+    packed = CustodyEvent(
+        id=uuid.uuid4(),
+        stream_id=stream.id,
+        version=1,
+        cohort_id=graph["cohort"].id,
+        order_id=graph["order"].id,
+        vendor_id=graph["vendor_id"],
+        hub_id=graph["hub"].id,
+        event_type="packed",
+        actor_type="user",
+        actor_id=str(graph["operator_id"]),
+        source_system="shopsoma_hub",
+        source_command="record_custody",
+        idempotency_key=f"packed-{uuid.uuid4().hex}",
+        occurred_at=packed_at,
+        location="Lagos Hub",
+        package_id=package.id,
+        package_version=1,
+    )
+    db_session.add(packed)
+    await db_session.flush()
+
+    sealed = CustodyEvent(
+        id=uuid.uuid4(),
+        stream_id=stream.id,
+        version=2,
+        previous_event_id=packed.id,
+        cohort_id=graph["cohort"].id,
+        order_id=graph["order"].id,
+        vendor_id=graph["vendor_id"],
+        hub_id=graph["hub"].id,
+        event_type="sealed",
+        actor_type="user",
+        actor_id=str(graph["operator_id"]),
+        source_system="shopsoma_hub",
+        source_command="record_custody",
+        idempotency_key=f"sealed-{uuid.uuid4().hex}",
+        occurred_at=seal.applied_at,
+        location="Lagos Hub",
+        package_id=package.id,
+        package_version=1,
+        seal_id=seal.id,
+    )
+    db_session.add(sealed)
+    await db_session.flush()
+
+    staged = CustodyEvent(
+        id=uuid.uuid4(),
+        stream_id=stream.id,
+        version=3,
+        previous_event_id=sealed.id,
+        cohort_id=graph["cohort"].id,
+        order_id=graph["order"].id,
+        vendor_id=graph["vendor_id"],
+        hub_id=graph["hub"].id,
+        event_type="staged",
+        actor_type="user",
+        actor_id=str(graph["operator_id"]),
+        source_system="shopsoma_hub",
+        source_command="record_custody",
+        idempotency_key=f"staged-{uuid.uuid4().hex}",
+        occurred_at=ready_at,
+        location="Lagos Hub",
+        package_id=package.id,
+        package_version=1,
+        seal_id=seal.id,
+    )
+    db_session.add(staged)
+    await db_session.flush()
+
+    with pytest.raises(IntegrityError, match="custody handoff blocked by active rate attempt claim"):
+        async with db_session.begin_nested():
+            db_session.add(
+                CustodyEvent(
+                    id=uuid.uuid4(),
+                    stream_id=stream.id,
+                    version=4,
+                    previous_event_id=staged.id,
+                    cohort_id=graph["cohort"].id,
+                    order_id=graph["order"].id,
+                    vendor_id=graph["vendor_id"],
+                    hub_id=graph["hub"].id,
+                    event_type="released",
+                    actor_type="user",
+                    actor_id=str(graph["operator_id"]),
+                    source_system="shopsoma_hub",
+                    source_command="record_custody",
+                    idempotency_key=f"released-{uuid.uuid4().hex}",
+                    occurred_at=ready_at + timedelta(microseconds=1),
+                    location="Lagos Hub",
+                    package_id=package.id,
+                    package_version=1,
+                    seal_id=seal.id,
+                )
+            )
+            await db_session.flush()
+
+
+@pytest.mark.asyncio
+async def test_custody_handoff_reclaims_expired_rate_claim_before_releasing_package(
+    db_session, vendor_user, customer_user
+) -> None:
+    graph, package, seal, intent = await _subject(
+        db_session, vendor_user, customer_user
+    )
+    claimed = await db_session.scalar(text("SELECT clock_timestamp()"))
+    attempt = _attempt(
+        graph,
+        package,
+        seal,
+        intent,
+        claimed,
+        claim_ttl_seconds=1,
+        idempotency_key=f"expire-then-release-{uuid.uuid4().hex}",
+    )
+    db_session.add(attempt)
+    await db_session.flush()
+    await db_session.execute(text("SELECT pg_sleep(1.05)"))
+
+    from app.models.package_custody import CustodyStream
+
+    packed_at = await db_session.scalar(
+        text(
+            "SELECT packed_at FROM hub_package_versions WHERE package_id=:id AND version=1"
+        ),
+        {"id": package.id},
+    )
+    ready_at = await db_session.scalar(
+        text("SELECT ready_at FROM hub_packages WHERE id=:id"),
+        {"id": package.id},
+    )
+    stream = CustodyStream(
+        cohort_id=graph["cohort"].id,
+        order_id=graph["order"].id,
+        vendor_id=graph["vendor_id"],
+        hub_id=graph["hub"].id,
+        package_id=package.id,
+        package_version=1,
+    )
+    db_session.add(stream)
+    await db_session.flush()
+
+    packed = CustodyEvent(
+        id=uuid.uuid4(),
+        stream_id=stream.id,
+        version=1,
+        cohort_id=graph["cohort"].id,
+        order_id=graph["order"].id,
+        vendor_id=graph["vendor_id"],
+        hub_id=graph["hub"].id,
+        event_type="packed",
+        actor_type="user",
+        actor_id=str(graph["operator_id"]),
+        source_system="shopsoma_hub",
+        source_command="record_custody",
+        idempotency_key=f"packed-expiry-{uuid.uuid4().hex}",
+        occurred_at=packed_at,
+        location="Lagos Hub",
+        package_id=package.id,
+        package_version=1,
+    )
+    db_session.add(packed)
+    await db_session.flush()
+
+    sealed = CustodyEvent(
+        id=uuid.uuid4(),
+        stream_id=stream.id,
+        version=2,
+        previous_event_id=packed.id,
+        cohort_id=graph["cohort"].id,
+        order_id=graph["order"].id,
+        vendor_id=graph["vendor_id"],
+        hub_id=graph["hub"].id,
+        event_type="sealed",
+        actor_type="user",
+        actor_id=str(graph["operator_id"]),
+        source_system="shopsoma_hub",
+        source_command="record_custody",
+        idempotency_key=f"sealed-expiry-{uuid.uuid4().hex}",
+        occurred_at=seal.applied_at,
+        location="Lagos Hub",
+        package_id=package.id,
+        package_version=1,
+        seal_id=seal.id,
+    )
+    db_session.add(sealed)
+    await db_session.flush()
+
+    staged = CustodyEvent(
+        id=uuid.uuid4(),
+        stream_id=stream.id,
+        version=3,
+        previous_event_id=sealed.id,
+        cohort_id=graph["cohort"].id,
+        order_id=graph["order"].id,
+        vendor_id=graph["vendor_id"],
+        hub_id=graph["hub"].id,
+        event_type="staged",
+        actor_type="user",
+        actor_id=str(graph["operator_id"]),
+        source_system="shopsoma_hub",
+        source_command="record_custody",
+        idempotency_key=f"staged-expiry-{uuid.uuid4().hex}",
+        occurred_at=ready_at,
+        location="Lagos Hub",
+        package_id=package.id,
+        package_version=1,
+        seal_id=seal.id,
+    )
+    db_session.add(staged)
+    await db_session.flush()
+
+    release_at = await db_session.scalar(text("SELECT clock_timestamp()"))
+    released = CustodyEvent(
+        id=uuid.uuid4(),
+        stream_id=stream.id,
+        version=4,
+        previous_event_id=staged.id,
+        cohort_id=graph["cohort"].id,
+        order_id=graph["order"].id,
+        vendor_id=graph["vendor_id"],
+        hub_id=graph["hub"].id,
+        event_type="released",
+        actor_type="user",
+        actor_id=str(graph["operator_id"]),
+        source_system="shopsoma_hub",
+        source_command="record_custody",
+        idempotency_key=f"released-after-expiry-{uuid.uuid4().hex}",
+        occurred_at=release_at,
+        location="Lagos Hub",
+        package_id=package.id,
+        package_version=1,
+        seal_id=seal.id,
+    )
+    db_session.add(released)
+    await db_session.flush()
+    await db_session.refresh(attempt)
+    assert attempt.classification == "abandoned"
+    assert attempt.failure_code == "claim_expired"
+    active = await db_session.scalar(
+        text(
+            "SELECT active_attempt_id FROM outbound_intent_rate_guards WHERE intent_id=:id"
+        ),
+        {"id": intent.id},
+    )
+    assert active is None
 
 
 @pytest.mark.asyncio

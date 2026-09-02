@@ -30,7 +30,8 @@ REVISIONS = (
 )
 MILESTONE_FOUR_REVISION = "b3c4d5e6f7a8"
 FREE_SHIPPING_REVISION = "c4d5e6f7a8b9"
-CURRENT_HEAD_REVISION = "d5e6f7a8b9c0"
+PREVIOUS_HEAD_REVISION = "d5e6f7a8b9c0"
+CURRENT_HEAD_REVISION = "e6f7a8b9c0d1"
 
 
 def _script():
@@ -52,7 +53,9 @@ def test_milestone_two_revisions_are_sequential_from_current_head() -> None:
     free_shipping = script.get_revision(FREE_SHIPPING_REVISION)
     assert free_shipping.down_revision == MILESTONE_FOUR_REVISION
     current = script.get_revision(CURRENT_HEAD_REVISION)
-    assert current.down_revision == FREE_SHIPPING_REVISION
+    assert current.down_revision == PREVIOUS_HEAD_REVISION
+    previous_head = script.get_revision(PREVIOUS_HEAD_REVISION)
+    assert previous_head.down_revision == FREE_SHIPPING_REVISION
     assert script.get_current_head() == CURRENT_HEAD_REVISION
 
 

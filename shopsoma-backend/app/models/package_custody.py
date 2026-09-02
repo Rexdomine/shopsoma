@@ -989,6 +989,31 @@ BEGIN
             RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='custody seal interval is invalid';
         END IF;
     END IF;
+    IF NEW.event_type IN ('released','tendered','provider_accepted') THEN
+        UPDATE domestic_rate_attempts attempt
+           SET classification='abandoned',
+               failure_code='claim_expired'
+          FROM outbound_intent_rate_guards guard
+          JOIN outbound_shipment_intents intent ON intent.id=guard.intent_id
+         WHERE guard.active_attempt_id=attempt.id
+           AND intent.package_id=NEW.package_id
+           AND intent.package_version=NEW.package_version
+           AND NOT guard.is_invalidated
+           AND attempt.classification='pending'
+           AND attempt.claim_expires_at IS NOT NULL
+           AND clock_timestamp() >= attempt.claim_expires_at;
+        PERFORM 1
+          FROM outbound_intent_rate_guards guard
+          JOIN outbound_shipment_intents intent ON intent.id=guard.intent_id
+         WHERE intent.package_id=NEW.package_id
+           AND intent.package_version=NEW.package_version
+           AND NOT guard.is_invalidated
+           AND guard.active_attempt_id IS NOT NULL
+         FOR UPDATE OF guard;
+        IF FOUND THEN
+            RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='custody handoff blocked by active rate attempt claim';
+        END IF;
+    END IF;
     UPDATE custody_streams SET next_version=next_version+1 WHERE id=NEW.stream_id;
     RETURN NEW;
 END; $$ LANGUAGE plpgsql

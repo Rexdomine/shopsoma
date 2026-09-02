@@ -14,10 +14,12 @@ import {
   updateShippingInfo,
   cancelOrder,
   processRefund,
+  runShadowQuote,
 } from '../../services/adminOrderService';
 import type {
   OrderDetail,
   FulfillmentStatus,
+  ShadowQuoteResult,
 } from '../../services/adminOrderService';
 import { getStatusBadgeConfig } from '../../utils/orderStatusMessages';
 import { formatPriceWithConversion } from '../../utils/pricing';
@@ -53,6 +55,9 @@ export default function AdminOrderDetail() {
 
   // Pickup scheduling modal
   const [showPickupScheduleModal, setShowPickupScheduleModal] = useState(false);
+  const [shadowQuoteResult, setShadowQuoteResult] = useState<ShadowQuoteResult | null>(null);
+  const [runningShadowQuote, setRunningShadowQuote] = useState(false);
+  const [selectedShadowPackageId, setSelectedShadowPackageId] = useState('');
   const [pickupWindowData, setPickupWindowData] = useState({
     pickup_window_start: '',
     pickup_window_end: '',
@@ -78,6 +83,9 @@ export default function AdminOrderDetail() {
         tracking_number: data.tracking_number || '',
         estimated_delivery_date: data.estimated_delivery_date || '',
       });
+      setSelectedShadowPackageId(
+        data.ready_packages.length === 1 ? data.ready_packages[0].id : ''
+      );
     } catch (err) {
       console.error('Failed to load order:', err);
       error('Failed to load order details');
@@ -255,6 +263,30 @@ export default function AdminOrderDetail() {
     }
   };
 
+  const handleRunShadowQuote = async () => {
+    if (!order) return;
+    if (order.ready_packages.length > 1 && !selectedShadowPackageId) {
+      warning('Select a ready package before running the DHL sandbox shadow quote');
+      return;
+    }
+
+    try {
+      setRunningShadowQuote(true);
+      const result = await runShadowQuote(order.id, selectedShadowPackageId || undefined);
+      setShadowQuoteResult(result);
+      if (result.result_kind === 'failed') {
+        error(`DHL sandbox shadow quote failed: ${result.note}`);
+      } else {
+        success(`DHL sandbox shadow quote recorded (${result.result_kind})`);
+      }
+    } catch (err) {
+      console.error('Failed to run shadow quote:', err);
+      error('Failed to run DHL sandbox shadow quote');
+    } finally {
+      setRunningShadowQuote(false);
+    }
+  };
+
 
   if (loading) {
     return (
@@ -329,6 +361,21 @@ export default function AdminOrderDetail() {
             <CurrencySwitcher value={currentCurrency} onChange={setCurrency} />
             {order.fulfillment_status !== 'cancelled' && (
               <>
+                {order.ready_packages.length > 1 && (
+                  <select
+                    value={selectedShadowPackageId}
+                    onChange={(e) => setSelectedShadowPackageId(e.target.value)}
+                    disabled={runningShadowQuote || updating}
+                    className="px-3 py-2 border border-gray-300 rounded-lg bg-white text-sm disabled:opacity-50"
+                  >
+                    <option value="">Select ready package</option>
+                    {order.ready_packages.map((pkg) => (
+                      <option key={pkg.id} value={pkg.id}>
+                        {`Package ${pkg.id.slice(0, 8)} · ready ${new Date(pkg.ready_at).toLocaleString()}`}
+                      </option>
+                    ))}
+                  </select>
+                )}
                 <button
                   onClick={() => setShowCancelModal(true)}
                   disabled={updating}
@@ -345,6 +392,13 @@ export default function AdminOrderDetail() {
                     Process Refund
                   </button>
                 )}
+                <button
+                  onClick={handleRunShadowQuote}
+                  disabled={runningShadowQuote || updating || order.ready_packages.length === 0}
+                  className="px-4 py-2 border border-[#105E53] text-[#105E53] rounded-lg hover:bg-[#f1f8f6] disabled:opacity-50"
+                >
+                  {runningShadowQuote ? 'Running Shadow Quote...' : 'Run DHL Sandbox Shadow Quote'}
+                </button>
               </>
             )}
           </div>
@@ -637,6 +691,36 @@ export default function AdminOrderDetail() {
                 </button>
               </div>
               <div className="space-y-3 text-sm">
+                {shadowQuoteResult && (() => {
+                  const failed = shadowQuoteResult.result_kind === 'failed';
+                  const containerClass = failed
+                    ? 'rounded-lg border border-red-200 bg-red-50 p-3'
+                    : 'rounded-lg border border-emerald-200 bg-emerald-50 p-3';
+                  const labelClass = failed
+                    ? 'text-xs font-semibold uppercase tracking-wide text-red-700'
+                    : 'text-xs font-semibold uppercase tracking-wide text-emerald-700';
+                  const bodyClass = failed ? 'text-sm text-red-900' : 'text-sm text-emerald-900';
+                  const timeClass = failed ? 'text-xs text-red-700' : 'text-xs text-emerald-700';
+
+                  return (
+                    <div className={containerClass}>
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <div className={labelClass}>
+                            DHL Sandbox Shadow Quote
+                          </div>
+                          <div className={bodyClass}>
+                            {shadowQuoteResult.result_kind} · {shadowQuoteResult.offers_count} offer(s)
+                          </div>
+                        </div>
+                        <div className={timeClass}>
+                          {new Date(shadowQuoteResult.quoted_at).toLocaleString()}
+                        </div>
+                      </div>
+                      <div className={`mt-2 ${bodyClass}`}>{shadowQuoteResult.note}</div>
+                    </div>
+                  );
+                })()}
                 {order.shipping_address && (
                   <div>
                     <div className="text-gray-500">Recipient</div>

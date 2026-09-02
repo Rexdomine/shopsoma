@@ -2,9 +2,10 @@
 from fastapi import APIRouter, Depends, Query, HTTPException, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, and_, or_, desc
+from sqlalchemy import select, func, and_, or_, desc, exists
 from sqlalchemy.orm import selectinload
 from typing import Optional, List
+from uuid import UUID
 from datetime import datetime, date, timedelta
 from decimal import Decimal
 import logging
@@ -13,6 +14,7 @@ import io
 import math
 
 from app.api.dependencies import get_db, get_current_admin
+from app.core.config import Settings, settings
 from app.models.user import User
 from app.models.order import Order, OrderItem, PaymentStatus, FulfillmentStatus
 from app.models.vendor import Vendor
@@ -21,6 +23,7 @@ from app.models.vendor_pickup import VendorPickup, PickupStatus
 from app.models.product import Product
 from app.models.payment import Payment
 from app.models.setting import Setting
+from app.models.package_custody import HubPackage, CustodyEvent
 
 logger = logging.getLogger(__name__)
 from app.services.order_notification_service import OrderNotificationService
@@ -41,9 +44,20 @@ from app.schemas.admin_order import (
     AddressInfo,
     OrderItemDetail,
     PickupInfo,
+    ReadyPackageInfo,
+    ShadowQuoteResult,
+)
+from app.services.admin_shadow_quote import (
+    run_admin_shadow_quote,
+    ShadowQuoteConflictError,
+    ShadowQuoteError,
 )
 
 router = APIRouter(prefix="/admin/orders", tags=["Admin Orders"])
+
+
+def get_app_settings() -> Settings:
+    return settings
 
 
 # ============================================================================
@@ -445,6 +459,21 @@ async def get_order_detail(
         # Build response with detailed error tracking
         display_currency = resolve_order_currency(order)
         usd_to_ngn_rate = await _get_usd_to_ngn_rate(db)
+        ready_packages = (
+            await db.execute(
+                select(HubPackage)
+                .where(
+                    HubPackage.order_id == order.id,
+                    HubPackage.state == "ready",
+                    ~exists().where(
+                        CustodyEvent.package_id == HubPackage.id,
+                        CustodyEvent.package_version == HubPackage.current_version,
+                        CustodyEvent.event_type.in_(("released", "tendered", "provider_accepted")),
+                    ),
+                )
+                .order_by(desc(HubPackage.ready_at), desc(HubPackage.created_at))
+            )
+        ).scalars().all()
         return OrderDetail(
         id=order.id,
         order_number=order.order_number,
@@ -494,6 +523,16 @@ async def get_order_detail(
                 admin_notes=pickup.admin_notes,
             )
             for pickup in order.pickups
+        ],
+        ready_packages=[
+            ReadyPackageInfo(
+                id=package.id,
+                current_version=package.current_version,
+                hub_id=package.hub_id,
+                ready_at=package.ready_at,
+            )
+            for package in ready_packages
+            if package.ready_at is not None
         ],
     )
     except ValueError as e:
@@ -829,6 +868,71 @@ async def bulk_update_status(
 # ============================================================================
 # ORDER ACTIONS
 # ============================================================================
+
+@router.post("/{order_id}/shadow-quote", response_model=ShadowQuoteResult)
+async def create_shadow_quote(
+    order_id: str,
+    package_id: str | None = None,
+    admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_app_settings),
+):
+    """Run an admin-only DHL sandbox shadow quote for a ready package."""
+
+    try:
+        parsed_order_id = UUID(order_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid order id",
+        ) from exc
+
+    if package_id is not None:
+        try:
+            parsed_package_id = UUID(package_id)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Invalid package id",
+            ) from exc
+    else:
+        parsed_package_id = None
+
+    if not settings.checkout_capability_configured:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Checkout capability fingerprinting is not configured",
+        )
+
+    pepper_version = settings.CHECKOUT_CAPABILITY_ACTIVE_PEPPER_VERSION
+    if pepper_version is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Checkout capability fingerprint version is not configured",
+        )
+
+    identity_key = settings.CHECKOUT_CAPABILITY_ACTIVE_PEPPER.get_secret_value().encode("utf-8")
+    identity_key_version = f"checkout-capability-v{pepper_version}"
+
+    try:
+        return await run_admin_shadow_quote(
+            db=db,
+            order_id=parsed_order_id,
+            admin=admin,
+            settings=settings,
+            identity_key=identity_key,
+            identity_key_version=identity_key_version,
+            ready_package_id=parsed_package_id,
+        )
+    except ShadowQuoteError as exc:
+        detail = str(exc)
+        status_code = status.HTTP_400_BAD_REQUEST
+        if isinstance(exc, ShadowQuoteConflictError):
+            status_code = status.HTTP_409_CONFLICT
+        elif detail == "order not found":
+            status_code = status.HTTP_404_NOT_FOUND
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+
 
 @router.post("/{order_id}/cancel")
 async def cancel_order(
