@@ -49,6 +49,7 @@ from app.schemas.admin_order import (
 )
 from app.services.admin_shadow_quote import (
     run_admin_shadow_quote,
+    ShadowQuoteConflictError,
     ShadowQuoteError,
 )
 
@@ -918,7 +919,9 @@ async def create_shadow_quote(
     except ShadowQuoteError as exc:
         detail = str(exc)
         status_code = status.HTTP_400_BAD_REQUEST
-        if detail == "order not found":
+        if isinstance(exc, ShadowQuoteConflictError):
+            status_code = status.HTTP_409_CONFLICT
+        elif detail == "order not found":
             status_code = status.HTTP_404_NOT_FOUND
         raise HTTPException(status_code=status_code, detail=detail) from exc
 

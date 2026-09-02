@@ -13,6 +13,7 @@ from typing import Optional
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
@@ -60,6 +61,10 @@ from app.schemas.admin_order import ShadowQuoteResult
 
 
 class ShadowQuoteError(Exception):
+    pass
+
+
+class ShadowQuoteConflictError(ShadowQuoteError):
     pass
 
 
@@ -349,20 +354,24 @@ async def run_admin_shadow_quote(
         claim_ttl_seconds=300,
         classification="pending",
     )
-    db.add(attempt)
-    await db.flush()
+    try:
+        db.add(attempt)
+        await db.flush()
 
-    await db.execute(
-        text(
-            "UPDATE domestic_rate_attempts "
-            "SET call_started_at=clock_timestamp() "
-            "WHERE id=:attempt_id"
-        ),
-        {"attempt_id": attempt.id},
-    )
-    await db.refresh(attempt)
-    call_started_at = attempt.call_started_at
-    await db.commit()
+        await db.execute(
+            text(
+                "UPDATE domestic_rate_attempts "
+                "SET call_started_at=clock_timestamp() "
+                "WHERE id=:attempt_id"
+            ),
+            {"attempt_id": attempt.id},
+        )
+        await db.refresh(attempt)
+        call_started_at = attempt.call_started_at
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise ShadowQuoteConflictError("shadow quote already in progress") from exc
 
     result: DHLDomesticRateResult | None = None
     adapter_error = None

@@ -4,10 +4,11 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
+from pydantic import SecretStr
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from app.core.config import Settings
+from app.core.config import Settings, settings
 from app.models.domestic_rate_quote import (
     DomesticRateAttempt,
     DomesticRateOffer,
@@ -526,3 +527,116 @@ async def test_admin_shadow_quote_reclaims_expired_pending_shadow_attempt_before
     assert current.source_command == "admin_shadow_quote"
     assert current.classification == "success"
     assert current.result_recorded_at is not None
+
+
+@pytest.mark.asyncio
+async def test_admin_shadow_quote_raises_conflict_when_live_shadow_claim_exists(
+    monkeypatch, db_session, vendor_user, customer_user, admin_user
+):
+    graph, package, seal, intent = await _subject(
+        db_session, vendor_user, customer_user
+    )
+    active_attempt = _attempt(
+        graph,
+        package,
+        seal,
+        intent,
+        await db_session.scalar(text("SELECT clock_timestamp()")),
+        initiating_actor_type="admin",
+        initiating_actor_id=str(admin_user["user"].id),
+        source_command="admin_shadow_quote",
+        idempotency_key=f"live-shadow-{uuid.uuid4().hex}",
+        claim_ttl_seconds=300,
+    )
+    db_session.add(active_attempt)
+    await db_session.flush()
+    await db_session.execute(
+        text(
+            "UPDATE domestic_rate_attempts SET call_started_at=clock_timestamp() "
+            "WHERE id=:id"
+        ),
+        {"id": active_attempt.id},
+    )
+    await db_session.commit()
+
+    def _should_not_run_adapter(**kwargs):
+        raise AssertionError("provider adapter must not run after claim conflict")
+
+    monkeypatch.setattr(
+        "app.services.admin_shadow_quote.create_sandbox_domestic_rate_adapter",
+        _should_not_run_adapter,
+    )
+
+    with pytest.raises(ShadowQuoteError, match="shadow quote already in progress"):
+        await run_admin_shadow_quote(
+            db=db_session,
+            order_id=graph["order"].id,
+            admin=admin_user["user"],
+            settings=_settings(graph["cohort"].id),
+            identity_key=b"shadow-pepper",
+            identity_key_version="checkout-capability-v7",
+            ready_package_id=package.id,
+        )
+
+
+@pytest.mark.asyncio
+async def test_admin_shadow_quote_endpoint_returns_conflict_for_live_shadow_claim(
+    client, monkeypatch, db_session, vendor_user, customer_user, admin_user
+):
+    graph, package, seal, intent = await _subject(
+        db_session, vendor_user, customer_user
+    )
+    active_attempt = _attempt(
+        graph,
+        package,
+        seal,
+        intent,
+        await db_session.scalar(text("SELECT clock_timestamp()")),
+        initiating_actor_type="admin",
+        initiating_actor_id=str(admin_user["user"].id),
+        source_command="admin_shadow_quote",
+        idempotency_key=f"live-shadow-endpoint-{uuid.uuid4().hex}",
+        claim_ttl_seconds=300,
+    )
+    db_session.add(active_attempt)
+    await db_session.flush()
+    await db_session.execute(
+        text(
+            "UPDATE domestic_rate_attempts SET call_started_at=clock_timestamp() "
+            "WHERE id=:id"
+        ),
+        {"id": active_attempt.id},
+    )
+    await db_session.commit()
+
+    monkeypatch.setattr(settings, "DHL_ENABLED", True)
+    monkeypatch.setattr(settings, "DHL_ENVIRONMENT", "sandbox")
+    monkeypatch.setattr(settings, "DHL_API_USERNAME", "sandbox-user")
+    monkeypatch.setattr(settings, "DHL_API_PASSWORD", "sandbox-pass")
+    monkeypatch.setattr(settings, "DHL_EXPORT_ACCOUNT_NUMBER", "123456789")
+    monkeypatch.setattr(settings, "DHL_DOMESTIC_PROVIDER_CALLS_ENABLED", True)
+    monkeypatch.setattr(settings, "DHL_DOMESTIC_QUOTE_TTL_SECONDS", 1800)
+    monkeypatch.setattr(settings, "DHL_DOMESTIC_SANDBOX_COHORT_IDS", str(graph["cohort"].id))
+    monkeypatch.setattr(settings, "CHECKOUT_CAPABILITY_ACTIVE_PEPPER_VERSION", 7)
+    monkeypatch.setattr(
+        settings,
+        "CHECKOUT_CAPABILITY_ACTIVE_PEPPER",
+        SecretStr("shadow-pepper"),
+    )
+
+    def _should_not_run_adapter(**kwargs):
+        raise AssertionError("provider adapter must not run after claim conflict")
+
+    monkeypatch.setattr(
+        "app.services.admin_shadow_quote.create_sandbox_domestic_rate_adapter",
+        _should_not_run_adapter,
+    )
+
+    response = await client.post(
+        f"/api/v1/admin/orders/{graph['order'].id}/shadow-quote",
+        headers=admin_user["headers"],
+        params={"package_id": str(package.id)},
+    )
+
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"] == "shadow quote already in progress"
