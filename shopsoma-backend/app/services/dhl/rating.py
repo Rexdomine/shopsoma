@@ -223,11 +223,23 @@ class DHLDomesticRateAdapter:
                 "domestic rate request is outside the supported lane"
             )
 
-    async def rate(
+    def prepare_rate_payload(
         self, resolved_hub: DHLResolvedHub, request: DomesticRateRequest
-    ) -> DHLDomesticRateResult:
+    ) -> dict[str, object]:
         self.validate_request(resolved_hub, request)
-        payload = self._request_payload(resolved_hub, request)
+        return self._request_payload(resolved_hub, request)
+
+    async def rate(
+        self,
+        resolved_hub: DHLResolvedHub,
+        request: DomesticRateRequest,
+        prepared_payload: dict[str, object] | None = None,
+    ) -> DHLDomesticRateResult:
+        payload = (
+            prepared_payload
+            if prepared_payload is not None
+            else self.prepare_rate_payload(resolved_hub, request)
+        )
         try:
             response = await self._client.request_json("POST", "/rates", json=payload)
         except DHLAPIError as exc:

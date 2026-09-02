@@ -365,6 +365,7 @@ async def run_admin_shadow_quote(
             identity_key=identity_key,
             identity_key_version=identity_key_version,
         )
+        prepared_payload = adapter.prepare_rate_payload(resolved, request)
     except DHLRateAdapterError as exc:
         raise ShadowQuoteError(str(exc)) from exc
 
@@ -428,7 +429,7 @@ async def run_admin_shadow_quote(
         await db.refresh(attempt)
         call_started_at = attempt.call_started_at
         await db.commit()
-        result = await adapter.rate(resolved, request)
+        result = await adapter.rate(resolved, request, prepared_payload=prepared_payload)
     except DHLRateAdapterError as exc:
         adapter_error = exc
     result_recorded_at = await db.scalar(text("SELECT clock_timestamp()"))

@@ -36,9 +36,16 @@ from tests.test_package_custody_persistence import _ready_package
 class _FakeAdapter:
     def __init__(self):
         self.calls = []
+        self.prepared_payloads = []
 
-    async def rate(self, resolved_hub, request):
+    def prepare_rate_payload(self, resolved_hub, request):
+        payload = {"prepared": True}
+        self.prepared_payloads.append(payload)
+        return payload
+
+    async def rate(self, resolved_hub, request, prepared_payload=None):
         self.calls.append((resolved_hub, request))
+        self.prepared_payloads.append(prepared_payload)
         return DHLDomesticRateResult(
             result_kind="success",
             offers=(
@@ -68,7 +75,7 @@ class _InspectingDelayAdapter(_FakeAdapter):
         self.observed_call_started_at = None
         self.observed_result_recorded_at = None
 
-    async def rate(self, resolved_hub, request):
+    async def rate(self, resolved_hub, request, prepared_payload=None):
         async with self._sessions() as observer:
             attempt = (
                 await observer.execute(
@@ -80,7 +87,9 @@ class _InspectingDelayAdapter(_FakeAdapter):
             self.observed_call_started_at = attempt.call_started_at
             self.observed_result_recorded_at = attempt.result_recorded_at
         await asyncio.sleep(0)
-        return await super().rate(resolved_hub, request)
+        return await super().rate(
+            resolved_hub, request, prepared_payload=prepared_payload
+        )
 
 
 def _settings(cohort_id):
@@ -279,6 +288,46 @@ async def test_admin_shadow_quote_translates_contract_validation_failures(
             identity_key=b"shadow-pepper",
             identity_key_version="checkout-capability-v7",
         )
+
+
+@pytest.mark.asyncio
+async def test_admin_shadow_quote_rejects_provider_payload_preflight_before_writing_attempt(
+    monkeypatch, db_session, vendor_user, customer_user, admin_user
+):
+    graph, _package, _seal, _intent = await _subject(
+        db_session, vendor_user, customer_user
+    )
+
+    class _PreflightRejectingAdapter(_FakeAdapter):
+        def prepare_rate_payload(self, resolved_hub, request):
+            raise DHLRateAdapterError("domestic rate request is invalid")
+
+        async def rate(self, resolved_hub, request, prepared_payload=None):
+            raise AssertionError("provider call must not run after local payload preflight failure")
+
+    monkeypatch.setattr(
+        "app.services.admin_shadow_quote.create_sandbox_domestic_rate_adapter",
+        lambda **kwargs: _PreflightRejectingAdapter(),
+    )
+
+    with pytest.raises(ShadowQuoteError, match="domestic rate request is invalid"):
+        await run_admin_shadow_quote(
+            db=db_session,
+            order_id=graph["order"].id,
+            admin=admin_user["user"],
+            settings=_settings(graph["cohort"].id),
+            identity_key=b"shadow-pepper",
+            identity_key_version="checkout-capability-v7",
+        )
+
+    attempts = (
+        await db_session.execute(
+            select(DomesticRateAttempt).where(
+                DomesticRateAttempt.order_id == graph["order"].id
+            )
+        )
+    ).scalars().all()
+    assert attempts == []
 
 
 @pytest.mark.asyncio
@@ -548,7 +597,10 @@ async def test_admin_shadow_quote_raises_conflict_when_live_shadow_claim_exists(
     await db_session.commit()
 
     class _NeverRateAdapter:
-        async def rate(self, resolved_hub, request):
+        def prepare_rate_payload(self, resolved_hub, request):
+            return {"prepared": True}
+
+        async def rate(self, resolved_hub, request, prepared_payload=None):
             raise AssertionError("provider rate() must not run after claim conflict")
 
     monkeypatch.setattr(
@@ -614,7 +666,10 @@ async def test_admin_shadow_quote_endpoint_returns_conflict_for_live_shadow_clai
     )
 
     class _NeverRateAdapter:
-        async def rate(self, resolved_hub, request):
+        def prepare_rate_payload(self, resolved_hub, request):
+            return {"prepared": True}
+
+        async def rate(self, resolved_hub, request, prepared_payload=None):
             raise AssertionError("provider rate() must not run after claim conflict")
 
     monkeypatch.setattr(
@@ -672,7 +727,10 @@ async def test_admin_shadow_quote_endpoint_returns_bad_request_for_stale_subject
     )
 
     class _NeverRateAdapter:
-        async def rate(self, resolved_hub, request):
+        def prepare_rate_payload(self, resolved_hub, request):
+            return {"prepared": True}
+
+        async def rate(self, resolved_hub, request, prepared_payload=None):
             raise AssertionError("provider rate() must not run after stale subject drift")
 
     monkeypatch.setattr(
