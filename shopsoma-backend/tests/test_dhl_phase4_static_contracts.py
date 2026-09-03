@@ -66,6 +66,14 @@ def test_phase4_booking_guard_creation_recovers_uniqueness_races() -> None:
     assert ".with_for_update()" in source
 
 
+def test_phase4_booking_releases_guard_on_definitive_dhl_rejections() -> None:
+    source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    assert "exc.status_code in {400, 401, 403}" in source
+    assert 'booking.classification = "failure" if definitive_rejection else "unknown"' in source
+    assert 'guard.active_booking_id = None if definitive_rejection else guard.active_booking_id' in source
+    assert 'guard.booking_blocked_reason = None if definitive_rejection else "unknown_outcome"' in source
+
+
 def test_no_duplicate_dhl_client_module_remains() -> None:
     assert not DUPLICATE_CLIENT.exists()
 
@@ -98,3 +106,28 @@ def test_tracking_refresh_sets_delivered_at_only_on_first_delivery_transition() 
     source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
     assert 'if latest.outbound_state == "delivered" and (' in source
     assert 'current_state != "delivered" or order.delivered_at is None' in source
+
+
+def test_tracking_refresh_reloads_locked_booking_after_provider_poll() -> None:
+    source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    assert "booking = await _load_booking_for_order(" in source
+    assert "lock_for_update=True" in source
+    assert "allow_carrier_movement = booking.handoff_recorded_at is not None" in source
+    assert "current_state = booking.outbound_state" in source
+
+
+def test_tracking_refresh_keeps_provider_terminal_observation_as_latest() -> None:
+    source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    assert "latest = observations[-1]" in source
+    assert "\n                latest = observation\n" not in source
+
+
+def test_tracking_refresh_preserves_cancelled_order_status() -> None:
+    source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    assert "if order.fulfillment_status != FulfillmentStatus.CANCELLED:" in source
+
+
+def test_handoff_locks_booking_before_replay_check() -> None:
+    source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    assert "record_collection_handoff" in source
+    assert "lock_for_update=True" in source

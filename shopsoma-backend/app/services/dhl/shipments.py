@@ -763,10 +763,18 @@ async def book_outbound_shipment(
     except (DHLAPIError, TimeoutError) as exc:
         completed_at = await db.scalar(text("SELECT clock_timestamp()"))
         booking.result_recorded_at = completed_at
-        booking.classification = "unknown"
-        booking.failure_code = "unknown_outcome"
+        definitive_rejection = isinstance(exc, DHLAPIError) and (
+            exc.status_code in {400, 401, 403}
+        )
+        booking.classification = "failure" if definitive_rejection else "unknown"
+        booking.failure_code = (
+            f"provider_rejected_{exc.status_code}"
+            if definitive_rejection and isinstance(exc, DHLAPIError) and exc.status_code is not None
+            else "unknown_outcome"
+        )
         booking.completion_txid = await db.scalar(text("SELECT txid_current()"))
-        guard.booking_blocked_reason = "unknown_outcome"
+        guard.active_booking_id = None if definitive_rejection else guard.active_booking_id
+        guard.booking_blocked_reason = None if definitive_rejection else "unknown_outcome"
         await db.flush()
         return _booking_result(booking, replayed=False, note=str(exc))
     except ShipmentPhase4UnknownOutcomeError as exc:
@@ -841,7 +849,12 @@ async def record_collection_handoff(
     admin: User,
     command: HandoffCommand,
 ) -> HandoffResult:
-    booking = await _load_booking_for_order(db, order_id=order_id, booking_id=command.booking_id)
+    booking = await _load_booking_for_order(
+        db,
+        order_id=order_id,
+        booking_id=command.booking_id,
+        lock_for_update=True,
+    )
     if booking.classification != "success":
         raise ShipmentPhase4Error("cannot hand off a non-booked shipment")
     if booking.outbound_state not in {"label_ready", "awaiting_collection", "collected"}:
@@ -1028,8 +1041,6 @@ async def refresh_tracking(
         raise ShipmentPhase4Error("tracking adapter returned no observations")
     inserted = 0
     latest = observations[-1]
-    allow_carrier_movement = booking.handoff_recorded_at is not None
-    current_state = booking.outbound_state
     try:
         async with db.begin_nested():
             for position, observation in enumerate(observations):
@@ -1063,7 +1074,14 @@ async def refresh_tracking(
                         raise
                     continue
                 inserted += 1
-                latest = observation
+            booking = await _load_booking_for_order(
+                db,
+                order_id=order_id,
+                booking_id=command.booking_id,
+                lock_for_update=True,
+            )
+            allow_carrier_movement = booking.handoff_recorded_at is not None
+            current_state = booking.outbound_state
             completed_at = await db.scalar(text("SELECT clock_timestamp()"))
             booking.last_tracking_refresh_at = completed_at
             effective_state = current_state
@@ -1093,18 +1111,19 @@ async def refresh_tracking(
             if order is not None:
                 order.delivery_provider = PROVIDER
                 order.tracking_number = booking.tracking_number
-                if allow_carrier_movement and effective_state in {"collected", "in_transit"}:
-                    order.fulfillment_status = FulfillmentStatus.IN_TRANSIT
-                elif allow_carrier_movement and effective_state == "out_for_delivery":
-                    order.fulfillment_status = FulfillmentStatus.OUT_FOR_DELIVERY
-                elif allow_carrier_movement and effective_state == "delivered":
-                    order.fulfillment_status = FulfillmentStatus.DELIVERED
-                    if latest.outbound_state == "delivered" and (
-                        current_state != "delivered" or order.delivered_at is None
-                    ):
-                        order.delivered_at = latest.observed_at
-                elif effective_state == "exception":
-                    order.fulfillment_status = FulfillmentStatus.DELIVERY_FAILED
+                if order.fulfillment_status != FulfillmentStatus.CANCELLED:
+                    if allow_carrier_movement and effective_state in {"collected", "in_transit"}:
+                        order.fulfillment_status = FulfillmentStatus.IN_TRANSIT
+                    elif allow_carrier_movement and effective_state == "out_for_delivery":
+                        order.fulfillment_status = FulfillmentStatus.OUT_FOR_DELIVERY
+                    elif allow_carrier_movement and effective_state == "delivered":
+                        order.fulfillment_status = FulfillmentStatus.DELIVERED
+                        if latest.outbound_state == "delivered" and (
+                            current_state != "delivered" or order.delivered_at is None
+                        ):
+                            order.delivered_at = latest.observed_at
+                    elif effective_state == "exception":
+                        order.fulfillment_status = FulfillmentStatus.DELIVERY_FAILED
             refresh = OutboundShipmentTrackingRefresh(
                 booking_id=booking.id,
                 order_id=booking.order_id,
@@ -1143,15 +1162,20 @@ async def refresh_tracking(
     )
 
 
-async def _load_booking_for_order(db: AsyncSession, *, order_id: uuid.UUID, booking_id: uuid.UUID) -> OutboundShipmentBooking:
-    booking = (
-        await db.execute(
-            select(OutboundShipmentBooking).where(
-                OutboundShipmentBooking.id == booking_id,
-                OutboundShipmentBooking.order_id == order_id,
-            )
-        )
-    ).scalar_one_or_none()
+async def _load_booking_for_order(
+    db: AsyncSession,
+    *,
+    order_id: uuid.UUID,
+    booking_id: uuid.UUID,
+    lock_for_update: bool = False,
+) -> OutboundShipmentBooking:
+    query = select(OutboundShipmentBooking).where(
+        OutboundShipmentBooking.id == booking_id,
+        OutboundShipmentBooking.order_id == order_id,
+    )
+    if lock_for_update:
+        query = query.with_for_update()
+    booking = (await db.execute(query)).scalar_one_or_none()
     if booking is None:
         raise ShipmentPhase4Error("booking not found for order")
     return booking
