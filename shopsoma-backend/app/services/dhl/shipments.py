@@ -281,32 +281,36 @@ class DHLShipmentAdapter:
         checkpoints = _tracking_checkpoints(response)
         observations: list[TrackingObservation] = []
         for shipment, checkpoint in checkpoints:
-            code = str(
-                checkpoint.get("statusCode")
-                or checkpoint.get("typeCode")
-                or checkpoint.get("code")
-                or "UNKNOWN"
-            ).strip().upper()
+            codes = [
+                str(raw).strip().upper()
+                for raw in (
+                    checkpoint.get("typeCode"),
+                    checkpoint.get("statusCode"),
+                    checkpoint.get("code"),
+                )
+                if raw is not None and str(raw).strip()
+            ]
+            primary_code = codes[0] if codes else "UNKNOWN"
             detail = str(
                 checkpoint.get("description")
                 or checkpoint.get("detail")
                 or checkpoint.get("remark")
-                or code
+                or primary_code
             ).strip()
             observed_at = _tracking_observed_at(
                 checkpoint=checkpoint,
                 shipment=shipment,
                 response=response,
             ) or datetime.now(UTC)
-            outbound_state, customer_status = _map_tracking_status(code)
+            outbound_state, customer_status = _map_tracking_status(*codes)
             observations.append(
                 TrackingObservation(
-                    provider_status_code=code,
+                    provider_status_code=primary_code,
                     outbound_state=outbound_state,
                     customer_status=customer_status,
                     detail=detail,
                     observed_at=observed_at,
-                    exception_code=code if outbound_state == "exception" else None,
+                    exception_code=primary_code if outbound_state == "exception" else None,
                 )
             )
         if not observations:
@@ -389,6 +393,55 @@ def _customer_status_for_outbound_state(outbound_state: str, *, fallback: str) -
         "delivered": "delivered",
         "exception": "delivery_exception",
     }.get(outbound_state, fallback)
+
+
+def _aggregate_order_shipment_state(states: Sequence[str]) -> str | None:
+    active_states = [state for state in states if state and state != "cancelled"]
+    if not active_states:
+        return None
+    if any(state == "exception" for state in active_states):
+        return "exception"
+    if all(state == "delivered" for state in active_states):
+        return "delivered"
+    if all(state in {"delivered", "out_for_delivery"} for state in active_states):
+        return "out_for_delivery"
+    if any(
+        state in {"collected", "in_transit", "out_for_delivery", "delivered"}
+        for state in active_states
+    ):
+        return "in_transit"
+    return "booked"
+
+
+async def _aggregate_order_outbound_state(
+    db: AsyncSession,
+    *,
+    order_id: uuid.UUID,
+    fallback: str,
+) -> str:
+    bookings = (
+        await db.execute(
+            select(OutboundShipmentBooking)
+            .where(
+                OutboundShipmentBooking.order_id == order_id,
+                OutboundShipmentBooking.classification == "success",
+            )
+            .order_by(
+                OutboundShipmentBooking.package_id,
+                OutboundShipmentBooking.package_version,
+                OutboundShipmentBooking.result_recorded_at.desc(),
+                OutboundShipmentBooking.created_at.desc(),
+            )
+        )
+    ).scalars().all()
+    latest_by_package: dict[tuple[uuid.UUID, int], str] = {}
+    for candidate in bookings:
+        key = (candidate.package_id, candidate.package_version)
+        if key in latest_by_package or candidate.outbound_state == "cancelled":
+            continue
+        latest_by_package[key] = candidate.outbound_state
+    aggregate_state = _aggregate_order_shipment_state(list(latest_by_package.values()))
+    return aggregate_state or fallback
 
 
 def _ensure_sandbox_booking_allowed(
@@ -698,16 +751,21 @@ def _normalize_text(value: str, *, field: str) -> str:
     return normalized
 
 
-def _map_tracking_status(code: str) -> tuple[str, str]:
-    if code in {"PICKUP_CONFIRMED", "COLLECTED"}:
+def _map_tracking_status(*codes: str) -> tuple[str, str]:
+    normalized_codes = {
+        code.strip().upper()
+        for code in codes
+        if code is not None and code.strip()
+    }
+    if normalized_codes & {"PU", "PICKUP_CONFIRMED", "COLLECTED"}:
         return "collected", "picked_up"
-    if code in {"DEPARTED", "IN_TRANSIT", "ARRIVED_AT_SORT"}:
-        return "in_transit", "in_transit"
-    if code in {"OUT_FOR_DELIVERY"}:
-        return "out_for_delivery", "out_for_delivery"
-    if code in {"DELIVERED"}:
+    if normalized_codes & {"OK", "DELIVERED"}:
         return "delivered", "delivered"
-    if code in {"EXCEPTION", "HOLD", "RETURNED"}:
+    if normalized_codes & {"OOD", "OUT_FOR_DELIVERY"}:
+        return "out_for_delivery", "out_for_delivery"
+    if normalized_codes & {"DEPARTED", "IN_TRANSIT", "ARRIVED_AT_SORT", "TRANSIT"}:
+        return "in_transit", "in_transit"
+    if normalized_codes & {"EXCEPTION", "HOLD", "RETURNED", "FAILURE"}:
         return "exception", "delivery_exception"
     return "booked", "label_created"
 
@@ -924,7 +982,6 @@ async def book_outbound_shipment(
         called_at = await db.scalar(text("SELECT clock_timestamp()"))
         booking.call_started_at = called_at
         await db.flush()
-        await db.commit()
         adapter_result = await adapter.book(intent, order, hub, package_version)
     except (DHLAPIError, TimeoutError) as exc:
         completed_at = await db.scalar(text("SELECT clock_timestamp()"))
@@ -1198,7 +1255,10 @@ async def refresh_tracking(
     )
     _ensure_sandbox_booking_allowed(settings, cohort_ids=cohort_ids)
     adapter = adapter or create_shipment_adapter(settings)
-    observations = await adapter.track(booking.tracking_number)
+    try:
+        observations = await adapter.track(booking.tracking_number)
+    except (DHLAPIError, TimeoutError) as exc:
+        raise ShipmentPhase4Error(str(exc)) from exc
     if not observations:
         raise ShipmentPhase4Error("tracking adapter returned no observations")
     inserted = 0
@@ -1293,22 +1353,27 @@ async def refresh_tracking(
                 effective_state,
                 fallback=latest.customer_status,
             )
+            aggregate_state = await _aggregate_order_outbound_state(
+                db,
+                order_id=booking.order_id,
+                fallback=effective_state,
+            )
             order = await _load_order(db, order_id=order_id, lock_for_update=True)
             if order is not None:
                 order.delivery_provider = PROVIDER
                 order.tracking_number = booking.tracking_number
                 if order.fulfillment_status != FulfillmentStatus.CANCELLED:
-                    if allow_carrier_movement and effective_state in {"collected", "in_transit"}:
+                    if allow_carrier_movement and aggregate_state in {"collected", "in_transit"}:
                         order.fulfillment_status = FulfillmentStatus.IN_TRANSIT
-                    elif allow_carrier_movement and effective_state == "out_for_delivery":
+                    elif allow_carrier_movement and aggregate_state == "out_for_delivery":
                         order.fulfillment_status = FulfillmentStatus.OUT_FOR_DELIVERY
-                    elif allow_carrier_movement and effective_state == "delivered":
+                    elif allow_carrier_movement and aggregate_state == "delivered":
                         order.fulfillment_status = FulfillmentStatus.DELIVERED
                         if latest.outbound_state == "delivered" and (
                             current_state != "delivered" or order.delivered_at is None
                         ):
                             order.delivered_at = latest.observed_at
-                    elif effective_state == "exception":
+                    elif aggregate_state == "exception":
                         order.fulfillment_status = FulfillmentStatus.DELIVERY_FAILED
             refresh = OutboundShipmentTrackingRefresh(
                 booking_id=booking.id,

@@ -13,7 +13,11 @@ from app.services.dhl.client import (
     DHLClient,
     DHLConfigurationError,
 )
-from app.services.dhl.shipments import DHLShipmentAdapter
+from app.services.dhl.shipments import (
+    _aggregate_order_shipment_state,
+    _map_tracking_status,
+    DHLShipmentAdapter,
+)
 
 
 DUMMY_USERNAME = "dummy-api-user"
@@ -275,6 +279,32 @@ async def test_successful_non_json_response_is_rejected_safely() -> None:
     assert "not-json" not in str(exc_info.value)
 
 
+@pytest.mark.parametrize(
+    ("codes", "expected"),
+    [
+        (("PU",), ("collected", "picked_up")),
+        (("OK",), ("delivered", "delivered")),
+        (("TRANSIT",), ("in_transit", "in_transit")),
+        (("FAILURE",), ("exception", "delivery_exception")),
+        (("PU", "TRANSIT"), ("collected", "picked_up")),
+        (("UNKNOWN",), ("booked", "label_created")),
+    ],
+)
+def test_map_tracking_status_handles_real_mydhl_codes(
+    codes: tuple[str, ...],
+    expected: tuple[str, str],
+) -> None:
+    assert _map_tracking_status(*codes) == expected
+
+
+def test_aggregate_order_shipment_state_uses_slowest_non_cancelled_package() -> None:
+    assert _aggregate_order_shipment_state(["delivered", "out_for_delivery"]) == "out_for_delivery"
+    assert _aggregate_order_shipment_state(["delivered", "in_transit"]) == "in_transit"
+    assert _aggregate_order_shipment_state(["delivered", "delivered"]) == "delivered"
+    assert _aggregate_order_shipment_state(["cancelled", "delivered"]) == "delivered"
+    assert _aggregate_order_shipment_state(["exception", "delivered"]) == "exception"
+
+
 @pytest.mark.asyncio
 async def test_tracking_adapter_parses_mydhl_shipments_events_envelope() -> None:
     tracking_response = {
@@ -282,13 +312,15 @@ async def test_tracking_adapter_parses_mydhl_shipments_events_envelope() -> None
             {
                 "events": [
                     {
-                        "typeCode": "PICKUP_CONFIRMED",
+                        "typeCode": "PU",
+                        "statusCode": "TRANSIT",
                         "description": "Shipment collected",
                         "date": "2026-09-03",
                         "time": "13:45:00+01:00",
                     },
                     {
-                        "typeCode": "DELIVERED",
+                        "typeCode": "OK",
+                        "statusCode": "DELIVERED",
                         "description": "Shipment delivered",
                         "date": "2026-09-04",
                         "time": "08:15:00+01:00",
@@ -307,8 +339,8 @@ async def test_tracking_adapter_parses_mydhl_shipments_events_envelope() -> None
 
     request_json.assert_awaited_once_with("GET", "/shipments/TRACK123/tracking")
     assert [observation.provider_status_code for observation in observations] == [
-        "PICKUP_CONFIRMED",
-        "DELIVERED",
+        "PU",
+        "OK",
     ]
     assert [observation.outbound_state for observation in observations] == [
         "collected",

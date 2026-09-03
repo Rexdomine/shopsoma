@@ -84,7 +84,28 @@ def test_phase4_booking_locks_and_rejects_cancelled_orders_before_provider_call(
     source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
     assert 'order = await _load_order(db, order_id=order_id, lock_for_update=True)' in source
     assert '_ensure_order_not_cancelled(order, action="book shipment")' in source
+    assert 'booking.call_started_at = called_at' in source
     assert 'adapter_result = await adapter.book(intent, order, hub, package_version)' in source
+    segment = source.split('booking.call_started_at = called_at', 1)[1].split(
+        'adapter_result = await adapter.book(intent, order, hub, package_version)',
+        1,
+    )[0]
+    assert 'await db.commit()' not in segment
+
+
+def test_tracking_refresh_translates_transport_failures_into_service_errors() -> None:
+    source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    refresh_source = source[source.index("async def refresh_tracking"):]
+    assert 'except (DHLAPIError, TimeoutError) as exc:' in refresh_source
+    assert 'raise ShipmentPhase4Error(str(exc)) from exc' in refresh_source
+
+
+def test_tracking_refresh_aggregates_order_status_across_package_bookings() -> None:
+    source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    assert 'def _aggregate_order_shipment_state(states: Sequence[str]) -> str | None:' in source
+    assert 'aggregate_state = await _aggregate_order_outbound_state(' in source
+    assert 'if all(state == "delivered" for state in active_states):' in source
+    assert 'if all(state in {"delivered", "out_for_delivery"} for state in active_states):' in source
 
 
 def test_no_duplicate_dhl_client_module_remains() -> None:
