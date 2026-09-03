@@ -208,6 +208,37 @@ def upgrade() -> None:
             "provider", "environment", "tracking_number",
             name="uq_outbound_shipment_bookings_tracking",
         ),
+        sa.ForeignKeyConstraint(
+            ["intent_id"], ["outbound_shipment_intents.id"],
+            name="fk_outbound_shipment_bookings_intent",
+            ondelete="RESTRICT",
+        ),
+        sa.ForeignKeyConstraint(
+            ["order_id"], ["orders.id"],
+            name="fk_outbound_shipment_bookings_order",
+            ondelete="RESTRICT",
+        ),
+        sa.ForeignKeyConstraint(
+            ["origin_hub_id"], ["fulfillment_hubs.id"],
+            name="fk_outbound_shipment_bookings_origin_hub",
+            ondelete="RESTRICT",
+        ),
+        sa.ForeignKeyConstraint(
+            ["package_id", "package_version"],
+            ["hub_package_versions.package_id", "hub_package_versions.version"],
+            name="fk_outbound_shipment_bookings_package_version",
+            ondelete="RESTRICT",
+        ),
+        sa.ForeignKeyConstraint(
+            ["seal_id", "package_id", "package_version"],
+            [
+                "hub_package_seals.id",
+                "hub_package_seals.package_id",
+                "hub_package_seals.package_version",
+            ],
+            name="fk_outbound_shipment_bookings_seal_binding",
+            ondelete="RESTRICT",
+        ),
         sa.CheckConstraint(
             "provider = 'dhl' AND environment = 'sandbox'",
             name="ck_outbound_shipment_bookings_lane",

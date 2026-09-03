@@ -179,8 +179,9 @@ class DHLShipmentAdapter:
         hub: FulfillmentHub,
         package_version: HubPackageVersion,
     ) -> AdapterBookingResult:
+        planned_ship_date = _planned_ship_date_for_shadow_quote(intent.created_at)
         payload = {
-            "plannedShippingDateAndTime": _planned_ship_date_for_shadow_quote(intent.created_at).isoformat(),
+            "plannedShippingDateAndTime": _mydhl_planned_shipping_timestamp(planned_ship_date),
             "pickup": {"isRequested": False},
             "productCode": "N",
             "accounts": [{
@@ -308,6 +309,19 @@ def _cohort_allowlist(settings: Settings) -> frozenset[uuid.UUID]:
     return settings.dhl_domestic_sandbox_cohort_ids
 
 
+def _mydhl_planned_shipping_timestamp(planned_ship_date: date) -> str:
+    return f"{planned_ship_date.isoformat()}T12:00:00GMT+01:00"
+
+
+def _derived_handoff_idempotency_key(base_key: str, suffix: str) -> str:
+    candidate = f"{base_key}{suffix}"
+    if len(candidate) <= 200:
+        return candidate
+    digest = hashlib.sha256(candidate.encode("utf-8")).hexdigest()
+    prefix_budget = 200 - len(suffix) - 1 - len(digest)
+    return f"{base_key[:prefix_budget]}:{digest}{suffix}"
+
+
 def _ensure_sandbox_booking_allowed(
     settings: Settings,
     *,
@@ -370,6 +384,35 @@ async def _matching_replay(
             "idempotency key is already bound to a different shipment subject"
         )
     return existing
+
+
+async def _verified_carrier_acceptance_snapshot(
+    db: AsyncSession,
+    *,
+    booking_id: uuid.UUID,
+) -> OutboundShipmentTrackingSnapshot:
+    snapshot = (
+        await db.execute(
+            select(OutboundShipmentTrackingSnapshot)
+            .where(
+                OutboundShipmentTrackingSnapshot.booking_id == booking_id,
+                OutboundShipmentTrackingSnapshot.provider == PROVIDER,
+                OutboundShipmentTrackingSnapshot.outbound_state.in_(
+                    ("collected", "in_transit", "out_for_delivery", "delivered")
+                ),
+            )
+            .order_by(
+                OutboundShipmentTrackingSnapshot.observed_at.asc(),
+                OutboundShipmentTrackingSnapshot.id.asc(),
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if snapshot is None:
+        raise ShipmentPhase4ConflictError(
+            "verified DHL collection event required before carrier acceptance handoff"
+        )
+    return snapshot
 
 
 def _utc_or_none(value: object) -> datetime | None:
@@ -517,6 +560,7 @@ async def book_outbound_shipment(
     hub = await db.get(FulfillmentHub, intent.origin_hub_id)
     if hub is None:
         raise ShipmentPhase4Error("origin hub not found")
+    adapter = adapter or create_shipment_adapter(settings)
 
     request_fingerprint = hashlib.sha256(
         f"{intent.id}:{package.id}:{package.current_version}:{seal.id}".encode("utf-8")
@@ -575,15 +619,12 @@ async def book_outbound_shipment(
     guard = await db.get(OutboundIntentShipmentGuard, intent.id)
     assert booking is not None and guard is not None
 
-    adapter = adapter or create_shipment_adapter(settings)
     try:
         called_at = await db.scalar(text("SELECT clock_timestamp()"))
         booking.call_started_at = called_at
         await db.flush()
         await db.commit()
         adapter_result = await adapter.book(intent, order, hub, package_version)
-    except (DHLConfigurationError,) as exc:
-        raise ShipmentPhase4Error(str(exc)) from exc
     except (DHLAPIError, TimeoutError) as exc:
         completed_at = await db.scalar(text("SELECT clock_timestamp()"))
         booking.result_recorded_at = completed_at
@@ -694,6 +735,15 @@ async def record_collection_handoff(
             occurred_at=existing_event.occurred_at,
             custody_event_id=existing_event.id,
         )
+    verified_acceptance = await _verified_carrier_acceptance_snapshot(
+        db,
+        booking_id=booking.id,
+    )
+    tendered_occurred_at = min(command.occurred_at, verified_acceptance.observed_at)
+    tendered_idempotency_key = _derived_handoff_idempotency_key(
+        normalized_idempotency,
+        ":tendered",
+    )
     streams = (
         await db.execute(
             select(CustodyStream)
@@ -735,11 +785,11 @@ async def record_collection_handoff(
                 actor_id=str(admin.id),
                 source_system="admin_dhl_handoff",
                 source_command="admin_dhl_handoff",
-                occurred_at=command.occurred_at,
-                recorded_at=max(command.occurred_at, datetime.now(UTC)),
+                occurred_at=tendered_occurred_at,
+                recorded_at=max(tendered_occurred_at, datetime.now(UTC)),
                 location="hub_dispatch",
-                idempotency_key=f"{normalized_idempotency}:tendered",
-                counterparty=command.counterparty.strip(),
+                idempotency_key=tendered_idempotency_key,
+                counterparty=PROVIDER.upper(),
                 evidence_ref=command.evidence_ref.strip(),
                 evidence_hash=command.evidence_sha256.lower(),
                 package_id=booking.package_id,
@@ -766,14 +816,14 @@ async def record_collection_handoff(
             hub_id=booking.origin_hub_id,
             event_type="provider_accepted",
             actor_type="carrier",
-            actor_id=command.counterparty.strip(),
+            actor_id=PROVIDER,
             source_system="admin_dhl_handoff",
             source_command="admin_dhl_handoff",
-            occurred_at=command.occurred_at,
-            recorded_at=max(command.occurred_at, datetime.now(UTC)),
+            occurred_at=verified_acceptance.observed_at,
+            recorded_at=max(verified_acceptance.observed_at, datetime.now(UTC)),
             location="hub_dispatch",
             idempotency_key=normalized_idempotency,
-            counterparty=command.counterparty.strip(),
+            counterparty=PROVIDER.upper(),
             evidence_ref=command.evidence_ref.strip(),
             evidence_hash=command.evidence_sha256.lower(),
             package_id=booking.package_id,
