@@ -68,6 +68,21 @@ class ShipmentPhase4UnknownOutcomeError(ShipmentPhase4Error):
     pass
 
 
+def _is_unique_constraint_violation(
+    exc: IntegrityError,
+    *,
+    constraint_name: str | None = None,
+) -> bool:
+    orig = getattr(exc, "orig", None)
+    sqlstate = getattr(orig, "sqlstate", None) or getattr(orig, "pgcode", None)
+    if sqlstate != "23505":
+        return False
+    if constraint_name is None:
+        return True
+    diag = getattr(orig, "diag", None)
+    return getattr(diag, "constraint_name", None) == constraint_name
+
+
 @dataclass(frozen=True, slots=True)
 class BookingCommand:
     order_id: uuid.UUID
@@ -994,89 +1009,99 @@ async def refresh_tracking(
     latest = observations[-1]
     allow_carrier_movement = booking.handoff_recorded_at is not None
     current_state = booking.outbound_state
-    for position, observation in enumerate(observations):
-        derived_idempotency_key = _derived_handoff_idempotency_key(
-            normalized_idempotency,
-            f":{position}",
-        )
-        snapshot = OutboundShipmentTrackingSnapshot(
-            booking_id=booking.id,
-            order_id=booking.order_id,
-            provider=PROVIDER,
-            tracking_number=booking.tracking_number,
-            provider_status_code=observation.provider_status_code,
-            outbound_state=observation.outbound_state,
-            customer_status=observation.customer_status,
-            detail=observation.detail,
-            observed_at=observation.observed_at,
-            exception_code=observation.exception_code,
-            idempotency_key=derived_idempotency_key,
-            source_command="admin_dhl_tracking_refresh",
-        )
-        try:
-            async with db.begin_nested():
-                db.add(snapshot)
-                await db.flush()
-        except IntegrityError:
-            continue
-        inserted += 1
-        latest = observation
-    completed_at = await db.scalar(text("SELECT clock_timestamp()"))
-    booking.last_tracking_refresh_at = completed_at
-    effective_state = current_state
-    if allow_carrier_movement:
-        if latest.outbound_state == "exception":
-            if current_state not in {"delivered", "cancelled"}:
-                effective_state = "exception"
-        elif current_state == "exception":
-            if latest.outbound_state in {
-                "collected",
-                "in_transit",
-                "out_for_delivery",
-                "delivered",
-                "cancelled",
-            } and not _is_placeholder_booked_observation(latest):
-                effective_state = latest.outbound_state
-        elif current_state != "cancelled" and _state_rank(latest.outbound_state) >= _state_rank(current_state):
-            effective_state = latest.outbound_state
-    else:
-        if latest.outbound_state == "exception":
-            if current_state not in {"delivered", "cancelled"}:
-                effective_state = "exception"
-        elif latest.outbound_state in {"booked", "label_ready", "awaiting_collection"}:
-            if _state_rank(latest.outbound_state) >= _state_rank(current_state):
-                effective_state = latest.outbound_state
-    booking.outbound_state = effective_state
-    if latest.outbound_state == "exception":
-        booking.latest_exception_code = latest.exception_code
-    order = await db.get(Order, order_id)
-    if order is not None:
-        order.delivery_provider = PROVIDER
-        order.tracking_number = booking.tracking_number
-        if allow_carrier_movement and effective_state in {"collected", "in_transit", "out_for_delivery"}:
-            order.fulfillment_status = FulfillmentStatus.IN_TRANSIT
-        elif allow_carrier_movement and effective_state == "delivered":
-            order.fulfillment_status = FulfillmentStatus.DELIVERED
-            order.delivered_at = latest.observed_at
-        elif effective_state == "exception":
-            order.fulfillment_status = FulfillmentStatus.DELIVERY_FAILED
-    refresh = OutboundShipmentTrackingRefresh(
-        booking_id=booking.id,
-        order_id=booking.order_id,
-        provider=PROVIDER,
-        tracking_number=booking.tracking_number,
-        outbound_state=booking.outbound_state,
-        customer_status=latest.customer_status,
-        observations_recorded=inserted,
-        refreshed_at=completed_at,
-        idempotency_key=normalized_idempotency,
-        source_command="admin_dhl_tracking_refresh",
-    )
     try:
         async with db.begin_nested():
+            for position, observation in enumerate(observations):
+                derived_idempotency_key = _derived_handoff_idempotency_key(
+                    normalized_idempotency,
+                    f":{position}",
+                )
+                snapshot = OutboundShipmentTrackingSnapshot(
+                    booking_id=booking.id,
+                    order_id=booking.order_id,
+                    provider=PROVIDER,
+                    tracking_number=booking.tracking_number,
+                    provider_status_code=observation.provider_status_code,
+                    outbound_state=observation.outbound_state,
+                    customer_status=observation.customer_status,
+                    detail=observation.detail,
+                    observed_at=observation.observed_at,
+                    exception_code=observation.exception_code,
+                    idempotency_key=derived_idempotency_key,
+                    source_command="admin_dhl_tracking_refresh",
+                )
+                try:
+                    async with db.begin_nested():
+                        db.add(snapshot)
+                        await db.flush()
+                except IntegrityError as exc:
+                    if not _is_unique_constraint_violation(
+                        exc,
+                        constraint_name="uq_outbound_shipment_tracking_snapshots_observation",
+                    ):
+                        raise
+                    continue
+                inserted += 1
+                latest = observation
+            completed_at = await db.scalar(text("SELECT clock_timestamp()"))
+            booking.last_tracking_refresh_at = completed_at
+            effective_state = current_state
+            if allow_carrier_movement:
+                if latest.outbound_state == "exception":
+                    if current_state not in {"delivered", "cancelled"}:
+                        effective_state = "exception"
+                elif current_state == "exception":
+                    if latest.outbound_state in {
+                        "collected",
+                        "in_transit",
+                        "out_for_delivery",
+                        "delivered",
+                        "cancelled",
+                    } and not _is_placeholder_booked_observation(latest):
+                        effective_state = latest.outbound_state
+                elif current_state != "cancelled" and _state_rank(latest.outbound_state) >= _state_rank(current_state):
+                    effective_state = latest.outbound_state
+            else:
+                if latest.outbound_state == "exception":
+                    if current_state not in {"delivered", "cancelled"}:
+                        effective_state = "exception"
+                elif latest.outbound_state in {"booked", "label_ready", "awaiting_collection"}:
+                    if _state_rank(latest.outbound_state) >= _state_rank(current_state):
+                        effective_state = latest.outbound_state
+            booking.outbound_state = effective_state
+            if latest.outbound_state == "exception":
+                booking.latest_exception_code = latest.exception_code
+            order = await db.get(Order, order_id)
+            if order is not None:
+                order.delivery_provider = PROVIDER
+                order.tracking_number = booking.tracking_number
+                if allow_carrier_movement and effective_state in {"collected", "in_transit", "out_for_delivery"}:
+                    order.fulfillment_status = FulfillmentStatus.IN_TRANSIT
+                elif allow_carrier_movement and effective_state == "delivered":
+                    order.fulfillment_status = FulfillmentStatus.DELIVERED
+                    order.delivered_at = latest.observed_at
+                elif effective_state == "exception":
+                    order.fulfillment_status = FulfillmentStatus.DELIVERY_FAILED
+            refresh = OutboundShipmentTrackingRefresh(
+                booking_id=booking.id,
+                order_id=booking.order_id,
+                provider=PROVIDER,
+                tracking_number=booking.tracking_number,
+                outbound_state=booking.outbound_state,
+                customer_status=latest.customer_status,
+                observations_recorded=inserted,
+                refreshed_at=completed_at,
+                idempotency_key=normalized_idempotency,
+                source_command="admin_dhl_tracking_refresh",
+            )
             db.add(refresh)
             await db.flush()
-    except IntegrityError:
+    except IntegrityError as exc:
+        if not _is_unique_constraint_violation(
+            exc,
+            constraint_name="uq_outbound_shipment_tracking_refreshes_replay",
+        ):
+            raise
         replay = await _matching_tracking_replay(
             db,
             booking=booking,

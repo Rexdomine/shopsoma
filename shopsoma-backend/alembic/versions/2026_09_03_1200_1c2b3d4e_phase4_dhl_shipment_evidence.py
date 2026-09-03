@@ -97,64 +97,6 @@ def _create_prerequisite_phase4_tables() -> None:
     )
 
 
-def _drop_prerequisite_phase4_tables() -> None:
-    from app.core.base import Base
-    import app.models.checkout_shipping_estimate  # noqa: F401
-    import app.models.customer_shipping_quote  # noqa: F401
-    import app.models.domestic_rate_quote  # noqa: F401
-    import app.models.fulfillment_cohort  # noqa: F401
-    import app.models.fulfillment_hub  # noqa: F401
-    import app.models.hub_quality  # noqa: F401
-    import app.models.inbound_transfer  # noqa: F401
-    import app.models.order_guest_capability  # noqa: F401
-    import app.models.package_custody  # noqa: F401
-
-    bind = op.get_bind()
-    table_names = [
-        "domestic_rate_offers",
-        "domestic_rate_responses",
-        "domestic_rate_attempts",
-        "outbound_intent_rate_guards",
-        "outbound_shipment_intent_invalidations",
-        "outbound_shipment_intents",
-        "custody_events",
-        "custody_streams",
-        "hub_package_seals",
-        "hub_package_items",
-        "hub_package_versions",
-        "hub_packages",
-        "customer_shipping_quote_selections",
-        "customer_shipping_quote_options",
-        "customer_shipping_quotes",
-        "order_inventory_coverage",
-        "checkout_shipping_estimate_selections",
-        "checkout_shipping_estimate_options",
-        "checkout_shipping_estimates",
-        "order_guest_capabilities",
-        "order_current_owners",
-        "order_workflow_classifications",
-        "order_workflow_migration_runs",
-        "hub_evidence_retention_events",
-        "hub_evidence",
-        "hub_qc_inspections",
-        "hub_qc_sessions",
-        "hub_remediations",
-        "hub_discrepancies",
-        "hub_receipt_items",
-        "hub_receipt_sessions",
-        "inbound_transfer_item_allocations",
-        "inbound_transfers",
-        "cohort_item_allocations",
-        "fulfillment_cohorts",
-        "fulfillment_hubs",
-    ]
-    Base.metadata.drop_all(
-        bind=bind,
-        tables=[Base.metadata.tables[name] for name in table_names],
-        checkfirst=True,
-    )
-
-
 def upgrade() -> None:
     _create_prerequisite_phase4_tables()
     # ------------------------------------------------------------------
@@ -350,7 +292,7 @@ def upgrade() -> None:
         sa.Column("customer_status", sa.String(60), nullable=False),
         sa.Column("detail", sa.String(240), nullable=False),
         sa.Column("observed_at", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("recorded_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+        sa.Column("recorded_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("statement_timestamp()")),
         sa.Column("exception_code", sa.String(100), nullable=True),
         sa.Column("idempotency_key", sa.String(200), nullable=False),
         sa.Column("source_command", sa.String(100), nullable=False),
@@ -438,4 +380,3 @@ def downgrade() -> None:
     op.drop_table("outbound_shipment_tracking_snapshot")
     op.drop_table("outbound_shipment_booking")
     op.drop_table("outbound_intent_shipment_guard")
-    _drop_prerequisite_phase4_tables()
