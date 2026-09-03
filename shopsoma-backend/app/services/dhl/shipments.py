@@ -1062,24 +1062,24 @@ async def refresh_tracking(
                 elif current_state != "cancelled" and _state_rank(latest.outbound_state) >= _state_rank(current_state):
                     effective_state = latest.outbound_state
             else:
-                if latest.outbound_state == "exception":
-                    if current_state not in {"delivered", "cancelled"}:
-                        effective_state = "exception"
-                elif latest.outbound_state in {"booked", "label_ready", "awaiting_collection"}:
+                if latest.outbound_state in {"booked", "label_ready", "awaiting_collection"}:
                     if _state_rank(latest.outbound_state) >= _state_rank(current_state):
                         effective_state = latest.outbound_state
             booking.outbound_state = effective_state
-            if latest.outbound_state == "exception":
+            if effective_state == "exception" and latest.outbound_state == "exception":
                 booking.latest_exception_code = latest.exception_code
             order = await db.get(Order, order_id)
             if order is not None:
                 order.delivery_provider = PROVIDER
                 order.tracking_number = booking.tracking_number
-                if allow_carrier_movement and effective_state in {"collected", "in_transit", "out_for_delivery"}:
+                if allow_carrier_movement and effective_state in {"collected", "in_transit"}:
                     order.fulfillment_status = FulfillmentStatus.IN_TRANSIT
+                elif allow_carrier_movement and effective_state == "out_for_delivery":
+                    order.fulfillment_status = FulfillmentStatus.OUT_FOR_DELIVERY
                 elif allow_carrier_movement and effective_state == "delivered":
                     order.fulfillment_status = FulfillmentStatus.DELIVERED
-                    order.delivered_at = latest.observed_at
+                    if latest.outbound_state == "delivered":
+                        order.delivered_at = latest.observed_at
                 elif effective_state == "exception":
                     order.fulfillment_status = FulfillmentStatus.DELIVERY_FAILED
             refresh = OutboundShipmentTrackingRefresh(

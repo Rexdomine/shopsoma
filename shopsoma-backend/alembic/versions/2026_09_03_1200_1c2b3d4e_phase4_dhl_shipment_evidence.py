@@ -90,11 +90,8 @@ def _create_prerequisite_phase4_tables() -> None:
         "checkout_shipping_estimate_selections",
         "order_inventory_coverage",
     ]
-    Base.metadata.create_all(
-        bind=bind,
-        tables=[Base.metadata.tables[name] for name in table_names],
-        checkfirst=True,
-    )
+    for name in table_names:
+        Base.metadata.tables[name].create(bind=bind, checkfirst=True)
 
 
 def upgrade() -> None:

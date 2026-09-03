@@ -1,4 +1,6 @@
 """Admin order schemas with enhanced fields for super user management"""
+import re
+
 from pydantic import BaseModel, Field, field_validator
 from typing import Optional, List
 from datetime import datetime, date
@@ -7,6 +9,9 @@ from uuid import UUID
 
 from app.models.order import PaymentStatus, FulfillmentStatus
 from app.models.vendor_pickup import PickupStatus
+
+
+_SHA256_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 # ============================================================================
@@ -304,6 +309,24 @@ class DHLHandoffRequest(BaseModel):
     counterparty: str = Field(..., min_length=1, max_length=120)
     evidence_ref: str = Field(..., min_length=1, max_length=200)
     evidence_sha256: str = Field(..., min_length=64, max_length=64)
+
+    @field_validator('evidence_ref')
+    @classmethod
+    def validate_evidence_ref(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError('evidence_ref must not be empty')
+        if '://' in normalized or normalized.startswith('/') or '..' in normalized:
+            raise ValueError('evidence_ref must be a private reference path, not a URL or absolute path')
+        return normalized
+
+    @field_validator('evidence_sha256')
+    @classmethod
+    def validate_evidence_sha256(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if _SHA256_HEX_RE.fullmatch(normalized) is None:
+            raise ValueError('evidence_sha256 must be a lowercase SHA-256 hex digest')
+        return normalized
 
 
 class DHLHandoffResult(BaseModel):

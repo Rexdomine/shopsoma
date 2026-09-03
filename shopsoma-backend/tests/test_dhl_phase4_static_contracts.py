@@ -1,8 +1,12 @@
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 
+from app.schemas.admin_order import DHLHandoffRequest
 from app.services.dhl.shipments import _is_unique_constraint_violation
 
 
@@ -50,7 +54,33 @@ def test_phase4_migration_uses_statement_timestamp_and_preserves_predecessors() 
     source = MIGRATION.read_text()
     assert 'sa.Column("recorded_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("statement_timestamp()"))' in source
     assert "_drop_prerequisite_phase4_tables" not in source
+    assert "Base.metadata.create_all" not in source
+    assert "Base.metadata.tables[name].create(bind=bind, checkfirst=True)" in source
 
 
 def test_no_duplicate_dhl_client_module_remains() -> None:
     assert not DUPLICATE_CLIENT.exists()
+
+
+def test_dhl_handoff_request_rejects_invalid_evidence_inputs() -> None:
+    with pytest.raises(ValidationError):
+        DHLHandoffRequest(
+            occurred_at=datetime(2026, 9, 3, 12, 0, tzinfo=UTC),
+            idempotency_key="handoff-1",
+            counterparty="DHL",
+            evidence_ref="https://example.test/evidence",
+            evidence_sha256="z" * 64,
+        )
+
+
+def test_dhl_handoff_request_normalizes_valid_evidence_inputs() -> None:
+    payload = DHLHandoffRequest(
+        occurred_at=datetime(2026, 9, 3, 12, 0, tzinfo=UTC),
+        idempotency_key="handoff-1",
+        counterparty="DHL",
+        evidence_ref=" evidence/private-ref-1 ",
+        evidence_sha256="A" * 64,
+    )
+
+    assert payload.evidence_ref == "evidence/private-ref-1"
+    assert payload.evidence_sha256 == "a" * 64
