@@ -503,7 +503,6 @@ async def test_tracking_refresh_appends_snapshot(
                 idempotency_key=f"track-2-{uuid.uuid4().hex[:12]}",
             ),
         )
-        await db_session.rollback()
 
     # Two snapshots must exist
     count = await db_session.scalar(
@@ -515,6 +514,7 @@ async def test_tracking_refresh_appends_snapshot(
     )
     assert count == 2, "each refresh must create a new snapshot, not replace"
     assert snap2.observations_recorded >= 0, "refresh must return observations count"
+    await db_session.rollback()
 
 
 @pytest.mark.asyncio

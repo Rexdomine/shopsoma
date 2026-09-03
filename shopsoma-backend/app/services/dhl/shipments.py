@@ -560,7 +560,7 @@ async def _matching_handoff_replay(
         )
     return HandoffResult(
         booking_id=booking.id,
-        outbound_state=booking.outbound_state,
+        outbound_state="collected",
         occurred_at=existing_event.occurred_at,
         custody_event_id=existing_event.id,
     )
@@ -593,6 +593,29 @@ async def _verified_carrier_acceptance_snapshot(
             "verified DHL collection event required before carrier acceptance handoff"
         )
     return snapshot
+
+
+async def _latest_tracking_snapshot_for_state(
+    db: AsyncSession,
+    *,
+    booking_id: uuid.UUID,
+    outbound_state: str,
+) -> OutboundShipmentTrackingSnapshot | None:
+    return (
+        await db.execute(
+            select(OutboundShipmentTrackingSnapshot)
+            .where(
+                OutboundShipmentTrackingSnapshot.booking_id == booking_id,
+                OutboundShipmentTrackingSnapshot.provider == PROVIDER,
+                OutboundShipmentTrackingSnapshot.outbound_state == outbound_state,
+            )
+            .order_by(
+                OutboundShipmentTrackingSnapshot.observed_at.desc(),
+                OutboundShipmentTrackingSnapshot.id.desc(),
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none()
 
 
 def _utc_or_none(value: object) -> datetime | None:
@@ -717,11 +740,6 @@ async def book_outbound_shipment(
     command: BookingCommand,
     adapter: ShipmentAdapter | None = None,
 ) -> BookingResult:
-    if not _setting_bool(settings, "DHL_DOMESTIC_WORKFLOW_ENABLED", "dhl_domestic_workflow_enabled"):
-        raise ShipmentPhase4Error("dhl domestic workflow disabled")
-    if not _setting_bool(settings, "DHL_DOMESTIC_PROVIDER_CALLS_ENABLED", "dhl_domestic_provider_calls_enabled"):
-        raise ShipmentPhase4Error("dhl domestic provider calls disabled")
-
     command = BookingCommand(
         order_id=order_id,
         intent_id=command.intent_id,
@@ -736,6 +754,11 @@ async def book_outbound_shipment(
         assert now is not None
         if not (replay.classification == "pending" and replay.claim_expires_at <= now):
             return _booking_result(replay, replayed=True)
+
+    if not _setting_bool(settings, "DHL_DOMESTIC_WORKFLOW_ENABLED", "dhl_domestic_workflow_enabled"):
+        raise ShipmentPhase4Error("dhl domestic workflow disabled")
+    if not _setting_bool(settings, "DHL_DOMESTIC_PROVIDER_CALLS_ENABLED", "dhl_domestic_provider_calls_enabled"):
+        raise ShipmentPhase4Error("dhl domestic provider calls disabled")
 
     order, package, seal, intent, package_version, cohort_ids = await _load_authoritative_subject(db, order_id=order_id, command=command)
     _ensure_sandbox_booking_allowed(settings, cohort_ids=cohort_ids)
@@ -959,7 +982,6 @@ async def record_collection_handoff(
         db,
         booking_id=booking.id,
     )
-    tendered_occurred_at = min(command.occurred_at, verified_acceptance.observed_at)
     tendered_idempotency_key = _derived_handoff_idempotency_key(
         normalized_idempotency,
         ":tendered",
@@ -995,6 +1017,11 @@ async def record_collection_handoff(
         previous = tip
         next_version = stream.next_version
         if tip.event_type == "released":
+            if verified_acceptance.observed_at < tip.occurred_at:
+                raise ShipmentPhase4ConflictError(
+                    "verified carrier acceptance precedes current custody state"
+                )
+            tendered_occurred_at = min(command.occurred_at, verified_acceptance.observed_at)
             tendered = CustodyEvent(
                 id=uuid.uuid4(),
                 stream_id=stream.id,
@@ -1149,12 +1176,20 @@ async def refresh_tracking(
             )
             allow_carrier_movement = booking.handoff_recorded_at is not None
             current_state = booking.outbound_state
+            current_state_snapshot = await _latest_tracking_snapshot_for_state(
+                db,
+                booking_id=booking.id,
+                outbound_state=current_state,
+            )
             completed_at = await db.scalar(text("SELECT clock_timestamp()"))
             booking.last_tracking_refresh_at = completed_at
             effective_state = current_state
             if allow_carrier_movement:
                 if latest.outbound_state == "exception":
-                    if current_state not in {"delivered", "cancelled"}:
+                    if current_state not in {"delivered", "cancelled"} and (
+                        current_state_snapshot is None
+                        or latest.observed_at >= current_state_snapshot.observed_at
+                    ):
                         effective_state = "exception"
                 elif current_state == "exception":
                     if latest.outbound_state in {

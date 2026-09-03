@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -109,10 +109,40 @@ def test_dhl_handoff_request_normalizes_valid_evidence_inputs() -> None:
     assert payload.evidence_sha256 == "a" * 64
 
 
+def test_dhl_handoff_request_rejects_naive_occurred_at() -> None:
+    with pytest.raises(ValidationError, match="occurred_at must be timezone-aware"):
+        DHLHandoffRequest(
+            occurred_at=datetime(2026, 9, 3, 12, 0),
+            idempotency_key="handoff-1",
+            counterparty="DHL",
+            evidence_ref="evidence/private-ref-1",
+            evidence_sha256="a" * 64,
+        )
+
+
+def test_dhl_handoff_request_normalizes_occurred_at_to_utc() -> None:
+    payload = DHLHandoffRequest(
+        occurred_at=datetime(2026, 9, 3, 13, 0, tzinfo=timezone(timedelta(hours=1))),
+        idempotency_key="handoff-1",
+        counterparty="DHL",
+        evidence_ref="evidence/private-ref-1",
+        evidence_sha256="a" * 64,
+    )
+
+    assert payload.occurred_at.tzinfo == UTC
+
+
 def test_tracking_refresh_sets_delivered_at_only_on_first_delivery_transition() -> None:
     source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
     assert 'if latest.outbound_state == "delivered" and (' in source
     assert 'current_state != "delivered" or order.delivered_at is None' in source
+
+
+def test_booking_replay_runs_before_provider_call_gates() -> None:
+    source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    assert source.index("replay = await _matching_replay") < source.index(
+        'raise ShipmentPhase4Error("dhl domestic provider calls disabled")'
+    )
 
 
 def test_tracking_refresh_reloads_locked_booking_after_provider_poll() -> None:
@@ -145,6 +175,7 @@ def test_handoff_replays_before_state_validation_and_rejects_mismatched_evidence
     assert "replay = await _matching_handoff_replay(" in source
     assert "if replay is not None:" in source
     assert "return replay" in source
+    assert 'outbound_state="collected"' in source
     assert 'booking.collection_scheduled_at != command.occurred_at' in source
     assert 'booking.collection_counterparty != normalized_counterparty' in source
     assert 'booking.collection_evidence_ref != command.evidence_ref.strip()' in source
@@ -156,6 +187,8 @@ def test_handoff_rejects_cancelled_orders_and_invalid_chronology_before_custody_
     assert '_ensure_order_not_cancelled(order, action="record handoff")' in source
     assert 'if command.occurred_at < tip.occurred_at:' in source
     assert '"handoff occurred_at precedes current custody state"' in source
+    assert 'if verified_acceptance.observed_at < tip.occurred_at:' in source
+    assert '"verified carrier acceptance precedes current custody state"' in source
     assert 'booking.collection_scheduled_at = command.occurred_at' in source
 
 
@@ -164,3 +197,9 @@ def test_tracking_refresh_uses_effective_customer_status_and_locks_order() -> No
     assert 'effective_customer_status = _customer_status_for_outbound_state(' in source
     assert 'order = await _load_order(db, order_id=order_id, lock_for_update=True)' in source
     assert 'customer_status=effective_customer_status' in source
+
+
+def test_tracking_refresh_ignores_stale_exception_checkpoints() -> None:
+    source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    assert 'current_state_snapshot = await _latest_tracking_snapshot_for_state(' in source
+    assert 'latest.observed_at >= current_state_snapshot.observed_at' in source
