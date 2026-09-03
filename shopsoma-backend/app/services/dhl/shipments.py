@@ -278,13 +278,25 @@ class DHLShipmentAdapter:
             "GET",
             f"/shipments/{tracking_number}/tracking",
         )
-        checkpoints = response.get("checkpoints") or response.get("events") or []
+        checkpoints = _tracking_checkpoints(response)
         observations: list[TrackingObservation] = []
-        for checkpoint in checkpoints:
-            code = str(checkpoint.get("statusCode") or checkpoint.get("code") or "UNKNOWN").strip().upper()
-            detail = str(checkpoint.get("description") or checkpoint.get("detail") or code).strip()
-            observed_at = _utc_or_none(
-                checkpoint.get("timestamp") or checkpoint.get("dateTime") or response.get("timestamp")
+        for shipment, checkpoint in checkpoints:
+            code = str(
+                checkpoint.get("statusCode")
+                or checkpoint.get("typeCode")
+                or checkpoint.get("code")
+                or "UNKNOWN"
+            ).strip().upper()
+            detail = str(
+                checkpoint.get("description")
+                or checkpoint.get("detail")
+                or checkpoint.get("remark")
+                or code
+            ).strip()
+            observed_at = _tracking_observed_at(
+                checkpoint=checkpoint,
+                shipment=shipment,
+                response=response,
             ) or datetime.now(UTC)
             outbound_state, customer_status = _map_tracking_status(code)
             observations.append(
@@ -629,6 +641,53 @@ def _utc_or_none(value: object) -> datetime | None:
     if isinstance(value, str):
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
         return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+    return None
+
+
+def _tracking_checkpoints(response: dict[str, object]) -> list[tuple[dict[str, object], dict[str, object]]]:
+    shipments = response.get("shipments")
+    if isinstance(shipments, list):
+        nested: list[tuple[dict[str, object], dict[str, object]]] = []
+        for shipment in shipments:
+            if not isinstance(shipment, dict):
+                continue
+            events = shipment.get("events") or shipment.get("checkpoints") or []
+            if not isinstance(events, list):
+                continue
+            for checkpoint in events:
+                if isinstance(checkpoint, dict):
+                    nested.append((shipment, checkpoint))
+        if nested:
+            return nested
+    checkpoints = response.get("checkpoints") or response.get("events") or []
+    if not isinstance(checkpoints, list):
+        return []
+    return [({}, checkpoint) for checkpoint in checkpoints if isinstance(checkpoint, dict)]
+
+
+def _tracking_observed_at(
+    *,
+    checkpoint: dict[str, object],
+    shipment: dict[str, object],
+    response: dict[str, object],
+) -> datetime | None:
+    date_value = checkpoint.get("date")
+    time_value = checkpoint.get("time")
+    combined_datetime = None
+    if date_value and time_value:
+        combined_datetime = f"{str(date_value).strip()}T{str(time_value).strip()}"
+    elif date_value:
+        combined_datetime = f"{str(date_value).strip()}T00:00:00"
+    for candidate in (
+        checkpoint.get("timestamp"),
+        checkpoint.get("dateTime"),
+        combined_datetime,
+        shipment.get("timestamp"),
+        response.get("timestamp"),
+    ):
+        parsed = _utc_or_none(candidate)
+        if parsed is not None:
+            return parsed
     return None
 
 
@@ -981,6 +1040,9 @@ async def record_collection_handoff(
         raise ShipmentPhase4ConflictError("handoff already recorded")
     order = await _load_order(db, order_id=order_id, lock_for_update=True)
     _ensure_order_not_cancelled(order, action="record handoff")
+    database_now = await db.scalar(text("SELECT clock_timestamp()"))
+    if command.occurred_at > database_now:
+        raise ShipmentPhase4ConflictError("handoff occurred_at cannot be in the future")
     verified_acceptance = await _verified_carrier_acceptance_snapshot(
         db,
         booking_id=booking.id,
@@ -1111,7 +1173,12 @@ async def refresh_tracking(
     command: TrackingRefreshCommand,
     adapter: ShipmentAdapter | None = None,
 ) -> TrackingRefreshResult:
-    booking = await _load_booking_for_order(db, order_id=order_id, booking_id=command.booking_id)
+    booking = await _load_booking_for_order(
+        db,
+        order_id=order_id,
+        booking_id=command.booking_id,
+        lock_for_update=True,
+    )
     if booking.tracking_number is None:
         raise ShipmentPhase4Error("tracking number unavailable")
     normalized_idempotency = _normalize_text(command.idempotency_key, field="idempotency_key")
@@ -1124,8 +1191,6 @@ async def refresh_tracking(
         return replay
     if not _setting_bool(settings, "DHL_DOMESTIC_WORKFLOW_ENABLED", "dhl_domestic_workflow_enabled"):
         raise ShipmentPhase4Error("dhl domestic workflow disabled")
-    if not _setting_bool(settings, "DHL_DOMESTIC_PROVIDER_CALLS_ENABLED", "dhl_domestic_provider_calls_enabled"):
-        raise ShipmentPhase4Error("dhl domestic provider calls disabled")
     cohort_ids = await _package_cohort_ids(
         db,
         package_id=booking.package_id,

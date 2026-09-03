@@ -1,6 +1,8 @@
 import asyncio
 import base64
 import logging
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
@@ -11,6 +13,7 @@ from app.services.dhl.client import (
     DHLClient,
     DHLConfigurationError,
 )
+from app.services.dhl.shipments import DHLShipmentAdapter
 
 
 DUMMY_USERNAME = "dummy-api-user"
@@ -270,3 +273,47 @@ async def test_successful_non_json_response_is_rejected_safely() -> None:
     assert exc_info.value.retryable is False
     assert "invalid response" in str(exc_info.value).lower()
     assert "not-json" not in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_tracking_adapter_parses_mydhl_shipments_events_envelope() -> None:
+    tracking_response = {
+        "shipments": [
+            {
+                "events": [
+                    {
+                        "typeCode": "PICKUP_CONFIRMED",
+                        "description": "Shipment collected",
+                        "date": "2026-09-03",
+                        "time": "13:45:00+01:00",
+                    },
+                    {
+                        "typeCode": "DELIVERED",
+                        "description": "Shipment delivered",
+                        "date": "2026-09-04",
+                        "time": "08:15:00+01:00",
+                    },
+                ]
+            }
+        ]
+    }
+    with patch(
+        "app.services.dhl.client.DHLClient.request_json",
+        new_callable=AsyncMock,
+        return_value=tracking_response,
+    ) as request_json:
+        adapter = DHLShipmentAdapter(make_settings())
+        observations = await adapter.track("TRACK123")
+
+    request_json.assert_awaited_once_with("GET", "/shipments/TRACK123/tracking")
+    assert [observation.provider_status_code for observation in observations] == [
+        "PICKUP_CONFIRMED",
+        "DELIVERED",
+    ]
+    assert [observation.outbound_state for observation in observations] == [
+        "collected",
+        "delivered",
+    ]
+    assert observations[0].detail == "Shipment collected"
+    assert observations[0].observed_at.isoformat() == "2026-09-03T13:45:00+01:00"
+    assert observations[1].observed_at.isoformat() == "2026-09-04T08:15:00+01:00"

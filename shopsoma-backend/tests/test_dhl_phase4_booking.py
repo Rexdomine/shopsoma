@@ -465,17 +465,25 @@ async def test_tracking_refresh_appends_snapshot(
     from app.services.dhl.shipments import TrackingRefreshCommand, refresh_tracking
 
     tracking_response = {
-        "events": [
+        "shipments": [
             {
-                "statusCode": "BOOKED",
-                "description": "Shipment booked",
-                "timestamp": booking.result_recorded_at.isoformat(),
-            },
-            {
-                "statusCode": "PICKUP_CONFIRMED",
-                "description": "Shipment collected",
-                "timestamp": (booking.result_recorded_at + timedelta(minutes=5)).isoformat(),
-            },
+                "events": [
+                    {
+                        "typeCode": "BOOKED",
+                        "description": "Shipment booked",
+                        "date": booking.result_recorded_at.date().isoformat(),
+                        "time": booking.result_recorded_at.timetz().isoformat(),
+                    },
+                    {
+                        "typeCode": "PICKUP_CONFIRMED",
+                        "description": "Shipment collected",
+                        "date": (booking.result_recorded_at + timedelta(minutes=5)).date().isoformat(),
+                        "time": (
+                            booking.result_recorded_at + timedelta(minutes=5)
+                        ).timetz().isoformat(),
+                    },
+                ]
+            }
         ]
     }
     with patch(

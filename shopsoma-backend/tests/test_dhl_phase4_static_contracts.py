@@ -163,20 +163,26 @@ def test_booking_replay_runs_before_provider_call_gates() -> None:
     )
 
 
-def test_tracking_refresh_replay_runs_before_provider_call_gates() -> None:
+def test_tracking_refresh_replay_runs_before_workflow_gate_and_skips_provider_calls_gate() -> None:
     source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
     refresh_source = source[source.index("async def refresh_tracking"):]
     assert refresh_source.index("replay = await _matching_tracking_replay") < refresh_source.index(
-        'raise ShipmentPhase4Error("dhl domestic provider calls disabled")'
+        'raise ShipmentPhase4Error("dhl domestic workflow disabled")'
     )
+    assert 'raise ShipmentPhase4Error("dhl domestic provider calls disabled")' not in refresh_source
 
 
 def test_tracking_refresh_reloads_locked_booking_after_provider_poll() -> None:
     source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
-    assert "booking = await _load_booking_for_order(" in source
-    assert "lock_for_update=True" in source
-    assert "allow_carrier_movement = booking.handoff_recorded_at is not None" in source
-    assert "current_state = booking.outbound_state" in source
+    refresh_source = source[source.index("async def refresh_tracking"):]
+    assert "booking = await _load_booking_for_order(" in refresh_source
+    assert "lock_for_update=True" in refresh_source
+    assert "observations = await adapter.track(booking.tracking_number)" in refresh_source
+    assert refresh_source.index("lock_for_update=True") < refresh_source.index(
+        "observations = await adapter.track(booking.tracking_number)"
+    )
+    assert "allow_carrier_movement = booking.handoff_recorded_at is not None" in refresh_source
+    assert "current_state = booking.outbound_state" in refresh_source
 
 
 def test_tracking_refresh_keeps_provider_terminal_observation_as_latest() -> None:
@@ -211,6 +217,9 @@ def test_handoff_replays_before_state_validation_and_rejects_mismatched_evidence
 def test_handoff_rejects_cancelled_orders_and_invalid_chronology_before_custody_insert() -> None:
     source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
     assert '_ensure_order_not_cancelled(order, action="record handoff")' in source
+    assert 'database_now = await db.scalar(text("SELECT clock_timestamp()"))' in source
+    assert 'if command.occurred_at > database_now:' in source
+    assert '"handoff occurred_at cannot be in the future"' in source
     assert 'if command.occurred_at < tip.occurred_at:' in source
     assert '"handoff occurred_at precedes current custody state"' in source
     assert 'if verified_acceptance.observed_at < tip.occurred_at:' in source
