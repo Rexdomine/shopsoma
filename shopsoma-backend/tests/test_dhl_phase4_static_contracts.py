@@ -269,9 +269,11 @@ def test_handoff_rejects_cancelled_orders_and_invalid_chronology_before_custody_
     assert 'tendered_occurred_at = max(' in source
     assert 'min(command.occurred_at, verified_acceptance.observed_at)' in source
     assert 'tendered_recorded_at = max(' in source
-    assert 'previous.recorded_at + timedelta(microseconds=1)' in source
+    assert 'tendered_recorded_now = await db.scalar(text("SELECT clock_timestamp()"))' in source
+    assert 'previous.recorded_at,' in source
     assert 'provider_accepted_occurred_at = max(' in source
     assert 'previous.occurred_at + timedelta(microseconds=1)' in source
+    assert 'provider_accepted_recorded_now = await db.scalar(text("SELECT clock_timestamp()"))' in source
     assert 'provider_accepted_recorded_at = max(' in source
     assert 'booking.collection_scheduled_at = command.occurred_at' in source
     assert 'booking.handoff_recorded_at = max(recorded_at, returned_event.recorded_at)' in source

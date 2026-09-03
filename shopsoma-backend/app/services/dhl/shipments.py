@@ -1165,10 +1165,13 @@ async def record_collection_handoff(
                 min(command.occurred_at, verified_acceptance.observed_at),
                 previous.occurred_at + timedelta(microseconds=1),
             )
+            tendered_recorded_now = await db.scalar(text("SELECT clock_timestamp()"))
+            assert tendered_recorded_now is not None
             tendered_recorded_at = max(
-                tendered_occurred_at + timedelta(microseconds=1),
-                previous.recorded_at + timedelta(microseconds=1),
+                tendered_occurred_at,
+                previous.recorded_at,
                 recorded_at,
+                tendered_recorded_now,
             )
             tendered = CustodyEvent(
                 id=uuid.uuid4(),
@@ -1208,10 +1211,12 @@ async def record_collection_handoff(
             verified_acceptance.observed_at,
             previous.occurred_at + timedelta(microseconds=1),
         )
+        provider_accepted_recorded_now = await db.scalar(text("SELECT clock_timestamp()"))
+        assert provider_accepted_recorded_now is not None
         provider_accepted_recorded_at = max(
-            provider_accepted_occurred_at + timedelta(microseconds=1),
-            previous.recorded_at + timedelta(microseconds=1),
-            recorded_at,
+            provider_accepted_occurred_at,
+            previous.recorded_at,
+            provider_accepted_recorded_now,
         )
         custody = CustodyEvent(
             id=uuid.uuid4(),
