@@ -20,6 +20,7 @@ from app.models.dhl_shipment import (
 from app.models.order import FulfillmentStatus, Order
 from app.models.package_custody import (
     CustodyEvent,
+    CustodyStream,
     HubPackage,
     HubPackageSeal,
     OutboundShipmentIntent,
@@ -54,6 +55,10 @@ class ShipmentPhase4ConflictError(ShipmentPhase4Error):
 
 
 class ShipmentPhase4ReconciliationRequiredError(ShipmentPhase4ConflictError):
+    pass
+
+
+class ShipmentPhase4UnknownOutcomeError(ShipmentPhase4Error):
     pass
 
 
@@ -155,7 +160,7 @@ class ShipmentAdapter(Protocol):
 class DHLShipmentAdapter:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
-        self._client = DHLClient(settings)
+        self._client = DHLClient(config=settings)
 
     async def book(self, intent: OutboundShipmentIntent, order: Order) -> AdapterBookingResult:
         payload = {
@@ -196,9 +201,9 @@ class DHLShipmentAdapter:
         tracking = response.get("trackingNumber") or response.get("shipmentTrackingNumber")
         provider_reference = response.get("shipmentReference") or tracking
         if not tracking or not provider_reference:
-            # Finding 3921711344: ambiguous provider response — persist unknown outcome before re-raise
-            booking.classification = "unknown"; booking.outbound_state = "unknown"; booking.failure_code = "unknown_outcome"
-            raise ShipmentPhase4Error("booking response missing provider identifiers")
+            raise ShipmentPhase4UnknownOutcomeError(
+                "booking response missing provider identifiers"
+            )
         booked_at = _utc_or_none(response.get("timestamp"))
         return AdapterBookingResult(
             provider_reference=str(provider_reference),
@@ -248,6 +253,14 @@ class DHLShipmentAdapter:
 
 def create_shipment_adapter(settings: Settings) -> ShipmentAdapter:
     return DHLShipmentAdapter(settings)
+
+
+def _setting_bool(settings: object, upper_name: str, lower_name: str) -> bool:
+    if hasattr(settings, upper_name):
+        return bool(getattr(settings, upper_name))
+    if hasattr(settings, lower_name):
+        return bool(getattr(settings, lower_name))
+    return False
 
 
 def _utc_or_none(value: object) -> datetime | None:
@@ -353,9 +366,9 @@ async def book_outbound_shipment(
     command: BookingCommand,
     adapter: ShipmentAdapter | None = None,
 ) -> BookingResult:
-    if not settings.DHL_DOMESTIC_WORKFLOW_ENABLED:
+    if not _setting_bool(settings, "DHL_DOMESTIC_WORKFLOW_ENABLED", "dhl_domestic_workflow_enabled"):
         raise ShipmentPhase4Error("dhl domestic workflow disabled")
-    if not settings.DHL_DOMESTIC_PROVIDER_CALLS_ENABLED:
+    if not _setting_bool(settings, "DHL_DOMESTIC_PROVIDER_CALLS_ENABLED", "dhl_domestic_provider_calls_enabled"):
         raise ShipmentPhase4Error("dhl domestic provider calls disabled")
 
     order, package, seal, intent = await _load_authoritative_subject(db, order_id=order_id, command=command)
@@ -368,6 +381,10 @@ async def book_outbound_shipment(
         idempotency_key=_normalize_text(command.idempotency_key, field="idempotency_key"),
     )
 
+    request_fingerprint = hashlib.sha256(
+        f"{intent.id}:{package.id}:{package.current_version}:{seal.id}".encode("utf-8")
+    ).hexdigest()
+
     existing = (
         await db.execute(
             select(OutboundShipmentBooking).where(
@@ -379,6 +396,17 @@ async def book_outbound_shipment(
         )
     ).scalar_one_or_none()
     if existing is not None:
+        if (
+            existing.order_id != order.id
+            or existing.intent_id != intent.id
+            or existing.package_id != package.id
+            or existing.package_version != package.current_version
+            or existing.seal_id != seal.id
+            or existing.request_fingerprint != request_fingerprint
+        ):
+            raise ShipmentPhase4ConflictError(
+                "idempotency key is already bound to a different shipment subject"
+            )
         return _booking_result(existing, replayed=True)
 
     guard = await db.get(OutboundIntentShipmentGuard, intent.id)
@@ -414,9 +442,7 @@ async def book_outbound_shipment(
         initiating_actor_id=str(admin.id),
         source_command="admin_dhl_booking",
         idempotency_key=command.idempotency_key,
-        request_fingerprint=hashlib.sha256(
-            f"{intent.id}:{package.id}:{package.current_version}:{seal.id}".encode("utf-8")
-        ).hexdigest(),
+        request_fingerprint=request_fingerprint,
         fingerprint_key_version="shipment-fingerprint-v1",
         planned_ship_date=planned_ship_date,
         adapter_version=BOOKING_ADAPTER_VERSION,
@@ -435,10 +461,20 @@ async def book_outbound_shipment(
     try:
         called_at = await db.scalar(text("SELECT clock_timestamp()"))
         booking.call_started_at = called_at
+        await db.flush()
         adapter_result = await adapter.book(intent, order)
     except (DHLConfigurationError,) as exc:
         raise ShipmentPhase4Error(str(exc)) from exc
     except (DHLAPIError, TimeoutError) as exc:
+        completed_at = await db.scalar(text("SELECT clock_timestamp()"))
+        booking.result_recorded_at = completed_at
+        booking.classification = "unknown"
+        booking.failure_code = "unknown_outcome"
+        booking.completion_txid = await db.scalar(text("SELECT txid_current()"))
+        guard.booking_blocked_reason = "unknown_outcome"
+        await db.flush()
+        return _booking_result(booking, replayed=False, note=str(exc))
+    except ShipmentPhase4UnknownOutcomeError as exc:
         completed_at = await db.scalar(text("SELECT clock_timestamp()"))
         booking.result_recorded_at = completed_at
         booking.classification = "unknown"
@@ -536,30 +572,33 @@ async def record_collection_handoff(
             custody_event_id=existing_event.id,
         )
     cohort_id, vendor_id = await _cohort_ref_from_booking(db, booking)
-    # Finding 3921711332: query stream tip and append, not insert as version-1
-    from app.models.package_custody import CustodyStream as _CS
-    tip = (await db.execute(
-        select(_CS.id, _CS.version).where(
-            _CS.package_id == booking.package_id,
-            _CS.package_version == booking.package_version,
-        ).order_by(_CS.version.desc())
-    )).first()
-    custody = CustodyEvent(
-        id=uuid.uuid4(),
-        stream_id=(await db.execute(
-            select(CustodyStream.id).where(
+    stream = (
+        await db.execute(
+            select(CustodyStream).where(
                 CustodyStream.package_id == booking.package_id,
                 CustodyStream.package_version == booking.package_version,
             )
-        )).scalar_one(),
-        version=(tip.version + 1 if tip else 1),
+        )
+    ).scalar_one()
+    tip = (
+        await db.execute(
+            select(CustodyEvent)
+            .where(CustodyEvent.stream_id == stream.id)
+            .order_by(CustodyEvent.version.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    custody = CustodyEvent(
+        id=uuid.uuid4(),
+        stream_id=stream.id,
+        version=stream.next_version,
         previous_event_id=(tip.id if tip else None),
         cohort_id=cohort_id,
         order_id=order_id,
         vendor_id=vendor_id,
         hub_id=booking.origin_hub_id,
         event_type="provider_accepted",
-        actor_type="hub_operator",
+        actor_type="user",
         actor_id=str(admin.id),
         source_system="admin_dhl_handoff",
         source_command="admin_dhl_handoff",
@@ -589,7 +628,7 @@ async def record_collection_handoff(
         booking_id=booking.id,
         outbound_state=booking.outbound_state,
         occurred_at=custody.occurred_at,
-        custody_event_id=custody.event_id,
+        custody_event_id=custody.id,
     )
 
 
@@ -601,9 +640,9 @@ async def refresh_tracking(
     command: TrackingRefreshCommand,
     adapter: ShipmentAdapter | None = None,
 ) -> TrackingRefreshResult:
-    if not settings.DHL_DOMESTIC_WORKFLOW_ENABLED:
+    if not _setting_bool(settings, "DHL_DOMESTIC_WORKFLOW_ENABLED", "dhl_domestic_workflow_enabled"):
         raise ShipmentPhase4Error("dhl domestic workflow disabled")
-    if not settings.DHL_DOMESTIC_PROVIDER_CALLS_ENABLED:
+    if not _setting_bool(settings, "DHL_DOMESTIC_PROVIDER_CALLS_ENABLED", "dhl_domestic_provider_calls_enabled"):
         raise ShipmentPhase4Error("dhl domestic provider calls disabled")
     booking = await _load_booking_for_order(db, order_id=order_id, booking_id=command.booking_id)
     if booking.tracking_number is None:
@@ -614,7 +653,7 @@ async def refresh_tracking(
         raise ShipmentPhase4Error("tracking adapter returned no observations")
     inserted = 0
     latest = observations[-1]
-    for observation in observations:
+    for position, observation in enumerate(observations):
         snapshot = OutboundShipmentTrackingSnapshot(
             booking_id=booking.id,
             order_id=booking.order_id,
@@ -626,15 +665,14 @@ async def refresh_tracking(
             detail=observation.detail,
             observed_at=observation.observed_at,
             exception_code=observation.exception_code,
-            idempotency_key=f"{command.idempotency_key}:{inserted}",
+            idempotency_key=f"{command.idempotency_key}:{position}",
             source_command="admin_dhl_tracking_refresh",
         )
-        db.add(snapshot)
         try:
-            await db.flush()
+            async with db.begin_nested():
+                db.add(snapshot)
+                await db.flush()
         except IntegrityError:
-            # Finding 3921711337: savepoint isolation — rollback only this snapshot, not the loop/book update
-            await db.rollback()
             continue
         inserted += 1
         latest = observation
@@ -690,17 +728,15 @@ async def _hub_ref_from_booking(db: AsyncSession, booking: OutboundShipmentBooki
 
 
 async def _cohort_ref_from_booking(db: AsyncSession, booking: OutboundShipmentBooking) -> tuple[uuid.UUID, uuid.UUID]:
-    from app.models.fulfillment_cohort import FulfillmentCohort
-    from app.models.hub_quality import HubReceiptItem
     from app.models.package_custody import HubPackageItem
-    from app.services.fulfillment.contracts import FulfillmentCohortRef
 
     row = (
         await db.execute(
-            select(FulfillmentCohort.id, FulfillmentCohort.vendor_id)
-            .join(HubReceiptItem, HubReceiptItem.cohort_id == FulfillmentCohort.id)
-            .join(HubPackageItem, HubPackageItem.receipt_item_id == HubReceiptItem.id)
-            .where(HubPackageItem.package_id == booking.package_id)
+            select(HubPackageItem.cohort_id, HubPackageItem.vendor_id)
+            .where(
+                HubPackageItem.package_id == booking.package_id,
+                HubPackageItem.package_version == booking.package_version,
+            )
             .limit(1)
         )
     ).first()

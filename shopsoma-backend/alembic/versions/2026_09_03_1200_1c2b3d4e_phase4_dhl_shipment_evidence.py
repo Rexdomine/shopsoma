@@ -39,7 +39,74 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+def _create_prerequisite_phase4_tables() -> None:
+    from app.core.base import Base
+    import app.models.fulfillment_cohort  # noqa: F401
+    import app.models.fulfillment_hub  # noqa: F401
+    import app.models.hub_quality  # noqa: F401
+    import app.models.inbound_transfer  # noqa: F401
+    import app.models.package_custody  # noqa: F401
+
+    bind = op.get_bind()
+    table_names = [
+        "fulfillment_hubs",
+        "fulfillment_cohorts",
+        "cohort_item_allocations",
+        "inbound_transfers",
+        "inbound_transfer_item_allocations",
+        "hub_receipt_sessions",
+        "hub_receipt_items",
+        "hub_packages",
+        "hub_package_versions",
+        "hub_package_items",
+        "hub_package_seals",
+        "custody_streams",
+        "custody_events",
+        "outbound_shipment_intents",
+        "outbound_shipment_intent_invalidations",
+    ]
+    Base.metadata.create_all(
+        bind=bind,
+        tables=[Base.metadata.tables[name] for name in table_names],
+        checkfirst=True,
+    )
+
+
+def _drop_prerequisite_phase4_tables() -> None:
+    from app.core.base import Base
+    import app.models.fulfillment_cohort  # noqa: F401
+    import app.models.fulfillment_hub  # noqa: F401
+    import app.models.hub_quality  # noqa: F401
+    import app.models.inbound_transfer  # noqa: F401
+    import app.models.package_custody  # noqa: F401
+
+    bind = op.get_bind()
+    table_names = [
+        "outbound_shipment_intent_invalidations",
+        "outbound_shipment_intents",
+        "custody_events",
+        "custody_streams",
+        "hub_package_seals",
+        "hub_package_items",
+        "hub_package_versions",
+        "hub_packages",
+        "hub_receipt_items",
+        "hub_receipt_sessions",
+        "inbound_transfer_item_allocations",
+        "inbound_transfers",
+        "cohort_item_allocations",
+        "fulfillment_cohorts",
+        "fulfillment_hubs",
+    ]
+    Base.metadata.drop_all(
+        bind=bind,
+        tables=[Base.metadata.tables[name] for name in table_names],
+        checkfirst=True,
+    )
+
+
 def upgrade() -> None:
+    _create_prerequisite_phase4_tables()
     # ------------------------------------------------------------------
     # outboun d_intent_shipment_guard
     #   Exactly one active booking per (intent_id, package_id, package_version).
@@ -187,3 +254,4 @@ def downgrade() -> None:
     op.drop_table("outbound_shipment_tracking_snapshot")
     op.drop_table("outbound_shipment_booking")
     op.drop_table("outbound_intent_shipment_guard")
+    _drop_prerequisite_phase4_tables()
