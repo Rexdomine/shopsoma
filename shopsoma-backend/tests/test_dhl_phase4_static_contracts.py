@@ -1,13 +1,19 @@
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 
 from app.schemas.admin_order import DHLHandoffRequest
-from app.services.dhl.shipments import _is_unique_constraint_violation
+from app.services.dhl.client import DHLConfigurationError
+from app.services.dhl.shipments import (
+    _is_unique_constraint_violation,
+    create_shipment_adapter,
+    ShipmentPhase4Error,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -96,15 +102,27 @@ def test_dhl_handoff_request_rejects_invalid_evidence_inputs() -> None:
         )
 
 
+def test_dhl_handoff_request_rejects_blank_counterparty() -> None:
+    with pytest.raises(ValidationError, match="counterparty must not be empty"):
+        DHLHandoffRequest(
+            occurred_at=datetime(2026, 9, 3, 12, 0, tzinfo=UTC),
+            idempotency_key="handoff-1",
+            counterparty="   ",
+            evidence_ref="evidence/private-ref-1",
+            evidence_sha256="a" * 64,
+        )
+
+
 def test_dhl_handoff_request_normalizes_valid_evidence_inputs() -> None:
     payload = DHLHandoffRequest(
         occurred_at=datetime(2026, 9, 3, 12, 0, tzinfo=UTC),
         idempotency_key="handoff-1",
-        counterparty="DHL",
+        counterparty=" DHL ",
         evidence_ref=" evidence/private-ref-1 ",
         evidence_sha256="A" * 64,
     )
 
+    assert payload.counterparty == "DHL"
     assert payload.evidence_ref == "evidence/private-ref-1"
     assert payload.evidence_sha256 == "a" * 64
 
@@ -141,6 +159,14 @@ def test_tracking_refresh_sets_delivered_at_only_on_first_delivery_transition() 
 def test_booking_replay_runs_before_provider_call_gates() -> None:
     source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
     assert source.index("replay = await _matching_replay") < source.index(
+        'raise ShipmentPhase4Error("dhl domestic provider calls disabled")'
+    )
+
+
+def test_tracking_refresh_replay_runs_before_provider_call_gates() -> None:
+    source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    refresh_source = source[source.index("async def refresh_tracking"):]
+    assert refresh_source.index("replay = await _matching_tracking_replay") < refresh_source.index(
         'raise ShipmentPhase4Error("dhl domestic provider calls disabled")'
     )
 
@@ -203,3 +229,22 @@ def test_tracking_refresh_ignores_stale_exception_checkpoints() -> None:
     source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
     assert 'current_state_snapshot = await _latest_tracking_snapshot_for_state(' in source
     assert 'latest.observed_at >= current_state_snapshot.observed_at' in source
+
+
+def test_tracking_refresh_requires_fresh_timestamps_for_state_advancement() -> None:
+    source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    assert 'current_state_observed_at = (' in source
+    assert 'latest.outbound_state in {' in source
+    assert 'current_state_observed_at is None' in source
+    assert 'or latest.observed_at >= current_state_observed_at' in source
+    assert '_state_rank(latest.outbound_state) >= _state_rank(current_state)' in source
+
+
+def test_create_shipment_adapter_translates_dhl_configuration_failures(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _boom(_: object) -> None:
+        raise DHLConfigurationError('DHL integration is disabled')
+
+    monkeypatch.setattr('app.services.dhl.shipments.DHLShipmentAdapter', _boom)
+
+    with pytest.raises(ShipmentPhase4Error, match='DHL integration is disabled'):
+        create_shipment_adapter(cast(Any, object()))

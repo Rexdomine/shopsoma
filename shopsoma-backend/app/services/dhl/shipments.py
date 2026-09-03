@@ -311,7 +311,10 @@ class DHLShipmentAdapter:
 
 
 def create_shipment_adapter(settings: Settings) -> ShipmentAdapter:
-    return DHLShipmentAdapter(settings)
+    try:
+        return DHLShipmentAdapter(settings)
+    except DHLConfigurationError as exc:
+        raise ShipmentPhase4Error(str(exc)) from exc
 
 
 def _setting_bool(settings: object, upper_name: str, lower_name: str) -> bool:
@@ -1108,10 +1111,6 @@ async def refresh_tracking(
     command: TrackingRefreshCommand,
     adapter: ShipmentAdapter | None = None,
 ) -> TrackingRefreshResult:
-    if not _setting_bool(settings, "DHL_DOMESTIC_WORKFLOW_ENABLED", "dhl_domestic_workflow_enabled"):
-        raise ShipmentPhase4Error("dhl domestic workflow disabled")
-    if not _setting_bool(settings, "DHL_DOMESTIC_PROVIDER_CALLS_ENABLED", "dhl_domestic_provider_calls_enabled"):
-        raise ShipmentPhase4Error("dhl domestic provider calls disabled")
     booking = await _load_booking_for_order(db, order_id=order_id, booking_id=command.booking_id)
     if booking.tracking_number is None:
         raise ShipmentPhase4Error("tracking number unavailable")
@@ -1123,6 +1122,10 @@ async def refresh_tracking(
     )
     if replay is not None:
         return replay
+    if not _setting_bool(settings, "DHL_DOMESTIC_WORKFLOW_ENABLED", "dhl_domestic_workflow_enabled"):
+        raise ShipmentPhase4Error("dhl domestic workflow disabled")
+    if not _setting_bool(settings, "DHL_DOMESTIC_PROVIDER_CALLS_ENABLED", "dhl_domestic_provider_calls_enabled"):
+        raise ShipmentPhase4Error("dhl domestic provider calls disabled")
     cohort_ids = await _package_cohort_ids(
         db,
         package_id=booking.package_id,
@@ -1181,6 +1184,9 @@ async def refresh_tracking(
                 booking_id=booking.id,
                 outbound_state=current_state,
             )
+            current_state_observed_at = (
+                current_state_snapshot.observed_at if current_state_snapshot is not None else None
+            )
             completed_at = await db.scalar(text("SELECT clock_timestamp()"))
             booking.last_tracking_refresh_at = completed_at
             effective_state = current_state
@@ -1198,9 +1204,18 @@ async def refresh_tracking(
                         "out_for_delivery",
                         "delivered",
                         "cancelled",
-                    } and not _is_placeholder_booked_observation(latest):
+                    } and not _is_placeholder_booked_observation(latest) and (
+                        current_state_observed_at is None
+                        or latest.observed_at >= current_state_observed_at
+                    ):
                         effective_state = latest.outbound_state
-                elif current_state != "cancelled" and _state_rank(latest.outbound_state) >= _state_rank(current_state):
+                elif current_state != "cancelled" and (
+                    _state_rank(latest.outbound_state) >= _state_rank(current_state)
+                    and (
+                        current_state_observed_at is None
+                        or latest.observed_at >= current_state_observed_at
+                    )
+                ):
                     effective_state = latest.outbound_state
             else:
                 if latest.outbound_state in {"booked", "label_ready", "awaiting_collection"}:

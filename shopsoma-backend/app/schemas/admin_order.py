@@ -318,6 +318,14 @@ class DHLHandoffRequest(BaseModel):
             raise ValueError('occurred_at must be timezone-aware')
         return value.astimezone(UTC)
 
+    @field_validator('counterparty')
+    @classmethod
+    def validate_counterparty(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError('counterparty must not be empty')
+        return normalized
+
     @field_validator('evidence_ref')
     @classmethod
     def validate_evidence_ref(cls, value: str) -> str:
