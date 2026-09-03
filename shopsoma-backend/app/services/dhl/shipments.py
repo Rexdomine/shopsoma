@@ -362,6 +362,20 @@ def _is_placeholder_booked_observation(observation: TrackingObservation) -> bool
     )
 
 
+def _customer_status_for_outbound_state(outbound_state: str, *, fallback: str) -> str:
+    return {
+        "intent_created": "label_created",
+        "booked": "label_created",
+        "label_ready": "label_created",
+        "awaiting_collection": "label_created",
+        "collected": "picked_up",
+        "in_transit": "in_transit",
+        "out_for_delivery": "out_for_delivery",
+        "delivered": "delivered",
+        "exception": "delivery_exception",
+    }.get(outbound_state, fallback)
+
+
 def _ensure_sandbox_booking_allowed(
     settings: Settings,
     *,
@@ -486,6 +500,72 @@ async def _matching_tracking_replay(
     )
 
 
+async def _load_order(
+    db: AsyncSession,
+    *,
+    order_id: uuid.UUID,
+    lock_for_update: bool = False,
+) -> Order:
+    query = select(Order).where(Order.id == order_id)
+    if lock_for_update:
+        query = query.with_for_update()
+    order = (await db.execute(query)).scalar_one_or_none()
+    if order is None:
+        raise ShipmentPhase4Error("order not found")
+    return order
+
+
+def _ensure_order_not_cancelled(order: Order, *, action: str) -> None:
+    if order.fulfillment_status == FulfillmentStatus.CANCELLED:
+        raise ShipmentPhase4ConflictError(f"cannot {action} for cancelled order")
+
+
+async def _matching_handoff_replay(
+    db: AsyncSession,
+    *,
+    booking: OutboundShipmentBooking,
+    command: HandoffCommand,
+    normalized_idempotency: str,
+) -> HandoffResult | None:
+    existing_events = (
+        await db.execute(
+            select(CustodyEvent)
+            .join(CustodyStream, CustodyStream.id == CustodyEvent.stream_id)
+            .where(
+                CustodyEvent.package_id == booking.package_id,
+                CustodyEvent.package_version == booking.package_version,
+                CustodyEvent.idempotency_key == normalized_idempotency,
+            )
+            .order_by(
+                CustodyStream.cohort_id,
+                CustodyStream.vendor_id,
+                CustodyStream.id,
+                CustodyEvent.version,
+                CustodyEvent.id,
+            )
+        )
+    ).scalars().all()
+    if not existing_events:
+        return None
+    existing_event = existing_events[0]
+    normalized_counterparty = command.counterparty.strip()
+    if (
+        booking.collection_scheduled_at != command.occurred_at
+        or booking.collection_counterparty != normalized_counterparty
+        or booking.collection_evidence_ref != command.evidence_ref.strip()
+        or booking.collection_evidence_hash != command.evidence_sha256.lower()
+    ):
+        raise ShipmentPhase4ConflictError(
+            "handoff idempotency key is already bound to different evidence"
+        )
+    return HandoffResult(
+        booking_id=booking.id,
+        outbound_state=booking.outbound_state,
+        occurred_at=existing_event.occurred_at,
+        custody_event_id=existing_event.id,
+    )
+
+
 async def _verified_carrier_acceptance_snapshot(
     db: AsyncSession,
     *,
@@ -553,9 +633,8 @@ async def _load_authoritative_subject(
     order_id: uuid.UUID,
     command: BookingCommand,
 ) -> tuple[Order, HubPackage, HubPackageSeal, OutboundShipmentIntent, HubPackageVersion, frozenset[uuid.UUID]]:
-    order = await db.get(Order, order_id)
-    if order is None:
-        raise ShipmentPhase4Error("order not found")
+    order = await _load_order(db, order_id=order_id, lock_for_update=True)
+    _ensure_order_not_cancelled(order, action="book shipment")
     package_handoff_exists = (
         select(CustodyEvent.id)
         .where(
@@ -755,6 +834,8 @@ async def book_outbound_shipment(
     assert booking is not None and guard is not None
 
     try:
+        order = await _load_order(db, order_id=order_id, lock_for_update=True)
+        _ensure_order_not_cancelled(order, action="book shipment")
         called_at = await db.scalar(text("SELECT clock_timestamp()"))
         booking.call_started_at = called_at
         await db.flush()
@@ -855,41 +936,25 @@ async def record_collection_handoff(
         booking_id=command.booking_id,
         lock_for_update=True,
     )
+    normalized_idempotency = _normalize_text(command.idempotency_key, field="idempotency_key")
+    replay = await _matching_handoff_replay(
+        db,
+        booking=booking,
+        command=command,
+        normalized_idempotency=normalized_idempotency,
+    )
+    if replay is not None:
+        return replay
     if booking.classification != "success":
         raise ShipmentPhase4Error("cannot hand off a non-booked shipment")
     if booking.outbound_state not in {"label_ready", "awaiting_collection", "collected"}:
         raise ShipmentPhase4ConflictError(
             f"booking cannot accept handoff in state {booking.outbound_state}"
         )
-    normalized_idempotency = _normalize_text(command.idempotency_key, field="idempotency_key")
     if booking.handoff_recorded_at is not None:
-        existing_events = (
-            await db.execute(
-                select(CustodyEvent)
-                .join(CustodyStream, CustodyStream.id == CustodyEvent.stream_id)
-                .where(
-                    CustodyEvent.package_id == booking.package_id,
-                    CustodyEvent.package_version == booking.package_version,
-                    CustodyEvent.idempotency_key == normalized_idempotency,
-                )
-                .order_by(
-                    CustodyStream.cohort_id,
-                    CustodyStream.vendor_id,
-                    CustodyStream.id,
-                    CustodyEvent.version,
-                    CustodyEvent.id,
-                )
-            )
-        ).scalars().all()
-        if not existing_events:
-            raise ShipmentPhase4ConflictError("handoff already recorded")
-        existing_event = existing_events[0]
-        return HandoffResult(
-            booking_id=booking.id,
-            outbound_state=booking.outbound_state,
-            occurred_at=existing_event.occurred_at,
-            custody_event_id=existing_event.id,
-        )
+        raise ShipmentPhase4ConflictError("handoff already recorded")
+    order = await _load_order(db, order_id=order_id, lock_for_update=True)
+    _ensure_order_not_cancelled(order, action="record handoff")
     verified_acceptance = await _verified_carrier_acceptance_snapshot(
         db,
         booking_id=booking.id,
@@ -923,6 +988,10 @@ async def record_collection_handoff(
         ).scalar_one_or_none()
         if tip is None:
             raise ShipmentPhase4ConflictError("custody stream has no releasable lifecycle tip")
+        if command.occurred_at < tip.occurred_at:
+            raise ShipmentPhase4ConflictError(
+                "handoff occurred_at precedes current custody state"
+            )
         previous = tip
         next_version = stream.next_version
         if tip.event_type == "released":
@@ -944,7 +1013,7 @@ async def record_collection_handoff(
                 recorded_at=max(tendered_occurred_at, datetime.now(UTC)),
                 location="hub_dispatch",
                 idempotency_key=tendered_idempotency_key,
-                counterparty=PROVIDER.upper(),
+                counterparty=command.counterparty.strip(),
                 evidence_ref=command.evidence_ref.strip(),
                 evidence_hash=command.evidence_sha256.lower(),
                 package_id=booking.package_id,
@@ -978,7 +1047,7 @@ async def record_collection_handoff(
             recorded_at=max(verified_acceptance.observed_at, datetime.now(UTC)),
             location="hub_dispatch",
             idempotency_key=normalized_idempotency,
-            counterparty=PROVIDER.upper(),
+            counterparty=command.counterparty.strip(),
             evidence_ref=command.evidence_ref.strip(),
             evidence_hash=command.evidence_sha256.lower(),
             package_id=booking.package_id,
@@ -991,12 +1060,10 @@ async def record_collection_handoff(
     booking.collection_counterparty = returned_event.counterparty
     booking.collection_evidence_ref = returned_event.evidence_ref
     booking.collection_evidence_hash = returned_event.evidence_hash
-    booking.collection_scheduled_at = booking.collection_scheduled_at or returned_event.occurred_at
+    booking.collection_scheduled_at = command.occurred_at
     booking.handoff_recorded_at = max(command.occurred_at, datetime.now(UTC))
     booking.outbound_state = "collected"
-    order = await db.get(Order, order_id)
-    if order is not None:
-        order.fulfillment_status = FulfillmentStatus.PICKED_UP
+    order.fulfillment_status = FulfillmentStatus.PICKED_UP
     await db.flush()
     return HandoffResult(
         booking_id=booking.id,
@@ -1107,7 +1174,11 @@ async def refresh_tracking(
             booking.outbound_state = effective_state
             if effective_state == "exception" and latest.outbound_state == "exception":
                 booking.latest_exception_code = latest.exception_code
-            order = await db.get(Order, order_id)
+            effective_customer_status = _customer_status_for_outbound_state(
+                effective_state,
+                fallback=latest.customer_status,
+            )
+            order = await _load_order(db, order_id=order_id, lock_for_update=True)
             if order is not None:
                 order.delivery_provider = PROVIDER
                 order.tracking_number = booking.tracking_number
@@ -1130,7 +1201,7 @@ async def refresh_tracking(
                 provider=PROVIDER,
                 tracking_number=booking.tracking_number,
                 outbound_state=booking.outbound_state,
-                customer_status=latest.customer_status,
+                customer_status=effective_customer_status,
                 observations_recorded=inserted,
                 refreshed_at=completed_at,
                 idempotency_key=normalized_idempotency,
@@ -1156,7 +1227,7 @@ async def refresh_tracking(
         booking_id=booking.id,
         tracking_number=booking.tracking_number,
         outbound_state=booking.outbound_state,
-        customer_status=latest.customer_status,
+        customer_status=effective_customer_status,
         observations_recorded=inserted,
         refreshed_at=completed_at,
     )

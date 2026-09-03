@@ -74,6 +74,13 @@ def test_phase4_booking_releases_guard_on_definitive_dhl_rejections() -> None:
     assert 'guard.booking_blocked_reason = None if definitive_rejection else "unknown_outcome"' in source
 
 
+def test_phase4_booking_locks_and_rejects_cancelled_orders_before_provider_call() -> None:
+    source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    assert 'order = await _load_order(db, order_id=order_id, lock_for_update=True)' in source
+    assert '_ensure_order_not_cancelled(order, action="book shipment")' in source
+    assert 'adapter_result = await adapter.book(intent, order, hub, package_version)' in source
+
+
 def test_no_duplicate_dhl_client_module_remains() -> None:
     assert not DUPLICATE_CLIENT.exists()
 
@@ -131,3 +138,29 @@ def test_handoff_locks_booking_before_replay_check() -> None:
     source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
     assert "record_collection_handoff" in source
     assert "lock_for_update=True" in source
+
+
+def test_handoff_replays_before_state_validation_and_rejects_mismatched_evidence() -> None:
+    source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    assert "replay = await _matching_handoff_replay(" in source
+    assert "if replay is not None:" in source
+    assert "return replay" in source
+    assert 'booking.collection_scheduled_at != command.occurred_at' in source
+    assert 'booking.collection_counterparty != normalized_counterparty' in source
+    assert 'booking.collection_evidence_ref != command.evidence_ref.strip()' in source
+    assert 'booking.collection_evidence_hash != command.evidence_sha256.lower()' in source
+
+
+def test_handoff_rejects_cancelled_orders_and_invalid_chronology_before_custody_insert() -> None:
+    source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    assert '_ensure_order_not_cancelled(order, action="record handoff")' in source
+    assert 'if command.occurred_at < tip.occurred_at:' in source
+    assert '"handoff occurred_at precedes current custody state"' in source
+    assert 'booking.collection_scheduled_at = command.occurred_at' in source
+
+
+def test_tracking_refresh_uses_effective_customer_status_and_locks_order() -> None:
+    source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    assert 'effective_customer_status = _customer_status_for_outbound_state(' in source
+    assert 'order = await _load_order(db, order_id=order_id, lock_for_update=True)' in source
+    assert 'customer_status=effective_customer_status' in source
