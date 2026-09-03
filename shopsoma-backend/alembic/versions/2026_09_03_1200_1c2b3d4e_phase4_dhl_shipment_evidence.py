@@ -41,6 +41,7 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def _create_prerequisite_phase4_tables() -> None:
     from app.core.base import Base
+    import app.models.domestic_rate_quote  # noqa: F401
     import app.models.fulfillment_cohort  # noqa: F401
     import app.models.fulfillment_hub  # noqa: F401
     import app.models.hub_quality  # noqa: F401
@@ -56,6 +57,12 @@ def _create_prerequisite_phase4_tables() -> None:
         "inbound_transfer_item_allocations",
         "hub_receipt_sessions",
         "hub_receipt_items",
+        "hub_discrepancies",
+        "hub_remediations",
+        "hub_qc_sessions",
+        "hub_qc_inspections",
+        "hub_evidence",
+        "hub_evidence_retention_events",
         "hub_packages",
         "hub_package_versions",
         "hub_package_items",
@@ -64,6 +71,10 @@ def _create_prerequisite_phase4_tables() -> None:
         "custody_events",
         "outbound_shipment_intents",
         "outbound_shipment_intent_invalidations",
+        "outbound_intent_rate_guards",
+        "domestic_rate_attempts",
+        "domestic_rate_responses",
+        "domestic_rate_offers",
     ]
     Base.metadata.create_all(
         bind=bind,
@@ -74,6 +85,7 @@ def _create_prerequisite_phase4_tables() -> None:
 
 def _drop_prerequisite_phase4_tables() -> None:
     from app.core.base import Base
+    import app.models.domestic_rate_quote  # noqa: F401
     import app.models.fulfillment_cohort  # noqa: F401
     import app.models.fulfillment_hub  # noqa: F401
     import app.models.hub_quality  # noqa: F401
@@ -82,6 +94,10 @@ def _drop_prerequisite_phase4_tables() -> None:
 
     bind = op.get_bind()
     table_names = [
+        "domestic_rate_offers",
+        "domestic_rate_responses",
+        "domestic_rate_attempts",
+        "outbound_intent_rate_guards",
         "outbound_shipment_intent_invalidations",
         "outbound_shipment_intents",
         "custody_events",
@@ -90,6 +106,12 @@ def _drop_prerequisite_phase4_tables() -> None:
         "hub_package_items",
         "hub_package_versions",
         "hub_packages",
+        "hub_evidence_retention_events",
+        "hub_evidence",
+        "hub_qc_inspections",
+        "hub_qc_sessions",
+        "hub_remediations",
+        "hub_discrepancies",
         "hub_receipt_items",
         "hub_receipt_sessions",
         "inbound_transfer_item_allocations",
@@ -237,6 +259,16 @@ def upgrade() -> None:
         sa.UniqueConstraint(
             "booking_id", "idempotency_key",
             name="uq_outbound_shipment_tracking_snapshots_replay",
+        ),
+        sa.ForeignKeyConstraint(
+            ["booking_id"], ["outbound_shipment_booking.id"],
+            name="fk_outbound_shipment_tracking_snapshots_booking",
+            ondelete="RESTRICT",
+        ),
+        sa.ForeignKeyConstraint(
+            ["order_id"], ["orders.id"],
+            name="fk_outbound_shipment_tracking_snapshots_order",
+            ondelete="RESTRICT",
         ),
         sa.CheckConstraint(
             "provider = 'dhl'",

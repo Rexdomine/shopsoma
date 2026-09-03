@@ -22,7 +22,9 @@ from app.models.package_custody import (
     CustodyEvent,
     CustodyStream,
     HubPackage,
+    HubPackageItem,
     HubPackageSeal,
+    HubPackageVersion,
     OutboundShipmentIntent,
     OutboundShipmentIntentInvalidation,
 )
@@ -39,6 +41,7 @@ from app.services.dhl.client import (
 PROVIDER = "dhl"
 ENVIRONMENT = "sandbox"
 ACCOUNT_ALIAS = "dhl-ng-sandbox"
+MYDHL_TEST_BASE_URL = "https://express.api.dhl.com/mydhlapi/test"
 BOOKING_ADAPTER_VERSION = "mydhl-shipments-v1"
 BOOKING_SCHEMA_VERSION = "domestic-booking-v1"
 TRACKING_SCHEMA_VERSION = "domestic-tracking-v1"
@@ -152,7 +155,12 @@ class AdapterBookingResult:
 
 
 class ShipmentAdapter(Protocol):
-    async def book(self, intent: OutboundShipmentIntent, order: Order) -> AdapterBookingResult: ...
+    async def book(
+        self,
+        intent: OutboundShipmentIntent,
+        order: Order,
+        package_version: HubPackageVersion,
+    ) -> AdapterBookingResult: ...
 
     async def track(self, tracking_number: str) -> Sequence[TrackingObservation]: ...
 
@@ -162,12 +170,20 @@ class DHLShipmentAdapter:
         self._settings = settings
         self._client = DHLClient(config=settings)
 
-    async def book(self, intent: OutboundShipmentIntent, order: Order) -> AdapterBookingResult:
+    async def book(
+        self,
+        intent: OutboundShipmentIntent,
+        order: Order,
+        package_version: HubPackageVersion,
+    ) -> AdapterBookingResult:
         payload = {
             "plannedShippingDateAndTime": _planned_ship_date_for_shadow_quote(intent.created_at).isoformat(),
             "pickup": {"isRequested": False},
             "productCode": "N",
-            "accounts": [{"typeCode": "shipper", "number": "SANDBOX"}],
+            "accounts": [{
+                "typeCode": "shipper",
+                "number": self._settings.DHL_EXPORT_ACCOUNT_NUMBER.get_secret_value(),
+            }],
             "customerDetails": {
                 "shipperDetails": {"postalAddress": {"countryCode": "NG"}},
                 "receiverDetails": {
@@ -186,7 +202,16 @@ class DHLShipmentAdapter:
                 },
             },
             "outputImageProperties": {"printerDPI": 300, "encodingFormat": "pdf"},
-            "content": {"packages": [{"weight": 1}]},
+            "content": {
+                "packages": [{
+                    "weight": float(package_version.weight_kg),
+                    "dimensions": {
+                        "length": float(package_version.length_cm),
+                        "width": float(package_version.width_cm),
+                        "height": float(package_version.height_cm),
+                    },
+                }]
+            },
         }
         response = await self._client.request_json("POST", "/shipments", json=payload)
         documents = response.get("documents") or []
@@ -263,6 +288,26 @@ def _setting_bool(settings: object, upper_name: str, lower_name: str) -> bool:
     return False
 
 
+def _cohort_allowlist(settings: Settings) -> frozenset[uuid.UUID]:
+    return settings.dhl_domestic_sandbox_cohort_ids
+
+
+def _ensure_sandbox_booking_allowed(
+    settings: Settings,
+    *,
+    cohort_ids: frozenset[uuid.UUID],
+) -> None:
+    if settings.DHL_ENVIRONMENT != "sandbox":
+        raise ShipmentPhase4Error("sandbox adapter requires DHL_ENVIRONMENT=sandbox")
+    if settings.dhl_base_url != MYDHL_TEST_BASE_URL:
+        raise ShipmentPhase4Error("sandbox adapter requires fixed MyDHL test base URL")
+    allowed = _cohort_allowlist(settings)
+    if not allowed:
+        raise ShipmentPhase4Error("sandbox adapter requires restricted cohort set")
+    if not cohort_ids <= allowed:
+        raise ShipmentPhase4Error("package composition is outside sandbox cohort allowlist")
+
+
 def _utc_or_none(value: object) -> datetime | None:
     if value is None:
         return None
@@ -300,7 +345,7 @@ async def _load_authoritative_subject(
     *,
     order_id: uuid.UUID,
     command: BookingCommand,
-) -> tuple[Order, HubPackage, HubPackageSeal, OutboundShipmentIntent]:
+) -> tuple[Order, HubPackage, HubPackageSeal, OutboundShipmentIntent, HubPackageVersion, frozenset[uuid.UUID]]:
     order = await db.get(Order, order_id)
     if order is None:
         raise ShipmentPhase4Error("order not found")
@@ -354,7 +399,27 @@ async def _load_authoritative_subject(
     ).scalar_one_or_none()
     if intent is None:
         raise ShipmentPhase4Error("no authoritative outbound shipment intent")
-    return order, package, seal, intent
+    package_version = (
+        await db.execute(
+            select(HubPackageVersion).where(
+                HubPackageVersion.package_id == package.id,
+                HubPackageVersion.version == package.current_version,
+            )
+        )
+    ).scalar_one_or_none()
+    if package_version is None:
+        raise ShipmentPhase4Error("missing package version measurement")
+    package_items = (
+        await db.execute(
+            select(HubPackageItem).where(
+                HubPackageItem.package_id == package.id,
+                HubPackageItem.package_version == package.current_version,
+            )
+        )
+    ).scalars().all()
+    if not package_items:
+        raise ShipmentPhase4Error("ready package has no package items")
+    return order, package, seal, intent, package_version, frozenset(item.cohort_id for item in package_items)
 
 
 async def book_outbound_shipment(
@@ -371,7 +436,8 @@ async def book_outbound_shipment(
     if not _setting_bool(settings, "DHL_DOMESTIC_PROVIDER_CALLS_ENABLED", "dhl_domestic_provider_calls_enabled"):
         raise ShipmentPhase4Error("dhl domestic provider calls disabled")
 
-    order, package, seal, intent = await _load_authoritative_subject(db, order_id=order_id, command=command)
+    order, package, seal, intent, package_version, cohort_ids = await _load_authoritative_subject(db, order_id=order_id, command=command)
+    _ensure_sandbox_booking_allowed(settings, cohort_ids=cohort_ids)
     command = BookingCommand(
         order_id=order_id,
         intent_id=intent.id,
@@ -462,7 +528,7 @@ async def book_outbound_shipment(
         called_at = await db.scalar(text("SELECT clock_timestamp()"))
         booking.call_started_at = called_at
         await db.flush()
-        adapter_result = await adapter.book(intent, order)
+        adapter_result = await adapter.book(intent, order, package_version)
     except (DHLConfigurationError,) as exc:
         raise ShipmentPhase4Error(str(exc)) from exc
     except (DHLAPIError, TimeoutError) as exc:
@@ -588,24 +654,64 @@ async def record_collection_handoff(
             .limit(1)
         )
     ).scalar_one_or_none()
+    if tip is None:
+        raise ShipmentPhase4ConflictError("custody stream has no releasable lifecycle tip")
+    normalized_idempotency = _normalize_text(command.idempotency_key, field="idempotency_key")
+    previous = tip
+    next_version = stream.next_version
+    if tip.event_type == "released":
+        tendered = CustodyEvent(
+            id=uuid.uuid4(),
+            stream_id=stream.id,
+            version=next_version,
+            previous_event_id=previous.id,
+            cohort_id=cohort_id,
+            order_id=order_id,
+            vendor_id=vendor_id,
+            hub_id=booking.origin_hub_id,
+            event_type="tendered",
+            actor_type="user",
+            actor_id=str(admin.id),
+            source_system="admin_dhl_handoff",
+            source_command="admin_dhl_handoff",
+            occurred_at=command.occurred_at,
+            recorded_at=max(command.occurred_at, datetime.now(UTC)),
+            location="hub_dispatch",
+            idempotency_key=f"{normalized_idempotency}:tendered",
+            counterparty=command.counterparty.strip(),
+            evidence_ref=command.evidence_ref.strip(),
+            evidence_hash=command.evidence_sha256.lower(),
+            package_id=booking.package_id,
+            package_version=booking.package_version,
+            seal_id=booking.seal_id,
+        )
+        db.add(tendered)
+        await db.flush()
+        previous = tendered
+        next_version += 1
+    elif tip.event_type != "tendered":
+        raise ShipmentPhase4ConflictError(
+            f"booking cannot accept handoff from custody state {tip.event_type}"
+        )
+
     custody = CustodyEvent(
         id=uuid.uuid4(),
         stream_id=stream.id,
-        version=stream.next_version,
-        previous_event_id=(tip.id if tip else None),
+        version=next_version,
+        previous_event_id=previous.id,
         cohort_id=cohort_id,
         order_id=order_id,
         vendor_id=vendor_id,
         hub_id=booking.origin_hub_id,
         event_type="provider_accepted",
-        actor_type="user",
-        actor_id=str(admin.id),
+        actor_type="carrier",
+        actor_id=command.counterparty.strip(),
         source_system="admin_dhl_handoff",
         source_command="admin_dhl_handoff",
         occurred_at=command.occurred_at,
         recorded_at=max(command.occurred_at, datetime.now(UTC)),
         location="hub_dispatch",
-        idempotency_key=_normalize_text(command.idempotency_key, field="idempotency_key"),
+        idempotency_key=normalized_idempotency,
         counterparty=command.counterparty.strip(),
         evidence_ref=command.evidence_ref.strip(),
         evidence_hash=command.evidence_sha256.lower(),
@@ -613,7 +719,7 @@ async def record_collection_handoff(
         package_version=booking.package_version,
         seal_id=booking.seal_id,
     )
-    db.add(custody)  # single ORM insert (consolidated from duplicate construction)
+    db.add(custody)
     booking.collection_counterparty = custody.counterparty
     booking.collection_evidence_ref = custody.evidence_ref
     booking.collection_evidence_hash = custody.evidence_hash
@@ -728,8 +834,6 @@ async def _hub_ref_from_booking(db: AsyncSession, booking: OutboundShipmentBooki
 
 
 async def _cohort_ref_from_booking(db: AsyncSession, booking: OutboundShipmentBooking) -> tuple[uuid.UUID, uuid.UUID]:
-    from app.models.package_custody import HubPackageItem
-
     row = (
         await db.execute(
             select(HubPackageItem.cohort_id, HubPackageItem.vendor_id)

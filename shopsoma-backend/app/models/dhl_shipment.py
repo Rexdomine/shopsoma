@@ -194,7 +194,7 @@ class OutboundShipmentTrackingSnapshot(Base):
     id = _id_column()
     booking_id = Column(
         _UUID,
-        ForeignKey("outbound_shipment_bookings.id", ondelete="RESTRICT"),
+        ForeignKey("outbound_shipment_booking.id", ondelete="RESTRICT"),
         nullable=False,
     )
     order_id = Column(_UUID, ForeignKey("orders.id", ondelete="RESTRICT"), nullable=False)
