@@ -6,7 +6,8 @@ configuration from environment variables.
 
 import re
 import uuid
-from typing import Optional
+from typing import List, Literal, Optional
+from uuid import UUID
 from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings
 
@@ -28,12 +29,15 @@ class Settings(BaseSettings):
     DATABASE_URL: str
     DATABASE_ECHO: bool = False
     ASYNC_DATABASE_URL: Optional[str] = None
+    RENDER_DATABASE_URL: str = ""
 
     # Redis Settings
     REDIS_HOST: str = "localhost"
     REDIS_PORT: int = 6379
     REDIS_DB: int = 0
-    REDIS_URL: Optional[str] = Field(default=None, validation_alias=AliasChoices("REDIS_URL", "redis_url"))
+    REDIS_URL: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("REDIS_URL", "redis_url")
+    )
 
     # Email Settings
     SMTP_HOST: str = ""
@@ -57,6 +61,7 @@ class Settings(BaseSettings):
     # Payment Settings
     STRIPE_SECRET_KEY: str = ""
     STRIPE_PUBLISHABLE_KEY: str = ""
+    STRIPE_WEBHOOK_SECRET: str = ""
     PAYSTACK_SECRET_KEY: str = ""
     PAYSTACK_PUBLIC_KEY: str = ""
 
@@ -69,6 +74,12 @@ class Settings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("ALLOWED_ORIGIN_REGEX", "allowed_origin_regex"),
     )
+
+    # Rate Limiting
+    RATE_LIMIT_ENABLED: bool = True
+    RATE_LIMIT_REQUESTS: int = 5
+    RATE_LIMIT_WINDOW_SECONDS: int = 60
+    TRUSTED_PROXY_IPS: str = ""
 
     # Celery Settings
     CELERY_BROKER_URL: str = ""
@@ -85,15 +96,122 @@ class Settings(BaseSettings):
     SHIPBUBBLE_API_KEY: str = ""
     SHIPBUBBLE_WEBHOOK_SECRET: str = ""  # For webhook signature verification
 
+    # DHL Express MyDHL API
+    # Docs: https://developer.dhl.com/api-reference/dhl-express-mydhl-api
+    DHL_ENABLED: bool = False
+    DHL_ENVIRONMENT: Literal["sandbox", "production"] = "sandbox"
+    DHL_API_USERNAME: SecretStr = SecretStr("")
+    DHL_API_PASSWORD: SecretStr = SecretStr("")
+    DHL_EXPORT_ACCOUNT_NUMBER: SecretStr = SecretStr("")
+    DHL_IMPORT_ACCOUNT_NUMBER: SecretStr = SecretStr("")
+    DHL_REQUEST_TIMEOUT_SECONDS: float = Field(default=30.0, ge=1, le=60)
+
+    # Domestic DHL workflow safety gates
+    DHL_DOMESTIC_WORKFLOW_ENABLED: bool = False
+    DHL_DOMESTIC_QUOTE_ENFORCEMENT_ENABLED: bool = False
+    DHL_DOMESTIC_PROVIDER_CALLS_ENABLED: bool = False
+    DHL_DOMESTIC_SANDBOX_COHORT_IDS: str = ""
+    DHL_DOMESTIC_QUOTE_TTL_SECONDS: int = Field(default=1800, ge=300, le=3600)
+    DHL_DOMESTIC_PAYMENT_WINDOW_SECONDS: int = Field(default=1800, ge=300, le=3600)
+    DHL_DOMESTIC_AUTH_GRACE_SECONDS: int = Field(default=900, ge=60, le=1800)
+
+    # Checkout prerequisites remain inert until a separately approved rollout.
+    DOMESTIC_CHECKOUT_PREREQUISITES_ENABLED: bool = False
+    DOMESTIC_CHECKOUT_COHORT_ALLOWLIST: str = ""
+    DOMESTIC_CHECKOUT_COHORT_PERCENTAGE: int = Field(default=0, ge=0, le=100)
+    CHECKOUT_CAPABILITY_ACTIVE_PEPPER_VERSION: Optional[int] = None
+    CHECKOUT_CAPABILITY_ACTIVE_PEPPER: SecretStr = SecretStr("")
+    CHECKOUT_CAPABILITY_PREVIOUS_PEPPER_VERSION: Optional[int] = None
+    CHECKOUT_CAPABILITY_PREVIOUS_PEPPER: SecretStr = SecretStr("")
+
+    @property
+    def domestic_checkout_cohort_ids(self) -> frozenset[UUID]:
+        raw = self.DOMESTIC_CHECKOUT_COHORT_ALLOWLIST
+        if not raw:
+            return frozenset()
+        values = raw.split(",")
+        if any(value != value.strip() or not value for value in values):
+            return frozenset()
+        try:
+            parsed = tuple(UUID(value) for value in values)
+        except ValueError:
+            return frozenset()
+        if len(set(parsed)) != len(parsed) or any(
+            str(item) != raw_item for item, raw_item in zip(parsed, values)
+        ):
+            return frozenset()
+        return frozenset(parsed)
+
+    @property
+    def checkout_capability_configured(self) -> bool:
+        return bool(
+            self.CHECKOUT_CAPABILITY_ACTIVE_PEPPER_VERSION
+            and self.CHECKOUT_CAPABILITY_ACTIVE_PEPPER.get_secret_value()
+        )
+
+    @property
+    def dhl_base_url(self) -> str:
+        """Return the fixed official MyDHL API URL for the selected environment."""
+        if self.DHL_ENVIRONMENT == "production":
+            return "https://express.api.dhl.com/mydhlapi"
+        return "https://express.api.dhl.com/mydhlapi/test"
+
+    @property
+    def dhl_configured(self) -> bool:
+        """Return whether DHL is enabled with the minimum required configuration."""
+        return self.DHL_ENABLED and all(
+            secret.get_secret_value()
+            for secret in (
+                self.DHL_API_USERNAME,
+                self.DHL_API_PASSWORD,
+                self.DHL_EXPORT_ACCOUNT_NUMBER,
+            )
+        )
+
+    @property
+    def dhl_domestic_sandbox_cohort_ids(self) -> frozenset[UUID]:
+        """Return a strict allowlist; malformed or duplicate values fail closed."""
+        raw_values = self.DHL_DOMESTIC_SANDBOX_COHORT_IDS.split(",")
+        if not raw_values or any(
+            value != value.strip() or not value for value in raw_values
+        ):
+            return frozenset()
+        try:
+            cohort_ids = tuple(UUID(value) for value in raw_values)
+        except ValueError:
+            return frozenset()
+        if any(str(cohort_id) != raw for cohort_id, raw in zip(cohort_ids, raw_values)):
+            return frozenset()
+        if len(set(cohort_ids)) != len(cohort_ids):
+            return frozenset()
+        return frozenset(cohort_ids)
+
     @property
     def FRONTEND_URL(self) -> str:
         """Alias for FRONTEND_BASE_URL for backward compatibility"""
         return self.FRONTEND_BASE_URL
 
+    @property
+    def allowed_origins_list(self) -> List[str]:
+        return [
+            origin.strip()
+            for origin in self.ALLOWED_ORIGINS.split(",")
+            if origin.strip()
+        ]
+
+    @property
+    def trusted_proxy_ips_list(self) -> List[str]:
+        return [
+            proxy_ip.strip()
+            for proxy_ip in self.TRUSTED_PROXY_IPS.split(",")
+            if proxy_ip.strip()
+        ]
+
     # S3/Object Storage
-    USE_LOCAL_STORAGE: bool = True  # Use local file storage for development
+    USE_LOCAL_STORAGE: Optional[bool] = None  # Defaults to local only in development
+    ALLOW_LOCAL_STORAGE_IN_NON_DEV: bool = False
     LOCAL_UPLOAD_DIR: str = "uploads"  # Directory for local uploads
-    S3_BUCKET_NAME: str = "shopsoma-uploads"
+    S3_BUCKET_NAME: str = ""
     S3_ENDPOINT_URL: str = ""  # For CloudFlare R2 or MinIO
     CDN_BASE_URL: str = ""  # CloudFront or CloudFlare CDN
 
@@ -151,6 +269,25 @@ class Settings(BaseSettings):
         extra = "forbid"
 
     def model_post_init(self, __context) -> None:
+        environment = self.ENVIRONMENT.lower()
+
+        if self.DHL_ENABLED:
+            required_dhl_fields = {
+                "DHL_API_USERNAME": self.DHL_API_USERNAME,
+                "DHL_API_PASSWORD": self.DHL_API_PASSWORD,
+                "DHL_EXPORT_ACCOUNT_NUMBER": self.DHL_EXPORT_ACCOUNT_NUMBER,
+            }
+            missing_dhl_fields = [
+                field_name
+                for field_name, secret in required_dhl_fields.items()
+                if not secret.get_secret_value()
+            ]
+            if missing_dhl_fields:
+                missing = ", ".join(missing_dhl_fields)
+                raise ValueError(
+                    "DHL is enabled but required settings are missing: " + missing
+                )
+
         if not self.ASYNC_DATABASE_URL:
             self.ASYNC_DATABASE_URL = self._build_async_db_url(self.DATABASE_URL)
         if self.AWS_S3_BUCKET and not self.S3_BUCKET_NAME:
@@ -161,6 +298,34 @@ class Settings(BaseSettings):
             self.AWS_S3_BUCKET = self.S3_BUCKET_NAME
         if self.S3_ENDPOINT_URL and not self.AWS_S3_ENDPOINT_URL:
             self.AWS_S3_ENDPOINT_URL = self.S3_ENDPOINT_URL
+        if self.USE_LOCAL_STORAGE is None:
+            self.USE_LOCAL_STORAGE = environment == "development"
+        if (
+            environment != "development"
+            and self.USE_LOCAL_STORAGE
+            and not self.ALLOW_LOCAL_STORAGE_IN_NON_DEV
+        ):
+            raise ValueError(
+                "USE_LOCAL_STORAGE cannot default to true outside development. "
+                "Set USE_LOCAL_STORAGE=false with object storage credentials, or "
+                "explicitly set ALLOW_LOCAL_STORAGE_IN_NON_DEV=true for a temporary non-production fallback."
+            )
+        if not self.USE_LOCAL_STORAGE:
+            missing_storage_fields = [
+                field_name
+                for field_name, value in {
+                    "AWS_ACCESS_KEY_ID": self.AWS_ACCESS_KEY_ID,
+                    "AWS_SECRET_ACCESS_KEY": self.AWS_SECRET_ACCESS_KEY,
+                    "AWS_REGION": self.AWS_REGION,
+                    "S3_BUCKET_NAME": self.S3_BUCKET_NAME,
+                }.items()
+                if not value
+            ]
+            if missing_storage_fields:
+                missing = ", ".join(missing_storage_fields)
+                raise ValueError(
+                    f"Object storage is enabled but required settings are missing: {missing}"
+                )
 
     @staticmethod
     def _build_async_db_url(database_url: str) -> str:

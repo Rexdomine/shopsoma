@@ -1,13 +1,17 @@
 """
 Unit tests for image upload and storage
 """
+
 import pytest
 import io
+from pathlib import Path
 from PIL import Image
 from httpx import AsyncClient
-from unittest.mock import Mock, patch, AsyncMock
-from fastapi import UploadFile
+from unittest.mock import Mock, patch
+from fastapi import HTTPException, UploadFile
 
+from app.api.v1.images import _require_vendor_image_key
+from app.models.product import ProductImage
 from app.services.image_service import image_service
 
 
@@ -17,7 +21,8 @@ class TestImageValidation:
     @pytest.mark.asyncio
     async def test_valid_image_types(self):
         """Test that valid image types are accepted"""
-        valid_types = ["image/jpeg", "image/png", "image/webp", "image/gif"]
+        valid_types = ["image/jpeg", "image/png", "image/webp"]
+        assert set(image_service.allowed_types) == set(valid_types)
 
         for content_type in valid_types:
             # Create mock file
@@ -63,9 +68,9 @@ class TestImageValidation:
 class TestImageCompression:
     """Test image compression and resizing"""
 
-    def create_test_image(self, size=(1000, 1000), mode='RGB', format='JPEG'):
+    def create_test_image(self, size=(1000, 1000), mode="RGB", format="JPEG"):
         """Helper to create test image"""
-        img = Image.new(mode, size, color='red')
+        img = Image.new(mode, size, color="red")
         img_bytes = io.BytesIO()
         img.save(img_bytes, format=format)
         return img_bytes.getvalue()
@@ -74,21 +79,17 @@ class TestImageCompression:
         """Test JPEG compression"""
         original_data = self.create_test_image()
         compressed, format_type = image_service._compress_and_resize(
-            original_data,
-            target_size=None,
-            quality=85
+            original_data, target_size=None, quality=85
         )
 
-        assert format_type == 'jpeg'
+        assert format_type == "jpeg"
         assert len(compressed) < len(original_data)  # Should be compressed
 
     def test_resize_image(self):
         """Test image resizing"""
         original_data = self.create_test_image(size=(2000, 2000))
         resized, _ = image_service._compress_and_resize(
-            original_data,
-            target_size=(800, 800),
-            quality=85
+            original_data, target_size=(800, 800), quality=85
         )
 
         # Check resized image dimensions
@@ -98,25 +99,21 @@ class TestImageCompression:
 
     def test_rgba_to_rgb_conversion(self):
         """Test RGBA to RGB conversion for JPEG"""
-        original_data = self.create_test_image(mode='RGBA', format='PNG')
+        original_data = self.create_test_image(mode="RGBA", format="PNG")
         compressed, format_type = image_service._compress_and_resize(
-            original_data,
-            target_size=None,
-            quality=85
+            original_data, target_size=None, quality=85
         )
 
         # Should convert to JPEG
         img = Image.open(io.BytesIO(compressed))
-        assert img.mode == 'RGB'
+        assert img.mode == "RGB"
 
     def test_maintain_aspect_ratio(self):
         """Test that resizing maintains aspect ratio"""
         # Create 2000x1000 image (2:1 ratio)
         original_data = self.create_test_image(size=(2000, 1000))
         resized, _ = image_service._compress_and_resize(
-            original_data,
-            target_size=(800, 800),  # Max dimensions
-            quality=85
+            original_data, target_size=(800, 800), quality=85  # Max dimensions
         )
 
         img = Image.open(io.BytesIO(resized))
@@ -151,7 +148,7 @@ class TestFilenameGeneration:
         key = image_service._get_s3_key("test.jpg", "products")
 
         # Should have structure: folder/year/month/filename
-        parts = key.split('/')
+        parts = key.split("/")
         assert len(parts) == 4
         assert parts[0] == "products"
         assert len(parts[1]) == 4  # Year
@@ -165,12 +162,12 @@ class TestImageEndpoints:
     async def test_upload_image_unauthorized(self, client: AsyncClient):
         """Test image upload without authentication"""
         # Create fake image file
-        img = Image.new('RGB', (100, 100), color='red')
+        img = Image.new("RGB", (100, 100), color="red")
         img_bytes = io.BytesIO()
-        img.save(img_bytes, format='JPEG')
+        img.save(img_bytes, format="JPEG")
         img_bytes.seek(0)
 
-        files = {'file': ('test.jpg', img_bytes, 'image/jpeg')}
+        files = {"file": ("test.jpg", img_bytes, "image/jpeg")}
         response = await client.post("/api/v1/images/upload", files=files)
 
         assert response.status_code == 403  # Not authenticated
@@ -178,16 +175,14 @@ class TestImageEndpoints:
     @pytest.mark.asyncio
     async def test_upload_image_as_customer(self, client: AsyncClient, customer_user):
         """Test that customers cannot upload images"""
-        img = Image.new('RGB', (100, 100), color='red')
+        img = Image.new("RGB", (100, 100), color="red")
         img_bytes = io.BytesIO()
-        img.save(img_bytes, format='JPEG')
+        img.save(img_bytes, format="JPEG")
         img_bytes.seek(0)
 
-        files = {'file': ('test.jpg', img_bytes, 'image/jpeg')}
+        files = {"file": ("test.jpg", img_bytes, "image/jpeg")}
         response = await client.post(
-            "/api/v1/images/upload",
-            files=files,
-            headers=customer_user["headers"]
+            "/api/v1/images/upload", files=files, headers=customer_user["headers"]
         )
 
         assert response.status_code == 403  # Customers can't upload
@@ -196,32 +191,31 @@ class TestImageEndpoints:
     async def test_upload_image_success(
         self,
         client: AsyncClient,
-        vendor_user
+        vendor_user,
+        tmp_path,
+        monkeypatch,
     ):
-        """Test successful image upload"""
-        # Mock S3 client
-        with patch.object(image_service, 's3_client') as mock_s3:
-            mock_s3.put_object = Mock()
+        """Test successful image upload using the configured local backend."""
+        monkeypatch.setattr(image_service, "upload_dir", tmp_path)
 
-            img = Image.new('RGB', (100, 100), color='red')
-            img_bytes = io.BytesIO()
-            img.save(img_bytes, format='JPEG')
-            img_bytes.seek(0)
+        img = Image.new("RGB", (100, 100), color="red")
+        img_bytes = io.BytesIO()
+        img.save(img_bytes, format="JPEG")
+        img_bytes.seek(0)
 
-            files = {'file': ('test.jpg', img_bytes, 'image/jpeg')}
-            response = await client.post(
-                "/api/v1/images/upload",
-                files=files,
-                headers=vendor_user["headers"]
-            )
+        files = {"file": ("test.jpg", img_bytes, "image/jpeg")}
+        response = await client.post(
+            "/api/v1/images/upload", files=files, headers=vendor_user["headers"]
+        )
 
-            assert response.status_code == 201
-            data = response.json()
-            assert 'original' in data
-            assert 'thumbnail' in data
-            assert 'medium' in data
-            assert 'large' in data
-            assert 's3_key' in data
+        assert response.status_code == 201
+        data = response.json()
+        assert data["original"].startswith("/uploads/")
+        assert data["thumbnail"].startswith("/uploads/")
+        assert data["medium"].startswith("/uploads/")
+        assert data["large"].startswith("/uploads/")
+        assert data["s3_key"].startswith(f"vendors/{vendor_user['user'].id}/")
+        assert (tmp_path / data["s3_key"]).is_file()
 
     @pytest.mark.asyncio
     async def test_batch_upload_limit(self, client: AsyncClient, vendor_user):
@@ -229,90 +223,353 @@ class TestImageEndpoints:
         # Try to upload 11 images
         files = []
         for i in range(11):
-            img = Image.new('RGB', (100, 100), color='red')
+            img = Image.new("RGB", (100, 100), color="red")
             img_bytes = io.BytesIO()
-            img.save(img_bytes, format='JPEG')
+            img.save(img_bytes, format="JPEG")
             img_bytes.seek(0)
-            files.append(('files', (f'test{i}.jpg', img_bytes, 'image/jpeg')))
+            files.append(("files", (f"test{i}.jpg", img_bytes, "image/jpeg")))
 
         response = await client.post(
-            "/api/v1/images/upload/batch",
-            files=files,
-            headers=vendor_user["headers"]
+            "/api/v1/images/upload/batch", files=files, headers=vendor_user["headers"]
         )
 
         assert response.status_code == 400
         assert "Maximum 10 images" in response.json()["detail"]
 
     @pytest.mark.asyncio
-    async def test_generate_signed_url(self, client: AsyncClient, vendor_user):
-        """Test signed URL generation"""
-        request_data = {
-            "s3_key": "products/2025/11/test.jpg",
-            "expiration": 3600
-        }
+    async def test_batch_upload_rejects_invalid_shared_folder(
+        self, client: AsyncClient, vendor_user
+    ):
+        files = [("files", ("test.jpg", io.BytesIO(b"not-read"), "image/jpeg"))]
 
-        with patch.object(image_service, 's3_client') as mock_s3:
-            mock_s3.generate_presigned_url = Mock(
-                return_value="https://signed-url.com/image.jpg"
-            )
+        response = await client.post(
+            "/api/v1/images/upload/batch",
+            params={"folder": "../other-vendor"},
+            files=files,
+            headers=vendor_user["headers"],
+        )
 
-            response = await client.post(
-                "/api/v1/images/signed-url",
-                json=request_data,
-                headers=vendor_user["headers"]
-            )
-
-            assert response.status_code == 200
-            data = response.json()
-            assert 'url' in data
-            assert 'expires_in' in data
-            assert 'expires_at' in data
+        assert response.status_code == 400
+        assert response.json()["detail"] == "Invalid storage folder"
 
     @pytest.mark.asyncio
-    async def test_delete_image(self, client: AsyncClient, vendor_user):
-        """Test image deletion"""
-        with patch.object(image_service, 's3_client') as mock_s3:
-            mock_s3.delete_object = Mock()
+    async def test_batch_upload_keeps_invalid_file_as_per_file_failure(
+        self, client: AsyncClient, vendor_user
+    ):
+        files = [("files", ("bad.pdf", io.BytesIO(b"bad"), "application/pdf"))]
 
-            s3_key = "products/2025/11/test.jpg"
-            response = await client.delete(
-                f"/api/v1/images/{s3_key}",
-                headers=vendor_user["headers"]
+        response = await client.post(
+            "/api/v1/images/upload/batch", files=files, headers=vendor_user["headers"]
+        )
+
+        assert response.status_code == 200
+        assert response.json() == {
+            "images": [],
+            "total": 1,
+            "success": 0,
+            "failed": 1,
+        }
+
+    @pytest.mark.asyncio
+    async def test_generate_signed_url(self, client: AsyncClient, vendor_user):
+        """Local storage fails closed instead of pretending to sign a public URL."""
+        request_data = {"s3_key": "products/2025/11/test.jpg", "expiration": 3600}
+
+        response = await client.post(
+            "/api/v1/images/signed-url",
+            json=request_data,
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 503
+        assert response.json()["detail"] == "Signed URLs require object storage"
+
+    @pytest.mark.asyncio
+    async def test_batch_delete_images_from_local_storage(
+        self,
+        client: AsyncClient,
+        vendor_user,
+        tmp_path,
+        monkeypatch,
+    ):
+        """Batch deletion removes vendor-owned files from local storage."""
+        monkeypatch.setattr(image_service, "upload_dir", tmp_path)
+        vendor_id = vendor_user["user"].id
+        s3_keys = [
+            f"vendors/{vendor_id}/products/2025/11/first.jpg",
+            f"vendors/{vendor_id}/products/2025/11/second.jpg",
+        ]
+        image_paths = [tmp_path / s3_key for s3_key in s3_keys]
+        for image_path in image_paths:
+            image_path.parent.mkdir(parents=True, exist_ok=True)
+            image_path.write_bytes(b"test-image")
+
+        response = await client.post(
+            "/api/v1/images/delete/batch",
+            json=s3_keys,
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 200
+        assert response.json() == {
+            "deleted": 2,
+            "failed": 0,
+            "total": 2,
+            "message": "Deleted 2 images, 0 failed",
+        }
+        assert all(not image_path.exists() for image_path in image_paths)
+
+    @pytest.mark.asyncio
+    async def test_batch_delete_counts_local_filesystem_failure_and_continues(
+        self,
+        client: AsyncClient,
+        vendor_user,
+        tmp_path,
+        monkeypatch,
+    ):
+        """One local unlink failure does not hide or stop later batch results."""
+        monkeypatch.setattr(image_service, "upload_dir", tmp_path)
+        vendor_id = vendor_user["user"].id
+        failed_key = f"vendors/{vendor_id}/products/failed.jpg"
+        deleted_key = f"vendors/{vendor_id}/products/deleted.jpg"
+        failed_path = tmp_path / failed_key
+        deleted_path = tmp_path / deleted_key
+        for image_path in (failed_path, deleted_path):
+            image_path.parent.mkdir(parents=True, exist_ok=True)
+            image_path.write_bytes(b"test-image")
+
+        original_unlink = Path.unlink
+
+        def unlink_with_one_failure(path: Path, *args, **kwargs):
+            if path == failed_path:
+                raise OSError("simulated local delete failure")
+            return original_unlink(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "unlink", unlink_with_one_failure)
+
+        response = await client.post(
+            "/api/v1/images/delete/batch",
+            json=[failed_key, deleted_key],
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 200
+        assert response.json() == {
+            "deleted": 1,
+            "failed": 1,
+            "total": 2,
+            "message": "Deleted 1 images, 1 failed",
+        }
+        assert failed_path.is_file()
+        assert not deleted_path.exists()
+
+    @pytest.mark.asyncio
+    async def test_batch_delete_rejects_another_vendor_before_deleting_owned_file(
+        self,
+        client: AsyncClient,
+        vendor_user,
+        tmp_path,
+        monkeypatch,
+    ):
+        """Ownership validation rejects the whole batch before local deletion."""
+        monkeypatch.setattr(image_service, "upload_dir", tmp_path)
+        owned_key = f"vendors/{vendor_user['user'].id}/products/owned.jpg"
+        other_key = "vendors/00000000-0000-0000-0000-000000000000/products/other.jpg"
+        owned_path = tmp_path / owned_key
+        other_path = tmp_path / other_key
+        for image_path in (owned_path, other_path):
+            image_path.parent.mkdir(parents=True, exist_ok=True)
+            image_path.write_bytes(b"test-image")
+
+        response = await client.post(
+            "/api/v1/images/delete/batch",
+            json=[owned_key, other_key],
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 403
+        assert owned_path.is_file()
+        assert other_path.is_file()
+
+    @pytest.mark.asyncio
+    async def test_batch_delete_rejects_nul_key_before_deleting_owned_file(
+        self,
+        client: AsyncClient,
+        vendor_user,
+        tmp_path,
+        monkeypatch,
+    ):
+        """Path validation rejects the whole batch before local deletion."""
+        monkeypatch.setattr(image_service, "upload_dir", tmp_path)
+        vendor_id = vendor_user["user"].id
+        owned_key = f"vendors/{vendor_id}/products/owned.jpg"
+        nul_key = f"vendors/{vendor_id}/products/invalid\0.jpg"
+        owned_path = tmp_path / owned_key
+        owned_path.parent.mkdir(parents=True, exist_ok=True)
+        owned_path.write_bytes(b"owned-image")
+
+        response = await client.post(
+            "/api/v1/images/delete/batch",
+            json=[owned_key, nul_key],
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 400
+        assert response.json()["detail"] == "Invalid image key"
+        assert owned_path.is_file()
+
+    @pytest.mark.asyncio
+    async def test_delete_image(
+        self,
+        client: AsyncClient,
+        vendor_user,
+        tmp_path,
+        monkeypatch,
+    ):
+        """Test image deletion from local storage."""
+        monkeypatch.setattr(image_service, "upload_dir", tmp_path)
+        s3_key = f"vendors/{vendor_user['user'].id}/products/2025/11/test.jpg"
+        image_path = tmp_path / s3_key
+        image_path.parent.mkdir(parents=True)
+        image_path.write_bytes(b"test-image")
+
+        response = await client.delete(
+            f"/api/v1/images/{s3_key}", headers=vendor_user["headers"]
+        )
+
+        assert response.status_code == 200
+        assert response.json()["success"] is True
+        assert not image_path.exists()
+
+    @pytest.mark.asyncio
+    async def test_delete_image_rejects_another_vendor_key(
+        self,
+        client: AsyncClient,
+        vendor_user,
+        tmp_path,
+        monkeypatch,
+    ):
+        monkeypatch.setattr(image_service, "upload_dir", tmp_path)
+        s3_key = "vendors/00000000-0000-0000-0000-000000000000/products/test.jpg"
+        image_path = tmp_path / s3_key
+        image_path.parent.mkdir(parents=True)
+        image_path.write_bytes(b"other-vendor-image")
+
+        response = await client.delete(
+            f"/api/v1/images/{s3_key}", headers=vendor_user["headers"]
+        )
+
+        assert response.status_code == 403
+        assert image_path.is_file()
+
+    @pytest.mark.asyncio
+    async def test_delete_image_rejects_vendor_key_with_traversal(self, vendor_user):
+        s3_key = (
+            f"vendors/{vendor_user['user'].id}/../"
+            "00000000-0000-0000-0000-000000000000/products/test.jpg"
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            _require_vendor_image_key(vendor_user["user"], s3_key)
+
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.detail == "Invalid image key"
+
+    @pytest.mark.asyncio
+    async def test_delete_image_rejects_legacy_key_claimed_by_product_url(
+        self,
+        client: AsyncClient,
+        vendor_user,
+        sample_product,
+        db_session,
+        tmp_path,
+        monkeypatch,
+    ):
+        monkeypatch.setattr(image_service, "upload_dir", tmp_path)
+        s3_key = "products/2025/11/legacy.jpg"
+        image_path = tmp_path / s3_key
+        image_path.parent.mkdir(parents=True)
+        image_path.write_bytes(b"legacy-vendor-image")
+        db_session.add(
+            ProductImage(
+                product_id=sample_product.id,
+                image_url=f"/uploads/{s3_key}",
+                display_order=0,
             )
+        )
+        await db_session.commit()
 
-            assert response.status_code == 200
-            data = response.json()
-            assert data['success'] is True
+        response = await client.delete(
+            f"/api/v1/images/{s3_key}", headers=vendor_user["headers"]
+        )
+
+        assert response.status_code == 403
+        assert image_path.is_file()
+
+    @pytest.mark.asyncio
+    async def test_delete_image_rejects_unowned_legacy_key(
+        self,
+        client: AsyncClient,
+        vendor_user,
+        tmp_path,
+        monkeypatch,
+    ):
+        monkeypatch.setattr(image_service, "upload_dir", tmp_path)
+        s3_key = "products/2025/11/unowned.jpg"
+        image_path = tmp_path / s3_key
+        image_path.parent.mkdir(parents=True)
+        image_path.write_bytes(b"unowned-legacy-image")
+
+        response = await client.delete(
+            f"/api/v1/images/{s3_key}", headers=vendor_user["headers"]
+        )
+
+        assert response.status_code == 403
+        assert image_path.is_file()
 
     @pytest.mark.asyncio
     async def test_image_health_check(self, client: AsyncClient):
-        """Test image service health check endpoint"""
-        with patch.object(image_service, 's3_client') as mock_s3:
-            mock_s3.head_bucket = Mock()
+        """Test local image service health without object-storage probes."""
+        response = await client.get("/api/v1/images/health")
 
-            response = await client.get("/api/v1/images/health")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "healthy"
+        assert data["backend"] == "local"
+        assert "bucket" not in data
 
-            assert response.status_code == 200
-            data = response.json()
-            assert data['status'] == 'healthy'
-            assert 'bucket' in data
+    @pytest.mark.asyncio
+    async def test_image_health_check_reports_unavailable_local_storage(
+        self, client: AsyncClient, tmp_path, monkeypatch
+    ):
+        unavailable = tmp_path / "not-a-directory"
+        unavailable.write_text("occupied")
+        monkeypatch.setattr(image_service, "upload_dir", unavailable)
+
+        response = await client.get("/api/v1/images/health")
+
+        assert response.status_code == 200
+        assert response.json()["status"] == "unhealthy"
 
 
 class TestURLGeneration:
     """Test URL generation for different configurations"""
 
+    @patch("app.core.config.settings.AWS_REGION", "eu-west-1")
+    @patch("app.core.config.settings.S3_BUCKET_NAME", "shopsoma-test")
     def test_standard_s3_url(self):
-        """Test standard S3 URL generation"""
+        """Test deterministic standard S3 URL generation."""
         url = image_service._get_public_url("products/2025/11/test.jpg")
 
-        assert ("s3" in url) or ("r2" in url)
-        assert "products/2025/11/test.jpg" in url
+        assert url == (
+            "https://shopsoma-test.s3.eu-west-1.amazonaws.com/"
+            "products/2025/11/test.jpg"
+        )
 
-    @patch('app.core.config.settings.CDN_BASE_URL', 'https://cdn.shopsoma.com')
+    @patch("app.core.config.settings.CDN_BASE_URL", "https://cdn.shopsoma.com")
     def test_cdn_url(self):
         """Test CDN URL generation when configured"""
         url = image_service._get_public_url("products/2025/11/test.jpg")
 
-        assert url.startswith('https://cdn.shopsoma.com')
+        assert url.startswith("https://cdn.shopsoma.com")
         assert "products/2025/11/test.jpg" in url

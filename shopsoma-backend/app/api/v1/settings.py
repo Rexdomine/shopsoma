@@ -11,12 +11,14 @@ from urllib.parse import urlparse
 import anyio
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
+from sqlalchemy import update as sqlalchemy_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.models.setting import Setting
 from app.models.app_setting import AppSetting
 from app.models.user import User
+from app.models.vendor import Vendor
 from app.schemas.setting import (
     SettingResponse,
     SettingUpdate,
@@ -29,11 +31,14 @@ from app.schemas.app_setting import (
     AppSettingResponse,
     PayoutHoldSettings,
     PayoutHoldSettingsUpdate,
+    CommissionSettings,
+    CommissionSettingsUpdate,
     FeaturedRotationSettings,
     FeaturedRotationSettingsUpdate,
     DatabaseSyncResponse,
 )
 from app.api.dependencies import get_current_user, require_admin
+from app.services.commission import COMMISSION_SETTING_KEY, DEFAULT_COMMISSION_RATE, normalize_commission_rate
 
 logger = logging.getLogger(__name__)
 
@@ -450,6 +455,65 @@ async def update_payout_hold_settings(
     logger.info(f"[Settings] Admin {current_user.email} updated payout hold days to {payload.hold_days}")
 
     return PayoutHoldSettings(hold_days=payload.hold_days, updated_at=updated_at)
+
+
+@router.get("/admin/commission", response_model=CommissionSettings)
+async def get_commission_settings(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin)
+):
+    """Get default platform commission settings (Admin only)."""
+    _ = current_user
+    result = await db.execute(
+        select(AppSetting).where(AppSetting.key == COMMISSION_SETTING_KEY)
+    )
+    setting = result.scalar_one_or_none()
+    commission_rate = normalize_commission_rate(setting.value if setting else DEFAULT_COMMISSION_RATE)
+
+    return CommissionSettings(
+        commission_rate=float(commission_rate),
+        updated_at=setting.updated_at if setting else None,
+    )
+
+
+@router.put("/admin/commission", response_model=CommissionSettings)
+async def update_commission_settings(
+    payload: CommissionSettingsUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin)
+):
+    """
+    Update default platform commission settings.
+
+    By default this affects new vendors only. If apply_to_existing_vendors is true,
+    existing vendor commission rates are also updated for future order snapshots.
+    Historical order items and payouts are not mutated.
+    """
+    commission_rate = normalize_commission_rate(payload.commission_rate)
+    await update_app_setting_value(db, COMMISSION_SETTING_KEY, str(commission_rate))
+
+    if payload.apply_to_existing_vendors:
+        await db.execute(
+            sqlalchemy_update(Vendor).values(commission_rate=commission_rate)
+        )
+        await db.commit()
+
+    result = await db.execute(
+        select(AppSetting).where(AppSetting.key == COMMISSION_SETTING_KEY)
+    )
+    setting = result.scalar_one_or_none()
+
+    logger.info(
+        "[Settings] Admin %s updated default commission to %s%% (apply_to_existing_vendors=%s)",
+        current_user.email,
+        commission_rate,
+        payload.apply_to_existing_vendors,
+    )
+
+    return CommissionSettings(
+        commission_rate=float(commission_rate),
+        updated_at=setting.updated_at if setting else None,
+    )
 
 
 @router.post("/admin/db-sync", response_model=DatabaseSyncResponse)

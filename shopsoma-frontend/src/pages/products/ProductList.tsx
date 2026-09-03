@@ -6,11 +6,13 @@ import Loading from '../../components/common/Loading';
 import type { Category, Product } from '../../types';
 import { productService, type ProductListParams } from '../../services/productService';
 import { categoryService } from '../../services/categoryService';
-import { MEN_HERO_IMAGE_URL, ROUTES, WOMEN_HERO_IMAGE_URL } from '../../config/constants';
+import { IMAGE_CONFIG, MEN_HERO_IMAGE_URL, ROUTES, WOMEN_HERO_IMAGE_URL } from '../../config/constants';
 import ProductCard from '../../components/products/ProductCard';
 import VendorShowcaseCard from '../../components/products/VendorShowcaseCard';
 import { useWishlistActions } from '../../hooks/useWishlistActions';
 import { usePreferenceStore } from '../../store/preferenceStore';
+import { hasSolidColorHex } from '../../utils/colorDisplay';
+import { getProductImageSource } from '../../utils/productImages';
 
 const PAGE_SIZE = 12;
 
@@ -314,6 +316,7 @@ export default function ProductList({
   const [childCategoryMap, setChildCategoryMap] = useState<Record<string, Category[]>>({});
   const [featuredHoverProduct, setFeaturedHoverProduct] = useState<Product | null>(null);
   const hoverCloseRef = useRef<number | null>(null);
+  const featuredHoverImage = featuredHoverProduct ? getProductImageSource(featuredHoverProduct) : null;
 
   const hoveredNavItem = useMemo(
     () => navItems.find((item) => item.id === hoveredNavId) || null,
@@ -334,6 +337,20 @@ export default function ProductList({
       hoveredChildCategories.slice(index * perColumn, index * perColumn + perColumn)
     ).filter((group) => group.length);
   }, [hoveredChildCategories]);
+
+  const handleSpotlightImageError = (
+    event: React.SyntheticEvent<HTMLImageElement>,
+    fallbackSrc?: string
+  ) => {
+    const image = event.currentTarget;
+    if (fallbackSrc && image.dataset.fallbackApplied !== 'true') {
+      image.dataset.fallbackApplied = 'true';
+      image.src = fallbackSrc;
+      return;
+    }
+    image.src = IMAGE_CONFIG.PLACEHOLDER;
+    image.onerror = null;
+  };
 
   useEffect(() => {
     if (!hoveredNavId || childCategoryMap[hoveredNavId] || childCategoryOverrides?.[hoveredNavId]) return;
@@ -878,13 +895,12 @@ const handleFilterChange = (key: keyof FilterState, value: string) => {
                   {featuredHoverProduct ? (
                     <>
                       <div className="aspect-[4/5] bg-gray-100 overflow-hidden mb-3">
-                        {featuredHoverProduct.images?.[0]?.image_url ? (
-                          <img
-                            src={featuredHoverProduct.images[0].image_url}
-                            alt={featuredHoverProduct.title}
-                            className="w-full h-full object-cover"
-                          />
-                        ) : null}
+                        <img
+                          src={featuredHoverImage?.src || IMAGE_CONFIG.PLACEHOLDER}
+                          alt={featuredHoverProduct.title}
+                          className="w-full h-full object-cover"
+                          onError={(event) => handleSpotlightImageError(event, featuredHoverImage?.fallbackSrc)}
+                        />
                       </div>
                       <p className="text-xs font-ui uppercase tracking-[0.3em] text-gray-400 mb-2">
                         Spotlight
@@ -1382,7 +1398,11 @@ function FilterGroup({
           )}
           {options.map((option) => {
             const selectedColor = selected === option;
-            const showColorSwatch = type === 'color' && option !== 'All';
+            const meta = colorMeta?.[option];
+            const showColorSwatch =
+              type === 'color' &&
+              option !== 'All' &&
+              (hasSolidColorHex(meta?.hex) || option.toLowerCase() in COLOR_PRESETS);
             const swatchColor = showColorSwatch ? getColorValue(option) : undefined;
             const count =
               showColorSwatch && option !== 'All' ? colorMeta?.[option]?.count ?? 0 : 0;
@@ -1408,7 +1428,13 @@ function FilterGroup({
                       style={{ backgroundColor: swatchColor }}
                     />
                   )}
-                  <span>{option}</span>
+                  {!showColorSwatch && option !== 'All' ? (
+                    <span className="rounded-full border border-gray-200 px-2 py-1 text-xs font-medium text-gray-600">
+                      {option}
+                    </span>
+                  ) : (
+                    <span>{option}</span>
+                  )}
                 </div>
                 {showColorSwatch && count > 0 && (
                   <span className="text-xs text-gray-400">({count})</span>

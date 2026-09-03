@@ -8,6 +8,7 @@ import { IMAGE_CONFIG } from '../config/constants';
 import { useWishlistActions } from '../hooks/useWishlistActions';
 import { useCurrency } from '../hooks/useCurrency';
 import { formatPriceWithConversion } from '../utils/pricing';
+import { getProductImageSource, getProductImageSources } from '../utils/productImages';
 
 const HERO_IMAGE = '/images/hero/demo-image-2.png';
 
@@ -24,8 +25,9 @@ function HomeProductCard({
 }: HomeProductCardProps) {
   const [isHovered, setIsHovered] = useState(false);
   const { currentCurrency, exchangeRates } = useCurrency();
-  const primaryImage = product.images?.[0]?.image_url || IMAGE_CONFIG.PLACEHOLDER;
-  const secondaryImage = product.images?.[1]?.image_url || primaryImage;
+  const productImages = getProductImageSources(product);
+  const primaryImage = productImages[0] ?? { src: IMAGE_CONFIG.PLACEHOLDER };
+  const secondaryImage = productImages[1] ?? primaryImage;
   const vendor = product.vendor_name || 'Shopsoma';
   const price = product.variants?.[0]?.price ?? product.base_price ?? 0;
 
@@ -50,6 +52,20 @@ function HomeProductCard({
     return Array.from(colorMap.values());
   })();
 
+  const handleImageError = (
+    event: React.SyntheticEvent<HTMLImageElement>,
+    fallbackSrc?: string
+  ) => {
+    const image = event.currentTarget;
+    if (fallbackSrc && image.dataset.fallbackApplied !== 'true') {
+      image.dataset.fallbackApplied = 'true';
+      image.src = fallbackSrc;
+      return;
+    }
+    image.src = IMAGE_CONFIG.PLACEHOLDER;
+    image.onerror = null;
+  };
+
   return (
     <div
       className="group relative"
@@ -59,9 +75,13 @@ function HomeProductCard({
       <div className="relative">
         <Link to={`/products/${product.id}`} className="relative aspect-[3/4] overflow-hidden bg-white block">
           <img
-            src={isHovered ? secondaryImage : primaryImage}
+            src={isHovered ? secondaryImage.src : primaryImage.src}
             alt={product.title}
             className="w-full h-full object-cover transition-all duration-500"
+            onError={(event) => handleImageError(
+              event,
+              isHovered ? secondaryImage.fallbackSrc : primaryImage.fallbackSrc
+            )}
           />
           <button
             type="button"
@@ -194,10 +214,22 @@ type FeaturedCollabProps = {
 };
 
 function FeaturedCollab({ product }: FeaturedCollabProps) {
-  const imageUrl = product.images?.[0]?.image_url || '';
+  const image = getProductImageSource(product);
+  const imageUrl = image?.src || IMAGE_CONFIG.PLACEHOLDER;
   const title = product.title;
   const description = product.description || '';
   const productLink = `/products/${product.id}`;
+
+  const handleImageError = (event: React.SyntheticEvent<HTMLImageElement>) => {
+    const img = event.currentTarget;
+    if (image?.fallbackSrc && img.dataset.fallbackApplied !== 'true') {
+      img.dataset.fallbackApplied = 'true';
+      img.src = image.fallbackSrc;
+      return;
+    }
+    img.src = IMAGE_CONFIG.PLACEHOLDER;
+    img.onerror = null;
+  };
 
   return (
     <section className="w-full bg-[var(--color-page-bg)]">
@@ -239,6 +271,7 @@ function FeaturedCollab({ product }: FeaturedCollabProps) {
               src={imageUrl}
               alt={title}
               className="w-full h-full object-cover"
+              onError={handleImageError}
             />
           </div>
         </div>
@@ -282,10 +315,10 @@ function FeaturedCollabSkeleton() {
 function CategoryStrip() {
   const categories = useMemo(
     () => [
-      { name: 'Gowns', image: '/images/gown-category-image.svg' },
-      { name: 'Hand stitched', image: '/images/demo-image-3.svg' },
-      { name: 'Strong Construction', image: '/images/strong-construction-category-image.svg' },
-      { name: 'Cotton', image: '/images/cotton-category-image.svg' },
+      { name: 'Dresses', image: '/images/gown-category-image.svg' },
+      { name: 'Occasion wear', image: '/images/demo-image-3.svg' },
+      { name: 'Workwear', image: '/images/strong-construction-category-image.svg' },
+      { name: 'Casual', image: '/images/cotton-category-image.svg' },
     ],
     []
   );
@@ -446,12 +479,12 @@ export default function Home() {
   }, [featuredProducts, rotationMinutes]);
 
   const featuredProduct = featuredProducts[featuredIndex];
-  const featuredImageUrl = featuredProduct?.images?.[0]?.image_url || '';
+  const featuredImage = featuredProduct ? getProductImageSource(featuredProduct) : null;
+  const featuredImageUrl = featuredImage?.src || '';
   const showFeaturedSkeleton =
     featuredLoading ||
     !featuredProduct ||
-    !featuredProduct.images?.length ||
-    !featuredProduct.images?.[0]?.image_url ||
+    !featuredImageUrl ||
     !featuredReady;
 
   useEffect(() => {

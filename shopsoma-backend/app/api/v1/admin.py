@@ -5,7 +5,7 @@ from typing import Optional, List
 from uuid import UUID
 from fastapi import APIRouter, HTTPException, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, or_, delete
+from sqlalchemy import select, func, or_, delete, update
 from sqlalchemy.orm import selectinload
 from datetime import datetime
 from decimal import Decimal
@@ -14,7 +14,18 @@ import os
 
 from app.core.database import get_db
 from app.api.dependencies import get_current_admin
-from app.models.product import Product, ProductVariant, ProductImage, ProductStatus, ModerationStatus
+from app.models.product import (
+    ModerationStatus,
+    Product,
+    ProductImage,
+    ProductStatus,
+    ProductVariant,
+    SizeStock,
+    Variation,
+)
+from app.models.stock_payment_persistence import coordinate_catalog_write
+from app.models.payment import Payment
+from app.models.setting import Setting
 from app.models.user import User, UserRole
 from app.models.vendor import Vendor, KYCStatus
 from app.models.vendor_application import VendorApplication
@@ -23,6 +34,75 @@ from app.schemas.common import PaginatedResponse
 from app.schemas.product import ProductApprovalRequest, ProductRejectionRequest, ProductFeatureUpdate
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+
+
+def _resolve_admin_order_currency(order, payments=None) -> str:
+    payment_rows = list(payments or [])
+    if payment_rows:
+        latest_payment = max(
+            payment_rows,
+            key=lambda payment: payment.created_at or datetime.min,
+        )
+        if latest_payment.currency:
+            return latest_payment.currency.upper()
+
+    return (getattr(order, "currency", None) or "NGN").upper()
+
+
+def _normalize_admin_currency(currency: Optional[str]) -> str:
+    normalized = (currency or "NGN").upper()
+    return normalized if normalized in {"NGN", "USD"} else "NGN"
+
+
+async def _get_admin_usd_to_ngn_rate(db: AsyncSession) -> Decimal:
+    result = await db.execute(
+        select(Setting).where(Setting.key == "exchange_rate_usd_to_ngn")
+    )
+    rate_setting = result.scalar_one_or_none()
+    if not rate_setting:
+        return Decimal("833")
+
+    try:
+        return Decimal(str(rate_setting.value))
+    except (ArithmeticError, ValueError, TypeError):
+        return Decimal("833")
+
+
+def _convert_admin_currency(amount: Decimal, from_currency: str, to_currency: str, usd_to_ngn_rate: Decimal) -> Decimal:
+    source = _normalize_admin_currency(from_currency)
+    target = _normalize_admin_currency(to_currency)
+
+    if source == target:
+        return amount
+    if source == "USD" and target == "NGN":
+        return (amount * usd_to_ngn_rate).quantize(Decimal("0.01"))
+    if source == "NGN" and target == "USD":
+        return (amount / usd_to_ngn_rate).quantize(Decimal("0.01"))
+    return amount
+
+
+def _should_use_product_currency_for_legacy_admin_item(item, display_currency: str) -> bool:
+    product = getattr(item, "product", None)
+    if not product or not getattr(product, "currency", None):
+        return False
+
+    product_currency = _normalize_admin_currency(product.currency)
+    item_currency = _normalize_admin_currency(getattr(item, "currency", None) or display_currency)
+    if product_currency == display_currency or item_currency != display_currency:
+        return False
+
+    product_base_price = getattr(product, "base_price", None)
+    if product_base_price is None:
+        return False
+
+    item_unit_price = Decimal(str(item.unit_price or "0"))
+    item_subtotal = Decimal(str(item.subtotal or "0"))
+    expected_subtotal = (Decimal(str(product_base_price)) * Decimal(item.quantity or 0)).quantize(Decimal("0.01"))
+
+    return (
+        item_unit_price.quantize(Decimal("0.01")) == Decimal(str(product_base_price)).quantize(Decimal("0.01"))
+        or item_subtotal.quantize(Decimal("0.01")) == expected_subtotal
+    )
 
 
 @router.post("/seed-database")
@@ -165,6 +245,8 @@ async def reset_products(db: AsyncSession = Depends(get_db)):
     Delete all products, variants, and images (for testing)
     """
     try:
+        # This test-only, unbounded reset intentionally fails closed when any
+        # Lane 2A-4B stock/payment subject exists; it has no safe bounded key set.
         # Delete in correct order due to foreign keys
         await db.execute("DELETE FROM product_images")
         await db.execute("DELETE FROM product_variants")
@@ -1342,7 +1424,10 @@ async def list_all_products(
                 "sku": product.sku,
                 "base_price": float(product.base_price),
                 "compare_at_price": float(product.compare_at_price) if product.compare_at_price else None,
+                "currency": product.currency,
                 "total_stock": product.total_stock,
+                "made_to_order": product.made_to_order,
+                "made_to_order_timeline": product.made_to_order_timeline,
                 "status": product.status.value,
                 "is_featured": product.is_featured,
                 "moderation_status": product.moderation_status.value,
@@ -1584,6 +1669,39 @@ async def delete_product(
 
     product_title = product.title
 
+    variant_ids = list(
+        (
+            await db.execute(
+                select(ProductVariant.id).where(ProductVariant.product_id == product_id)
+            )
+        ).scalars()
+    )
+    variation_ids = list(
+        (
+            await db.execute(
+                select(Variation.id).where(Variation.product_id == product_id)
+            )
+        ).scalars()
+    )
+    size_stock_ids = (
+        list(
+            (
+                await db.execute(
+                    select(SizeStock.id).where(SizeStock.variation_id.in_(variation_ids))
+                )
+            ).scalars()
+        )
+        if variation_ids
+        else []
+    )
+    await coordinate_catalog_write(
+        db,
+        product_ids=[product_id],
+        variation_ids=variation_ids,
+        product_variant_ids=variant_ids,
+        size_stock_ids=size_stock_ids,
+    )
+
     try:
         # Delete associated product images
         await db.execute(
@@ -1653,7 +1771,10 @@ async def get_product(
         "sku": product.sku,
         "base_price": float(product.base_price),
         "compare_at_price": float(product.compare_at_price) if product.compare_at_price else None,
+        "currency": product.currency,
         "total_stock": product.total_stock,
+        "made_to_order": product.made_to_order,
+        "made_to_order_timeline": product.made_to_order_timeline,
         "status": product.status.value,
         "moderation_status": product.moderation_status.value,
         "is_featured": product.is_featured,
@@ -1831,6 +1952,8 @@ async def list_categories(
 
     Requires admin role
     """
+    from app.models.category import Category as ProductCategory
+
     result = await db.execute(select(ProductCategory).order_by(ProductCategory.display_order))
     categories = result.scalars().all()
 
@@ -2304,6 +2427,16 @@ async def update_featured_products(
 
     Requires admin role
     """
+    current_featured_ids = list(
+        (
+            await db.execute(select(Product.id).where(Product.is_featured.is_(True)))
+        ).scalars()
+    )
+    await coordinate_catalog_write(
+        db,
+        product_ids=set(current_featured_ids).union(product_ids),
+    )
+
     # Clear existing featured status
     await db.execute(
         update(Product)
@@ -2351,7 +2484,7 @@ async def list_orders(
     query = (
         select(Order, User)
         .join(User, Order.customer_id == User.id)
-        .options(selectinload(Order.items))
+        .options(selectinload(Order.items), selectinload(Order.payments))
     )
 
     # Apply filters
@@ -2402,6 +2535,7 @@ async def list_orders(
 
     orders_data = []
     for order, user in orders_with_users:
+        display_currency = _resolve_admin_order_currency(order, order.payments)
         vendor_ids = {item.vendor_id for item in order.items}
         item_count = sum(item.quantity for item in order.items)
 
@@ -2415,6 +2549,7 @@ async def list_orders(
                     "email": user.email,
                 },
                 "total_amount": float(order.total_amount),
+                "currency": display_currency,
                 "payment_status": order.payment_status,
                 "fulfillment_status": order.fulfillment_status,
                 "created_at": order.created_at.isoformat() if order.created_at else None,
@@ -2528,6 +2663,7 @@ async def get_order(
         select(Order, User)
         .join(User, Order.customer_id == User.id)
         .where(Order.id == order_id)
+        .options(selectinload(Order.payments))
     )
     order_with_user = result.first()
 
@@ -2535,6 +2671,8 @@ async def get_order(
         raise HTTPException(status_code=404, detail="Order not found")
 
     order, user = order_with_user
+    display_currency = _resolve_admin_order_currency(order, order.payments)
+    usd_to_ngn_rate = await _get_admin_usd_to_ngn_rate(db)
 
     # Get order items
     items_result = await db.execute(
@@ -2555,17 +2693,41 @@ async def get_order(
             "full_name": user.full_name,
             "email": user.email,
         },
+        "currency": display_currency,
         "total_amount": float(order.total_amount),
         "payment_status": order.payment_status,
         "fulfillment_status": order.fulfillment_status,
         "created_at": order.created_at.isoformat() if order.created_at else None,
         "items": [
             {
+                **(
+                    lambda source_currency: {
+                        "unit_price": float(
+                            _convert_admin_currency(
+                                Decimal(str(item.unit_price or "0")),
+                                source_currency,
+                                display_currency,
+                                usd_to_ngn_rate,
+                            )
+                        ),
+                        "subtotal": float(
+                            _convert_admin_currency(
+                                Decimal(str(item.subtotal or "0")),
+                                source_currency,
+                                display_currency,
+                                usd_to_ngn_rate,
+                            )
+                        ),
+                    }
+                )(
+                    _normalize_admin_currency(item.product.currency)
+                    if _should_use_product_currency_for_legacy_admin_item(item, display_currency)
+                    else _normalize_admin_currency(getattr(item, "currency", None) or display_currency)
+                ),
                 "id": str(item.id),
                 "product_title": item.product_title,
                 "quantity": item.quantity,
-                "unit_price": float(item.unit_price),
-                "subtotal": float(item.subtotal),
+                "currency": display_currency,
                 "fulfillment_status": item.fulfillment_status,
                 "product_image_url": (
                     (
@@ -3313,6 +3475,7 @@ async def export_orders(
     """
     import csv
     from io import StringIO
+    from app.models.order import Order
 
     # Get all orders
     result = await db.execute(select(Order))

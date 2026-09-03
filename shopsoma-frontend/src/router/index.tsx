@@ -427,6 +427,30 @@ const router = createBrowserRouter([
     ),
   },
   {
+    path: ROUTES.VENDOR_PAYOUT_INFO,
+    element: (
+      <ErrorBoundary>
+        <Suspense fallback={<Loading fullScreen message="Loading settings..." />}>
+          <VendorLayout>
+            <BrandInfoSettings />
+          </VendorLayout>
+        </Suspense>
+      </ErrorBoundary>
+    ),
+  },
+  {
+    path: ROUTES.VENDOR_SECURITY,
+    element: (
+      <ErrorBoundary>
+        <Suspense fallback={<Loading fullScreen message="Loading settings..." />}>
+          <VendorLayout>
+            <BrandInfoSettings />
+          </VendorLayout>
+        </Suspense>
+      </ErrorBoundary>
+    ),
+  },
+  {
     path: ROUTES.VENDOR_EARNINGS,
     element: (
       <ErrorBoundary>

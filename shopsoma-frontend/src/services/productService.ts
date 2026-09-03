@@ -1,6 +1,62 @@
 import api from './api';
 import type { Product, ImageUploadResponse, ImageBatchUploadResponse } from '../types';
 
+export interface CreateProductImagePayload {
+  image_url: string;
+  thumbnail_url?: string;
+  alt_text?: string;
+  display_order?: number;
+  is_primary?: boolean;
+}
+
+export interface CreateProductVariantPayload {
+  size?: string;
+  color?: string;
+  color_hex?: string;
+  price: number;
+  stock: number;
+  sku?: string;
+  is_available?: boolean;
+}
+
+export interface CreateProductVariationPayload {
+  title: string;
+  type?: string;
+  color_hex?: string;
+  price?: number;
+  sale_price?: number;
+  images?: string[];
+  is_active?: boolean;
+  sizes: Array<{
+    size: string;
+    stock: number;
+  }>;
+}
+
+export interface CreateProductPayload {
+  title: string;
+  description?: string;
+  category_id?: string;
+  collection_id?: string;
+  sku?: string;
+  base_price: number;
+  compare_at_price?: number;
+  currency?: 'NGN' | 'USD';
+  total_stock?: number;
+  status?: 'draft' | 'active' | 'inactive' | 'archived';
+  is_featured?: boolean;
+  product_type?: 'single' | 'variable';
+  made_to_order?: boolean;
+  made_to_order_timeline?: string;
+  care_instructions?: string;
+  fabric_composition?: string;
+  meta_title?: string;
+  meta_description?: string;
+  images?: CreateProductImagePayload[];
+  variants?: CreateProductVariantPayload[];
+  variations?: CreateProductVariationPayload[];
+}
+
 export interface ProductListParams {
   page?: number;
   page_size?: number;
@@ -39,7 +95,7 @@ export const productService = {
 
   // Get vendor product by ID (vendor only)
   async getVendorProduct(productId: string): Promise<Product> {
-    const response = await api.get(`/products/${productId}`, { timeout: 20000 });
+    const response = await api.get(`/vendor/products/${productId}`, { timeout: 20000 });
     return response.data;
   },
 
@@ -88,14 +144,15 @@ export const productService = {
     vendorId: string,
     params?: ProductListParams
   ): Promise<ProductListResponse> {
-    const response = await api.get('/products', {
-      params: { vendor_id: vendorId, ...params },
+    void vendorId;
+    const response = await api.get('/vendor/products', {
+      params,
     });
     return response.data;
   },
 
   // Create product (vendor only)
-  async createProduct(productData: Partial<Product> | FormData): Promise<Product> {
+  async createProduct(productData: CreateProductPayload | FormData): Promise<Product> {
     const config = productData instanceof FormData
       ? { timeout: 20000, headers: { 'Content-Type': 'multipart/form-data' } }
       : { timeout: 20000 };
@@ -120,7 +177,7 @@ export const productService = {
   // Duplicate product (vendor only)
   async duplicateProduct(productId: string): Promise<Product> {
     // Fetch the original product
-    const original = await this.getProduct(productId);
+    const original = await this.getVendorProduct(productId);
 
     // Create a copy with modified title and reset certain fields
     const duplicateData: Partial<Product> = {
@@ -178,6 +235,7 @@ export const productService = {
       headers: {
         'Content-Type': 'multipart/form-data',
       },
+      timeout: 60000,
     });
     return response.data;
   },
@@ -201,6 +259,7 @@ export const productService = {
       headers: {
         'Content-Type': 'multipart/form-data',
       },
+      timeout: 60000,
     });
     return response.data;
   },

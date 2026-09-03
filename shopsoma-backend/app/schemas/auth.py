@@ -70,6 +70,11 @@ class Token(BaseModel):
     expires_in: int
 
 
+class RefreshTokenRequest(BaseModel):
+    """Refresh token request schema"""
+    refresh_token: str
+
+
 class TokenData(BaseModel):
     """Token payload data"""
     user_id: UUID

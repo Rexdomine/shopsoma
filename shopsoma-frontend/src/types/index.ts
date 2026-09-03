@@ -231,6 +231,8 @@ export interface CollectionProductSummary {
   status: string;
   base_price: number;
   total_stock: number;
+  made_to_order: boolean;
+  made_to_order_timeline?: string;
   created_at: string;
   image_url?: string | null;
   collection_name?: string | null;

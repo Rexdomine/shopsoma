@@ -129,7 +129,7 @@ class VariationBase(BaseModel):
 
 class VariationCreate(VariationBase):
     """Schema for creating variation"""
-    sizes: List[SizeStockCreate] = Field(..., min_length=1, description="Size stock array (at least 1 size required)")
+    sizes: List[SizeStockCreate] = Field(default_factory=list, description="Optional size stock array")
 
 
 class VariationUpdate(BaseModel):
@@ -316,6 +316,15 @@ class ProductCreate(ProductBase):
                 raise ValueError("Only one image can be marked as primary")
         return v
 
+    @model_validator(mode="after")
+    def validate_made_to_order(self) -> "ProductCreate":
+        """Made-to-order products should rely on timeline, not stock."""
+        if self.made_to_order:
+            if not self.made_to_order_timeline or not self.made_to_order_timeline.strip():
+                raise ValueError("Made-to-order products require a production timeline")
+            self.total_stock = 0
+        return self
+
 
 class ProductUpdate(BaseModel):
     """Schema for updating product"""
@@ -350,6 +359,15 @@ class ProductUpdate(BaseModel):
                 raise ValueError("Price cannot exceed 999,999.99")
             return round(v, 2)
         return v
+
+    @model_validator(mode="after")
+    def validate_made_to_order(self) -> "ProductUpdate":
+        """Keep made-to-order updates internally consistent."""
+        if self.made_to_order is True:
+            if not self.made_to_order_timeline or not self.made_to_order_timeline.strip():
+                raise ValueError("Made-to-order products require a production timeline")
+            self.total_stock = 0
+        return self
 
 
 class ProductResponse(ProductBase):

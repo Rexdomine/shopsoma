@@ -31,8 +31,31 @@ class TestProductCreate:
         assert data["title"] == product_data["title"]
         assert float(data["base_price"]) == product_data["base_price"]
         assert data["vendor_id"] == str(vendor_user["vendor"].id)
+        assert data["status"] == "draft"
         assert data["moderation_status"] == "pending"
         assert "id" in data
+
+    @pytest.mark.asyncio
+    async def test_create_product_defaults_to_non_public_state_even_if_vendor_submits_active(
+        self,
+        client: AsyncClient,
+        vendor_user,
+    ):
+        """New vendor products should not become storefront-visible on creation."""
+        response = await client.post(
+            "/api/v1/products",
+            json={
+                "title": "Queued Product",
+                "base_price": 120.00,
+                "status": "active",
+            },
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 201
+        data = response.json()
+        assert data["status"] == "active"
+        assert data["moderation_status"] == "pending"
 
     @pytest.mark.asyncio
     async def test_create_product_with_variants(self, client: AsyncClient, vendor_user):
@@ -141,6 +164,39 @@ class TestVendorProductView:
         assert data["vendor_id"] == str(vendor_user["vendor"].id)
 
     @pytest.mark.asyncio
+    async def test_vendor_can_list_pending_products(
+        self,
+        client: AsyncClient,
+        vendor_user,
+        db_session: AsyncSession,
+    ):
+        """Vendor dashboard should retain access to pending products."""
+        from app.models.product import Product, ProductStatus, ModerationStatus
+        import uuid
+
+        pending_product = Product(
+            id=uuid.uuid4(),
+            vendor_id=vendor_user["vendor"].id,
+            title="Pending Vendor Product",
+            base_price=70.00,
+            total_stock=4,
+            status=ProductStatus.DRAFT,
+            moderation_status=ModerationStatus.PENDING,
+        )
+        db_session.add(pending_product)
+        await db_session.commit()
+
+        response = await client.get(
+            "/api/v1/vendor/products",
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        returned_ids = {item["id"] for item in data["products"]}
+        assert str(pending_product.id) in returned_ids
+
+    @pytest.mark.asyncio
     async def test_create_product_unauthorized(self, client: AsyncClient):
         """Test product creation without authentication"""
         product_data = {
@@ -182,6 +238,36 @@ class TestProductList:
         assert "total" in data
         assert "page" in data
         assert data["total"] >= 1
+
+    @pytest.mark.asyncio
+    async def test_list_products_public_excludes_unapproved_products(
+        self,
+        client: AsyncClient,
+        vendor_user,
+        db_session: AsyncSession,
+    ):
+        """Pending moderation products must not appear on storefront listings."""
+        from app.models.product import Product, ProductStatus, ModerationStatus
+        import uuid
+
+        hidden_product = Product(
+            id=uuid.uuid4(),
+            vendor_id=vendor_user["vendor"].id,
+            title="Pending Storefront Product",
+            base_price=89.00,
+            total_stock=2,
+            status=ProductStatus.ACTIVE,
+            moderation_status=ModerationStatus.PENDING,
+        )
+        db_session.add(hidden_product)
+        await db_session.commit()
+
+        response = await client.get("/api/v1/products")
+
+        assert response.status_code == 200
+        data = response.json()
+        returned_ids = {item["id"] for item in data["products"]}
+        assert str(hidden_product.id) not in returned_ids
 
     @pytest.mark.asyncio
     async def test_list_products_with_search(self, client: AsyncClient, sample_product):
@@ -335,6 +421,69 @@ class TestProductRetrieve:
         response = await client.get(f"/api/v1/products/{draft_product.id}")
         assert response.status_code == 404  # Should not be visible
 
+    @pytest.mark.asyncio
+    async def test_get_pending_active_product_as_public_returns_not_found(
+        self,
+        client: AsyncClient,
+        vendor_user,
+        db_session: AsyncSession,
+    ):
+        """Pending moderation should block direct public detail access even if status is active."""
+        from app.models.product import Product, ProductStatus, ModerationStatus
+        import uuid
+
+        pending_product = Product(
+            id=uuid.uuid4(),
+            vendor_id=vendor_user["vendor"].id,
+            title="Pending Detail Product",
+            base_price=50.00,
+            total_stock=3,
+            status=ProductStatus.ACTIVE,
+            moderation_status=ModerationStatus.PENDING,
+        )
+        db_session.add(pending_product)
+        await db_session.commit()
+
+        response = await client.get(f"/api/v1/products/{pending_product.id}")
+
+        assert response.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_approved_product_becomes_public_after_admin_approval(
+        self,
+        client: AsyncClient,
+        vendor_user,
+        admin_user,
+    ):
+        """Admin approval should be the transition that makes a product public."""
+        create_response = await client.post(
+            "/api/v1/products",
+            json={
+                "title": "Approval Flow Product",
+                "base_price": 65.00,
+            },
+            headers=vendor_user["headers"],
+        )
+        assert create_response.status_code == 201
+        created = create_response.json()
+        product_id = created["id"]
+
+        public_before = await client.get(f"/api/v1/products/{product_id}")
+        assert public_before.status_code == 404
+
+        approval_response = await client.put(
+            f"/api/v1/admin/products/{product_id}/approve",
+            json={"notes": "Approved for storefront"},
+            headers=admin_user["headers"],
+        )
+        assert approval_response.status_code == 200
+
+        public_after = await client.get(f"/api/v1/products/{product_id}")
+        assert public_after.status_code == 200
+        approved = public_after.json()
+        assert approved["moderation_status"] == "approved"
+        assert approved["status"] == "active"
+
 
 class TestProductUpdate:
     """Test product update endpoint"""
@@ -357,6 +506,53 @@ class TestProductUpdate:
         data = response.json()
         assert data["title"] == update_data["title"]
         assert float(data["base_price"]) == update_data["base_price"]
+
+    @pytest.mark.asyncio
+    async def test_update_single_product_stock_syncs_legacy_variant_stock(
+        self,
+        client: AsyncClient,
+        vendor_user,
+        db_session: AsyncSession,
+    ):
+        """Editing single-product stock should update the storefront variant stock source too."""
+        from app.models.product import Product, ProductVariant, ProductStatus, ModerationStatus, ProductType
+        import uuid
+
+        product = Product(
+            id=uuid.uuid4(),
+            vendor_id=vendor_user["vendor"].id,
+            title="Single Stock Sync Product",
+            base_price=80.00,
+            total_stock=0,
+            status=ProductStatus.ACTIVE,
+            moderation_status=ModerationStatus.APPROVED,
+            product_type=ProductType.SINGLE,
+        )
+        db_session.add(product)
+        await db_session.flush()
+
+        variant = ProductVariant(
+            id=uuid.uuid4(),
+            product_id=product.id,
+            size="M",
+            price=80.00,
+            stock=0,
+            is_available=False,
+        )
+        db_session.add(variant)
+        await db_session.commit()
+
+        response = await client.put(
+            f"/api/v1/products/{product.id}",
+            json={"total_stock": 7},
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_stock"] == 7
+        assert data["variants"][0]["stock"] == 7
+        assert data["variants"][0]["is_available"] is True
 
     @pytest.mark.asyncio
     async def test_update_product_unauthorized(self, client: AsyncClient, sample_product):
@@ -424,8 +620,17 @@ class TestProductDelete:
     """Test product deletion endpoint"""
 
     @pytest.mark.asyncio
-    async def test_delete_product_success(self, client: AsyncClient, vendor_user, sample_product):
+    async def test_delete_product_success(
+        self,
+        client: AsyncClient,
+        vendor_user,
+        sample_product,
+        db_session: AsyncSession,
+    ):
         """Test successful product deletion (soft delete)"""
+        from app.models.product import Product, ProductStatus
+        from sqlalchemy import select
+
         response = await client.delete(
             f"/api/v1/products/{sample_product.id}",
             headers=vendor_user["headers"]
@@ -433,14 +638,15 @@ class TestProductDelete:
 
         assert response.status_code == 204
 
-        # Verify product is archived
-        get_response = await client.get(
-            f"/api/v1/products/{sample_product.id}",
-            headers=vendor_user["headers"]
+        # Verify product is archived in persistence and hidden from the public catalog
+        archived_result = await db_session.execute(
+            select(Product).where(Product.id == sample_product.id)
         )
-        # Should still exist for vendor but be archived
-        assert get_response.status_code == 200
-        assert get_response.json()["status"] == "archived"
+        archived_product = archived_result.scalar_one()
+        assert archived_product.status == ProductStatus.ARCHIVED
+
+        public_response = await client.get(f"/api/v1/products/{sample_product.id}")
+        assert public_response.status_code == 404
 
     @pytest.mark.asyncio
     async def test_delete_product_unauthorized(self, client: AsyncClient, sample_product):

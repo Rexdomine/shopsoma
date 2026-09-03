@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { ArrowLeft, Edit2, Loader2, Shirt, Package, DollarSign, Tag, Calendar, Eye, Trash2, Copy } from 'lucide-react';
 import VendorSidebar from '../../components/vendor/VendorSidebar';
 import DeleteProductModal from '../../components/vendor/DeleteProductModal';
@@ -12,6 +12,8 @@ import CurrencySwitcher from '../../components/common/CurrencySwitcher';
 import { useCurrencyStore } from '../../store/currencyStore';
 import { formatPriceWithConversion } from '../../utils/pricing';
 
+type VendorSidebarPrimary = 'dashboard' | 'orders' | 'products' | 'collections' | 'marketing' | 'analytics' | 'earnings' | 'settings';
+
 function formatDate(dateStr: string) {
   const d = new Date(dateStr);
   const mm = String(d.getMonth() + 1).padStart(2, '0');
@@ -23,12 +25,21 @@ function formatDate(dateStr: string) {
 export default function VendorProductView() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
   const { toasts, hideToast, error, success } = useToast();
   const { currentCurrency, setCurrency, exchangeRates, fetchExchangeRate } = useCurrencyStore();
   const [product, setProduct] = useState<Product | null>(null);
   const [loading, setLoading] = useState(true);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const navigationState = location.state as {
+    returnTo?: string;
+    returnLabel?: string;
+    activePrimary?: VendorSidebarPrimary;
+  } | null;
+  const returnTo = navigationState?.returnTo || ROUTES.VENDOR_PRODUCTS;
+  const returnLabel = navigationState?.returnLabel || 'Back to Products';
+  const activePrimary = navigationState?.activePrimary || 'products';
 
   useEffect(() => {
     fetchExchangeRate();
@@ -128,7 +139,7 @@ export default function VendorProductView() {
     return (
       <div className="min-h-screen bg-[var(--color-page-bg)]">
         <div className="flex">
-          <VendorSidebar activePrimary="products" />
+          <VendorSidebar activePrimary={activePrimary} />
           <main className="flex-1 p-8">
             <div className="flex items-center justify-center py-20 text-gray-600 gap-3">
               <Loader2 className="h-6 w-6 animate-spin" />
@@ -153,6 +164,17 @@ export default function VendorProductView() {
     );
   };
 
+  const inventoryCount = product.total_stock ?? product.inventory_quantity ?? 0;
+  const fulfillmentLabel = product.made_to_order
+    ? product.made_to_order_timeline
+      ? `Made to order • ${product.made_to_order_timeline}`
+      : 'Made to order'
+    : inventoryCount > 0
+      ? inventoryCount < 5
+        ? `Low stock • ${inventoryCount} left`
+        : `Ready to ship • ${inventoryCount} in stock`
+      : 'Out of stock';
+
   return (
     <div className="min-h-screen bg-[var(--color-page-bg)]">
       <ToastContainer toasts={toasts} onClose={hideToast} />
@@ -164,7 +186,7 @@ export default function VendorProductView() {
         isDeleting={isDeleting}
       />
       <div className="flex">
-        <VendorSidebar activePrimary="products" />
+        <VendorSidebar activePrimary={activePrimary} />
 
         <main className="flex-1 p-8">
           {/* Header */}
@@ -172,9 +194,9 @@ export default function VendorProductView() {
             <div className="flex items-center gap-4">
               <button
                 type="button"
-                onClick={() => navigate(ROUTES.VENDOR_PRODUCTS)}
+                onClick={() => navigate(returnTo)}
                 className="p-2 rounded-lg border border-gray-300 bg-white hover:bg-gray-50 transition"
-                title="Back to products"
+                title={returnLabel}
               >
                 <ArrowLeft className="h-5 w-5 text-gray-600" />
               </button>
@@ -263,7 +285,7 @@ export default function VendorProductView() {
                   {/* Made to Order */}
                   {product.made_to_order && (
                     <div>
-                      <span className="inline-flex items-center gap-2 px-3 py-1 bg-blue-100 text-blue-800 text-xs font-semibold rounded-full">
+                      <span className="inline-flex items-center gap-2 px-3 py-1 bg-sky-50 text-sky-700 text-xs font-semibold rounded-full">
                         <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
                           <path d="M10 2a8 8 0 100 16 8 8 0 000-16zm1 11H9v-2h2v2zm0-4H9V5h2v4z"/>
                         </svg>
@@ -322,8 +344,17 @@ export default function VendorProductView() {
                           {variation.size_stocks && variation.size_stocks.length > 0 && (
                             <div className="flex flex-wrap gap-2">
                               {variation.size_stocks.map((sizeStock, sizeIdx) => (
-                                <span key={sizeIdx} className="inline-flex items-center gap-2 px-3 py-1 bg-gray-100 text-gray-700 rounded-full text-xs font-medium">
-                                  {sizeStock.size}: {sizeStock.stock} in stock
+                                <span
+                                  key={sizeIdx}
+                                  className={`inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-medium ${
+                                    product.made_to_order
+                                      ? 'bg-sky-50 text-sky-700'
+                                      : 'bg-gray-100 text-gray-700'
+                                  }`}
+                                >
+                                  {product.made_to_order
+                                    ? `${sizeStock.size} • Made to order`
+                                    : `${sizeStock.size}: ${sizeStock.stock} in stock`}
                                 </span>
                               ))}
                             </div>
@@ -393,14 +424,14 @@ export default function VendorProductView() {
                     </div>
                   )}
 
-                  {/* Stock */}
+                  {/* Fulfillment */}
                   <div className="flex items-center justify-between pt-4 border-t border-gray-200">
                     <span className="text-sm font-medium text-gray-700 flex items-center gap-2">
                       <Package className="h-4 w-4" />
-                      Total Stock
+                      {product.made_to_order ? 'Fulfillment' : 'Inventory'}
                     </span>
-                    <span className="text-sm font-semibold text-gray-900">
-                      {product.total_stock ?? product.inventory_quantity ?? 0}
+                    <span className={`text-sm font-semibold ${product.made_to_order ? 'text-sky-700' : 'text-gray-900'}`}>
+                      {fulfillmentLabel}
                     </span>
                   </div>
 
@@ -480,11 +511,11 @@ export default function VendorProductView() {
                   </button>
                   <button
                     type="button"
-                    onClick={() => navigate(ROUTES.VENDOR_PRODUCTS)}
+                    onClick={() => navigate(returnTo)}
                     className="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-gray-300 bg-white text-gray-700 px-4 py-2.5 text-sm font-medium hover:bg-gray-50 transition"
                   >
                     <ArrowLeft className="h-4 w-4" />
-                    Back to Products
+                    {returnLabel}
                   </button>
                 </div>
               </div>

@@ -11,6 +11,7 @@ import OrderFilters from '../../components/admin/OrderFilters';
 import BulkOrderActions from '../../components/admin/BulkOrderActions';
 import { useToast } from '../../hooks/useToast';
 import { useCurrency } from '../../hooks/useCurrency';
+import { formatPriceWithConversion } from '../../utils/pricing';
 import {
   getOrderStats,
   listOrders,
@@ -30,7 +31,7 @@ import { getAdminStatusLabel } from '../../utils/orderStatusMessages';
 export default function AdminOrders() {
   const navigate = useNavigate();
   const { toasts, hideToast, success, error, warning } = useToast();
-  const { currentCurrency, setCurrency, formatBasePrice } = useCurrency();
+  const { currentCurrency, setCurrency, exchangeRates } = useCurrency();
 
   const [stats, setStats] = useState<OrderStatsType | null>(null);
   const [orders, setOrders] = useState<OrderListItem[]>([]);
@@ -48,7 +49,8 @@ export default function AdminOrders() {
   // Filters
   const [filters, setFilters] = useState<OrderFilterParams>({});
 
-  const formatOrderAmount = (amount: number) => formatBasePrice(amount);
+  const formatOrderAmount = (amount: number, sourceCurrency: 'NGN' | 'USD') =>
+    formatPriceWithConversion(amount, sourceCurrency, currentCurrency, exchangeRates);
 
   // Load statistics
   const loadStats = useCallback(async () => {
@@ -322,7 +324,7 @@ export default function AdminOrders() {
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="text-sm font-medium text-gray-900">
-                          {formatOrderAmount(order.total_amount)}
+                          {formatOrderAmount(order.total_amount, order.currency)}
                         </div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">

@@ -272,7 +272,6 @@ class ShadowQuoteResult(BaseModel):
     class Config:
         from_attributes = True
 
-
 class DHLBookingRequest(BaseModel):
     intent_id: UUID
     package_id: UUID

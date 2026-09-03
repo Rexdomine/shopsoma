@@ -4,7 +4,7 @@ Authentication endpoints
 from datetime import datetime, timedelta
 import logging
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
+from fastapi import APIRouter, Body, Depends, HTTPException, status, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from uuid import UUID
@@ -31,6 +31,7 @@ from app.schemas.auth import (
     UserCreate,
     UserLogin,
     Token,
+    RefreshTokenRequest,
     UserResponse,
     MagicLinkRequest,
     MagicLinkVerify,
@@ -45,6 +46,7 @@ from app.schemas.auth import (
 from app.api.dependencies import get_current_user, get_current_active_user, get_optional_user
 from app.services.email_service import email_service
 from app.services.account_claim import queue_account_claim_email
+from app.services.commission import get_default_commission_rate
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 logger = logging.getLogger(__name__)
@@ -117,10 +119,12 @@ async def signup(
 
     # Create vendor profile if user is a vendor
     if new_user.role == UserRole.VENDOR:
+        default_commission_rate = await get_default_commission_rate(db)
         vendor_profile = Vendor(
             user_id=new_user.id,
             business_name=user_data.full_name,  # Use full_name as business_name initially
-            approved=True  # Auto-approve for demo
+            approved=True,  # Auto-approve for demo
+            commission_rate=default_commission_rate
         )
         db.add(vendor_profile)
         await db.commit()
@@ -458,7 +462,8 @@ async def confirm_password_reset(
 
 @router.post("/refresh", response_model=Token)
 async def refresh_access_token(
-    refresh_token: str,
+    refresh_data: Optional[RefreshTokenRequest] = Body(default=None),
+    refresh_token: Optional[str] = None,
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -466,7 +471,14 @@ async def refresh_access_token(
     """
     from app.core.security import decode_token
 
-    payload = decode_token(refresh_token)
+    token_value = refresh_data.refresh_token if refresh_data else refresh_token
+    if not token_value:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid refresh token"
+        )
+
+    payload = decode_token(token_value)
 
     if not payload or payload.get("type") != "refresh":
         raise HTTPException(

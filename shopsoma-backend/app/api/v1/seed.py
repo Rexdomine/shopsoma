@@ -4,14 +4,14 @@ Simple seeding endpoint - self-contained without external imports
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, text
-from datetime import datetime
 import uuid
 
 from app.core.database import get_db
-from app.models.product import Product, ProductVariant, ProductImage, ProductStatus, ModerationStatus
+from app.models.product import Product, ProductVariant, ProductImage, ModerationStatus
 from app.models.user import User, UserRole
 from app.models.vendor import Vendor, KYCStatus
 from app.core.security import get_password_hash
+from app.services.commission import DEFAULT_COMMISSION_RATE
 
 router = APIRouter(prefix="/seed", tags=["seed"])
 
@@ -45,7 +45,7 @@ async def test_vendor_creation(db: AsyncSession = Depends(get_db)):
             business_description="A test vendor business",
             kyc_status=KYCStatus.APPROVED,
             approved=True,
-            commission_rate=12.5
+            commission_rate=DEFAULT_COMMISSION_RATE
         )
         db.add(vendor)
         await db.commit()
@@ -142,7 +142,7 @@ async def initialize_database(db: AsyncSession = Depends(get_db)):
             business_description="Premier African fashion marketplace featuring authentic designs",
             kyc_status=KYCStatus.APPROVED,
             approved=True,
-            commission_rate=12.5
+            commission_rate=DEFAULT_COMMISSION_RATE
         )
         db.add(vendor)
         await db.flush()
@@ -331,12 +331,6 @@ async def initialize_database(db: AsyncSession = Depends(get_db)):
 
     except Exception as e:
         await db.rollback()
-        import traceback
-        error_details = {
-            "error": str(e),
-            "type": type(e).__name__,
-            "traceback": traceback.format_exc()
-        }
         raise HTTPException(status_code=500, detail=f"Seeding failed: {str(e)}")
 
 
@@ -346,6 +340,8 @@ async def reset_database(db: AsyncSession = Depends(get_db)):
     try:
         # Delete in correct order due to foreign keys
         await db.execute(text("DELETE FROM product_images"))
+        # This unrestricted destructive fixture reset has no bounded subject set;
+        # the stock/payment coordinator intentionally fails closed after Lane 2A-4B.
         await db.execute(text("DELETE FROM product_variants"))
         await db.execute(text("DELETE FROM products"))
         await db.execute(text("DELETE FROM vendors WHERE business_name = 'Shopsoma Demo Store' OR business_name = 'Test Business'"))

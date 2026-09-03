@@ -1,8 +1,11 @@
-# Render Blueprint for Shopsoma Staging Environment
-# This file defines infrastructure as code for deploying to Render
+# Render Blueprint for Shopsoma staging
+#
+# Notes:
+# - Staging/production should use object storage. Do not rely on local disk uploads.
+# - Checkout outbox delivery requires the managed key-value service, worker, and beat below.
+# - The outbox consumer performs internal fulfilment only; provider calls are not wired here.
 
 databases:
-  # PostgreSQL Database
   - name: shopsoma-staging-db
     plan: basic-256mb
     region: oregon
@@ -10,8 +13,13 @@ databases:
     user: shopsoma_user
 
 services:
+  - type: keyvalue
+    name: shopsoma-staging-celery-redis
+    plan: starter
+    region: oregon
+    maxmemoryPolicy: noeviction
+    ipAllowList: []
 
-  # Backend API (FastAPI)
   - type: web
     name: shopsoma-staging-api
     env: python
@@ -19,10 +27,11 @@ services:
     plan: starter
     branch: develop
     buildCommand: "cd shopsoma-backend && pip install -r requirements.txt"
-    startCommand: "cd shopsoma-backend && alembic upgrade heads && uvicorn app.main:app --host 0.0.0.0 --port $PORT"
+    startCommand: "cd shopsoma-backend && python run_checkout_prerequisite_deploy.py && uvicorn app.main:app --host 0.0.0.0 --port $PORT"
+    healthCheckPath: /api/v1/health
     envVars:
       - key: PYTHON_VERSION
-        value: 3.9.18
+        value: 3.11.11
       - key: DATABASE_URL
         fromDatabase:
           name: shopsoma-staging-db
@@ -37,13 +46,161 @@ services:
         value: 7
       - key: ENVIRONMENT
         value: staging
-      - key: ALLOWED_ORIGINS
-        value: https://shopsoma-staging.onrender.com,http://localhost:5173,http://localhost:5174
+      - key: DEBUG
+        value: false
+      - key: LOG_LEVEL
+        value: INFO
       - key: DATABASE_ECHO
         value: false
-    healthCheckPath: /api/v1/health
+      - key: FRONTEND_BASE_URL
+        value: https://shopsoma-staging.onrender.com
+      - key: ALLOWED_ORIGINS
+        value: https://shopsoma-staging.onrender.com,http://localhost:5173,http://localhost:5174
+      - key: RATE_LIMIT_ENABLED
+        value: true
+      - key: RATE_LIMIT_REQUESTS
+        value: 5
+      - key: RATE_LIMIT_WINDOW_SECONDS
+        value: 60
+      - key: USE_LOCAL_STORAGE
+        value: false
+      - key: ALLOW_LOCAL_STORAGE_IN_NON_DEV
+        value: false
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      - key: PAYSTACK_SECRET_KEY
+        sync: false
+      - key: SHIPBUBBLE_API_KEY
+        sync: false
+      - key: SHIPBUBBLE_WEBHOOK_SECRET
+        sync: false
+      - key: BREVO_API_KEY
+        sync: false
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: AWS_REGION
+        sync: false
+      - key: S3_BUCKET_NAME
+        sync: false
+      - key: S3_ENDPOINT_URL
+        sync: false
+      - key: CDN_BASE_URL
+        sync: false
 
-  # Frontend (React + Vite)
+  - type: worker
+    name: shopsoma-staging-checkout-outbox-worker
+    runtime: python
+    region: oregon
+    plan: starter
+    branch: develop
+    buildCommand: "cd shopsoma-backend && pip install -r requirements.txt"
+    startCommand: "cd shopsoma-backend && celery -A app.celery_app:celery_app worker --loglevel=info"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.11
+      - key: ENVIRONMENT
+        value: staging
+      - key: DATABASE_URL
+        fromDatabase:
+          name: shopsoma-staging-db
+          property: connectionString
+      - key: CELERY_BROKER_URL
+        fromService:
+          type: keyvalue
+          name: shopsoma-staging-celery-redis
+          property: connectionString
+      - key: CELERY_RESULT_BACKEND
+        fromService:
+          type: keyvalue
+          name: shopsoma-staging-celery-redis
+          property: connectionString
+      - key: SECRET_KEY
+        fromService:
+          type: web
+          name: shopsoma-staging-api
+          envVarKey: SECRET_KEY
+      - key: USE_LOCAL_STORAGE
+        value: false
+      - key: AWS_ACCESS_KEY_ID
+        fromService:
+          type: web
+          name: shopsoma-staging-api
+          envVarKey: AWS_ACCESS_KEY_ID
+      - key: AWS_SECRET_ACCESS_KEY
+        fromService:
+          type: web
+          name: shopsoma-staging-api
+          envVarKey: AWS_SECRET_ACCESS_KEY
+      - key: AWS_REGION
+        fromService:
+          type: web
+          name: shopsoma-staging-api
+          envVarKey: AWS_REGION
+      - key: S3_BUCKET_NAME
+        fromService:
+          type: web
+          name: shopsoma-staging-api
+          envVarKey: S3_BUCKET_NAME
+
+  - type: worker
+    name: shopsoma-staging-checkout-outbox-beat
+    runtime: python
+    region: oregon
+    plan: starter
+    branch: develop
+    buildCommand: "cd shopsoma-backend && pip install -r requirements.txt"
+    startCommand: "cd shopsoma-backend && celery -A app.celery_app:celery_app beat --loglevel=info"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.11
+      - key: ENVIRONMENT
+        value: staging
+      - key: DATABASE_URL
+        fromDatabase:
+          name: shopsoma-staging-db
+          property: connectionString
+      - key: CELERY_BROKER_URL
+        fromService:
+          type: keyvalue
+          name: shopsoma-staging-celery-redis
+          property: connectionString
+      - key: CELERY_RESULT_BACKEND
+        fromService:
+          type: keyvalue
+          name: shopsoma-staging-celery-redis
+          property: connectionString
+      - key: SECRET_KEY
+        fromService:
+          type: web
+          name: shopsoma-staging-api
+          envVarKey: SECRET_KEY
+      - key: USE_LOCAL_STORAGE
+        value: false
+      - key: AWS_ACCESS_KEY_ID
+        fromService:
+          type: web
+          name: shopsoma-staging-api
+          envVarKey: AWS_ACCESS_KEY_ID
+      - key: AWS_SECRET_ACCESS_KEY
+        fromService:
+          type: web
+          name: shopsoma-staging-api
+          envVarKey: AWS_SECRET_ACCESS_KEY
+      - key: AWS_REGION
+        fromService:
+          type: web
+          name: shopsoma-staging-api
+          envVarKey: AWS_REGION
+      - key: S3_BUCKET_NAME
+        fromService:
+          type: web
+          name: shopsoma-staging-api
+          envVarKey: S3_BUCKET_NAME
+
   - type: web
     name: shopsoma-staging
     env: static
@@ -73,6 +230,6 @@ services:
       - key: VITE_API_BASE_URL
         value: https://shopsoma-staging-api.onrender.com/api/v1
       - key: VITE_PAYSTACK_PUBLIC_KEY
-        value: pk_test_9547fa4bf30edfebb1f56b66784fb6a0cab1eebf
+        sync: false
       - key: VITE_STRIPE_PUBLISHABLE_KEY
-        value: pk_test_51SUke6R5eRmaz3M8mBnU2whLHSSa9RMfjdO0ZjppvBdH2NvXt9J84oiIr67CcIRcKgRlVTOJQOKAKCqLTT6TRJpd003YbmQSnX
+        sync: false

@@ -63,6 +63,7 @@ export interface OrderItemDetail {
   product_image_url?: string;
   variant_details?: Record<string, any>;
   unit_price: number;
+  currency: 'NGN' | 'USD';
   quantity: number;
   subtotal: number;
   commission_rate: number;
@@ -91,11 +92,19 @@ export interface PickupInfo {
   admin_notes?: string;
 }
 
+export interface ReadyPackageInfo {
+  id: string;
+  current_version: number;
+  hub_id: string;
+  ready_at: string;
+}
+
 export interface OrderListItem {
   id: string;
   order_number: string;
   customer: CustomerInfo;
   total_amount: number;
+  currency: 'NGN' | 'USD';
   payment_status: PaymentStatus;
   fulfillment_status: FulfillmentStatus;
   created_at: string;
@@ -107,6 +116,7 @@ export interface OrderDetail {
   id: string;
   order_number: string;
   customer: CustomerInfo;
+  currency: 'NGN' | 'USD';
   shipping_address?: AddressInfo;
   billing_address?: AddressInfo;
   subtotal: number;
@@ -129,6 +139,7 @@ export interface OrderDetail {
   cancellation_reason?: string;
   items: OrderItemDetail[];
   pickups: PickupInfo[];
+  ready_packages: ReadyPackageInfo[];
 }
 
 export interface OrderStats {
@@ -212,6 +223,27 @@ export interface CancelOrderRequest {
   cancellation_reason: string;
   refund?: boolean;
   admin_notes?: string;
+}
+
+export interface ShadowQuoteOffer {
+  provider_product_code: string;
+  service_label: string;
+  currency: string;
+  total_amount: number;
+}
+
+export interface ShadowQuoteResult {
+  order_id: string;
+  shadow_quote_id: string;
+  result_kind: string;
+  environment: string;
+  adapter_version: string;
+  provider: string;
+  offers_count: number;
+  offers_redacted: ShadowQuoteOffer[];
+  gate_status: Record<string, boolean | string>;
+  quoted_at: string;
+  note: string;
 }
 
 // ============================================================================
@@ -315,6 +347,24 @@ export const processRefund = async (
   data: RefundRequest
 ): Promise<{ success: boolean; message: string; order_id: string; order_number: string; refund_amount: number }> => {
   const response = await api.post(`/admin/orders/${orderId}/refund`, data);
+  return response.data;
+};
+
+/**
+ * Run admin-only DHL sandbox shadow quote
+ */
+export const runShadowQuote = async (
+  orderId: string,
+  packageId?: string
+): Promise<ShadowQuoteResult> => {
+  const response = await api.post<ShadowQuoteResult>(
+    `/admin/orders/${orderId}/shadow-quote`,
+    undefined,
+    {
+      params: packageId ? { package_id: packageId } : undefined,
+      timeout: 0,
+    }
+  );
   return response.data;
 };
 

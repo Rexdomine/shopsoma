@@ -7,6 +7,7 @@ import ToastContainer from '../../components/ui/ToastContainer';
 import { ROUTES } from '../../config/constants';
 import { useToast } from '../../hooks/useToast';
 import { productService } from '../../services/productService';
+import type { CreateProductPayload } from '../../services/productService';
 import { categoryService } from '../../services/categoryService';
 import { collectionService } from '../../services/collectionService';
 import type { Category, Collection } from '../../types';
@@ -17,6 +18,8 @@ import type { Currency } from '../../store/currencyStore';
 // EU Sizing: Numeric sizes (32-50)
 type SizeOption = 'XXXL' | 'XXL' | 'XL' | 'L' | 'M' | 'S' | 'XS' | 'XXS' | '4' | '6' | '8' | '10' | '12' | '14' | '16' | '18' | '20' | '22' | '32' | '34' | '36' | '38' | '40' | '42' | '44' | '46' | '48' | '50';
 type SizingSystem = 'US Sizing' | 'UK Sizing' | 'EU Sizing';
+type VariationMode = 'Size' | 'Color';
+type ColorMode = 'solid' | 'multi' | 'none';
 
 interface ProductImage {
   id: string;
@@ -35,15 +38,65 @@ interface ProductVariation {
 interface DetailedVariation {
   id: string;
   name: string;
-  type: string;
+  type: VariationMode;
   hasDifferentPricing: boolean;
   price: string;
   salesPrice: string;
-  color: string;
+  colorMode: ColorMode;
+  colorLabel: string;
+  colorHex: string;
+  colorStock: string;
   sizingSystem: SizingSystem;
   selectedSizes: SizeOption[];
   sizeStock: Record<SizeOption, string>;
   images: ProductImage[];
+}
+
+interface ProductImageFramePreviewProps {
+  imageSrc?: string;
+  alt: string;
+  compact?: boolean;
+}
+
+function ProductImageFramePreview({
+  imageSrc,
+  alt,
+  compact = false,
+}: ProductImageFramePreviewProps) {
+  return (
+    <div className="rounded-3xl border border-[#105E53]/10 bg-white/90 p-4 shadow-sm shadow-[#105E53]/5">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#105E53]">
+          PDP frame
+        </p>
+        <span className="rounded-full bg-[#105E53]/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-[#105E53]">
+          4:5
+        </span>
+      </div>
+      <div
+        className={`mt-4 mx-auto aspect-[4/5] w-full overflow-hidden rounded-2xl border border-[#105E53]/15 bg-[linear-gradient(135deg,#f8faf9_0%,#eef4f2_100%)] shadow-inner ${
+          compact ? 'max-w-[132px]' : 'max-w-[190px]'
+        }`}
+      >
+        {imageSrc ? (
+          <img
+            src={imageSrc}
+            alt={alt}
+            className="h-full w-full object-contain object-center"
+          />
+        ) : (
+          <div className="flex h-full w-full items-center justify-center px-4 text-center">
+            <span className="font-serif text-xs leading-relaxed text-[#105E53]/55">
+              Your first upload previews here.
+            </span>
+          </div>
+        )}
+      </div>
+      <p className="mt-3 text-center text-[11px] leading-relaxed text-gray-500">
+        Check product centering before publishing.
+      </p>
+    </div>
+  );
 }
 
 
@@ -66,6 +119,8 @@ export default function VendorProductAdd() {
   const [productDescription, setProductDescription] = useState('');
   const [materials, setMaterials] = useState('');
   const [collectionId, setCollectionId] = useState('');
+  const [colorMode, setColorMode] = useState<ColorMode>('solid');
+  const [colorLabel, setColorLabel] = useState('');
   const [color, setColor] = useState('#000000'); // Now stores hex value
   const [colorHex, setColorHex] = useState('#000000'); // Hex input field
   const [selectedSizes, setSelectedSizes] = useState<SizeOption[]>([]);
@@ -107,12 +162,15 @@ export default function VendorProductAdd() {
 
   // Variation modal form state (controlled inputs)
   const [variationName, setVariationName] = useState('');
-  const [variationType, setVariationType] = useState('');
+  const [variationType, setVariationType] = useState<VariationMode>('Color');
   const [variationHasDifferentPricing, setVariationHasDifferentPricing] = useState(false);
   const [variationPrice, setVariationPrice] = useState('');
   const [variationSalesPrice, setVariationSalesPrice] = useState('');
+  const [variationColorMode, setVariationColorMode] = useState<ColorMode>('solid');
+  const [variationColorLabel, setVariationColorLabel] = useState('');
   const [variationColor, setVariationColor] = useState('#000000');
   const [variationColorHex, setVariationColorHex] = useState('#000000');
+  const [variationColorStock, setVariationColorStock] = useState('');
   const [variationSizingSystem, setVariationSizingSystem] = useState<SizingSystem>('US Sizing');
   const [variationSelectedSizes, setVariationSelectedSizes] = useState<SizeOption[]>([]);
   const [variationSizeStock, setVariationSizeStock] = useState<Record<SizeOption, string>>({} as Record<SizeOption, string>);
@@ -128,6 +186,11 @@ export default function VendorProductAdd() {
   const [showSizingDropdown, setShowSizingDropdown] = useState(false);
 
   const materialOptions = ['Leather', 'Cotton', 'Wire', 'Silk', 'Wool', 'Polyester', 'Denim'];
+  const colorModeOptions: Array<{ value: ColorMode; label: string }> = [
+    { value: 'solid', label: 'Solid Color' },
+    { value: 'multi', label: 'Multi-color / Pattern' },
+    { value: 'none', label: 'No Color' },
+  ];
 
   // E-commerce standard size mappings
   const SIZE_MAPPINGS: Record<SizingSystem, SizeOption[]> = {
@@ -230,8 +293,11 @@ export default function VendorProductAdd() {
       setVariationHasDifferentPricing(editingVariation.hasDifferentPricing);
       setVariationPrice(editingVariation.price);
       setVariationSalesPrice(editingVariation.salesPrice);
-      setVariationColor(editingVariation.color);
-      setVariationColorHex(editingVariation.color);
+      setVariationColorMode(editingVariation.colorMode);
+      setVariationColorLabel(editingVariation.colorLabel);
+      setVariationColor(editingVariation.colorHex);
+      setVariationColorHex(editingVariation.colorHex);
+      setVariationColorStock(editingVariation.colorStock);
       setVariationSizingSystem(editingVariation.sizingSystem);
       setVariationSelectedSizes(editingVariation.selectedSizes);
       setVariationSizeStock(editingVariation.sizeStock);
@@ -239,18 +305,85 @@ export default function VendorProductAdd() {
     } else {
       // Reset form for new variation
       setVariationName('');
-      setVariationType('');
+      setVariationType('Color');
       setVariationHasDifferentPricing(false);
       setVariationPrice('');
       setVariationSalesPrice('');
+      setVariationColorMode('solid');
+      setVariationColorLabel('');
       setVariationColor('#000000');
       setVariationColorHex('#000000');
+      setVariationColorStock('');
       setVariationSizingSystem('US Sizing');
       setVariationSelectedSizes([]);
       setVariationSizeStock({} as Record<SizeOption, string>);
       setVariationImages([]);
     }
   }, [editingVariation, showVariationModal]);
+
+  useEffect(() => {
+    if (variationType === 'Color') {
+      setVariationSelectedSizes([]);
+      setVariationSizeStock({} as Record<SizeOption, string>);
+      return;
+    }
+    setVariationColorMode('solid');
+    setVariationColorLabel('');
+    setVariationColor('#000000');
+    setVariationColorHex('#000000');
+    setVariationColorStock('');
+  }, [variationType]);
+
+  useEffect(() => {
+    if (colorMode === 'none') {
+      setColorLabel('No color');
+      return;
+    }
+
+    if (colorLabel === 'No color') {
+      setColorLabel('');
+    }
+  }, [colorMode, colorLabel]);
+
+  useEffect(() => {
+    if (variationType !== 'Color') {
+      return;
+    }
+
+    if (variationColorMode === 'solid') {
+      return;
+    }
+
+    if (variationColorMode === 'multi') {
+      if (!variationColorLabel.trim()) {
+        setVariationColorLabel('Multi-color');
+      }
+    } else {
+      setVariationColorLabel('No color');
+    }
+
+    setVariationColor('#000000');
+    setVariationColorHex('#000000');
+  }, [variationColorMode, variationColorLabel, variationType]);
+
+  const getResolvedColorLabel = (mode: ColorMode, label: string) => {
+    if (mode === 'none') {
+      return 'No color';
+    }
+    if (mode === 'multi') {
+      return label.trim() || 'Multi-color';
+    }
+    return label.trim();
+  };
+
+  useEffect(() => {
+    if (!madeToOrder) {
+      return;
+    }
+    setStockAmount('');
+    setVariationColorStock('');
+    setVariationSizeStock({} as Record<SizeOption, string>);
+  }, [madeToOrder]);
 
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -530,26 +663,36 @@ export default function VendorProductAdd() {
   // Validate and save variation
   const handleSaveVariation = () => {
     // Validation
-    if (!variationName.trim()) {
+    if (variationType === 'Size' && !variationName.trim()) {
       warning('Variation name is required');
       return;
     }
 
-    if (!variationType) {
-      warning('Please select a variation type');
-      return;
-    }
+    if (variationType === 'Size') {
+      if (variationSelectedSizes.length === 0) {
+        warning('Please select at least one size');
+        return;
+      }
 
-    if (variationSelectedSizes.length === 0) {
-      warning('Please select at least one size');
-      return;
-    }
+      if (!madeToOrder) {
+        for (const size of variationSelectedSizes) {
+          const stockValue = variationSizeStock[size];
+          if (stockValue && (isNaN(parseInt(stockValue)) || parseInt(stockValue) < 0)) {
+            warning(`Invalid stock value for size ${size}`);
+            return;
+          }
+        }
+      }
+    } else {
+      const resolvedVariationColorLabel = getResolvedColorLabel(variationColorMode, variationColorLabel);
 
-    // Validate stock values
-    for (const size of variationSelectedSizes) {
-      const stockValue = variationSizeStock[size];
-      if (stockValue && (isNaN(parseInt(stockValue)) || parseInt(stockValue) < 0)) {
-        warning(`Invalid stock value for size ${size}`);
+      if (!resolvedVariationColorLabel) {
+        warning('Please provide a color label for this variation');
+        return;
+      }
+
+      if (!madeToOrder && variationColorStock && (isNaN(parseInt(variationColorStock)) || parseInt(variationColorStock) < 0)) {
+        warning('Invalid stock value for color');
         return;
       }
     }
@@ -575,12 +718,15 @@ export default function VendorProductAdd() {
 
     const newVariation: DetailedVariation = {
       id: editingVariation ? editingVariation.id : Date.now().toString(),
-      name: variationName,
+      name: variationType === 'Color' ? getResolvedColorLabel(variationColorMode, variationColorLabel) : variationName,
       type: variationType,
       hasDifferentPricing: variationHasDifferentPricing,
       price: variationPrice,
       salesPrice: variationSalesPrice,
-      color: variationColor,
+      colorMode: variationColorMode,
+      colorLabel: getResolvedColorLabel(variationColorMode, variationColorLabel),
+      colorHex: variationColorMode === 'solid' ? variationColorHex : '#000000',
+      colorStock: variationColorStock,
       sizingSystem: variationSizingSystem,
       selectedSizes: variationSelectedSizes,
       sizeStock: variationSizeStock,
@@ -621,84 +767,167 @@ export default function VendorProductAdd() {
       return;
     }
 
+    if (madeToOrder && !estimatedProductionTime.trim()) {
+      warning('Estimated production time is required for made-to-order items', 'Missing info');
+      return;
+    }
+
+    const resolvedSingleColorLabel =
+      productType === 'single' ? getResolvedColorLabel(colorMode, colorLabel) : '';
+
+    if (productType === 'single' && !resolvedSingleColorLabel) {
+      warning('Please provide a color option for this product', 'Missing info');
+      return;
+    }
+
     if (productType === 'single' && selectedSizes.length === 0) {
       warning('Please select at least one size', 'Missing info');
       return;
     }
 
-    const imageUploads = variations.flatMap((variation) => variation.images);
-    const hasUploadedImages = imageUploads.some((image) => image.uploaded && image.imageUrl);
+    const productImageUploads = variations.flatMap((variation) => variation.images);
+    const variationImageUploads = detailedVariations.flatMap((variation) => variation.images);
 
-    if (!hasUploadedImages) {
-      warning('At least one image is required', 'Missing info');
+    if (productType === 'single' && !productImageUploads.some((image) => image.uploaded && image.imageUrl)) {
+      warning('At least one product image is required', 'Missing info');
       return;
+    }
+
+    if (productType === 'variable') {
+      if (detailedVariations.length === 0) {
+        warning('Add at least one variation before publishing a variable product', 'Missing info');
+        return;
+      }
+
+      if (!variationImageUploads.some((image) => image.uploaded && image.imageUrl)) {
+        warning('At least one variation image is required', 'Missing info');
+        return;
+      }
     }
 
     setIsSubmitting(true);
 
     try {
-      const formData = new FormData();
-      formData.append('title', productName);
-      formData.append('description', productDescription);
-      formData.append('base_price', productPrice);
-      if (salesPrice) {
-        formData.append('sale_price', salesPrice);
-      }
-      formData.append('currency', productCurrency);
-      formData.append('primary_category_id', primaryCategoryId);
-      if (subcategoryId) {
-        formData.append('subcategory_id', subcategoryId);
-      }
-      if (childCategoryId) {
-        formData.append('child_category_id', childCategoryId);
-      }
-      if (collectionId) {
-        formData.append('collection_id', collectionId);
-      }
-      formData.append('product_type', productType);
-      formData.append('materials', materials);
-      formData.append('product_care', productCare);
-      formData.append('color', colorHex);
-      if (estimatedProductionTime) {
-        formData.append('estimated_production_time', estimatedProductionTime);
-      }
-      formData.append('made_to_order', String(madeToOrder));
-      formData.append('is_sustainable', String(isSustainable));
+      const parsedProductPrice = parseFloat(productPrice);
+      const parsedSalesPrice = salesPrice ? parseFloat(salesPrice) : undefined;
+      const basePrice =
+        parsedSalesPrice && parsedSalesPrice > 0 && parsedSalesPrice < parsedProductPrice
+          ? parsedSalesPrice
+          : parsedProductPrice;
+      const compareAtPrice =
+        parsedSalesPrice && parsedSalesPrice > 0 && parsedSalesPrice < parsedProductPrice
+          ? parsedProductPrice
+          : undefined;
+      const parsedStockAmount = parseInt(stockAmount || '0', 10) || 0;
+      const shouldTrackStock = !madeToOrder;
+      const resolvedCategoryId = childCategoryId || subcategoryId || primaryCategoryId;
+      const uploadedImages =
+        productType === 'single'
+          ? productImageUploads.filter((image) => image.uploaded && image.imageUrl)
+          : Array.from(
+              new Map(
+                variationImageUploads
+                  .filter((image) => image.uploaded && image.imageUrl)
+                  .map((image) => [image.imageUrl!, image])
+              ).values()
+            );
+
+      const payload: CreateProductPayload = {
+        title: productName.trim(),
+        description: productDescription.trim(),
+        category_id: resolvedCategoryId,
+        collection_id: collectionId || undefined,
+        base_price: basePrice,
+        compare_at_price: compareAtPrice,
+        currency: productCurrency,
+        total_stock: shouldTrackStock ? parsedStockAmount : 0,
+        status: 'draft',
+        is_featured: false,
+        product_type: productType,
+        made_to_order: madeToOrder,
+        made_to_order_timeline: estimatedProductionTime.trim() || undefined,
+        care_instructions: productCare || undefined,
+        fabric_composition: materials || undefined,
+        images: uploadedImages.map((image, index) => ({
+          image_url: image.imageUrl!,
+          thumbnail_url: image.thumbnailUrl,
+          alt_text: productName.trim() || undefined,
+          display_order: index,
+          is_primary: index === 0,
+        })),
+      };
 
       if (productType === 'single') {
-        formData.append('sizes', selectedSizes.join(','));
-        formData.append('stock_amount', stockAmount || '0');
-      }
-
-      const transformedVariations = detailedVariations.map((variation) => ({
-        name: variation.name,
-        type: variation.type,
-        price: variation.hasDifferentPricing ? variation.price : productPrice,
-        sale_price: variation.hasDifferentPricing ? variation.salesPrice : salesPrice,
-        color: variation.color,
-        sizes: variation.selectedSizes,
-        size_stocks: variation.selectedSizes.map((size) => ({
+        payload.variants = selectedSizes.map((size) => ({
           size,
-          stock: parseInt(variation.sizeStock[size] || '0', 10),
-        })),
-        images: variation.images
-          .filter((image) => image.uploaded && image.imageUrl)
-          .map((image) => image.imageUrl),
-      }));
+          color: resolvedSingleColorLabel,
+          color_hex: colorMode === 'solid' ? colorHex || undefined : undefined,
+          price: basePrice,
+          stock: shouldTrackStock ? parsedStockAmount : 0,
+          is_available: shouldTrackStock ? parsedStockAmount > 0 : true,
+        }));
+      } else {
+        const variantPayload: NonNullable<CreateProductPayload['variants']> = [];
+        const variationPayload: NonNullable<CreateProductPayload['variations']> = [];
 
-      if (productType === 'variable') {
-        formData.append('variations', JSON.stringify(transformedVariations));
-      }
+        detailedVariations.forEach((variation) => {
+          const variationRegularPrice = variation.price ? parseFloat(variation.price) : parsedProductPrice;
+          const variationSales = variation.salesPrice ? parseFloat(variation.salesPrice) : undefined;
+          const variationBasePrice =
+            variation.hasDifferentPricing && variationSales && variationSales > 0 && variationSales < variationRegularPrice
+              ? variationSales
+              : variation.hasDifferentPricing && variationRegularPrice > 0
+                ? variationRegularPrice
+                : basePrice;
+          const variationCompareAtPrice =
+            variation.hasDifferentPricing && variationSales && variationSales > 0 && variationSales < variationRegularPrice
+              ? variationRegularPrice
+              : undefined;
 
-      imageUploads
-        .filter((image) => image.uploaded && image.imageUrl)
-        .forEach((image) => {
-          if (image.imageUrl) {
-            formData.append('images', image.imageUrl);
+          if (variation.type === 'Color') {
+            const colorStock = shouldTrackStock ? parseInt(variation.colorStock || '0', 10) || 0 : 0;
+            variationPayload.push({
+              title: variation.colorLabel,
+              type: variation.colorMode,
+              color_hex: variation.colorMode === 'solid' ? variation.colorHex || undefined : undefined,
+              price: variationBasePrice,
+              sale_price: variationCompareAtPrice,
+              images: variation.images
+                .filter((image) => image.uploaded && image.imageUrl)
+                .map((image) => image.imageUrl!),
+              is_active: true,
+              sizes: [],
+            });
+            variantPayload.push({
+              color: variation.colorLabel,
+              color_hex: variation.colorMode === 'solid' ? variation.colorHex || undefined : undefined,
+              price: variationBasePrice,
+              stock: colorStock,
+              is_available: shouldTrackStock ? colorStock > 0 : true,
+            });
+            return;
           }
+
+          variation.selectedSizes.forEach((size) => {
+            const sizeStock = shouldTrackStock ? parseInt(variation.sizeStock[size] || '0', 10) || 0 : 0;
+            variantPayload.push({
+              size,
+              price: variationBasePrice,
+              stock: sizeStock,
+              is_available: shouldTrackStock ? sizeStock > 0 : true,
+            });
+          });
         });
 
-      await productService.createProduct(formData);
+        if (variationPayload.length > 0) {
+          payload.variations = variationPayload;
+        }
+        if (variantPayload.length > 0) {
+          payload.variants = variantPayload;
+        }
+      }
+
+      await productService.createProduct(payload);
 
       success('Product submitted for review. We will notify you once it is approved.', 'Submitted');
       navigate(ROUTES.VENDOR_PRODUCTS);
@@ -1104,31 +1333,73 @@ export default function VendorProductAdd() {
                     </div>
                   </div>
 
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Color *
-                    </label>
-                    <div className="flex items-center gap-3">
-                      <input
-                        type="color"
-                        value={color}
-                        onChange={handleMainColorPickerChange}
-                        className="w-12 h-12 rounded-lg border border-gray-200 cursor-pointer"
-                      />
-                      <input
-                        type="text"
-                        value={colorHex}
-                        onChange={handleMainColorHexChange}
-                        placeholder="#000000"
-                        className="flex-1 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
-                      />
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Color Option *
+                      </label>
+                      <select
+                        value={colorMode}
+                        onChange={(e) => setColorMode(e.target.value as ColorMode)}
+                        className="w-full rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
+                      >
+                        {colorModeOptions.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
                     </div>
+
+                    {(colorMode === 'solid' || colorMode === 'multi') && (
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          Color Label *
+                        </label>
+                        <input
+                          type="text"
+                          value={colorLabel}
+                          onChange={(e) => setColorLabel(e.target.value)}
+                          placeholder={colorMode === 'solid' ? 'E.g., Black' : 'E.g., Multi-color / Ankara Print'}
+                          className="w-full rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
+                        />
+                      </div>
+                    )}
+
+                    {colorMode === 'solid' && (
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          Solid Color Swatch
+                        </label>
+                        <div className="flex items-center gap-3">
+                          <input
+                            type="color"
+                            value={color}
+                            onChange={handleMainColorPickerChange}
+                            className="w-12 h-12 rounded-lg border border-gray-200 cursor-pointer"
+                          />
+                          <input
+                            type="text"
+                            value={colorHex}
+                            onChange={handleMainColorHexChange}
+                            placeholder="#000000"
+                            className="flex-1 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    {colorMode === 'none' && (
+                      <p className="rounded-lg border border-dashed border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-500">
+                        Customers will see this item as <span className="font-medium text-gray-700">No color</span>.
+                      </p>
+                    )}
                   </div>
 
                   <div className="grid grid-cols-2 gap-4">
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-2">
-                        Estimated Production Time
+                        Estimated Production Time {madeToOrder ? '*' : ''}
                       </label>
                       <input
                         type="text"
@@ -1136,7 +1407,13 @@ export default function VendorProductAdd() {
                         onChange={(e) => setEstimatedProductionTime(e.target.value)}
                         className="w-full rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
                         placeholder="E.g., 2-3 weeks"
+                        required={madeToOrder}
                       />
+                      {madeToOrder && (
+                        <p className="mt-2 text-xs text-[#105E53]">
+                          Required for made-to-order pieces so customers know the production timeline.
+                        </p>
+                      )}
                     </div>
 
                     <div>
@@ -1163,9 +1440,19 @@ export default function VendorProductAdd() {
                         min="0"
                         value={stockAmount}
                         onChange={(e) => setStockAmount(e.target.value)}
-                        className="w-full rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
-                        placeholder="0"
+                        className={`w-full rounded-lg border px-4 py-3 text-sm transition ${
+                          madeToOrder
+                            ? 'border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed'
+                            : 'border-gray-200 bg-gray-50 focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20'
+                        }`}
+                        placeholder={madeToOrder ? 'Disabled for made-to-order' : '0'}
+                        disabled={madeToOrder}
                       />
+                      <p className="mt-2 text-xs text-gray-500">
+                        {madeToOrder
+                          ? 'Inventory tracking is disabled for made-to-order products. Use production time instead.'
+                          : 'Use stock amount only for ready-to-ship inventory.'}
+                      </p>
                     </div>
                   )}
 
@@ -1263,71 +1550,145 @@ export default function VendorProductAdd() {
             </div>
 
             <div className="space-y-6">
-              <div className="bg-white rounded-lg border border-gray-200 p-6">
-                <h2 className="text-lg font-semibold text-gray-900 mb-6">Product Images</h2>
-
-                <div className="space-y-4">
-                  {/* Hidden file input */}
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept="image/*"
-                    multiple
-                    className="hidden"
-                    onChange={handleImageUpload}
-                  />
-
-                  {/* Image grid */}
-                  {currentVarImages.length > 0 && (
-                    <div className="grid grid-cols-4 gap-3">
-                      {currentVarImages.map((image) => (
-                        <div key={image.id} className="relative group aspect-square">
-                          <img
-                            src={image.preview}
-                            alt="Product"
-                            className="w-full h-full object-cover rounded-lg"
-                          />
-                          {!image.uploaded && (
-                            <div className="absolute inset-0 bg-black/50 rounded-lg flex items-center justify-center">
-                              <div className="w-6 h-6 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                            </div>
-                          )}
-                          {image.uploaded && (
-                            <div className="absolute top-2 left-2 p-1 bg-green-500 rounded-full">
-                              <Check className="h-3 w-3 text-white" />
-                            </div>
-                          )}
-                          <button
-                            type="button"
-                            onClick={() => removeImage(image.id)}
-                            className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition flex items-center justify-center rounded-lg"
-                          >
-                            <Trash2 className="h-5 w-5 text-white" />
-                          </button>
-                        </div>
-                      ))}
+              <div className="overflow-hidden rounded-2xl border border-[#105E53]/10 bg-white shadow-sm shadow-[#105E53]/5">
+                <div className="border-b border-[#105E53]/10 bg-[linear-gradient(135deg,#f7faf8_0%,#eef5f2_100%)] px-6 py-5">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-[#105E53]">
+                        Product media
+                      </p>
+                      <h2 className="mt-2 text-lg font-semibold text-gray-950">Product Images</h2>
+                      <p className="mt-2 max-w-2xl text-sm leading-6 text-gray-600">
+                        {productType === 'single'
+                          ? 'Upload the main product images shoppers will see first. Use clean, centered photography so the PDP gallery feels editorial.'
+                          : 'Variable products use variation images only. Add media inside each variation to avoid duplicate galleries.'}
+                      </p>
                     </div>
-                  )}
+                    <span className="inline-flex w-fit rounded-full border border-[#105E53]/15 bg-white/80 px-3 py-1 text-xs font-medium text-[#105E53]">
+                      4:5 recommended
+                    </span>
+                  </div>
+                </div>
 
-                  {/* Upload button */}
-                  <button
-                    type="button"
-                    onClick={() => fileInputRef.current?.click()}
-                    disabled={isUploading}
-                    className="w-full border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-[#105E53] hover:bg-[#105E53]/5 transition disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    {isUploading ? (
-                      <span className="inline-flex flex-col items-center gap-2">
-                        <div className="w-8 h-8 border-2 border-gray-400 border-t-[#105E53] rounded-full animate-spin mx-auto mb-2" />
-                        <p className="text-sm text-gray-600">Uploading... {Math.round(uploadProgress)}%</p>
-                      </span>
-                    ) : (
-                      <span className="inline-flex flex-col items-center gap-2">
-                        <Upload className="w-8 h-8 text-gray-400 mx-auto mb-2" />
-                        <p className="text-sm text-gray-600">Click to upload product images</p>
-                      </span>
+                <div className="p-6">
+                  <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_230px]">
+                    <div className="rounded-3xl border border-[#105E53]/10 bg-[#105E53]/5 p-5">
+                      <p className="text-sm font-semibold text-[#105E53]">
+                        Image standard
+                      </p>
+                      <p className="mt-2 text-sm leading-6 text-gray-600">
+                        Use a portrait 4:5 image and keep the product centered in frame.
+                      </p>
+                      <div className="mt-4 grid gap-2 text-xs text-gray-600 sm:grid-cols-3">
+                        <div className="rounded-2xl bg-white/80 p-3">
+                          <p className="font-semibold text-gray-900">Ratio</p>
+                          <p className="mt-1">4:5</p>
+                        </div>
+                        <div className="rounded-2xl bg-white/80 p-3">
+                          <p className="font-semibold text-gray-900">Recommended</p>
+                          <p className="mt-1">1600 × 2000 px</p>
+                        </div>
+                        <div className="rounded-2xl bg-white/80 p-3">
+                          <p className="font-semibold text-gray-900">Minimum</p>
+                          <p className="mt-1">1280 × 1600 px</p>
+                        </div>
+                      </div>
+                      <p className="mt-4 border-t border-[#105E53]/10 pt-4 text-xs leading-5 text-gray-500">
+                        Correct dimensions alone do not guarantee a perfect display. Check that the product is not pushed too far left, right, top, or bottom.
+                      </p>
+                    </div>
+                    <ProductImageFramePreview
+                      imageSrc={productType === 'single' ? currentVarImages[0]?.preview : undefined}
+                      alt="Product page image preview"
+                    />
+                  </div>
+
+                  <div className="mt-6 space-y-4">
+                    {/* Hidden file input */}
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      className="hidden"
+                      onChange={handleImageUpload}
+                    />
+
+                    {/* Image grid */}
+                    {productType === 'single' && currentVarImages.length > 0 && (
+                      <div className="rounded-3xl border border-gray-200 bg-gray-50/70 p-3">
+                        <div className="mb-3 flex items-center justify-between px-1">
+                          <p className="text-sm font-medium text-gray-900">Uploaded gallery</p>
+                          <p className="text-xs text-gray-500">{currentVarImages.length} image{currentVarImages.length === 1 ? '' : 's'}</p>
+                        </div>
+                        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4">
+                          {currentVarImages.map((image, index) => (
+                            <div key={image.id} className="relative group aspect-square overflow-hidden rounded-2xl bg-white shadow-sm">
+                              <img
+                                src={image.preview}
+                                alt="Product"
+                                className="w-full h-full object-cover transition duration-300 group-hover:scale-105"
+                              />
+                              {!image.uploaded && (
+                                <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
+                                  <div className="w-6 h-6 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                                </div>
+                              )}
+                              {index === 0 && image.uploaded && (
+                                <div className="absolute left-2 top-2 rounded-full bg-white/95 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#105E53] shadow-sm">
+                                  Cover
+                                </div>
+                              )}
+                              {image.uploaded && (
+                                <div className="absolute right-2 top-2 p-1 bg-green-500 rounded-full shadow-sm">
+                                  <Check className="h-3 w-3 text-white" />
+                                </div>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => removeImage(image.id)}
+                                className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition flex items-center justify-center"
+                              >
+                                <Trash2 className="h-5 w-5 text-white" />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
                     )}
-                  </button>
+
+                    {/* Upload button */}
+                    {productType === 'single' ? (
+                      <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        disabled={isUploading}
+                        className="w-full rounded-3xl border border-dashed border-[#105E53]/30 bg-white p-8 text-center shadow-sm transition hover:border-[#105E53] hover:bg-[#105E53]/5 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {isUploading ? (
+                          <span className="inline-flex flex-col items-center gap-2">
+                            <div className="w-8 h-8 border-2 border-gray-400 border-t-[#105E53] rounded-full animate-spin mx-auto mb-2" />
+                            <p className="text-sm text-gray-600">Uploading... {Math.round(uploadProgress)}%</p>
+                          </span>
+                        ) : (
+                          <span className="inline-flex flex-col items-center gap-2">
+                            <span className="flex h-12 w-12 items-center justify-center rounded-full bg-[#105E53] text-white shadow-sm">
+                              <Upload className="w-5 h-5" />
+                            </span>
+                            <span className="text-sm font-semibold text-gray-900">Upload product images</span>
+                            <span className="text-xs text-gray-500">JPG, PNG, WebP, or GIF. Add multiple angles for better buyer confidence.</span>
+                          </span>
+                        )}
+                      </button>
+                    ) : (
+                      <div className="w-full rounded-3xl border border-dashed border-gray-300 bg-gray-50 p-8 text-center">
+                        <p className="text-sm font-medium text-gray-700">Featured image disabled for variable products</p>
+                        <p className="mt-2 text-sm text-gray-500">
+                          Upload images inside each variation. The product gallery will be generated from those variation images.
+                        </p>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
 
@@ -1358,14 +1719,26 @@ export default function VendorProductAdd() {
                         >
                           <div className="flex-1">
                             <div className="flex items-center gap-3">
-                              <div
-                                className="w-6 h-6 rounded-full border border-gray-300"
-                                style={{ backgroundColor: variation.color }}
-                              />
+                              {variation.type === 'Color' && variation.colorMode === 'solid' ? (
+                                <div
+                                  className="w-6 h-6 rounded-full border border-gray-300"
+                                  style={{ backgroundColor: variation.colorHex }}
+                                />
+                              ) : variation.type === 'Color' ? (
+                                <span className="rounded-full border border-gray-200 bg-gray-50 px-3 py-1 text-xs font-medium text-gray-600">
+                                  {variation.colorLabel}
+                                </span>
+                              ) : (
+                                <div className="w-6 h-6 rounded-full border border-dashed border-gray-300 bg-gray-50" />
+                              )}
                               <div>
-                                <p className="font-medium text-gray-900">{variation.name}</p>
+                                <p className="font-medium text-gray-900">
+                                  {variation.type === 'Color' ? variation.colorLabel : variation.name}
+                                </p>
                                 <p className="text-sm text-gray-500">
-                                  {variation.type} • {variation.selectedSizes.join(', ')} • Stock: {Object.values(variation.sizeStock).reduce((acc, val) => acc + (parseInt(val) || 0), 0)}
+                                  {variation.type} • {variation.type === 'Size'
+                                    ? `${variation.selectedSizes.join(', ')} • Stock: ${Object.values(variation.sizeStock).reduce((acc, val) => acc + (parseInt(val) || 0), 0)}`
+                                    : `Stock: ${parseInt(variation.colorStock || '0', 10) || 0}`}
                                 </p>
                               </div>
                             </div>
@@ -1440,13 +1813,13 @@ export default function VendorProductAdd() {
                       {/* Variation Name */}
                       <div>
                         <label className="block text-sm font-medium text-gray-700 mb-2">
-                          Variation Name *
+                          {variationType === 'Color' ? 'Internal Variation Name' : 'Variation Name *'}
                         </label>
                         <input
                           type="text"
                           value={variationName}
                           onChange={(e) => setVariationName(e.target.value)}
-                          placeholder="E.g., Red Large"
+                          placeholder={variationType === 'Color' ? 'Optional internal name' : 'E.g., Red Large'}
                           className="w-full rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
                         />
                       </div>
@@ -1458,14 +1831,11 @@ export default function VendorProductAdd() {
                         </label>
                         <select
                           value={variationType}
-                          onChange={(e) => setVariationType(e.target.value)}
+                          onChange={(e) => setVariationType(e.target.value as VariationMode)}
                           className="w-full rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
                         >
-                          <option value="">Select type</option>
                           <option value="Color">Color</option>
                           <option value="Size">Size</option>
-                          <option value="Material">Material</option>
-                          <option value="Style">Style</option>
                         </select>
                       </div>
 
@@ -1524,25 +1894,88 @@ export default function VendorProductAdd() {
                       </div>
 
                       {/* Color Selector */}
+                      <div className="space-y-4">
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-2">
+                            Color Option
+                          </label>
+                          <select
+                            value={variationColorMode}
+                            onChange={(e) => setVariationColorMode(e.target.value as ColorMode)}
+                            disabled={variationType === 'Size'}
+                            className="w-full rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            {colorModeOptions.map((option) => (
+                              <option key={option.value} value={option.value}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        {variationType === 'Color' && variationColorMode !== 'none' && (
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                              Color Label *
+                            </label>
+                            <input
+                              type="text"
+                              value={variationColorLabel}
+                              onChange={(e) => setVariationColorLabel(e.target.value)}
+                              placeholder={variationColorMode === 'solid' ? 'E.g., Black' : 'E.g., Multi-color / Mixed Print'}
+                              className="w-full rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
+                            />
+                          </div>
+                        )}
+
+                        {variationType === 'Color' && variationColorMode === 'solid' && (
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                              Solid Color Swatch
+                            </label>
+                            <div className="flex items-center gap-3">
+                              <input
+                                type="color"
+                                value={variationColor}
+                                onChange={handleColorPickerChange}
+                                className="w-12 h-12 rounded-lg border border-gray-200 cursor-pointer"
+                              />
+                              <input
+                                type="text"
+                                value={variationColorHex}
+                                onChange={handleColorHexChange}
+                                placeholder="#000000"
+                                className="flex-1 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
+                              />
+                            </div>
+                          </div>
+                        )}
+
+                        {variationType === 'Color' && variationColorMode === 'none' && (
+                          <p className="rounded-lg border border-dashed border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-500">
+                            Customers will see this option as <span className="font-medium text-gray-700">No color</span>.
+                          </p>
+                        )}
+                      </div>
+
                       <div>
                         <label className="block text-sm font-medium text-gray-700 mb-2">
-                          Color Selector
+                          Stock per Color
                         </label>
-                        <div className="flex items-center gap-3">
-                          <input
-                            type="color"
-                            value={variationColor}
-                            onChange={handleColorPickerChange}
-                            className="w-12 h-12 rounded-lg border border-gray-200 cursor-pointer"
-                          />
-                          <input
-                            type="text"
-                            value={variationColorHex}
-                            onChange={handleColorHexChange}
-                            placeholder="#000000"
-                            className="flex-1 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
-                          />
-                        </div>
+                        <input
+                          type="number"
+                          min="0"
+                          value={variationColorStock}
+                          onChange={(e) => setVariationColorStock(e.target.value)}
+                          disabled={variationType === 'Size' || madeToOrder}
+                          placeholder={madeToOrder ? 'Disabled for made-to-order' : '0'}
+                          className="w-full rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                        />
+                        {madeToOrder && (
+                          <p className="mt-2 text-xs text-gray-500">
+                            Stock tracking is off for made-to-order variations.
+                          </p>
+                        )}
                       </div>
 
                       {/* Variation Sizing System */}
@@ -1554,7 +1987,8 @@ export default function VendorProductAdd() {
                           <button
                             type="button"
                             onClick={() => setShowSizingDropdown(!showSizingDropdown)}
-                            className="w-full rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-left flex items-center justify-between"
+                            disabled={variationType === 'Color'}
+                            className="w-full rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-left flex items-center justify-between disabled:opacity-50 disabled:cursor-not-allowed"
                           >
                             <span className="text-gray-900">{variationSizingSystem}</span>
                             <ChevronDown className="w-4 h-4 text-gray-400" />
@@ -1591,11 +2025,12 @@ export default function VendorProductAdd() {
                             <button
                               key={size}
                               type="button"
+                              disabled={variationType === 'Color'}
                               className={`px-4 py-2 border rounded-lg text-sm font-medium transition ${
                                 variationSelectedSizes.includes(size)
                                   ? 'bg-[#105E53] text-white border-[#105E53]'
                                   : 'border-gray-300 hover:border-[#105E53] hover:bg-[#105E53]/5'
-                              }`}
+                              } disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:border-gray-300 disabled:hover:bg-transparent`}
                               onClick={() => toggleVariationSize(size)}
                             >
                               {size}
@@ -1619,18 +2054,54 @@ export default function VendorProductAdd() {
                                 placeholder="0"
                                 value={variationSizeStock[size] || ''}
                                 onChange={(e) => handleVariationStockChange(size, e.target.value)}
-                                className="w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
+                                disabled={variationType === 'Color' || madeToOrder}
+                                className="w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20 disabled:opacity-50 disabled:cursor-not-allowed"
                               />
                             </div>
                           ))}
                         </div>
+                        {madeToOrder && (
+                          <p className="mt-2 text-xs text-gray-500">
+                            Size-level inventory is disabled for made-to-order products.
+                          </p>
+                        )}
                       </div>
 
                       {/* Upload Images */}
                       <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-2">
-                          Upload Images
-                        </label>
+                        <div className="mb-3 flex items-start justify-between gap-3">
+                          <div>
+                            <label className="block text-sm font-medium text-gray-800">
+                              Variation Images
+                            </label>
+                            <p className="mt-1 text-xs text-gray-500">
+                              These images become the shopper-facing gallery for this variation.
+                            </p>
+                          </div>
+                          <span className="rounded-full bg-[#105E53]/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#105E53]">
+                            4:5
+                          </span>
+                        </div>
+                        <div className="mb-4 grid gap-4 sm:grid-cols-[minmax(0,1fr)_168px]">
+                          <div className="rounded-3xl border border-[#105E53]/10 bg-[#105E53]/5 p-4 text-xs leading-relaxed text-gray-600">
+                            <p className="font-semibold text-[#105E53]">
+                              Use a portrait 4:5 image and keep the product centered in frame.
+                            </p>
+                            <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                              <span className="rounded-2xl bg-white/80 px-3 py-2">Ratio: 4:5</span>
+                              <span className="rounded-2xl bg-white/80 px-3 py-2">1600 × 2000 px</span>
+                              <span className="rounded-2xl bg-white/80 px-3 py-2">Min 1280 × 1600 px</span>
+                            </div>
+                            <p className="mt-3 border-t border-[#105E53]/10 pt-3">
+                              Correct dimensions alone do not guarantee a perfect display. Check that the subject is not pushed too far left, right, top, or bottom.
+                            </p>
+                          </div>
+                          <ProductImageFramePreview
+                            imageSrc={variationImages[0]?.preview}
+                            alt="Variation product page image preview"
+                            compact
+                          />
+                        </div>
 
                         {/* Hidden file input */}
                         <input
@@ -1644,33 +2115,44 @@ export default function VendorProductAdd() {
 
                         {/* Image grid */}
                         {variationImages.length > 0 && (
-                          <div className="grid grid-cols-4 gap-3 mb-3">
-                            {variationImages.map((image) => (
-                              <div key={image.id} className="relative group aspect-square">
-                                <img
-                                  src={image.preview}
-                                  alt="Variation"
-                                  className="w-full h-full object-cover rounded-lg"
-                                />
-                                {!image.uploaded && (
-                                  <div className="absolute inset-0 bg-black/50 rounded-lg flex items-center justify-center">
-                                    <div className="w-6 h-6 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                                  </div>
-                                )}
-                                {image.uploaded && (
-                                  <div className="absolute top-2 left-2 p-1 bg-green-500 rounded-full">
-                                    <Check className="h-3 w-3 text-white" />
-                                  </div>
-                                )}
-                                <button
-                                  type="button"
-                                  onClick={() => removeVariationImage(image.id)}
-                                  className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition flex items-center justify-center rounded-lg"
-                                >
-                                  <Trash2 className="h-5 w-5 text-white" />
-                                </button>
-                              </div>
-                            ))}
+                          <div className="mb-4 rounded-3xl border border-gray-200 bg-gray-50/70 p-3">
+                            <div className="mb-3 flex items-center justify-between px-1">
+                              <p className="text-sm font-medium text-gray-900">Variation gallery</p>
+                              <p className="text-xs text-gray-500">{variationImages.length} image{variationImages.length === 1 ? '' : 's'}</p>
+                            </div>
+                            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                              {variationImages.map((image, index) => (
+                                <div key={image.id} className="relative group aspect-square overflow-hidden rounded-2xl bg-white shadow-sm">
+                                  <img
+                                    src={image.preview}
+                                    alt="Variation"
+                                    className="w-full h-full object-cover transition duration-300 group-hover:scale-105"
+                                  />
+                                  {!image.uploaded && (
+                                    <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
+                                      <div className="w-6 h-6 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                                    </div>
+                                  )}
+                                  {index === 0 && image.uploaded && (
+                                    <div className="absolute left-2 top-2 rounded-full bg-white/95 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#105E53] shadow-sm">
+                                      Cover
+                                    </div>
+                                  )}
+                                  {image.uploaded && (
+                                    <div className="absolute right-2 top-2 p-1 bg-green-500 rounded-full shadow-sm">
+                                      <Check className="h-3 w-3 text-white" />
+                                    </div>
+                                  )}
+                                  <button
+                                    type="button"
+                                    onClick={() => removeVariationImage(image.id)}
+                                    className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition flex items-center justify-center"
+                                  >
+                                    <Trash2 className="h-5 w-5 text-white" />
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
                           </div>
                         )}
 
@@ -1679,7 +2161,7 @@ export default function VendorProductAdd() {
                           type="button"
                           onClick={() => variationFileInputRef.current?.click()}
                           disabled={isUploading}
-                          className="w-full border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-[#105E53] hover:bg-[#105E53]/5 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                          className="w-full rounded-3xl border border-dashed border-[#105E53]/30 bg-white p-8 text-center shadow-sm transition hover:border-[#105E53] hover:bg-[#105E53]/5 disabled:cursor-not-allowed disabled:opacity-50"
                         >
                           {isUploading ? (
                             <span className="inline-flex flex-col items-center gap-2">
@@ -1688,8 +2170,11 @@ export default function VendorProductAdd() {
                             </span>
                           ) : (
                             <span className="inline-flex flex-col items-center gap-2">
-                              <Upload className="w-8 h-8 text-gray-400 mx-auto mb-2" />
-                              <p className="text-sm text-gray-600">Click to upload variation images</p>
+                              <span className="flex h-12 w-12 items-center justify-center rounded-full bg-[#105E53] text-white shadow-sm">
+                                <Upload className="w-5 h-5" />
+                              </span>
+                              <span className="text-sm font-semibold text-gray-900">Upload variation images</span>
+                              <span className="text-xs text-gray-500">Add the best angles for this color or size option.</span>
                             </span>
                           )}
                         </button>

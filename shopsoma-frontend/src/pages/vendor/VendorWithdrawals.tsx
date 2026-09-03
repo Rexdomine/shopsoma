@@ -15,7 +15,7 @@ import WithdrawModal from '../../components/vendor/WithdrawModal';
 import CurrencySwitcher from '../../components/common/CurrencySwitcher';
 import { useCurrencyStore } from '../../store/currencyStore';
 import { formatPriceWithConversion } from '../../utils/pricing';
-import { vendorService, type VendorPayout } from '../../services/vendorService';
+import { vendorService, type VendorPayout, type VendorPayoutStatus } from '../../services/vendorService';
 import { useToast } from '../../hooks/useToast';
 import ToastContainer from '../../components/ui/ToastContainer';
 
@@ -33,15 +33,26 @@ const getRangeStart = (end: Date, range: string) => {
   return start;
 };
 
+const PAYOUT_STATUS_BADGES: Record<VendorPayoutStatus, { label: string; className: string }> = {
+  pending: { label: 'Pending', className: 'bg-amber-50 text-amber-700' },
+  processing: { label: 'Processing', className: 'bg-blue-50 text-blue-700' },
+  completed: { label: 'Completed', className: 'bg-emerald-50 text-emerald-700' },
+  failed: { label: 'Failed', className: 'bg-rose-50 text-rose-700' },
+  available: { label: 'Available', className: 'bg-emerald-50 text-emerald-700' },
+  paid_out: { label: 'Paid out', className: 'bg-emerald-50 text-emerald-700' },
+};
+
 function StatusBadge({ status }: { status: string }) {
-  const normalized = status.toLowerCase();
-  if (normalized === 'completed') {
-    return <span className="px-3 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700">Delivered</span>;
-  }
-  if (normalized === 'failed') {
-    return <span className="px-3 py-1 rounded-full text-xs font-semibold bg-rose-50 text-rose-700">Cancelled</span>;
-  }
-  return <span className="px-3 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-700">Pending</span>;
+  const normalized = status.toLowerCase() as VendorPayoutStatus;
+  const config = PAYOUT_STATUS_BADGES[normalized] || {
+    label: status.replace(/_/g, ' '),
+    className: 'bg-gray-100 text-gray-700',
+  };
+  return (
+    <span className={`px-3 py-1 rounded-full text-xs font-semibold capitalize ${config.className}`}>
+      {config.label}
+    </span>
+  );
 }
 
 export default function VendorWithdrawals() {
