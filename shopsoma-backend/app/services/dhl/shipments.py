@@ -15,6 +15,7 @@ from app.core.config import Settings
 from app.models.dhl_shipment import (
     OutboundIntentShipmentGuard,
     OutboundShipmentBooking,
+    OutboundShipmentTrackingRefresh,
     OutboundShipmentTrackingSnapshot,
 )
 from app.models.order import FulfillmentStatus, Order
@@ -332,8 +333,6 @@ def _state_rank(outbound_state: str) -> int:
         "in_transit": 5,
         "out_for_delivery": 6,
         "delivered": 7,
-        "exception": 8,
-        "cancelled": 9,
     }
     return order.get(outbound_state, -1)
 
@@ -442,35 +441,23 @@ async def _matching_tracking_replay(
     booking: OutboundShipmentBooking,
     idempotency_key: str,
 ) -> TrackingRefreshResult | None:
-    first_key = _derived_handoff_idempotency_key(idempotency_key, ":0")
-    first_snapshot = (
+    refresh = (
         await db.execute(
-            select(OutboundShipmentTrackingSnapshot).where(
-                OutboundShipmentTrackingSnapshot.booking_id == booking.id,
-                OutboundShipmentTrackingSnapshot.idempotency_key == first_key,
+            select(OutboundShipmentTrackingRefresh).where(
+                OutboundShipmentTrackingRefresh.booking_id == booking.id,
+                OutboundShipmentTrackingRefresh.idempotency_key == idempotency_key,
             )
         )
     ).scalar_one_or_none()
-    if first_snapshot is None:
+    if refresh is None:
         return None
-    latest_snapshot = (
-        await db.execute(
-            select(OutboundShipmentTrackingSnapshot)
-            .where(OutboundShipmentTrackingSnapshot.booking_id == booking.id)
-            .order_by(
-                OutboundShipmentTrackingSnapshot.observed_at.desc(),
-                OutboundShipmentTrackingSnapshot.id.desc(),
-            )
-            .limit(1)
-        )
-    ).scalar_one()
     return TrackingRefreshResult(
         booking_id=booking.id,
-        tracking_number=booking.tracking_number or "",
-        outbound_state=booking.outbound_state,
-        customer_status=latest_snapshot.customer_status,
-        observations_recorded=0,
-        refreshed_at=booking.last_tracking_refresh_at or latest_snapshot.recorded_at,
+        tracking_number=refresh.tracking_number,
+        outbound_state=refresh.outbound_state,
+        customer_status=refresh.customer_status,
+        observations_recorded=refresh.observations_recorded,
+        refreshed_at=refresh.refreshed_at,
     )
 
 
@@ -750,12 +737,12 @@ async def book_outbound_shipment(
     except Exception as exc:
         completed_at = await db.scalar(text("SELECT clock_timestamp()"))
         booking.result_recorded_at = completed_at
-        booking.classification = "failure"
-        booking.failure_code = "adapter_failure"
+        booking.classification = "unknown"
+        booking.failure_code = "unknown_outcome"
         booking.completion_txid = await db.scalar(text("SELECT txid_current()"))
-        guard.active_booking_id = None
+        guard.booking_blocked_reason = "unknown_outcome"
         await db.flush()
-        raise ShipmentPhase4Error("booking failed") from exc
+        return _booking_result(booking, replayed=False, note=str(exc))
 
     completed_at = await db.scalar(text("SELECT clock_timestamp()"))
     booked_at = adapter_result.booked_at or completed_at
@@ -1021,11 +1008,18 @@ async def refresh_tracking(
     booking.last_tracking_refresh_at = completed_at
     effective_state = current_state
     if allow_carrier_movement:
-        if _state_rank(latest.outbound_state) >= _state_rank(current_state):
+        if latest.outbound_state == "exception":
+            if current_state not in {"delivered", "cancelled"}:
+                effective_state = "exception"
+        elif current_state != "cancelled" and (
+            current_state == "exception"
+            or _state_rank(latest.outbound_state) >= _state_rank(current_state)
+        ):
             effective_state = latest.outbound_state
     else:
         if latest.outbound_state == "exception":
-            effective_state = "exception"
+            if current_state not in {"delivered", "cancelled"}:
+                effective_state = "exception"
         elif latest.outbound_state in {"booked", "label_ready", "awaiting_collection"}:
             if _state_rank(latest.outbound_state) >= _state_rank(current_state):
                 effective_state = latest.outbound_state
@@ -1043,6 +1037,19 @@ async def refresh_tracking(
             order.delivered_at = latest.observed_at
         elif effective_state == "exception":
             order.fulfillment_status = FulfillmentStatus.DELIVERY_FAILED
+    refresh = OutboundShipmentTrackingRefresh(
+        booking_id=booking.id,
+        order_id=booking.order_id,
+        provider=PROVIDER,
+        tracking_number=booking.tracking_number,
+        outbound_state=booking.outbound_state,
+        customer_status=latest.customer_status,
+        observations_recorded=inserted,
+        refreshed_at=completed_at,
+        idempotency_key=normalized_idempotency,
+        source_command="admin_dhl_tracking_refresh",
+    )
+    db.add(refresh)
     await db.flush()
     return TrackingRefreshResult(
         booking_id=booking.id,

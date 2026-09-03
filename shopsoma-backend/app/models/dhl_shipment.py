@@ -236,3 +236,48 @@ class OutboundShipmentTrackingSnapshot(Base):
         ),
         Index("ix_outbound_shipment_tracking_snapshots_booking", "booking_id", "observed_at"),
     )
+
+
+class OutboundShipmentTrackingRefresh(Base):
+    """Durable replay result for one manual tracking refresh command."""
+
+    __tablename__ = "outbound_shipment_tracking_refresh"
+
+    id = _id_column()
+    booking_id = Column(
+        _UUID,
+        ForeignKey("outbound_shipment_booking.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    order_id = Column(_UUID, ForeignKey("orders.id", ondelete="RESTRICT"), nullable=False)
+    provider = Column(String(20), nullable=False)
+    tracking_number = Column(String(120), nullable=False)
+    outbound_state = Column(String(30), nullable=False)
+    customer_status = Column(String(60), nullable=False)
+    observations_recorded = Column(Integer, nullable=False)
+    refreshed_at = Column(DateTime(timezone=True), nullable=False)
+    idempotency_key = Column(String(200), nullable=False)
+    source_command = Column(String(100), nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=_NOW)
+
+    __table_args__ = (
+        CheckConstraint(
+            "provider = 'dhl'"
+            " AND tracking_number = btrim(tracking_number) AND length(tracking_number) > 0"
+            " AND outbound_state IN ('booked', 'label_ready', 'awaiting_collection', 'collected', 'in_transit', 'out_for_delivery', 'delivered', 'exception', 'cancelled')"
+            " AND customer_status = btrim(customer_status) AND length(customer_status) > 0"
+            " AND observations_recorded >= 0"
+            " AND idempotency_key ~ '^[!-~]+$'"
+            " AND source_command ~ '^[A-Za-z0-9][A-Za-z0-9._:-]*$'",
+            name="ck_outbound_shipment_tracking_refreshes_canonical",
+        ),
+        CheckConstraint(
+            "created_at >= refreshed_at",
+            name="ck_outbound_shipment_tracking_refreshes_time_order",
+        ),
+        UniqueConstraint(
+            "booking_id", "idempotency_key",
+            name="uq_outbound_shipment_tracking_refreshes_replay",
+        ),
+        Index("ix_outbound_shipment_tracking_refreshes_booking", "booking_id", "refreshed_at"),
+    )

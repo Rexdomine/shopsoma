@@ -253,8 +253,47 @@ def upgrade() -> None:
             name="ck_outbound_shipment_bookings_versions_ttl",
         ),
         sa.CheckConstraint(
-            "classification IN ('pending', 'success', 'failure', 'unknown')",
-            name="ck_outbound_shipment_bookings_classification",
+            "request_fingerprint ~ '^[0-9a-f]{64}$' "
+            "AND ((label_sha256 IS NULL AND label_content IS NULL AND label_media_type IS NULL AND label_received_at IS NULL) "
+            "OR (label_sha256 ~ '^[0-9a-f]{64}$' AND label_content IS NOT NULL AND octet_length(label_content) > 0 "
+            "AND label_media_type = btrim(label_media_type) AND length(label_media_type) > 0 AND label_received_at IS NOT NULL))",
+            name="ck_outbound_shipment_bookings_label_privacy",
+        ),
+        sa.CheckConstraint(
+            "account_alias ~ '^[A-Za-z0-9][A-Za-z0-9._:-]*$'"
+            " AND initiating_actor_type ~ '^[A-Za-z0-9][A-Za-z0-9._:-]*$'"
+            " AND initiating_actor_id ~ '^[!-~]+$'"
+            " AND source_command ~ '^[A-Za-z0-9][A-Za-z0-9._:-]*$'"
+            " AND idempotency_key ~ '^[!-~]+$'"
+            " AND fingerprint_key_version ~ '^[A-Za-z0-9][A-Za-z0-9._:-]*$'"
+            " AND adapter_version ~ '^[A-Za-z0-9][A-Za-z0-9._:-]*$'"
+            " AND schema_version ~ '^[A-Za-z0-9][A-Za-z0-9._:-]*$'"
+            " AND canonicalization_version ~ '^[A-Za-z0-9][A-Za-z0-9._:-]*$'",
+            name="ck_outbound_shipment_bookings_identifiers",
+        ),
+        sa.CheckConstraint(
+            "classification IN ('pending', 'success', 'failure', 'unknown')"
+            " AND outbound_state IN ('intent_created', 'booked', 'label_ready', 'awaiting_collection', 'collected', 'in_transit', 'out_for_delivery', 'delivered', 'exception', 'cancelled')",
+            name="ck_outbound_shipment_bookings_state_classification",
+        ),
+        sa.CheckConstraint(
+            "claim_expires_at = claimed_at + claim_ttl_seconds * interval '1 second'"
+            " AND (call_started_at IS NULL OR call_started_at >= claimed_at)"
+            " AND (result_recorded_at IS NULL OR ((call_started_at IS NULL AND result_recorded_at >= claimed_at) OR (call_started_at IS NOT NULL AND result_recorded_at >= call_started_at)))"
+            " AND ((classification = 'pending' AND result_recorded_at IS NULL AND completion_txid IS NULL AND failure_code IS NULL)"
+            " OR (classification = 'success' AND result_recorded_at IS NOT NULL AND completion_txid IS NOT NULL AND failure_code IS NULL AND provider_reference IS NOT NULL AND tracking_number IS NOT NULL)"
+            " OR (classification = 'failure' AND result_recorded_at IS NOT NULL AND completion_txid IS NOT NULL AND failure_code IS NOT NULL AND provider_reference IS NULL AND tracking_number IS NULL)"
+            " OR (classification = 'unknown' AND result_recorded_at IS NOT NULL AND completion_txid IS NOT NULL AND failure_code = 'unknown_outcome'))",
+            name="ck_outbound_shipment_bookings_lifecycle",
+        ),
+        sa.CheckConstraint(
+            "(collection_evidence_ref IS NULL AND collection_evidence_hash IS NULL AND collection_counterparty IS NULL AND handoff_recorded_at IS NULL)"
+            " OR (collection_evidence_ref IS NOT NULL AND collection_evidence_hash ~ '^[0-9a-f]{64}$'"
+            " AND collection_evidence_ref = btrim(collection_evidence_ref) AND length(collection_evidence_ref) > 0"
+            " AND collection_evidence_ref NOT LIKE '%://%' AND collection_evidence_ref NOT LIKE '/%' AND collection_evidence_ref NOT LIKE '%..%'"
+            " AND collection_counterparty = btrim(collection_counterparty) AND length(collection_counterparty) > 0"
+            " AND handoff_recorded_at IS NOT NULL)",
+            name="ck_outbound_shipment_bookings_private_handoff_evidence",
         ),
     )
     op.create_index(
@@ -307,8 +346,18 @@ def upgrade() -> None:
             ondelete="RESTRICT",
         ),
         sa.CheckConstraint(
-            "provider = 'dhl'",
-            name="ck_outbound_shipment_tracking_snapshots_provider",
+            "provider = 'dhl'"
+            " AND provider_status_code = btrim(provider_status_code) AND length(provider_status_code) > 0"
+            " AND outbound_state IN ('booked', 'label_ready', 'awaiting_collection', 'collected', 'in_transit', 'out_for_delivery', 'delivered', 'exception', 'cancelled')"
+            " AND customer_status = btrim(customer_status) AND length(customer_status) > 0"
+            " AND detail = btrim(detail) AND length(detail) > 0"
+            " AND idempotency_key ~ '^[!-~]+$'"
+            " AND source_command ~ '^[A-Za-z0-9][A-Za-z0-9._:-]*$'",
+            name="ck_outbound_shipment_tracking_snapshots_canonical",
+        ),
+        sa.CheckConstraint(
+            "recorded_at >= observed_at",
+            name="ck_outbound_shipment_tracking_snapshots_recording_order",
         ),
     )
     op.create_index(
@@ -317,8 +366,47 @@ def upgrade() -> None:
         ["booking_id", "observed_at"],
     )
 
+    op.create_table(
+        "outbound_shipment_tracking_refresh",
+        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True, default=uuid4),
+        sa.Column("booking_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("order_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("provider", sa.String(20), nullable=False, server_default="dhl"),
+        sa.Column("tracking_number", sa.String(120), nullable=False),
+        sa.Column("outbound_state", sa.String(30), nullable=False),
+        sa.Column("customer_status", sa.String(60), nullable=False),
+        sa.Column("observations_recorded", sa.Integer(), nullable=False),
+        sa.Column("refreshed_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("idempotency_key", sa.String(200), nullable=False),
+        sa.Column("source_command", sa.String(100), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+        sa.UniqueConstraint("booking_id", "idempotency_key", name="uq_outbound_shipment_tracking_refreshes_replay"),
+        sa.ForeignKeyConstraint(["booking_id"], ["outbound_shipment_booking.id"], name="fk_outbound_shipment_tracking_refreshes_booking", ondelete="RESTRICT"),
+        sa.ForeignKeyConstraint(["order_id"], ["orders.id"], name="fk_outbound_shipment_tracking_refreshes_order", ondelete="RESTRICT"),
+        sa.CheckConstraint(
+            "provider = 'dhl'"
+            " AND tracking_number = btrim(tracking_number) AND length(tracking_number) > 0"
+            " AND outbound_state IN ('booked', 'label_ready', 'awaiting_collection', 'collected', 'in_transit', 'out_for_delivery', 'delivered', 'exception', 'cancelled')"
+            " AND customer_status = btrim(customer_status) AND length(customer_status) > 0"
+            " AND observations_recorded >= 0"
+            " AND idempotency_key ~ '^[!-~]+$'"
+            " AND source_command ~ '^[A-Za-z0-9][A-Za-z0-9._:-]*$'",
+            name="ck_outbound_shipment_tracking_refreshes_canonical",
+        ),
+        sa.CheckConstraint(
+            "created_at >= refreshed_at",
+            name="ck_outbound_shipment_tracking_refreshes_time_order",
+        ),
+    )
+    op.create_index(
+        "ix_outbound_shipment_tracking_refreshes_booking",
+        "outbound_shipment_tracking_refresh",
+        ["booking_id", "refreshed_at"],
+    )
+
 
 def downgrade() -> None:
+    op.drop_table("outbound_shipment_tracking_refresh")
     op.drop_table("outbound_shipment_tracking_snapshot")
     op.drop_table("outbound_shipment_booking")
     op.drop_table("outbound_intent_shipment_guard")
