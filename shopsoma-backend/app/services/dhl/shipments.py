@@ -1161,7 +1161,15 @@ async def record_collection_handoff(
                 raise ShipmentPhase4ConflictError(
                     "verified carrier acceptance precedes current custody state"
                 )
-            tendered_occurred_at = min(command.occurred_at, verified_acceptance.observed_at)
+            tendered_occurred_at = max(
+                min(command.occurred_at, verified_acceptance.observed_at),
+                previous.occurred_at + timedelta(microseconds=1),
+            )
+            tendered_recorded_at = max(
+                tendered_occurred_at + timedelta(microseconds=1),
+                previous.recorded_at + timedelta(microseconds=1),
+                recorded_at,
+            )
             tendered = CustodyEvent(
                 id=uuid.uuid4(),
                 stream_id=stream.id,
@@ -1177,7 +1185,7 @@ async def record_collection_handoff(
                 source_system="admin_dhl_handoff",
                 source_command="admin_dhl_handoff",
                 occurred_at=tendered_occurred_at,
-                recorded_at=max(tendered_occurred_at, recorded_at),
+                recorded_at=tendered_recorded_at,
                 location="hub_dispatch",
                 idempotency_key=tendered_idempotency_key,
                 counterparty=command.counterparty.strip(),
@@ -1200,6 +1208,11 @@ async def record_collection_handoff(
             verified_acceptance.observed_at,
             previous.occurred_at + timedelta(microseconds=1),
         )
+        provider_accepted_recorded_at = max(
+            provider_accepted_occurred_at + timedelta(microseconds=1),
+            previous.recorded_at + timedelta(microseconds=1),
+            recorded_at,
+        )
         custody = CustodyEvent(
             id=uuid.uuid4(),
             stream_id=stream.id,
@@ -1215,7 +1228,7 @@ async def record_collection_handoff(
             source_system="admin_dhl_handoff",
             source_command="admin_dhl_handoff",
             occurred_at=provider_accepted_occurred_at,
-            recorded_at=max(provider_accepted_occurred_at, recorded_at),
+            recorded_at=provider_accepted_recorded_at,
             location="hub_dispatch",
             idempotency_key=normalized_idempotency,
             counterparty=command.counterparty.strip(),
@@ -1232,7 +1245,7 @@ async def record_collection_handoff(
     booking.collection_evidence_ref = returned_event.evidence_ref
     booking.collection_evidence_hash = returned_event.evidence_hash
     booking.collection_scheduled_at = command.occurred_at
-    booking.handoff_recorded_at = recorded_at
+    booking.handoff_recorded_at = max(recorded_at, returned_event.recorded_at)
     booking.outbound_state = "collected"
     order.fulfillment_status = FulfillmentStatus.PICKED_UP
     await db.flush()
