@@ -1115,6 +1115,7 @@ async def record_collection_handoff(
     database_now = await db.scalar(text("SELECT clock_timestamp()"))
     if command.occurred_at > database_now:
         raise ShipmentPhase4ConflictError("handoff occurred_at cannot be in the future")
+    recorded_at = max(command.occurred_at, database_now)
     verified_acceptance = await _verified_carrier_acceptance_snapshot(
         db,
         booking_id=booking.id,
@@ -1174,7 +1175,7 @@ async def record_collection_handoff(
                 source_system="admin_dhl_handoff",
                 source_command="admin_dhl_handoff",
                 occurred_at=tendered_occurred_at,
-                recorded_at=max(tendered_occurred_at, datetime.now(UTC)),
+                recorded_at=max(tendered_occurred_at, recorded_at),
                 location="hub_dispatch",
                 idempotency_key=tendered_idempotency_key,
                 counterparty=command.counterparty.strip(),
@@ -1208,7 +1209,7 @@ async def record_collection_handoff(
             source_system="admin_dhl_handoff",
             source_command="admin_dhl_handoff",
             occurred_at=verified_acceptance.observed_at,
-            recorded_at=max(verified_acceptance.observed_at, datetime.now(UTC)),
+            recorded_at=max(verified_acceptance.observed_at, recorded_at),
             location="hub_dispatch",
             idempotency_key=normalized_idempotency,
             counterparty=command.counterparty.strip(),
@@ -1225,7 +1226,7 @@ async def record_collection_handoff(
     booking.collection_evidence_ref = returned_event.evidence_ref
     booking.collection_evidence_hash = returned_event.evidence_hash
     booking.collection_scheduled_at = command.occurred_at
-    booking.handoff_recorded_at = max(command.occurred_at, datetime.now(UTC))
+    booking.handoff_recorded_at = recorded_at
     booking.outbound_state = "collected"
     order.fulfillment_status = FulfillmentStatus.PICKED_UP
     await db.flush()

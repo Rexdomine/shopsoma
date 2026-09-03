@@ -33,6 +33,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.models.package_custody import CustodyEvent, CustodyStream
 from app.models.dhl_shipment import OutboundIntentShipmentGuard
+from app.schemas.admin_order import DHLBookingRequest
 
 
 class _Secret:
@@ -237,13 +238,13 @@ async def test_booking_idempotency_same_key_returns_same_response(
     admin = admin_user["user"]
     key = f"idem-{uuid.uuid4().hex[:12]}"
 
-    booking_payload = {
-        "intent_id": str(intent.id),
-        "package_id": str(package.id),
-        "package_version": 1,
-        "seal_id": str(seal.id),
-        "idempotency_key": key,
-    }
+    booking_payload = DHLBookingRequest(
+        intent_id=intent.id,
+        package_id=package.id,
+        package_version=1,
+        seal_id=seal.id,
+        idempotency_key=key,
+    )
 
     with patch(
         "app.services.dhl.client.DHLClient.request_json",
@@ -254,7 +255,7 @@ async def test_booking_idempotency_same_key_returns_same_response(
 
         r1 = await create_dhl_booking(
             order_id=str(graph["order"].id),
-            payload=type("Payload", (), booking_payload)(),
+            payload=booking_payload,
             admin=admin,
             db=db_session,
             settings=_settings_stub(frozenset({graph["cohort"].id})),
@@ -265,7 +266,7 @@ async def test_booking_idempotency_same_key_returns_same_response(
         # Second call with same key — must return same row
         r2 = await create_dhl_booking(
             order_id=str(graph["order"].id),
-            payload=type("Payload", (), booking_payload)(),
+            payload=booking_payload,
             admin=admin,
             db=db_session,
             settings=_settings_stub(frozenset({graph["cohort"].id})),
@@ -287,13 +288,13 @@ async def test_unknown_outcome_recorded_blocks_retry(
     admin = admin_user["user"]
     key = f"unknown-{uuid.uuid4().hex[:12]}"
 
-    booking_payload = {
-        "intent_id": str(intent.id),
-        "package_id": str(package.id),
-        "package_version": 1,
-        "seal_id": str(seal.id),
-        "idempotency_key": key,
-    }
+    booking_payload = DHLBookingRequest(
+        intent_id=intent.id,
+        package_id=package.id,
+        package_version=1,
+        seal_id=seal.id,
+        idempotency_key=key,
+    )
 
     fake_unknown_response = {
         "shipmentTrackingNumber": None,
@@ -310,7 +311,7 @@ async def test_unknown_outcome_recorded_blocks_retry(
 
         result = await create_dhl_booking(
             order_id=str(graph["order"].id),
-            payload=type("Payload", (), booking_payload)(),
+            payload=booking_payload,
             admin=admin,
             db=db_session,
             settings=_settings_stub(frozenset({graph["cohort"].id})),
@@ -340,7 +341,8 @@ async def test_handoff_creates_custody_event_with_chain(
 
     from app.services.dhl.shipments import HandoffCommand, record_collection_handoff
 
-    occurred = datetime.now(UTC)
+    occurred = await db_session.scalar(text("SELECT clock_timestamp()"))
+    assert occurred is not None
     evidence_payload = f"handoff-evidence-{uuid.uuid4().hex}".encode()
     result = await record_collection_handoff(
         db_session,
@@ -387,7 +389,8 @@ async def test_handoff_idempotency_same_key_returns_same_event(
 
     from app.services.dhl.shipments import HandoffCommand, record_collection_handoff
 
-    occurred = datetime.now(UTC)
+    occurred = await db_session.scalar(text("SELECT clock_timestamp()"))
+    assert occurred is not None
     key = f"handoff-idem-{uuid.uuid4().hex[:12]}"
     evidence_payload = b"handoff-evidence-payload"
 
@@ -471,6 +474,8 @@ async def test_tracking_refresh_appends_snapshot(
     from app.models.dhl_shipment import OutboundShipmentTrackingSnapshot
     from app.services.dhl.shipments import TrackingRefreshCommand, refresh_tracking
 
+    tracking_response_time = await db_session.scalar(text("SELECT clock_timestamp()"))
+    assert tracking_response_time is not None
     tracking_response = {
         "shipments": [
             {
@@ -478,16 +483,14 @@ async def test_tracking_refresh_appends_snapshot(
                     {
                         "typeCode": "BOOKED",
                         "description": "Shipment booked",
-                        "date": booking.result_recorded_at.date().isoformat(),
-                        "time": booking.result_recorded_at.timetz().isoformat(),
+                        "date": (tracking_response_time - timedelta(minutes=5)).date().isoformat(),
+                        "time": (tracking_response_time - timedelta(minutes=5)).timetz().isoformat(),
                     },
                     {
                         "typeCode": "PICKUP_CONFIRMED",
                         "description": "Shipment collected",
-                        "date": (booking.result_recorded_at + timedelta(minutes=5)).date().isoformat(),
-                        "time": (
-                            booking.result_recorded_at + timedelta(minutes=5)
-                        ).timetz().isoformat(),
+                        "date": tracking_response_time.date().isoformat(),
+                        "time": tracking_response_time.timetz().isoformat(),
                     },
                 ]
             }
