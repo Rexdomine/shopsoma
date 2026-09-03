@@ -80,7 +80,9 @@ def _is_unique_constraint_violation(
     if constraint_name is None:
         return True
     diag = getattr(orig, "diag", None)
-    return getattr(diag, "constraint_name", None) == constraint_name
+    if getattr(diag, "constraint_name", None) == constraint_name:
+        return True
+    return constraint_name in str(orig)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1194,6 +1196,10 @@ async def record_collection_handoff(
                 f"booking cannot accept handoff from custody state {tip.event_type}"
             )
 
+        provider_accepted_occurred_at = max(
+            verified_acceptance.observed_at,
+            previous.occurred_at + timedelta(microseconds=1),
+        )
         custody = CustodyEvent(
             id=uuid.uuid4(),
             stream_id=stream.id,
@@ -1208,8 +1214,8 @@ async def record_collection_handoff(
             actor_id=PROVIDER,
             source_system="admin_dhl_handoff",
             source_command="admin_dhl_handoff",
-            occurred_at=verified_acceptance.observed_at,
-            recorded_at=max(verified_acceptance.observed_at, recorded_at),
+            occurred_at=provider_accepted_occurred_at,
+            recorded_at=max(provider_accepted_occurred_at, recorded_at),
             location="hub_dispatch",
             idempotency_key=normalized_idempotency,
             counterparty=command.counterparty.strip(),

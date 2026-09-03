@@ -40,6 +40,22 @@ def test_phase4_unique_violation_helper_matches_only_named_constraint() -> None:
         ),
         constraint_name="uq_outbound_shipment_tracking_snapshots_observation",
     )
+    assert _is_unique_constraint_violation(
+        IntegrityError(
+            "INSERT",
+            {},
+            type(
+                "Orig",
+                (),
+                {
+                    "sqlstate": "23505",
+                    "diag": None,
+                    "__str__": lambda self: 'duplicate key value violates unique constraint "uq_outbound_shipment_tracking_snapshots_observation"',
+                },
+            )(),
+        ),
+        constraint_name="uq_outbound_shipment_tracking_snapshots_observation",
+    )
     assert not _is_unique_constraint_violation(
         _integrity_error(
             "23505",
@@ -251,7 +267,9 @@ def test_handoff_rejects_cancelled_orders_and_invalid_chronology_before_custody_
     assert 'if verified_acceptance.observed_at < tip.occurred_at:' in source
     assert '"verified carrier acceptance precedes current custody state"' in source
     assert 'recorded_at=max(tendered_occurred_at, recorded_at)' in source
-    assert 'recorded_at=max(verified_acceptance.observed_at, recorded_at)' in source
+    assert 'provider_accepted_occurred_at = max(' in source
+    assert 'previous.occurred_at + timedelta(microseconds=1)' in source
+    assert 'recorded_at=max(provider_accepted_occurred_at, recorded_at)' in source
     assert 'booking.collection_scheduled_at = command.occurred_at' in source
     assert 'booking.handoff_recorded_at = recorded_at' in source
 
