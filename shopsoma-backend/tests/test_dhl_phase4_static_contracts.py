@@ -262,6 +262,9 @@ def test_handoff_rejects_cancelled_orders_and_invalid_chronology_before_custody_
     assert 'if command.occurred_at > database_now:' in source
     assert 'recorded_at = max(command.occurred_at, database_now)' in source
     assert '"handoff occurred_at cannot be in the future"' in source
+    assert 'verified_acceptance_now = await db.scalar(text("SELECT clock_timestamp()"))' in source
+    assert 'if verified_acceptance.observed_at > verified_acceptance_now:' in source
+    assert '"verified carrier acceptance cannot be in the future"' in source
     assert 'if command.occurred_at < tip.occurred_at:' in source
     assert '"handoff occurred_at precedes current custody state"' in source
     assert 'if verified_acceptance.observed_at < tip.occurred_at:' in source

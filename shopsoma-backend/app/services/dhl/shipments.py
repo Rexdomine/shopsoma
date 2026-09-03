@@ -1122,6 +1122,12 @@ async def record_collection_handoff(
         db,
         booking_id=booking.id,
     )
+    verified_acceptance_now = await db.scalar(text("SELECT clock_timestamp()"))
+    assert verified_acceptance_now is not None
+    if verified_acceptance.observed_at > verified_acceptance_now:
+        raise ShipmentPhase4ConflictError(
+            "verified carrier acceptance cannot be in the future"
+        )
     tendered_idempotency_key = _derived_handoff_idempotency_key(
         normalized_idempotency,
         ":tendered",

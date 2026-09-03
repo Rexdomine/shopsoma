@@ -113,7 +113,8 @@ class _Phase4Helpers:
 
         claimed_at = await db_session.scalar(text("SELECT clock_timestamp()"))
         assert claimed_at is not None
-        result_recorded_at = claimed_at + timedelta(seconds=1)
+        result_recorded_at = await db_session.scalar(text("SELECT clock_timestamp()"))
+        assert result_recorded_at is not None
         booking = OutboundShipmentBooking(
             id=uuid.uuid4(),
             order_id=graph["order"].id,
