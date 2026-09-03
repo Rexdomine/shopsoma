@@ -37,6 +37,7 @@ from app.services.dhl.client import (
     DHLClient,
     DHLConfigurationError,
 )
+from app.models.fulfillment_hub import FulfillmentHub
 
 PROVIDER = "dhl"
 ENVIRONMENT = "sandbox"
@@ -159,6 +160,7 @@ class ShipmentAdapter(Protocol):
         self,
         intent: OutboundShipmentIntent,
         order: Order,
+        hub: FulfillmentHub,
         package_version: HubPackageVersion,
     ) -> AdapterBookingResult: ...
 
@@ -174,6 +176,7 @@ class DHLShipmentAdapter:
         self,
         intent: OutboundShipmentIntent,
         order: Order,
+        hub: FulfillmentHub,
         package_version: HubPackageVersion,
     ) -> AdapterBookingResult:
         payload = {
@@ -185,7 +188,20 @@ class DHLShipmentAdapter:
                 "number": self._settings.DHL_EXPORT_ACCOUNT_NUMBER.get_secret_value(),
             }],
             "customerDetails": {
-                "shipperDetails": {"postalAddress": {"countryCode": "NG"}},
+                "shipperDetails": {
+                    "postalAddress": {
+                        "countryCode": hub.country_code,
+                        "postalCode": hub.postal_code,
+                        "cityName": hub.city,
+                        "provinceCode": hub.state,
+                        "addressLine1": hub.address_line1,
+                        "addressLine2": hub.address_line2,
+                    },
+                    "contactInformation": {
+                        "fullName": hub.contact_name,
+                        "phone": hub.contact_phone,
+                    },
+                },
                 "receiverDetails": {
                     "postalAddress": {
                         "countryCode": intent.destination_country_code,
@@ -306,6 +322,54 @@ def _ensure_sandbox_booking_allowed(
         raise ShipmentPhase4Error("sandbox adapter requires restricted cohort set")
     if not cohort_ids <= allowed:
         raise ShipmentPhase4Error("package composition is outside sandbox cohort allowlist")
+
+
+async def _package_cohort_ids(
+    db: AsyncSession,
+    *,
+    package_id: uuid.UUID,
+    package_version: int,
+) -> frozenset[uuid.UUID]:
+    rows = (
+        await db.execute(
+            select(HubPackageItem.cohort_id).where(
+                HubPackageItem.package_id == package_id,
+                HubPackageItem.package_version == package_version,
+            )
+        )
+    ).scalars().all()
+    return frozenset(rows)
+
+
+async def _matching_replay(
+    db: AsyncSession,
+    *,
+    order_id: uuid.UUID,
+    command: BookingCommand,
+) -> OutboundShipmentBooking | None:
+    existing = (
+        await db.execute(
+            select(OutboundShipmentBooking).where(
+                OutboundShipmentBooking.provider == PROVIDER,
+                OutboundShipmentBooking.environment == ENVIRONMENT,
+                OutboundShipmentBooking.account_alias == ACCOUNT_ALIAS,
+                OutboundShipmentBooking.idempotency_key == command.idempotency_key,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is None:
+        return None
+    if (
+        existing.order_id != order_id
+        or existing.intent_id != command.intent_id
+        or existing.package_id != command.package_id
+        or existing.package_version != command.package_version
+        or existing.seal_id != command.seal_id
+    ):
+        raise ShipmentPhase4ConflictError(
+            "idempotency key is already bound to a different shipment subject"
+        )
+    return existing
 
 
 def _utc_or_none(value: object) -> datetime | None:
@@ -436,44 +500,27 @@ async def book_outbound_shipment(
     if not _setting_bool(settings, "DHL_DOMESTIC_PROVIDER_CALLS_ENABLED", "dhl_domestic_provider_calls_enabled"):
         raise ShipmentPhase4Error("dhl domestic provider calls disabled")
 
-    order, package, seal, intent, package_version, cohort_ids = await _load_authoritative_subject(db, order_id=order_id, command=command)
-    _ensure_sandbox_booking_allowed(settings, cohort_ids=cohort_ids)
     command = BookingCommand(
         order_id=order_id,
-        intent_id=intent.id,
-        package_id=package.id,
-        package_version=package.current_version,
-        seal_id=seal.id,
+        intent_id=command.intent_id,
+        package_id=command.package_id,
+        package_version=command.package_version,
+        seal_id=command.seal_id,
         idempotency_key=_normalize_text(command.idempotency_key, field="idempotency_key"),
     )
+    replay = await _matching_replay(db, order_id=order_id, command=command)
+    if replay is not None:
+        return _booking_result(replay, replayed=True)
+
+    order, package, seal, intent, package_version, cohort_ids = await _load_authoritative_subject(db, order_id=order_id, command=command)
+    _ensure_sandbox_booking_allowed(settings, cohort_ids=cohort_ids)
+    hub = await db.get(FulfillmentHub, intent.origin_hub_id)
+    if hub is None:
+        raise ShipmentPhase4Error("origin hub not found")
 
     request_fingerprint = hashlib.sha256(
         f"{intent.id}:{package.id}:{package.current_version}:{seal.id}".encode("utf-8")
     ).hexdigest()
-
-    existing = (
-        await db.execute(
-            select(OutboundShipmentBooking).where(
-                OutboundShipmentBooking.provider == PROVIDER,
-                OutboundShipmentBooking.environment == ENVIRONMENT,
-                OutboundShipmentBooking.account_alias == ACCOUNT_ALIAS,
-                OutboundShipmentBooking.idempotency_key == command.idempotency_key,
-            )
-        )
-    ).scalar_one_or_none()
-    if existing is not None:
-        if (
-            existing.order_id != order.id
-            or existing.intent_id != intent.id
-            or existing.package_id != package.id
-            or existing.package_version != package.current_version
-            or existing.seal_id != seal.id
-            or existing.request_fingerprint != request_fingerprint
-        ):
-            raise ShipmentPhase4ConflictError(
-                "idempotency key is already bound to a different shipment subject"
-            )
-        return _booking_result(existing, replayed=True)
 
     guard = await db.get(OutboundIntentShipmentGuard, intent.id)
     if guard is None:
@@ -522,13 +569,19 @@ async def book_outbound_shipment(
     db.add(booking)
     await db.flush()
     guard.active_booking_id = booking.id
+    await db.commit()
+
+    booking = await db.get(OutboundShipmentBooking, booking.id)
+    guard = await db.get(OutboundIntentShipmentGuard, intent.id)
+    assert booking is not None and guard is not None
 
     adapter = adapter or create_shipment_adapter(settings)
     try:
         called_at = await db.scalar(text("SELECT clock_timestamp()"))
         booking.call_started_at = called_at
         await db.flush()
-        adapter_result = await adapter.book(intent, order, package_version)
+        await db.commit()
+        adapter_result = await adapter.book(intent, order, hub, package_version)
     except (DHLConfigurationError,) as exc:
         raise ShipmentPhase4Error(str(exc)) from exc
     except (DHLAPIError, TimeoutError) as exc:
@@ -619,65 +672,107 @@ async def record_collection_handoff(
         raise ShipmentPhase4ConflictError(
             f"booking cannot accept handoff in state {booking.outbound_state}"
         )
+    normalized_idempotency = _normalize_text(command.idempotency_key, field="idempotency_key")
     if booking.handoff_recorded_at is not None:
-        existing_event = (
+        existing_events = (
             await db.execute(
-                select(CustodyEvent).where(
+                select(CustodyEvent)
+                .where(
                     CustodyEvent.package_id == booking.package_id,
                     CustodyEvent.package_version == booking.package_version,
-                    CustodyEvent.idempotency_key == command.idempotency_key,
+                    CustodyEvent.idempotency_key == normalized_idempotency,
                 )
+                .order_by(CustodyEvent.created_at, CustodyEvent.id)
             )
-        ).scalar_one_or_none()
-        if existing_event is None:
+        ).scalars().all()
+        if not existing_events:
             raise ShipmentPhase4ConflictError("handoff already recorded")
+        existing_event = existing_events[0]
         return HandoffResult(
             booking_id=booking.id,
             outbound_state=booking.outbound_state,
             occurred_at=existing_event.occurred_at,
             custody_event_id=existing_event.id,
         )
-    cohort_id, vendor_id = await _cohort_ref_from_booking(db, booking)
-    stream = (
+    streams = (
         await db.execute(
-            select(CustodyStream).where(
+            select(CustodyStream)
+            .where(
                 CustodyStream.package_id == booking.package_id,
                 CustodyStream.package_version == booking.package_version,
             )
+            .order_by(CustodyStream.cohort_id, CustodyStream.vendor_id)
         )
-    ).scalar_one()
-    tip = (
-        await db.execute(
-            select(CustodyEvent)
-            .where(CustodyEvent.stream_id == stream.id)
-            .order_by(CustodyEvent.version.desc())
-            .limit(1)
-        )
-    ).scalar_one_or_none()
-    if tip is None:
-        raise ShipmentPhase4ConflictError("custody stream has no releasable lifecycle tip")
-    normalized_idempotency = _normalize_text(command.idempotency_key, field="idempotency_key")
-    previous = tip
-    next_version = stream.next_version
-    if tip.event_type == "released":
-        tendered = CustodyEvent(
+    ).scalars().all()
+    if not streams:
+        raise ShipmentPhase4ConflictError("package custody streams not found")
+    returned_event: CustodyEvent | None = None
+    for stream in streams:
+        tip = (
+            await db.execute(
+                select(CustodyEvent)
+                .where(CustodyEvent.stream_id == stream.id)
+                .order_by(CustodyEvent.version.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if tip is None:
+            raise ShipmentPhase4ConflictError("custody stream has no releasable lifecycle tip")
+        previous = tip
+        next_version = stream.next_version
+        if tip.event_type == "released":
+            tendered = CustodyEvent(
+                id=uuid.uuid4(),
+                stream_id=stream.id,
+                version=next_version,
+                previous_event_id=previous.id,
+                cohort_id=stream.cohort_id,
+                order_id=order_id,
+                vendor_id=stream.vendor_id,
+                hub_id=booking.origin_hub_id,
+                event_type="tendered",
+                actor_type="user",
+                actor_id=str(admin.id),
+                source_system="admin_dhl_handoff",
+                source_command="admin_dhl_handoff",
+                occurred_at=command.occurred_at,
+                recorded_at=max(command.occurred_at, datetime.now(UTC)),
+                location="hub_dispatch",
+                idempotency_key=f"{normalized_idempotency}:tendered",
+                counterparty=command.counterparty.strip(),
+                evidence_ref=command.evidence_ref.strip(),
+                evidence_hash=command.evidence_sha256.lower(),
+                package_id=booking.package_id,
+                package_version=booking.package_version,
+                seal_id=booking.seal_id,
+            )
+            db.add(tendered)
+            await db.flush()
+            previous = tendered
+            next_version += 1
+        elif tip.event_type != "tendered":
+            raise ShipmentPhase4ConflictError(
+                f"booking cannot accept handoff from custody state {tip.event_type}"
+            )
+
+        custody = CustodyEvent(
             id=uuid.uuid4(),
             stream_id=stream.id,
             version=next_version,
             previous_event_id=previous.id,
-            cohort_id=cohort_id,
+            cohort_id=stream.cohort_id,
             order_id=order_id,
-            vendor_id=vendor_id,
+            vendor_id=stream.vendor_id,
             hub_id=booking.origin_hub_id,
-            event_type="tendered",
-            actor_type="user",
-            actor_id=str(admin.id),
+            event_type="provider_accepted",
+            actor_type="carrier",
+            actor_id=command.counterparty.strip(),
             source_system="admin_dhl_handoff",
             source_command="admin_dhl_handoff",
             occurred_at=command.occurred_at,
             recorded_at=max(command.occurred_at, datetime.now(UTC)),
             location="hub_dispatch",
-            idempotency_key=f"{normalized_idempotency}:tendered",
+            idempotency_key=normalized_idempotency,
             counterparty=command.counterparty.strip(),
             evidence_ref=command.evidence_ref.strip(),
             evidence_hash=command.evidence_sha256.lower(),
@@ -685,46 +780,14 @@ async def record_collection_handoff(
             package_version=booking.package_version,
             seal_id=booking.seal_id,
         )
-        db.add(tendered)
-        await db.flush()
-        previous = tendered
-        next_version += 1
-    elif tip.event_type != "tendered":
-        raise ShipmentPhase4ConflictError(
-            f"booking cannot accept handoff from custody state {tip.event_type}"
-        )
-
-    custody = CustodyEvent(
-        id=uuid.uuid4(),
-        stream_id=stream.id,
-        version=next_version,
-        previous_event_id=previous.id,
-        cohort_id=cohort_id,
-        order_id=order_id,
-        vendor_id=vendor_id,
-        hub_id=booking.origin_hub_id,
-        event_type="provider_accepted",
-        actor_type="carrier",
-        actor_id=command.counterparty.strip(),
-        source_system="admin_dhl_handoff",
-        source_command="admin_dhl_handoff",
-        occurred_at=command.occurred_at,
-        recorded_at=max(command.occurred_at, datetime.now(UTC)),
-        location="hub_dispatch",
-        idempotency_key=normalized_idempotency,
-        counterparty=command.counterparty.strip(),
-        evidence_ref=command.evidence_ref.strip(),
-        evidence_hash=command.evidence_sha256.lower(),
-        package_id=booking.package_id,
-        package_version=booking.package_version,
-        seal_id=booking.seal_id,
-    )
-    db.add(custody)
-    booking.collection_counterparty = custody.counterparty
-    booking.collection_evidence_ref = custody.evidence_ref
-    booking.collection_evidence_hash = custody.evidence_hash
-    booking.collection_scheduled_at = booking.collection_scheduled_at or custody.occurred_at
-    booking.handoff_recorded_at = custody.recorded_at
+        db.add(custody)
+        returned_event = returned_event or custody
+    assert returned_event is not None
+    booking.collection_counterparty = returned_event.counterparty
+    booking.collection_evidence_ref = returned_event.evidence_ref
+    booking.collection_evidence_hash = returned_event.evidence_hash
+    booking.collection_scheduled_at = booking.collection_scheduled_at or returned_event.occurred_at
+    booking.handoff_recorded_at = max(command.occurred_at, datetime.now(UTC))
     booking.outbound_state = "collected"
     order = await db.get(Order, order_id)
     if order is not None:
@@ -733,8 +796,8 @@ async def record_collection_handoff(
     return HandoffResult(
         booking_id=booking.id,
         outbound_state=booking.outbound_state,
-        occurred_at=custody.occurred_at,
-        custody_event_id=custody.id,
+        occurred_at=returned_event.occurred_at,
+        custody_event_id=returned_event.id,
     )
 
 
@@ -753,6 +816,12 @@ async def refresh_tracking(
     booking = await _load_booking_for_order(db, order_id=order_id, booking_id=command.booking_id)
     if booking.tracking_number is None:
         raise ShipmentPhase4Error("tracking number unavailable")
+    cohort_ids = await _package_cohort_ids(
+        db,
+        package_id=booking.package_id,
+        package_version=booking.package_version,
+    )
+    _ensure_sandbox_booking_allowed(settings, cohort_ids=cohort_ids)
     adapter = adapter or create_shipment_adapter(settings)
     observations = await adapter.track(booking.tracking_number)
     if not observations:

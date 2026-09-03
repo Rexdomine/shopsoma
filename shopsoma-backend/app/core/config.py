@@ -139,6 +139,12 @@ class Settings(BaseSettings):
     DHL_DOMESTIC_QUOTE_TTL_SECONDS: int = 1800
     DHL_DOMESTIC_SANDBOX_COHORT_IDS: str = ""
 
+    # Checkout capability fingerprinting / guest capability rotation
+    CHECKOUT_CAPABILITY_ACTIVE_PEPPER: SecretStr = SecretStr("")
+    CHECKOUT_CAPABILITY_ACTIVE_PEPPER_VERSION: int | None = None
+    CHECKOUT_CAPABILITY_PREVIOUS_PEPPER: SecretStr = SecretStr("")
+    CHECKOUT_CAPABILITY_PREVIOUS_PEPPER_VERSION: int | None = None
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
@@ -213,6 +219,12 @@ class Settings(BaseSettings):
     @property
     def dhl_domestic_provider_calls_enabled(self) -> bool:
         return self.DHL_DOMESTIC_PROVIDER_CALLS_ENABLED
+
+    @property
+    def checkout_capability_configured(self) -> bool:
+        active_pepper = self.CHECKOUT_CAPABILITY_ACTIVE_PEPPER.get_secret_value()
+        active_version = self.CHECKOUT_CAPABILITY_ACTIVE_PEPPER_VERSION
+        return bool(active_pepper) and active_version is not None
 
 
 settings = Settings()
