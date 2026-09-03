@@ -159,7 +159,7 @@ class OutboundShipmentBooking(Base):
         CheckConstraint(
             "claim_expires_at = claimed_at + claim_ttl_seconds * interval '1 second'"
             " AND (call_started_at IS NULL OR call_started_at >= claimed_at)"
-            " AND (result_recorded_at IS NULL OR (call_started_at IS NOT NULL AND result_recorded_at >= call_started_at))"
+            " AND (result_recorded_at IS NULL OR ((call_started_at IS NULL AND result_recorded_at >= claimed_at) OR (call_started_at IS NOT NULL AND result_recorded_at >= call_started_at)))"
             " AND ((classification = 'pending' AND result_recorded_at IS NULL AND completion_txid IS NULL AND failure_code IS NULL)"
             " OR (classification = 'success' AND result_recorded_at IS NOT NULL AND completion_txid IS NOT NULL AND failure_code IS NULL AND provider_reference IS NOT NULL AND tracking_number IS NOT NULL)"
             " OR (classification = 'failure' AND result_recorded_at IS NOT NULL AND completion_txid IS NOT NULL AND failure_code IS NOT NULL AND provider_reference IS NULL AND tracking_number IS NULL)"

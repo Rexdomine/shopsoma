@@ -322,6 +322,22 @@ def _derived_handoff_idempotency_key(base_key: str, suffix: str) -> str:
     return f"{base_key[:prefix_budget]}:{digest}{suffix}"
 
 
+def _state_rank(outbound_state: str) -> int:
+    order = {
+        "intent_created": 0,
+        "booked": 1,
+        "label_ready": 2,
+        "awaiting_collection": 3,
+        "collected": 4,
+        "in_transit": 5,
+        "out_for_delivery": 6,
+        "delivered": 7,
+        "exception": 8,
+        "cancelled": 9,
+    }
+    return order.get(outbound_state, -1)
+
+
 def _ensure_sandbox_booking_allowed(
     settings: Settings,
     *,
@@ -403,19 +419,59 @@ async def _reconcile_or_release_expired_claim(
     assert now is not None
     if active.claim_expires_at > now or active.classification != "pending":
         return
-    completed_at = now
-    active.result_recorded_at = completed_at
-    active.completion_txid = await db.scalar(text("SELECT txid_current()"))
     if active.call_started_at is None:
         active.classification = "failure"
         active.failure_code = "claim_expired"
+        active.call_started_at = active.claimed_at
+        active.result_recorded_at = now
+        active.completion_txid = await db.scalar(text("SELECT txid_current()"))
         guard.active_booking_id = None
         guard.booking_blocked_reason = None
     else:
         active.classification = "unknown"
         active.failure_code = "unknown_outcome"
+        active.result_recorded_at = now
+        active.completion_txid = await db.scalar(text("SELECT txid_current()"))
         guard.booking_blocked_reason = "unknown_outcome"
     await db.flush()
+
+
+async def _matching_tracking_replay(
+    db: AsyncSession,
+    *,
+    booking: OutboundShipmentBooking,
+    idempotency_key: str,
+) -> TrackingRefreshResult | None:
+    first_key = _derived_handoff_idempotency_key(idempotency_key, ":0")
+    first_snapshot = (
+        await db.execute(
+            select(OutboundShipmentTrackingSnapshot).where(
+                OutboundShipmentTrackingSnapshot.booking_id == booking.id,
+                OutboundShipmentTrackingSnapshot.idempotency_key == first_key,
+            )
+        )
+    ).scalar_one_or_none()
+    if first_snapshot is None:
+        return None
+    latest_snapshot = (
+        await db.execute(
+            select(OutboundShipmentTrackingSnapshot)
+            .where(OutboundShipmentTrackingSnapshot.booking_id == booking.id)
+            .order_by(
+                OutboundShipmentTrackingSnapshot.observed_at.desc(),
+                OutboundShipmentTrackingSnapshot.id.desc(),
+            )
+            .limit(1)
+        )
+    ).scalar_one()
+    return TrackingRefreshResult(
+        booking_id=booking.id,
+        tracking_number=booking.tracking_number or "",
+        outbound_state=booking.outbound_state,
+        customer_status=latest_snapshot.customer_status,
+        observations_recorded=0,
+        refreshed_at=booking.last_tracking_refresh_at or latest_snapshot.recorded_at,
+    )
 
 
 async def _verified_carrier_acceptance_snapshot(
@@ -585,7 +641,10 @@ async def book_outbound_shipment(
     )
     replay = await _matching_replay(db, order_id=order_id, command=command)
     if replay is not None:
-        return _booking_result(replay, replayed=True)
+        now = await db.scalar(text("SELECT clock_timestamp()"))
+        assert now is not None
+        if not (replay.classification == "pending" and replay.claim_expires_at <= now):
+            return _booking_result(replay, replayed=True)
 
     order, package, seal, intent, package_version, cohort_ids = await _load_authoritative_subject(db, order_id=order_id, command=command)
     _ensure_sandbox_booking_allowed(settings, cohort_ids=cohort_ids)
@@ -598,13 +657,22 @@ async def book_outbound_shipment(
         f"{intent.id}:{package.id}:{package.current_version}:{seal.id}".encode("utf-8")
     ).hexdigest()
 
-    guard = await db.get(OutboundIntentShipmentGuard, intent.id)
+    guard = (
+        await db.execute(
+            select(OutboundIntentShipmentGuard)
+            .where(OutboundIntentShipmentGuard.intent_id == intent.id)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
     if guard is None:
         guard = OutboundIntentShipmentGuard(intent_id=intent.id)
         db.add(guard)
         await db.flush()
     else:
         await _reconcile_or_release_expired_claim(db, guard=guard)
+    replay = await _matching_replay(db, order_id=order_id, command=command)
+    if replay is not None:
+        return _booking_result(replay, replayed=True)
     if guard.booking_blocked_reason == "unknown_outcome":
         raise ShipmentPhase4ReconciliationRequiredError(
             "booking outcome is unknown; reconcile before retry"
@@ -900,6 +968,14 @@ async def refresh_tracking(
     booking = await _load_booking_for_order(db, order_id=order_id, booking_id=command.booking_id)
     if booking.tracking_number is None:
         raise ShipmentPhase4Error("tracking number unavailable")
+    normalized_idempotency = _normalize_text(command.idempotency_key, field="idempotency_key")
+    replay = await _matching_tracking_replay(
+        db,
+        booking=booking,
+        idempotency_key=normalized_idempotency,
+    )
+    if replay is not None:
+        return replay
     cohort_ids = await _package_cohort_ids(
         db,
         package_id=booking.package_id,
@@ -913,9 +989,10 @@ async def refresh_tracking(
     inserted = 0
     latest = observations[-1]
     allow_carrier_movement = booking.handoff_recorded_at is not None
+    current_state = booking.outbound_state
     for position, observation in enumerate(observations):
         derived_idempotency_key = _derived_handoff_idempotency_key(
-            _normalize_text(command.idempotency_key, field="idempotency_key"),
+            normalized_idempotency,
             f":{position}",
         )
         snapshot = OutboundShipmentTrackingSnapshot(
@@ -942,31 +1019,35 @@ async def refresh_tracking(
         latest = observation
     completed_at = await db.scalar(text("SELECT clock_timestamp()"))
     booking.last_tracking_refresh_at = completed_at
+    effective_state = current_state
     if allow_carrier_movement:
-        booking.outbound_state = latest.outbound_state
+        if _state_rank(latest.outbound_state) >= _state_rank(current_state):
+            effective_state = latest.outbound_state
     else:
         if latest.outbound_state == "exception":
-            booking.outbound_state = "exception"
+            effective_state = "exception"
         elif latest.outbound_state in {"booked", "label_ready", "awaiting_collection"}:
-            booking.outbound_state = latest.outbound_state
+            if _state_rank(latest.outbound_state) >= _state_rank(current_state):
+                effective_state = latest.outbound_state
+    booking.outbound_state = effective_state
     if latest.outbound_state == "exception":
         booking.latest_exception_code = latest.exception_code
     order = await db.get(Order, order_id)
     if order is not None:
         order.delivery_provider = PROVIDER
         order.tracking_number = booking.tracking_number
-        if allow_carrier_movement and latest.outbound_state in {"collected", "in_transit", "out_for_delivery"}:
+        if allow_carrier_movement and effective_state in {"collected", "in_transit", "out_for_delivery"}:
             order.fulfillment_status = FulfillmentStatus.IN_TRANSIT
-        elif allow_carrier_movement and latest.outbound_state == "delivered":
+        elif allow_carrier_movement and effective_state == "delivered":
             order.fulfillment_status = FulfillmentStatus.DELIVERED
             order.delivered_at = latest.observed_at
-        elif latest.outbound_state == "exception":
+        elif effective_state == "exception":
             order.fulfillment_status = FulfillmentStatus.DELIVERY_FAILED
     await db.flush()
     return TrackingRefreshResult(
         booking_id=booking.id,
         tracking_number=booking.tracking_number,
-        outbound_state=latest.outbound_state,
+        outbound_state=booking.outbound_state,
         customer_status=latest.customer_status,
         observations_recorded=inserted,
         refreshed_at=completed_at,

@@ -21,6 +21,7 @@ import hashlib
 import io
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -31,6 +32,29 @@ import pytest
 
 from app.models.package_custody import CustodyEvent, CustodyStream
 from app.models.dhl_shipment import OutboundIntentShipmentGuard
+
+
+class _Secret:
+    def __init__(self, value: str):
+        self._value = value
+
+    def get_secret_value(self) -> str:
+        return self._value
+
+
+def _settings_stub(cohort_ids=frozenset()) -> Any:
+    return type("S", (), {
+        "DHL_DOMESTIC_PROVIDER_CALLS_ENABLED": True,
+        "DHL_DOMESTIC_WORKFLOW_ENABLED": True,
+        "DHL_ENVIRONMENT": "sandbox",
+        "dhl_base_url": "https://express.api.dhl.com/mydhlapi/test",
+        "dhl_domestic_sandbox_cohort_ids": cohort_ids,
+        "DHL_ENABLED": True,
+        "DHL_API_USERNAME": _Secret("user"),
+        "DHL_API_PASSWORD": _Secret("pass"),
+        "DHL_EXPORT_ACCOUNT_NUMBER": _Secret("123456789"),
+        "DHL_IMPORT_ACCOUNT_NUMBER": _Secret("123456789"),
+    })()
 
 
 class _Phase4Helpers:
@@ -200,11 +224,7 @@ async def test_booking_idempotency_same_key_returns_same_response(
             payload=type("Payload", (), booking_payload)(),
             admin=admin,
             db=db_session,
-            settings=type("S", (), {
-                "dhl_domestic_provider_calls_enabled": True,
-                "dhl_domestic_workflow_enabled": True,
-                "dhl_domestic_booking_enabled": True,
-            })(),
+            settings=_settings_stub(frozenset({graph["cohort"].id})),
         )
         await db_session.commit()
         id1 = r1.booking_id
@@ -215,11 +235,7 @@ async def test_booking_idempotency_same_key_returns_same_response(
             payload=type("Payload", (), booking_payload)(),
             admin=admin,
             db=db_session,
-            settings=type("S", (), {
-                "dhl_domestic_provider_calls_enabled": True,
-                "dhl_domestic_workflow_enabled": True,
-                "dhl_domestic_booking_enabled": True,
-            })(),
+            settings=_settings_stub(frozenset({graph["cohort"].id})),
         )
         await db_session.rollback()
 
@@ -266,11 +282,7 @@ async def test_unknown_outcome_recorded_blocks_retry(
             payload=type("Payload", (), booking_payload)(),
             admin=admin,
             db=db_session,
-            settings=type("S", (), {
-                "dhl_domestic_provider_calls_enabled": True,
-                "dhl_domestic_workflow_enabled": True,
-                "dhl_domestic_booking_enabled": True,
-            })(),
+            settings=_settings_stub(frozenset({graph["cohort"].id})),
         )
         await db_session.rollback()
 
@@ -429,7 +441,7 @@ async def test_tracking_refresh_appends_snapshot(
     snap1 = await refresh_tracking(
         db_session,
         order_id=graph["order"].id,
-        settings=type("S", (), {"dhl_domestic_provider_calls_enabled": True})(),
+        settings=_settings_stub(frozenset({graph["cohort"].id})),
         command=TrackingRefreshCommand(
             booking_id=booking.id,
             idempotency_key=f"track-1-{uuid.uuid4().hex[:12]}",
@@ -440,7 +452,7 @@ async def test_tracking_refresh_appends_snapshot(
     snap2 = await refresh_tracking(
         db_session,
         order_id=graph["order"].id,
-        settings=type("S", (), {"dhl_domestic_provider_calls_enabled": True})(),
+        settings=_settings_stub(frozenset({graph["cohort"].id})),
         command=TrackingRefreshCommand(
             booking_id=booking.id,
             idempotency_key=f"track-2-{uuid.uuid4().hex[:12]}",
