@@ -47,176 +47,139 @@ def upgrade() -> None:
     # ------------------------------------------------------------------
     op.create_table(
         "outbound_intent_shipment_guard",
-        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True, default=uuid4),
-        sa.Column("intent_id", postgresql.UUID(as_uuid=True), nullable=False, index=True),
-        sa.Column("package_id", postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column("package_version", sa.Integer(), nullable=False),
-        sa.Column(
-            "recorded_at",
-            sa.DateTime(timezone=True),
-            nullable=False,
-            server_default=sa.func.now(),
-        ),
-        sa.Column("recorded_by", sa.String(200), nullable=False),
-        sa.UniqueConstraint(
-            "intent_id",
-            "package_id",
-            "package_version",
-            name="uq_shipment_guard_intent_package",
-        ),
+        sa.Column("intent_id", postgresql.UUID(as_uuid=True), primary_key=True),
+        sa.Column("active_booking_id", postgresql.UUID(as_uuid=True), nullable=True),
+        sa.Column("booking_blocked_reason", sa.String(40), nullable=True),
     )
     op.create_index(
-        "ix_shipment_guard_intent_package",
+        "ix_guard_intent",
         "outbound_intent_shipment_guard",
-        ["intent_id", "package_id", "package_version"],
-        unique=True,
+        ["intent_id"],
+        unique=False,
     )
 
     # ------------------------------------------------------------------
-    # outbound_shipment_booking
-    #   Immutable booking evidence: idempotent, captures label+tracking on
-    #   success; records outcome_kind='unknown' on ambiguous DHL responses.
+    # outbound_shipment_booking  — aligned with ORM OutboundShipmentBooking
     # ------------------------------------------------------------------
     op.create_table(
         "outbound_shipment_booking",
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True, default=uuid4),
-        sa.Column("order_id", postgresql.UUID(as_uuid=True), nullable=False, index=True),
-        sa.Column("intent_id", postgresql.UUID(as_uuid=True), nullable=False, index=True),
+        sa.Column("order_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("intent_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("package_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("package_version", sa.Integer(), nullable=False),
         sa.Column("seal_id", postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column("outbound_state", sa.String(50), nullable=False, server_default="booked"),
-        # Idempotency
-        sa.Column("idempotency_key", sa.String(200), nullable=False, unique=True),
-        # Deterministic request fingerprint for duplicate detection
-        sa.Column(
-            "request_fingerprint",
-            sa.String(64),
-            nullable=False,
-            comment="SHA-256 of canonicalized booking request",
-        ),
-        # Outcome
-        sa.Column(
-            "outcome_kind",
-            sa.String(20),
-            nullable=False,
-            server_default="success",
-        ),
-        # Provider reference (populated on success only)
-        sa.Column("provider_reference", sa.String(100), nullable=True),
-        sa.Column("tracking_number", sa.String(100), nullable=True),
-        # Label (populated on success only; stored as binary, not base64)
-        sa.Column("label_media_type", sa.String(100), nullable=True),
-        sa.Column("label_sha256", sa.String(64), nullable=True),
+        sa.Column("origin_hub_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("provider", sa.String(20), nullable=False, server_default="dhl"),
+        sa.Column("environment", sa.String(20), nullable=False, server_default="sandbox"),
+        sa.Column("account_alias", sa.String(100), nullable=False),
+        sa.Column("initiating_actor_type", sa.String(30), nullable=False),
+        sa.Column("initiating_actor_id", sa.String(200), nullable=False),
+        sa.Column("source_command", sa.String(100), nullable=False),
+        sa.Column("idempotency_key", sa.String(200), nullable=False),
+        sa.Column("request_fingerprint", sa.String(64), nullable=False),
+        sa.Column("fingerprint_key_version", sa.String(50), nullable=False),
+        sa.Column("planned_ship_date", sa.Date(), nullable=False),
+        sa.Column("adapter_version", sa.String(50), nullable=False),
+        sa.Column("schema_version", sa.String(50), nullable=False),
+        sa.Column("canonicalization_version", sa.String(50), nullable=False),
+        sa.Column("claimed_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+        sa.Column("claim_ttl_seconds", sa.Integer(), nullable=False, server_default="300"),
+        sa.Column("claim_expires_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("call_started_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("result_recorded_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("classification", sa.String(20), nullable=False, server_default="pending"),
+        sa.Column("outbound_state", sa.String(30), nullable=False, server_default="intent_created"),
+        sa.Column("failure_code", sa.String(100), nullable=True),
+        sa.Column("provider_reference", sa.String(120), nullable=True),
+        sa.Column("tracking_number", sa.String(120), nullable=True),
+        sa.Column("service_code", sa.String(60), nullable=True),
+        sa.Column("label_media_type", sa.String(80), nullable=True),
         sa.Column("label_content", sa.LargeBinary(), nullable=True),
-        # Failure note (populated on failure/unknown only)
-        sa.Column("failure_note", sa.Text(), nullable=True),
-        # Provider error context (populated on unknown only)
-        sa.Column("provider_status_code", sa.Integer(), nullable=True),
-        sa.Column("provider_request_id", sa.String(100), nullable=True),
-        # Timestamps
-        sa.Column(
-            "booked_at",
-            sa.DateTime(timezone=True),
-            nullable=True,
-            comment="When booking was accepted by DHL",
+        sa.Column("label_sha256", sa.String(64), nullable=True),
+        sa.Column("label_received_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("collection_scheduled_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("collection_counterparty", sa.String(120), nullable=True),
+        sa.Column("collection_evidence_ref", sa.String(200), nullable=True),
+        sa.Column("collection_evidence_hash", sa.String(64), nullable=True),
+        sa.Column("handoff_recorded_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("last_tracking_refresh_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("latest_exception_code", sa.String(100), nullable=True),
+        sa.Column("completion_txid", sa.BigInteger(), nullable=True),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+        sa.UniqueConstraint(
+            "provider", "environment", "account_alias", "idempotency_key",
+            name="uq_outbound_shipment_bookings_idempotency",
         ),
-        sa.Column(
-            "recorded_at",
-            sa.DateTime(timezone=True),
-            nullable=False,
-            server_default=sa.func.now(),
+        sa.UniqueConstraint(
+            "provider", "environment", "provider_reference",
+            name="uq_outbound_shipment_bookings_provider_reference",
         ),
-        # Operator who initiated booking
-        sa.Column("operator_id", postgresql.UUID(as_uuid=True), nullable=False),
-        # Constraints enforcing immutability rules
-        sa.CheckConstraint(
-            "outcome_kind IN ('success', 'failure', 'unknown')",
-            name="ck_booking_outcome_kind",
+        sa.UniqueConstraint(
+            "provider", "environment", "tracking_number",
+            name="uq_outbound_shipment_bookings_tracking",
         ),
         sa.CheckConstraint(
-            "outcome_kind != 'success' "
-            "OR (provider_reference IS NOT NULL AND tracking_number IS NOT NULL)",
-            name="ck_success_requires_provider_refs",
+            "provider = 'dhl' AND environment = 'sandbox'",
+            name="ck_outbound_shipment_bookings_lane",
         ),
         sa.CheckConstraint(
-            "outcome_kind != 'success' "
-            "OR (label_sha256 IS NOT NULL AND label_content IS NOT NULL AND label_media_type IS NOT NULL)",
-            name="ck_success_requires_label",
+            "package_version > 0 AND claim_ttl_seconds BETWEEN 1 AND 900",
+            name="ck_outbound_shipment_bookings_versions_ttl",
         ),
         sa.CheckConstraint(
-            "outcome_kind IN ('failure', 'unknown') "
-            "OR failure_note IS NULL",
-            name="ck_success_has_no_failure_note",
-        ),
-        # Request fingerprint must be a valid hex SHA-256
-        sa.CheckConstraint(
-            "request_fingerprint ~ '^[0-9a-f]{64}$'",
-            name="ck_booking_fingerprint_format",
-        ),
-        # Label SHA256 must be valid hex when present
-        sa.CheckConstraint(
-            "label_sha256 IS NULL OR label_sha256 ~ '^[0-9a-f]{64}$'",
-            name="ck_booking_label_sha256_format",
+            "classification IN ('pending', 'success', 'failure', 'unknown')",
+            name="ck_outbound_shipment_bookings_classification",
         ),
     )
     op.create_index(
-        "ix_booking_order_intent",
-        "outbound_shipment_booking",
-        ["order_id", "intent_id"],
-    )
-    op.create_index(
-        "ix_booking_intent_package",
+        "ix_outbound_shipment_booking_subject",
         "outbound_shipment_booking",
         ["intent_id", "package_id", "package_version"],
     )
+    op.create_index(
+        "ix_outbound_shipment_booking_state",
+        "outbound_shipment_booking",
+        ["outbound_state"],
+    )
 
     # ------------------------------------------------------------------
-    # outbound_shipment_tracking_snapshot
-    #   Append-only tracking history per booking.  Each refresh call
-    #   inserts a new row; rows are never updated or deleted.
+    # outbound_shipment_tracking_snapshot  — aligned with ORM OutboundShipmentTrackingSnapshot
     # ------------------------------------------------------------------
     op.create_table(
         "outbound_shipment_tracking_snapshot",
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True, default=uuid4),
-        sa.Column("booking_id", postgresql.UUID(as_uuid=True), nullable=False, index=True),
-        sa.Column("idempotency_key", sa.String(200), nullable=False, unique=True),
-        # Tracking data from DHL
-        sa.Column("tracking_number", sa.String(100), nullable=False),
-        sa.Column("outbound_state", sa.String(50), nullable=False),
-        sa.Column("customer_status", sa.String(50), nullable=False),
-        sa.Column("raw_status", sa.Text(), nullable=True),
-        sa.Column(
-            "status_code",
-            sa.String(20),
-            nullable=True,
-            comment="DHL event status code",
+        sa.Column("booking_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("order_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("provider", sa.String(20), nullable=False, server_default="dhl"),
+        sa.Column("tracking_number", sa.String(120), nullable=False),
+        sa.Column("provider_status_code", sa.String(60), nullable=False),
+        sa.Column("outbound_state", sa.String(30), nullable=False),
+        sa.Column("customer_status", sa.String(60), nullable=False),
+        sa.Column("detail", sa.String(240), nullable=False),
+        sa.Column("observed_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("recorded_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+        sa.Column("exception_code", sa.String(100), nullable=True),
+        sa.Column("idempotency_key", sa.String(200), nullable=False),
+        sa.Column("source_command", sa.String(100), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+        sa.UniqueConstraint(
+            "booking_id", "provider_status_code", "observed_at",
+            name="uq_outbound_shipment_tracking_snapshots_observation",
         ),
-        sa.Column("status_description", sa.Text(), nullable=True),
-        # Location
-        sa.Column("location_description", sa.String(200), nullable=True),
-        sa.Column("destination_country", sa.String(2), nullable=True),
-        sa.Column("destination_city", sa.String(100), nullable=True),
-        # Timestamps from DHL
-        sa.Column(
-            "event_occurred_at",
-            sa.DateTime(timezone=True),
-            nullable=True,
-            comment="When DHL recorded the event",
+        sa.UniqueConstraint(
+            "booking_id", "idempotency_key",
+            name="uq_outbound_shipment_tracking_snapshots_replay",
         ),
-        sa.Column(
-            "recorded_at",
-            sa.DateTime(timezone=True),
-            nullable=False,
-            server_default=sa.func.now(),
+        sa.CheckConstraint(
+            "provider = 'dhl'",
+            name="ck_outbound_shipment_tracking_snapshots_provider",
         ),
-        # Operator who triggered the refresh
-        sa.Column("operator_id", postgresql.UUID(as_uuid=True), nullable=False),
     )
     op.create_index(
-        "ix_tracking_snapshot_booking",
+        "ix_outbound_shipment_tracking_snapshots_booking",
         "outbound_shipment_tracking_snapshot",
-        ["booking_id"],
+        ["booking_id", "observed_at"],
     )
 
 

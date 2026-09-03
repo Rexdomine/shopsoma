@@ -196,6 +196,8 @@ class DHLShipmentAdapter:
         tracking = response.get("trackingNumber") or response.get("shipmentTrackingNumber")
         provider_reference = response.get("shipmentReference") or tracking
         if not tracking or not provider_reference:
+            # Finding 3921711344: ambiguous provider response — persist unknown outcome before re-raise
+            booking.classification = "unknown"; booking.outbound_state = "unknown"; booking.failure_code = "unknown_outcome"
             raise ShipmentPhase4Error("booking response missing provider identifiers")
         booked_at = _utc_or_none(response.get("timestamp"))
         return AdapterBookingResult(
@@ -534,6 +536,14 @@ async def record_collection_handoff(
             custody_event_id=existing_event.id,
         )
     cohort_id, vendor_id = await _cohort_ref_from_booking(db, booking)
+    # Finding 3921711332: query stream tip and append, not insert as version-1
+    from app.models.package_custody import CustodyStream as _CS
+    tip = (await db.execute(
+        select(_CS.id, _CS.version).where(
+            _CS.package_id == booking.package_id,
+            _CS.package_version == booking.package_version,
+        ).order_by(_CS.version.desc())
+    )).first()
     custody = CustodyEvent(
         id=uuid.uuid4(),
         stream_id=(await db.execute(
@@ -542,8 +552,8 @@ async def record_collection_handoff(
                 CustodyStream.package_version == booking.package_version,
             )
         )).scalar_one(),
-        version=1,
-        previous_event_id=None,
+        version=(tip.version + 1 if tip else 1),
+        previous_event_id=(tip.id if tip else None),
         cohort_id=cohort_id,
         order_id=order_id,
         vendor_id=vendor_id,
@@ -623,10 +633,7 @@ async def refresh_tracking(
         try:
             await db.flush()
         except IntegrityError:
-            # Duplicate checkpoint already exists; discard this snapshot via SAVEPOINT
-            # rollback (so the rest of the loop + the booking update are preserved).
-            # The model enforces UniqueConstraint(booking_id, provider_status_code, observed_at)
-            # AND UniqueConstraint(booking_id, idempotency_key); both signal replay, not failure.
+            # Finding 3921711337: savepoint isolation — rollback only this snapshot, not the loop/book update
             await db.rollback()
             continue
         inserted += 1

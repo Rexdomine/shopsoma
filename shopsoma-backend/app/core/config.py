@@ -122,6 +122,14 @@ class Settings(BaseSettings):
     # Default Currency
     DEFAULT_CURRENCY: str = "NGN"
 
+    # DHL settings (legacy — referenced by .env but not used by Phase 4)
+    DHL_ENABLED: bool = False
+    DHL_ENVIRONMENT: str = "sandbox"
+    DHL_API_USERNAME: str = ""
+    DHL_API_PASSWORD: str = ""
+    DHL_EXPORT_ACCOUNT_NUMBER: str = ""
+    DHL_DOMESTIC_QUOTE_ENFORCEMENT_ENABLED: bool = False
+
     # DHL domestic Phase 4 workflow feature gates
     DHL_DOMESTIC_WORKFLOW_ENABLED: bool = False
     DHL_DOMESTIC_PROVIDER_CALLS_ENABLED: bool = False
