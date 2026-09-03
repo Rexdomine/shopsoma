@@ -386,6 +386,38 @@ async def _matching_replay(
     return existing
 
 
+async def _reconcile_or_release_expired_claim(
+    db: AsyncSession,
+    *,
+    guard: OutboundIntentShipmentGuard,
+) -> None:
+    if guard.active_booking_id is None:
+        return
+    active = await db.get(OutboundShipmentBooking, guard.active_booking_id)
+    if active is None:
+        guard.active_booking_id = None
+        guard.booking_blocked_reason = None
+        await db.flush()
+        return
+    now = await db.scalar(text("SELECT clock_timestamp()"))
+    assert now is not None
+    if active.claim_expires_at > now or active.classification != "pending":
+        return
+    completed_at = now
+    active.result_recorded_at = completed_at
+    active.completion_txid = await db.scalar(text("SELECT txid_current()"))
+    if active.call_started_at is None:
+        active.classification = "failure"
+        active.failure_code = "claim_expired"
+        guard.active_booking_id = None
+        guard.booking_blocked_reason = None
+    else:
+        active.classification = "unknown"
+        active.failure_code = "unknown_outcome"
+        guard.booking_blocked_reason = "unknown_outcome"
+    await db.flush()
+
+
 async def _verified_carrier_acceptance_snapshot(
     db: AsyncSession,
     *,
@@ -571,11 +603,13 @@ async def book_outbound_shipment(
         guard = OutboundIntentShipmentGuard(intent_id=intent.id)
         db.add(guard)
         await db.flush()
-    elif guard.booking_blocked_reason == "unknown_outcome":
+    else:
+        await _reconcile_or_release_expired_claim(db, guard=guard)
+    if guard.booking_blocked_reason == "unknown_outcome":
         raise ShipmentPhase4ReconciliationRequiredError(
             "booking outcome is unknown; reconcile before retry"
         )
-    elif guard.active_booking_id is not None:
+    if guard.active_booking_id is not None:
         active = await db.get(OutboundShipmentBooking, guard.active_booking_id)
         if active is not None:
             raise ShipmentPhase4ConflictError(
@@ -878,7 +912,12 @@ async def refresh_tracking(
         raise ShipmentPhase4Error("tracking adapter returned no observations")
     inserted = 0
     latest = observations[-1]
+    allow_carrier_movement = booking.handoff_recorded_at is not None
     for position, observation in enumerate(observations):
+        derived_idempotency_key = _derived_handoff_idempotency_key(
+            _normalize_text(command.idempotency_key, field="idempotency_key"),
+            f":{position}",
+        )
         snapshot = OutboundShipmentTrackingSnapshot(
             booking_id=booking.id,
             order_id=booking.order_id,
@@ -890,7 +929,7 @@ async def refresh_tracking(
             detail=observation.detail,
             observed_at=observation.observed_at,
             exception_code=observation.exception_code,
-            idempotency_key=f"{command.idempotency_key}:{position}",
+            idempotency_key=derived_idempotency_key,
             source_command="admin_dhl_tracking_refresh",
         )
         try:
@@ -903,16 +942,22 @@ async def refresh_tracking(
         latest = observation
     completed_at = await db.scalar(text("SELECT clock_timestamp()"))
     booking.last_tracking_refresh_at = completed_at
-    booking.outbound_state = latest.outbound_state
+    if allow_carrier_movement:
+        booking.outbound_state = latest.outbound_state
+    else:
+        if latest.outbound_state == "exception":
+            booking.outbound_state = "exception"
+        elif latest.outbound_state in {"booked", "label_ready", "awaiting_collection"}:
+            booking.outbound_state = latest.outbound_state
     if latest.outbound_state == "exception":
         booking.latest_exception_code = latest.exception_code
     order = await db.get(Order, order_id)
     if order is not None:
         order.delivery_provider = PROVIDER
         order.tracking_number = booking.tracking_number
-        if latest.outbound_state in {"collected", "in_transit", "out_for_delivery"}:
+        if allow_carrier_movement and latest.outbound_state in {"collected", "in_transit", "out_for_delivery"}:
             order.fulfillment_status = FulfillmentStatus.IN_TRANSIT
-        elif latest.outbound_state == "delivered":
+        elif allow_carrier_movement and latest.outbound_state == "delivered":
             order.fulfillment_status = FulfillmentStatus.DELIVERED
             order.delivered_at = latest.observed_at
         elif latest.outbound_state == "exception":

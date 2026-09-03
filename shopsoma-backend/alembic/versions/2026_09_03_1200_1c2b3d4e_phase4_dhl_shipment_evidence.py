@@ -139,6 +139,11 @@ def upgrade() -> None:
         sa.Column("intent_id", postgresql.UUID(as_uuid=True), primary_key=True),
         sa.Column("active_booking_id", postgresql.UUID(as_uuid=True), nullable=True),
         sa.Column("booking_blocked_reason", sa.String(40), nullable=True),
+        sa.ForeignKeyConstraint(
+            ["intent_id"], ["outbound_shipment_intents.id"],
+            name="fk_outbound_intent_shipment_guard_intent",
+            ondelete="CASCADE",
+        ),
     )
     op.create_index(
         "ix_guard_intent",
