@@ -18,13 +18,13 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import io
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 
 # ---------------------------------------------------------------------------
 # Test fixtures — subject helpers (mirrors test_domestic_rate_persistence.py)
@@ -46,9 +46,12 @@ def _settings_stub(cohort_ids=frozenset()) -> Any:
     return type("S", (), {
         "DHL_DOMESTIC_PROVIDER_CALLS_ENABLED": True,
         "DHL_DOMESTIC_WORKFLOW_ENABLED": True,
+        "dhl_domestic_provider_calls_enabled": True,
+        "dhl_domestic_workflow_enabled": True,
         "DHL_ENVIRONMENT": "sandbox",
         "dhl_base_url": "https://express.api.dhl.com/mydhlapi/test",
         "dhl_domestic_sandbox_cohort_ids": cohort_ids,
+        "dhl_configured": True,
         "DHL_ENABLED": True,
         "DHL_API_USERNAME": _Secret("user"),
         "DHL_API_PASSWORD": _Secret("pass"),
@@ -104,6 +107,8 @@ class _Phase4Helpers:
         """Commit booking and intent state so handoff endpoint is reachable."""
         from app.models.dhl_shipment import OutboundShipmentBooking
 
+        claimed_at = datetime.now(UTC)
+        result_recorded_at = claimed_at + timedelta(seconds=1)
         booking = OutboundShipmentBooking(
             id=uuid.uuid4(),
             order_id=graph["order"].id,
@@ -117,31 +122,52 @@ class _Phase4Helpers:
             account_alias="sandbox-alias-001",
             initiating_actor_type="admin",
             initiating_actor_id=str(admin.id),
-            source_command="create_dhl_booking",
+            source_command="admin_dhl_booking",
             idempotency_key="phase4-handoff-subject-001",
             request_fingerprint=hashlib.sha256(b"test-booking").hexdigest(),
             fingerprint_key_version="v1",
-            planned_ship_date=datetime.now(UTC).date(),
+            planned_ship_date=claimed_at.date(),
             adapter_version="phase4-v1",
             schema_version="v1",
             canonicalization_version="v1",
-            claimed_at=datetime.now(UTC),
+            claimed_at=claimed_at,
             claim_ttl_seconds=300,
-            claim_expires_at=datetime.now(UTC) + timedelta(seconds=300),
+            claim_expires_at=claimed_at + timedelta(seconds=300),
             classification="success",
-            outbound_state="booked",
+            outbound_state="label_ready",
             provider_reference="PR-REF-001",
             tracking_number="DHL123456789",
             label_media_type="application/pdf",
             label_sha256=hashlib.sha256(b"test-label").hexdigest(),
             label_content=b"PDF_LABEL_CONTENT",
-            label_received_at=datetime.now(UTC),
-            result_recorded_at=datetime.now(UTC),
+            label_received_at=result_recorded_at,
+            result_recorded_at=result_recorded_at,
             completion_txid=1,
         )
         db_session.add(booking)
         await db_session.flush()
         return booking
+
+    async def _verified_acceptance_snapshot(self, db_session, booking):
+        from app.models.dhl_shipment import OutboundShipmentTrackingSnapshot
+
+        observed_at = booking.result_recorded_at + timedelta(seconds=1)
+        snapshot = OutboundShipmentTrackingSnapshot(
+            booking_id=booking.id,
+            order_id=booking.order_id,
+            provider="dhl",
+            tracking_number=booking.tracking_number,
+            provider_status_code="COLLECTED",
+            outbound_state="collected",
+            customer_status="picked_up",
+            detail="Shipment collected by DHL",
+            observed_at=observed_at,
+            idempotency_key=f"verified-acceptance-{uuid.uuid4().hex[:12]}",
+            source_command="admin_dhl_tracking_refresh",
+        )
+        db_session.add(snapshot)
+        await db_session.flush()
+        return snapshot
 
     async def _chain_custody(self, db_session, graph, package, seal):
         """Build packed→sealed→staged→released custody chain (admin-operator user)."""
@@ -262,8 +288,6 @@ async def test_unknown_outcome_recorded_blocks_retry(
         "idempotency_key": key,
     }
 
-    from app.services.dhl.client import DHLAPIError
-
     fake_unknown_response = {
         "shipmentTrackingNumber": None,
         "packages": [],
@@ -304,6 +328,7 @@ async def test_handoff_creates_custody_event_with_chain(
     booking = await PHASE4._ready_for_handoff(
         db_session, graph, package, seal, intent, admin
     )
+    await PHASE4._verified_acceptance_snapshot(db_session, booking)
     await db_session.commit()
 
     from app.services.dhl.shipments import HandoffCommand, record_collection_handoff
@@ -326,15 +351,15 @@ async def test_handoff_creates_custody_event_with_chain(
     await db_session.flush()
 
     assert result.custody_event_id is not None, "handoff must return custody event id"
-    assert result.outbound_state == "handed_off", "state must transition to handed_off"
+    assert result.outbound_state == "collected", "state must transition to collected"
 
     # Verify custody event in DB
     ev = await db_session.get(CustodyEvent, result.custody_event_id)
     assert ev is not None, "custody event must exist"
     assert ev.event_type == "provider_accepted", "event type must be provider_accepted"
-    assert ev.actor_type == "user", "actor type must be user for admin handoff"
-    assert ev.actor_id == str(admin.id), "actor must be the operator"
-    assert ev.recorded_at >= occurred, "recorded_at must be >= occurred_at"
+    assert ev.actor_type == "carrier", "actor type must be carrier for provider handoff"
+    assert ev.actor_id == "dhl", "actor must be the provider identity"
+    assert ev.recorded_at >= ev.occurred_at, "recorded_at must be >= occurred_at"
 
 
 @pytest.mark.asyncio
@@ -350,6 +375,7 @@ async def test_handoff_idempotency_same_key_returns_same_event(
     booking = await PHASE4._ready_for_handoff(
         db_session, graph, package, seal, intent, admin
     )
+    await PHASE4._verified_acceptance_snapshot(db_session, booking)
     await db_session.commit()
 
     from app.services.dhl.shipments import HandoffCommand, record_collection_handoff
@@ -416,7 +442,7 @@ async def test_label_returns_content_and_sha256_header(
 
     assert label.content == b"PDF_LABEL_CONTENT", "label content must be stored bytes"
     assert label.media_type == "application/pdf", "media type must be PDF"
-    assert label.filename.startswith("DHL"), "filename must start with DHL"
+    assert label.filename.startswith("dhl-label-"), "filename must use the dhl-label prefix"
     assert label.filename.endswith(".pdf"), "filename must end with .pdf"
     assert len(label.sha256) == 64, "SHA256 must be 64 hex chars"
 
@@ -438,27 +464,46 @@ async def test_tracking_refresh_appends_snapshot(
     from app.models.dhl_shipment import OutboundShipmentTrackingSnapshot
     from app.services.dhl.shipments import TrackingRefreshCommand, refresh_tracking
 
-    snap1 = await refresh_tracking(
-        db_session,
-        order_id=graph["order"].id,
-        settings=_settings_stub(frozenset({graph["cohort"].id})),
-        command=TrackingRefreshCommand(
-            booking_id=booking.id,
-            idempotency_key=f"track-1-{uuid.uuid4().hex[:12]}",
-        ),
-    )
-    await db_session.flush()
+    tracking_response = {
+        "events": [
+            {
+                "statusCode": "BOOKED",
+                "description": "Shipment booked",
+                "timestamp": booking.result_recorded_at.isoformat(),
+            },
+            {
+                "statusCode": "PICKUP_CONFIRMED",
+                "description": "Shipment collected",
+                "timestamp": (booking.result_recorded_at + timedelta(minutes=5)).isoformat(),
+            },
+        ]
+    }
+    with patch(
+        "app.services.dhl.client.DHLClient.request_json",
+        new_callable=AsyncMock,
+        return_value=tracking_response,
+    ):
+        _ = await refresh_tracking(
+            db_session,
+            order_id=graph["order"].id,
+            settings=_settings_stub(frozenset({graph["cohort"].id})),
+            command=TrackingRefreshCommand(
+                booking_id=booking.id,
+                idempotency_key=f"track-1-{uuid.uuid4().hex[:12]}",
+            ),
+        )
+        await db_session.flush()
 
-    snap2 = await refresh_tracking(
-        db_session,
-        order_id=graph["order"].id,
-        settings=_settings_stub(frozenset({graph["cohort"].id})),
-        command=TrackingRefreshCommand(
-            booking_id=booking.id,
-            idempotency_key=f"track-2-{uuid.uuid4().hex[:12]}",
-        ),
-    )
-    await db_session.rollback()
+        snap2 = await refresh_tracking(
+            db_session,
+            order_id=graph["order"].id,
+            settings=_settings_stub(frozenset({graph["cohort"].id})),
+            command=TrackingRefreshCommand(
+                booking_id=booking.id,
+                idempotency_key=f"track-2-{uuid.uuid4().hex[:12]}",
+            ),
+        )
+        await db_session.rollback()
 
     # Two snapshots must exist
     count = await db_session.scalar(
@@ -490,7 +535,7 @@ async def test_shipment_guard_prevents_duplicate_booking_row(
     await db_session.flush()
 
     # Second guard for same intent+package must violate unique constraint
-    with pytest.raises(__import__("sqlalchemy.exc").IntegrityError):
+    with pytest.raises(IntegrityError):
         guard2 = OutboundIntentShipmentGuard(
             intent_id=intent.id,  # same intent — must violate PK uniqueness
             active_booking_id=uuid.uuid4(),

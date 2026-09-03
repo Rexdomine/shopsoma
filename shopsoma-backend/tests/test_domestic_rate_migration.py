@@ -17,12 +17,13 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 
 ROOT = Path(__file__).resolve().parents[1]
-HEAD = "e6f7a8b9c0d1"
-CURRENT_HEAD_PARENT = "d5e6f7a8b9c0"
-PREVIOUS_HEAD = "c4d5e6f7a8b9"
-HEAD_PARENT = "b3c4d5e6f7a8"
-HEAD_GRANDPARENT = "a2b3c4d5e6f7"
-HEAD_MIGRATION = ROOT / "alembic" / "versions" / f"{HEAD}_repair_domestic_rate_custody_guards.py"
+HEAD = "1c2b3d4e"
+CURRENT_HEAD_PARENT = "e6f7a8b9c0d1"
+PREVIOUS_HEAD = "d5e6f7a8b9c0"
+HEAD_PARENT = "c4d5e6f7a8b9"
+HEAD_GRANDPARENT = "b3c4d5e6f7a8"
+HEAD_MIGRATION = ROOT / "alembic" / "versions" / "2026_09_03_1200_1c2b3d4e_phase4_dhl_shipment_evidence.py"
+REPAIR_MIGRATION = ROOT / "alembic" / "versions" / "e6f7a8b9c0d1_repair_domestic_rate_custody_guards.py"
 
 EXPAND_REVISION = "a0b1c2d3e4f5"
 F9_REVISION = "f9d1b3e5a7c9"
@@ -161,7 +162,8 @@ def test_domestic_rate_migration_is_the_single_linear_static_head() -> None:
     assert graph.get_revision(CURRENT_HEAD_PARENT).down_revision == PREVIOUS_HEAD
     assert graph.get_revision(PREVIOUS_HEAD).down_revision == HEAD_PARENT
     assert graph.get_revision(HEAD_PARENT).down_revision == HEAD_GRANDPARENT
-    assert graph.get_revision(HEAD_GRANDPARENT).down_revision == "a1b2c3d4e5f6"
+    assert graph.get_revision(HEAD_GRANDPARENT).down_revision == "a2b3c4d5e6f7"
+    assert graph.get_revision("a2b3c4d5e6f7").down_revision == "a1b2c3d4e5f6"
     assert graph.get_revision("a1b2c3d4e5f6").down_revision == EXPAND_REVISION
     assert graph.get_revision(EXPAND_REVISION).down_revision == F9_REVISION
     assert graph.get_revision(F9_REVISION).down_revision == QUOTE_REVISION
@@ -197,7 +199,7 @@ def test_domestic_rate_migration_is_the_single_linear_static_head() -> None:
 
 
 def test_domestic_rate_repair_head_replaces_runtime_trigger_functions_on_upgrade() -> None:
-    source = HEAD_MIGRATION.read_text()
+    source = REPAIR_MIGRATION.read_text()
     assert 'down_revision = "d5e6f7a8b9c0"' in source
     assert source.count("CREATE OR REPLACE FUNCTION validate_domestic_rate_attempt_insert()") == 2
     assert source.count("CREATE OR REPLACE FUNCTION validate_custody_event_insert()") == 2
@@ -267,7 +269,7 @@ def test_domestic_rate_lease_checks_and_functions_have_exact_model_parity() -> N
         if any(f"CREATE OR REPLACE FUNCTION {name}" in statement for name in names)
     )
     assert historical_functions == model_functions
-    repair_source = HEAD_MIGRATION.read_text()
+    repair_source = REPAIR_MIGRATION.read_text()
     current_insert = next(
         statement.replace("%%", "%").strip().replace("CREATE FUNCTION", "CREATE OR REPLACE FUNCTION", 1)
         for statement in DOMESTIC_RATE_TRIGGER_DDLS

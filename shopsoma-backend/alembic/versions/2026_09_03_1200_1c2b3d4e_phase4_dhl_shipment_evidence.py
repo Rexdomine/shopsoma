@@ -1,7 +1,7 @@
 """Phase 4 DHL shipment evidence: booking, tracking, custody guard.
 
 Revision ID: 1c2b3d4e
-Revises: 1c2b3d3a  # repair_domestic_rate_custody_guards
+Revises: e6f7a8b9c0d1  # repair_domestic_rate_custody_guards
 Create Date: 2026-09-03 12:00:00.000000
 
 Additive normalized evidence tables for DHL outbound booking, label,
@@ -34,7 +34,7 @@ from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision: str = "1c2b3d4e"
-down_revision: Union[str, None] = "17d4240dbb35"
+down_revision: Union[str, None] = "e6f7a8b9c0d1"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

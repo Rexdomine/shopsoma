@@ -5,14 +5,19 @@ configuration from environment variables.
 """
 
 import re
-import uuid
 from typing import List, Literal, Optional
 from uuid import UUID
-from pydantic import AliasChoices, Field, SecretStr
-from pydantic_settings import BaseSettings
+from pydantic import AliasChoices, Field, SecretStr, model_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="forbid",
+    )
+
     # Application Settings
     APP_NAME: str = "Shopsoma"
     ENVIRONMENT: str = "development"
@@ -241,34 +246,8 @@ class Settings(BaseSettings):
     # Default Currency
     DEFAULT_CURRENCY: str = "NGN"
 
-    # DHL settings (legacy — referenced by .env but not used by Phase 4)
-    DHL_ENABLED: bool = False
-    DHL_ENVIRONMENT: str = "sandbox"
-    DHL_API_USERNAME: SecretStr = SecretStr("")
-    DHL_API_PASSWORD: SecretStr = SecretStr("")
-    DHL_EXPORT_ACCOUNT_NUMBER: SecretStr = SecretStr("")
-    DHL_IMPORT_ACCOUNT_NUMBER: SecretStr = SecretStr("")
-    DHL_REQUEST_TIMEOUT_SECONDS: int = 30
-    DHL_DOMESTIC_QUOTE_ENFORCEMENT_ENABLED: bool = False
-
-    # DHL domestic Phase 4 workflow feature gates
-    DHL_DOMESTIC_WORKFLOW_ENABLED: bool = False
-    DHL_DOMESTIC_PROVIDER_CALLS_ENABLED: bool = False
-    DHL_DOMESTIC_QUOTE_TTL_SECONDS: int = 1800
-    DHL_DOMESTIC_SANDBOX_COHORT_IDS: str = ""
-
-    # Checkout capability fingerprinting / guest capability rotation
-    CHECKOUT_CAPABILITY_ACTIVE_PEPPER: SecretStr = SecretStr("")
-    CHECKOUT_CAPABILITY_ACTIVE_PEPPER_VERSION: int | None = None
-    CHECKOUT_CAPABILITY_PREVIOUS_PEPPER: SecretStr = SecretStr("")
-    CHECKOUT_CAPABILITY_PREVIOUS_PEPPER_VERSION: int | None = None
-
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        extra = "forbid"
-
-    def model_post_init(self, __context) -> None:
+    @model_validator(mode="after")
+    def _validate_settings(self):
         environment = self.ENVIRONMENT.lower()
 
         if self.DHL_ENABLED:
@@ -326,6 +305,7 @@ class Settings(BaseSettings):
                 raise ValueError(
                     f"Object storage is enabled but required settings are missing: {missing}"
                 )
+        return self
 
     @staticmethod
     def _build_async_db_url(database_url: str) -> str:
@@ -340,56 +320,5 @@ class Settings(BaseSettings):
     @staticmethod
     def get_masked_db_url(database_url: str) -> str:
         return re.sub(r"://([^:]+):([^@]+)@", r"://\\1:***@", database_url)
-
-    @property
-    def dhl_base_url(self) -> str:
-        if self.DHL_ENVIRONMENT == "sandbox":
-            return "https://express.api.dhl.com/mydhlapi/test"
-        return "https://express.api.dhl.com/mydhlapi"
-
-    @property
-    def dhl_configured(self) -> bool:
-        return all(
-            (
-                self.DHL_ENABLED,
-                bool(self.DHL_API_USERNAME.get_secret_value()),
-                bool(self.DHL_API_PASSWORD.get_secret_value()),
-                bool(self.DHL_EXPORT_ACCOUNT_NUMBER.get_secret_value()),
-                bool(self.dhl_base_url),
-            )
-        )
-
-    @property
-    def dhl_domestic_sandbox_cohort_ids(self) -> frozenset[uuid.UUID]:
-        raw = self.DHL_DOMESTIC_SANDBOX_COHORT_IDS.strip()
-        if not raw:
-            return frozenset()
-        values: list[uuid.UUID] = []
-        seen: set[uuid.UUID] = set()
-        for token in raw.split(","):
-            normalized = token.strip()
-            if not normalized:
-                continue
-            parsed = uuid.UUID(normalized)
-            if parsed in seen:
-                raise ValueError("DHL_DOMESTIC_SANDBOX_COHORT_IDS contains duplicates")
-            seen.add(parsed)
-            values.append(parsed)
-        return frozenset(values)
-
-    @property
-    def dhl_domestic_workflow_enabled(self) -> bool:
-        return self.DHL_DOMESTIC_WORKFLOW_ENABLED
-
-    @property
-    def dhl_domestic_provider_calls_enabled(self) -> bool:
-        return self.DHL_DOMESTIC_PROVIDER_CALLS_ENABLED
-
-    @property
-    def checkout_capability_configured(self) -> bool:
-        active_pepper = self.CHECKOUT_CAPABILITY_ACTIVE_PEPPER.get_secret_value()
-        active_version = self.CHECKOUT_CAPABILITY_ACTIVE_PEPPER_VERSION
-        return bool(active_pepper) and active_version is not None
-
 
 settings = Settings()
