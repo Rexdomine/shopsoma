@@ -24,6 +24,7 @@ from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
 # ---------------------------------------------------------------------------
@@ -53,6 +54,8 @@ def _settings_stub(cohort_ids=frozenset()) -> Any:
         "dhl_domestic_sandbox_cohort_ids": cohort_ids,
         "dhl_configured": True,
         "DHL_ENABLED": True,
+        "DHL_REQUEST_TIMEOUT_SECONDS": 30,
+        "DHL_DOMESTIC_QUOTE_TTL_SECONDS": 1800,
         "DHL_API_USERNAME": _Secret("user"),
         "DHL_API_PASSWORD": _Secret("pass"),
         "DHL_EXPORT_ACCOUNT_NUMBER": _Secret("123456789"),
@@ -107,7 +110,8 @@ class _Phase4Helpers:
         """Commit booking and intent state so handoff endpoint is reachable."""
         from app.models.dhl_shipment import OutboundShipmentBooking
 
-        claimed_at = datetime.now(UTC)
+        claimed_at = await db_session.scalar(text("SELECT clock_timestamp()"))
+        assert claimed_at is not None
         result_recorded_at = claimed_at + timedelta(seconds=1)
         booking = OutboundShipmentBooking(
             id=uuid.uuid4(),
@@ -151,7 +155,9 @@ class _Phase4Helpers:
     async def _verified_acceptance_snapshot(self, db_session, booking):
         from app.models.dhl_shipment import OutboundShipmentTrackingSnapshot
 
-        observed_at = booking.result_recorded_at + timedelta(seconds=1)
+        recorded_at = await db_session.scalar(text("SELECT clock_timestamp()"))
+        assert recorded_at is not None
+        observed_at = max(recorded_at, booking.result_recorded_at + timedelta(microseconds=1))
         snapshot = OutboundShipmentTrackingSnapshot(
             booking_id=booking.id,
             order_id=booking.order_id,
@@ -162,6 +168,7 @@ class _Phase4Helpers:
             customer_status="picked_up",
             detail="Shipment collected by DHL",
             observed_at=observed_at,
+            recorded_at=observed_at,
             idempotency_key=f"verified-acceptance-{uuid.uuid4().hex[:12]}",
             source_command="admin_dhl_tracking_refresh",
         )
