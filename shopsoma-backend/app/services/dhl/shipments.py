@@ -533,16 +533,26 @@ async def record_collection_handoff(
             occurred_at=existing_event.occurred_at,
             custody_event_id=existing_event.id,
         )
+    cohort_id, vendor_id = await _cohort_ref_from_booking(db, booking)
     custody = CustodyEvent(
-        event_id=uuid.uuid4(),
-        aggregate_id=booking.package_id,
-        aggregate_version=booking.package_version,
-        cohort=await _cohort_ref_from_booking(db, booking),
-        hub=await _hub_ref_from_booking(db, booking),
-        event="provider_accepted",
-        actor_type=admin and __import__('app.services.fulfillment.contracts', fromlist=['CustodyActorType']).CustodyActorType.HUB_OPERATOR,
+        id=uuid.uuid4(),
+        stream_id=(await db.execute(
+            select(CustodyStream.id).where(
+                CustodyStream.package_id == booking.package_id,
+                CustodyStream.package_version == booking.package_version,
+            )
+        )).scalar_one(),
+        version=1,
+        previous_event_id=None,
+        cohort_id=cohort_id,
+        order_id=order_id,
+        vendor_id=vendor_id,
+        hub_id=booking.origin_hub_id,
+        event_type="provider_accepted",
+        actor_type="hub_operator",
         actor_id=str(admin.id),
         source_system="admin_dhl_handoff",
+        source_command="admin_dhl_handoff",
         occurred_at=command.occurred_at,
         recorded_at=max(command.occurred_at, datetime.now(UTC)),
         location="hub_dispatch",
@@ -550,34 +560,11 @@ async def record_collection_handoff(
         counterparty=command.counterparty.strip(),
         evidence_ref=command.evidence_ref.strip(),
         evidence_hash=command.evidence_sha256.lower(),
-    )
-    row = __import__('app.models.package_custody', fromlist=['CustodyEvent']).CustodyEvent(
-        id=custody.event_id,
-        stream_id=(
-            await db.execute(
-                select(__import__('app.models.package_custody', fromlist=['CustodyStream']).CustodyStream.id).where(
-                    __import__('app.models.package_custody', fromlist=['CustodyStream']).CustodyStream.package_id == booking.package_id,
-                    __import__('app.models.package_custody', fromlist=['CustodyStream']).CustodyStream.package_version == booking.package_version,
-                )
-            )
-        ).scalar_one(),
         package_id=booking.package_id,
         package_version=booking.package_version,
-        aggregate_version=booking.package_version,
-        event_type="provider_accepted",
-        actor_type="hub_operator",
-        actor_id=str(admin.id),
-        source_system="admin_dhl_handoff",
-        occurred_at=custody.occurred_at,
-        recorded_at=custody.recorded_at,
-        location=custody.location,
-        idempotency_key=custody.idempotency_key,
-        counterparty=custody.counterparty,
-        evidence_ref=custody.evidence_ref,
-        evidence_hash=custody.evidence_hash,
         seal_id=booking.seal_id,
     )
-    db.add(row)
+    db.add(custody)  # single ORM insert (consolidated from duplicate construction)
     booking.collection_counterparty = custody.counterparty
     booking.collection_evidence_ref = custody.evidence_ref
     booking.collection_evidence_hash = custody.evidence_hash
@@ -636,8 +623,12 @@ async def refresh_tracking(
         try:
             await db.flush()
         except IntegrityError:
+            # Duplicate checkpoint already exists; discard this snapshot via SAVEPOINT
+            # rollback (so the rest of the loop + the booking update are preserved).
+            # The model enforces UniqueConstraint(booking_id, provider_status_code, observed_at)
+            # AND UniqueConstraint(booking_id, idempotency_key); both signal replay, not failure.
             await db.rollback()
-            raise
+            continue
         inserted += 1
         latest = observation
     completed_at = await db.scalar(text("SELECT clock_timestamp()"))
@@ -691,7 +682,7 @@ async def _hub_ref_from_booking(db: AsyncSession, booking: OutboundShipmentBooki
     return HubRef(id=hub.id)
 
 
-async def _cohort_ref_from_booking(db: AsyncSession, booking: OutboundShipmentBooking):
+async def _cohort_ref_from_booking(db: AsyncSession, booking: OutboundShipmentBooking) -> tuple[uuid.UUID, uuid.UUID]:
     from app.models.fulfillment_cohort import FulfillmentCohort
     from app.models.hub_quality import HubReceiptItem
     from app.models.package_custody import HubPackageItem
@@ -709,7 +700,7 @@ async def _cohort_ref_from_booking(db: AsyncSession, booking: OutboundShipmentBo
     if row is None:
         raise ShipmentPhase4Error("package cohort not found")
     cohort_id, vendor_id = row
-    return FulfillmentCohortRef(id=cohort_id, hub=await _hub_ref_from_booking(db, booking))
+    return cohort_id, vendor_id
 
 
 def _booking_result(booking: OutboundShipmentBooking, *, replayed: bool, note: str | None = None) -> BookingResult:

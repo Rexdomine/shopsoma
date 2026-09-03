@@ -40,7 +40,7 @@ def _id_column():
 class OutboundIntentShipmentGuard(Base):
     """Mutable serialization guard ensuring one bounded active booking per intent."""
 
-    __tablename__ = "outbound_intent_shipment_guards"
+    __tablename__ = "outbound_intent_shipment_guard"
 
     intent_id = Column(
         _UUID,
@@ -54,7 +54,7 @@ class OutboundIntentShipmentGuard(Base):
 class OutboundShipmentBooking(Base):
     """One normalized booking attempt for one exact outbound intent subject."""
 
-    __tablename__ = "outbound_shipment_bookings"
+    __tablename__ = "outbound_shipment_booking"
 
     id = _id_column()
     intent_id = Column(
@@ -189,7 +189,7 @@ class OutboundShipmentBooking(Base):
 class OutboundShipmentTrackingSnapshot(Base):
     """Append-only normalized tracking observations for one booking."""
 
-    __tablename__ = "outbound_shipment_tracking_snapshots"
+    __tablename__ = "outbound_shipment_tracking_snapshot"
 
     id = _id_column()
     booking_id = Column(

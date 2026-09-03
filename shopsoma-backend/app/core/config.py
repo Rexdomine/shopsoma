@@ -122,6 +122,10 @@ class Settings(BaseSettings):
     # Default Currency
     DEFAULT_CURRENCY: str = "NGN"
 
+    # DHL domestic Phase 4 workflow feature gates
+    DHL_DOMESTIC_WORKFLOW_ENABLED: bool = False
+    DHL_DOMESTIC_PROVIDER_CALLS_ENABLED: bool = False
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
