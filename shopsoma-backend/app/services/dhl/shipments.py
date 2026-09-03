@@ -677,11 +677,32 @@ async def book_outbound_shipment(
         )
     ).scalar_one_or_none()
     if guard is None:
-        guard = OutboundIntentShipmentGuard(intent_id=intent.id)
-        db.add(guard)
-        await db.flush()
-    else:
-        await _reconcile_or_release_expired_claim(db, guard=guard)
+        try:
+            async with db.begin_nested():
+                guard = OutboundIntentShipmentGuard(intent_id=intent.id)
+                db.add(guard)
+                await db.flush()
+        except IntegrityError as exc:
+            if not _is_unique_constraint_violation(exc):
+                raise
+            guard = (
+                await db.execute(
+                    select(OutboundIntentShipmentGuard)
+                    .where(OutboundIntentShipmentGuard.intent_id == intent.id)
+                    .with_for_update()
+                )
+            ).scalar_one_or_none()
+            if guard is None:
+                raise
+        else:
+            guard = (
+                await db.execute(
+                    select(OutboundIntentShipmentGuard)
+                    .where(OutboundIntentShipmentGuard.intent_id == intent.id)
+                    .with_for_update()
+                )
+            ).scalar_one()
+    await _reconcile_or_release_expired_claim(db, guard=guard)
     replay = await _matching_replay(db, order_id=order_id, command=command)
     if replay is not None:
         return _booking_result(replay, replayed=True)
@@ -1078,7 +1099,9 @@ async def refresh_tracking(
                     order.fulfillment_status = FulfillmentStatus.OUT_FOR_DELIVERY
                 elif allow_carrier_movement and effective_state == "delivered":
                     order.fulfillment_status = FulfillmentStatus.DELIVERED
-                    if latest.outbound_state == "delivered":
+                    if latest.outbound_state == "delivered" and (
+                        current_state != "delivered" or order.delivered_at is None
+                    ):
                         order.delivered_at = latest.observed_at
                 elif effective_state == "exception":
                     order.fulfillment_status = FulfillmentStatus.DELIVERY_FAILED

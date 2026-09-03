@@ -58,6 +58,14 @@ def test_phase4_migration_uses_statement_timestamp_and_preserves_predecessors() 
     assert "Base.metadata.tables[name].create(bind=bind, checkfirst=True)" in source
 
 
+def test_phase4_booking_guard_creation_recovers_uniqueness_races() -> None:
+    source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    assert "async with db.begin_nested():" in source
+    assert "guard = OutboundIntentShipmentGuard(intent_id=intent.id)" in source
+    assert "if not _is_unique_constraint_violation(exc):" in source
+    assert ".with_for_update()" in source
+
+
 def test_no_duplicate_dhl_client_module_remains() -> None:
     assert not DUPLICATE_CLIENT.exists()
 
@@ -84,3 +92,9 @@ def test_dhl_handoff_request_normalizes_valid_evidence_inputs() -> None:
 
     assert payload.evidence_ref == "evidence/private-ref-1"
     assert payload.evidence_sha256 == "a" * 64
+
+
+def test_tracking_refresh_sets_delivered_at_only_on_first_delivery_transition() -> None:
+    source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    assert 'if latest.outbound_state == "delivered" and (' in source
+    assert 'current_state != "delivered" or order.delivered_at is None' in source
