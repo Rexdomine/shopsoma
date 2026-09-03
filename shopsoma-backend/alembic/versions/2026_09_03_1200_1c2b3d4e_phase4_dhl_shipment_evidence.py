@@ -41,11 +41,14 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def _create_prerequisite_phase4_tables() -> None:
     from app.core.base import Base
+    import app.models.checkout_shipping_estimate  # noqa: F401
+    import app.models.customer_shipping_quote  # noqa: F401
     import app.models.domestic_rate_quote  # noqa: F401
     import app.models.fulfillment_cohort  # noqa: F401
     import app.models.fulfillment_hub  # noqa: F401
     import app.models.hub_quality  # noqa: F401
     import app.models.inbound_transfer  # noqa: F401
+    import app.models.order_guest_capability  # noqa: F401
     import app.models.package_custody  # noqa: F401
 
     bind = op.get_bind()
@@ -75,6 +78,17 @@ def _create_prerequisite_phase4_tables() -> None:
         "domestic_rate_attempts",
         "domestic_rate_responses",
         "domestic_rate_offers",
+        "customer_shipping_quotes",
+        "customer_shipping_quote_options",
+        "customer_shipping_quote_selections",
+        "order_workflow_migration_runs",
+        "order_workflow_classifications",
+        "order_current_owners",
+        "order_guest_capabilities",
+        "checkout_shipping_estimates",
+        "checkout_shipping_estimate_options",
+        "checkout_shipping_estimate_selections",
+        "order_inventory_coverage",
     ]
     Base.metadata.create_all(
         bind=bind,
@@ -85,11 +99,14 @@ def _create_prerequisite_phase4_tables() -> None:
 
 def _drop_prerequisite_phase4_tables() -> None:
     from app.core.base import Base
+    import app.models.checkout_shipping_estimate  # noqa: F401
+    import app.models.customer_shipping_quote  # noqa: F401
     import app.models.domestic_rate_quote  # noqa: F401
     import app.models.fulfillment_cohort  # noqa: F401
     import app.models.fulfillment_hub  # noqa: F401
     import app.models.hub_quality  # noqa: F401
     import app.models.inbound_transfer  # noqa: F401
+    import app.models.order_guest_capability  # noqa: F401
     import app.models.package_custody  # noqa: F401
 
     bind = op.get_bind()
@@ -106,6 +123,17 @@ def _drop_prerequisite_phase4_tables() -> None:
         "hub_package_items",
         "hub_package_versions",
         "hub_packages",
+        "customer_shipping_quote_selections",
+        "customer_shipping_quote_options",
+        "customer_shipping_quotes",
+        "order_inventory_coverage",
+        "checkout_shipping_estimate_selections",
+        "checkout_shipping_estimate_options",
+        "checkout_shipping_estimates",
+        "order_guest_capabilities",
+        "order_current_owners",
+        "order_workflow_classifications",
+        "order_workflow_migration_runs",
         "hub_evidence_retention_events",
         "hub_evidence",
         "hub_qc_inspections",
@@ -379,7 +407,7 @@ def upgrade() -> None:
         sa.Column("refreshed_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("idempotency_key", sa.String(200), nullable=False),
         sa.Column("source_command", sa.String(100), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("statement_timestamp()")),
         sa.UniqueConstraint("booking_id", "idempotency_key", name="uq_outbound_shipment_tracking_refreshes_replay"),
         sa.ForeignKeyConstraint(["booking_id"], ["outbound_shipment_booking.id"], name="fk_outbound_shipment_tracking_refreshes_booking", ondelete="RESTRICT"),
         sa.ForeignKeyConstraint(["order_id"], ["orders.id"], name="fk_outbound_shipment_tracking_refreshes_order", ondelete="RESTRICT"),

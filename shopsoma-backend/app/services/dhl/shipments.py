@@ -49,6 +49,7 @@ BOOKING_SCHEMA_VERSION = "domestic-booking-v1"
 TRACKING_SCHEMA_VERSION = "domestic-tracking-v1"
 CANONICALIZATION_VERSION = "shipment-c14n-v1"
 CLAIM_TTL_SECONDS = 300
+NO_CHECKPOINTS_DETAIL = "Shipment booked with no downstream checkpoints yet"
 
 
 class ShipmentPhase4Error(Exception):
@@ -287,7 +288,7 @@ class DHLShipmentAdapter:
                     provider_status_code="BOOKED",
                     outbound_state="booked",
                     customer_status="label_created",
-                    detail="Shipment booked with no downstream checkpoints yet",
+                    detail=NO_CHECKPOINTS_DETAIL,
                     observed_at=datetime.now(UTC),
                 )
             )
@@ -335,6 +336,15 @@ def _state_rank(outbound_state: str) -> int:
         "delivered": 7,
     }
     return order.get(outbound_state, -1)
+
+
+def _is_placeholder_booked_observation(observation: TrackingObservation) -> bool:
+    return (
+        observation.provider_status_code == "BOOKED"
+        and observation.outbound_state == "booked"
+        and observation.customer_status == "label_created"
+        and observation.detail == NO_CHECKPOINTS_DETAIL
+    )
 
 
 def _ensure_sandbox_booking_allowed(
@@ -807,12 +817,19 @@ async def record_collection_handoff(
         existing_events = (
             await db.execute(
                 select(CustodyEvent)
+                .join(CustodyStream, CustodyStream.id == CustodyEvent.stream_id)
                 .where(
                     CustodyEvent.package_id == booking.package_id,
                     CustodyEvent.package_version == booking.package_version,
                     CustodyEvent.idempotency_key == normalized_idempotency,
                 )
-                .order_by(CustodyEvent.created_at, CustodyEvent.id)
+                .order_by(
+                    CustodyStream.cohort_id,
+                    CustodyStream.vendor_id,
+                    CustodyStream.id,
+                    CustodyEvent.version,
+                    CustodyEvent.id,
+                )
             )
         ).scalars().all()
         if not existing_events:
@@ -1011,10 +1028,16 @@ async def refresh_tracking(
         if latest.outbound_state == "exception":
             if current_state not in {"delivered", "cancelled"}:
                 effective_state = "exception"
-        elif current_state != "cancelled" and (
-            current_state == "exception"
-            or _state_rank(latest.outbound_state) >= _state_rank(current_state)
-        ):
+        elif current_state == "exception":
+            if latest.outbound_state in {
+                "collected",
+                "in_transit",
+                "out_for_delivery",
+                "delivered",
+                "cancelled",
+            } and not _is_placeholder_booked_observation(latest):
+                effective_state = latest.outbound_state
+        elif current_state != "cancelled" and _state_rank(latest.outbound_state) >= _state_rank(current_state):
             effective_state = latest.outbound_state
     else:
         if latest.outbound_state == "exception":
@@ -1049,8 +1072,19 @@ async def refresh_tracking(
         idempotency_key=normalized_idempotency,
         source_command="admin_dhl_tracking_refresh",
     )
-    db.add(refresh)
-    await db.flush()
+    try:
+        async with db.begin_nested():
+            db.add(refresh)
+            await db.flush()
+    except IntegrityError:
+        replay = await _matching_tracking_replay(
+            db,
+            booking=booking,
+            idempotency_key=normalized_idempotency,
+        )
+        if replay is not None:
+            return replay
+        raise
     return TrackingRefreshResult(
         booking_id=booking.id,
         tracking_number=booking.tracking_number,
