@@ -104,6 +104,10 @@ def test_tracking_refresh_aggregates_order_status_across_package_bookings() -> N
     source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
     assert 'def _aggregate_order_shipment_state(states: Sequence[str]) -> str | None:' in source
     assert 'aggregate_state = await _aggregate_order_outbound_state(' in source
+    assert 'select(HubPackage.id, HubPackage.current_version).where(' in source
+    assert 'HubPackage.order_id == order_id' in source
+    assert '(package_id, current_version): "booked"' in source
+    assert 'if key not in latest_by_package or candidate.outbound_state == "cancelled":' in source
     assert 'if all(state == "delivered" for state in active_states):' in source
     assert 'if all(state in {"delivered", "out_for_delivery"} for state in active_states):' in source
 

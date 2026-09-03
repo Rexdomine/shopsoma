@@ -419,6 +419,16 @@ async def _aggregate_order_outbound_state(
     order_id: uuid.UUID,
     fallback: str,
 ) -> str:
+    packages = (
+        await db.execute(
+            select(HubPackage.id, HubPackage.current_version).where(
+                HubPackage.order_id == order_id
+            )
+        )
+    ).all()
+    if not packages:
+        return fallback
+
     bookings = (
         await db.execute(
             select(OutboundShipmentBooking)
@@ -434,10 +444,15 @@ async def _aggregate_order_outbound_state(
             )
         )
     ).scalars().all()
-    latest_by_package: dict[tuple[uuid.UUID, int], str] = {}
+    latest_by_package: dict[tuple[uuid.UUID, int], str] = {
+        (package_id, current_version): "booked"
+        for package_id, current_version in packages
+    }
     for candidate in bookings:
         key = (candidate.package_id, candidate.package_version)
-        if key in latest_by_package or candidate.outbound_state == "cancelled":
+        if key not in latest_by_package or candidate.outbound_state == "cancelled":
+            continue
+        if latest_by_package[key] != "booked":
             continue
         latest_by_package[key] = candidate.outbound_state
     aggregate_state = _aggregate_order_shipment_state(list(latest_by_package.values()))
