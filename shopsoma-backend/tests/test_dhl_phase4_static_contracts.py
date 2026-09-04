@@ -266,8 +266,7 @@ def test_tracking_refresh_aggregates_order_status_across_package_bookings() -> N
     assert 'HubPackage.order_id == order_id' in source
     assert '(package_id, current_version): "booked"' in source
     assert 'if key not in latest_by_package or candidate.outbound_state == "cancelled":' in source
-    assert 'if all(state == "delivered" for state in active_states):' in source
-    assert 'if all(state in {"delivered", "out_for_delivery"} for state in active_states):' in source
+    assert 'return min(active_states, key=_state_rank)' in source
 
 
 def test_no_duplicate_dhl_client_module_remains() -> None:
@@ -446,8 +445,9 @@ def test_tracking_refresh_reloads_locked_booking_after_provider_poll() -> None:
 
 def test_tracking_refresh_keeps_provider_terminal_observation_as_latest() -> None:
     source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
-    assert "latest = observations[-1]" in source
-    assert "\n                latest = observation\n" not in source
+    assert 'latest = max(' in source
+    assert 'key=lambda observation: observation.observed_at' in source
+    assert 'latest = observations[-1]' not in source
 
 
 def test_tracking_refresh_preserves_cancelled_order_status() -> None:
@@ -513,6 +513,8 @@ def test_order_tracking_projection_aggregates_latest_package_bookings() -> None:
     assert 'summary = ", ".join(projected)' in source
     assert 'order.tracking_number = await _project_order_tracking_number(' in source
     assert 'order.tracking_number = aggregate_tracking_number' in source
+    assert 'note="provider success persistence conflict",\n        )\n    order.tracking_number = await _project_order_tracking_number(' in source
+    assert '    )\n    await db.flush()\n    return _booking_result(booking, replayed=False)' in source
     assert 'order.tracking_number = booking.tracking_number' not in source
 
 

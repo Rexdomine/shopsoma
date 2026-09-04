@@ -460,16 +460,7 @@ def _aggregate_order_shipment_state(states: Sequence[str]) -> str | None:
         return None
     if any(state == "exception" for state in active_states):
         return "exception"
-    if all(state == "delivered" for state in active_states):
-        return "delivered"
-    if all(state in {"delivered", "out_for_delivery"} for state in active_states):
-        return "out_for_delivery"
-    if any(
-        state in {"collected", "in_transit", "out_for_delivery", "delivered"}
-        for state in active_states
-    ):
-        return "in_transit"
-    return "booked"
+    return min(active_states, key=_state_rank)
 
 
 async def _aggregate_order_outbound_state(
@@ -1353,11 +1344,6 @@ async def book_outbound_shipment(
     booking.completion_txid = await db.scalar(text("SELECT txid_current()"))
     booking.last_tracking_refresh_at = completed_at
     order.delivery_provider = PROVIDER
-    order.tracking_number = await _project_order_tracking_number(
-        db,
-        order_id=order.id,
-        fallback=booking.tracking_number,
-    )
     guard.booking_blocked_reason = None
     try:
         await db.flush()
@@ -1379,6 +1365,12 @@ async def book_outbound_shipment(
             replayed=False,
             note="provider success persistence conflict",
         )
+    order.tracking_number = await _project_order_tracking_number(
+        db,
+        order_id=order.id,
+        fallback=booking.tracking_number,
+    )
+    await db.flush()
     return _booking_result(booking, replayed=False)
 
 
@@ -1629,7 +1621,10 @@ async def refresh_tracking(
     if not observations:
         raise ShipmentPhase4Error("tracking adapter returned no observations")
     inserted = 0
-    latest = observations[-1]
+    latest = max(
+        observations,
+        key=lambda observation: observation.observed_at,
+    )
     try:
         async with db.begin_nested():
             for position, observation in enumerate(observations):

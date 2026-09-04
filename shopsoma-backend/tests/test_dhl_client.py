@@ -298,9 +298,12 @@ def test_map_tracking_status_handles_real_mydhl_codes(
 
 
 def test_aggregate_order_shipment_state_uses_slowest_non_cancelled_package() -> None:
+    assert _aggregate_order_shipment_state(["label_ready", "awaiting_collection"]) == "label_ready"
+    assert _aggregate_order_shipment_state(["awaiting_collection", "collected"]) == "awaiting_collection"
+    assert _aggregate_order_shipment_state(["collected", "in_transit"]) == "collected"
     assert _aggregate_order_shipment_state(["delivered", "out_for_delivery"]) == "out_for_delivery"
     assert _aggregate_order_shipment_state(["delivered", "in_transit"]) == "in_transit"
-    assert _aggregate_order_shipment_state(["delivered", "booked"]) == "in_transit"
+    assert _aggregate_order_shipment_state(["delivered", "booked"]) == "booked"
     assert _aggregate_order_shipment_state(["delivered", "delivered"]) == "delivered"
     assert _aggregate_order_shipment_state(["cancelled", "delivered"]) == "delivered"
     assert _aggregate_order_shipment_state(["exception", "delivered"]) == "exception"
