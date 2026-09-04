@@ -139,6 +139,21 @@ def test_phase4_booking_rejects_selected_service_codes_that_exceed_booking_width
     assert 'max_length=MAX_BOOKING_SERVICE_CODE_LENGTH' in source
 
 
+def test_phase4_booking_rejects_empty_decoded_labels_before_success_flush() -> None:
+    source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    assert 'if not adapter_result.label_content:' in source
+    assert 'raise ShipmentPhase4Error("invalid label_content")' in source
+    assert source.index('raise ShipmentPhase4Error("invalid label_content")') < source.index('booking.classification = "success"')
+    assert 'booking.failure_code = "unknown_outcome"' in source
+
+
+def test_phase4_booking_makes_label_less_successes_handoff_eligible() -> None:
+    source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    assert 'booking.outbound_state = "label_ready" if booking.label_content is not None else "awaiting_collection"' in source
+    handoff_source = source[source.index('async def record_collection_handoff('):]
+    assert 'if booking.outbound_state not in {"label_ready", "awaiting_collection", "collected"}:' in handoff_source
+
+
 def test_phase4_booking_validates_provider_success_identifiers_before_success_flush() -> None:
     source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
     assert 'MAX_BOOKING_PROVIDER_REFERENCE_LENGTH = 120' in source

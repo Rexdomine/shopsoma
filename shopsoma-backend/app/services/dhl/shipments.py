@@ -1259,6 +1259,8 @@ async def book_outbound_shipment(
                 raise ShipmentPhase4Error("invalid label_media_type")
             label_media_type = None
         else:
+            if not adapter_result.label_content:
+                raise ShipmentPhase4Error("invalid label_content")
             label_media_type = _normalize_bounded_text(
                 adapter_result.label_media_type,
                 field="label_media_type",
@@ -1285,7 +1287,7 @@ async def book_outbound_shipment(
         else None
     )
     booking.label_received_at = booked_at if adapter_result.label_content is not None else None
-    booking.outbound_state = "label_ready" if adapter_result.label_content is not None else "booked"
+    booking.outbound_state = "label_ready" if booking.label_content is not None else "awaiting_collection"
     booking.completion_txid = await db.scalar(text("SELECT txid_current()"))
     booking.last_tracking_refresh_at = completed_at
     order.delivery_provider = PROVIDER
