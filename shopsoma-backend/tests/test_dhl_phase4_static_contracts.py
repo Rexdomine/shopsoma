@@ -113,12 +113,23 @@ def test_phase4_booking_locks_and_rejects_cancelled_orders_before_provider_call(
     assert 'order = await _load_order(db, order_id=order_id, lock_for_update=True)' in source
     assert '_ensure_order_not_cancelled(order, action="book shipment")' in source
     assert 'booking.call_started_at = called_at' in source
-    assert 'adapter_result = await adapter.book(intent, order, hub, package_version)' in source
+    assert 'adapter_result = await adapter.book(intent, order, hub, package_version, quoted_service)' in source
     segment = source.split('booking.call_started_at = called_at', 1)[1].split(
-        'adapter_result = await adapter.book(intent, order, hub, package_version)',
+        'adapter_result = await adapter.book(intent, order, hub, package_version, quoted_service)',
         1,
     )[0]
     assert 'await db.commit()' not in segment
+
+
+def test_phase4_booking_binds_provider_product_to_persisted_selected_quote() -> None:
+    source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    assert 'class QuotedShipmentService:' in source
+    assert 'async def _load_persisted_quoted_service(' in source
+    assert 'CustomerShippingQuoteSelection.intent_id == intent_id' in source
+    assert 'CustomerShippingQuoteOption.provider == PROVIDER' in source
+    assert 'quoted_service = await _load_persisted_quoted_service(db, intent_id=intent.id)' in source
+    assert '"productCode": quoted_service.product_code' in source
+    assert 'booking.service_code = quoted_service.service_code' in source
 
 
 def test_tracking_refresh_translates_transport_failures_into_service_errors() -> None:
@@ -284,8 +295,10 @@ def test_booking_unknown_outcome_reconciliation_route_and_service_exist() -> Non
     assert 'result = await reconcile_unknown_booking_outcome(' in api_source
     assert 'class BookingReconciliationCommand:' in service_source
     assert 'async def reconcile_unknown_booking_outcome(' in service_source
-    assert 'guard.booking_blocked_reason = None' in service_source
-    assert 'booking.failure_code = "reconciled_provider_absent"' in service_source
+    assert 'definitive provider-absence evidence required before releasing unknown booking' in service_source
+    assert 'booking.classification = "success"' in service_source
+    assert 'booking.failure_code = "reconciled_provider_absent"' not in service_source
+    assert 'guard.active_booking_id = None' not in service_source.split('async def reconcile_unknown_booking_outcome(', 1)[1].split('async def _load_booking_for_order(', 1)[0]
     assert 'booking.tracking_number = tracking_number' in service_source
 
 

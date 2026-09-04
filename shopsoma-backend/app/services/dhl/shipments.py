@@ -12,6 +12,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
+from app.models.customer_shipping_quote import (
+    CustomerShippingQuoteOption,
+    CustomerShippingQuoteSelection,
+)
 from app.models.dhl_shipment import (
     OutboundIntentShipmentGuard,
     OutboundShipmentBooking,
@@ -190,6 +194,12 @@ class AdapterBookingResult:
     booked_at: datetime | None
 
 
+@dataclass(frozen=True, slots=True)
+class QuotedShipmentService:
+    product_code: str
+    service_code: str
+
+
 class ShipmentAdapter(Protocol):
     async def book(
         self,
@@ -197,6 +207,7 @@ class ShipmentAdapter(Protocol):
         order: Order,
         hub: FulfillmentHub,
         package_version: HubPackageVersion,
+        quoted_service: QuotedShipmentService,
     ) -> AdapterBookingResult: ...
 
     async def track(self, tracking_number: str) -> Sequence[TrackingObservation]: ...
@@ -213,12 +224,13 @@ class DHLShipmentAdapter:
         order: Order,
         hub: FulfillmentHub,
         package_version: HubPackageVersion,
+        quoted_service: QuotedShipmentService,
     ) -> AdapterBookingResult:
         planned_ship_date = _planned_ship_date_for_shadow_quote(intent.created_at)
         payload = {
             "plannedShippingDateAndTime": _mydhl_planned_shipping_timestamp(planned_ship_date),
             "pickup": {"isRequested": False},
-            "productCode": "N",
+            "productCode": quoted_service.product_code,
             "accounts": [{
                 "typeCode": "shipper",
                 "number": self._settings.DHL_EXPORT_ACCOUNT_NUMBER.get_secret_value(),
@@ -1001,6 +1013,33 @@ async def _load_persisted_booking_intent(
     return intent
 
 
+async def _load_persisted_quoted_service(
+    db: AsyncSession,
+    *,
+    intent_id: uuid.UUID,
+) -> QuotedShipmentService:
+    option = (
+        await db.execute(
+            select(CustomerShippingQuoteOption)
+            .join(
+                CustomerShippingQuoteSelection,
+                CustomerShippingQuoteSelection.option_id == CustomerShippingQuoteOption.id,
+            )
+            .where(
+                CustomerShippingQuoteSelection.intent_id == intent_id,
+                CustomerShippingQuoteSelection.quote_id == CustomerShippingQuoteOption.quote_id,
+                CustomerShippingQuoteOption.provider == PROVIDER,
+            )
+        )
+    ).scalar_one_or_none()
+    if option is None:
+        raise ShipmentPhase4Error("no persisted selected dhl shipping quote for outbound intent")
+    return QuotedShipmentService(
+        product_code=_normalize_nonempty_text(option.product_code, field="product_code"),
+        service_code=_normalize_nonempty_text(option.service_code, field="service_code"),
+    )
+
+
 async def book_outbound_shipment(
     db: AsyncSession,
     *,
@@ -1060,6 +1099,7 @@ async def book_outbound_shipment(
         order_id=order_id,
         command=command,
     )
+    quoted_service = await _load_persisted_quoted_service(db, intent_id=intent.id)
 
     request_fingerprint = hashlib.sha256(
         f"{intent.id}:{package.id}:{package.current_version}:{seal.id}".encode("utf-8")
@@ -1118,7 +1158,7 @@ async def book_outbound_shipment(
         called_at = await db.scalar(text("SELECT clock_timestamp()"))
         booking.call_started_at = called_at
         await db.flush()
-        adapter_result = await adapter.book(intent, order, hub, package_version)
+        adapter_result = await adapter.book(intent, order, hub, package_version, quoted_service)
     except (DHLAPIError, TimeoutError) as exc:
         completed_at = await db.scalar(text("SELECT clock_timestamp()"))
         booking.result_recorded_at = completed_at
@@ -1161,7 +1201,7 @@ async def book_outbound_shipment(
     booking.classification = "success"
     booking.provider_reference = adapter_result.provider_reference.strip()
     booking.tracking_number = adapter_result.tracking_number.strip()
-    booking.service_code = adapter_result.service_code
+    booking.service_code = quoted_service.service_code
     booking.label_media_type = adapter_result.label_media_type
     booking.label_content = adapter_result.label_content
     booking.label_sha256 = (
@@ -1610,18 +1650,15 @@ async def reconcile_unknown_booking_outcome(
             field="tracking_number",
         )
     else:
-        provider_reference = None
-        tracking_number = None
+        raise ShipmentPhase4ConflictError(
+            "definitive provider-absence evidence required before releasing unknown booking"
+        )
 
     if booking.classification != "unknown" or booking.failure_code != "unknown_outcome":
-        expected_classification = "success" if command.resolution == "confirm_success" else "failure"
-        if booking.classification == expected_classification:
+        if booking.classification == "success":
             if (
-                expected_classification == "success"
-                and (
-                    booking.provider_reference != provider_reference
-                    or booking.tracking_number != tracking_number
-                )
+                booking.provider_reference != provider_reference
+                or booking.tracking_number != tracking_number
             ):
                 raise ShipmentPhase4ConflictError(
                     "booking reconciliation does not match existing provider identifiers"
@@ -1635,29 +1672,20 @@ async def reconcile_unknown_booking_outcome(
     booking.completion_txid = await db.scalar(text("SELECT txid_current()"))
     guard.booking_blocked_reason = None
 
-    if command.resolution == "confirm_success":
-        order = await _load_order(db, order_id=order_id, lock_for_update=True)
-        booking.classification = "success"
-        booking.failure_code = None
-        booking.provider_reference = provider_reference
-        booking.tracking_number = tracking_number
-        booking.outbound_state = "booked"
-        booking.last_tracking_refresh_at = completed_at
-        guard.active_booking_id = booking.id
-        order.delivery_provider = PROVIDER
-        order.tracking_number = await _project_order_tracking_number(
-            db,
-            order_id=order.id,
-            fallback=booking.tracking_number,
-        )
-    else:
-        booking.classification = "failure"
-        booking.failure_code = "reconciled_provider_absent"
-        booking.provider_reference = None
-        booking.tracking_number = None
-        booking.outbound_state = "intent_created"
-        if guard.active_booking_id == booking.id:
-            guard.active_booking_id = None
+    order = await _load_order(db, order_id=order_id, lock_for_update=True)
+    booking.classification = "success"
+    booking.failure_code = None
+    booking.provider_reference = provider_reference
+    booking.tracking_number = tracking_number
+    booking.outbound_state = "booked"
+    booking.last_tracking_refresh_at = completed_at
+    guard.active_booking_id = booking.id
+    order.delivery_provider = PROVIDER
+    order.tracking_number = await _project_order_tracking_number(
+        db,
+        order_id=order.id,
+        fallback=booking.tracking_number,
+    )
 
     await db.flush()
     return _booking_result(booking, replayed=False, note=f"reconciled by admin {admin.id}")
