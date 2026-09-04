@@ -139,6 +139,19 @@ def test_phase4_booking_rejects_selected_service_codes_that_exceed_booking_width
     assert 'max_length=MAX_BOOKING_SERVICE_CODE_LENGTH' in source
 
 
+def test_phase4_booking_validates_provider_success_identifiers_before_success_flush() -> None:
+    source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    assert 'MAX_BOOKING_PROVIDER_REFERENCE_LENGTH = 120' in source
+    assert 'MAX_BOOKING_TRACKING_NUMBER_LENGTH = 120' in source
+    assert 'MAX_BOOKING_LABEL_MEDIA_TYPE_LENGTH = 80' in source
+    assert 'provider_reference = _normalize_bounded_text(' in source
+    assert 'tracking_number = _normalize_bounded_text(' in source
+    assert 'field="label_media_type"' in source
+    assert 'booking.classification = "unknown"' in source
+    assert 'guard.booking_blocked_reason = "unknown_outcome"' in source
+    assert source.index('provider_reference = _normalize_bounded_text(') < source.index('booking.classification = "success"')
+
+
 def test_phase4_booking_behavioural_helper_now_seeds_selected_dhl_quote() -> None:
     source = (ROOT / "tests" / "test_dhl_phase4_booking.py").read_text()
     assert 'async def _seed_selected_dhl_quote(' in source
@@ -162,6 +175,17 @@ def test_tracking_refresh_bounds_checkpoint_detail_before_persistence() -> None:
     assert 'def _bounded_tracking_detail(value: object) -> str:' in source
     assert 'detail = _bounded_tracking_detail(' in source
     assert 'detail=observation.detail' in source
+
+
+def test_tracking_refresh_bounds_provider_codes_before_persistence() -> None:
+    source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    assert 'MAX_TRACKING_STATUS_CODE_LENGTH = 60' in source
+    assert 'MAX_TRACKING_EXCEPTION_CODE_LENGTH = 100' in source
+    assert 'def _bounded_tracking_code(value: object, *, field: str, max_length: int) -> str:' in source
+    assert 'field="provider_status_code"' in source
+    assert 'field="exception_code"' in source
+    assert 'provider_status_code=primary_code' in source
+    assert 'exception_code=(' in source
 
 
 def test_tracking_refresh_aggregates_order_status_across_package_bookings() -> None:
@@ -325,6 +349,7 @@ def test_booking_unknown_outcome_reconciliation_route_and_service_exist() -> Non
     assert 'booking.failure_code = "reconciled_provider_absent"' not in service_source
     assert 'guard.active_booking_id = None' not in service_source.split('async def reconcile_unknown_booking_outcome(', 1)[1].split('async def _load_booking_for_order(', 1)[0]
     assert 'booking.tracking_number = tracking_number' in service_source
+    assert 'booking.outbound_state = "label_ready" if booking.label_content is not None else "awaiting_collection"' in service_source
 
 
 def test_tracking_refresh_replay_runs_before_workflow_gate_and_skips_provider_calls_gate() -> None:

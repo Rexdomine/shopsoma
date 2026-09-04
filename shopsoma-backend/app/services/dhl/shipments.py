@@ -54,7 +54,12 @@ TRACKING_SCHEMA_VERSION = "domestic-tracking-v1"
 CANONICALIZATION_VERSION = "shipment-c14n-v1"
 CLAIM_TTL_SECONDS = 300
 NO_CHECKPOINTS_DETAIL = "Shipment booked with no downstream checkpoints yet"
+MAX_BOOKING_PROVIDER_REFERENCE_LENGTH = 120
+MAX_BOOKING_TRACKING_NUMBER_LENGTH = 120
 MAX_BOOKING_SERVICE_CODE_LENGTH = 60
+MAX_BOOKING_LABEL_MEDIA_TYPE_LENGTH = 80
+MAX_TRACKING_STATUS_CODE_LENGTH = 60
+MAX_TRACKING_EXCEPTION_CODE_LENGTH = 100
 MAX_TRACKING_DETAIL_LENGTH = 240
 
 
@@ -322,7 +327,11 @@ class DHLShipmentAdapter:
                 )
                 if raw is not None and str(raw).strip()
             ]
-            primary_code = codes[0] if codes else "UNKNOWN"
+            primary_code = _bounded_tracking_code(
+                codes[0] if codes else "UNKNOWN",
+                field="provider_status_code",
+                max_length=MAX_TRACKING_STATUS_CODE_LENGTH,
+            )
             detail = _bounded_tracking_detail(
                 checkpoint.get("description")
                 or checkpoint.get("detail")
@@ -342,7 +351,15 @@ class DHLShipmentAdapter:
                     customer_status=customer_status,
                     detail=detail,
                     observed_at=observed_at,
-                    exception_code=primary_code if outbound_state == "exception" else None,
+                    exception_code=(
+                        _bounded_tracking_code(
+                            primary_code,
+                            field="exception_code",
+                            max_length=MAX_TRACKING_EXCEPTION_CODE_LENGTH,
+                        )
+                        if outbound_state == "exception"
+                        else None
+                    ),
                 )
             )
         if not observations:
@@ -900,6 +917,13 @@ def _normalize_bounded_text(value: str | None, *, field: str, max_length: int) -
     return normalized
 
 
+def _bounded_tracking_code(value: object, *, field: str, max_length: int) -> str:
+    normalized = str(value).strip().upper()
+    if not normalized or len(normalized) > max_length:
+        raise ShipmentPhase4Error(f"invalid {field}")
+    return normalized
+
+
 def _bounded_tracking_detail(value: object) -> str:
     detail = str(value).strip()
     if not detail:
@@ -1219,12 +1243,41 @@ async def book_outbound_shipment(
 
     completed_at = await db.scalar(text("SELECT clock_timestamp()"))
     booked_at = adapter_result.booked_at or completed_at
+    try:
+        provider_reference = _normalize_bounded_text(
+            adapter_result.provider_reference,
+            field="provider_reference",
+            max_length=MAX_BOOKING_PROVIDER_REFERENCE_LENGTH,
+        )
+        tracking_number = _normalize_bounded_text(
+            adapter_result.tracking_number,
+            field="tracking_number",
+            max_length=MAX_BOOKING_TRACKING_NUMBER_LENGTH,
+        )
+        if adapter_result.label_content is None:
+            if adapter_result.label_media_type is not None:
+                raise ShipmentPhase4Error("invalid label_media_type")
+            label_media_type = None
+        else:
+            label_media_type = _normalize_bounded_text(
+                adapter_result.label_media_type,
+                field="label_media_type",
+                max_length=MAX_BOOKING_LABEL_MEDIA_TYPE_LENGTH,
+            )
+    except ShipmentPhase4Error as exc:
+        booking.result_recorded_at = completed_at
+        booking.classification = "unknown"
+        booking.failure_code = "unknown_outcome"
+        booking.completion_txid = await db.scalar(text("SELECT txid_current()"))
+        guard.booking_blocked_reason = "unknown_outcome"
+        await db.flush()
+        return _booking_result(booking, replayed=False, note=str(exc))
     booking.result_recorded_at = completed_at
     booking.classification = "success"
-    booking.provider_reference = adapter_result.provider_reference.strip()
-    booking.tracking_number = adapter_result.tracking_number.strip()
+    booking.provider_reference = provider_reference
+    booking.tracking_number = tracking_number
     booking.service_code = quoted_service.service_code
-    booking.label_media_type = adapter_result.label_media_type
+    booking.label_media_type = label_media_type
     booking.label_content = adapter_result.label_content
     booking.label_sha256 = (
         hashlib.sha256(adapter_result.label_content).hexdigest()
@@ -1699,7 +1752,7 @@ async def reconcile_unknown_booking_outcome(
     booking.failure_code = None
     booking.provider_reference = provider_reference
     booking.tracking_number = tracking_number
-    booking.outbound_state = "booked"
+    booking.outbound_state = "label_ready" if booking.label_content is not None else "awaiting_collection"
     booking.last_tracking_refresh_at = completed_at
     guard.active_booking_id = booking.id
     order.delivery_provider = PROVIDER
