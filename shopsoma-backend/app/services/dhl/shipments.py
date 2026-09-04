@@ -54,6 +54,8 @@ TRACKING_SCHEMA_VERSION = "domestic-tracking-v1"
 CANONICALIZATION_VERSION = "shipment-c14n-v1"
 CLAIM_TTL_SECONDS = 300
 NO_CHECKPOINTS_DETAIL = "Shipment booked with no downstream checkpoints yet"
+MAX_BOOKING_SERVICE_CODE_LENGTH = 60
+MAX_TRACKING_DETAIL_LENGTH = 240
 
 
 class ShipmentPhase4Error(Exception):
@@ -321,12 +323,12 @@ class DHLShipmentAdapter:
                 if raw is not None and str(raw).strip()
             ]
             primary_code = codes[0] if codes else "UNKNOWN"
-            detail = str(
+            detail = _bounded_tracking_detail(
                 checkpoint.get("description")
                 or checkpoint.get("detail")
                 or checkpoint.get("remark")
                 or primary_code
-            ).strip()
+            )
             observed_at = _tracking_observed_at(
                 checkpoint=checkpoint,
                 shipment=shipment,
@@ -891,6 +893,22 @@ def _normalize_text(value: str, *, field: str) -> str:
     return normalized
 
 
+def _normalize_bounded_text(value: str | None, *, field: str, max_length: int) -> str:
+    normalized = _normalize_nonempty_text(value, field=field)
+    if len(normalized) > max_length:
+        raise ShipmentPhase4Error(f"invalid {field}")
+    return normalized
+
+
+def _bounded_tracking_detail(value: object) -> str:
+    detail = str(value).strip()
+    if not detail:
+        detail = NO_CHECKPOINTS_DETAIL
+    if len(detail) <= MAX_TRACKING_DETAIL_LENGTH:
+        return detail
+    return detail[: MAX_TRACKING_DETAIL_LENGTH - 1].rstrip() + "…"
+
+
 def _map_tracking_status(*codes: str) -> tuple[str, str]:
     normalized_codes = {
         code.strip().upper()
@@ -1036,7 +1054,11 @@ async def _load_persisted_quoted_service(
         raise ShipmentPhase4Error("no persisted selected dhl shipping quote for outbound intent")
     return QuotedShipmentService(
         product_code=_normalize_nonempty_text(option.product_code, field="product_code"),
-        service_code=_normalize_nonempty_text(option.service_code, field="service_code"),
+        service_code=_normalize_bounded_text(
+            option.service_code,
+            field="service_code",
+            max_length=MAX_BOOKING_SERVICE_CODE_LENGTH,
+        ),
     )
 
 

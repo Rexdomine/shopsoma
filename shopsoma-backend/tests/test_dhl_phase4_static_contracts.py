@@ -132,11 +132,36 @@ def test_phase4_booking_binds_provider_product_to_persisted_selected_quote() -> 
     assert 'booking.service_code = quoted_service.service_code' in source
 
 
+def test_phase4_booking_rejects_selected_service_codes_that_exceed_booking_width() -> None:
+    source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    assert 'MAX_BOOKING_SERVICE_CODE_LENGTH = 60' in source
+    assert 'service_code=_normalize_bounded_text(' in source
+    assert 'max_length=MAX_BOOKING_SERVICE_CODE_LENGTH' in source
+
+
+def test_phase4_booking_behavioural_helper_now_seeds_selected_dhl_quote() -> None:
+    source = (ROOT / "tests" / "test_dhl_phase4_booking.py").read_text()
+    assert 'async def _seed_selected_dhl_quote(' in source
+    assert 'CustomerShippingQuoteSelection(' in source
+    assert 'provider="dhl"' in source
+    assert 'product_code="N"' in source
+    assert 'service_code="DOM-N"' in source
+    assert 'await PHASE4._seed_selected_dhl_quote(db_session, graph, package, seal, intent, customer)' in source
+
+
 def test_tracking_refresh_translates_transport_failures_into_service_errors() -> None:
     source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
     refresh_source = source[source.index("async def refresh_tracking"):]
     assert 'except (DHLAPIError, TimeoutError) as exc:' in refresh_source
     assert 'raise ShipmentPhase4Error(str(exc)) from exc' in refresh_source
+
+
+def test_tracking_refresh_bounds_checkpoint_detail_before_persistence() -> None:
+    source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    assert 'MAX_TRACKING_DETAIL_LENGTH = 240' in source
+    assert 'def _bounded_tracking_detail(value: object) -> str:' in source
+    assert 'detail = _bounded_tracking_detail(' in source
+    assert 'detail=observation.detail' in source
 
 
 def test_tracking_refresh_aggregates_order_status_across_package_bookings() -> None:

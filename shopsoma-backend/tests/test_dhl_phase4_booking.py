@@ -20,6 +20,7 @@ import base64
 import hashlib
 import uuid
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
@@ -178,6 +179,63 @@ class _Phase4Helpers:
         await db_session.flush()
         return snapshot
 
+    async def _seed_selected_dhl_quote(self, db_session, graph, package, seal, intent, customer):
+        from app.models.customer_shipping_quote import (
+            CustomerShippingQuote,
+            CustomerShippingQuoteOption,
+            CustomerShippingQuoteSelection,
+        )
+
+        quote = CustomerShippingQuote(
+            order_id=graph["order"].id,
+            customer_id=customer.id,
+            intent_id=intent.id,
+            package_id=package.id,
+            package_version=1,
+            seal_id=seal.id,
+            origin_hub_id=graph["hub"].id,
+            destination_snapshot_hash=intent.destination_snapshot_hash,
+            currency="NGN",
+            ttl_seconds=1800,
+            initiating_actor_type="customer",
+            initiating_actor_id=str(customer.id),
+            source_command="create_shipping_quote",
+            idempotency_key=f"quote-{uuid.uuid4().hex}",
+            request_fingerprint=uuid.uuid4().hex * 2,
+            schema_version="customer-quote-v1",
+        )
+        db_session.add(quote)
+        await db_session.flush()
+
+        option = CustomerShippingQuoteOption(
+            quote_id=quote.id,
+            option_key="dhl-dom-n",
+            provider="dhl",
+            product_code="N",
+            service_code="DOM-N",
+            service_label="Domestic Express",
+            source_amount=Decimal("1000.0000"),
+            adjustment_amount=Decimal("50.0000"),
+            total_amount=Decimal("1050.0000"),
+            currency="NGN",
+            transit_days=1,
+        )
+        db_session.add(option)
+        await db_session.flush()
+
+        selection = CustomerShippingQuoteSelection(
+            quote_id=quote.id,
+            intent_id=intent.id,
+            option_id=option.id,
+            customer_id=customer.id,
+            selected_by_id=customer.id,
+            source_command="select_shipping_quote_option",
+            idempotency_key=f"selection-{uuid.uuid4().hex}",
+        )
+        db_session.add(selection)
+        await db_session.flush()
+        return quote, option, selection
+
     async def _chain_custody(self, db_session, graph, package, seal):
         """Build packed→sealed→staged→released custody chain (admin-operator user)."""
         stream = CustodyStream(
@@ -237,6 +295,8 @@ async def test_booking_idempotency_same_key_returns_same_response(
         db_session, vendor_user, customer_user
     )
     admin = admin_user["user"]
+    customer = customer_user["user"]
+    await PHASE4._seed_selected_dhl_quote(db_session, graph, package, seal, intent, customer)
     key = f"idem-{uuid.uuid4().hex[:12]}"
 
     booking_payload = DHLBookingRequest(
@@ -287,6 +347,8 @@ async def test_unknown_outcome_recorded_blocks_retry(
         db_session, vendor_user, customer_user
     )
     admin = admin_user["user"]
+    customer = customer_user["user"]
+    await PHASE4._seed_selected_dhl_quote(db_session, graph, package, seal, intent, customer)
     key = f"unknown-{uuid.uuid4().hex[:12]}"
 
     booking_payload = DHLBookingRequest(
