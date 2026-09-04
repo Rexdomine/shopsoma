@@ -349,6 +349,7 @@ def upgrade() -> None:
         sa.UniqueConstraint(
             "booking_id", "provider_status_code", "observed_at", "exception_code",
             name="uq_outbound_shipment_tracking_snapshots_observation",
+            postgresql_nulls_not_distinct=True,
         ),
         sa.UniqueConstraint(
             "booking_id", "idempotency_key",

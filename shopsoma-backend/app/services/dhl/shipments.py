@@ -1281,6 +1281,8 @@ def _map_tracking_status(*codes: str) -> tuple[str, str]:
         for code in codes
         if code is not None and code.strip()
     }
+    if normalized_codes & TERMINAL_TRACKING_EXCEPTION_CODES:
+        return "exception", "delivery_exception"
     if normalized_codes & {"PU", "PICKUP_CONFIRMED", "COLLECTED"}:
         return "collected", "picked_up"
     if normalized_codes & {"OK", "DELIVERED"}:

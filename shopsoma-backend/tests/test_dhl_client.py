@@ -288,6 +288,8 @@ async def test_successful_non_json_response_is_rejected_safely() -> None:
     [
         (("PU",), ("collected", "picked_up")),
         (("OK",), ("delivered", "delivered")),
+        (("OK", "RETURNED"), ("exception", "delivery_exception")),
+        (("PU", "FAILURE"), ("exception", "delivery_exception")),
         (("TRANSIT",), ("in_transit", "in_transit")),
         (("FAILURE",), ("exception", "delivery_exception")),
         (("PU", "TRANSIT"), ("collected", "picked_up")),

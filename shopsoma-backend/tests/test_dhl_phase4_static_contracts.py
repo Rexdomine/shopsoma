@@ -79,6 +79,7 @@ def test_phase4_migration_uses_statement_timestamp_and_preserves_predecessors() 
     source = MIGRATION.read_text()
     assert 'sa.Column("recorded_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("statement_timestamp()"))' in source
     assert '"booking_id", "provider_status_code", "observed_at", "exception_code"' in source
+    assert 'postgresql_nulls_not_distinct=True' in source
     assert "_drop_prerequisite_phase4_tables" not in source
     assert "Base.metadata.create_all" not in source
     assert "Base.metadata.tables[name].create(bind=bind, checkfirst=True)" in source
@@ -155,6 +156,26 @@ def test_phase4_tracking_preserves_terminal_exception_marker_from_all_codes() ->
     assert 'def _tracking_exception_code(' in source
     assert 'if code in TERMINAL_TRACKING_EXCEPTION_CODES' in source
     assert 'exception_code=_tracking_exception_code(' in source
+
+
+def test_phase4_tracking_snapshot_uniqueness_deduplicates_null_exception_codes() -> None:
+    model_source = (ROOT / "app" / "models" / "dhl_shipment.py").read_text()
+    migration_source = MIGRATION.read_text()
+    assert 'name="uq_outbound_shipment_tracking_snapshots_observation"' in model_source
+    assert 'postgresql_nulls_not_distinct=True' in model_source
+    assert 'name="uq_outbound_shipment_tracking_snapshots_observation"' in migration_source
+    assert 'postgresql_nulls_not_distinct=True' in migration_source
+
+
+def test_phase4_tracking_status_prioritizes_terminal_exception_codes_over_movement() -> None:
+    source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    segment = source.split('def _map_tracking_status(*codes: str) -> tuple[str, str]:', 1)[1].split(
+        'async def _load_authoritative_subject(',
+        1,
+    )[0]
+    assert 'if normalized_codes & TERMINAL_TRACKING_EXCEPTION_CODES:' in segment
+    assert segment.index('if normalized_codes & TERMINAL_TRACKING_EXCEPTION_CODES:') < segment.index('if normalized_codes & {"PU", "PICKUP_CONFIRMED", "COLLECTED"}:')
+    assert segment.index('if normalized_codes & TERMINAL_TRACKING_EXCEPTION_CODES:') < segment.index('if normalized_codes & {"OK", "DELIVERED"}:')
 
 
 def test_order_cancellation_blocks_inflight_dhl_bookings_after_call_start() -> None:
