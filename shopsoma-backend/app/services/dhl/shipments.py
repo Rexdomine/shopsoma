@@ -1498,6 +1498,8 @@ async def _load_shadow_quote_recovery_service(
     hub_version: int | None,
     minimum_planned_ship_date: date,
 ) -> QuotedShipmentService | None:
+    now = await db.scalar(text("SELECT clock_timestamp()"))
+    assert now is not None
     row = (
         await db.execute(
             select(DomesticRateOffer, DomesticRateAttempt)
@@ -1509,6 +1511,7 @@ async def _load_shadow_quote_recovery_service(
                 DomesticRateAttempt.source_command == "admin_shadow_quote",
                 DomesticRateAttempt.classification == "success",
                 DomesticRateResponse.result_kind == "success",
+                DomesticRateResponse.expires_at >= now,
                 DomesticRateOffer.provider_product_code == selected_service.product_code,
                 DomesticRateOffer.provider_service_code == selected_service.service_code,
                 DomesticRateAttempt.planned_ship_date >= minimum_planned_ship_date,
@@ -1699,6 +1702,8 @@ async def book_outbound_shipment(
             )
             if recovered_service is not None:
                 quoted_service = recovered_service
+                planned_ship_date = quoted_service.planned_ship_date
+                booking.planned_ship_date = planned_ship_date
         prepared_payload = adapter.prepare_booking_payload(
             intent,
             order,
@@ -1712,9 +1717,14 @@ async def book_outbound_shipment(
             order_id=order_id,
             booking_id=booking.id,
             lock_for_update=True,
+            populate_existing=True,
         )
-        guard = await db.get(OutboundIntentShipmentGuard, intent.id)
-        assert guard is not None
+        guard = await _load_guard_for_intent(
+            db,
+            intent_id=intent.id,
+            lock_for_update=True,
+            populate_existing=True,
+        )
         await _mark_booking_failure(
             db,
             booking=booking,
@@ -1742,9 +1752,14 @@ async def book_outbound_shipment(
             order_id=order_id,
             booking_id=booking.id,
             lock_for_update=True,
+            populate_existing=True,
         )
-        guard = await db.get(OutboundIntentShipmentGuard, intent.id)
-        assert guard is not None
+        guard = await _load_guard_for_intent(
+            db,
+            intent_id=intent.id,
+            lock_for_update=True,
+            populate_existing=True,
+        )
         completed_at = await db.scalar(text("SELECT clock_timestamp()"))
         definitive_rejection = isinstance(exc, DHLAPIError) and _is_definitive_booking_rejection(exc)
         booking.result_recorded_at = completed_at
@@ -1765,9 +1780,14 @@ async def book_outbound_shipment(
             order_id=order_id,
             booking_id=booking.id,
             lock_for_update=True,
+            populate_existing=True,
         )
-        guard = await db.get(OutboundIntentShipmentGuard, intent.id)
-        assert guard is not None
+        guard = await _load_guard_for_intent(
+            db,
+            intent_id=intent.id,
+            lock_for_update=True,
+            populate_existing=True,
+        )
         await _mark_booking_unknown_outcome(db, booking=booking, guard=guard)
         return _booking_result(booking, replayed=False, note=str(exc))
     except ShipmentPhase4Error as exc:
@@ -1776,9 +1796,14 @@ async def book_outbound_shipment(
             order_id=order_id,
             booking_id=booking.id,
             lock_for_update=True,
+            populate_existing=True,
         )
-        guard = await db.get(OutboundIntentShipmentGuard, intent.id)
-        assert guard is not None
+        guard = await _load_guard_for_intent(
+            db,
+            intent_id=intent.id,
+            lock_for_update=True,
+            populate_existing=True,
+        )
         await _mark_booking_failure(
             db,
             booking=booking,
@@ -1792,9 +1817,14 @@ async def book_outbound_shipment(
             order_id=order_id,
             booking_id=booking.id,
             lock_for_update=True,
+            populate_existing=True,
         )
-        guard = await db.get(OutboundIntentShipmentGuard, intent.id)
-        assert guard is not None
+        guard = await _load_guard_for_intent(
+            db,
+            intent_id=intent.id,
+            lock_for_update=True,
+            populate_existing=True,
+        )
         await _mark_booking_unknown_outcome(db, booking=booking, guard=guard)
         return _booking_result(booking, replayed=False, note=str(exc))
 
@@ -1886,9 +1916,14 @@ async def book_outbound_shipment(
             order_id=order_id,
             booking_id=booking.id,
             lock_for_update=True,
+            populate_existing=True,
         )
-        guard = await db.get(OutboundIntentShipmentGuard, intent.id)
-        assert guard is not None
+        guard = await _load_guard_for_intent(
+            db,
+            intent_id=intent.id,
+            lock_for_update=True,
+            populate_existing=True,
+        )
         await _mark_booking_unknown_outcome(db, booking=booking, guard=guard)
         return _booking_result(
             booking,
@@ -2534,17 +2569,36 @@ async def _load_booking_for_order(
     order_id: uuid.UUID,
     booking_id: uuid.UUID,
     lock_for_update: bool = False,
+    populate_existing: bool = False,
 ) -> OutboundShipmentBooking:
     query = select(OutboundShipmentBooking).where(
         OutboundShipmentBooking.id == booking_id,
         OutboundShipmentBooking.order_id == order_id,
-    )
+    ).execution_options(populate_existing=populate_existing)
     if lock_for_update:
         query = query.with_for_update()
     booking = (await db.execute(query)).scalar_one_or_none()
     if booking is None:
         raise ShipmentPhase4Error("booking not found for order")
     return booking
+
+
+async def _load_guard_for_intent(
+    db: AsyncSession,
+    *,
+    intent_id: uuid.UUID,
+    lock_for_update: bool = False,
+    populate_existing: bool = False,
+) -> OutboundIntentShipmentGuard:
+    query = select(OutboundIntentShipmentGuard).where(
+        OutboundIntentShipmentGuard.intent_id == intent_id,
+    ).execution_options(populate_existing=populate_existing)
+    if lock_for_update:
+        query = query.with_for_update()
+    guard = (await db.execute(query)).scalar_one_or_none()
+    if guard is None:
+        raise ShipmentPhase4Error("booking guard not found for intent")
+    return guard
 
 
 async def _hub_ref_from_booking(db: AsyncSession, booking: OutboundShipmentBooking):

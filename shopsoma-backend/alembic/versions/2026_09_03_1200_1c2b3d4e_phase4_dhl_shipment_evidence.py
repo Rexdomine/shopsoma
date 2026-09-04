@@ -350,6 +350,7 @@ def upgrade() -> None:
             "uq_outbound_shipment_tracking_snapshots_observation",
             "booking_id",
             "provider_status_code",
+            "outbound_state",
             "observed_at",
             sa.text("coalesce(exception_code, '')"),
             unique=True,

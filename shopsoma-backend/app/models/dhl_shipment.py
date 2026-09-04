@@ -249,6 +249,7 @@ class OutboundShipmentTrackingSnapshot(Base):
             "uq_outbound_shipment_tracking_snapshots_observation",
             "booking_id",
             "provider_status_code",
+            "outbound_state",
             "observed_at",
             text("coalesce(exception_code, '')"),
             unique=True,

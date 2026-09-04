@@ -80,6 +80,7 @@ def test_phase4_migration_uses_statement_timestamp_and_preserves_predecessors() 
     assert 'sa.Column("recorded_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("statement_timestamp()"))' in source
     assert 'sa.Index(' in source
     assert '"uq_outbound_shipment_tracking_snapshots_observation"' in source
+    assert '"outbound_state"' in source
     assert 'sa.text("coalesce(exception_code, \'\')")' in source
     assert "_drop_prerequisite_phase4_tables" not in source
     assert "Base.metadata.create_all" not in source
@@ -163,8 +164,10 @@ def test_phase4_tracking_snapshot_uniqueness_deduplicates_null_exception_codes()
     model_source = (ROOT / "app" / "models" / "dhl_shipment.py").read_text()
     migration_source = MIGRATION.read_text()
     assert '"uq_outbound_shipment_tracking_snapshots_observation"' in model_source
+    assert '"outbound_state"' in model_source
     assert 'text("coalesce(exception_code, \'\')")' in model_source
     assert '"uq_outbound_shipment_tracking_snapshots_observation"' in migration_source
+    assert '"outbound_state"' in migration_source
     assert 'sa.text("coalesce(exception_code, \'\')")' in migration_source
 
 
@@ -262,6 +265,8 @@ def test_phase4_booking_persists_unknown_outcome_when_success_flush_hits_unique_
     assert 'except IntegrityError as exc:' in success_tail
     assert 'if not _is_booking_success_persistence_conflict(exc):' in success_tail
     assert 'await db.rollback()' in success_tail
+    assert 'populate_existing=True' in success_tail
+    assert 'guard = await _load_guard_for_intent(' in success_tail
     assert 'await _mark_booking_unknown_outcome(db, booking=booking, guard=guard)' in success_tail
     assert 'note="provider success persistence conflict"' in success_tail
 
@@ -821,6 +826,7 @@ def test_phase4_booking_binds_selected_quote_to_source_hub_version_before_provid
     assert 'def _selected_quote_requires_recovery(' in source
     assert 'DomesticRateAttempt.source_command == "admin_shadow_quote"' in source
     assert 'DomesticRateAttempt.classification == "success"' in source
+    assert 'DomesticRateResponse.expires_at >= now' in source
     assert 'DomesticRateOffer.provider_product_code == selected_service.product_code' in source
     assert 'DomesticRateOffer.provider_service_code == selected_service.service_code' in source
     assert 'DomesticRateAttempt.planned_ship_date >= minimum_planned_ship_date' in source
@@ -828,6 +834,7 @@ def test_phase4_booking_binds_selected_quote_to_source_hub_version_before_provid
     assert 'recovered_service = await _load_shadow_quote_recovery_service(' in source
     assert 'if recovered_service is not None:' in source
     assert 'quoted_service = recovered_service' in source
+    assert 'booking.planned_ship_date = planned_ship_date' in source
     assert 'selected dhl quote hub version changed; refresh quote before booking' in source
     assert 'planned_ship_date = quoted_service.planned_ship_date' in source
     assert 'minimum_planned_ship_date = _planned_ship_date_for_shadow_quote(intent.created_at)' in source
@@ -884,10 +891,21 @@ def test_phase4_booking_rechecks_pending_guard_before_persisting_late_provider_s
     booking_source = source[source.index('async def book_outbound_shipment('):source.index('async def get_shipment_label(')]
     assert '.execution_options(populate_existing=True)' in booking_source
     assert 'select(OutboundIntentShipmentGuard)' in booking_source
+    assert 'async def _load_guard_for_intent(' in source
     assert 'booking.classification != "pending"' in booking_source
     assert 'guard.active_booking_id != booking.id' in booking_source
     assert 'guard.booking_blocked_reason is not None' in booking_source
     assert 'note="stale provider result ignored after booking ownership changed"' in booking_source
+
+
+def test_phase4_booking_rechecks_pending_guard_before_persisting_late_provider_failures() -> None:
+    source = (ROOT / 'app' / 'services' / 'dhl' / 'shipments.py').read_text()
+    booking_source = source[source.index('async def book_outbound_shipment('):source.index('async def get_shipment_label(')]
+    failure_branch = booking_source.split('except (DHLAPIError, TimeoutError) as exc:', 1)[1].split('except ShipmentPhase4UnknownOutcomeError as exc:', 1)[0]
+    assert 'booking = await _load_booking_for_order(' in failure_branch
+    assert 'populate_existing=True' in failure_branch
+    assert 'guard = await _load_guard_for_intent(' in failure_branch
+    assert 'lock_for_update=True' in failure_branch
 
 
 def test_phase4_tracking_refresh_anchors_placeholder_booked_observations_to_booking_time() -> None:
