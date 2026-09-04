@@ -414,8 +414,12 @@ def test_handoff_persists_delivered_at_when_delivery_is_preserved() -> None:
 def test_effective_handoff_tracking_allows_newer_exception_to_supersede_delivery() -> None:
     source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
     helper = source[source.index('def _highest_effective_tracking_snapshot_for_handoff('):source.index('async def _aggregate_order_outbound_state(')]
+    assert 'highest_progress_snapshot: OutboundShipmentTrackingSnapshot | None = None' in helper
     assert 'if snapshot_state == "exception":' in helper
-    assert 'if effective_state == "exception":' in helper
+    assert 'if _is_terminal_tracking_exception(snapshot):' in helper
+    assert 'if effective_state == "exception" and _is_terminal_tracking_exception(' in helper
+    assert 'if highest_progress_snapshot is not None and _state_rank(' in helper
+    assert 'effective_snapshot = highest_progress_snapshot' in helper
     assert 'if snapshot_state == "exception" or effective_state == "exception":' not in helper
     assert 'if effective_state != "delivered"' not in helper
 

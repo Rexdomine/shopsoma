@@ -378,6 +378,58 @@ def test_handoff_snapshot_fold_allows_delivery_to_resolve_transient_exception() 
     assert chosen is delivered
 
 
+def test_handoff_snapshot_fold_preserves_terminal_exception_across_later_transient_exception_and_delivery() -> None:
+    returned = SimpleNamespace(
+        outbound_state="exception",
+        observed_at=datetime.fromisoformat("2026-09-04T10:00:00+00:00"),
+        id="1",
+        exception_code="RETURNED",
+    )
+    hold = SimpleNamespace(
+        outbound_state="exception",
+        observed_at=datetime.fromisoformat("2026-09-04T11:00:00+00:00"),
+        id="2",
+        exception_code="HOLD",
+    )
+    delivered = SimpleNamespace(
+        outbound_state="delivered",
+        observed_at=datetime.fromisoformat("2026-09-04T12:00:00+00:00"),
+        id="3",
+        exception_code=None,
+    )
+
+    snapshots: list[Any] = [returned, hold, delivered]
+    chosen = _highest_effective_tracking_snapshot_for_handoff(snapshots)
+
+    assert chosen is returned
+
+
+def test_handoff_snapshot_fold_restores_pre_exception_progress_when_transient_exception_clears() -> None:
+    out_for_delivery = SimpleNamespace(
+        outbound_state="out_for_delivery",
+        observed_at=datetime.fromisoformat("2026-09-04T10:00:00+00:00"),
+        id="1",
+        exception_code=None,
+    )
+    hold = SimpleNamespace(
+        outbound_state="exception",
+        observed_at=datetime.fromisoformat("2026-09-04T11:00:00+00:00"),
+        id="2",
+        exception_code="HOLD",
+    )
+    in_transit = SimpleNamespace(
+        outbound_state="in_transit",
+        observed_at=datetime.fromisoformat("2026-09-04T12:00:00+00:00"),
+        id="3",
+        exception_code=None,
+    )
+
+    snapshots: list[Any] = [out_for_delivery, hold, in_transit]
+    chosen = _highest_effective_tracking_snapshot_for_handoff(snapshots)
+
+    assert chosen is out_for_delivery
+
+
 @pytest.mark.asyncio
 async def test_tracking_adapter_parses_mydhl_shipments_events_envelope() -> None:
     tracking_response = {

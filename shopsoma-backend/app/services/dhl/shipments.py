@@ -475,13 +475,27 @@ def _highest_effective_tracking_snapshot_for_handoff(
     snapshots: Sequence[OutboundShipmentTrackingSnapshot],
 ) -> OutboundShipmentTrackingSnapshot | None:
     effective_snapshot: OutboundShipmentTrackingSnapshot | None = None
+    highest_progress_snapshot: OutboundShipmentTrackingSnapshot | None = None
     for snapshot in snapshots:
+        snapshot_state = snapshot.outbound_state
+        if snapshot_state != "exception" and (
+            highest_progress_snapshot is None
+            or _state_rank(snapshot_state)
+            >= _state_rank(highest_progress_snapshot.outbound_state)
+        ):
+            highest_progress_snapshot = snapshot
         if effective_snapshot is None:
             effective_snapshot = snapshot
             continue
-        snapshot_state = snapshot.outbound_state
         effective_state = effective_snapshot.outbound_state
         if snapshot_state == "exception":
+            if _is_terminal_tracking_exception(snapshot):
+                effective_snapshot = snapshot
+                continue
+            if effective_state == "exception" and _is_terminal_tracking_exception(
+                effective_snapshot
+            ):
+                continue
             effective_snapshot = snapshot
             continue
         if effective_state == "exception" and _is_terminal_tracking_exception(
@@ -489,6 +503,11 @@ def _highest_effective_tracking_snapshot_for_handoff(
         ):
             continue
         if effective_state == "exception":
+            if highest_progress_snapshot is not None and _state_rank(
+                highest_progress_snapshot.outbound_state
+            ) >= _state_rank(snapshot_state):
+                effective_snapshot = highest_progress_snapshot
+                continue
             effective_snapshot = snapshot
             continue
         if _state_rank(snapshot_state) >= _state_rank(effective_state):
