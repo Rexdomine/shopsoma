@@ -892,9 +892,11 @@ def test_phase4_booking_rechecks_pending_guard_before_persisting_late_provider_s
     assert '.execution_options(populate_existing=True)' in booking_source
     assert 'select(OutboundIntentShipmentGuard)' in booking_source
     assert 'async def _load_guard_for_intent(' in source
-    assert 'booking.classification != "pending"' in booking_source
-    assert 'guard.active_booking_id != booking.id' in booking_source
-    assert 'guard.booking_blocked_reason is not None' in booking_source
+    assert 'def _booking_still_pending_owner(' in source
+    assert 'booking.classification == "pending"' in source
+    assert 'guard.active_booking_id == booking.id' in source
+    assert 'guard.booking_blocked_reason is None' in source
+    assert 'if not _booking_still_pending_owner(booking, guard):' in booking_source
     assert 'note="stale provider result ignored after booking ownership changed"' in booking_source
 
 
@@ -906,7 +908,11 @@ def test_phase4_booking_rechecks_pending_guard_before_persisting_late_provider_f
     assert 'populate_existing=True' in failure_branch
     assert 'guard = await _load_guard_for_intent(' in failure_branch
     assert 'lock_for_update=True' in failure_branch
-
+    assert 'def _booking_still_pending_owner(' in source
+    assert 'if not _booking_still_pending_owner(booking, guard):' in failure_branch
+    assert 'note="stale provider result ignored after booking ownership changed"' in failure_branch
+    assert failure_branch.index('if not _booking_still_pending_owner(booking, guard):') < failure_branch.index('booking.result_recorded_at = completed_at')
+    assert booking_source.count('if not _booking_still_pending_owner(booking, guard):') >= 5
 
 def test_phase4_tracking_refresh_anchors_placeholder_booked_observations_to_booking_time() -> None:
     source = (ROOT / 'app' / 'services' / 'dhl' / 'shipments.py').read_text()

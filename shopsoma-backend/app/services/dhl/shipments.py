@@ -145,6 +145,17 @@ def _is_booking_success_persistence_conflict(exc: IntegrityError) -> bool:
     )
 
 
+def _booking_still_pending_owner(
+    booking: OutboundShipmentBooking,
+    guard: OutboundIntentShipmentGuard,
+) -> bool:
+    return (
+        booking.classification == "pending"
+        and guard.active_booking_id == booking.id
+        and guard.booking_blocked_reason is None
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class BookingCommand:
     order_id: uuid.UUID
@@ -1725,6 +1736,12 @@ async def book_outbound_shipment(
             lock_for_update=True,
             populate_existing=True,
         )
+        if not _booking_still_pending_owner(booking, guard):
+            return _booking_result(
+                booking,
+                replayed=False,
+                note="stale provider result ignored after booking ownership changed",
+            )
         await _mark_booking_failure(
             db,
             booking=booking,
@@ -1760,6 +1777,12 @@ async def book_outbound_shipment(
             lock_for_update=True,
             populate_existing=True,
         )
+        if not _booking_still_pending_owner(booking, guard):
+            return _booking_result(
+                booking,
+                replayed=False,
+                note="stale provider result ignored after booking ownership changed",
+            )
         completed_at = await db.scalar(text("SELECT clock_timestamp()"))
         definitive_rejection = isinstance(exc, DHLAPIError) and _is_definitive_booking_rejection(exc)
         booking.result_recorded_at = completed_at
@@ -1788,6 +1811,12 @@ async def book_outbound_shipment(
             lock_for_update=True,
             populate_existing=True,
         )
+        if not _booking_still_pending_owner(booking, guard):
+            return _booking_result(
+                booking,
+                replayed=False,
+                note="stale provider result ignored after booking ownership changed",
+            )
         await _mark_booking_unknown_outcome(db, booking=booking, guard=guard)
         return _booking_result(booking, replayed=False, note=str(exc))
     except ShipmentPhase4Error as exc:
@@ -1804,6 +1833,12 @@ async def book_outbound_shipment(
             lock_for_update=True,
             populate_existing=True,
         )
+        if not _booking_still_pending_owner(booking, guard):
+            return _booking_result(
+                booking,
+                replayed=False,
+                note="stale provider result ignored after booking ownership changed",
+            )
         await _mark_booking_failure(
             db,
             booking=booking,
@@ -1825,6 +1860,12 @@ async def book_outbound_shipment(
             lock_for_update=True,
             populate_existing=True,
         )
+        if not _booking_still_pending_owner(booking, guard):
+            return _booking_result(
+                booking,
+                replayed=False,
+                note="stale provider result ignored after booking ownership changed",
+            )
         await _mark_booking_unknown_outcome(db, booking=booking, guard=guard)
         return _booking_result(booking, replayed=False, note=str(exc))
 
@@ -1847,11 +1888,7 @@ async def book_outbound_shipment(
             .with_for_update()
         )
     ).scalar_one()
-    if (
-        booking.classification != "pending"
-        or guard.active_booking_id != booking.id
-        or guard.booking_blocked_reason is not None
-    ):
+    if not _booking_still_pending_owner(booking, guard):
         return _booking_result(
             booking,
             replayed=False,
