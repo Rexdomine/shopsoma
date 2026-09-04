@@ -346,10 +346,13 @@ def upgrade() -> None:
         sa.Column("idempotency_key", sa.String(200), nullable=False),
         sa.Column("source_command", sa.String(100), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
-        sa.UniqueConstraint(
-            "booking_id", "provider_status_code", "observed_at", "exception_code",
-            name="uq_outbound_shipment_tracking_snapshots_observation",
-            postgresql_nulls_not_distinct=True,
+        sa.Index(
+            "uq_outbound_shipment_tracking_snapshots_observation",
+            "booking_id",
+            "provider_status_code",
+            "observed_at",
+            sa.text("coalesce(exception_code, '')"),
+            unique=True,
         ),
         sa.UniqueConstraint(
             "booking_id", "idempotency_key",

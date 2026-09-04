@@ -94,14 +94,12 @@ class _Phase4Helpers:
         label_b64 = base64.b64encode(label_pdf).decode()
         return {
             "shipmentTrackingNumber": tracking_number,
-            "packages": [
+            "shipmentReference": provider_reference,
+            "productCode": "N",
+            "documents": [
                 {
-                    "trackingNumber": tracking_number,
-                    "pieceID": provider_reference,
-                    "label": {
-                        "labelType": "PDF",
-                        "content": label_b64,
-                    },
+                    "mimeType": "application/pdf",
+                    "content": label_b64,
                 }
             ],
         }
@@ -196,8 +194,8 @@ class _Phase4Helpers:
             attempt_id=attempt.id,
             result_kind="success",
             received_at=received,
-            expires_at=received + timedelta(hours=1),
-            ttl_seconds=3600,
+            expires_at=received + timedelta(hours=2),
+            ttl_seconds=7200,
         )
         db_session.add(response)
         await db_session.flush()
@@ -366,7 +364,9 @@ async def test_booking_idempotency_same_key_returns_same_response(
         )
         await db_session.rollback()
 
+    assert r1.result_kind == "booked", "first call must persist a booked result"
     assert r2.booking_id == id1, "idempotency key must return same booking"
+    assert r2.result_kind == "booked", "replay must return the same booked result"
     assert r2.replayed is True, "second call must be marked as replay"
 
 

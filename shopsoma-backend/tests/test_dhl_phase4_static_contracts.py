@@ -78,8 +78,9 @@ def test_phase4_unique_violation_helper_matches_only_named_constraint() -> None:
 def test_phase4_migration_uses_statement_timestamp_and_preserves_predecessors() -> None:
     source = MIGRATION.read_text()
     assert 'sa.Column("recorded_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("statement_timestamp()"))' in source
-    assert '"booking_id", "provider_status_code", "observed_at", "exception_code"' in source
-    assert 'postgresql_nulls_not_distinct=True' in source
+    assert 'sa.Index(' in source
+    assert '"uq_outbound_shipment_tracking_snapshots_observation"' in source
+    assert 'sa.text("coalesce(exception_code, \'\')")' in source
     assert "_drop_prerequisite_phase4_tables" not in source
     assert "Base.metadata.create_all" not in source
     assert "Base.metadata.tables[name].create(bind=bind, checkfirst=True)" in source
@@ -161,10 +162,10 @@ def test_phase4_tracking_preserves_terminal_exception_marker_from_all_codes() ->
 def test_phase4_tracking_snapshot_uniqueness_deduplicates_null_exception_codes() -> None:
     model_source = (ROOT / "app" / "models" / "dhl_shipment.py").read_text()
     migration_source = MIGRATION.read_text()
-    assert 'name="uq_outbound_shipment_tracking_snapshots_observation"' in model_source
-    assert 'postgresql_nulls_not_distinct=True' in model_source
-    assert 'name="uq_outbound_shipment_tracking_snapshots_observation"' in migration_source
-    assert 'postgresql_nulls_not_distinct=True' in migration_source
+    assert '"uq_outbound_shipment_tracking_snapshots_observation"' in model_source
+    assert 'text("coalesce(exception_code, \'\')")' in model_source
+    assert '"uq_outbound_shipment_tracking_snapshots_observation"' in migration_source
+    assert 'sa.text("coalesce(exception_code, \'\')")' in migration_source
 
 
 def test_phase4_tracking_status_prioritizes_terminal_exception_codes_over_movement() -> None:
@@ -466,9 +467,14 @@ def test_tracking_refresh_bounds_provider_codes_before_persistence() -> None:
 def test_phase4_tracking_snapshot_uniqueness_preserves_same_timestamp_exception_variants() -> None:
     model_source = (ROOT / "app" / "models" / "dhl_shipment.py").read_text()
     migration_source = MIGRATION.read_text()
-    expected = '"booking_id", "provider_status_code", "observed_at", "exception_code"'
-    assert expected in model_source
-    assert expected in migration_source
+    assert '"booking_id"' in model_source
+    assert '"provider_status_code"' in model_source
+    assert '"observed_at"' in model_source
+    assert 'text("coalesce(exception_code, \'\')")' in model_source
+    assert '"booking_id"' in migration_source
+    assert '"provider_status_code"' in migration_source
+    assert '"observed_at"' in migration_source
+    assert 'sa.text("coalesce(exception_code, \'\')")' in migration_source
 
 
 def test_tracking_refresh_rejects_future_provider_observation_timestamps_before_insert() -> None:
@@ -811,6 +817,17 @@ def test_phase4_booking_binds_selected_quote_to_source_hub_version_before_provid
     assert 'quoted_hub_version = getattr(quoted_service, "hub_version", None)' in source
     assert 'current_hub_version = getattr(hub, "version", None)' in source
     assert 'quoted_hub_version != current_hub_version' in source
+    assert 'async def _load_shadow_quote_recovery_service(' in source
+    assert 'def _selected_quote_requires_recovery(' in source
+    assert 'DomesticRateAttempt.source_command == "admin_shadow_quote"' in source
+    assert 'DomesticRateAttempt.classification == "success"' in source
+    assert 'DomesticRateOffer.provider_product_code == selected_service.product_code' in source
+    assert 'DomesticRateOffer.provider_service_code == selected_service.service_code' in source
+    assert 'DomesticRateAttempt.planned_ship_date >= minimum_planned_ship_date' in source
+    assert 'if _selected_quote_requires_recovery(' in source
+    assert 'recovered_service = await _load_shadow_quote_recovery_service(' in source
+    assert 'if recovered_service is not None:' in source
+    assert 'quoted_service = recovered_service' in source
     assert 'selected dhl quote hub version changed; refresh quote before booking' in source
     assert 'planned_ship_date = quoted_service.planned_ship_date' in source
     assert 'minimum_planned_ship_date = _planned_ship_date_for_shadow_quote(intent.created_at)' in source
@@ -842,6 +859,44 @@ def test_admin_dhl_handoff_broadcasts_committed_projection_to_websocket_clients(
     assert 'await db.execute(select(Order).where(Order.id == UUID(order_id)))' in handoff_route
     assert 'await _broadcast_order_update(order)' in handoff_route
     assert handoff_route.index('await db.commit()') < handoff_route.index('await _broadcast_order_update(order)')
+
+
+def test_admin_dhl_booking_broadcasts_committed_projection_to_websocket_clients() -> None:
+    api_source = (ROOT / 'app' / 'api' / 'v1' / 'admin_orders.py').read_text()
+    booking_route = api_source.split('@router.post("/{order_id}/dhl/bookings", response_model=DHLBookingResult)', 1)[1].split('@router.post("/{order_id}/dhl/bookings/{booking_id}/reconcile", response_model=DHLBookingResult)', 1)[0]
+    assert 'await db.commit()' in booking_route
+    assert 'await db.execute(select(Order).where(Order.id == UUID(order_id)))' in booking_route
+    assert 'await _broadcast_order_update(order)' in booking_route
+    assert booking_route.index('await db.commit()') < booking_route.index('await _broadcast_order_update(order)')
+
+
+def test_admin_dhl_reconciliation_broadcasts_committed_projection_to_websocket_clients() -> None:
+    api_source = (ROOT / 'app' / 'api' / 'v1' / 'admin_orders.py').read_text()
+    reconcile_route = api_source.split('@router.post("/{order_id}/dhl/bookings/{booking_id}/reconcile", response_model=DHLBookingResult)', 1)[1].split('@router.get("/{order_id}/dhl/bookings/{booking_id}/label")', 1)[0]
+    assert 'await db.commit()' in reconcile_route
+    assert 'await db.execute(select(Order).where(Order.id == UUID(order_id)))' in reconcile_route
+    assert 'await _broadcast_order_update(order)' in reconcile_route
+    assert reconcile_route.index('await db.commit()') < reconcile_route.index('await _broadcast_order_update(order)')
+
+
+def test_phase4_booking_rechecks_pending_guard_before_persisting_late_provider_success() -> None:
+    source = (ROOT / 'app' / 'services' / 'dhl' / 'shipments.py').read_text()
+    booking_source = source[source.index('async def book_outbound_shipment('):source.index('async def get_shipment_label(')]
+    assert '.execution_options(populate_existing=True)' in booking_source
+    assert 'select(OutboundIntentShipmentGuard)' in booking_source
+    assert 'booking.classification != "pending"' in booking_source
+    assert 'guard.active_booking_id != booking.id' in booking_source
+    assert 'guard.booking_blocked_reason is not None' in booking_source
+    assert 'note="stale provider result ignored after booking ownership changed"' in booking_source
+
+
+def test_phase4_tracking_refresh_anchors_placeholder_booked_observations_to_booking_time() -> None:
+    source = (ROOT / 'app' / 'services' / 'dhl' / 'shipments.py').read_text()
+    refresh_source = source[source.index('async def refresh_tracking('):source.index('async def reconcile_unknown_booking_outcome(')]
+    assert 'placeholder_observed_at = (' in refresh_source
+    assert 'booking.result_recorded_at or booking.label_received_at or booking.claimed_at' in refresh_source
+    assert 'if _is_placeholder_booked_observation(observation)' in refresh_source
+    assert 'observed_at=placeholder_observed_at' in refresh_source
 
 
 def test_order_tracking_returns_persisted_carrier_number_on_initial_http_load() -> None:
@@ -885,9 +940,9 @@ def test_tracking_refresh_reloads_locked_booking_after_provider_poll() -> None:
     refresh_source = source[source.index("async def refresh_tracking"):]
     assert "booking = await _load_booking_for_order(" in refresh_source
     assert "lock_for_update=True" in refresh_source
-    assert "observations = await adapter.track(booking.tracking_number)" in refresh_source
+    assert "observations = list(await adapter.track(booking.tracking_number))" in refresh_source
     assert refresh_source.index("lock_for_update=True") < refresh_source.index(
-        "observations = await adapter.track(booking.tracking_number)"
+        "observations = list(await adapter.track(booking.tracking_number))"
     )
     assert "allow_carrier_movement = booking.handoff_recorded_at is not None" in refresh_source
     assert "current_state = booking.outbound_state" in refresh_source

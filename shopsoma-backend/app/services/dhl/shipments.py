@@ -20,7 +20,11 @@ from app.models.customer_shipping_quote import (
     CustomerShippingQuoteOption,
     CustomerShippingQuoteSelection,
 )
-from app.models.domestic_rate_quote import DomesticRateAttempt, DomesticRateResponse
+from app.models.domestic_rate_quote import (
+    DomesticRateAttempt,
+    DomesticRateOffer,
+    DomesticRateResponse,
+)
 from app.models.dhl_shipment import (
     OutboundIntentShipmentGuard,
     OutboundShipmentBooking,
@@ -569,6 +573,30 @@ def _is_placeholder_booked_observation(observation: TrackingObservation) -> bool
     )
 
 
+def _tracking_snapshot_fold_sort_key(
+    snapshot: OutboundShipmentTrackingSnapshot,
+) -> tuple[datetime, int, int, str, str, str]:
+    provider_status_code = str(getattr(snapshot, "provider_status_code", ""))
+    detail = str(getattr(snapshot, "detail", ""))
+    if snapshot.outbound_state == "exception":
+        return (
+            snapshot.observed_at,
+            1,
+            1 if _is_terminal_tracking_exception(snapshot) else 0,
+            (snapshot.exception_code or "").strip().upper(),
+            provider_status_code,
+            detail,
+        )
+    return (
+        snapshot.observed_at,
+        0,
+        _state_rank(snapshot.outbound_state),
+        "",
+        provider_status_code,
+        detail,
+    )
+
+
 def _customer_status_for_outbound_state(outbound_state: str, *, fallback: str) -> str:
     return {
         "intent_created": "label_created",
@@ -598,7 +626,7 @@ def _highest_effective_tracking_snapshot_for_handoff(
     effective_snapshot: OutboundShipmentTrackingSnapshot | None = None
     highest_progress_snapshot: OutboundShipmentTrackingSnapshot | None = None
     resolved_observed_at: datetime | None = None
-    for snapshot in snapshots:
+    for snapshot in sorted(snapshots, key=_tracking_snapshot_fold_sort_key):
         snapshot_state = snapshot.outbound_state
         if snapshot_state != "exception" and (
             highest_progress_snapshot is None
@@ -1139,8 +1167,7 @@ async def _latest_effective_tracking_snapshot_for_handoff(
 ) -> EffectiveTrackingResolution | None:
     snapshots = (
         await db.execute(
-            select(OutboundShipmentTrackingSnapshot)
-            .where(
+            select(OutboundShipmentTrackingSnapshot).where(
                 OutboundShipmentTrackingSnapshot.booking_id == booking_id,
                 OutboundShipmentTrackingSnapshot.provider == PROVIDER,
                 OutboundShipmentTrackingSnapshot.outbound_state.in_(
@@ -1152,10 +1179,6 @@ async def _latest_effective_tracking_snapshot_for_handoff(
                         "exception",
                     )
                 ),
-            )
-            .order_by(
-                OutboundShipmentTrackingSnapshot.observed_at.asc(),
-                OutboundShipmentTrackingSnapshot.id.asc(),
             )
         )
     ).scalars().all()
@@ -1467,6 +1490,71 @@ async def _load_persisted_quoted_service(
     )
 
 
+async def _load_shadow_quote_recovery_service(
+    db: AsyncSession,
+    *,
+    intent_id: uuid.UUID,
+    selected_service: QuotedShipmentService,
+    hub_version: int | None,
+    minimum_planned_ship_date: date,
+) -> QuotedShipmentService | None:
+    row = (
+        await db.execute(
+            select(DomesticRateOffer, DomesticRateAttempt)
+            .join(DomesticRateResponse, DomesticRateResponse.id == DomesticRateOffer.response_id)
+            .join(DomesticRateAttempt, DomesticRateAttempt.id == DomesticRateResponse.attempt_id)
+            .where(
+                DomesticRateAttempt.intent_id == intent_id,
+                DomesticRateAttempt.provider == PROVIDER,
+                DomesticRateAttempt.source_command == "admin_shadow_quote",
+                DomesticRateAttempt.classification == "success",
+                DomesticRateResponse.result_kind == "success",
+                DomesticRateOffer.provider_product_code == selected_service.product_code,
+                DomesticRateOffer.provider_service_code == selected_service.service_code,
+                DomesticRateAttempt.planned_ship_date >= minimum_planned_ship_date,
+            )
+            .order_by(
+                DomesticRateAttempt.planned_ship_date.desc(),
+                DomesticRateResponse.received_at.desc(),
+                DomesticRateOffer.created_at.desc(),
+            )
+        )
+    ).first()
+    if row is None:
+        return None
+    offer, attempt = row
+    if hub_version is not None and attempt.hub_version != hub_version:
+        return None
+    return QuotedShipmentService(
+        product_code=_normalize_nonempty_text(
+            offer.provider_product_code,
+            field="product_code",
+        ),
+        service_code=_normalize_bounded_text(
+            offer.provider_service_code,
+            field="service_code",
+            max_length=MAX_BOOKING_SERVICE_CODE_LENGTH,
+        ),
+        hub_version=attempt.hub_version,
+        planned_ship_date=attempt.planned_ship_date,
+    )
+
+
+def _selected_quote_requires_recovery(
+    *,
+    quoted_service: QuotedShipmentService,
+    hub_version: int | None,
+    minimum_planned_ship_date: date,
+) -> bool:
+    quoted_hub_version = getattr(quoted_service, "hub_version", None)
+    return (
+        quoted_service.planned_ship_date < minimum_planned_ship_date
+        or hub_version is not None
+        and quoted_hub_version is not None
+        and quoted_hub_version != hub_version
+    )
+
+
 async def book_outbound_shipment(
     db: AsyncSession,
     *,
@@ -1593,6 +1681,24 @@ async def book_outbound_shipment(
         ).scalar_one_or_none()
         if hub is None:
             raise ShipmentPhase4Error("origin hub not found")
+        minimum_planned_ship_date = _planned_ship_date_for_shadow_quote(
+            intent.created_at
+        )
+        current_hub_version = getattr(hub, "version", None)
+        if _selected_quote_requires_recovery(
+            quoted_service=quoted_service,
+            hub_version=current_hub_version,
+            minimum_planned_ship_date=minimum_planned_ship_date,
+        ):
+            recovered_service = await _load_shadow_quote_recovery_service(
+                db,
+                intent_id=intent.id,
+                selected_service=quoted_service,
+                hub_version=current_hub_version,
+                minimum_planned_ship_date=minimum_planned_ship_date,
+            )
+            if recovered_service is not None:
+                quoted_service = recovered_service
         prepared_payload = adapter.prepare_booking_payload(
             intent,
             order,
@@ -1692,15 +1798,36 @@ async def book_outbound_shipment(
         await _mark_booking_unknown_outcome(db, booking=booking, guard=guard)
         return _booking_result(booking, replayed=False, note=str(exc))
 
+    booking = (
+        await db.execute(
+            select(OutboundShipmentBooking)
+            .where(
+                OutboundShipmentBooking.id == booking.id,
+                OutboundShipmentBooking.order_id == order_id,
+            )
+            .execution_options(populate_existing=True)
+            .with_for_update()
+        )
+    ).scalar_one()
+    guard = (
+        await db.execute(
+            select(OutboundIntentShipmentGuard)
+            .where(OutboundIntentShipmentGuard.intent_id == intent.id)
+            .execution_options(populate_existing=True)
+            .with_for_update()
+        )
+    ).scalar_one()
+    if (
+        booking.classification != "pending"
+        or guard.active_booking_id != booking.id
+        or guard.booking_blocked_reason is not None
+    ):
+        return _booking_result(
+            booking,
+            replayed=False,
+            note="stale provider result ignored after booking ownership changed",
+        )
     order = await _load_order(db, order_id=order_id, lock_for_update=True)
-    booking = await _load_booking_for_order(
-        db,
-        order_id=order_id,
-        booking_id=booking.id,
-        lock_for_update=True,
-    )
-    guard = await db.get(OutboundIntentShipmentGuard, intent.id)
-    assert guard is not None
     completed_at = await db.scalar(text("SELECT clock_timestamp()"))
     booked_at = adapter_result.booked_at or completed_at
     try:
@@ -2058,11 +2185,27 @@ async def refresh_tracking(
     _ensure_sandbox_booking_allowed(settings, cohort_ids=cohort_ids)
     adapter = adapter or create_shipment_adapter(settings)
     try:
-        observations = await adapter.track(booking.tracking_number)
+        observations = list(await adapter.track(booking.tracking_number))
     except (DHLAPIError, TimeoutError) as exc:
         raise ShipmentPhase4Error(str(exc)) from exc
     if not observations:
         raise ShipmentPhase4Error("tracking adapter returned no observations")
+    placeholder_observed_at = (
+        booking.result_recorded_at or booking.label_received_at or booking.claimed_at
+    )
+    observations = [
+        TrackingObservation(
+            provider_status_code=observation.provider_status_code,
+            outbound_state=observation.outbound_state,
+            customer_status=observation.customer_status,
+            detail=observation.detail,
+            observed_at=placeholder_observed_at,
+            exception_code=observation.exception_code,
+        )
+        if _is_placeholder_booked_observation(observation)
+        else observation
+        for observation in observations
+    ]
     inserted = 0
     latest = max(
         observations,

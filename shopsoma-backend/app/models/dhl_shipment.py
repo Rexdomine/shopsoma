@@ -25,6 +25,7 @@ from sqlalchemy import (
     LargeBinary,
     String,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
@@ -244,10 +245,13 @@ class OutboundShipmentTrackingSnapshot(Base):
             "recorded_at >= observed_at",
             name="ck_outbound_shipment_tracking_snapshots_recording_order",
         ),
-        UniqueConstraint(
-            "booking_id", "provider_status_code", "observed_at", "exception_code",
-            name="uq_outbound_shipment_tracking_snapshots_observation",
-            postgresql_nulls_not_distinct=True,
+        Index(
+            "uq_outbound_shipment_tracking_snapshots_observation",
+            "booking_id",
+            "provider_status_code",
+            "observed_at",
+            text("coalesce(exception_code, '')"),
+            unique=True,
         ),
         UniqueConstraint(
             "booking_id", "idempotency_key",
