@@ -216,7 +216,7 @@ def test_phase4_handoff_preserves_advanced_tracking_state_and_collection_project
 
     assert 'FulfillmentStatus.PICKED_UP: "picked_up"' in orders_source
     assert '"status": "picked_up"' in orders_source
-    assert '"description": "Order has been collected by DHL"' in orders_source
+    assert '"description": "Order has been collected by the courier"' in orders_source
 
     assert "| 'picked_up'" in frontend_tracking_source
     assert "{ key: 'picked_up', label: 'Picked Up' }" in frontend_page_source
@@ -374,6 +374,40 @@ def test_tracking_refresh_aggregates_order_status_across_package_bookings() -> N
     assert 'return min(active_states, key=_state_rank)' in source
 
 
+def test_tracking_refresh_folds_all_checkpoints_before_advancing_state() -> None:
+    source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    refresh = source[source.index('async def refresh_tracking('):source.index('async def reconcile_unknown_booking_outcome(')]
+    assert 'effective_tracking = (' in refresh
+    assert 'await _latest_effective_tracking_snapshot_for_handoff(' in refresh
+    assert 'effective_state = effective_tracking.outbound_state' in refresh
+    assert 'key=lambda observation: observation.observed_at' not in refresh[refresh.index('effective_tracking = ('):refresh.index('booking.outbound_state = effective_state')]
+
+
+def test_handoff_persists_delivered_at_when_delivery_is_preserved() -> None:
+    source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    handoff = source[source.index('async def record_collection_handoff('):source.index('async def refresh_tracking(')]
+    assert 'order.fulfillment_status = FulfillmentStatus.DELIVERED' in handoff
+    assert 'latest_tracking.outbound_state == "delivered"' in handoff
+    assert 'order.delivered_at = latest_tracking.observed_at' in handoff
+
+
+def test_effective_handoff_tracking_allows_newer_exception_to_supersede_delivery() -> None:
+    source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    helper = source[source.index('def _highest_effective_tracking_snapshot_for_handoff('):source.index('async def _aggregate_order_outbound_state(')]
+    assert 'if snapshot_state == "exception" or effective_state == "exception":' in helper
+    assert 'if effective_state != "delivered"' not in helper
+
+
+def test_order_tracking_keeps_prepickup_statuses_before_picked_up_milestone() -> None:
+    orders_source = (ROOT / "app" / "api" / "v1" / "orders.py").read_text()
+    frontend_page_source = (ROOT.parent / "shopsoma-frontend" / "src" / "pages" / "orders" / "OrderTracking.tsx").read_text()
+    assert 'FulfillmentStatus.PREPARING_FOR_PICKUP: "order_placed"' in orders_source
+    assert 'FulfillmentStatus.PICKUP_SCHEDULED: "order_placed"' in orders_source
+    assert "fulfillmentStatus === 'preparing_for_pickup'" in frontend_page_source
+    assert "fulfillmentStatus === 'pickup_scheduled'" in frontend_page_source
+    assert "currentStatus = 'order_placed';" in frontend_page_source
+
+
 def test_phase4_handoff_replay_returns_persisted_booking_state() -> None:
     source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
     handoff_replay = source[source.index('async def _matching_handoff_replay('):source.index('async def _verified_carrier_acceptance_snapshot(')]
@@ -509,7 +543,8 @@ def test_dhl_reconciliation_flushes_success_before_projecting_tracking_and_trans
 
 def test_tracking_refresh_sets_delivered_at_only_on_first_delivery_transition() -> None:
     source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
-    assert 'if latest.outbound_state == "delivered" and (' in source
+    assert 'if effective_tracking is not None and (' in source
+    assert 'effective_tracking.outbound_state == "delivered"' in source
     assert 'current_state != "delivered" or order.delivered_at is None' in source
 
 
@@ -667,16 +702,17 @@ def test_order_tracking_projection_aggregates_latest_package_bookings() -> None:
 def test_tracking_refresh_ignores_stale_exception_checkpoints() -> None:
     source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
     assert 'current_state_snapshot = await _latest_tracking_snapshot_for_state(' in source
-    assert 'latest.observed_at >= current_state_snapshot.observed_at' in source
+    assert 'effective_tracking = (' in source
+    assert 'effective_tracking.observed_at >= current_state_observed_at' in source
 
 
 def test_tracking_refresh_requires_fresh_timestamps_for_state_advancement() -> None:
     source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
     assert 'current_state_observed_at = (' in source
-    assert 'latest.outbound_state in {' in source
-    assert 'current_state_observed_at is None' in source
-    assert 'or latest.observed_at >= current_state_observed_at' in source
-    assert '_state_rank(latest.outbound_state) >= _state_rank(current_state)' in source
+    assert 'effective_tracking = (' in source
+    assert 'current_state_snapshot is None' in source
+    assert 'or effective_tracking.observed_at >= current_state_observed_at' in source
+    assert 'effective_state = effective_tracking.outbound_state' in source
 
 
 def test_create_shipment_adapter_translates_dhl_configuration_failures(monkeypatch: pytest.MonkeyPatch) -> None:

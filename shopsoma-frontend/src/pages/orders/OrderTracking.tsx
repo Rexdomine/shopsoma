@@ -132,13 +132,14 @@ export default function OrderTracking() {
         // Handle order lifecycle statuses
         if (fulfillmentStatus === 'order_received') {
           currentStatus = 'order_placed';
-        } else if (fulfillmentStatus === 'picked_up') {
-          currentStatus = 'picked_up';
         } else if (
           fulfillmentStatus === 'preparing_for_pickup' ||
-          fulfillmentStatus === 'pickup_scheduled' ||
-          fulfillmentStatus === 'in_transit'
+          fulfillmentStatus === 'pickup_scheduled'
         ) {
+          currentStatus = 'order_placed';
+        } else if (fulfillmentStatus === 'picked_up') {
+          currentStatus = 'picked_up';
+        } else if (fulfillmentStatus === 'in_transit') {
           currentStatus = 'in_transit';
         } else if (fulfillmentStatus === 'out_for_delivery') {
           currentStatus = 'out_for_delivery';
