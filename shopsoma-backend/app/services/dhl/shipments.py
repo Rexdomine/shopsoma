@@ -38,6 +38,7 @@ from app.models.package_custody import (
 )
 from app.models.user import User
 from app.services.admin_shadow_quote import (
+    _blank_optional_text_to_none,
     _planned_ship_date_for_shadow_quote,
 )
 from app.services.dhl.client import (
@@ -426,11 +427,16 @@ def _provider_safe_booking_party(
     postal_code: object,
     country_code: object,
 ) -> dict[str, object]:
+    normalized_line2 = (
+        _blank_optional_text_to_none(line2)
+        if line2 is None or isinstance(line2, str)
+        else line2
+    )
     try:
         return DHLDomesticRateAdapter._party(
             SimpleNamespace(
                 line1=line1,
-                line2=line2,
+                line2=normalized_line2,
                 city=city,
                 state=state,
                 postal_code=postal_code,

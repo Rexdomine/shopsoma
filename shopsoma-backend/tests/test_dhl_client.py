@@ -569,6 +569,76 @@ async def test_tracking_adapter_skips_malformed_checkpoint_timestamp_candidates(
 
 
 @pytest.mark.asyncio
+async def test_booking_adapter_omits_blank_optional_address_line2() -> None:
+    booking_response = {
+        "documents": [
+            {
+                "content": base64.b64encode(b"%PDF-1.4 label").decode(),
+                "mimeType": "application/pdf",
+            }
+        ],
+        "trackingNumber": "TRACK123",
+        "shipmentReference": "REF123",
+        "productCode": "N",
+        "timestamp": "2026-09-04T08:15:00Z",
+    }
+    with patch(
+        "app.services.dhl.client.DHLClient.request_json",
+        new_callable=AsyncMock,
+        return_value=booking_response,
+    ) as request_json:
+        adapter = DHLShipmentAdapter(make_settings())
+        await adapter.book(
+            cast(
+                Any,
+                SimpleNamespace(
+                    created_at=datetime.fromisoformat("2026-09-04T08:00:00+00:00"),
+                    destination_country_code="NG",
+                    destination_postal_code=None,
+                    destination_city="Lagos",
+                    destination_state="Lagos",
+                    destination_address_line1="123 Example Street",
+                    destination_address_line2="   ",
+                    destination_name="Receiver Name",
+                    destination_phone="08030000000",
+                ),
+            ),
+            cast(Any, SimpleNamespace()),
+            cast(
+                Any,
+                SimpleNamespace(
+                    country_code="NG",
+                    postal_code=None,
+                    city="Lagos",
+                    state="LA",
+                    address_line1="Warehouse Block 3",
+                    address_line2="",
+                    contact_name="Hub Contact",
+                    contact_phone="08020000000",
+                ),
+            ),
+            cast(
+                Any,
+                SimpleNamespace(
+                    weight_kg=1.25,
+                    length_cm=20,
+                    width_cm=15,
+                    height_cm=10,
+                ),
+            ),
+            cast(Any, SimpleNamespace(product_code="N")),
+        )
+
+    payload = cast(Any, request_json.await_args).kwargs["json"]
+    shipper = payload["customerDetails"]["shipperDetails"]["postalAddress"]
+    receiver = payload["customerDetails"]["receiverDetails"]["postalAddress"]
+    assert all(not value.endswith(", ") for key, value in shipper.items() if key.startswith("addressLine"))
+    assert all(not value.endswith(", ") for key, value in receiver.items() if key.startswith("addressLine"))
+    assert all(", ," not in value for key, value in shipper.items() if key.startswith("addressLine"))
+    assert all(", ," not in value for key, value in receiver.items() if key.startswith("addressLine"))
+
+
+@pytest.mark.asyncio
 async def test_booking_adapter_uses_provider_safe_addresses_and_required_content_metadata() -> None:
     booking_response = {
         "documents": [

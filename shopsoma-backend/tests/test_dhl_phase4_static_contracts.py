@@ -129,8 +129,12 @@ def test_phase4_booking_locks_and_rejects_cancelled_orders_before_provider_call(
         1,
     )[0]
     assert 'await db.commit()' in segment
-    assert 'from app.services.dhl.rating import DHLDomesticRateAdapter' in source
+    assert 'from app.services.admin_shadow_quote import (' in source
+    assert '_blank_optional_text_to_none,' in source
     assert 'def _provider_safe_booking_party(' in source
+    assert 'normalized_line2 = (' in source
+    assert '_blank_optional_text_to_none(line2)' in source
+    assert 'line2=normalized_line2,' in source
     assert 'return DHLDomesticRateAdapter._party(' in source
     assert 'raise ShipmentPhase4Error("invalid booking party address") from None' in source
     assert '"unitOfMeasurement": "metric"' in source.split('"content": {', 1)[1]
