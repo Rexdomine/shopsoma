@@ -16,6 +16,8 @@ from sqlalchemy import (
     Column,
     Date,
     DateTime,
+    DDL,
+    event,
     ForeignKey,
     ForeignKeyConstraint,
     Index,
@@ -294,3 +296,52 @@ class OutboundShipmentTrackingRefresh(Base):
         ),
         Index("ix_outbound_shipment_tracking_refreshes_booking", "booking_id", "refreshed_at"),
     )
+
+
+_BOOKING_RECONCILIATION_AUDIT_IMMUTABILITY_FUNCTION = DDL(
+    """
+CREATE OR REPLACE FUNCTION validate_outbound_shipment_booking_reconciliation_audit_update() RETURNS trigger AS $$
+BEGIN
+    IF OLD.reconciliation_recorded_at IS NOT NULL AND (
+        NEW.reconciliation_resolution IS DISTINCT FROM OLD.reconciliation_resolution
+        OR NEW.reconciliation_recorded_at IS DISTINCT FROM OLD.reconciliation_recorded_at
+        OR NEW.reconciliation_actor_type IS DISTINCT FROM OLD.reconciliation_actor_type
+        OR NEW.reconciliation_actor_id IS DISTINCT FROM OLD.reconciliation_actor_id
+        OR NEW.reconciled_from_classification IS DISTINCT FROM OLD.reconciled_from_classification
+        OR NEW.reconciled_from_failure_code IS DISTINCT FROM OLD.reconciled_from_failure_code
+        OR NEW.reconciled_from_result_recorded_at IS DISTINCT FROM OLD.reconciled_from_result_recorded_at
+        OR NEW.reconciled_from_completion_txid IS DISTINCT FROM OLD.reconciled_from_completion_txid
+    ) THEN
+        RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'outbound shipment reconciliation audit is immutable';
+    END IF;
+    RETURN NEW;
+END; $$ LANGUAGE plpgsql
+"""
+)
+
+_BOOKING_RECONCILIATION_AUDIT_IMMUTABILITY_TRIGGER = DDL(
+    """
+CREATE TRIGGER tr_outbound_shipment_bookings_reconciliation_audit_immutable
+BEFORE UPDATE ON outbound_shipment_booking
+FOR EACH ROW EXECUTE FUNCTION validate_outbound_shipment_booking_reconciliation_audit_update()
+"""
+)
+
+
+event.listen(
+    OutboundShipmentBooking.__table__,
+    "after_create",
+    _BOOKING_RECONCILIATION_AUDIT_IMMUTABILITY_FUNCTION,
+)
+event.listen(
+    OutboundShipmentBooking.__table__,
+    "after_create",
+    _BOOKING_RECONCILIATION_AUDIT_IMMUTABILITY_TRIGGER,
+)
+event.listen(
+    OutboundShipmentBooking.__table__,
+    "after_drop",
+    DDL(
+        "DROP FUNCTION IF EXISTS validate_outbound_shipment_booking_reconciliation_audit_update() CASCADE"
+    ),
+)

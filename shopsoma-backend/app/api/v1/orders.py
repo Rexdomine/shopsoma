@@ -1459,7 +1459,7 @@ async def get_order_tracking(
         FulfillmentStatus.ORDER_RECEIVED: "order_placed",
         FulfillmentStatus.PREPARING_FOR_PICKUP: "in_transit",
         FulfillmentStatus.PICKUP_SCHEDULED: "in_transit",
-        FulfillmentStatus.PICKED_UP: "in_transit",
+        FulfillmentStatus.PICKED_UP: "picked_up",
         FulfillmentStatus.IN_TRANSIT: "in_transit",
         FulfillmentStatus.OUT_FOR_DELIVERY: "out_for_delivery",
         FulfillmentStatus.DELIVERED: "delivered",
@@ -1483,17 +1483,25 @@ async def get_order_tracking(
             }
         )
 
-    # In Transit (consolidates preparing/scheduled/picked_up/in_transit)
+    # In Transit (consolidates preparing/scheduled/in_transit)
     if order.fulfillment_status in [
         FulfillmentStatus.PREPARING_FOR_PICKUP,
         FulfillmentStatus.PICKUP_SCHEDULED,
-        FulfillmentStatus.PICKED_UP,
         FulfillmentStatus.IN_TRANSIT,
     ]:
         history.append(
             {
                 "status": "in_transit",
                 "description": "Order is in transit to you",
+                "occurred_at": order.updated_at.isoformat(),
+            }
+        )
+
+    if order.fulfillment_status == FulfillmentStatus.PICKED_UP:
+        history.append(
+            {
+                "status": "picked_up",
+                "description": "Order has been collected by DHL",
                 "occurred_at": order.updated_at.isoformat(),
             }
         )

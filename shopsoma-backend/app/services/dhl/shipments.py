@@ -875,6 +875,27 @@ async def _latest_tracking_snapshot_for_state(
     ).scalar_one_or_none()
 
 
+async def _latest_tracking_snapshot(
+    db: AsyncSession,
+    *,
+    booking_id: uuid.UUID,
+) -> OutboundShipmentTrackingSnapshot | None:
+    return (
+        await db.execute(
+            select(OutboundShipmentTrackingSnapshot)
+            .where(
+                OutboundShipmentTrackingSnapshot.booking_id == booking_id,
+                OutboundShipmentTrackingSnapshot.provider == PROVIDER,
+            )
+            .order_by(
+                OutboundShipmentTrackingSnapshot.observed_at.desc(),
+                OutboundShipmentTrackingSnapshot.id.desc(),
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+
 def _utc_or_none(value: object) -> datetime | None:
     if value is None:
         return None
@@ -1400,7 +1421,7 @@ async def get_shipment_label(
     booking = await _load_booking_for_order(db, order_id=order_id, booking_id=booking_id)
     if booking.label_content is None or booking.label_media_type is None or booking.label_sha256 is None:
         raise ShipmentPhase4Error("label not available for booking")
-    filename = f"dhl-label-{booking.tracking_number or booking.id}.pdf"
+    filename = f"dhl-label-{booking.id}.pdf"
     return ShipmentLabel(
         booking_id=booking.id,
         media_type=booking.label_media_type,
@@ -1585,14 +1606,28 @@ async def record_collection_handoff(
     booking.collection_evidence_hash = returned_event.evidence_hash
     booking.collection_scheduled_at = command.occurred_at
     booking.handoff_recorded_at = max(recorded_at, returned_event.recorded_at)
-    booking.outbound_state = "collected"
+    latest_tracking = await _latest_tracking_snapshot(db, booking_id=booking.id)
+    if latest_tracking is not None and latest_tracking.outbound_state in {
+        "collected",
+        "in_transit",
+        "out_for_delivery",
+        "delivered",
+        "exception",
+    }:
+        booking.outbound_state = latest_tracking.outbound_state
+        if latest_tracking.outbound_state == "exception":
+            booking.latest_exception_code = latest_tracking.exception_code
+    else:
+        booking.outbound_state = "collected"
     aggregate_state = await _aggregate_order_outbound_state(
         db,
         order_id=booking.order_id,
         fallback=booking.outbound_state,
     )
     if order.fulfillment_status != FulfillmentStatus.CANCELLED:
-        if aggregate_state in {"collected", "in_transit"}:
+        if aggregate_state == "collected":
+            order.fulfillment_status = FulfillmentStatus.PICKED_UP
+        elif aggregate_state == "in_transit":
             order.fulfillment_status = FulfillmentStatus.IN_TRANSIT
         elif aggregate_state == "out_for_delivery":
             order.fulfillment_status = FulfillmentStatus.OUT_FOR_DELIVERY

@@ -185,16 +185,34 @@ def test_phase4_dhl_mutations_preserve_order_before_booking_locking() -> None:
     assert '_ensure_order_not_cancelled(order, action="reconcile booking")' in reconcile
 
 
-def test_phase4_handoff_aggregates_split_order_state_before_promoting_order() -> None:
-    source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
-    handoff = source[source.index('async def record_collection_handoff('):source.index('async def refresh_tracking(')]
+def test_phase4_handoff_preserves_advanced_tracking_state_and_collection_projection() -> None:
+    service_source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    orders_source = (ROOT / "app" / "api" / "v1" / "orders.py").read_text()
+    frontend_tracking_source = (ROOT.parent / "shopsoma-frontend" / "src" / "services" / "orderService.ts").read_text()
+    frontend_page_source = (ROOT.parent / "shopsoma-frontend" / "src" / "pages" / "orders" / "OrderTracking.tsx").read_text()
+
+    handoff = service_source[service_source.index('async def record_collection_handoff('):service_source.index('async def refresh_tracking(')]
+    assert 'latest_tracking = await _latest_tracking_snapshot(db, booking_id=booking.id)' in handoff
+    assert 'booking.outbound_state = latest_tracking.outbound_state' in handoff
     assert 'booking.outbound_state = "collected"' in handoff
-    assert 'aggregate_state = await _aggregate_order_outbound_state(' in handoff
-    assert 'order_id=booking.order_id' in handoff
-    assert 'fallback=booking.outbound_state' in handoff
-    assert 'if aggregate_state in {"collected", "in_transit"}:' in handoff
+    assert 'if aggregate_state == "collected":' in handoff
+    assert 'order.fulfillment_status = FulfillmentStatus.PICKED_UP' in handoff
+    assert 'elif aggregate_state == "in_transit":' in handoff
     assert 'order.fulfillment_status = FulfillmentStatus.IN_TRANSIT' in handoff
-    assert 'order.fulfillment_status = FulfillmentStatus.PICKED_UP' not in handoff
+
+    assert 'FulfillmentStatus.PICKED_UP: "picked_up"' in orders_source
+    assert '"status": "picked_up"' in orders_source
+    assert '"description": "Order has been collected by DHL"' in orders_source
+
+    assert "| 'picked_up'" in frontend_tracking_source
+    assert "{ key: 'picked_up', label: 'Picked Up' }" in frontend_page_source
+    assert "currentStatus = 'picked_up';" in frontend_page_source
+
+
+def test_phase4_booking_gets_header_safe_label_filename() -> None:
+    source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    assert 'filename = f"dhl-label-{booking.id}.pdf"' in source
+    assert 'filename = f"dhl-label-{booking.tracking_number or booking.id}.pdf"' not in source
 
 
 def test_phase4_booking_binds_provider_product_to_persisted_selected_quote() -> None:
@@ -276,6 +294,9 @@ def test_phase4_reconciliation_preserves_append_only_audit_fields() -> None:
         'reconciled_from_result_recorded_at',
         'reconciled_from_completion_txid',
         'ck_outbound_shipment_bookings_reconciliation_audit',
+        'validate_outbound_shipment_booking_reconciliation_audit_update',
+        'tr_outbound_shipment_bookings_reconciliation_audit_immutable',
+        'outbound shipment reconciliation audit is immutable',
     ):
         assert field in model_source
         assert field in migration_source

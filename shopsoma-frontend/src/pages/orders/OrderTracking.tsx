@@ -14,6 +14,7 @@ import { formatPriceWithConversion, type Currency } from '../../utils/pricing';
 
 const STATUS_STEPS: Array<{ key: OrderStatus; label: string }> = [
   { key: 'order_placed', label: 'Order Placed' },
+  { key: 'picked_up', label: 'Picked Up' },
   { key: 'in_transit', label: 'In Transit' },
   { key: 'out_for_delivery', label: 'Out for Delivery' },
   { key: 'delivered', label: 'Delivered' },
@@ -27,6 +28,7 @@ const TERMINAL_STATES: Record<OrderStatus, { label: string; color: string }> = {
   // Include normal states for type safety
   'order_placed': { label: 'Order Placed', color: 'yellow' },
   'pending_confirmation': { label: 'Pending Confirmation', color: 'yellow' },
+  'picked_up': { label: 'Picked Up', color: 'indigo' },
   'in_transit': { label: 'In Transit', color: 'blue' },
   'out_for_delivery': { label: 'Out for Delivery', color: 'blue' },
   'delivered': { label: 'Delivered', color: 'green' },
@@ -130,10 +132,11 @@ export default function OrderTracking() {
         // Handle order lifecycle statuses
         if (fulfillmentStatus === 'order_received') {
           currentStatus = 'order_placed';
+        } else if (fulfillmentStatus === 'picked_up') {
+          currentStatus = 'picked_up';
         } else if (
           fulfillmentStatus === 'preparing_for_pickup' ||
           fulfillmentStatus === 'pickup_scheduled' ||
-          fulfillmentStatus === 'picked_up' ||
           fulfillmentStatus === 'in_transit'
         ) {
           currentStatus = 'in_transit';

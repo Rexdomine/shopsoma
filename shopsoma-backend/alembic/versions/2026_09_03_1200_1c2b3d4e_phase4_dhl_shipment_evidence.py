@@ -286,6 +286,30 @@ def upgrade() -> None:
         "outbound_shipment_booking",
         ["outbound_state"],
     )
+    op.execute(
+        """
+        CREATE OR REPLACE FUNCTION validate_outbound_shipment_booking_reconciliation_audit_update() RETURNS trigger AS $$
+        BEGIN
+            IF OLD.reconciliation_recorded_at IS NOT NULL AND (
+                NEW.reconciliation_resolution IS DISTINCT FROM OLD.reconciliation_resolution
+                OR NEW.reconciliation_recorded_at IS DISTINCT FROM OLD.reconciliation_recorded_at
+                OR NEW.reconciliation_actor_type IS DISTINCT FROM OLD.reconciliation_actor_type
+                OR NEW.reconciliation_actor_id IS DISTINCT FROM OLD.reconciliation_actor_id
+                OR NEW.reconciled_from_classification IS DISTINCT FROM OLD.reconciled_from_classification
+                OR NEW.reconciled_from_failure_code IS DISTINCT FROM OLD.reconciled_from_failure_code
+                OR NEW.reconciled_from_result_recorded_at IS DISTINCT FROM OLD.reconciled_from_result_recorded_at
+                OR NEW.reconciled_from_completion_txid IS DISTINCT FROM OLD.reconciled_from_completion_txid
+            ) THEN
+                RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'outbound shipment reconciliation audit is immutable';
+            END IF;
+            RETURN NEW;
+        END; $$ LANGUAGE plpgsql;
+
+        CREATE TRIGGER tr_outbound_shipment_bookings_reconciliation_audit_immutable
+        BEFORE UPDATE ON outbound_shipment_booking
+        FOR EACH ROW EXECUTE FUNCTION validate_outbound_shipment_booking_reconciliation_audit_update();
+        """
+    )
 
     # ------------------------------------------------------------------
     # outbound_shipment_tracking_snapshot  — aligned with ORM OutboundShipmentTrackingSnapshot
@@ -386,6 +410,12 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.execute(
+        "DROP TRIGGER IF EXISTS tr_outbound_shipment_bookings_reconciliation_audit_immutable ON outbound_shipment_booking"
+    )
+    op.execute(
+        "DROP FUNCTION IF EXISTS validate_outbound_shipment_booking_reconciliation_audit_update()"
+    )
     op.drop_table("outbound_shipment_tracking_refresh")
     op.drop_table("outbound_shipment_tracking_snapshot")
     op.drop_table("outbound_shipment_booking")
