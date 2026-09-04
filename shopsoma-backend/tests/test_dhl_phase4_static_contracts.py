@@ -138,6 +138,9 @@ def test_order_cancellation_blocks_inflight_dhl_bookings_after_call_start() -> N
     assert 'select(Order).where(Order.id == order_id).with_for_update()' in admin_source
     assert 'await ensure_order_cancellation_allowed(db, order_id=order.id)' in admin_source
     assert 'status_code=status.HTTP_409_CONFLICT' in admin_source
+    assert 'if new_status == FulfillmentStatus.CANCELLED:' in admin_source
+    assert 'if update_data.fulfillment_status == FulfillmentStatus.CANCELLED:' in admin_source
+    assert 'select(Order).where(Order.id.in_(update_data.order_ids)).with_for_update()' in admin_source
 
 
 def test_phase4_booking_persists_unknown_outcome_when_success_flush_hits_unique_provider_conflict() -> None:
@@ -155,6 +158,22 @@ def test_phase4_booking_persists_unknown_outcome_when_success_flush_hits_unique_
     assert 'await db.rollback()' in success_tail
     assert 'await _mark_booking_unknown_outcome(db, booking=booking, guard=guard)' in success_tail
     assert 'note="provider success persistence conflict"' in success_tail
+
+
+def test_phase4_dhl_mutations_preserve_order_before_booking_locking() -> None:
+    source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+
+    handoff = source[source.index('async def record_collection_handoff('):source.index('async def download_label(') if 'async def download_label(' in source else source.index('async def _load_booking_for_order(')]
+    assert handoff.index('order = await _load_order(db, order_id=order_id, lock_for_update=True)') < handoff.index('booking = await _load_booking_for_order(')
+    assert '_ensure_order_not_cancelled(order, action="record handoff")' in handoff
+
+    refresh = source[source.index('async def refresh_tracking('):source.index('async def reconcile_unknown_booking_outcome(')]
+    assert refresh.index('order = await _load_order(db, order_id=order_id, lock_for_update=True)') < refresh.index('booking = await _load_booking_for_order(')
+    assert '_ensure_order_not_cancelled(order, action="refresh tracking")' in refresh
+
+    reconcile = source[source.index('async def reconcile_unknown_booking_outcome('):source.index('async def _load_booking_for_order(')]
+    assert reconcile.index('order = await _load_order(db, order_id=order_id, lock_for_update=True)') < reconcile.index('booking = await _load_booking_for_order(')
+    assert '_ensure_order_not_cancelled(order, action="reconcile booking")' in reconcile
 
 
 def test_phase4_booking_binds_provider_product_to_persisted_selected_quote() -> None:

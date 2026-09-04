@@ -590,7 +590,7 @@ async def update_order_status(
 ):
     """Update order fulfillment status"""
 
-    query = select(Order).where(Order.id == order_id).options(
+    query = select(Order).where(Order.id == order_id).with_for_update().options(
         selectinload(Order.customer),
         selectinload(Order.shipping_address),
         selectinload(Order.billing_address),
@@ -611,6 +611,15 @@ async def update_order_status(
     # Store old status for notification
     old_status = order.fulfillment_status
     new_status = update_data.fulfillment_status
+
+    if new_status == FulfillmentStatus.CANCELLED:
+        try:
+            await ensure_order_cancellation_allowed(db, order_id=order.id)
+        except ShipmentPhase4ConflictError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(exc),
+            ) from exc
 
     # Update status
     order.fulfillment_status = new_status
@@ -844,7 +853,7 @@ async def bulk_update_status(
     """Bulk update order statuses"""
 
     # Get all orders
-    query = select(Order).where(Order.id.in_(update_data.order_ids))
+    query = select(Order).where(Order.id.in_(update_data.order_ids)).with_for_update()
     result = await db.execute(query)
     orders = result.scalars().all()
 
@@ -856,6 +865,14 @@ async def bulk_update_status(
 
     updated_count = 0
     for order in orders:
+        if update_data.fulfillment_status == FulfillmentStatus.CANCELLED:
+            try:
+                await ensure_order_cancellation_allowed(db, order_id=order.id)
+            except ShipmentPhase4ConflictError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=str(exc),
+                ) from exc
         previous_status = order.fulfillment_status
         order.fulfillment_status = update_data.fulfillment_status
 

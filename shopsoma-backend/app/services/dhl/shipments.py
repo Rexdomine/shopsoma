@@ -1408,6 +1408,8 @@ async def record_collection_handoff(
     admin: User,
     command: HandoffCommand,
 ) -> HandoffResult:
+    order = await _load_order(db, order_id=order_id, lock_for_update=True)
+    _ensure_order_not_cancelled(order, action="record handoff")
     booking = await _load_booking_for_order(
         db,
         order_id=order_id,
@@ -1431,8 +1433,6 @@ async def record_collection_handoff(
         )
     if booking.handoff_recorded_at is not None:
         raise ShipmentPhase4ConflictError("handoff already recorded")
-    order = await _load_order(db, order_id=order_id, lock_for_update=True)
-    _ensure_order_not_cancelled(order, action="record handoff")
     database_now = await db.scalar(text("SELECT clock_timestamp()"))
     if command.occurred_at > database_now:
         raise ShipmentPhase4ConflictError("handoff occurred_at cannot be in the future")
@@ -1595,6 +1595,8 @@ async def refresh_tracking(
     command: TrackingRefreshCommand,
     adapter: ShipmentAdapter | None = None,
 ) -> TrackingRefreshResult:
+    order = await _load_order(db, order_id=order_id, lock_for_update=True)
+    _ensure_order_not_cancelled(order, action="refresh tracking")
     booking = await _load_booking_for_order(
         db,
         order_id=order_id,
@@ -1728,7 +1730,6 @@ async def refresh_tracking(
                 order_id=booking.order_id,
                 fallback=booking.tracking_number,
             )
-            order = await _load_order(db, order_id=order_id, lock_for_update=True)
             if order is not None:
                 order.delivery_provider = PROVIDER
                 order.tracking_number = aggregate_tracking_number
@@ -1790,6 +1791,8 @@ async def reconcile_unknown_booking_outcome(
     admin: User,
     command: BookingReconciliationCommand,
 ) -> BookingResult:
+    order = await _load_order(db, order_id=order_id, lock_for_update=True)
+    _ensure_order_not_cancelled(order, action="reconcile booking")
     booking = await _load_booking_for_order(
         db,
         order_id=order_id,
@@ -1830,7 +1833,6 @@ async def reconcile_unknown_booking_outcome(
     booking.completion_txid = await db.scalar(text("SELECT txid_current()"))
     guard.booking_blocked_reason = None
 
-    order = await _load_order(db, order_id=order_id, lock_for_update=True)
     booking.classification = "success"
     booking.failure_code = None
     booking.provider_reference = provider_reference
