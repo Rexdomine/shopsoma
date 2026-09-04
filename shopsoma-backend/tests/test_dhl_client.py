@@ -405,6 +405,23 @@ async def test_tracking_adapter_parses_mydhl_shipments_events_envelope() -> None
 
 
 @pytest.mark.asyncio
+async def test_tracking_adapter_url_encodes_tracking_number_path_segment() -> None:
+    tracking_response = {"shipments": []}
+    with patch(
+        "app.services.dhl.client.DHLClient.request_json",
+        new_callable=AsyncMock,
+        return_value=tracking_response,
+    ) as request_json:
+        adapter = DHLShipmentAdapter(make_settings())
+        await adapter.track("TRACK/123?#frag")
+
+    request_json.assert_awaited_once_with(
+        "GET",
+        "/shipments/TRACK%2F123%3F%23frag/tracking",
+    )
+
+
+@pytest.mark.asyncio
 async def test_tracking_adapter_skips_malformed_checkpoint_timestamp_candidates() -> None:
     tracking_response = {
         "shipments": [

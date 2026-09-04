@@ -249,10 +249,20 @@ def test_phase4_booking_rejects_selected_service_codes_that_exceed_booking_width
 
 def test_phase4_booking_rejects_empty_decoded_labels_before_success_flush() -> None:
     source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    assert 'if adapter_result.label_content is None:' in source
     assert 'if not adapter_result.label_content:' in source
     assert 'raise ShipmentPhase4Error("invalid label_content")' in source
+    assert source.index('if adapter_result.label_content is None:') < source.index('booking.classification = "success"')
     assert source.index('raise ShipmentPhase4Error("invalid label_content")') < source.index('booking.classification = "success"')
     assert 'booking.failure_code = "unknown_outcome"' in source
+
+
+def test_phase4_booking_requires_label_document_before_success_flush() -> None:
+    source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    success_window = source[source.index('completed_at = await db.scalar(text("SELECT clock_timestamp()"))'):source.index('booking.classification = "success"')]
+    assert 'if adapter_result.label_content is None:' in success_window
+    assert 'raise ShipmentPhase4Error("invalid label_content")' in success_window
+    assert 'booking.outbound_state = "label_ready" if booking.label_content is not None else "awaiting_collection"' in source
 
 
 def test_phase4_booking_validates_pdf_label_contract_before_success_flush() -> None:
@@ -578,6 +588,9 @@ def test_booking_reconciles_expired_claims_before_authoritative_subject_validati
 def test_booking_expiry_reconciliation_preserves_no_call_boundary_marker() -> None:
     source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
     claim_source = source[source.index("async def _reconcile_or_release_expired_claim"):source.index("async def _load_or_create_guard")]
+    assert 'select(OutboundShipmentBooking)' in claim_source
+    assert '.execution_options(populate_existing=True)' in claim_source
+    assert '.with_for_update()' in claim_source
     assert 'active.classification = "failure"' in claim_source
     assert 'active.failure_code = "claim_expired"' in claim_source
     assert 'active.call_started_at = active.claimed_at' not in claim_source

@@ -6,6 +6,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from typing import Protocol, Sequence
+from urllib.parse import quote
 
 from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
@@ -326,7 +327,7 @@ class DHLShipmentAdapter:
     async def track(self, tracking_number: str) -> Sequence[TrackingObservation]:
         response = await self._client.request_json(
             "GET",
-            f"/shipments/{tracking_number}/tracking",
+            f"/shipments/{quote(tracking_number, safe='')}/tracking",
         )
         checkpoints = _tracking_checkpoints(response)
         observations: list[TrackingObservation] = []
@@ -661,7 +662,14 @@ async def _reconcile_or_release_expired_claim(
     changed = False
     if guard.active_booking_id is None:
         return changed
-    active = await db.get(OutboundShipmentBooking, guard.active_booking_id)
+    active = (
+        await db.execute(
+            select(OutboundShipmentBooking)
+            .where(OutboundShipmentBooking.id == guard.active_booking_id)
+            .execution_options(populate_existing=True)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
     if active is None:
         guard.active_booking_id = None
         guard.booking_blocked_reason = None
@@ -1392,6 +1400,8 @@ async def book_outbound_shipment(
     completed_at = await db.scalar(text("SELECT clock_timestamp()"))
     booked_at = adapter_result.booked_at or completed_at
     try:
+        if adapter_result.label_content is None:
+            raise ShipmentPhase4Error("invalid label_content")
         provider_reference = _normalize_bounded_text(
             adapter_result.provider_reference,
             field="provider_reference",
@@ -1402,17 +1412,12 @@ async def book_outbound_shipment(
             field="tracking_number",
             max_length=MAX_BOOKING_TRACKING_NUMBER_LENGTH,
         )
-        if adapter_result.label_content is None:
-            if adapter_result.label_media_type is not None:
-                raise ShipmentPhase4Error("invalid label_media_type")
-            label_media_type = None
-        else:
-            if not adapter_result.label_content:
-                raise ShipmentPhase4Error("invalid label_content")
-            _validate_pdf_label_content(adapter_result.label_content)
-            label_media_type = _validated_pdf_label_media_type(
-                adapter_result.label_media_type
-            )
+        if not adapter_result.label_content:
+            raise ShipmentPhase4Error("invalid label_content")
+        _validate_pdf_label_content(adapter_result.label_content)
+        label_media_type = _validated_pdf_label_media_type(
+            adapter_result.label_media_type
+        )
     except ShipmentPhase4Error as exc:
         await _mark_booking_unknown_outcome(
             db,
