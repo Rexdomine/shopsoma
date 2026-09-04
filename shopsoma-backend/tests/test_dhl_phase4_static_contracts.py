@@ -392,7 +392,9 @@ def test_phase4_reconciliation_preserves_append_only_audit_fields() -> None:
         'ck_outbound_shipment_bookings_reconciliation_audit',
         'validate_outbound_shipment_booking_reconciliation_audit_update',
         'tr_outbound_shipment_bookings_reconciliation_audit_immutable',
+        'tr_outbound_shipment_bookings_reconciliation_audit_immutable_delete',
         'outbound shipment reconciliation audit is immutable',
+        "IF TG_OP = 'DELETE' AND OLD.reconciliation_recorded_at IS NOT NULL THEN",
     ):
         assert field in model_source
         assert field in migration_source
@@ -771,6 +773,22 @@ def test_phase4_booking_binds_selected_quote_to_source_hub_version_before_provid
     assert 'current_hub_version = getattr(hub, "version", None)' in source
     assert 'quoted_hub_version != current_hub_version' in source
     assert 'selected dhl quote hub version changed; refresh quote before booking' in source
+    booking_source = source[source.index('async def book_outbound_shipment('):]
+    assert '.execution_options(populate_existing=True)' in booking_source
+    assert 'select(FulfillmentHub)' in booking_source
+    assert 'FulfillmentHub.id == intent.origin_hub_id' in booking_source
+    assert '.with_for_update()' in booking_source
+    assert booking_source.index('select(FulfillmentHub)') < booking_source.index('prepared_payload = adapter.prepare_booking_payload(')
+    assert booking_source.index('prepared_payload = adapter.prepare_booking_payload(') < booking_source.index('booking.call_started_at = called_at')
+
+
+def test_order_tracking_returns_persisted_carrier_number_on_initial_http_load() -> None:
+    orders_source = (ROOT / 'app' / 'api' / 'v1' / 'orders.py').read_text()
+    frontend_tracking_source = (ROOT.parent / 'shopsoma-frontend' / 'src' / 'services' / 'orderService.ts').read_text()
+    assert 'tracking_id = order.tracking_number or f"GB{order.order_number.replace(\'-\', \'\')[-8:]}"' in orders_source
+    assert '"tracking_number": order.tracking_number,' in orders_source
+    assert 'tracking_number?: string | null;' in frontend_tracking_source
+    assert 'tracking_number: trackingId,' in frontend_tracking_source
 
 
 def test_booking_reconciliation_acquires_guard_before_locking_booking_row() -> None:

@@ -21,6 +21,7 @@ export interface OrderTracking {
   order_id: string;
   order_number: string;
   tracking_id: string;
+  tracking_number?: string | null;
   amount: number;
   currency: string;
   updated_at: string;
@@ -43,6 +44,7 @@ export const buildMockTracking = (orderId: string): OrderTracking => {
     order_id: orderId,
     order_number: orderId,
     tracking_id: trackingId,
+    tracking_number: trackingId,
     amount: 85000,
     currency: 'NGN',
     updated_at: today.toISOString(),

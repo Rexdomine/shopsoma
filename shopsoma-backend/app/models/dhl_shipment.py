@@ -333,6 +333,9 @@ _BOOKING_RECONCILIATION_AUDIT_IMMUTABILITY_FUNCTION = DDL(
     """
 CREATE OR REPLACE FUNCTION validate_outbound_shipment_booking_reconciliation_audit_update() RETURNS trigger AS $$
 BEGIN
+    IF TG_OP = 'DELETE' AND OLD.reconciliation_recorded_at IS NOT NULL THEN
+        RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'outbound shipment reconciliation audit is immutable';
+    END IF;
     IF OLD.reconciliation_recorded_at IS NOT NULL AND (
         NEW.reconciliation_resolution IS DISTINCT FROM OLD.reconciliation_resolution
         OR NEW.reconciliation_recorded_at IS DISTINCT FROM OLD.reconciliation_recorded_at
@@ -346,6 +349,9 @@ BEGIN
         OR NEW.reconciliation_evidence_sha256 IS DISTINCT FROM OLD.reconciliation_evidence_sha256
     ) THEN
         RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'outbound shipment reconciliation audit is immutable';
+    END IF;
+    IF TG_OP = 'DELETE' THEN
+        RETURN OLD;
     END IF;
     RETURN NEW;
 END; $$ LANGUAGE plpgsql
@@ -361,6 +367,15 @@ FOR EACH ROW EXECUTE FUNCTION validate_outbound_shipment_booking_reconciliation_
 )
 
 
+_BOOKING_RECONCILIATION_AUDIT_IMMUTABILITY_DELETE_TRIGGER = DDL(
+    """
+CREATE TRIGGER tr_outbound_shipment_bookings_reconciliation_audit_immutable_delete
+BEFORE DELETE ON outbound_shipment_booking
+FOR EACH ROW EXECUTE FUNCTION validate_outbound_shipment_booking_reconciliation_audit_update()
+"""
+)
+
+
 event.listen(
     OutboundShipmentBooking.__table__,
     "after_create",
@@ -370,6 +385,11 @@ event.listen(
     OutboundShipmentBooking.__table__,
     "after_create",
     _BOOKING_RECONCILIATION_AUDIT_IMMUTABILITY_TRIGGER,
+)
+event.listen(
+    OutboundShipmentBooking.__table__,
+    "after_create",
+    _BOOKING_RECONCILIATION_AUDIT_IMMUTABILITY_DELETE_TRIGGER,
 )
 event.listen(
     OutboundShipmentBooking.__table__,

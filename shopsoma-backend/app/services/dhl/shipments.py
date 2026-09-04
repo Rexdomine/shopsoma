@@ -1512,9 +1512,6 @@ async def book_outbound_shipment(
     if not _setting_bool(settings, "DHL_DOMESTIC_PROVIDER_CALLS_ENABLED", "dhl_domestic_provider_calls_enabled"):
         raise ShipmentPhase4Error("dhl domestic provider calls disabled")
     _ensure_sandbox_booking_allowed(settings, cohort_ids=cohort_ids)
-    hub = await db.get(FulfillmentHub, intent.origin_hub_id)
-    if hub is None:
-        raise ShipmentPhase4Error("origin hub not found")
     adapter = adapter or create_shipment_adapter(settings)
 
     now = await db.scalar(text("SELECT clock_timestamp()"))
@@ -1557,6 +1554,16 @@ async def book_outbound_shipment(
     try:
         order = await _load_order(db, order_id=order_id, lock_for_update=True)
         _ensure_order_not_cancelled(order, action="book shipment")
+        hub = (
+            await db.execute(
+                select(FulfillmentHub)
+                .where(FulfillmentHub.id == intent.origin_hub_id)
+                .execution_options(populate_existing=True)
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+        if hub is None:
+            raise ShipmentPhase4Error("origin hub not found")
         prepared_payload = adapter.prepare_booking_payload(
             intent,
             order,

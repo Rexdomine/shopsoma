@@ -1450,8 +1450,9 @@ async def get_order_tracking(
                 detail="Not authorized to view this order",
             )
 
-    # Generate tracking ID based on order number
-    tracking_id = f"GB{order.order_number.replace('-', '')[-8:]}"
+    # Prefer the persisted carrier tracking number when available; otherwise fall back
+    # to the legacy synthetic public identifier.
+    tracking_id = order.tracking_number or f"GB{order.order_number.replace('-', '')[-8:]}"
 
     # Map fulfillment status to tracking status (new 7-status system)
     # Matches frontend OrderStatus type in orderService.ts
@@ -1566,6 +1567,7 @@ async def get_order_tracking(
         "order_id": str(order.id),
         "order_number": order.order_number,
         "tracking_id": tracking_id,
+        "tracking_number": order.tracking_number,
         "amount": float(order.total_amount),
         "currency": currency,
         "updated_at": order.updated_at.isoformat(),
