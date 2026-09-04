@@ -245,6 +245,15 @@ class QuotedShipmentService:
 
 
 class ShipmentAdapter(Protocol):
+    def prepare_booking_payload(
+        self,
+        intent: OutboundShipmentIntent,
+        order: Order,
+        hub: FulfillmentHub,
+        package_version: HubPackageVersion,
+        quoted_service: QuotedShipmentService,
+    ) -> dict[str, object]: ...
+
     async def book(
         self,
         intent: OutboundShipmentIntent,
@@ -252,6 +261,7 @@ class ShipmentAdapter(Protocol):
         hub: FulfillmentHub,
         package_version: HubPackageVersion,
         quoted_service: QuotedShipmentService,
+        prepared_payload: dict[str, object] | None = None,
     ) -> AdapterBookingResult: ...
 
     async def track(self, tracking_number: str) -> Sequence[TrackingObservation]: ...
@@ -262,14 +272,14 @@ class DHLShipmentAdapter:
         self._settings = settings
         self._client = DHLClient(config=settings)
 
-    async def book(
+    def prepare_booking_payload(
         self,
         intent: OutboundShipmentIntent,
         order: Order,
         hub: FulfillmentHub,
         package_version: HubPackageVersion,
         quoted_service: QuotedShipmentService,
-    ) -> AdapterBookingResult:
+    ) -> dict[str, object]:
         planned_ship_date = _planned_ship_date_for_shadow_quote(intent.created_at)
         shipper = _provider_safe_booking_party(
             line1=hub.address_line1,
@@ -287,7 +297,7 @@ class DHLShipmentAdapter:
             postal_code=intent.destination_postal_code,
             country_code=intent.destination_country_code,
         )
-        payload = {
+        return {
             "plannedShippingDateAndTime": _mydhl_planned_shipping_timestamp(planned_ship_date),
             "pickup": {"isRequested": False},
             "productCode": quoted_service.product_code,
@@ -325,6 +335,23 @@ class DHLShipmentAdapter:
                 }]
             },
         }
+
+    async def book(
+        self,
+        intent: OutboundShipmentIntent,
+        order: Order,
+        hub: FulfillmentHub,
+        package_version: HubPackageVersion,
+        quoted_service: QuotedShipmentService,
+        prepared_payload: dict[str, object] | None = None,
+    ) -> AdapterBookingResult:
+        payload = prepared_payload or self.prepare_booking_payload(
+            intent,
+            order,
+            hub,
+            package_version,
+            quoted_service,
+        )
         response = await self._client.request_json("POST", "/shipments", json=payload)
         documents = response.get("documents") or []
         label_media_type = None
@@ -1501,11 +1528,43 @@ async def book_outbound_shipment(
     try:
         order = await _load_order(db, order_id=order_id, lock_for_update=True)
         _ensure_order_not_cancelled(order, action="book shipment")
+        prepared_payload = adapter.prepare_booking_payload(
+            intent,
+            order,
+            hub,
+            package_version,
+            quoted_service,
+        )
+    except ShipmentPhase4Error as exc:
+        booking = await _load_booking_for_order(
+            db,
+            order_id=order_id,
+            booking_id=booking.id,
+            lock_for_update=True,
+        )
+        guard = await db.get(OutboundIntentShipmentGuard, intent.id)
+        assert guard is not None
+        await _mark_booking_failure(
+            db,
+            booking=booking,
+            guard=guard,
+            failure_code="local_preflight_failed",
+        )
+        return _booking_result(booking, replayed=False, note=str(exc))
+
+    try:
         called_at = await db.scalar(text("SELECT clock_timestamp()"))
         booking.call_started_at = called_at
         await db.flush()
         await db.commit()
-        adapter_result = await adapter.book(intent, order, hub, package_version, quoted_service)
+        adapter_result = await adapter.book(
+            intent,
+            order,
+            hub,
+            package_version,
+            quoted_service,
+            prepared_payload=prepared_payload,
+        )
     except (DHLAPIError, TimeoutError) as exc:
         booking = await _load_booking_for_order(
             db,
@@ -1540,8 +1599,22 @@ async def book_outbound_shipment(
         assert guard is not None
         await _mark_booking_unknown_outcome(db, booking=booking, guard=guard)
         return _booking_result(booking, replayed=False, note=str(exc))
-    except ShipmentPhase4Error:
-        raise
+    except ShipmentPhase4Error as exc:
+        booking = await _load_booking_for_order(
+            db,
+            order_id=order_id,
+            booking_id=booking.id,
+            lock_for_update=True,
+        )
+        guard = await db.get(OutboundIntentShipmentGuard, intent.id)
+        assert guard is not None
+        await _mark_booking_failure(
+            db,
+            booking=booking,
+            guard=guard,
+            failure_code="local_preflight_failed",
+        )
+        return _booking_result(booking, replayed=False, note=str(exc))
     except Exception as exc:
         booking = await _load_booking_for_order(
             db,
@@ -2276,6 +2349,25 @@ async def _mark_booking_unknown_outcome(
     booking.failure_code = "unknown_outcome"
     booking.completion_txid = await db.scalar(text("SELECT txid_current()"))
     guard.booking_blocked_reason = "unknown_outcome"
+    await db.flush()
+
+
+async def _mark_booking_failure(
+    db: AsyncSession,
+    *,
+    booking: OutboundShipmentBooking,
+    guard: OutboundIntentShipmentGuard,
+    failure_code: str,
+    completed_at: datetime | None = None,
+) -> None:
+    if completed_at is None:
+        completed_at = await db.scalar(text("SELECT clock_timestamp()"))
+    booking.result_recorded_at = completed_at
+    booking.classification = "failure"
+    booking.failure_code = failure_code
+    booking.completion_txid = await db.scalar(text("SELECT txid_current()"))
+    guard.active_booking_id = None
+    guard.booking_blocked_reason = None
     await db.flush()
 
 

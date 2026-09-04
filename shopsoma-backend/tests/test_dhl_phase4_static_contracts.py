@@ -120,12 +120,15 @@ def test_phase4_booking_releases_guard_on_definitive_dhl_rejections() -> None:
 
 def test_phase4_booking_locks_and_rejects_cancelled_orders_before_provider_call() -> None:
     source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    adapter_call = 'adapter_result = await adapter.book('
     assert 'order = await _load_order(db, order_id=order_id, lock_for_update=True)' in source
     assert '_ensure_order_not_cancelled(order, action="book shipment")' in source
+    assert 'prepared_payload = adapter.prepare_booking_payload(' in source
     assert 'booking.call_started_at = called_at' in source
-    assert 'adapter_result = await adapter.book(intent, order, hub, package_version, quoted_service)' in source
+    assert adapter_call in source
+    assert source.index('prepared_payload = adapter.prepare_booking_payload(') < source.index('booking.call_started_at = called_at')
     segment = source.split('booking.call_started_at = called_at', 1)[1].split(
-        'adapter_result = await adapter.book(intent, order, hub, package_version, quoted_service)',
+        adapter_call,
         1,
     )[0]
     assert 'await db.commit()' in segment
@@ -139,6 +142,11 @@ def test_phase4_booking_locks_and_rejects_cancelled_orders_before_provider_call(
     assert 'raise ShipmentPhase4Error("invalid booking party address") from None' in source
     assert '"unitOfMeasurement": "metric"' in source.split('"content": {', 1)[1]
     assert '"isCustomsDeclarable": False' in source.split('"content": {', 1)[1]
+    assert 'await _mark_booking_failure(' in source
+    assert 'failure_code="local_preflight_failed"' in source
+    assert 'booking.classification = "failure"' in source
+    assert 'guard.active_booking_id = None' in source
+    assert 'guard.booking_blocked_reason = None' in source
 
 
 def test_phase4_tracking_preserves_terminal_exception_marker_from_all_codes() -> None:
@@ -219,11 +227,12 @@ def test_order_status_routes_block_manual_dhl_carrier_transitions() -> None:
 
 def test_phase4_booking_persists_unknown_outcome_when_success_flush_hits_unique_provider_conflict() -> None:
     source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    adapter_call = 'adapter_result = await adapter.book('
     assert 'def _is_booking_success_persistence_conflict(exc: IntegrityError) -> bool:' in source
     assert 'constraint_name="uq_outbound_shipment_bookings_provider_reference"' in source
     assert 'constraint_name="uq_outbound_shipment_bookings_tracking"' in source
     assert 'booking.call_started_at = called_at' in source
-    assert 'await db.commit()' in source[source.index('booking.call_started_at = called_at'):source.index('adapter_result = await adapter.book(intent, order, hub, package_version, quoted_service)')]
+    assert 'await db.commit()' in source[source.index('booking.call_started_at = called_at'):source.index(adapter_call)]
     success_reacquire = source[source.index('order = await _load_order(db, order_id=order_id, lock_for_update=True)'):source.index('completed_at = await db.scalar(text("SELECT clock_timestamp()"))')]
     assert success_reacquire.index('order = await _load_order(db, order_id=order_id, lock_for_update=True)') < success_reacquire.index('booking = await _load_booking_for_order(')
     success_tail = source[source.index('booking.classification = "success"'):]

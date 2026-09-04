@@ -20,6 +20,7 @@ from app.services.dhl.shipments import (
     _highest_effective_tracking_snapshot_for_handoff,
     _map_tracking_status,
     DHLShipmentAdapter,
+    ShipmentPhase4Error,
 )
 
 
@@ -718,3 +719,55 @@ async def test_booking_adapter_uses_provider_safe_addresses_and_required_content
     assert "addressLine3" in receiver
     assert result.provider_reference == "REF123"
     assert result.tracking_number == "TRACK123"
+
+
+@pytest.mark.asyncio
+async def test_booking_adapter_preflight_rejects_invalid_address_before_provider_call() -> None:
+    with patch(
+        "app.services.dhl.client.DHLClient.request_json",
+        new_callable=AsyncMock,
+    ) as request_json:
+        adapter = DHLShipmentAdapter(make_settings())
+        with pytest.raises(ShipmentPhase4Error, match="invalid booking party address"):
+            await adapter.book(
+                cast(
+                    Any,
+                    SimpleNamespace(
+                        created_at=datetime.fromisoformat("2026-09-04T08:00:00+00:00"),
+                        destination_country_code="NG",
+                        destination_postal_code=None,
+                        destination_city="Lagos",
+                        destination_state="Lagos",
+                        destination_address_line1="123 Example Street",
+                        destination_address_line2=None,
+                        destination_name="Receiver Name",
+                        destination_phone="08030000000",
+                    ),
+                ),
+                cast(Any, SimpleNamespace()),
+                cast(
+                    Any,
+                    SimpleNamespace(
+                        country_code="NG",
+                        postal_code=None,
+                        city="Lagos",
+                        state="X" * 36,
+                        address_line1="Warehouse Block 3",
+                        address_line2=None,
+                        contact_name="Hub Contact",
+                        contact_phone="08020000000",
+                    ),
+                ),
+                cast(
+                    Any,
+                    SimpleNamespace(
+                        weight_kg=1.25,
+                        length_cm=20,
+                        width_cm=15,
+                        height_cm=10,
+                    ),
+                ),
+                cast(Any, SimpleNamespace(product_code="N")),
+            )
+
+    request_json.assert_not_awaited()
