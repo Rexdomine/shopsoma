@@ -167,6 +167,14 @@ def upgrade() -> None:
         sa.Column("last_tracking_refresh_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("latest_exception_code", sa.String(100), nullable=True),
         sa.Column("completion_txid", sa.BigInteger(), nullable=True),
+        sa.Column("reconciliation_resolution", sa.String(30), nullable=True),
+        sa.Column("reconciliation_recorded_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("reconciliation_actor_type", sa.String(30), nullable=True),
+        sa.Column("reconciliation_actor_id", sa.String(200), nullable=True),
+        sa.Column("reconciled_from_classification", sa.String(20), nullable=True),
+        sa.Column("reconciled_from_failure_code", sa.String(100), nullable=True),
+        sa.Column("reconciled_from_result_recorded_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("reconciled_from_completion_txid", sa.BigInteger(), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
         sa.UniqueConstraint(
             "provider", "environment", "account_alias", "idempotency_key",
@@ -252,6 +260,11 @@ def upgrade() -> None:
             " OR (classification = 'failure' AND result_recorded_at IS NOT NULL AND completion_txid IS NOT NULL AND failure_code IS NOT NULL AND provider_reference IS NULL AND tracking_number IS NULL)"
             " OR (classification = 'unknown' AND result_recorded_at IS NOT NULL AND completion_txid IS NOT NULL AND failure_code = 'unknown_outcome'))",
             name="ck_outbound_shipment_bookings_lifecycle",
+        ),
+        sa.CheckConstraint(
+            "((reconciliation_resolution IS NULL AND reconciliation_recorded_at IS NULL AND reconciliation_actor_type IS NULL AND reconciliation_actor_id IS NULL AND reconciled_from_classification IS NULL AND reconciled_from_failure_code IS NULL AND reconciled_from_result_recorded_at IS NULL AND reconciled_from_completion_txid IS NULL)"
+            " OR (reconciliation_resolution = 'confirm_success' AND reconciliation_recorded_at IS NOT NULL AND reconciliation_actor_type ~ '^[A-Za-z0-9][A-Za-z0-9._:-]*$' AND reconciliation_actor_id ~ '^[!-~]+$' AND reconciled_from_classification = 'unknown' AND reconciled_from_failure_code = 'unknown_outcome' AND reconciled_from_result_recorded_at IS NOT NULL AND reconciled_from_completion_txid IS NOT NULL))",
+            name="ck_outbound_shipment_bookings_reconciliation_audit",
         ),
         sa.CheckConstraint(
             "(collection_evidence_ref IS NULL AND collection_evidence_hash IS NULL AND collection_counterparty IS NULL AND handoff_recorded_at IS NULL)"

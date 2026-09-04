@@ -61,6 +61,8 @@ MAX_BOOKING_LABEL_MEDIA_TYPE_LENGTH = 80
 MAX_TRACKING_STATUS_CODE_LENGTH = 60
 MAX_TRACKING_EXCEPTION_CODE_LENGTH = 100
 MAX_TRACKING_DETAIL_LENGTH = 240
+EXPECTED_LABEL_MEDIA_TYPE = "application/pdf"
+PDF_SIGNATURE = b"%PDF-"
 
 
 class ShipmentPhase4Error(Exception):
@@ -964,6 +966,22 @@ def _bounded_tracking_detail(value: object) -> str:
     return detail[: MAX_TRACKING_DETAIL_LENGTH - 1].rstrip() + "…"
 
 
+def _validated_pdf_label_media_type(value: str | None) -> str:
+    media_type = _normalize_bounded_text(
+        value.lower() if isinstance(value, str) else value,
+        field="label_media_type",
+        max_length=MAX_BOOKING_LABEL_MEDIA_TYPE_LENGTH,
+    )
+    if media_type != EXPECTED_LABEL_MEDIA_TYPE:
+        raise ShipmentPhase4Error("invalid label_media_type")
+    return media_type
+
+
+def _validate_pdf_label_content(value: bytes) -> None:
+    if not value.startswith(PDF_SIGNATURE):
+        raise ShipmentPhase4Error("invalid label_content")
+
+
 def _map_tracking_status(*codes: str) -> tuple[str, str]:
     normalized_codes = {
         code.strip().upper()
@@ -1314,10 +1332,9 @@ async def book_outbound_shipment(
         else:
             if not adapter_result.label_content:
                 raise ShipmentPhase4Error("invalid label_content")
-            label_media_type = _normalize_bounded_text(
-                adapter_result.label_media_type,
-                field="label_media_type",
-                max_length=MAX_BOOKING_LABEL_MEDIA_TYPE_LENGTH,
+            _validate_pdf_label_content(adapter_result.label_content)
+            label_media_type = _validated_pdf_label_media_type(
+                adapter_result.label_media_type
             )
     except ShipmentPhase4Error as exc:
         await _mark_booking_unknown_outcome(
@@ -1846,6 +1863,14 @@ async def reconcile_unknown_booking_outcome(
     assert completed_at is not None
     try:
         async with db.begin_nested():
+            booking.reconciliation_resolution = command.resolution
+            booking.reconciliation_recorded_at = completed_at
+            booking.reconciliation_actor_type = "admin"
+            booking.reconciliation_actor_id = str(admin.id)
+            booking.reconciled_from_classification = booking.classification
+            booking.reconciled_from_failure_code = booking.failure_code
+            booking.reconciled_from_result_recorded_at = booking.result_recorded_at
+            booking.reconciled_from_completion_txid = booking.completion_txid
             booking.result_recorded_at = completed_at
             booking.completion_txid = await db.scalar(text("SELECT txid_current()"))
             guard.booking_blocked_reason = None

@@ -88,10 +88,10 @@ class _Phase4Helpers:
         self,
         tracking_number: str = "DHL123456789",
         provider_reference: str = "PR-REF-001",
-        label_png: bytes = b"\x89PNG\r\n\x1a\n",
+        label_pdf: bytes = b"%PDF-1.4\n%shopsoma test label\n",
     ):
         """Deterministic fake DHL booking response with label payload."""
-        label_b64 = base64.b64encode(label_png).decode()
+        label_b64 = base64.b64encode(label_pdf).decode()
         return {
             "shipmentTrackingNumber": tracking_number,
             "packages": [
@@ -145,8 +145,8 @@ class _Phase4Helpers:
             provider_reference="PR-REF-001",
             tracking_number="DHL123456789",
             label_media_type="application/pdf",
-            label_sha256=hashlib.sha256(b"test-label").hexdigest(),
-            label_content=b"PDF_LABEL_CONTENT",
+            label_sha256=hashlib.sha256(b"%PDF-1.4\n%seeded handoff label\n").hexdigest(),
+            label_content=b"%PDF-1.4\n%seeded handoff label\n",
             label_received_at=result_recorded_at,
             result_recorded_at=result_recorded_at,
             completion_txid=1,
@@ -513,7 +513,7 @@ async def test_label_returns_content_and_sha256_header(
         booking_id=booking.id,
     )
 
-    assert label.content == b"PDF_LABEL_CONTENT", "label content must be stored bytes"
+    assert label.content == b"%PDF-1.4\n%seeded handoff label\n", "label content must be stored bytes"
     assert label.media_type == "application/pdf", "media type must be PDF"
     assert label.filename.startswith("dhl-label-"), "filename must use the dhl-label prefix"
     assert label.filename.endswith(".pdf"), "filename must end with .pdf"

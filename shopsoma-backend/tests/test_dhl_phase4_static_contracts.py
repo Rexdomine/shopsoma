@@ -125,6 +125,7 @@ def test_order_cancellation_blocks_inflight_dhl_bookings_after_call_start() -> N
     service_source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
     customer_source = (ROOT / "app" / "api" / "v1" / "orders.py").read_text()
     admin_source = (ROOT / "app" / "api" / "v1" / "admin_orders.py").read_text()
+    legacy_admin_source = (ROOT / "app" / "api" / "v1" / "admin.py").read_text()
 
     assert 'async def ensure_order_cancellation_allowed(' in service_source
     assert 'OutboundShipmentBooking.outbound_state != "cancelled"' in service_source
@@ -141,6 +142,14 @@ def test_order_cancellation_blocks_inflight_dhl_bookings_after_call_start() -> N
     assert 'if new_status == FulfillmentStatus.CANCELLED:' in admin_source
     assert 'if update_data.fulfillment_status == FulfillmentStatus.CANCELLED:' in admin_source
     assert 'select(Order).where(Order.id.in_(update_data.order_ids)).with_for_update()' in admin_source
+
+    legacy_status_route = legacy_admin_source.split('@router.put("/orders/{order_id}/status")', 1)[1].split(
+        '@router.post("/orders/{order_id}/cancel")',
+        1,
+    )[0]
+    assert '.with_for_update()' in legacy_status_route
+    assert 'await ensure_order_cancellation_allowed(db, order_id=order.id)' in legacy_status_route
+    assert 'if status == FulfillmentStatus.CANCELLED.value:' in legacy_status_route
 
 
 def test_phase4_booking_persists_unknown_outcome_when_success_flush_hits_unique_provider_conflict() -> None:
@@ -214,6 +223,18 @@ def test_phase4_booking_rejects_empty_decoded_labels_before_success_flush() -> N
     assert 'booking.failure_code = "unknown_outcome"' in source
 
 
+def test_phase4_booking_validates_pdf_label_contract_before_success_flush() -> None:
+    source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    assert 'EXPECTED_LABEL_MEDIA_TYPE = "application/pdf"' in source
+    assert 'PDF_SIGNATURE = b"%PDF-"' in source
+    assert 'def _validated_pdf_label_media_type(value: str | None) -> str:' in source
+    assert 'def _validate_pdf_label_content(value: bytes) -> None:' in source
+    assert 'if media_type != EXPECTED_LABEL_MEDIA_TYPE:' in source
+    assert 'if not value.startswith(PDF_SIGNATURE):' in source
+    assert source.index('_validate_pdf_label_content(adapter_result.label_content)') < source.index('booking.classification = "success"')
+    assert source.index('_validated_pdf_label_media_type(') < source.index('booking.classification = "success"')
+
+
 def test_phase4_booking_makes_label_less_successes_handoff_eligible() -> None:
     source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
     assert 'booking.outbound_state = "label_ready" if booking.label_content is not None else "awaiting_collection"' in source
@@ -228,10 +249,36 @@ def test_phase4_booking_validates_provider_success_identifiers_before_success_fl
     assert 'MAX_BOOKING_LABEL_MEDIA_TYPE_LENGTH = 80' in source
     assert 'provider_reference = _normalize_bounded_text(' in source
     assert 'tracking_number = _normalize_bounded_text(' in source
-    assert 'field="label_media_type"' in source
     assert 'booking.classification = "unknown"' in source
     assert 'guard.booking_blocked_reason = "unknown_outcome"' in source
     assert source.index('provider_reference = _normalize_bounded_text(') < source.index('booking.classification = "success"')
+
+
+def test_phase4_reconciliation_preserves_append_only_audit_fields() -> None:
+    service_source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    model_source = (ROOT / "app" / "models" / "dhl_shipment.py").read_text()
+    migration_source = MIGRATION.read_text()
+    assert 'booking.reconciliation_resolution = command.resolution' in service_source
+    assert 'booking.reconciliation_recorded_at = completed_at' in service_source
+    assert 'booking.reconciliation_actor_type = "admin"' in service_source
+    assert 'booking.reconciliation_actor_id = str(admin.id)' in service_source
+    assert 'booking.reconciled_from_classification = booking.classification' in service_source
+    assert 'booking.reconciled_from_failure_code = booking.failure_code' in service_source
+    assert 'booking.reconciled_from_result_recorded_at = booking.result_recorded_at' in service_source
+    assert 'booking.reconciled_from_completion_txid = booking.completion_txid' in service_source
+    for field in (
+        'reconciliation_resolution',
+        'reconciliation_recorded_at',
+        'reconciliation_actor_type',
+        'reconciliation_actor_id',
+        'reconciled_from_classification',
+        'reconciled_from_failure_code',
+        'reconciled_from_result_recorded_at',
+        'reconciled_from_completion_txid',
+        'ck_outbound_shipment_bookings_reconciliation_audit',
+    ):
+        assert field in model_source
+        assert field in migration_source
 
 
 def test_phase4_booking_behavioural_helper_now_seeds_selected_dhl_quote() -> None:

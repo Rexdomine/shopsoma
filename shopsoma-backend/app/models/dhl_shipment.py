@@ -105,6 +105,14 @@ class OutboundShipmentBooking(Base):
     last_tracking_refresh_at = Column(DateTime(timezone=True))
     latest_exception_code = Column(String(100))
     completion_txid = Column(BigInteger)
+    reconciliation_resolution = Column(String(30))
+    reconciliation_recorded_at = Column(DateTime(timezone=True))
+    reconciliation_actor_type = Column(String(30))
+    reconciliation_actor_id = Column(String(200))
+    reconciled_from_classification = Column(String(20))
+    reconciled_from_failure_code = Column(String(100))
+    reconciled_from_result_recorded_at = Column(DateTime(timezone=True))
+    reconciled_from_completion_txid = Column(BigInteger)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=_NOW)
 
     __table_args__ = (
@@ -165,6 +173,11 @@ class OutboundShipmentBooking(Base):
             " OR (classification = 'failure' AND result_recorded_at IS NOT NULL AND completion_txid IS NOT NULL AND failure_code IS NOT NULL AND provider_reference IS NULL AND tracking_number IS NULL)"
             " OR (classification = 'unknown' AND result_recorded_at IS NOT NULL AND completion_txid IS NOT NULL AND failure_code = 'unknown_outcome'))",
             name="ck_outbound_shipment_bookings_lifecycle",
+        ),
+        CheckConstraint(
+            "((reconciliation_resolution IS NULL AND reconciliation_recorded_at IS NULL AND reconciliation_actor_type IS NULL AND reconciliation_actor_id IS NULL AND reconciled_from_classification IS NULL AND reconciled_from_failure_code IS NULL AND reconciled_from_result_recorded_at IS NULL AND reconciled_from_completion_txid IS NULL)"
+            " OR (reconciliation_resolution = 'confirm_success' AND reconciliation_recorded_at IS NOT NULL AND reconciliation_actor_type ~ '^[A-Za-z0-9][A-Za-z0-9._:-]*$' AND reconciliation_actor_id ~ '^[!-~]+$' AND reconciled_from_classification = 'unknown' AND reconciled_from_failure_code = 'unknown_outcome' AND reconciled_from_result_recorded_at IS NOT NULL AND reconciled_from_completion_txid IS NOT NULL))",
+            name="ck_outbound_shipment_bookings_reconciliation_audit",
         ),
         CheckConstraint(
             "(collection_evidence_ref IS NULL AND collection_evidence_hash IS NULL AND collection_counterparty IS NULL AND handoff_recorded_at IS NULL)"
