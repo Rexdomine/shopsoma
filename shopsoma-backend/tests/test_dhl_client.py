@@ -329,7 +329,9 @@ def test_handoff_snapshot_fold_preserves_highest_effective_state() -> None:
     snapshots: list[Any] = [delivered, delayed_in_transit]
     chosen = _highest_effective_tracking_snapshot_for_handoff(snapshots)
 
-    assert chosen is delivered
+    assert chosen is not None
+    assert chosen.snapshot is delivered
+    assert chosen.resolved_observed_at == delivered.observed_at
 
 
 def test_handoff_snapshot_fold_keeps_return_exception_sticky_against_later_movement() -> None:
@@ -355,7 +357,9 @@ def test_handoff_snapshot_fold_keeps_return_exception_sticky_against_later_movem
     snapshots: list[Any] = [delivered, returned, pickup_after_return]
     chosen = _highest_effective_tracking_snapshot_for_handoff(snapshots)
 
-    assert chosen is returned
+    assert chosen is not None
+    assert chosen.snapshot is returned
+    assert chosen.resolved_observed_at == returned.observed_at
 
 
 def test_handoff_snapshot_fold_allows_delivery_to_resolve_transient_exception() -> None:
@@ -375,7 +379,9 @@ def test_handoff_snapshot_fold_allows_delivery_to_resolve_transient_exception() 
     snapshots: list[Any] = [hold, delivered]
     chosen = _highest_effective_tracking_snapshot_for_handoff(snapshots)
 
-    assert chosen is delivered
+    assert chosen is not None
+    assert chosen.snapshot is delivered
+    assert chosen.resolved_observed_at == delivered.observed_at
 
 
 def test_handoff_snapshot_fold_preserves_terminal_exception_across_later_transient_exception_and_delivery() -> None:
@@ -401,7 +407,9 @@ def test_handoff_snapshot_fold_preserves_terminal_exception_across_later_transie
     snapshots: list[Any] = [returned, hold, delivered]
     chosen = _highest_effective_tracking_snapshot_for_handoff(snapshots)
 
-    assert chosen is returned
+    assert chosen is not None
+    assert chosen.snapshot is returned
+    assert chosen.resolved_observed_at == returned.observed_at
 
 
 def test_handoff_snapshot_fold_restores_pre_exception_progress_when_transient_exception_clears() -> None:
@@ -427,7 +435,9 @@ def test_handoff_snapshot_fold_restores_pre_exception_progress_when_transient_ex
     snapshots: list[Any] = [out_for_delivery, hold, in_transit]
     chosen = _highest_effective_tracking_snapshot_for_handoff(snapshots)
 
-    assert chosen is out_for_delivery
+    assert chosen is not None
+    assert chosen.snapshot is out_for_delivery
+    assert chosen.resolved_observed_at == in_transit.observed_at
 
 
 @pytest.mark.asyncio

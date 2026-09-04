@@ -170,6 +170,36 @@ def test_order_cancellation_blocks_inflight_dhl_bookings_after_call_start() -> N
     assert 'ShipmentPhase4ConflictError' in legacy_cancel_route
 
 
+def test_order_status_routes_block_manual_dhl_carrier_transitions() -> None:
+    service_source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    admin_source = (ROOT / "app" / "api" / "v1" / "admin_orders.py").read_text()
+    legacy_admin_source = (ROOT / "app" / "api" / "v1" / "admin.py").read_text()
+
+    assert 'CARRIER_CONTROLLED_FULFILLMENT_STATUSES = frozenset(' in service_source
+    assert 'async def ensure_order_manual_dhl_status_write_allowed(' in service_source
+    assert 'FulfillmentStatus.DELIVERED' in service_source
+    assert 'FulfillmentStatus.DELIVERY_FAILED' in service_source
+    assert 'FulfillmentStatus.RETURNED' in service_source
+    assert 'cannot manually set DHL carrier-tracked order status; use verified DHL handoff or tracking evidence' in service_source
+
+    assert 'await ensure_order_manual_dhl_status_write_allowed(' in admin_source
+    assert 'if new_status in {' in admin_source
+    assert 'if update_data.fulfillment_status in {' in admin_source
+    assert 'FulfillmentStatus.DELIVERED' in admin_source
+    assert 'FulfillmentStatus.DELIVERY_FAILED' in admin_source
+    assert 'FulfillmentStatus.RETURNED' in admin_source
+
+    legacy_status_route = legacy_admin_source.split('@router.put("/orders/{order_id}/status")', 1)[1].split(
+        '@router.post("/orders/{order_id}/cancel")',
+        1,
+    )[0]
+    assert 'await ensure_order_manual_dhl_status_write_allowed(' in legacy_status_route
+    assert 'new_status=FulfillmentStatus(status)' in legacy_status_route
+    assert 'FulfillmentStatus.DELIVERED.value' in legacy_status_route
+    assert 'FulfillmentStatus.DELIVERY_FAILED.value' in legacy_status_route
+    assert 'FulfillmentStatus.RETURNED.value' in legacy_status_route
+
+
 def test_phase4_booking_persists_unknown_outcome_when_success_flush_hits_unique_provider_conflict() -> None:
     source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
     assert 'def _is_booking_success_persistence_conflict(exc: IntegrityError) -> bool:' in source
@@ -217,7 +247,8 @@ def test_phase4_handoff_preserves_advanced_tracking_state_and_collection_project
     assert 'OutboundShipmentTrackingSnapshot.observed_at.asc()' in service_source
     assert 'return _highest_effective_tracking_snapshot_for_handoff(snapshots)' in service_source
     assert 'latest_tracking = await _latest_effective_tracking_snapshot_for_handoff(' in handoff
-    assert 'booking.outbound_state = latest_tracking.outbound_state' in handoff
+    assert 'latest_tracking_snapshot = latest_tracking.snapshot if latest_tracking is not None else None' in handoff
+    assert 'booking.outbound_state = latest_tracking_snapshot.outbound_state' in handoff
     assert 'booking.outbound_state = "collected"' in handoff
     assert 'if aggregate_state == "collected":' in handoff
     assert 'order.fulfillment_status = FulfillmentStatus.PICKED_UP' in handoff
@@ -399,7 +430,8 @@ def test_tracking_refresh_folds_all_checkpoints_before_advancing_state() -> None
     refresh = source[source.index('async def refresh_tracking('):source.index('async def reconcile_unknown_booking_outcome(')]
     assert 'effective_tracking = (' in refresh
     assert 'await _latest_effective_tracking_snapshot_for_handoff(' in refresh
-    assert 'effective_state = effective_tracking.outbound_state' in refresh
+    assert 'effective_tracking_snapshot = (' in refresh
+    assert 'effective_state = effective_tracking_snapshot.outbound_state' in refresh
     assert 'key=lambda observation: observation.observed_at' not in refresh[refresh.index('effective_tracking = ('):refresh.index('booking.outbound_state = effective_state')]
 
 
@@ -407,19 +439,25 @@ def test_handoff_persists_delivered_at_when_delivery_is_preserved() -> None:
     source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
     handoff = source[source.index('async def record_collection_handoff('):source.index('async def refresh_tracking(')]
     assert 'order.fulfillment_status = FulfillmentStatus.DELIVERED' in handoff
-    assert 'latest_tracking.outbound_state == "delivered"' in handoff
-    assert 'order.delivered_at = latest_tracking.observed_at' in handoff
+    assert 'latest_tracking_snapshot.outbound_state == "delivered"' in handoff
+    assert 'order.delivered_at = latest_tracking_snapshot.observed_at' in handoff
 
 
 def test_effective_handoff_tracking_allows_newer_exception_to_supersede_delivery() -> None:
     source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
     helper = source[source.index('def _highest_effective_tracking_snapshot_for_handoff('):source.index('async def _aggregate_order_outbound_state(')]
+    assert '@dataclass(frozen=True)' in source
+    assert 'class EffectiveTrackingResolution:' in source
+    assert 'resolved_observed_at: datetime' in source
     assert 'highest_progress_snapshot: OutboundShipmentTrackingSnapshot | None = None' in helper
+    assert 'resolved_observed_at: datetime | None = None' in helper
     assert 'if snapshot_state == "exception":' in helper
     assert 'if _is_terminal_tracking_exception(snapshot):' in helper
     assert 'if effective_state == "exception" and _is_terminal_tracking_exception(' in helper
     assert 'if highest_progress_snapshot is not None and _state_rank(' in helper
     assert 'effective_snapshot = highest_progress_snapshot' in helper
+    assert 'resolved_observed_at = snapshot.observed_at' in helper
+    assert 'return EffectiveTrackingResolution(' in helper
     assert 'if snapshot_state == "exception" or effective_state == "exception":' not in helper
     assert 'if effective_state != "delivered"' not in helper
 
@@ -582,8 +620,8 @@ def test_dhl_reconciliation_flushes_success_before_projecting_tracking_and_trans
 
 def test_tracking_refresh_sets_delivered_at_only_on_first_delivery_transition() -> None:
     source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
-    assert 'if effective_tracking is not None and (' in source
-    assert 'effective_tracking.outbound_state == "delivered"' in source
+    assert 'if effective_tracking_snapshot is not None and (' in source
+    assert 'effective_tracking_snapshot.outbound_state == "delivered"' in source
     assert 'current_state != "delivered" or order.delivered_at is None' in source
 
 
@@ -774,16 +812,30 @@ def test_tracking_refresh_ignores_stale_exception_checkpoints() -> None:
     source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
     assert 'current_state_snapshot = await _latest_tracking_snapshot_for_state(' in source
     assert 'effective_tracking = (' in source
-    assert 'effective_tracking.observed_at >= current_state_observed_at' in source
+    assert 'effective_tracking_snapshot = (' in source
+    assert 'effective_tracking_observed_at = (' in source
+    assert 'effective_tracking_observed_at >= current_state_observed_at' in source
 
 
 def test_tracking_refresh_requires_fresh_timestamps_for_state_advancement() -> None:
     source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
     assert 'current_state_observed_at = (' in source
     assert 'effective_tracking = (' in source
-    assert 'current_state_snapshot is None' in source
-    assert 'or effective_tracking.observed_at >= current_state_observed_at' in source
-    assert 'effective_state = effective_tracking.outbound_state' in source
+    assert 'current_state_observed_at is None' in source
+    assert 'or effective_tracking_observed_at is not None' in source
+    assert 'and effective_tracking_observed_at >= current_state_observed_at' in source
+    assert 'effective_state = effective_tracking_snapshot.outbound_state' in source
+
+
+def test_tracking_refresh_uses_resolving_observation_time_when_transient_exception_clears() -> None:
+    source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    helper = source[source.index('def _highest_effective_tracking_snapshot_for_handoff('):source.index('async def _aggregate_order_outbound_state(')]
+    refresh = source[source.index('async def refresh_tracking('):source.index('async def reconcile_unknown_booking_outcome(')]
+    assert 'resolved_observed_at = snapshot.observed_at' in helper
+    assert 'resolved_observed_at=resolved_observed_at or effective_snapshot.observed_at' in helper
+    assert 'effective_tracking_observed_at = (' in refresh
+    assert 'effective_tracking.resolved_observed_at' in refresh
+    assert 'effective_state = effective_tracking_snapshot.outbound_state' in refresh
 
 
 def test_create_shipment_adapter_translates_dhl_configuration_failures(monkeypatch: pytest.MonkeyPatch) -> None:

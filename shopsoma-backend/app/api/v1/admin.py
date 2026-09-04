@@ -2764,6 +2764,7 @@ async def update_order_status(
     from app.services.dhl.shipments import (
         ShipmentPhase4ConflictError,
         ensure_order_cancellation_allowed,
+        ensure_order_manual_dhl_status_write_allowed,
     )
     from app.services.email_service import email_service
     import logging
@@ -2787,6 +2788,22 @@ async def update_order_status(
     if status == FulfillmentStatus.CANCELLED.value:
         try:
             await ensure_order_cancellation_allowed(db, order_id=order.id)
+        except ShipmentPhase4ConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if status in {
+        FulfillmentStatus.PICKED_UP.value,
+        FulfillmentStatus.IN_TRANSIT.value,
+        FulfillmentStatus.OUT_FOR_DELIVERY.value,
+        FulfillmentStatus.DELIVERED.value,
+        FulfillmentStatus.DELIVERY_FAILED.value,
+        FulfillmentStatus.RETURNED.value,
+    }:
+        try:
+            await ensure_order_manual_dhl_status_write_allowed(
+                db,
+                order_id=order.id,
+                new_status=FulfillmentStatus(status),
+            )
         except ShipmentPhase4ConflictError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 

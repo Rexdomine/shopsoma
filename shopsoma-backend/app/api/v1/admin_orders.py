@@ -69,6 +69,7 @@ from app.services.dhl.shipments import (
     ShipmentPhase4ReconciliationRequiredError,
     book_outbound_shipment,
     ensure_order_cancellation_allowed,
+    ensure_order_manual_dhl_status_write_allowed,
     get_shipment_label,
     reconcile_unknown_booking_outcome,
     record_collection_handoff,
@@ -620,6 +621,25 @@ async def update_order_status(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=str(exc),
             ) from exc
+    if new_status in {
+        FulfillmentStatus.PICKED_UP,
+        FulfillmentStatus.IN_TRANSIT,
+        FulfillmentStatus.OUT_FOR_DELIVERY,
+        FulfillmentStatus.DELIVERED,
+        FulfillmentStatus.DELIVERY_FAILED,
+        FulfillmentStatus.RETURNED,
+    }:
+        try:
+            await ensure_order_manual_dhl_status_write_allowed(
+                db,
+                order_id=order.id,
+                new_status=new_status,
+            )
+        except ShipmentPhase4ConflictError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(exc),
+            ) from exc
 
     # Update status
     order.fulfillment_status = new_status
@@ -868,6 +888,25 @@ async def bulk_update_status(
         if update_data.fulfillment_status == FulfillmentStatus.CANCELLED:
             try:
                 await ensure_order_cancellation_allowed(db, order_id=order.id)
+            except ShipmentPhase4ConflictError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=str(exc),
+                ) from exc
+        if update_data.fulfillment_status in {
+            FulfillmentStatus.PICKED_UP,
+            FulfillmentStatus.IN_TRANSIT,
+            FulfillmentStatus.OUT_FOR_DELIVERY,
+            FulfillmentStatus.DELIVERED,
+            FulfillmentStatus.DELIVERY_FAILED,
+            FulfillmentStatus.RETURNED,
+        }:
+            try:
+                await ensure_order_manual_dhl_status_write_allowed(
+                    db,
+                    order_id=order.id,
+                    new_status=update_data.fulfillment_status,
+                )
             except ShipmentPhase4ConflictError as exc:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,

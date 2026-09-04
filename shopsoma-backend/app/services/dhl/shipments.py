@@ -68,6 +68,16 @@ EXPECTED_LABEL_MEDIA_TYPE = "application/pdf"
 PDF_SIGNATURE = b"%PDF-"
 DEFINITIVE_DHL_BOOKING_REJECTION_STATUSES = frozenset({400, 401, 403, 422})
 TERMINAL_TRACKING_EXCEPTION_CODES = frozenset({"FAILURE", "RETURNED"})
+CARRIER_CONTROLLED_FULFILLMENT_STATUSES = frozenset(
+    {
+        FulfillmentStatus.PICKED_UP,
+        FulfillmentStatus.IN_TRANSIT,
+        FulfillmentStatus.OUT_FOR_DELIVERY,
+        FulfillmentStatus.DELIVERED,
+        FulfillmentStatus.DELIVERY_FAILED,
+        FulfillmentStatus.RETURNED,
+    }
+)
 
 
 class ShipmentPhase4Error(Exception):
@@ -84,6 +94,12 @@ class ShipmentPhase4ReconciliationRequiredError(ShipmentPhase4ConflictError):
 
 class ShipmentPhase4UnknownOutcomeError(ShipmentPhase4Error):
     pass
+
+
+@dataclass(frozen=True)
+class EffectiveTrackingResolution:
+    snapshot: OutboundShipmentTrackingSnapshot
+    resolved_observed_at: datetime
 
 
 def _is_unique_constraint_violation(
@@ -473,9 +489,10 @@ def _aggregate_order_shipment_state(states: Sequence[str]) -> str | None:
 
 def _highest_effective_tracking_snapshot_for_handoff(
     snapshots: Sequence[OutboundShipmentTrackingSnapshot],
-) -> OutboundShipmentTrackingSnapshot | None:
+) -> EffectiveTrackingResolution | None:
     effective_snapshot: OutboundShipmentTrackingSnapshot | None = None
     highest_progress_snapshot: OutboundShipmentTrackingSnapshot | None = None
+    resolved_observed_at: datetime | None = None
     for snapshot in snapshots:
         snapshot_state = snapshot.outbound_state
         if snapshot_state != "exception" and (
@@ -486,17 +503,20 @@ def _highest_effective_tracking_snapshot_for_handoff(
             highest_progress_snapshot = snapshot
         if effective_snapshot is None:
             effective_snapshot = snapshot
+            resolved_observed_at = snapshot.observed_at
             continue
         effective_state = effective_snapshot.outbound_state
         if snapshot_state == "exception":
             if _is_terminal_tracking_exception(snapshot):
                 effective_snapshot = snapshot
+                resolved_observed_at = snapshot.observed_at
                 continue
             if effective_state == "exception" and _is_terminal_tracking_exception(
                 effective_snapshot
             ):
                 continue
             effective_snapshot = snapshot
+            resolved_observed_at = snapshot.observed_at
             continue
         if effective_state == "exception" and _is_terminal_tracking_exception(
             effective_snapshot
@@ -507,12 +527,20 @@ def _highest_effective_tracking_snapshot_for_handoff(
                 highest_progress_snapshot.outbound_state
             ) >= _state_rank(snapshot_state):
                 effective_snapshot = highest_progress_snapshot
+                resolved_observed_at = snapshot.observed_at
                 continue
             effective_snapshot = snapshot
+            resolved_observed_at = snapshot.observed_at
             continue
         if _state_rank(snapshot_state) >= _state_rank(effective_state):
             effective_snapshot = snapshot
-    return effective_snapshot
+            resolved_observed_at = snapshot.observed_at
+    if effective_snapshot is None:
+        return None
+    return EffectiveTrackingResolution(
+        snapshot=effective_snapshot,
+        resolved_observed_at=resolved_observed_at or effective_snapshot.observed_at,
+    )
 
 
 def _is_terminal_tracking_exception(
@@ -850,6 +878,36 @@ async def ensure_order_cancellation_allowed(
         )
 
 
+async def ensure_order_manual_dhl_status_write_allowed(
+    db: AsyncSession,
+    *,
+    order_id: uuid.UUID,
+    new_status: FulfillmentStatus,
+) -> None:
+    if new_status not in CARRIER_CONTROLLED_FULFILLMENT_STATUSES:
+        return
+    blocking_booking = (
+        await db.execute(
+            select(OutboundShipmentBooking)
+            .where(
+                OutboundShipmentBooking.order_id == order_id,
+                OutboundShipmentBooking.outbound_state != "cancelled",
+                OutboundShipmentBooking.classification.in_(("pending", "unknown", "success")),
+            )
+            .order_by(
+                OutboundShipmentBooking.claimed_at.desc(),
+                OutboundShipmentBooking.created_at.desc(),
+            )
+            .limit(1)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if blocking_booking is not None:
+        raise ShipmentPhase4ConflictError(
+            "cannot manually set DHL carrier-tracked order status; use verified DHL handoff or tracking evidence"
+        )
+
+
 async def _matching_handoff_replay(
     db: AsyncSession,
     *,
@@ -973,7 +1031,7 @@ async def _latest_effective_tracking_snapshot_for_handoff(
     db: AsyncSession,
     *,
     booking_id: uuid.UUID,
-) -> OutboundShipmentTrackingSnapshot | None:
+) -> EffectiveTrackingResolution | None:
     snapshots = (
         await db.execute(
             select(OutboundShipmentTrackingSnapshot)
@@ -1722,16 +1780,17 @@ async def record_collection_handoff(
         db,
         booking_id=booking.id,
     )
-    if latest_tracking is not None and latest_tracking.outbound_state in {
+    latest_tracking_snapshot = latest_tracking.snapshot if latest_tracking is not None else None
+    if latest_tracking_snapshot is not None and latest_tracking_snapshot.outbound_state in {
         "collected",
         "in_transit",
         "out_for_delivery",
         "delivered",
         "exception",
     }:
-        booking.outbound_state = latest_tracking.outbound_state
-        if latest_tracking.outbound_state == "exception":
-            booking.latest_exception_code = latest_tracking.exception_code
+        booking.outbound_state = latest_tracking_snapshot.outbound_state
+        if latest_tracking_snapshot.outbound_state == "exception":
+            booking.latest_exception_code = latest_tracking_snapshot.exception_code
     else:
         booking.outbound_state = "collected"
     aggregate_state = await _aggregate_order_outbound_state(
@@ -1749,14 +1808,14 @@ async def record_collection_handoff(
         elif aggregate_state == "delivered":
             order.fulfillment_status = FulfillmentStatus.DELIVERED
             if (
-                latest_tracking is not None
-                and latest_tracking.outbound_state == "delivered"
+                latest_tracking_snapshot is not None
+                and latest_tracking_snapshot.outbound_state == "delivered"
                 and (
                     order.delivered_at is None
-                    or latest_tracking.observed_at > order.delivered_at
+                    or latest_tracking_snapshot.observed_at > order.delivered_at
                 )
             ):
-                order.delivered_at = latest_tracking.observed_at
+                order.delivered_at = latest_tracking_snapshot.observed_at
         elif aggregate_state == "exception":
             order.fulfillment_status = FulfillmentStatus.DELIVERY_FAILED
     await db.flush()
@@ -1878,31 +1937,40 @@ async def refresh_tracking(
                 if allow_carrier_movement
                 else None
             )
+            effective_tracking_snapshot = (
+                effective_tracking.snapshot if effective_tracking is not None else None
+            )
+            effective_tracking_observed_at = (
+                effective_tracking.resolved_observed_at
+                if effective_tracking is not None
+                else None
+            )
             completed_at = await db.scalar(text("SELECT clock_timestamp()"))
             booking.last_tracking_refresh_at = completed_at
             effective_state = current_state
             if allow_carrier_movement:
                 if (
-                    effective_tracking is not None
+                    effective_tracking_snapshot is not None
                     and current_state != "cancelled"
                     and (
-                        current_state_snapshot is None
-                        or effective_tracking.observed_at >= current_state_observed_at
+                        current_state_observed_at is None
+                        or effective_tracking_observed_at is not None
+                        and effective_tracking_observed_at >= current_state_observed_at
                     )
                 ):
-                    effective_state = effective_tracking.outbound_state
+                    effective_state = effective_tracking_snapshot.outbound_state
             else:
                 if latest.outbound_state in {"booked", "label_ready", "awaiting_collection"}:
                     if _state_rank(latest.outbound_state) >= _state_rank(current_state):
                         effective_state = latest.outbound_state
             booking.outbound_state = effective_state
-            if effective_state == "exception" and effective_tracking is not None:
-                booking.latest_exception_code = effective_tracking.exception_code
+            if effective_state == "exception" and effective_tracking_snapshot is not None:
+                booking.latest_exception_code = effective_tracking_snapshot.exception_code
             effective_customer_status = _customer_status_for_outbound_state(
                 effective_state,
                 fallback=(
-                    effective_tracking.customer_status
-                    if effective_tracking is not None
+                    effective_tracking_snapshot.customer_status
+                    if effective_tracking_snapshot is not None
                     else latest.customer_status
                 ),
             )
@@ -1928,13 +1996,13 @@ async def refresh_tracking(
                         order.fulfillment_status = FulfillmentStatus.OUT_FOR_DELIVERY
                     elif allow_carrier_movement and aggregate_state == "delivered":
                         order.fulfillment_status = FulfillmentStatus.DELIVERED
-                        if effective_tracking is not None and (
-                            effective_tracking.outbound_state == "delivered"
+                        if effective_tracking_snapshot is not None and (
+                            effective_tracking_snapshot.outbound_state == "delivered"
                             and (
                                 current_state != "delivered" or order.delivered_at is None
                             )
                         ):
-                            order.delivered_at = effective_tracking.observed_at
+                            order.delivered_at = effective_tracking_snapshot.observed_at
                     elif aggregate_state == "exception":
                         order.fulfillment_status = FulfillmentStatus.DELIVERY_FAILED
             refresh = OutboundShipmentTrackingRefresh(
