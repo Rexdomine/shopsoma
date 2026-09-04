@@ -129,6 +129,19 @@ def test_phase4_booking_locks_and_rejects_cancelled_orders_before_provider_call(
         1,
     )[0]
     assert 'await db.commit()' in segment
+    assert 'from app.services.dhl.rating import DHLDomesticRateAdapter' in source
+    assert 'def _provider_safe_booking_party(' in source
+    assert 'return DHLDomesticRateAdapter._party(' in source
+    assert 'raise ShipmentPhase4Error("invalid booking party address") from None' in source
+    assert '"unitOfMeasurement": "metric"' in source.split('"content": {', 1)[1]
+    assert '"isCustomsDeclarable": False' in source.split('"content": {', 1)[1]
+
+
+def test_phase4_tracking_preserves_terminal_exception_marker_from_all_codes() -> None:
+    source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    assert 'def _tracking_exception_code(' in source
+    assert 'if code in TERMINAL_TRACKING_EXCEPTION_CODES' in source
+    assert 'exception_code=_tracking_exception_code(' in source
 
 
 def test_order_cancellation_blocks_inflight_dhl_bookings_after_call_start() -> None:
@@ -400,7 +413,7 @@ def test_tracking_refresh_bounds_provider_codes_before_persistence() -> None:
     assert 'field="provider_status_code"' in source
     assert 'field="exception_code"' in source
     assert 'provider_status_code=primary_code' in source
-    assert 'exception_code=(' in source
+    assert 'exception_code=_tracking_exception_code(' in source
 
 
 def test_tracking_refresh_rejects_future_provider_observation_timestamps_before_insert() -> None:

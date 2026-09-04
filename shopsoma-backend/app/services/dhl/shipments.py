@@ -6,6 +6,7 @@ import hashlib
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
+from types import SimpleNamespace
 from typing import Protocol, Sequence
 from urllib.parse import quote
 
@@ -44,6 +45,7 @@ from app.services.dhl.client import (
     DHLClient,
     DHLConfigurationError,
 )
+from app.services.dhl.rating import DHLDomesticRateAdapter
 from app.models.fulfillment_hub import FulfillmentHub
 
 PROVIDER = "dhl"
@@ -268,6 +270,22 @@ class DHLShipmentAdapter:
         quoted_service: QuotedShipmentService,
     ) -> AdapterBookingResult:
         planned_ship_date = _planned_ship_date_for_shadow_quote(intent.created_at)
+        shipper = _provider_safe_booking_party(
+            line1=hub.address_line1,
+            line2=hub.address_line2,
+            city=hub.city,
+            state=hub.state,
+            postal_code=hub.postal_code,
+            country_code=hub.country_code,
+        )
+        receiver = _provider_safe_booking_party(
+            line1=intent.destination_address_line1,
+            line2=intent.destination_address_line2,
+            city=intent.destination_city,
+            state=intent.destination_state,
+            postal_code=intent.destination_postal_code,
+            country_code=intent.destination_country_code,
+        )
         payload = {
             "plannedShippingDateAndTime": _mydhl_planned_shipping_timestamp(planned_ship_date),
             "pickup": {"isRequested": False},
@@ -278,28 +296,14 @@ class DHLShipmentAdapter:
             }],
             "customerDetails": {
                 "shipperDetails": {
-                    "postalAddress": {
-                        "countryCode": hub.country_code,
-                        "postalCode": hub.postal_code,
-                        "cityName": hub.city,
-                        "provinceCode": hub.state,
-                        "addressLine1": hub.address_line1,
-                        "addressLine2": hub.address_line2,
-                    },
+                    "postalAddress": shipper,
                     "contactInformation": {
                         "fullName": hub.contact_name,
                         "phone": hub.contact_phone,
                     },
                 },
                 "receiverDetails": {
-                    "postalAddress": {
-                        "countryCode": intent.destination_country_code,
-                        "postalCode": intent.destination_postal_code,
-                        "cityName": intent.destination_city,
-                        "provinceCode": intent.destination_state,
-                        "addressLine1": intent.destination_address_line1,
-                        "addressLine2": intent.destination_address_line2,
-                    },
+                    "postalAddress": receiver,
                     "contactInformation": {
                         "fullName": intent.destination_name,
                         "phone": intent.destination_phone,
@@ -308,6 +312,8 @@ class DHLShipmentAdapter:
             },
             "outputImageProperties": {"printerDPI": 300, "encodingFormat": "pdf"},
             "content": {
+                "unitOfMeasurement": "metric",
+                "isCustomsDeclarable": False,
                 "packages": [{
                     "weight": float(package_version.weight_kg),
                     "dimensions": {
@@ -385,14 +391,9 @@ class DHLShipmentAdapter:
                     customer_status=customer_status,
                     detail=detail,
                     observed_at=observed_at,
-                    exception_code=(
-                        _bounded_tracking_code(
-                            primary_code,
-                            field="exception_code",
-                            max_length=MAX_TRACKING_EXCEPTION_CODE_LENGTH,
-                        )
-                        if outbound_state == "exception"
-                        else None
+                    exception_code=_tracking_exception_code(
+                        codes,
+                        outbound_state=outbound_state,
                     ),
                 )
             )
@@ -414,6 +415,56 @@ def create_shipment_adapter(settings: Settings) -> ShipmentAdapter:
         return DHLShipmentAdapter(settings)
     except DHLConfigurationError as exc:
         raise ShipmentPhase4Error(str(exc)) from exc
+
+
+def _provider_safe_booking_party(
+    *,
+    line1: object,
+    line2: object,
+    city: object,
+    state: object,
+    postal_code: object,
+    country_code: object,
+) -> dict[str, object]:
+    try:
+        return DHLDomesticRateAdapter._party(
+            SimpleNamespace(
+                line1=line1,
+                line2=line2,
+                city=city,
+                state=state,
+                postal_code=postal_code,
+                country_code=country_code,
+            )
+        )
+    except (TypeError, ValueError):
+        raise ShipmentPhase4Error("invalid booking party address") from None
+
+
+def _tracking_exception_code(
+    codes: Sequence[str],
+    *,
+    outbound_state: str,
+) -> str | None:
+    if outbound_state != "exception":
+        return None
+    normalized_codes = [str(code).strip().upper() for code in codes if str(code).strip()]
+    terminal_code = next(
+        (
+            code
+            for code in normalized_codes
+            if code in TERMINAL_TRACKING_EXCEPTION_CODES
+        ),
+        None,
+    )
+    candidate = terminal_code or (normalized_codes[0] if normalized_codes else None)
+    if candidate is None:
+        return None
+    return _bounded_tracking_code(
+        candidate,
+        field="exception_code",
+        max_length=MAX_TRACKING_EXCEPTION_CODE_LENGTH,
+    )
 
 
 def _setting_bool(settings: object, upper_name: str, lower_name: str) -> bool:
