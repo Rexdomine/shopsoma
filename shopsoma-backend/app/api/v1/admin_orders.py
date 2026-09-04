@@ -1133,6 +1133,11 @@ async def create_dhl_handoff(
             ),
         )
         await db.commit()
+        order = (
+            await db.execute(select(Order).where(Order.id == UUID(order_id)))
+        ).scalar_one_or_none()
+        if order is not None:
+            await _broadcast_order_update(order)
         return result
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid DHL resource id") from exc

@@ -835,6 +835,15 @@ def test_admin_tracking_refresh_broadcasts_committed_projection_to_websocket_cli
     assert refresh_route.index('await db.commit()') < refresh_route.index('await _broadcast_order_update(order)')
 
 
+def test_admin_dhl_handoff_broadcasts_committed_projection_to_websocket_clients() -> None:
+    api_source = (ROOT / 'app' / 'api' / 'v1' / 'admin_orders.py').read_text()
+    handoff_route = api_source.split('@router.post("/{order_id}/dhl/bookings/{booking_id}/handoff", response_model=DHLHandoffResult)', 1)[1].split('@router.post("/{order_id}/dhl/tracking-refresh", response_model=DHLTrackingRefreshResult)', 1)[0]
+    assert 'await db.commit()' in handoff_route
+    assert 'await db.execute(select(Order).where(Order.id == UUID(order_id)))' in handoff_route
+    assert 'await _broadcast_order_update(order)' in handoff_route
+    assert handoff_route.index('await db.commit()') < handoff_route.index('await _broadcast_order_update(order)')
+
+
 def test_order_tracking_returns_persisted_carrier_number_on_initial_http_load() -> None:
     orders_source = (ROOT / 'app' / 'api' / 'v1' / 'orders.py').read_text()
     frontend_tracking_source = (ROOT.parent / 'shopsoma-frontend' / 'src' / 'services' / 'orderService.ts').read_text()
