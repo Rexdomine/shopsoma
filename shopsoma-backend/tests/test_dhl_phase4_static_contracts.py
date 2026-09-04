@@ -83,7 +83,7 @@ def test_phase4_migration_uses_statement_timestamp_and_preserves_predecessors() 
 def test_phase4_booking_guard_creation_recovers_uniqueness_races() -> None:
     source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
     assert "async with db.begin_nested():" in source
-    assert "guard = OutboundIntentShipmentGuard(intent_id=intent.id)" in source
+    assert "guard = OutboundIntentShipmentGuard(intent_id=persisted_intent.id)" in source
     assert "if not _is_unique_constraint_violation(exc):" in source
     assert ".with_for_update()" in source
 
@@ -204,6 +204,18 @@ def test_booking_replay_runs_before_provider_call_gates() -> None:
     )
     assert source.index("await _reconcile_or_release_expired_claim") < source.index(
         'raise ShipmentPhase4Error("dhl domestic provider calls disabled")'
+    )
+
+
+def test_booking_reconciles_expired_claims_before_authoritative_subject_validation() -> None:
+    source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    booking_source = source[source.index("async def book_outbound_shipment"):]
+    assert "persisted_intent = await _load_persisted_booking_intent(" in booking_source
+    assert booking_source.index("persisted_intent = await _load_persisted_booking_intent(") < booking_source.index(
+        "await _reconcile_or_release_expired_claim"
+    )
+    assert booking_source.index("await _reconcile_or_release_expired_claim") < booking_source.index(
+        "order, package, seal, intent, package_version, cohort_ids = await _load_authoritative_subject"
     )
 
 

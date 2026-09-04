@@ -920,6 +920,28 @@ async def _load_authoritative_subject(
     return order, package, seal, intent, package_version, frozenset(item.cohort_id for item in package_items)
 
 
+async def _load_persisted_booking_intent(
+    db: AsyncSession,
+    *,
+    order_id: uuid.UUID,
+    command: BookingCommand,
+) -> OutboundShipmentIntent:
+    intent = (
+        await db.execute(
+            select(OutboundShipmentIntent).where(
+                OutboundShipmentIntent.id == command.intent_id,
+                OutboundShipmentIntent.order_id == order_id,
+                OutboundShipmentIntent.package_id == command.package_id,
+                OutboundShipmentIntent.package_version == command.package_version,
+                OutboundShipmentIntent.seal_id == command.seal_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if intent is None:
+        raise ShipmentPhase4Error("no persisted outbound shipment intent")
+    return intent
+
+
 async def book_outbound_shipment(
     db: AsyncSession,
     *,
@@ -944,23 +966,23 @@ async def book_outbound_shipment(
         if not (replay.classification == "pending" and replay.claim_expires_at <= now):
             return _booking_result(replay, replayed=True)
 
-    order, package, seal, intent, package_version, cohort_ids = await _load_authoritative_subject(db, order_id=order_id, command=command)
-
-    request_fingerprint = hashlib.sha256(
-        f"{intent.id}:{package.id}:{package.current_version}:{seal.id}".encode("utf-8")
-    ).hexdigest()
+    persisted_intent = await _load_persisted_booking_intent(
+        db,
+        order_id=order_id,
+        command=command,
+    )
 
     guard = (
         await db.execute(
             select(OutboundIntentShipmentGuard)
-            .where(OutboundIntentShipmentGuard.intent_id == intent.id)
+            .where(OutboundIntentShipmentGuard.intent_id == persisted_intent.id)
             .with_for_update()
         )
     ).scalar_one_or_none()
     if guard is None:
         try:
             async with db.begin_nested():
-                guard = OutboundIntentShipmentGuard(intent_id=intent.id)
+                guard = OutboundIntentShipmentGuard(intent_id=persisted_intent.id)
                 db.add(guard)
                 await db.flush()
         except IntegrityError as exc:
@@ -969,7 +991,7 @@ async def book_outbound_shipment(
             guard = (
                 await db.execute(
                     select(OutboundIntentShipmentGuard)
-                    .where(OutboundIntentShipmentGuard.intent_id == intent.id)
+                    .where(OutboundIntentShipmentGuard.intent_id == persisted_intent.id)
                     .with_for_update()
                 )
             ).scalar_one_or_none()
@@ -979,7 +1001,7 @@ async def book_outbound_shipment(
             guard = (
                 await db.execute(
                     select(OutboundIntentShipmentGuard)
-                    .where(OutboundIntentShipmentGuard.intent_id == intent.id)
+                    .where(OutboundIntentShipmentGuard.intent_id == persisted_intent.id)
                     .with_for_update()
                 )
             ).scalar_one()
@@ -997,6 +1019,16 @@ async def book_outbound_shipment(
             raise ShipmentPhase4ConflictError(
                 f"booking already exists for intent in state {active.outbound_state}"
             )
+
+    order, package, seal, intent, package_version, cohort_ids = await _load_authoritative_subject(
+        db,
+        order_id=order_id,
+        command=command,
+    )
+
+    request_fingerprint = hashlib.sha256(
+        f"{intent.id}:{package.id}:{package.current_version}:{seal.id}".encode("utf-8")
+    ).hexdigest()
 
     if not _setting_bool(settings, "DHL_DOMESTIC_WORKFLOW_ENABLED", "dhl_domestic_workflow_enabled"):
         raise ShipmentPhase4Error("dhl domestic workflow disabled")
