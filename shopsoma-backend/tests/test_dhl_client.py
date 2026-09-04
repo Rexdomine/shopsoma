@@ -629,7 +629,15 @@ async def test_booking_adapter_omits_blank_optional_address_line2() -> None:
                     height_cm=10,
                 ),
             ),
-            cast(Any, SimpleNamespace(product_code="N")),
+            cast(
+                Any,
+                SimpleNamespace(
+                    product_code="N",
+                    service_code="N_P",
+                    hub_version=1,
+                    planned_ship_date=datetime.fromisoformat("2026-09-05T00:00:00+00:00").date(),
+                ),
+            ),
         )
 
     payload = cast(Any, request_json.await_args).kwargs["json"]
@@ -701,7 +709,15 @@ async def test_booking_adapter_uses_provider_safe_addresses_and_required_content
                     height_cm=10,
                 ),
             ),
-            cast(Any, SimpleNamespace(product_code="N")),
+            cast(
+                Any,
+                SimpleNamespace(
+                    product_code="N",
+                    service_code="N_P",
+                    hub_version=1,
+                    planned_ship_date=datetime.fromisoformat("2026-09-05T00:00:00+00:00").date(),
+                ),
+            ),
         )
 
     request_json.assert_awaited_once()
@@ -769,7 +785,15 @@ async def test_booking_adapter_preflight_rejects_invalid_address_before_provider
                         height_cm=10,
                     ),
                 ),
-                cast(Any, SimpleNamespace(product_code="N")),
+                cast(
+                Any,
+                SimpleNamespace(
+                    product_code="N",
+                    service_code="N_P",
+                    hub_version=1,
+                    planned_ship_date=datetime.fromisoformat("2026-09-05T00:00:00+00:00").date(),
+                ),
+            ),
             )
 
     request_json.assert_not_awaited()

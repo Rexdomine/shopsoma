@@ -247,6 +247,7 @@ class QuotedShipmentService:
     product_code: str
     service_code: str
     hub_version: int
+    planned_ship_date: date
 
 
 class ShipmentAdapter(Protocol):
@@ -295,7 +296,12 @@ class DHLShipmentAdapter:
             raise ShipmentPhase4Error(
                 "selected dhl quote hub version changed; refresh quote before booking"
             )
-        planned_ship_date = _planned_ship_date_for_shadow_quote(intent.created_at)
+        minimum_planned_ship_date = _planned_ship_date_for_shadow_quote(intent.created_at)
+        planned_ship_date = quoted_service.planned_ship_date
+        if planned_ship_date < minimum_planned_ship_date:
+            raise ShipmentPhase4Error(
+                "selected dhl quote ship date expired; refresh quote before booking"
+            )
         shipper = _provider_safe_booking_party(
             line1=hub.address_line1,
             line2=hub.address_line2,
@@ -1301,6 +1307,7 @@ async def _load_authoritative_subject(
     *,
     order_id: uuid.UUID,
     command: BookingCommand,
+    populate_existing: bool = False,
 ) -> tuple[Order, HubPackage, HubPackageSeal, OutboundShipmentIntent, HubPackageVersion, frozenset[uuid.UUID]]:
     order = await _load_order(db, order_id=order_id, lock_for_update=True)
     _ensure_order_not_cancelled(order, action="book shipment")
@@ -1315,32 +1322,39 @@ async def _load_authoritative_subject(
     )
     package = (
         await db.execute(
-            select(HubPackage).where(
+            select(HubPackage)
+            .where(
                 HubPackage.id == command.package_id,
                 HubPackage.order_id == order_id,
                 HubPackage.state == "ready",
                 HubPackage.current_version == command.package_version,
                 ~package_handoff_exists,
             )
+            .execution_options(populate_existing=populate_existing)
+            .with_for_update()
         )
     ).scalar_one_or_none()
     if package is None:
         raise ShipmentPhase4Error("selected ready package not found for order")
     seal = (
         await db.execute(
-            select(HubPackageSeal).where(
+            select(HubPackageSeal)
+            .where(
                 HubPackageSeal.id == command.seal_id,
                 HubPackageSeal.package_id == package.id,
                 HubPackageSeal.package_version == package.current_version,
                 HubPackageSeal.retired_at.is_(None),
             )
+            .execution_options(populate_existing=populate_existing)
+            .with_for_update()
         )
     ).scalar_one_or_none()
     if seal is None:
         raise ShipmentPhase4Error("no active bound seal")
     intent = (
         await db.execute(
-            select(OutboundShipmentIntent).where(
+            select(OutboundShipmentIntent)
+            .where(
                 OutboundShipmentIntent.id == command.intent_id,
                 OutboundShipmentIntent.order_id == order_id,
                 OutboundShipmentIntent.package_id == package.id,
@@ -1350,26 +1364,34 @@ async def _load_authoritative_subject(
                 .where(OutboundShipmentIntentInvalidation.intent_id == OutboundShipmentIntent.id)
                 .exists(),
             )
+            .execution_options(populate_existing=populate_existing)
+            .with_for_update()
         )
     ).scalar_one_or_none()
     if intent is None:
         raise ShipmentPhase4Error("no authoritative outbound shipment intent")
     package_version = (
         await db.execute(
-            select(HubPackageVersion).where(
+            select(HubPackageVersion)
+            .where(
                 HubPackageVersion.package_id == package.id,
                 HubPackageVersion.version == package.current_version,
             )
+            .execution_options(populate_existing=populate_existing)
+            .with_for_update()
         )
     ).scalar_one_or_none()
     if package_version is None:
         raise ShipmentPhase4Error("missing package version measurement")
     package_items = (
         await db.execute(
-            select(HubPackageItem).where(
+            select(HubPackageItem)
+            .where(
                 HubPackageItem.package_id == package.id,
                 HubPackageItem.package_version == package.current_version,
             )
+            .execution_options(populate_existing=populate_existing)
+            .with_for_update()
         )
     ).scalars().all()
     if not package_items:
@@ -1441,6 +1463,7 @@ async def _load_persisted_quoted_service(
             max_length=MAX_BOOKING_SERVICE_CODE_LENGTH,
         ),
         hub_version=attempt.hub_version,
+        planned_ship_date=attempt.planned_ship_date,
     )
 
 
@@ -1518,7 +1541,7 @@ async def book_outbound_shipment(
 
     now = await db.scalar(text("SELECT clock_timestamp()"))
     assert now is not None
-    planned_ship_date = _planned_ship_date_for_shadow_quote(intent.created_at)
+    planned_ship_date = quoted_service.planned_ship_date
     booking = OutboundShipmentBooking(
         intent_id=intent.id,
         order_id=order.id,
@@ -1554,8 +1577,12 @@ async def book_outbound_shipment(
     assert booking is not None and guard is not None
 
     try:
-        order = await _load_order(db, order_id=order_id, lock_for_update=True)
-        _ensure_order_not_cancelled(order, action="book shipment")
+        order, package, seal, intent, package_version, _ = await _load_authoritative_subject(
+            db,
+            order_id=order_id,
+            command=command,
+            populate_existing=True,
+        )
         hub = (
             await db.execute(
                 select(FulfillmentHub)

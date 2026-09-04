@@ -83,6 +83,30 @@ def get_app_settings() -> Settings:
     return settings
 
 
+async def _broadcast_order_update(order: Order) -> None:
+    try:
+        ws_manager = get_connection_manager()
+        broadcast_data = {
+            "status": order.status.value if hasattr(order, 'status') else None,
+            "fulfillment_status": order.fulfillment_status.value,
+            "payment_status": order.payment_status.value,
+            "delivery_provider": order.delivery_provider,
+            "tracking_number": order.tracking_number,
+            "estimated_delivery_date": order.estimated_delivery_date.isoformat() if order.estimated_delivery_date else None,
+            "delivered_at": order.delivered_at.isoformat() if order.delivered_at else None,
+            "cancelled_at": order.cancelled_at.isoformat() if order.cancelled_at else None,
+            "updated_at": order.updated_at.isoformat(),
+        }
+        logger.info(
+            "[WebSocket] Broadcasting order update for %s to %s connection(s)",
+            order.id,
+            ws_manager.get_connection_count(str(order.id)),
+        )
+        await ws_manager.send_order_update(order_id=str(order.id), data=broadcast_data)
+    except Exception:
+        logger.exception("[WebSocket] Failed to broadcast update for order %s", order.id)
+
+
 # ============================================================================
 # HELPER FUNCTIONS
 # ============================================================================
@@ -700,39 +724,7 @@ async def update_order_status(
             # Log error but don't fail the request
             print(f"Failed to send notifications for order {order.id}: {str(e)}")
 
-        # Broadcast real-time update via WebSocket
-        try:
-            ws_manager = get_connection_manager()
-            broadcast_data = {
-                "status": order.status.value if hasattr(order, 'status') else None,
-                "fulfillment_status": order.fulfillment_status.value,
-                "payment_status": order.payment_status.value,
-                "delivery_provider": order.delivery_provider,
-                "tracking_number": order.tracking_number,
-                "estimated_delivery_date": order.estimated_delivery_date.isoformat() if order.estimated_delivery_date else None,
-                "delivered_at": order.delivered_at.isoformat() if order.delivered_at else None,
-                "cancelled_at": order.cancelled_at.isoformat() if order.cancelled_at else None,
-                "updated_at": order.updated_at.isoformat()
-            }
-
-            print(f"[WebSocket] ===== BROADCASTING ORDER UPDATE =====")
-            print(f"[WebSocket] Order ID: {order.id}")
-            print(f"[WebSocket] Fulfillment Status: {order.fulfillment_status.value}")
-            print(f"[WebSocket] Active Connections: {ws_manager.get_connection_count(str(order.id))}")
-            print(f"[WebSocket] Broadcast Data: {broadcast_data}")
-
-            await ws_manager.send_order_update(
-                order_id=str(order.id),
-                data=broadcast_data
-            )
-
-            print(f"[WebSocket] ✓ Broadcast complete for order {order.id}")
-            print(f"[WebSocket] =====================================")
-        except Exception as e:
-            # Log error but don't fail the request
-            print(f"[WebSocket] ✗ Failed to broadcast update for order {order.id}: {str(e)}")
-            import traceback
-            traceback.print_exc()
+        await _broadcast_order_update(order)
 
     # Return updated order
     return await get_order_detail(str(order.id), admin, db)
@@ -1173,6 +1165,11 @@ async def refresh_dhl_tracking(
             ),
         )
         await db.commit()
+        order = (
+            await db.execute(select(Order).where(Order.id == UUID(order_id)))
+        ).scalar_one_or_none()
+        if order is not None:
+            await _broadcast_order_update(order)
         return result
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid order id") from exc

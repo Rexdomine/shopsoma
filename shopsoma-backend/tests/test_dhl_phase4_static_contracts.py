@@ -749,6 +749,9 @@ def test_booking_reconciles_expired_claims_before_authoritative_subject_validati
     assert booking_source.index("await db.commit()") < booking_source.index(
         "order, package, seal, intent, package_version, cohort_ids = await _load_authoritative_subject"
     )
+    post_claim = booking_source.split("booking = await db.get(OutboundShipmentBooking, booking.id)", 1)[1]
+    assert 'populate_existing=True' in post_claim.split('prepared_payload = adapter.prepare_booking_payload(', 1)[0]
+    assert post_claim.index('order, package, seal, intent, package_version, _ = await _load_authoritative_subject(') < post_claim.index('prepared_payload = adapter.prepare_booking_payload(')
 
 
 def test_booking_expiry_reconciliation_preserves_no_call_boundary_marker() -> None:
@@ -804,10 +807,14 @@ def test_phase4_booking_binds_selected_quote_to_source_hub_version_before_provid
     assert 'DomesticRateResponse.id == CustomerShippingQuote.source_rate_response_id' in source
     assert 'DomesticRateAttempt.id == DomesticRateResponse.attempt_id' in source
     assert 'hub_version=attempt.hub_version' in source
+    assert 'planned_ship_date=attempt.planned_ship_date' in source
     assert 'quoted_hub_version = getattr(quoted_service, "hub_version", None)' in source
     assert 'current_hub_version = getattr(hub, "version", None)' in source
     assert 'quoted_hub_version != current_hub_version' in source
     assert 'selected dhl quote hub version changed; refresh quote before booking' in source
+    assert 'planned_ship_date = quoted_service.planned_ship_date' in source
+    assert 'minimum_planned_ship_date = _planned_ship_date_for_shadow_quote(intent.created_at)' in source
+    assert 'selected dhl quote ship date expired; refresh quote before booking' in source
     booking_source = source[source.index('async def book_outbound_shipment('):]
     assert '.execution_options(populate_existing=True)' in booking_source
     assert 'select(FulfillmentHub)' in booking_source
@@ -815,6 +822,17 @@ def test_phase4_booking_binds_selected_quote_to_source_hub_version_before_provid
     assert '.with_for_update()' in booking_source
     assert booking_source.index('select(FulfillmentHub)') < booking_source.index('prepared_payload = adapter.prepare_booking_payload(')
     assert booking_source.index('prepared_payload = adapter.prepare_booking_payload(') < booking_source.index('booking.call_started_at = called_at')
+
+
+def test_admin_tracking_refresh_broadcasts_committed_projection_to_websocket_clients() -> None:
+    api_source = (ROOT / 'app' / 'api' / 'v1' / 'admin_orders.py').read_text()
+    refresh_route = api_source.split('@router.post("/{order_id}/dhl/tracking-refresh", response_model=DHLTrackingRefreshResult)', 1)[1].split('@router.post("/{order_id}/cancel")', 1)[0]
+    assert 'async def _broadcast_order_update(order: Order) -> None:' in api_source
+    assert 'await ws_manager.send_order_update(order_id=str(order.id), data=broadcast_data)' in api_source
+    assert 'await db.commit()' in refresh_route
+    assert 'await db.execute(select(Order).where(Order.id == UUID(order_id)))' in refresh_route
+    assert 'await _broadcast_order_update(order)' in refresh_route
+    assert refresh_route.index('await db.commit()') < refresh_route.index('await _broadcast_order_update(order)')
 
 
 def test_order_tracking_returns_persisted_carrier_number_on_initial_http_load() -> None:
