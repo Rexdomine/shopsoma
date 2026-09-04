@@ -202,6 +202,9 @@ def test_booking_replay_runs_before_provider_call_gates() -> None:
     assert source.index("replay = await _matching_replay") < source.index(
         'raise ShipmentPhase4Error("dhl domestic provider calls disabled")'
     )
+    assert source.index("await _reconcile_or_release_expired_claim") < source.index(
+        'raise ShipmentPhase4Error("dhl domestic provider calls disabled")'
+    )
 
 
 def test_tracking_refresh_replay_runs_before_workflow_gate_and_skips_provider_calls_gate() -> None:
@@ -287,6 +290,15 @@ def test_tracking_refresh_uses_effective_customer_status_and_locks_order() -> No
     assert 'effective_customer_status = _customer_status_for_outbound_state(' in source
     assert 'order = await _load_order(db, order_id=order_id, lock_for_update=True)' in source
     assert 'customer_status=effective_customer_status' in source
+
+
+def test_order_tracking_projection_aggregates_latest_package_bookings() -> None:
+    source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    assert 'async def _project_order_tracking_number(' in source
+    assert 'summary = ", ".join(projected)' in source
+    assert 'order.tracking_number = await _project_order_tracking_number(' in source
+    assert 'order.tracking_number = aggregate_tracking_number' in source
+    assert 'order.tracking_number = booking.tracking_number' not in source
 
 
 def test_tracking_refresh_ignores_stale_exception_checkpoints() -> None:

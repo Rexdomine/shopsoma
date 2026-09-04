@@ -461,6 +461,58 @@ async def _aggregate_order_outbound_state(
     return aggregate_state or fallback
 
 
+async def _project_order_tracking_number(
+    db: AsyncSession,
+    *,
+    order_id: uuid.UUID,
+    fallback: str | None,
+) -> str | None:
+    packages = (
+        await db.execute(
+            select(HubPackage.id, HubPackage.current_version).where(
+                HubPackage.order_id == order_id
+            )
+        )
+    ).all()
+    if not packages:
+        return fallback
+
+    bookings = (
+        await db.execute(
+            select(OutboundShipmentBooking)
+            .where(
+                OutboundShipmentBooking.order_id == order_id,
+                OutboundShipmentBooking.classification == "success",
+            )
+            .order_by(
+                OutboundShipmentBooking.package_id,
+                OutboundShipmentBooking.package_version,
+                OutboundShipmentBooking.result_recorded_at.desc(),
+                OutboundShipmentBooking.created_at.desc(),
+            )
+        )
+    ).scalars().all()
+    latest_by_package: dict[tuple[uuid.UUID, int], str] = {}
+    for candidate in bookings:
+        key = (candidate.package_id, candidate.package_version)
+        if key not in {(package_id, current_version) for package_id, current_version in packages}:
+            continue
+        if key in latest_by_package or candidate.outbound_state == "cancelled":
+            continue
+        tracking_number = candidate.tracking_number.strip() if candidate.tracking_number else None
+        if tracking_number:
+            latest_by_package[key] = tracking_number
+    if not latest_by_package:
+        return fallback
+
+    projected: list[str] = []
+    for tracking_number in latest_by_package.values():
+        if tracking_number not in projected:
+            projected.append(tracking_number)
+    summary = ", ".join(projected)
+    return summary if len(summary) <= 100 else fallback
+
+
 def _ensure_sandbox_booking_allowed(
     settings: Settings,
     *,
@@ -892,17 +944,7 @@ async def book_outbound_shipment(
         if not (replay.classification == "pending" and replay.claim_expires_at <= now):
             return _booking_result(replay, replayed=True)
 
-    if not _setting_bool(settings, "DHL_DOMESTIC_WORKFLOW_ENABLED", "dhl_domestic_workflow_enabled"):
-        raise ShipmentPhase4Error("dhl domestic workflow disabled")
-    if not _setting_bool(settings, "DHL_DOMESTIC_PROVIDER_CALLS_ENABLED", "dhl_domestic_provider_calls_enabled"):
-        raise ShipmentPhase4Error("dhl domestic provider calls disabled")
-
     order, package, seal, intent, package_version, cohort_ids = await _load_authoritative_subject(db, order_id=order_id, command=command)
-    _ensure_sandbox_booking_allowed(settings, cohort_ids=cohort_ids)
-    hub = await db.get(FulfillmentHub, intent.origin_hub_id)
-    if hub is None:
-        raise ShipmentPhase4Error("origin hub not found")
-    adapter = adapter or create_shipment_adapter(settings)
 
     request_fingerprint = hashlib.sha256(
         f"{intent.id}:{package.id}:{package.current_version}:{seal.id}".encode("utf-8")
@@ -955,6 +997,16 @@ async def book_outbound_shipment(
             raise ShipmentPhase4ConflictError(
                 f"booking already exists for intent in state {active.outbound_state}"
             )
+
+    if not _setting_bool(settings, "DHL_DOMESTIC_WORKFLOW_ENABLED", "dhl_domestic_workflow_enabled"):
+        raise ShipmentPhase4Error("dhl domestic workflow disabled")
+    if not _setting_bool(settings, "DHL_DOMESTIC_PROVIDER_CALLS_ENABLED", "dhl_domestic_provider_calls_enabled"):
+        raise ShipmentPhase4Error("dhl domestic provider calls disabled")
+    _ensure_sandbox_booking_allowed(settings, cohort_ids=cohort_ids)
+    hub = await db.get(FulfillmentHub, intent.origin_hub_id)
+    if hub is None:
+        raise ShipmentPhase4Error("origin hub not found")
+    adapter = adapter or create_shipment_adapter(settings)
 
     now = await db.scalar(text("SELECT clock_timestamp()"))
     assert now is not None
@@ -1057,7 +1109,11 @@ async def book_outbound_shipment(
     booking.completion_txid = await db.scalar(text("SELECT txid_current()"))
     booking.last_tracking_refresh_at = completed_at
     order.delivery_provider = PROVIDER
-    order.tracking_number = booking.tracking_number
+    order.tracking_number = await _project_order_tracking_number(
+        db,
+        order_id=order.id,
+        fallback=booking.tracking_number,
+    )
     guard.booking_blocked_reason = None
     await db.flush()
     return _booking_result(booking, replayed=False)
@@ -1404,10 +1460,15 @@ async def refresh_tracking(
                 order_id=booking.order_id,
                 fallback=effective_state,
             )
+            aggregate_tracking_number = await _project_order_tracking_number(
+                db,
+                order_id=booking.order_id,
+                fallback=booking.tracking_number,
+            )
             order = await _load_order(db, order_id=order_id, lock_for_update=True)
             if order is not None:
                 order.delivery_provider = PROVIDER
-                order.tracking_number = booking.tracking_number
+                order.tracking_number = aggregate_tracking_number
                 if order.fulfillment_status != FulfillmentStatus.CANCELLED:
                     if allow_carrier_movement and aggregate_state in {"collected", "in_transit"}:
                         order.fulfillment_status = FulfillmentStatus.IN_TRANSIT
