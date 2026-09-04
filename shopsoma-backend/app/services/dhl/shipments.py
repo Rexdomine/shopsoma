@@ -1569,7 +1569,20 @@ async def record_collection_handoff(
     booking.collection_scheduled_at = command.occurred_at
     booking.handoff_recorded_at = max(recorded_at, returned_event.recorded_at)
     booking.outbound_state = "collected"
-    order.fulfillment_status = FulfillmentStatus.PICKED_UP
+    aggregate_state = await _aggregate_order_outbound_state(
+        db,
+        order_id=booking.order_id,
+        fallback=booking.outbound_state,
+    )
+    if order.fulfillment_status != FulfillmentStatus.CANCELLED:
+        if aggregate_state in {"collected", "in_transit"}:
+            order.fulfillment_status = FulfillmentStatus.IN_TRANSIT
+        elif aggregate_state == "out_for_delivery":
+            order.fulfillment_status = FulfillmentStatus.OUT_FOR_DELIVERY
+        elif aggregate_state == "delivered":
+            order.fulfillment_status = FulfillmentStatus.DELIVERED
+        elif aggregate_state == "exception":
+            order.fulfillment_status = FulfillmentStatus.DELIVERY_FAILED
     await db.flush()
     return HandoffResult(
         booking_id=booking.id,
@@ -1632,6 +1645,13 @@ async def refresh_tracking(
                     normalized_idempotency,
                     f":{position}",
                 )
+                observed_at = observation.observed_at
+                recorded_at = await db.scalar(text("SELECT clock_timestamp()"))
+                assert recorded_at is not None
+                if observed_at > recorded_at:
+                    raise ShipmentPhase4ConflictError(
+                        "carrier observation timestamp cannot be in the future"
+                    )
                 snapshot = OutboundShipmentTrackingSnapshot(
                     booking_id=booking.id,
                     order_id=booking.order_id,
@@ -1641,7 +1661,7 @@ async def refresh_tracking(
                     outbound_state=observation.outbound_state,
                     customer_status=observation.customer_status,
                     detail=observation.detail,
-                    observed_at=observation.observed_at,
+                    observed_at=observed_at,
                     exception_code=observation.exception_code,
                     idempotency_key=derived_idempotency_key,
                     source_command="admin_dhl_tracking_refresh",
@@ -1824,18 +1844,29 @@ async def reconcile_unknown_booking_outcome(
 
     completed_at = await db.scalar(text("SELECT clock_timestamp()"))
     assert completed_at is not None
-    booking.result_recorded_at = completed_at
-    booking.completion_txid = await db.scalar(text("SELECT txid_current()"))
-    guard.booking_blocked_reason = None
+    try:
+        async with db.begin_nested():
+            booking.result_recorded_at = completed_at
+            booking.completion_txid = await db.scalar(text("SELECT txid_current()"))
+            guard.booking_blocked_reason = None
 
-    booking.classification = "success"
-    booking.failure_code = None
-    booking.provider_reference = provider_reference
-    booking.tracking_number = tracking_number
-    booking.outbound_state = "label_ready" if booking.label_content is not None else "awaiting_collection"
-    booking.last_tracking_refresh_at = completed_at
-    guard.active_booking_id = booking.id
-    order.delivery_provider = PROVIDER
+            booking.classification = "success"
+            booking.failure_code = None
+            booking.provider_reference = provider_reference
+            booking.tracking_number = tracking_number
+            booking.outbound_state = (
+                "label_ready" if booking.label_content is not None else "awaiting_collection"
+            )
+            booking.last_tracking_refresh_at = completed_at
+            guard.active_booking_id = booking.id
+            order.delivery_provider = PROVIDER
+            await db.flush()
+    except IntegrityError as exc:
+        if not _is_booking_success_persistence_conflict(exc):
+            raise
+        raise ShipmentPhase4ConflictError(
+            "booking reconciliation conflicts with existing provider identifiers"
+        ) from exc
     order.tracking_number = await _project_order_tracking_number(
         db,
         order_id=order.id,

@@ -176,6 +176,18 @@ def test_phase4_dhl_mutations_preserve_order_before_booking_locking() -> None:
     assert '_ensure_order_not_cancelled(order, action="reconcile booking")' in reconcile
 
 
+def test_phase4_handoff_aggregates_split_order_state_before_promoting_order() -> None:
+    source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    handoff = source[source.index('async def record_collection_handoff('):source.index('async def refresh_tracking(')]
+    assert 'booking.outbound_state = "collected"' in handoff
+    assert 'aggregate_state = await _aggregate_order_outbound_state(' in handoff
+    assert 'order_id=booking.order_id' in handoff
+    assert 'fallback=booking.outbound_state' in handoff
+    assert 'if aggregate_state in {"collected", "in_transit"}:' in handoff
+    assert 'order.fulfillment_status = FulfillmentStatus.IN_TRANSIT' in handoff
+    assert 'order.fulfillment_status = FulfillmentStatus.PICKED_UP' not in handoff
+
+
 def test_phase4_booking_binds_provider_product_to_persisted_selected_quote() -> None:
     source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
     assert 'class QuotedShipmentService:' in source
@@ -256,6 +268,17 @@ def test_tracking_refresh_bounds_provider_codes_before_persistence() -> None:
     assert 'field="exception_code"' in source
     assert 'provider_status_code=primary_code' in source
     assert 'exception_code=(' in source
+
+
+def test_tracking_refresh_rejects_future_provider_observation_timestamps_before_insert() -> None:
+    source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    refresh = source[source.index('async def refresh_tracking('):source.index('async def reconcile_unknown_booking_outcome(')]
+    assert 'observed_at = observation.observed_at' in refresh
+    assert 'recorded_at = await db.scalar(text("SELECT clock_timestamp()"))' in refresh
+    assert 'if observed_at > recorded_at:' in refresh
+    assert 'raise ShipmentPhase4ConflictError(' in refresh
+    assert '"carrier observation timestamp cannot be in the future"' in refresh
+    assert refresh.index('if observed_at > recorded_at:') < refresh.index('snapshot = OutboundShipmentTrackingSnapshot(')
 
 
 def test_tracking_refresh_aggregates_order_status_across_package_bookings() -> None:
@@ -359,6 +382,17 @@ def test_dhl_booking_reconciliation_request_normalizes_success_identifiers() -> 
 
     assert payload.provider_reference == "DHL-REF"
     assert payload.tracking_number == "TRACK-1"
+
+
+def test_dhl_reconciliation_flushes_success_before_projecting_tracking_and_translates_identifier_conflicts() -> None:
+    source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    reconcile = source[source.index('async def reconcile_unknown_booking_outcome('):source.index('async def _load_booking_for_order(')]
+    assert 'async with db.begin_nested():' in reconcile
+    assert 'booking.classification = "success"' in reconcile
+    assert 'await db.flush()' in reconcile
+    assert 'if not _is_booking_success_persistence_conflict(exc):' in reconcile
+    assert '"booking reconciliation conflicts with existing provider identifiers"' in reconcile
+    assert reconcile.index('await db.flush()') < reconcile.index('order.tracking_number = await _project_order_tracking_number(')
 
 
 def test_tracking_refresh_sets_delivered_at_only_on_first_delivery_transition() -> None:
