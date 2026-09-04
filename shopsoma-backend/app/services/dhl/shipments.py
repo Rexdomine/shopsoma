@@ -85,6 +85,14 @@ def _is_unique_constraint_violation(
     return constraint_name in str(orig)
 
 
+def _is_definitive_booking_rejection(exc: DHLAPIError) -> bool:
+    return (
+        exc.status_code is not None
+        and 400 <= exc.status_code < 500
+        and not exc.retryable
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class BookingCommand:
     order_id: uuid.UUID
@@ -93,6 +101,14 @@ class BookingCommand:
     package_version: int
     seal_id: uuid.UUID
     idempotency_key: str
+
+
+@dataclass(frozen=True, slots=True)
+class BookingReconciliationCommand:
+    booking_id: uuid.UUID
+    resolution: str
+    provider_reference: str | None = None
+    tracking_number: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -581,23 +597,23 @@ async def _reconcile_or_release_expired_claim(
     db: AsyncSession,
     *,
     guard: OutboundIntentShipmentGuard,
-) -> None:
+) -> bool:
+    changed = False
     if guard.active_booking_id is None:
-        return
+        return changed
     active = await db.get(OutboundShipmentBooking, guard.active_booking_id)
     if active is None:
         guard.active_booking_id = None
         guard.booking_blocked_reason = None
         await db.flush()
-        return
+        return True
     now = await db.scalar(text("SELECT clock_timestamp()"))
     assert now is not None
     if active.claim_expires_at > now or active.classification != "pending":
-        return
+        return changed
     if active.call_started_at is None:
         active.classification = "failure"
         active.failure_code = "claim_expired"
-        active.call_started_at = active.claimed_at
         active.result_recorded_at = now
         active.completion_txid = await db.scalar(text("SELECT txid_current()"))
         guard.active_booking_id = None
@@ -608,7 +624,50 @@ async def _reconcile_or_release_expired_claim(
         active.result_recorded_at = now
         active.completion_txid = await db.scalar(text("SELECT txid_current()"))
         guard.booking_blocked_reason = "unknown_outcome"
+    changed = True
     await db.flush()
+    return changed
+
+
+async def _load_or_create_guard(
+    db: AsyncSession,
+    *,
+    intent_id: uuid.UUID,
+) -> OutboundIntentShipmentGuard:
+    guard = (
+        await db.execute(
+            select(OutboundIntentShipmentGuard)
+            .where(OutboundIntentShipmentGuard.intent_id == intent_id)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if guard is None:
+        try:
+            async with db.begin_nested():
+                guard = OutboundIntentShipmentGuard(intent_id=intent_id)
+                db.add(guard)
+                await db.flush()
+        except IntegrityError as exc:
+            if not _is_unique_constraint_violation(exc):
+                raise
+            guard = (
+                await db.execute(
+                    select(OutboundIntentShipmentGuard)
+                    .where(OutboundIntentShipmentGuard.intent_id == intent_id)
+                    .with_for_update()
+                )
+            ).scalar_one_or_none()
+            if guard is None:
+                raise
+        else:
+            guard = (
+                await db.execute(
+                    select(OutboundIntentShipmentGuard)
+                    .where(OutboundIntentShipmentGuard.intent_id == intent_id)
+                    .with_for_update()
+                )
+            ).scalar_one()
+    return guard
 
 
 async def _matching_tracking_replay(
@@ -972,40 +1031,16 @@ async def book_outbound_shipment(
         command=command,
     )
 
-    guard = (
-        await db.execute(
-            select(OutboundIntentShipmentGuard)
-            .where(OutboundIntentShipmentGuard.intent_id == persisted_intent.id)
-            .with_for_update()
+    guard = await _load_or_create_guard(db, intent_id=persisted_intent.id)
+    reconciliation_changed = await _reconcile_or_release_expired_claim(db, guard=guard)
+    if reconciliation_changed:
+        await db.commit()
+        persisted_intent = await _load_persisted_booking_intent(
+            db,
+            order_id=order_id,
+            command=command,
         )
-    ).scalar_one_or_none()
-    if guard is None:
-        try:
-            async with db.begin_nested():
-                guard = OutboundIntentShipmentGuard(intent_id=persisted_intent.id)
-                db.add(guard)
-                await db.flush()
-        except IntegrityError as exc:
-            if not _is_unique_constraint_violation(exc):
-                raise
-            guard = (
-                await db.execute(
-                    select(OutboundIntentShipmentGuard)
-                    .where(OutboundIntentShipmentGuard.intent_id == persisted_intent.id)
-                    .with_for_update()
-                )
-            ).scalar_one_or_none()
-            if guard is None:
-                raise
-        else:
-            guard = (
-                await db.execute(
-                    select(OutboundIntentShipmentGuard)
-                    .where(OutboundIntentShipmentGuard.intent_id == persisted_intent.id)
-                    .with_for_update()
-                )
-            ).scalar_one()
-    await _reconcile_or_release_expired_claim(db, guard=guard)
+        guard = await _load_or_create_guard(db, intent_id=persisted_intent.id)
     replay = await _matching_replay(db, order_id=order_id, command=command)
     if replay is not None:
         return _booking_result(replay, replayed=True)
@@ -1087,9 +1122,7 @@ async def book_outbound_shipment(
     except (DHLAPIError, TimeoutError) as exc:
         completed_at = await db.scalar(text("SELECT clock_timestamp()"))
         booking.result_recorded_at = completed_at
-        definitive_rejection = isinstance(exc, DHLAPIError) and (
-            exc.status_code in {400, 401, 403}
-        )
+        definitive_rejection = isinstance(exc, DHLAPIError) and _is_definitive_booking_rejection(exc)
         booking.classification = "failure" if definitive_rejection else "unknown"
         booking.failure_code = (
             f"provider_rejected_{exc.status_code}"
@@ -1552,6 +1585,84 @@ async def refresh_tracking(
     )
 
 
+async def reconcile_unknown_booking_outcome(
+    db: AsyncSession,
+    *,
+    order_id: uuid.UUID,
+    admin: User,
+    command: BookingReconciliationCommand,
+) -> BookingResult:
+    booking = await _load_booking_for_order(
+        db,
+        order_id=order_id,
+        booking_id=command.booking_id,
+        lock_for_update=True,
+    )
+    guard = await _load_or_create_guard(db, intent_id=booking.intent_id)
+
+    if command.resolution == "confirm_success":
+        provider_reference = _normalize_nonempty_text(
+            command.provider_reference,
+            field="provider_reference",
+        )
+        tracking_number = _normalize_nonempty_text(
+            command.tracking_number,
+            field="tracking_number",
+        )
+    else:
+        provider_reference = None
+        tracking_number = None
+
+    if booking.classification != "unknown" or booking.failure_code != "unknown_outcome":
+        expected_classification = "success" if command.resolution == "confirm_success" else "failure"
+        if booking.classification == expected_classification:
+            if (
+                expected_classification == "success"
+                and (
+                    booking.provider_reference != provider_reference
+                    or booking.tracking_number != tracking_number
+                )
+            ):
+                raise ShipmentPhase4ConflictError(
+                    "booking reconciliation does not match existing provider identifiers"
+                )
+            return _booking_result(booking, replayed=True)
+        raise ShipmentPhase4ConflictError("booking is not awaiting reconciliation")
+
+    completed_at = await db.scalar(text("SELECT clock_timestamp()"))
+    assert completed_at is not None
+    booking.result_recorded_at = completed_at
+    booking.completion_txid = await db.scalar(text("SELECT txid_current()"))
+    guard.booking_blocked_reason = None
+
+    if command.resolution == "confirm_success":
+        order = await _load_order(db, order_id=order_id, lock_for_update=True)
+        booking.classification = "success"
+        booking.failure_code = None
+        booking.provider_reference = provider_reference
+        booking.tracking_number = tracking_number
+        booking.outbound_state = "booked"
+        booking.last_tracking_refresh_at = completed_at
+        guard.active_booking_id = booking.id
+        order.delivery_provider = PROVIDER
+        order.tracking_number = await _project_order_tracking_number(
+            db,
+            order_id=order.id,
+            fallback=booking.tracking_number,
+        )
+    else:
+        booking.classification = "failure"
+        booking.failure_code = "reconciled_provider_absent"
+        booking.provider_reference = None
+        booking.tracking_number = None
+        booking.outbound_state = "intent_created"
+        if guard.active_booking_id == booking.id:
+            guard.active_booking_id = None
+
+    await db.flush()
+    return _booking_result(booking, replayed=False, note=f"reconciled by admin {admin.id}")
+
+
 async def _load_booking_for_order(
     db: AsyncSession,
     *,
@@ -1613,3 +1724,12 @@ def _booking_result(booking: OutboundShipmentBooking, *, replayed: bool, note: s
         note=note,
         replayed=replayed,
     )
+
+
+def _normalize_nonempty_text(value: str | None, *, field: str) -> str:
+    if value is None:
+        raise ShipmentPhase4Error(f"invalid {field}")
+    normalized = value.strip()
+    if not normalized:
+        raise ShipmentPhase4Error(f"invalid {field}")
+    return normalized

@@ -6,7 +6,7 @@ from decimal import Decimal
 from typing import List, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.models.order import PaymentStatus, FulfillmentStatus
 from app.models.vendor_pickup import PickupStatus
@@ -302,6 +302,31 @@ class DHLBookingResult(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class DHLBookingReconciliationRequest(BaseModel):
+    resolution: str = Field(..., pattern="^(confirm_failure|confirm_success)$")
+    provider_reference: Optional[str] = Field(None, min_length=1, max_length=120)
+    tracking_number: Optional[str] = Field(None, min_length=1, max_length=120)
+
+    @field_validator('provider_reference', 'tracking_number')
+    @classmethod
+    def validate_optional_text(cls, value: Optional[str]):
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError('optional reconciliation fields must not be blank')
+        return normalized
+
+    @model_validator(mode='after')
+    def validate_resolution_requirements(self):
+        if self.resolution == 'confirm_success':
+            if self.provider_reference is None or self.tracking_number is None:
+                raise ValueError('provider_reference and tracking_number are required for confirm_success')
+        elif self.provider_reference is not None or self.tracking_number is not None:
+            raise ValueError('confirm_failure must not include provider_reference or tracking_number')
+        return self
 
 
 class DHLHandoffRequest(BaseModel):

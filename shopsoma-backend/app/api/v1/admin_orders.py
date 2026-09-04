@@ -48,6 +48,7 @@ from app.schemas.admin_order import (
     ShadowQuoteResult,
     DHLBookingRequest,
     DHLBookingResult,
+    DHLBookingReconciliationRequest,
     DHLHandoffRequest,
     DHLHandoffResult,
     DHLTrackingRefreshRequest,
@@ -60,6 +61,7 @@ from app.services.admin_shadow_quote import (
 )
 from app.services.dhl.shipments import (
     BookingCommand,
+    BookingReconciliationCommand,
     HandoffCommand,
     TrackingRefreshCommand,
     ShipmentPhase4ConflictError,
@@ -67,6 +69,7 @@ from app.services.dhl.shipments import (
     ShipmentPhase4ReconciliationRequiredError,
     book_outbound_shipment,
     get_shipment_label,
+    reconcile_unknown_booking_outcome,
     record_collection_handoff,
     refresh_tracking,
 )
@@ -986,6 +989,40 @@ async def create_dhl_booking(
             status_code = status.HTTP_404_NOT_FOUND
         elif isinstance(exc, ShipmentPhase4ReconciliationRequiredError):
             status_code = status.HTTP_409_CONFLICT
+        elif isinstance(exc, ShipmentPhase4ConflictError):
+            status_code = status.HTTP_409_CONFLICT
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
+@router.post("/{order_id}/dhl/bookings/{booking_id}/reconcile", response_model=DHLBookingResult)
+async def reconcile_dhl_booking(
+    order_id: str,
+    booking_id: str,
+    payload: DHLBookingReconciliationRequest,
+    admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        result = await reconcile_unknown_booking_outcome(
+            db,
+            order_id=UUID(order_id),
+            admin=admin,
+            command=BookingReconciliationCommand(
+                booking_id=UUID(booking_id),
+                resolution=payload.resolution,
+                provider_reference=payload.provider_reference,
+                tracking_number=payload.tracking_number,
+            ),
+        )
+        await db.commit()
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid DHL resource id") from exc
+    except ShipmentPhase4Error as exc:
+        detail = str(exc)
+        status_code = status.HTTP_400_BAD_REQUEST
+        if detail == "booking not found for order":
+            status_code = status.HTTP_404_NOT_FOUND
         elif isinstance(exc, ShipmentPhase4ConflictError):
             status_code = status.HTTP_409_CONFLICT
         raise HTTPException(status_code=status_code, detail=detail) from exc

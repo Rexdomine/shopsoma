@@ -8,8 +8,10 @@ from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 
 from app.schemas.admin_order import DHLHandoffRequest
-from app.services.dhl.client import DHLConfigurationError
+from app.schemas.admin_order import DHLBookingReconciliationRequest
+from app.services.dhl.client import DHLAPIError, DHLConfigurationError
 from app.services.dhl.shipments import (
+    _is_definitive_booking_rejection,
     _is_unique_constraint_violation,
     create_shipment_adapter,
     ShipmentPhase4Error,
@@ -82,15 +84,25 @@ def test_phase4_migration_uses_statement_timestamp_and_preserves_predecessors() 
 
 def test_phase4_booking_guard_creation_recovers_uniqueness_races() -> None:
     source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    assert "async def _load_or_create_guard(" in source
     assert "async with db.begin_nested():" in source
-    assert "guard = OutboundIntentShipmentGuard(intent_id=persisted_intent.id)" in source
+    assert "guard = OutboundIntentShipmentGuard(intent_id=intent_id)" in source
     assert "if not _is_unique_constraint_violation(exc):" in source
     assert ".with_for_update()" in source
 
 
 def test_phase4_booking_releases_guard_on_definitive_dhl_rejections() -> None:
+    definitive_404 = DHLAPIError("DHL API request was rejected", status_code=404, retryable=False)
+    definitive_422 = DHLAPIError("DHL API request was rejected", status_code=422, retryable=False)
+    retryable_429 = DHLAPIError("DHL API rate limit exceeded", status_code=429, retryable=True)
+    retryable_503 = DHLAPIError("DHL API is unavailable", status_code=503, retryable=True)
+
+    assert _is_definitive_booking_rejection(definitive_404) is True
+    assert _is_definitive_booking_rejection(definitive_422) is True
+    assert _is_definitive_booking_rejection(retryable_429) is False
+    assert _is_definitive_booking_rejection(retryable_503) is False
+
     source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
-    assert "exc.status_code in {400, 401, 403}" in source
     assert 'booking.classification = "failure" if definitive_rejection else "unknown"' in source
     assert 'guard.active_booking_id = None if definitive_rejection else guard.active_booking_id' in source
     assert 'guard.booking_blocked_reason = None if definitive_rejection else "unknown_outcome"' in source
@@ -191,6 +203,35 @@ def test_dhl_handoff_request_normalizes_occurred_at_to_utc() -> None:
     assert payload.occurred_at.tzinfo == UTC
 
 
+def test_dhl_booking_reconciliation_request_requires_provider_identifiers_for_success() -> None:
+    with pytest.raises(ValidationError, match="provider_reference and tracking_number are required for confirm_success"):
+        DHLBookingReconciliationRequest(
+            resolution="confirm_success",
+            provider_reference=None,
+            tracking_number=None,
+        )
+
+
+def test_dhl_booking_reconciliation_request_rejects_identifiers_for_confirm_failure() -> None:
+    with pytest.raises(ValidationError, match="confirm_failure must not include provider_reference or tracking_number"):
+        DHLBookingReconciliationRequest(
+            resolution="confirm_failure",
+            provider_reference=" DHL-REF ",
+            tracking_number=" TRACK-1 ",
+        )
+
+
+def test_dhl_booking_reconciliation_request_normalizes_success_identifiers() -> None:
+    payload = DHLBookingReconciliationRequest(
+        resolution="confirm_success",
+        provider_reference=" DHL-REF ",
+        tracking_number=" TRACK-1 ",
+    )
+
+    assert payload.provider_reference == "DHL-REF"
+    assert payload.tracking_number == "TRACK-1"
+
+
 def test_tracking_refresh_sets_delivered_at_only_on_first_delivery_transition() -> None:
     source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
     assert 'if latest.outbound_state == "delivered" and (' in source
@@ -215,8 +256,37 @@ def test_booking_reconciles_expired_claims_before_authoritative_subject_validati
         "await _reconcile_or_release_expired_claim"
     )
     assert booking_source.index("await _reconcile_or_release_expired_claim") < booking_source.index(
+        "await db.commit()"
+    )
+    assert booking_source.index("await db.commit()") < booking_source.index(
         "order, package, seal, intent, package_version, cohort_ids = await _load_authoritative_subject"
     )
+
+
+def test_booking_expiry_reconciliation_preserves_no_call_boundary_marker() -> None:
+    source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    claim_source = source[source.index("async def _reconcile_or_release_expired_claim"):source.index("async def _load_or_create_guard")]
+    assert 'active.classification = "failure"' in claim_source
+    assert 'active.failure_code = "claim_expired"' in claim_source
+    assert 'active.call_started_at = active.claimed_at' not in claim_source
+
+
+def test_booking_unknown_outcome_reconciliation_route_and_service_exist() -> None:
+    schema_source = (ROOT / "app" / "schemas" / "admin_order.py").read_text()
+    api_source = (ROOT / "app" / "api" / "v1" / "admin_orders.py").read_text()
+    service_source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+
+    assert 'class DHLBookingReconciliationRequest(BaseModel):' in schema_source
+    assert 'resolution: str = Field(..., pattern="^(confirm_failure|confirm_success)$")' in schema_source
+    assert 'provider_reference and tracking_number are required for confirm_success' in schema_source
+    assert 'confirm_failure must not include provider_reference or tracking_number' in schema_source
+    assert '@router.post("/{order_id}/dhl/bookings/{booking_id}/reconcile", response_model=DHLBookingResult)' in api_source
+    assert 'result = await reconcile_unknown_booking_outcome(' in api_source
+    assert 'class BookingReconciliationCommand:' in service_source
+    assert 'async def reconcile_unknown_booking_outcome(' in service_source
+    assert 'guard.booking_blocked_reason = None' in service_source
+    assert 'booking.failure_code = "reconciled_provider_absent"' in service_source
+    assert 'booking.tracking_number = tracking_number' in service_source
 
 
 def test_tracking_refresh_replay_runs_before_workflow_gate_and_skips_provider_calls_gate() -> None:
