@@ -196,8 +196,8 @@ class _Phase4Helpers:
             attempt_id=attempt.id,
             result_kind="success",
             received_at=received,
-            expires_at=received + timedelta(minutes=15),
-            ttl_seconds=900,
+            expires_at=received + timedelta(hours=1),
+            ttl_seconds=3600,
         )
         db_session.add(response)
         await db_session.flush()
