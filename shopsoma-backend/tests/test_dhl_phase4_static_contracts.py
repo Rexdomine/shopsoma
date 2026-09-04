@@ -394,7 +394,9 @@ def test_handoff_persists_delivered_at_when_delivery_is_preserved() -> None:
 def test_effective_handoff_tracking_allows_newer_exception_to_supersede_delivery() -> None:
     source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
     helper = source[source.index('def _highest_effective_tracking_snapshot_for_handoff('):source.index('async def _aggregate_order_outbound_state(')]
-    assert 'if snapshot_state == "exception" or effective_state == "exception":' in helper
+    assert 'if snapshot_state == "exception":' in helper
+    assert 'if effective_state == "exception":' in helper
+    assert 'if snapshot_state == "exception" or effective_state == "exception":' not in helper
     assert 'if effective_state != "delivered"' not in helper
 
 
@@ -691,9 +693,13 @@ def test_tracking_refresh_uses_effective_customer_status_and_locks_order() -> No
 def test_order_tracking_projection_aggregates_latest_package_bookings() -> None:
     source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
     assert 'async def _project_order_tracking_number(' in source
+    assert 'MAX_ORDER_TRACKING_NUMBER_LENGTH = 100' in source
     assert 'summary = ", ".join(projected)' in source
     assert 'order.tracking_number = await _project_order_tracking_number(' in source
     assert 'order.tracking_number = aggregate_tracking_number' in source
+    assert 'if len(summary) > MAX_ORDER_TRACKING_NUMBER_LENGTH:' in source
+    assert 'if fallback and len(fallback) <= MAX_ORDER_TRACKING_NUMBER_LENGTH:' in source
+    assert 'return None' in source
     assert 'note="provider success persistence conflict",\n        )\n    order.tracking_number = await _project_order_tracking_number(' in source
     assert '    )\n    await db.flush()\n    return _booking_result(booking, replayed=False)' in source
     assert 'order.tracking_number = booking.tracking_number' not in source

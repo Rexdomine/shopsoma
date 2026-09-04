@@ -56,6 +56,7 @@ CLAIM_TTL_SECONDS = 300
 NO_CHECKPOINTS_DETAIL = "Shipment booked with no downstream checkpoints yet"
 MAX_BOOKING_PROVIDER_REFERENCE_LENGTH = 120
 MAX_BOOKING_TRACKING_NUMBER_LENGTH = 120
+MAX_ORDER_TRACKING_NUMBER_LENGTH = 100
 MAX_BOOKING_SERVICE_CODE_LENGTH = 60
 MAX_BOOKING_LABEL_MEDIA_TYPE_LENGTH = 80
 MAX_TRACKING_STATUS_CODE_LENGTH = 60
@@ -475,8 +476,10 @@ def _highest_effective_tracking_snapshot_for_handoff(
             continue
         snapshot_state = snapshot.outbound_state
         effective_state = effective_snapshot.outbound_state
-        if snapshot_state == "exception" or effective_state == "exception":
+        if snapshot_state == "exception":
             effective_snapshot = snapshot
+            continue
+        if effective_state == "exception":
             continue
         if _state_rank(snapshot_state) >= _state_rank(effective_state):
             effective_snapshot = snapshot
@@ -578,7 +581,12 @@ async def _project_order_tracking_number(
         if tracking_number not in projected:
             projected.append(tracking_number)
     summary = ", ".join(projected)
-    return summary if len(summary) <= 100 else fallback
+    if len(summary) > MAX_ORDER_TRACKING_NUMBER_LENGTH:
+        fallback = fallback.strip() if fallback else None
+        if fallback and len(fallback) <= MAX_ORDER_TRACKING_NUMBER_LENGTH:
+            return fallback
+        return None
+    return summary
 
 
 def _ensure_sandbox_booking_allowed(
