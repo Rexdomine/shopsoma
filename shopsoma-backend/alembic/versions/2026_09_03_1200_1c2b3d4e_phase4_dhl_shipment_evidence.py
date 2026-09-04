@@ -369,6 +369,22 @@ def upgrade() -> None:
         "outbound_shipment_tracking_snapshot",
         ["booking_id", "observed_at"],
     )
+    op.execute(
+        """
+        CREATE OR REPLACE FUNCTION validate_outbound_shipment_tracking_snapshot_append_only() RETURNS trigger AS $$
+        BEGIN
+            RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'outbound shipment tracking snapshot evidence is append-only';
+        END; $$ LANGUAGE plpgsql;
+
+        CREATE TRIGGER tr_outbound_shipment_tracking_snapshot_append_only_update
+        BEFORE UPDATE ON outbound_shipment_tracking_snapshot
+        FOR EACH ROW EXECUTE FUNCTION validate_outbound_shipment_tracking_snapshot_append_only();
+
+        CREATE TRIGGER tr_outbound_shipment_tracking_snapshot_append_only_delete
+        BEFORE DELETE ON outbound_shipment_tracking_snapshot
+        FOR EACH ROW EXECUTE FUNCTION validate_outbound_shipment_tracking_snapshot_append_only();
+        """
+    )
 
     op.create_table(
         "outbound_shipment_tracking_refresh",
@@ -410,6 +426,15 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.execute(
+        "DROP TRIGGER IF EXISTS tr_outbound_shipment_tracking_snapshot_append_only_delete ON outbound_shipment_tracking_snapshot"
+    )
+    op.execute(
+        "DROP TRIGGER IF EXISTS tr_outbound_shipment_tracking_snapshot_append_only_update ON outbound_shipment_tracking_snapshot"
+    )
+    op.execute(
+        "DROP FUNCTION IF EXISTS validate_outbound_shipment_tracking_snapshot_append_only()"
+    )
     op.execute(
         "DROP TRIGGER IF EXISTS tr_outbound_shipment_bookings_reconciliation_audit_immutable ON outbound_shipment_booking"
     )

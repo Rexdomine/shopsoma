@@ -817,7 +817,7 @@ async def _matching_handoff_replay(
         )
     return HandoffResult(
         booking_id=booking.id,
-        outbound_state="collected",
+        outbound_state=booking.outbound_state,
         occurred_at=existing_event.occurred_at,
         custody_event_id=existing_event.id,
     )
@@ -886,6 +886,36 @@ async def _latest_tracking_snapshot(
             .where(
                 OutboundShipmentTrackingSnapshot.booking_id == booking_id,
                 OutboundShipmentTrackingSnapshot.provider == PROVIDER,
+            )
+            .order_by(
+                OutboundShipmentTrackingSnapshot.observed_at.desc(),
+                OutboundShipmentTrackingSnapshot.id.desc(),
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+
+async def _latest_effective_tracking_snapshot_for_handoff(
+    db: AsyncSession,
+    *,
+    booking_id: uuid.UUID,
+) -> OutboundShipmentTrackingSnapshot | None:
+    return (
+        await db.execute(
+            select(OutboundShipmentTrackingSnapshot)
+            .where(
+                OutboundShipmentTrackingSnapshot.booking_id == booking_id,
+                OutboundShipmentTrackingSnapshot.provider == PROVIDER,
+                OutboundShipmentTrackingSnapshot.outbound_state.in_(
+                    (
+                        "collected",
+                        "in_transit",
+                        "out_for_delivery",
+                        "delivered",
+                        "exception",
+                    )
+                ),
             )
             .order_by(
                 OutboundShipmentTrackingSnapshot.observed_at.desc(),
@@ -1606,7 +1636,10 @@ async def record_collection_handoff(
     booking.collection_evidence_hash = returned_event.evidence_hash
     booking.collection_scheduled_at = command.occurred_at
     booking.handoff_recorded_at = max(recorded_at, returned_event.recorded_at)
-    latest_tracking = await _latest_tracking_snapshot(db, booking_id=booking.id)
+    latest_tracking = await _latest_effective_tracking_snapshot_for_handoff(
+        db,
+        booking_id=booking.id,
+    )
     if latest_tracking is not None and latest_tracking.outbound_state in {
         "collected",
         "in_transit",
@@ -1801,7 +1834,9 @@ async def refresh_tracking(
                 order.delivery_provider = PROVIDER
                 order.tracking_number = aggregate_tracking_number
                 if order.fulfillment_status != FulfillmentStatus.CANCELLED:
-                    if allow_carrier_movement and aggregate_state in {"collected", "in_transit"}:
+                    if allow_carrier_movement and aggregate_state == "collected":
+                        order.fulfillment_status = FulfillmentStatus.PICKED_UP
+                    elif allow_carrier_movement and aggregate_state == "in_transit":
                         order.fulfillment_status = FulfillmentStatus.IN_TRANSIT
                     elif allow_carrier_movement and aggregate_state == "out_for_delivery":
                         order.fulfillment_status = FulfillmentStatus.OUT_FOR_DELIVERY

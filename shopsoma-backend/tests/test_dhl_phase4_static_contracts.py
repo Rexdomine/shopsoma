@@ -192,7 +192,9 @@ def test_phase4_handoff_preserves_advanced_tracking_state_and_collection_project
     frontend_page_source = (ROOT.parent / "shopsoma-frontend" / "src" / "pages" / "orders" / "OrderTracking.tsx").read_text()
 
     handoff = service_source[service_source.index('async def record_collection_handoff('):service_source.index('async def refresh_tracking(')]
-    assert 'latest_tracking = await _latest_tracking_snapshot(db, booking_id=booking.id)' in handoff
+    assert 'async def _latest_effective_tracking_snapshot_for_handoff(' in service_source
+    assert 'OutboundShipmentTrackingSnapshot.outbound_state.in_(' in service_source
+    assert 'latest_tracking = await _latest_effective_tracking_snapshot_for_handoff(' in handoff
     assert 'booking.outbound_state = latest_tracking.outbound_state' in handoff
     assert 'booking.outbound_state = "collected"' in handoff
     assert 'if aggregate_state == "collected":' in handoff
@@ -358,6 +360,36 @@ def test_tracking_refresh_aggregates_order_status_across_package_bookings() -> N
     assert '(package_id, current_version): "booked"' in source
     assert 'if key not in latest_by_package or candidate.outbound_state == "cancelled":' in source
     assert 'return min(active_states, key=_state_rank)' in source
+
+
+def test_phase4_handoff_replay_returns_persisted_booking_state() -> None:
+    source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    handoff_replay = source[source.index('async def _matching_handoff_replay('):source.index('async def _verified_carrier_acceptance_snapshot(')]
+    assert 'outbound_state=booking.outbound_state' in handoff_replay
+    assert 'outbound_state="collected"' not in handoff_replay
+
+
+def test_tracking_refresh_keeps_collected_state_at_picked_up_milestone() -> None:
+    source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    refresh = source[source.index('async def refresh_tracking('):source.index('async def reconcile_unknown_booking_outcome(')]
+    assert 'if allow_carrier_movement and aggregate_state == "collected":' in refresh
+    assert 'order.fulfillment_status = FulfillmentStatus.PICKED_UP' in refresh
+    assert 'elif allow_carrier_movement and aggregate_state == "in_transit":' in refresh
+    assert 'order.fulfillment_status = FulfillmentStatus.IN_TRANSIT' in refresh
+
+
+def test_phase4_tracking_snapshots_are_db_enforced_append_only() -> None:
+    model_source = (ROOT / "app" / "models" / "dhl_shipment.py").read_text()
+    migration_source = MIGRATION.read_text()
+    for field in (
+        'validate_outbound_shipment_tracking_snapshot_append_only',
+        'tr_outbound_shipment_tracking_snapshot_append_only_update',
+        'tr_outbound_shipment_tracking_snapshot_append_only_delete',
+        'outbound shipment tracking snapshot evidence is append-only',
+    ):
+        assert field in model_source
+        assert field in migration_source
+    assert 'OutboundShipmentTrackingSnapshot.__table__' in model_source
 
 
 def test_no_duplicate_dhl_client_module_remains() -> None:
@@ -568,7 +600,7 @@ def test_handoff_replays_before_state_validation_and_rejects_mismatched_evidence
     assert "replay = await _matching_handoff_replay(" in source
     assert "if replay is not None:" in source
     assert "return replay" in source
-    assert 'outbound_state="collected"' in source
+    assert 'outbound_state=booking.outbound_state' in source
     assert 'booking.collection_scheduled_at != command.occurred_at' in source
     assert 'booking.collection_counterparty != normalized_counterparty' in source
     assert 'booking.collection_evidence_ref != command.evidence_ref.strip()' in source

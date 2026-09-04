@@ -298,6 +298,34 @@ class OutboundShipmentTrackingRefresh(Base):
     )
 
 
+_TRACKING_SNAPSHOT_APPEND_ONLY_FUNCTION = DDL(
+    """
+CREATE OR REPLACE FUNCTION validate_outbound_shipment_tracking_snapshot_append_only() RETURNS trigger AS $$
+BEGIN
+    RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'outbound shipment tracking snapshot evidence is append-only';
+END; $$ LANGUAGE plpgsql
+"""
+)
+
+
+_TRACKING_SNAPSHOT_APPEND_ONLY_UPDATE_TRIGGER = DDL(
+    """
+CREATE TRIGGER tr_outbound_shipment_tracking_snapshot_append_only_update
+BEFORE UPDATE ON outbound_shipment_tracking_snapshot
+FOR EACH ROW EXECUTE FUNCTION validate_outbound_shipment_tracking_snapshot_append_only()
+"""
+)
+
+
+_TRACKING_SNAPSHOT_APPEND_ONLY_DELETE_TRIGGER = DDL(
+    """
+CREATE TRIGGER tr_outbound_shipment_tracking_snapshot_append_only_delete
+BEFORE DELETE ON outbound_shipment_tracking_snapshot
+FOR EACH ROW EXECUTE FUNCTION validate_outbound_shipment_tracking_snapshot_append_only()
+"""
+)
+
+
 _BOOKING_RECONCILIATION_AUDIT_IMMUTABILITY_FUNCTION = DDL(
     """
 CREATE OR REPLACE FUNCTION validate_outbound_shipment_booking_reconciliation_audit_update() RETURNS trigger AS $$
@@ -343,5 +371,27 @@ event.listen(
     "after_drop",
     DDL(
         "DROP FUNCTION IF EXISTS validate_outbound_shipment_booking_reconciliation_audit_update() CASCADE"
+    ),
+)
+event.listen(
+    OutboundShipmentTrackingSnapshot.__table__,
+    "after_create",
+    _TRACKING_SNAPSHOT_APPEND_ONLY_FUNCTION,
+)
+event.listen(
+    OutboundShipmentTrackingSnapshot.__table__,
+    "after_create",
+    _TRACKING_SNAPSHOT_APPEND_ONLY_UPDATE_TRIGGER,
+)
+event.listen(
+    OutboundShipmentTrackingSnapshot.__table__,
+    "after_create",
+    _TRACKING_SNAPSHOT_APPEND_ONLY_DELETE_TRIGGER,
+)
+event.listen(
+    OutboundShipmentTrackingSnapshot.__table__,
+    "after_drop",
+    DDL(
+        "DROP FUNCTION IF EXISTS validate_outbound_shipment_tracking_snapshot_append_only() CASCADE"
     ),
 )
