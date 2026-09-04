@@ -757,6 +757,34 @@ def _ensure_order_not_cancelled(order: Order, *, action: str) -> None:
         raise ShipmentPhase4ConflictError(f"cannot {action} for cancelled order")
 
 
+async def ensure_order_cancellation_allowed(
+    db: AsyncSession,
+    *,
+    order_id: uuid.UUID,
+) -> None:
+    in_flight_booking = (
+        await db.execute(
+            select(OutboundShipmentBooking)
+            .where(
+                OutboundShipmentBooking.order_id == order_id,
+                OutboundShipmentBooking.classification == "pending",
+                OutboundShipmentBooking.call_started_at.is_not(None),
+                OutboundShipmentBooking.result_recorded_at.is_(None),
+            )
+            .order_by(
+                OutboundShipmentBooking.claimed_at.desc(),
+                OutboundShipmentBooking.created_at.desc(),
+            )
+            .limit(1)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if in_flight_booking is not None:
+        raise ShipmentPhase4ConflictError(
+            "cannot cancel order while shipment booking is in progress"
+        )
+
+
 async def _matching_handoff_replay(
     db: AsyncSession,
     *,

@@ -33,6 +33,10 @@ from app.models.stock_payment_persistence import (
     StockReservation,
     coordinate_catalog_write,
 )
+from app.services.dhl.shipments import (
+    ShipmentPhase4ConflictError,
+    ensure_order_cancellation_allowed,
+)
 from app.schemas.order import (
     OrderCreate,
     OrderUpdate,
@@ -1628,6 +1632,14 @@ async def cancel_order(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Cannot cancel order while payment outcome is unresolved",
             )
+
+    try:
+        await ensure_order_cancellation_allowed(db, order_id=order.id)
+    except ShipmentPhase4ConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
 
     # Cancel order
     order.fulfillment_status = FulfillmentStatus.CANCELLED

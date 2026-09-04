@@ -121,6 +121,26 @@ def test_phase4_booking_locks_and_rejects_cancelled_orders_before_provider_call(
     assert 'await db.commit()' in segment
 
 
+def test_order_cancellation_blocks_inflight_dhl_bookings_after_call_start() -> None:
+    service_source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    customer_source = (ROOT / "app" / "api" / "v1" / "orders.py").read_text()
+    admin_source = (ROOT / "app" / "api" / "v1" / "admin_orders.py").read_text()
+
+    assert 'async def ensure_order_cancellation_allowed(' in service_source
+    assert 'OutboundShipmentBooking.classification == "pending"' in service_source
+    assert 'OutboundShipmentBooking.call_started_at.is_not(None)' in service_source
+    assert 'OutboundShipmentBooking.result_recorded_at.is_(None)' in service_source
+    assert 'cannot cancel order while shipment booking is in progress' in service_source
+
+    assert 'await ensure_order_cancellation_allowed(db, order_id=order.id)' in customer_source
+    assert 'ShipmentPhase4ConflictError' in customer_source
+    assert 'status_code=status.HTTP_409_CONFLICT' in customer_source
+
+    assert 'select(Order).where(Order.id == order_id).with_for_update()' in admin_source
+    assert 'await ensure_order_cancellation_allowed(db, order_id=order.id)' in admin_source
+    assert 'status_code=status.HTTP_409_CONFLICT' in admin_source
+
+
 def test_phase4_booking_persists_unknown_outcome_when_success_flush_hits_unique_provider_conflict() -> None:
     source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
     assert 'def _is_booking_success_persistence_conflict(exc: IntegrityError) -> bool:' in source

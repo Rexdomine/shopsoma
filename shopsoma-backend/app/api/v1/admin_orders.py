@@ -68,6 +68,7 @@ from app.services.dhl.shipments import (
     ShipmentPhase4Error,
     ShipmentPhase4ReconciliationRequiredError,
     book_outbound_shipment,
+    ensure_order_cancellation_allowed,
     get_shipment_label,
     reconcile_unknown_booking_outcome,
     record_collection_handoff,
@@ -1134,7 +1135,7 @@ async def cancel_order(
 ):
     """Cancel an order"""
 
-    query = select(Order).where(Order.id == order_id)
+    query = select(Order).where(Order.id == order_id).with_for_update()
     result = await db.execute(query)
     order = result.scalar_one_or_none()
 
@@ -1149,6 +1150,14 @@ async def cancel_order(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Order is already cancelled",
         )
+
+    try:
+        await ensure_order_cancellation_allowed(db, order_id=order.id)
+    except ShipmentPhase4ConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
 
     # Cancel order
     order.fulfillment_status = FulfillmentStatus.CANCELLED
