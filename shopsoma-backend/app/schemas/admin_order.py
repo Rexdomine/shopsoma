@@ -308,8 +308,10 @@ class DHLBookingReconciliationRequest(BaseModel):
     resolution: str = Field(..., pattern="^(confirm_failure|confirm_success)$")
     provider_reference: Optional[str] = Field(None, min_length=1, max_length=120)
     tracking_number: Optional[str] = Field(None, min_length=1, max_length=120)
+    label_media_type: Optional[str] = Field(None, min_length=1, max_length=80)
+    label_content_base64: Optional[str] = Field(None, min_length=1)
 
-    @field_validator('provider_reference', 'tracking_number')
+    @field_validator('provider_reference', 'tracking_number', 'label_media_type', 'label_content_base64')
     @classmethod
     def validate_optional_text(cls, value: Optional[str]):
         if value is None:
@@ -322,10 +324,24 @@ class DHLBookingReconciliationRequest(BaseModel):
     @model_validator(mode='after')
     def validate_resolution_requirements(self):
         if self.resolution == 'confirm_success':
-            if self.provider_reference is None or self.tracking_number is None:
-                raise ValueError('provider_reference and tracking_number are required for confirm_success')
-        elif self.provider_reference is not None or self.tracking_number is not None:
-            raise ValueError('confirm_failure must not include provider_reference or tracking_number')
+            if (
+                self.provider_reference is None
+                or self.tracking_number is None
+                or self.label_media_type is None
+                or self.label_content_base64 is None
+            ):
+                raise ValueError(
+                    'provider_reference, tracking_number, label_media_type, and label_content_base64 are required for confirm_success'
+                )
+        elif (
+            self.provider_reference is not None
+            or self.tracking_number is not None
+            or self.label_media_type is not None
+            or self.label_content_base64 is not None
+        ):
+            raise ValueError(
+                'confirm_failure must not include provider_reference, tracking_number, label_media_type, or label_content_base64'
+            )
         return self
 
 

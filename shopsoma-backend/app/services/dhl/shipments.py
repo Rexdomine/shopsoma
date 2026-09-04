@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import hashlib
 import uuid
 from dataclasses import dataclass
@@ -65,6 +66,8 @@ MAX_TRACKING_EXCEPTION_CODE_LENGTH = 100
 MAX_TRACKING_DETAIL_LENGTH = 240
 EXPECTED_LABEL_MEDIA_TYPE = "application/pdf"
 PDF_SIGNATURE = b"%PDF-"
+DEFINITIVE_DHL_BOOKING_REJECTION_STATUSES = frozenset({400, 401, 403, 422})
+TERMINAL_TRACKING_EXCEPTION_CODES = frozenset({"FAILURE", "RETURNED"})
 
 
 class ShipmentPhase4Error(Exception):
@@ -102,8 +105,7 @@ def _is_unique_constraint_violation(
 
 def _is_definitive_booking_rejection(exc: DHLAPIError) -> bool:
     return (
-        exc.status_code is not None
-        and 400 <= exc.status_code < 500
+        exc.status_code in DEFINITIVE_DHL_BOOKING_REJECTION_STATUSES
         and not exc.retryable
     )
 
@@ -134,6 +136,8 @@ class BookingReconciliationCommand:
     resolution: str
     provider_reference: str | None = None
     tracking_number: str | None = None
+    label_media_type: str | None = None
+    label_content_base64: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -480,11 +484,27 @@ def _highest_effective_tracking_snapshot_for_handoff(
         if snapshot_state == "exception":
             effective_snapshot = snapshot
             continue
+        if effective_state == "exception" and _is_terminal_tracking_exception(
+            effective_snapshot
+        ):
+            continue
         if effective_state == "exception":
+            effective_snapshot = snapshot
             continue
         if _state_rank(snapshot_state) >= _state_rank(effective_state):
             effective_snapshot = snapshot
     return effective_snapshot
+
+
+def _is_terminal_tracking_exception(
+    snapshot: OutboundShipmentTrackingSnapshot,
+) -> bool:
+    if snapshot.outbound_state != "exception":
+        return False
+    exception_code = snapshot.exception_code
+    if not isinstance(exception_code, str):
+        return False
+    return exception_code.strip().upper() in TERMINAL_TRACKING_EXCEPTION_CODES
 
 
 async def _aggregate_order_outbound_state(
@@ -1065,6 +1085,18 @@ def _validated_pdf_label_media_type(value: str | None) -> str:
 def _validate_pdf_label_content(value: bytes) -> None:
     if not value.startswith(PDF_SIGNATURE):
         raise ShipmentPhase4Error("invalid label_content")
+
+
+def _decoded_reconciled_pdf_label_content(value: str | None) -> bytes:
+    normalized = _normalize_nonempty_text(value, field="label_content_base64")
+    try:
+        decoded = base64.b64decode(normalized, validate=True)
+    except (ValueError, binascii.Error) as exc:
+        raise ShipmentPhase4Error("invalid label_content") from exc
+    if not decoded:
+        raise ShipmentPhase4Error("invalid label_content")
+    _validate_pdf_label_content(decoded)
+    return decoded
 
 
 def _map_tracking_status(*codes: str) -> tuple[str, str]:
@@ -1937,9 +1969,14 @@ async def reconcile_unknown_booking_outcome(
         db,
         order_id=order_id,
         booking_id=command.booking_id,
-        lock_for_update=True,
     )
     guard = await _load_or_create_guard(db, intent_id=booking.intent_id)
+    booking = await _load_booking_for_order(
+        db,
+        order_id=order_id,
+        booking_id=command.booking_id,
+        lock_for_update=True,
+    )
 
     if command.resolution == "confirm_success":
         provider_reference = _normalize_nonempty_text(
@@ -1949,6 +1986,12 @@ async def reconcile_unknown_booking_outcome(
         tracking_number = _normalize_nonempty_text(
             command.tracking_number,
             field="tracking_number",
+        )
+        recovered_label_content = _decoded_reconciled_pdf_label_content(
+            command.label_content_base64
+        )
+        recovered_label_media_type = _validated_pdf_label_media_type(
+            command.label_media_type
         )
     else:
         raise ShipmentPhase4ConflictError(
@@ -1987,9 +2030,11 @@ async def reconcile_unknown_booking_outcome(
             booking.failure_code = None
             booking.provider_reference = provider_reference
             booking.tracking_number = tracking_number
-            booking.outbound_state = (
-                "label_ready" if booking.label_content is not None else "awaiting_collection"
-            )
+            booking.label_media_type = recovered_label_media_type
+            booking.label_content = recovered_label_content
+            booking.label_sha256 = hashlib.sha256(recovered_label_content).hexdigest()
+            booking.label_received_at = completed_at
+            booking.outbound_state = "label_ready"
             booking.last_tracking_refresh_at = completed_at
             guard.active_booking_id = booking.id
             order.delivery_provider = PROVIDER

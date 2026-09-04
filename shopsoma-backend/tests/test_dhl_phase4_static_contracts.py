@@ -1,3 +1,4 @@
+import base64
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -92,17 +93,26 @@ def test_phase4_booking_guard_creation_recovers_uniqueness_races() -> None:
 
 
 def test_phase4_booking_releases_guard_on_definitive_dhl_rejections() -> None:
-    definitive_404 = DHLAPIError("DHL API request was rejected", status_code=404, retryable=False)
+    definitive_400 = DHLAPIError("DHL API request was rejected", status_code=400, retryable=False)
+    definitive_401 = DHLAPIError("DHL API authentication failed", status_code=401, retryable=False)
+    definitive_403 = DHLAPIError("DHL API authorization failed", status_code=403, retryable=False)
     definitive_422 = DHLAPIError("DHL API request was rejected", status_code=422, retryable=False)
+    ambiguous_408 = DHLAPIError("DHL API request was rejected", status_code=408, retryable=False)
+    ambiguous_409 = DHLAPIError("DHL API request was rejected", status_code=409, retryable=False)
     retryable_429 = DHLAPIError("DHL API rate limit exceeded", status_code=429, retryable=True)
     retryable_503 = DHLAPIError("DHL API is unavailable", status_code=503, retryable=True)
 
-    assert _is_definitive_booking_rejection(definitive_404) is True
+    assert _is_definitive_booking_rejection(definitive_400) is True
+    assert _is_definitive_booking_rejection(definitive_401) is True
+    assert _is_definitive_booking_rejection(definitive_403) is True
     assert _is_definitive_booking_rejection(definitive_422) is True
+    assert _is_definitive_booking_rejection(ambiguous_408) is False
+    assert _is_definitive_booking_rejection(ambiguous_409) is False
     assert _is_definitive_booking_rejection(retryable_429) is False
     assert _is_definitive_booking_rejection(retryable_503) is False
 
     source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    assert 'DEFINITIVE_DHL_BOOKING_REJECTION_STATUSES = frozenset({400, 401, 403, 422})' in source
     assert 'booking.classification = "failure" if definitive_rejection else "unknown"' in source
     assert 'guard.active_booking_id = None if definitive_rejection else guard.active_booking_id' in source
     assert 'guard.booking_blocked_reason = None if definitive_rejection else "unknown_outcome"' in source
@@ -514,7 +524,10 @@ def test_dhl_handoff_request_normalizes_occurred_at_to_utc() -> None:
 
 
 def test_dhl_booking_reconciliation_request_requires_provider_identifiers_for_success() -> None:
-    with pytest.raises(ValidationError, match="provider_reference and tracking_number are required for confirm_success"):
+    with pytest.raises(
+        ValidationError,
+        match="provider_reference, tracking_number, label_media_type, and label_content_base64 are required for confirm_success",
+    ):
         DHLBookingReconciliationRequest(
             resolution="confirm_success",
             provider_reference=None,
@@ -523,23 +536,33 @@ def test_dhl_booking_reconciliation_request_requires_provider_identifiers_for_su
 
 
 def test_dhl_booking_reconciliation_request_rejects_identifiers_for_confirm_failure() -> None:
-    with pytest.raises(ValidationError, match="confirm_failure must not include provider_reference or tracking_number"):
+    with pytest.raises(
+        ValidationError,
+        match="confirm_failure must not include provider_reference, tracking_number, label_media_type, or label_content_base64",
+    ):
         DHLBookingReconciliationRequest(
             resolution="confirm_failure",
             provider_reference=" DHL-REF ",
             tracking_number=" TRACK-1 ",
+            label_media_type=" application/pdf ",
+            label_content_base64=" JVBERi0xLjQK ",
         )
 
 
 def test_dhl_booking_reconciliation_request_normalizes_success_identifiers() -> None:
+    label_base64 = base64.b64encode(b"%PDF-1.4\nreconciled label\n").decode()
     payload = DHLBookingReconciliationRequest(
         resolution="confirm_success",
         provider_reference=" DHL-REF ",
         tracking_number=" TRACK-1 ",
+        label_media_type=" application/pdf ",
+        label_content_base64=f" {label_base64} ",
     )
 
     assert payload.provider_reference == "DHL-REF"
     assert payload.tracking_number == "TRACK-1"
+    assert payload.label_media_type == "application/pdf"
+    assert payload.label_content_base64 == label_base64
 
 
 def test_dhl_reconciliation_flushes_success_before_projecting_tracking_and_translates_identifier_conflicts() -> None:
@@ -603,8 +626,8 @@ def test_booking_unknown_outcome_reconciliation_route_and_service_exist() -> Non
 
     assert 'class DHLBookingReconciliationRequest(BaseModel):' in schema_source
     assert 'resolution: str = Field(..., pattern="^(confirm_failure|confirm_success)$")' in schema_source
-    assert 'provider_reference and tracking_number are required for confirm_success' in schema_source
-    assert 'confirm_failure must not include provider_reference or tracking_number' in schema_source
+    assert 'provider_reference, tracking_number, label_media_type, and label_content_base64 are required for confirm_success' in schema_source
+    assert 'confirm_failure must not include provider_reference, tracking_number, label_media_type, or label_content_base64' in schema_source
     assert '@router.post("/{order_id}/dhl/bookings/{booking_id}/reconcile", response_model=DHLBookingResult)' in api_source
     assert 'result = await reconcile_unknown_booking_outcome(' in api_source
     assert 'class BookingReconciliationCommand:' in service_source
@@ -614,7 +637,32 @@ def test_booking_unknown_outcome_reconciliation_route_and_service_exist() -> Non
     assert 'booking.failure_code = "reconciled_provider_absent"' not in service_source
     assert 'guard.active_booking_id = None' not in service_source.split('async def reconcile_unknown_booking_outcome(', 1)[1].split('async def _load_booking_for_order(', 1)[0]
     assert 'booking.tracking_number = tracking_number' in service_source
-    assert 'booking.outbound_state = "label_ready" if booking.label_content is not None else "awaiting_collection"' in service_source
+    assert 'label_media_type=payload.label_media_type' in api_source
+    assert 'label_content_base64=payload.label_content_base64' in api_source
+    assert 'label_media_type: str | None = None' in service_source
+    assert 'label_content_base64: str | None = None' in service_source
+    assert 'recovered_label_content = _decoded_reconciled_pdf_label_content(' in service_source
+    assert 'recovered_label_media_type = _validated_pdf_label_media_type(' in service_source
+    assert 'booking.label_sha256 = hashlib.sha256(recovered_label_content).hexdigest()' in service_source
+    assert 'booking.outbound_state = "label_ready"' in service_source
+
+
+def test_booking_reconciliation_acquires_guard_before_locking_booking_row() -> None:
+    service_source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    reconcile = service_source.split('async def reconcile_unknown_booking_outcome(', 1)[1].split('async def _load_booking_for_order(', 1)[0]
+    assert 'guard = await _load_or_create_guard(db, intent_id=booking.intent_id)' in reconcile
+    assert reconcile.index('guard = await _load_or_create_guard(db, intent_id=booking.intent_id)') < reconcile.rindex('lock_for_update=True')
+
+
+def test_phase4_reconciliation_success_requires_a_valid_pdf_label() -> None:
+    service_source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    assert 'def _decoded_reconciled_pdf_label_content(value: str | None) -> bytes:' in service_source
+    assert '_normalize_nonempty_text(value, field="label_content_base64")' in service_source
+    assert 'base64.b64decode(normalized, validate=True)' in service_source
+    assert '_validate_pdf_label_content(decoded)' in service_source
+    assert 'booking.label_media_type = recovered_label_media_type' in service_source
+    assert 'booking.label_content = recovered_label_content' in service_source
+    assert 'booking.label_received_at = completed_at' in service_source
 
 
 def test_tracking_refresh_replay_runs_before_workflow_gate_and_skips_provider_calls_gate() -> None:

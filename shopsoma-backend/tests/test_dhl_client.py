@@ -358,6 +358,26 @@ def test_handoff_snapshot_fold_keeps_return_exception_sticky_against_later_movem
     assert chosen is returned
 
 
+def test_handoff_snapshot_fold_allows_delivery_to_resolve_transient_exception() -> None:
+    hold = SimpleNamespace(
+        outbound_state="exception",
+        observed_at=datetime.fromisoformat("2026-09-04T10:00:00+00:00"),
+        id="1",
+        exception_code="HOLD",
+    )
+    delivered = SimpleNamespace(
+        outbound_state="delivered",
+        observed_at=datetime.fromisoformat("2026-09-04T11:00:00+00:00"),
+        id="2",
+        exception_code=None,
+    )
+
+    snapshots: list[Any] = [hold, delivered]
+    chosen = _highest_effective_tracking_snapshot_for_handoff(snapshots)
+
+    assert chosen is delivered
+
+
 @pytest.mark.asyncio
 async def test_tracking_adapter_parses_mydhl_shipments_events_envelope() -> None:
     tracking_response = {
