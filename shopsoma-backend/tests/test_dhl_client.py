@@ -350,3 +350,39 @@ async def test_tracking_adapter_parses_mydhl_shipments_events_envelope() -> None
     assert observations[0].detail == "Shipment collected"
     assert observations[0].observed_at.isoformat() == "2026-09-03T13:45:00+01:00"
     assert observations[1].observed_at.isoformat() == "2026-09-04T08:15:00+01:00"
+
+
+@pytest.mark.asyncio
+async def test_tracking_adapter_skips_malformed_checkpoint_timestamp_candidates() -> None:
+    tracking_response = {
+        "shipments": [
+            {
+                "timestamp": "2026-09-04T08:15:00Z",
+                "events": [
+                    {
+                        "typeCode": "PU",
+                        "statusCode": "TRANSIT",
+                        "description": "Shipment collected",
+                        "timestamp": "not-a-timestamp",
+                        "dateTime": "2026-09-03T13:45:00+01:00",
+                    },
+                    {
+                        "typeCode": "OK",
+                        "statusCode": "DELIVERED",
+                        "description": "Shipment delivered",
+                        "timestamp": "still-bad",
+                    },
+                ],
+            }
+        ]
+    }
+    with patch(
+        "app.services.dhl.client.DHLClient.request_json",
+        new_callable=AsyncMock,
+        return_value=tracking_response,
+    ):
+        adapter = DHLShipmentAdapter(make_settings())
+        observations = await adapter.track("TRACK123")
+
+    assert observations[0].observed_at.isoformat() == "2026-09-03T13:45:00+01:00"
+    assert observations[1].observed_at.isoformat() == "2026-09-04T08:15:00+00:00"

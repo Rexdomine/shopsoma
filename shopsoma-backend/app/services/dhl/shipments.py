@@ -104,6 +104,16 @@ def _is_definitive_booking_rejection(exc: DHLAPIError) -> bool:
     )
 
 
+def _is_booking_success_persistence_conflict(exc: IntegrityError) -> bool:
+    return _is_unique_constraint_violation(
+        exc,
+        constraint_name="uq_outbound_shipment_bookings_provider_reference",
+    ) or _is_unique_constraint_violation(
+        exc,
+        constraint_name="uq_outbound_shipment_bookings_tracking",
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class BookingCommand:
     order_id: uuid.UUID
@@ -851,7 +861,10 @@ def _utc_or_none(value: object) -> datetime | None:
     if isinstance(value, datetime):
         return value if value.tzinfo else value.replace(tzinfo=UTC)
     if isinstance(value, str):
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
         return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
     return None
 
@@ -1204,11 +1217,20 @@ async def book_outbound_shipment(
         called_at = await db.scalar(text("SELECT clock_timestamp()"))
         booking.call_started_at = called_at
         await db.flush()
+        await db.commit()
         adapter_result = await adapter.book(intent, order, hub, package_version, quoted_service)
     except (DHLAPIError, TimeoutError) as exc:
+        booking = await _load_booking_for_order(
+            db,
+            order_id=order_id,
+            booking_id=booking.id,
+            lock_for_update=True,
+        )
+        guard = await db.get(OutboundIntentShipmentGuard, intent.id)
+        assert guard is not None
         completed_at = await db.scalar(text("SELECT clock_timestamp()"))
-        booking.result_recorded_at = completed_at
         definitive_rejection = isinstance(exc, DHLAPIError) and _is_definitive_booking_rejection(exc)
+        booking.result_recorded_at = completed_at
         booking.classification = "failure" if definitive_rejection else "unknown"
         booking.failure_code = (
             f"provider_rejected_{exc.status_code}"
@@ -1221,26 +1243,39 @@ async def book_outbound_shipment(
         await db.flush()
         return _booking_result(booking, replayed=False, note=str(exc))
     except ShipmentPhase4UnknownOutcomeError as exc:
-        completed_at = await db.scalar(text("SELECT clock_timestamp()"))
-        booking.result_recorded_at = completed_at
-        booking.classification = "unknown"
-        booking.failure_code = "unknown_outcome"
-        booking.completion_txid = await db.scalar(text("SELECT txid_current()"))
-        guard.booking_blocked_reason = "unknown_outcome"
-        await db.flush()
+        booking = await _load_booking_for_order(
+            db,
+            order_id=order_id,
+            booking_id=booking.id,
+            lock_for_update=True,
+        )
+        guard = await db.get(OutboundIntentShipmentGuard, intent.id)
+        assert guard is not None
+        await _mark_booking_unknown_outcome(db, booking=booking, guard=guard)
         return _booking_result(booking, replayed=False, note=str(exc))
     except ShipmentPhase4Error:
         raise
     except Exception as exc:
-        completed_at = await db.scalar(text("SELECT clock_timestamp()"))
-        booking.result_recorded_at = completed_at
-        booking.classification = "unknown"
-        booking.failure_code = "unknown_outcome"
-        booking.completion_txid = await db.scalar(text("SELECT txid_current()"))
-        guard.booking_blocked_reason = "unknown_outcome"
-        await db.flush()
+        booking = await _load_booking_for_order(
+            db,
+            order_id=order_id,
+            booking_id=booking.id,
+            lock_for_update=True,
+        )
+        guard = await db.get(OutboundIntentShipmentGuard, intent.id)
+        assert guard is not None
+        await _mark_booking_unknown_outcome(db, booking=booking, guard=guard)
         return _booking_result(booking, replayed=False, note=str(exc))
 
+    booking = await _load_booking_for_order(
+        db,
+        order_id=order_id,
+        booking_id=booking.id,
+        lock_for_update=True,
+    )
+    guard = await db.get(OutboundIntentShipmentGuard, intent.id)
+    assert guard is not None
+    order = await _load_order(db, order_id=order_id, lock_for_update=True)
     completed_at = await db.scalar(text("SELECT clock_timestamp()"))
     booked_at = adapter_result.booked_at or completed_at
     try:
@@ -1267,12 +1302,12 @@ async def book_outbound_shipment(
                 max_length=MAX_BOOKING_LABEL_MEDIA_TYPE_LENGTH,
             )
     except ShipmentPhase4Error as exc:
-        booking.result_recorded_at = completed_at
-        booking.classification = "unknown"
-        booking.failure_code = "unknown_outcome"
-        booking.completion_txid = await db.scalar(text("SELECT txid_current()"))
-        guard.booking_blocked_reason = "unknown_outcome"
-        await db.flush()
+        await _mark_booking_unknown_outcome(
+            db,
+            booking=booking,
+            guard=guard,
+            completed_at=completed_at,
+        )
         return _booking_result(booking, replayed=False, note=str(exc))
     booking.result_recorded_at = completed_at
     booking.classification = "success"
@@ -1297,7 +1332,26 @@ async def book_outbound_shipment(
         fallback=booking.tracking_number,
     )
     guard.booking_blocked_reason = None
-    await db.flush()
+    try:
+        await db.flush()
+    except IntegrityError as exc:
+        if not _is_booking_success_persistence_conflict(exc):
+            raise
+        await db.rollback()
+        booking = await _load_booking_for_order(
+            db,
+            order_id=order_id,
+            booking_id=booking.id,
+            lock_for_update=True,
+        )
+        guard = await db.get(OutboundIntentShipmentGuard, intent.id)
+        assert guard is not None
+        await _mark_booking_unknown_outcome(db, booking=booking, guard=guard)
+        return _booking_result(
+            booking,
+            replayed=False,
+            note="provider success persistence conflict",
+        )
     return _booking_result(booking, replayed=False)
 
 
@@ -1829,6 +1883,23 @@ def _booking_result(booking: OutboundShipmentBooking, *, replayed: bool, note: s
         note=note,
         replayed=replayed,
     )
+
+
+async def _mark_booking_unknown_outcome(
+    db: AsyncSession,
+    *,
+    booking: OutboundShipmentBooking,
+    guard: OutboundIntentShipmentGuard,
+    completed_at: datetime | None = None,
+) -> None:
+    if completed_at is None:
+        completed_at = await db.scalar(text("SELECT clock_timestamp()"))
+    booking.result_recorded_at = completed_at
+    booking.classification = "unknown"
+    booking.failure_code = "unknown_outcome"
+    booking.completion_txid = await db.scalar(text("SELECT txid_current()"))
+    guard.booking_blocked_reason = "unknown_outcome"
+    await db.flush()
 
 
 def _normalize_nonempty_text(value: str | None, *, field: str) -> str:

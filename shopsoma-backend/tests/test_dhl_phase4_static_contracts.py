@@ -118,7 +118,22 @@ def test_phase4_booking_locks_and_rejects_cancelled_orders_before_provider_call(
         'adapter_result = await adapter.book(intent, order, hub, package_version, quoted_service)',
         1,
     )[0]
-    assert 'await db.commit()' not in segment
+    assert 'await db.commit()' in segment
+
+
+def test_phase4_booking_persists_unknown_outcome_when_success_flush_hits_unique_provider_conflict() -> None:
+    source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    assert 'def _is_booking_success_persistence_conflict(exc: IntegrityError) -> bool:' in source
+    assert 'constraint_name="uq_outbound_shipment_bookings_provider_reference"' in source
+    assert 'constraint_name="uq_outbound_shipment_bookings_tracking"' in source
+    assert 'booking.call_started_at = called_at' in source
+    assert 'await db.commit()' in source[source.index('booking.call_started_at = called_at'):source.index('adapter_result = await adapter.book(intent, order, hub, package_version, quoted_service)')]
+    success_tail = source[source.index('booking.classification = "success"'):]
+    assert 'except IntegrityError as exc:' in success_tail
+    assert 'if not _is_booking_success_persistence_conflict(exc):' in success_tail
+    assert 'await db.rollback()' in success_tail
+    assert 'await _mark_booking_unknown_outcome(db, booking=booking, guard=guard)' in success_tail
+    assert 'note="provider success persistence conflict"' in success_tail
 
 
 def test_phase4_booking_binds_provider_product_to_persisted_selected_quote() -> None:
