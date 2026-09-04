@@ -127,10 +127,9 @@ def test_order_cancellation_blocks_inflight_dhl_bookings_after_call_start() -> N
     admin_source = (ROOT / "app" / "api" / "v1" / "admin_orders.py").read_text()
 
     assert 'async def ensure_order_cancellation_allowed(' in service_source
-    assert 'OutboundShipmentBooking.classification == "pending"' in service_source
-    assert 'OutboundShipmentBooking.call_started_at.is_not(None)' in service_source
-    assert 'OutboundShipmentBooking.result_recorded_at.is_(None)' in service_source
-    assert 'cannot cancel order while shipment booking is in progress' in service_source
+    assert 'OutboundShipmentBooking.outbound_state != "cancelled"' in service_source
+    assert 'OutboundShipmentBooking.classification.in_(("pending", "unknown", "success"))' in service_source
+    assert 'cannot cancel order while shipment booking outcome remains unresolved or active' in service_source
 
     assert 'await ensure_order_cancellation_allowed(db, order_id=order.id)' in customer_source
     assert 'ShipmentPhase4ConflictError' in customer_source
@@ -148,6 +147,8 @@ def test_phase4_booking_persists_unknown_outcome_when_success_flush_hits_unique_
     assert 'constraint_name="uq_outbound_shipment_bookings_tracking"' in source
     assert 'booking.call_started_at = called_at' in source
     assert 'await db.commit()' in source[source.index('booking.call_started_at = called_at'):source.index('adapter_result = await adapter.book(intent, order, hub, package_version, quoted_service)')]
+    success_reacquire = source[source.index('order = await _load_order(db, order_id=order_id, lock_for_update=True)'):source.index('completed_at = await db.scalar(text("SELECT clock_timestamp()"))')]
+    assert success_reacquire.index('order = await _load_order(db, order_id=order_id, lock_for_update=True)') < success_reacquire.index('booking = await _load_booking_for_order(')
     success_tail = source[source.index('booking.classification = "success"'):]
     assert 'except IntegrityError as exc:' in success_tail
     assert 'if not _is_booking_success_persistence_conflict(exc):' in success_tail

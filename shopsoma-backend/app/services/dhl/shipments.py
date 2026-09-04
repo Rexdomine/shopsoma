@@ -762,14 +762,13 @@ async def ensure_order_cancellation_allowed(
     *,
     order_id: uuid.UUID,
 ) -> None:
-    in_flight_booking = (
+    blocking_booking = (
         await db.execute(
             select(OutboundShipmentBooking)
             .where(
                 OutboundShipmentBooking.order_id == order_id,
-                OutboundShipmentBooking.classification == "pending",
-                OutboundShipmentBooking.call_started_at.is_not(None),
-                OutboundShipmentBooking.result_recorded_at.is_(None),
+                OutboundShipmentBooking.outbound_state != "cancelled",
+                OutboundShipmentBooking.classification.in_(("pending", "unknown", "success")),
             )
             .order_by(
                 OutboundShipmentBooking.claimed_at.desc(),
@@ -779,9 +778,9 @@ async def ensure_order_cancellation_allowed(
             .with_for_update()
         )
     ).scalar_one_or_none()
-    if in_flight_booking is not None:
+    if blocking_booking is not None:
         raise ShipmentPhase4ConflictError(
-            "cannot cancel order while shipment booking is in progress"
+            "cannot cancel order while shipment booking outcome remains unresolved or active"
         )
 
 
@@ -1295,6 +1294,7 @@ async def book_outbound_shipment(
         await _mark_booking_unknown_outcome(db, booking=booking, guard=guard)
         return _booking_result(booking, replayed=False, note=str(exc))
 
+    order = await _load_order(db, order_id=order_id, lock_for_update=True)
     booking = await _load_booking_for_order(
         db,
         order_id=order_id,
@@ -1303,7 +1303,6 @@ async def book_outbound_shipment(
     )
     guard = await db.get(OutboundIntentShipmentGuard, intent.id)
     assert guard is not None
-    order = await _load_order(db, order_id=order_id, lock_for_update=True)
     completed_at = await db.scalar(text("SELECT clock_timestamp()"))
     booked_at = adapter_result.booked_at or completed_at
     try:
