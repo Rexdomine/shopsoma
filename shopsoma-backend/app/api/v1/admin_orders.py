@@ -1071,6 +1071,8 @@ async def reconcile_dhl_booking(
                 tracking_number=payload.tracking_number,
                 label_media_type=payload.label_media_type,
                 label_content_base64=payload.label_content_base64,
+                provider_absence_evidence_ref=payload.provider_absence_evidence_ref,
+                provider_absence_evidence_sha256=payload.provider_absence_evidence_sha256,
             ),
         )
         await db.commit()

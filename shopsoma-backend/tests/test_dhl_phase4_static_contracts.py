@@ -375,6 +375,8 @@ def test_phase4_reconciliation_preserves_append_only_audit_fields() -> None:
     assert 'booking.reconciled_from_failure_code = booking.failure_code' in service_source
     assert 'booking.reconciled_from_result_recorded_at = booking.result_recorded_at' in service_source
     assert 'booking.reconciled_from_completion_txid = booking.completion_txid' in service_source
+    assert 'booking.reconciliation_evidence_ref = provider_absence_evidence_ref' in service_source
+    assert 'booking.reconciliation_evidence_sha256 = provider_absence_evidence_sha256' in service_source
     for field in (
         'reconciliation_resolution',
         'reconciliation_recorded_at',
@@ -384,6 +386,9 @@ def test_phase4_reconciliation_preserves_append_only_audit_fields() -> None:
         'reconciled_from_failure_code',
         'reconciled_from_result_recorded_at',
         'reconciled_from_completion_txid',
+        'reconciliation_evidence_ref',
+        'reconciliation_evidence_sha256',
+        "reconciliation_resolution = 'confirm_failure'",
         'ck_outbound_shipment_bookings_reconciliation_audit',
         'validate_outbound_shipment_booking_reconciliation_audit_update',
         'tr_outbound_shipment_bookings_reconciliation_audit_immutable',
@@ -610,11 +615,44 @@ def test_dhl_booking_reconciliation_request_rejects_identifiers_for_confirm_fail
     ):
         DHLBookingReconciliationRequest(
             resolution="confirm_failure",
+            provider_absence_evidence_ref="evidence/dhl/no-shipment-check.txt",
+            provider_absence_evidence_sha256="a" * 64,
             provider_reference=" DHL-REF ",
             tracking_number=" TRACK-1 ",
             label_media_type=" application/pdf ",
             label_content_base64=" JVBERi0xLjQK ",
         )
+
+
+def test_dhl_booking_reconciliation_request_requires_provider_absence_evidence_for_failure() -> None:
+    with pytest.raises(
+        ValidationError,
+        match="provider_absence_evidence_ref and provider_absence_evidence_sha256 are required for confirm_failure",
+    ):
+        DHLBookingReconciliationRequest(
+            resolution="confirm_failure",
+            provider_reference=None,
+            tracking_number=None,
+            label_media_type=None,
+            label_content_base64=None,
+            provider_absence_evidence_ref=None,
+            provider_absence_evidence_sha256=None,
+        )
+
+
+def test_dhl_booking_reconciliation_request_normalizes_failure_evidence() -> None:
+    payload = DHLBookingReconciliationRequest(
+        resolution="confirm_failure",
+        provider_reference=None,
+        tracking_number=None,
+        label_media_type=None,
+        label_content_base64=None,
+        provider_absence_evidence_ref=" evidence/dhl/no-shipment-check.txt ",
+        provider_absence_evidence_sha256="A" * 64,
+    )
+
+    assert payload.provider_absence_evidence_ref == "evidence/dhl/no-shipment-check.txt"
+    assert payload.provider_absence_evidence_sha256 == "a" * 64
 
 
 def test_dhl_booking_reconciliation_request_normalizes_success_identifiers() -> None:
@@ -695,24 +733,44 @@ def test_booking_unknown_outcome_reconciliation_route_and_service_exist() -> Non
     assert 'class DHLBookingReconciliationRequest(BaseModel):' in schema_source
     assert 'resolution: str = Field(..., pattern="^(confirm_failure|confirm_success)$")' in schema_source
     assert 'provider_reference, tracking_number, label_media_type, and label_content_base64 are required for confirm_success' in schema_source
+    assert 'provider_absence_evidence_ref and provider_absence_evidence_sha256 are required for confirm_failure' in schema_source
     assert 'confirm_failure must not include provider_reference, tracking_number, label_media_type, or label_content_base64' in schema_source
+    assert 'confirm_success must not include provider_absence_evidence_ref or provider_absence_evidence_sha256' in schema_source
     assert '@router.post("/{order_id}/dhl/bookings/{booking_id}/reconcile", response_model=DHLBookingResult)' in api_source
     assert 'result = await reconcile_unknown_booking_outcome(' in api_source
     assert 'class BookingReconciliationCommand:' in service_source
     assert 'async def reconcile_unknown_booking_outcome(' in service_source
-    assert 'definitive provider-absence evidence required before releasing unknown booking' in service_source
+    assert 'provider_absence_evidence_ref: str | None = None' in service_source
+    assert 'provider_absence_evidence_sha256: str | None = None' in service_source
     assert 'booking.classification = "success"' in service_source
-    assert 'booking.failure_code = "reconciled_provider_absent"' not in service_source
-    assert 'guard.active_booking_id = None' not in service_source.split('async def reconcile_unknown_booking_outcome(', 1)[1].split('async def _load_booking_for_order(', 1)[0]
+    assert 'booking.failure_code = "reconciled_provider_absent"' in service_source
+    assert 'guard.active_booking_id = None' in service_source.split('async def reconcile_unknown_booking_outcome(', 1)[1].split('async def _load_booking_for_order(', 1)[0]
     assert 'booking.tracking_number = tracking_number' in service_source
     assert 'label_media_type=payload.label_media_type' in api_source
     assert 'label_content_base64=payload.label_content_base64' in api_source
+    assert 'provider_absence_evidence_ref=payload.provider_absence_evidence_ref' in api_source
+    assert 'provider_absence_evidence_sha256=payload.provider_absence_evidence_sha256' in api_source
     assert 'label_media_type: str | None = None' in service_source
     assert 'label_content_base64: str | None = None' in service_source
+    assert 'booking.reconciliation_evidence_ref = provider_absence_evidence_ref' in service_source
+    assert 'booking.reconciliation_evidence_sha256 = provider_absence_evidence_sha256' in service_source
     assert 'recovered_label_content = _decoded_reconciled_pdf_label_content(' in service_source
     assert 'recovered_label_media_type = _validated_pdf_label_media_type(' in service_source
     assert 'booking.label_sha256 = hashlib.sha256(recovered_label_content).hexdigest()' in service_source
     assert 'booking.outbound_state = "label_ready"' in service_source
+
+
+def test_phase4_booking_binds_selected_quote_to_source_hub_version_before_provider_call() -> None:
+    source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    assert 'select(CustomerShippingQuoteOption, DomesticRateAttempt)' in source
+    assert 'CustomerShippingQuote.id == CustomerShippingQuoteSelection.quote_id' in source
+    assert 'DomesticRateResponse.id == CustomerShippingQuote.source_rate_response_id' in source
+    assert 'DomesticRateAttempt.id == DomesticRateResponse.attempt_id' in source
+    assert 'hub_version=attempt.hub_version' in source
+    assert 'quoted_hub_version = getattr(quoted_service, "hub_version", None)' in source
+    assert 'current_hub_version = getattr(hub, "version", None)' in source
+    assert 'quoted_hub_version != current_hub_version' in source
+    assert 'selected dhl quote hub version changed; refresh quote before booking' in source
 
 
 def test_booking_reconciliation_acquires_guard_before_locking_booking_row() -> None:

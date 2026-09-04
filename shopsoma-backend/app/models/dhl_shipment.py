@@ -115,6 +115,8 @@ class OutboundShipmentBooking(Base):
     reconciled_from_failure_code = Column(String(100))
     reconciled_from_result_recorded_at = Column(DateTime(timezone=True))
     reconciled_from_completion_txid = Column(BigInteger)
+    reconciliation_evidence_ref = Column(String(200))
+    reconciliation_evidence_sha256 = Column(String(64))
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=_NOW)
 
     __table_args__ = (
@@ -177,8 +179,9 @@ class OutboundShipmentBooking(Base):
             name="ck_outbound_shipment_bookings_lifecycle",
         ),
         CheckConstraint(
-            "((reconciliation_resolution IS NULL AND reconciliation_recorded_at IS NULL AND reconciliation_actor_type IS NULL AND reconciliation_actor_id IS NULL AND reconciled_from_classification IS NULL AND reconciled_from_failure_code IS NULL AND reconciled_from_result_recorded_at IS NULL AND reconciled_from_completion_txid IS NULL)"
-            " OR (reconciliation_resolution = 'confirm_success' AND reconciliation_recorded_at IS NOT NULL AND reconciliation_actor_type ~ '^[A-Za-z0-9][A-Za-z0-9._:-]*$' AND reconciliation_actor_id ~ '^[!-~]+$' AND reconciled_from_classification = 'unknown' AND reconciled_from_failure_code = 'unknown_outcome' AND reconciled_from_result_recorded_at IS NOT NULL AND reconciled_from_completion_txid IS NOT NULL))",
+            "((reconciliation_resolution IS NULL AND reconciliation_recorded_at IS NULL AND reconciliation_actor_type IS NULL AND reconciliation_actor_id IS NULL AND reconciled_from_classification IS NULL AND reconciled_from_failure_code IS NULL AND reconciled_from_result_recorded_at IS NULL AND reconciled_from_completion_txid IS NULL AND reconciliation_evidence_ref IS NULL AND reconciliation_evidence_sha256 IS NULL)"
+            " OR (reconciliation_resolution = 'confirm_success' AND reconciliation_recorded_at IS NOT NULL AND reconciliation_actor_type ~ '^[A-Za-z0-9][A-Za-z0-9._:-]*$' AND reconciliation_actor_id ~ '^[!-~]+$' AND reconciled_from_classification = 'unknown' AND reconciled_from_failure_code = 'unknown_outcome' AND reconciled_from_result_recorded_at IS NOT NULL AND reconciled_from_completion_txid IS NOT NULL AND reconciliation_evidence_ref IS NULL AND reconciliation_evidence_sha256 IS NULL)"
+            " OR (reconciliation_resolution = 'confirm_failure' AND reconciliation_recorded_at IS NOT NULL AND reconciliation_actor_type ~ '^[A-Za-z0-9][A-Za-z0-9._:-]*$' AND reconciliation_actor_id ~ '^[!-~]+$' AND reconciled_from_classification = 'unknown' AND reconciled_from_failure_code = 'unknown_outcome' AND reconciled_from_result_recorded_at IS NOT NULL AND reconciled_from_completion_txid IS NOT NULL AND reconciliation_evidence_ref = btrim(reconciliation_evidence_ref) AND length(reconciliation_evidence_ref) > 0 AND reconciliation_evidence_ref NOT LIKE '%://%' AND reconciliation_evidence_ref NOT LIKE '/%' AND reconciliation_evidence_ref NOT LIKE '%..%' AND reconciliation_evidence_sha256 ~ '^[0-9a-f]{64}$'))",
             name="ck_outbound_shipment_bookings_reconciliation_audit",
         ),
         CheckConstraint(
@@ -339,6 +342,8 @@ BEGIN
         OR NEW.reconciled_from_failure_code IS DISTINCT FROM OLD.reconciled_from_failure_code
         OR NEW.reconciled_from_result_recorded_at IS DISTINCT FROM OLD.reconciled_from_result_recorded_at
         OR NEW.reconciled_from_completion_txid IS DISTINCT FROM OLD.reconciled_from_completion_txid
+        OR NEW.reconciliation_evidence_ref IS DISTINCT FROM OLD.reconciliation_evidence_ref
+        OR NEW.reconciliation_evidence_sha256 IS DISTINCT FROM OLD.reconciliation_evidence_sha256
     ) THEN
         RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'outbound shipment reconciliation audit is immutable';
     END IF;

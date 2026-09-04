@@ -175,6 +175,8 @@ def upgrade() -> None:
         sa.Column("reconciled_from_failure_code", sa.String(100), nullable=True),
         sa.Column("reconciled_from_result_recorded_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("reconciled_from_completion_txid", sa.BigInteger(), nullable=True),
+        sa.Column("reconciliation_evidence_ref", sa.String(200), nullable=True),
+        sa.Column("reconciliation_evidence_sha256", sa.String(64), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
         sa.UniqueConstraint(
             "provider", "environment", "account_alias", "idempotency_key",
@@ -262,8 +264,9 @@ def upgrade() -> None:
             name="ck_outbound_shipment_bookings_lifecycle",
         ),
         sa.CheckConstraint(
-            "((reconciliation_resolution IS NULL AND reconciliation_recorded_at IS NULL AND reconciliation_actor_type IS NULL AND reconciliation_actor_id IS NULL AND reconciled_from_classification IS NULL AND reconciled_from_failure_code IS NULL AND reconciled_from_result_recorded_at IS NULL AND reconciled_from_completion_txid IS NULL)"
-            " OR (reconciliation_resolution = 'confirm_success' AND reconciliation_recorded_at IS NOT NULL AND reconciliation_actor_type ~ '^[A-Za-z0-9][A-Za-z0-9._:-]*$' AND reconciliation_actor_id ~ '^[!-~]+$' AND reconciled_from_classification = 'unknown' AND reconciled_from_failure_code = 'unknown_outcome' AND reconciled_from_result_recorded_at IS NOT NULL AND reconciled_from_completion_txid IS NOT NULL))",
+            "((reconciliation_resolution IS NULL AND reconciliation_recorded_at IS NULL AND reconciliation_actor_type IS NULL AND reconciliation_actor_id IS NULL AND reconciled_from_classification IS NULL AND reconciled_from_failure_code IS NULL AND reconciled_from_result_recorded_at IS NULL AND reconciled_from_completion_txid IS NULL AND reconciliation_evidence_ref IS NULL AND reconciliation_evidence_sha256 IS NULL)"
+            " OR (reconciliation_resolution = 'confirm_success' AND reconciliation_recorded_at IS NOT NULL AND reconciliation_actor_type ~ '^[A-Za-z0-9][A-Za-z0-9._:-]*$' AND reconciliation_actor_id ~ '^[!-~]+$' AND reconciled_from_classification = 'unknown' AND reconciled_from_failure_code = 'unknown_outcome' AND reconciled_from_result_recorded_at IS NOT NULL AND reconciled_from_completion_txid IS NOT NULL AND reconciliation_evidence_ref IS NULL AND reconciliation_evidence_sha256 IS NULL)"
+            " OR (reconciliation_resolution = 'confirm_failure' AND reconciliation_recorded_at IS NOT NULL AND reconciliation_actor_type ~ '^[A-Za-z0-9][A-Za-z0-9._:-]*$' AND reconciliation_actor_id ~ '^[!-~]+$' AND reconciled_from_classification = 'unknown' AND reconciled_from_failure_code = 'unknown_outcome' AND reconciled_from_result_recorded_at IS NOT NULL AND reconciled_from_completion_txid IS NOT NULL AND reconciliation_evidence_ref = btrim(reconciliation_evidence_ref) AND length(reconciliation_evidence_ref) > 0 AND reconciliation_evidence_ref NOT LIKE '%://%' AND reconciliation_evidence_ref NOT LIKE '/%' AND reconciliation_evidence_ref NOT LIKE '%..%' AND reconciliation_evidence_sha256 ~ '^[0-9a-f]{64}$'))",
             name="ck_outbound_shipment_bookings_reconciliation_audit",
         ),
         sa.CheckConstraint(
@@ -299,6 +302,8 @@ def upgrade() -> None:
                 OR NEW.reconciled_from_failure_code IS DISTINCT FROM OLD.reconciled_from_failure_code
                 OR NEW.reconciled_from_result_recorded_at IS DISTINCT FROM OLD.reconciled_from_result_recorded_at
                 OR NEW.reconciled_from_completion_txid IS DISTINCT FROM OLD.reconciled_from_completion_txid
+                OR NEW.reconciliation_evidence_ref IS DISTINCT FROM OLD.reconciliation_evidence_ref
+                OR NEW.reconciliation_evidence_sha256 IS DISTINCT FROM OLD.reconciliation_evidence_sha256
             ) THEN
                 RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'outbound shipment reconciliation audit is immutable';
             END IF;

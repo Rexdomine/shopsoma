@@ -310,8 +310,17 @@ class DHLBookingReconciliationRequest(BaseModel):
     tracking_number: Optional[str] = Field(None, min_length=1, max_length=120)
     label_media_type: Optional[str] = Field(None, min_length=1, max_length=80)
     label_content_base64: Optional[str] = Field(None, min_length=1)
+    provider_absence_evidence_ref: Optional[str] = Field(None, min_length=1, max_length=200)
+    provider_absence_evidence_sha256: Optional[str] = Field(None, min_length=64, max_length=64)
 
-    @field_validator('provider_reference', 'tracking_number', 'label_media_type', 'label_content_base64')
+    @field_validator(
+        'provider_reference',
+        'tracking_number',
+        'label_media_type',
+        'label_content_base64',
+        'provider_absence_evidence_ref',
+        'provider_absence_evidence_sha256',
+    )
     @classmethod
     def validate_optional_text(cls, value: Optional[str]):
         if value is None:
@@ -319,6 +328,25 @@ class DHLBookingReconciliationRequest(BaseModel):
         normalized = value.strip()
         if not normalized:
             raise ValueError('optional reconciliation fields must not be blank')
+        return normalized
+
+    @field_validator('provider_absence_evidence_ref')
+    @classmethod
+    def validate_provider_absence_evidence_ref(cls, value: Optional[str]):
+        if value is None:
+            return None
+        if '://' in value or value.startswith('/') or '..' in value:
+            raise ValueError('provider_absence_evidence_ref must be a private reference path, not a URL or absolute path')
+        return value
+
+    @field_validator('provider_absence_evidence_sha256')
+    @classmethod
+    def validate_provider_absence_evidence_sha256(cls, value: Optional[str]):
+        if value is None:
+            return None
+        normalized = value.lower()
+        if _SHA256_HEX_RE.fullmatch(normalized) is None:
+            raise ValueError('provider_absence_evidence_sha256 must be a lowercase SHA-256 hex digest')
         return normalized
 
     @model_validator(mode='after')
@@ -333,15 +361,30 @@ class DHLBookingReconciliationRequest(BaseModel):
                 raise ValueError(
                     'provider_reference, tracking_number, label_media_type, and label_content_base64 are required for confirm_success'
                 )
-        elif (
-            self.provider_reference is not None
-            or self.tracking_number is not None
-            or self.label_media_type is not None
-            or self.label_content_base64 is not None
-        ):
-            raise ValueError(
-                'confirm_failure must not include provider_reference, tracking_number, label_media_type, or label_content_base64'
-            )
+            if (
+                self.provider_absence_evidence_ref is not None
+                or self.provider_absence_evidence_sha256 is not None
+            ):
+                raise ValueError(
+                    'confirm_success must not include provider_absence_evidence_ref or provider_absence_evidence_sha256'
+                )
+        else:
+            if (
+                self.provider_absence_evidence_ref is None
+                or self.provider_absence_evidence_sha256 is None
+            ):
+                raise ValueError(
+                    'provider_absence_evidence_ref and provider_absence_evidence_sha256 are required for confirm_failure'
+                )
+            if (
+                self.provider_reference is not None
+                or self.tracking_number is not None
+                or self.label_media_type is not None
+                or self.label_content_base64 is not None
+            ):
+                raise ValueError(
+                    'confirm_failure must not include provider_reference, tracking_number, label_media_type, or label_content_base64'
+                )
         return self
 
 

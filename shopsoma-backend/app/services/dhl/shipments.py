@@ -16,9 +16,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
 from app.models.customer_shipping_quote import (
+    CustomerShippingQuote,
     CustomerShippingQuoteOption,
     CustomerShippingQuoteSelection,
 )
+from app.models.domestic_rate_quote import DomesticRateAttempt, DomesticRateResponse
 from app.models.dhl_shipment import (
     OutboundIntentShipmentGuard,
     OutboundShipmentBooking,
@@ -157,6 +159,8 @@ class BookingReconciliationCommand:
     tracking_number: str | None = None
     label_media_type: str | None = None
     label_content_base64: str | None = None
+    provider_absence_evidence_ref: str | None = None
+    provider_absence_evidence_sha256: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -242,6 +246,7 @@ class AdapterBookingResult:
 class QuotedShipmentService:
     product_code: str
     service_code: str
+    hub_version: int
 
 
 class ShipmentAdapter(Protocol):
@@ -280,6 +285,16 @@ class DHLShipmentAdapter:
         package_version: HubPackageVersion,
         quoted_service: QuotedShipmentService,
     ) -> dict[str, object]:
+        quoted_hub_version = getattr(quoted_service, "hub_version", None)
+        current_hub_version = getattr(hub, "version", None)
+        if (
+            quoted_hub_version is not None
+            and current_hub_version is not None
+            and quoted_hub_version != current_hub_version
+        ):
+            raise ShipmentPhase4Error(
+                "selected dhl quote hub version changed; refresh quote before booking"
+            )
         planned_ship_date = _planned_ship_date_for_shadow_quote(intent.created_at)
         shipper = _provider_safe_booking_party(
             line1=hub.address_line1,
@@ -1387,12 +1402,24 @@ async def _load_persisted_quoted_service(
     *,
     intent_id: uuid.UUID,
 ) -> QuotedShipmentService:
-    option = (
+    row = (
         await db.execute(
-            select(CustomerShippingQuoteOption)
+            select(CustomerShippingQuoteOption, DomesticRateAttempt)
             .join(
                 CustomerShippingQuoteSelection,
                 CustomerShippingQuoteSelection.option_id == CustomerShippingQuoteOption.id,
+            )
+            .join(
+                CustomerShippingQuote,
+                CustomerShippingQuote.id == CustomerShippingQuoteSelection.quote_id,
+            )
+            .join(
+                DomesticRateResponse,
+                DomesticRateResponse.id == CustomerShippingQuote.source_rate_response_id,
+            )
+            .join(
+                DomesticRateAttempt,
+                DomesticRateAttempt.id == DomesticRateResponse.attempt_id,
             )
             .where(
                 CustomerShippingQuoteSelection.intent_id == intent_id,
@@ -1400,9 +1427,10 @@ async def _load_persisted_quoted_service(
                 CustomerShippingQuoteOption.provider == PROVIDER,
             )
         )
-    ).scalar_one_or_none()
-    if option is None:
+    ).one_or_none()
+    if row is None:
         raise ShipmentPhase4Error("no persisted selected dhl shipping quote for outbound intent")
+    option, attempt = row
     return QuotedShipmentService(
         product_code=_normalize_nonempty_text(option.product_code, field="product_code"),
         service_code=_normalize_bounded_text(
@@ -1410,6 +1438,7 @@ async def _load_persisted_quoted_service(
             field="service_code",
             max_length=MAX_BOOKING_SERVICE_CODE_LENGTH,
         ),
+        hub_version=attempt.hub_version,
     )
 
 
@@ -2180,6 +2209,12 @@ async def reconcile_unknown_booking_outcome(
     admin: User,
     command: BookingReconciliationCommand,
 ) -> BookingResult:
+    provider_reference: str | None = None
+    tracking_number: str | None = None
+    recovered_label_content: bytes | None = None
+    recovered_label_media_type: str | None = None
+    provider_absence_evidence_ref: str | None = None
+    provider_absence_evidence_sha256: str | None = None
     order = await _load_order(db, order_id=order_id, lock_for_update=True)
     _ensure_order_not_cancelled(order, action="reconcile booking")
     booking = await _load_booking_for_order(
@@ -2211,18 +2246,35 @@ async def reconcile_unknown_booking_outcome(
             command.label_media_type
         )
     else:
-        raise ShipmentPhase4ConflictError(
-            "definitive provider-absence evidence required before releasing unknown booking"
+        provider_absence_evidence_ref = _normalize_private_reference(
+            command.provider_absence_evidence_ref,
+            field="provider_absence_evidence_ref",
+        )
+        provider_absence_evidence_sha256 = _normalize_sha256_hex(
+            command.provider_absence_evidence_sha256,
+            field="provider_absence_evidence_sha256",
         )
 
     if booking.classification != "unknown" or booking.failure_code != "unknown_outcome":
-        if booking.classification == "success":
+        if command.resolution == "confirm_success" and booking.classification == "success":
             if (
                 booking.provider_reference != provider_reference
                 or booking.tracking_number != tracking_number
             ):
                 raise ShipmentPhase4ConflictError(
                     "booking reconciliation does not match existing provider identifiers"
+                )
+            return _booking_result(booking, replayed=True)
+        if command.resolution == "confirm_failure" and booking.classification == "failure":
+            if booking.failure_code != "reconciled_provider_absent":
+                raise ShipmentPhase4ConflictError("booking is not awaiting reconciliation")
+            if (
+                booking.reconciliation_evidence_ref != provider_absence_evidence_ref
+                or booking.reconciliation_evidence_sha256
+                != provider_absence_evidence_sha256
+            ):
+                raise ShipmentPhase4ConflictError(
+                    "booking reconciliation does not match existing provider-absence evidence"
                 )
             return _booking_result(booking, replayed=True)
         raise ShipmentPhase4ConflictError("booking is not awaiting reconciliation")
@@ -2241,20 +2293,40 @@ async def reconcile_unknown_booking_outcome(
             booking.reconciled_from_completion_txid = booking.completion_txid
             booking.result_recorded_at = completed_at
             booking.completion_txid = await db.scalar(text("SELECT txid_current()"))
-            guard.booking_blocked_reason = None
+            if command.resolution == "confirm_success":
+                assert provider_reference is not None
+                assert tracking_number is not None
+                assert recovered_label_content is not None
+                assert recovered_label_media_type is not None
+                booking.reconciliation_evidence_ref = None
+                booking.reconciliation_evidence_sha256 = None
+                guard.booking_blocked_reason = None
 
-            booking.classification = "success"
-            booking.failure_code = None
-            booking.provider_reference = provider_reference
-            booking.tracking_number = tracking_number
-            booking.label_media_type = recovered_label_media_type
-            booking.label_content = recovered_label_content
-            booking.label_sha256 = hashlib.sha256(recovered_label_content).hexdigest()
-            booking.label_received_at = completed_at
-            booking.outbound_state = "label_ready"
-            booking.last_tracking_refresh_at = completed_at
-            guard.active_booking_id = booking.id
-            order.delivery_provider = PROVIDER
+                booking.classification = "success"
+                booking.failure_code = None
+                booking.provider_reference = provider_reference
+                booking.tracking_number = tracking_number
+                booking.label_media_type = recovered_label_media_type
+                booking.label_content = recovered_label_content
+                booking.label_sha256 = hashlib.sha256(recovered_label_content).hexdigest()
+                booking.label_received_at = completed_at
+                booking.outbound_state = "label_ready"
+                booking.last_tracking_refresh_at = completed_at
+                guard.active_booking_id = booking.id
+                order.delivery_provider = PROVIDER
+            else:
+                booking.reconciliation_evidence_ref = provider_absence_evidence_ref
+                booking.reconciliation_evidence_sha256 = provider_absence_evidence_sha256
+                booking.classification = "failure"
+                booking.failure_code = "reconciled_provider_absent"
+                booking.provider_reference = None
+                booking.tracking_number = None
+                booking.label_media_type = None
+                booking.label_content = None
+                booking.label_sha256 = None
+                booking.label_received_at = None
+                guard.active_booking_id = None
+                guard.booking_blocked_reason = None
             await db.flush()
     except IntegrityError as exc:
         if not _is_booking_success_persistence_conflict(exc):
@@ -2262,14 +2334,19 @@ async def reconcile_unknown_booking_outcome(
         raise ShipmentPhase4ConflictError(
             "booking reconciliation conflicts with existing provider identifiers"
         ) from exc
-    order.tracking_number = await _project_order_tracking_number(
-        db,
-        order_id=order.id,
-        fallback=booking.tracking_number,
-    )
+    if command.resolution == "confirm_success":
+        order.tracking_number = await _project_order_tracking_number(
+            db,
+            order_id=order.id,
+            fallback=booking.tracking_number,
+        )
 
     await db.flush()
-    return _booking_result(booking, replayed=False, note=f"reconciled by admin {admin.id}")
+    return _booking_result(
+        booking,
+        replayed=False,
+        note=f"reconciled {command.resolution} by admin {admin.id}",
+    )
 
 
 async def _load_booking_for_order(
@@ -2377,4 +2454,22 @@ def _normalize_nonempty_text(value: str | None, *, field: str) -> str:
     normalized = value.strip()
     if not normalized:
         raise ShipmentPhase4Error(f"invalid {field}")
+    return normalized
+
+
+def _normalize_private_reference(value: str | None, *, field: str) -> str:
+    normalized = _normalize_nonempty_text(value, field=field)
+    if "://" in normalized or normalized.startswith("/") or ".." in normalized:
+        raise ShipmentPhase4Error(f"invalid {field}")
+    return normalized
+
+
+def _normalize_sha256_hex(value: str | None, *, field: str) -> str:
+    normalized = _normalize_nonempty_text(value, field=field).lower()
+    if len(normalized) != 64:
+        raise ShipmentPhase4Error(f"invalid {field}")
+    try:
+        bytes.fromhex(normalized)
+    except ValueError as exc:
+        raise ShipmentPhase4Error(f"invalid {field}") from exc
     return normalized
