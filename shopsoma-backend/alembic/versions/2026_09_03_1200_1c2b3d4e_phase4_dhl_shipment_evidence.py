@@ -347,7 +347,7 @@ def upgrade() -> None:
         sa.Column("source_command", sa.String(100), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
         sa.UniqueConstraint(
-            "booking_id", "provider_status_code", "observed_at",
+            "booking_id", "provider_status_code", "observed_at", "exception_code",
             name="uq_outbound_shipment_tracking_snapshots_observation",
         ),
         sa.UniqueConstraint(
@@ -452,6 +452,9 @@ def downgrade() -> None:
     )
     op.execute(
         "DROP TRIGGER IF EXISTS tr_outbound_shipment_bookings_reconciliation_audit_immutable ON outbound_shipment_booking"
+    )
+    op.execute(
+        "DROP TRIGGER IF EXISTS tr_outbound_shipment_bookings_reconciliation_audit_immutable_delete ON outbound_shipment_booking"
     )
     op.execute(
         "DROP FUNCTION IF EXISTS validate_outbound_shipment_booking_reconciliation_audit_update()"

@@ -78,6 +78,7 @@ def test_phase4_unique_violation_helper_matches_only_named_constraint() -> None:
 def test_phase4_migration_uses_statement_timestamp_and_preserves_predecessors() -> None:
     source = MIGRATION.read_text()
     assert 'sa.Column("recorded_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("statement_timestamp()"))' in source
+    assert '"booking_id", "provider_status_code", "observed_at", "exception_code"' in source
     assert "_drop_prerequisite_phase4_tables" not in source
     assert "Base.metadata.create_all" not in source
     assert "Base.metadata.tables[name].create(bind=bind, checkfirst=True)" in source
@@ -399,6 +400,11 @@ def test_phase4_reconciliation_preserves_append_only_audit_fields() -> None:
         assert field in model_source
         assert field in migration_source
 
+    assert (
+        'DROP TRIGGER IF EXISTS tr_outbound_shipment_bookings_reconciliation_audit_immutable_delete ON outbound_shipment_booking'
+        in migration_source
+    )
+
 
 def test_phase4_booking_behavioural_helper_now_seeds_selected_dhl_quote() -> None:
     source = (ROOT / "tests" / "test_dhl_phase4_booking.py").read_text()
@@ -434,6 +440,14 @@ def test_tracking_refresh_bounds_provider_codes_before_persistence() -> None:
     assert 'field="exception_code"' in source
     assert 'provider_status_code=primary_code' in source
     assert 'exception_code=_tracking_exception_code(' in source
+
+
+def test_phase4_tracking_snapshot_uniqueness_preserves_same_timestamp_exception_variants() -> None:
+    model_source = (ROOT / "app" / "models" / "dhl_shipment.py").read_text()
+    migration_source = MIGRATION.read_text()
+    expected = '"booking_id", "provider_status_code", "observed_at", "exception_code"'
+    assert expected in model_source
+    assert expected in migration_source
 
 
 def test_tracking_refresh_rejects_future_provider_observation_timestamps_before_insert() -> None:

@@ -245,7 +245,7 @@ class OutboundShipmentTrackingSnapshot(Base):
             name="ck_outbound_shipment_tracking_snapshots_recording_order",
         ),
         UniqueConstraint(
-            "booking_id", "provider_status_code", "observed_at",
+            "booking_id", "provider_status_code", "observed_at", "exception_code",
             name="uq_outbound_shipment_tracking_snapshots_observation",
         ),
         UniqueConstraint(
