@@ -2,6 +2,8 @@ import asyncio
 import base64
 import logging
 from datetime import UTC, datetime
+from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -15,6 +17,7 @@ from app.services.dhl.client import (
 )
 from app.services.dhl.shipments import (
     _aggregate_order_shipment_state,
+    _highest_effective_tracking_snapshot_for_handoff,
     _map_tracking_status,
     DHLShipmentAdapter,
 )
@@ -307,6 +310,26 @@ def test_aggregate_order_shipment_state_uses_slowest_non_cancelled_package() -> 
     assert _aggregate_order_shipment_state(["delivered", "delivered"]) == "delivered"
     assert _aggregate_order_shipment_state(["cancelled", "delivered"]) == "delivered"
     assert _aggregate_order_shipment_state(["exception", "delivered"]) == "exception"
+
+
+def test_handoff_snapshot_fold_preserves_highest_effective_state() -> None:
+    delivered = SimpleNamespace(
+        outbound_state="delivered",
+        observed_at=datetime.fromisoformat("2026-09-04T10:00:00+00:00"),
+        id="1",
+        exception_code=None,
+    )
+    delayed_in_transit = SimpleNamespace(
+        outbound_state="in_transit",
+        observed_at=datetime.fromisoformat("2026-09-04T11:00:00+00:00"),
+        id="2",
+        exception_code=None,
+    )
+
+    snapshots: list[Any] = [delivered, delayed_in_transit]
+    chosen = _highest_effective_tracking_snapshot_for_handoff(snapshots)
+
+    assert chosen is delivered
 
 
 @pytest.mark.asyncio

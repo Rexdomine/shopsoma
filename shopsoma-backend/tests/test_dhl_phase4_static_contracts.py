@@ -151,6 +151,14 @@ def test_order_cancellation_blocks_inflight_dhl_bookings_after_call_start() -> N
     assert 'await ensure_order_cancellation_allowed(db, order_id=order.id)' in legacy_status_route
     assert 'if status == FulfillmentStatus.CANCELLED.value:' in legacy_status_route
 
+    legacy_cancel_route = legacy_admin_source.split('@router.post("/orders/{order_id}/cancel")', 1)[1].split(
+        '@router.put("/orders/{order_id}/notes")',
+        1,
+    )[0]
+    assert '.with_for_update()' in legacy_cancel_route
+    assert 'await ensure_order_cancellation_allowed(db, order_id=order.id)' in legacy_cancel_route
+    assert 'ShipmentPhase4ConflictError' in legacy_cancel_route
+
 
 def test_phase4_booking_persists_unknown_outcome_when_success_flush_hits_unique_provider_conflict() -> None:
     source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
@@ -193,7 +201,11 @@ def test_phase4_handoff_preserves_advanced_tracking_state_and_collection_project
 
     handoff = service_source[service_source.index('async def record_collection_handoff('):service_source.index('async def refresh_tracking(')]
     assert 'async def _latest_effective_tracking_snapshot_for_handoff(' in service_source
+    assert 'def _highest_effective_tracking_snapshot_for_handoff(' in service_source
     assert 'OutboundShipmentTrackingSnapshot.outbound_state.in_(' in service_source
+    assert '.order_by(' in service_source
+    assert 'OutboundShipmentTrackingSnapshot.observed_at.asc()' in service_source
+    assert 'return _highest_effective_tracking_snapshot_for_handoff(snapshots)' in service_source
     assert 'latest_tracking = await _latest_effective_tracking_snapshot_for_handoff(' in handoff
     assert 'booking.outbound_state = latest_tracking.outbound_state' in handoff
     assert 'booking.outbound_state = "collected"' in handoff

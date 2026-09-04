@@ -465,6 +465,42 @@ def _aggregate_order_shipment_state(states: Sequence[str]) -> str | None:
     return min(active_states, key=_state_rank)
 
 
+def _highest_effective_tracking_snapshot_for_handoff(
+    snapshots: Sequence[OutboundShipmentTrackingSnapshot],
+) -> OutboundShipmentTrackingSnapshot | None:
+    effective_snapshot: OutboundShipmentTrackingSnapshot | None = None
+    effective_state = "collected"
+    effective_observed_at: datetime | None = None
+    for snapshot in snapshots:
+        snapshot_state = snapshot.outbound_state
+        if snapshot_state == "exception":
+            if effective_state != "delivered" and (
+                effective_observed_at is None
+                or snapshot.observed_at >= effective_observed_at
+            ):
+                effective_snapshot = snapshot
+                effective_state = snapshot_state
+                effective_observed_at = snapshot.observed_at
+            continue
+        if effective_state == "exception":
+            if (
+                effective_observed_at is None
+                or snapshot.observed_at >= effective_observed_at
+            ):
+                effective_snapshot = snapshot
+                effective_state = snapshot_state
+                effective_observed_at = snapshot.observed_at
+            continue
+        if _state_rank(snapshot_state) >= _state_rank(effective_state) and (
+            effective_observed_at is None
+            or snapshot.observed_at >= effective_observed_at
+        ):
+            effective_snapshot = snapshot
+            effective_state = snapshot_state
+            effective_observed_at = snapshot.observed_at
+    return effective_snapshot
+
+
 async def _aggregate_order_outbound_state(
     db: AsyncSession,
     *,
@@ -901,7 +937,7 @@ async def _latest_effective_tracking_snapshot_for_handoff(
     *,
     booking_id: uuid.UUID,
 ) -> OutboundShipmentTrackingSnapshot | None:
-    return (
+    snapshots = (
         await db.execute(
             select(OutboundShipmentTrackingSnapshot)
             .where(
@@ -918,12 +954,12 @@ async def _latest_effective_tracking_snapshot_for_handoff(
                 ),
             )
             .order_by(
-                OutboundShipmentTrackingSnapshot.observed_at.desc(),
-                OutboundShipmentTrackingSnapshot.id.desc(),
+                OutboundShipmentTrackingSnapshot.observed_at.asc(),
+                OutboundShipmentTrackingSnapshot.id.asc(),
             )
-            .limit(1)
         )
-    ).scalar_one_or_none()
+    ).scalars().all()
+    return _highest_effective_tracking_snapshot_for_handoff(snapshots)
 
 
 def _utc_or_none(value: object) -> datetime | None:
