@@ -185,6 +185,35 @@ class _Phase4Helpers:
             CustomerShippingQuoteOption,
             CustomerShippingQuoteSelection,
         )
+        from app.models.domestic_rate_quote import DomesticRateOffer, DomesticRateResponse
+        from tests.test_domestic_rate_persistence import _attempt, _complete_attempt
+
+        claimed = await db_session.scalar(text("SELECT clock_timestamp()"))
+        assert claimed is not None
+        attempt = _attempt(graph, package, seal, intent, claimed)
+        received = await _complete_attempt(db_session, attempt, "success")
+        response = DomesticRateResponse(
+            attempt_id=attempt.id,
+            result_kind="success",
+            received_at=received,
+            expires_at=received + timedelta(minutes=15),
+            ttl_seconds=900,
+        )
+        db_session.add(response)
+        await db_session.flush()
+
+        offer = DomesticRateOffer(
+            response_id=response.id,
+            provider_product_code="N",
+            provider_service_code="DOM-N",
+            service_label="Domestic Express",
+            total_amount=Decimal("1000.0000"),
+            currency="NGN",
+            transit_days=1,
+            delivery_date=attempt.planned_ship_date + timedelta(days=1),
+        )
+        db_session.add(offer)
+        await db_session.flush()
 
         quote = CustomerShippingQuote(
             order_id=graph["order"].id,
@@ -195,8 +224,9 @@ class _Phase4Helpers:
             seal_id=seal.id,
             origin_hub_id=graph["hub"].id,
             destination_snapshot_hash=intent.destination_snapshot_hash,
+            source_rate_response_id=response.id,
             currency="NGN",
-            ttl_seconds=1800,
+            ttl_seconds=900,
             initiating_actor_type="customer",
             initiating_actor_id=str(customer.id),
             source_command="create_shipping_quote",
@@ -209,6 +239,7 @@ class _Phase4Helpers:
 
         option = CustomerShippingQuoteOption(
             quote_id=quote.id,
+            source_rate_offer_id=offer.id,
             option_key="dhl-dom-n",
             provider="dhl",
             product_code="N",
@@ -219,6 +250,7 @@ class _Phase4Helpers:
             total_amount=Decimal("1050.0000"),
             currency="NGN",
             transit_days=1,
+            delivery_date=offer.delivery_date,
         )
         db_session.add(option)
         await db_session.flush()
