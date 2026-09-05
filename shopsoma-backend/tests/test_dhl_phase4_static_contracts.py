@@ -483,6 +483,17 @@ def test_tracking_refresh_interprets_naive_dhl_checkpoint_times_as_lagos_local_t
     assert 'detail=observation.detail' in source
 
 
+def test_tracking_refresh_prefers_explicit_checkpoint_timestamp_over_date_only_fallback() -> None:
+    source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    observed_at = source[source.index('def _tracking_observed_at('):source.index('def _normalize_text(')]
+    assert 'if date_value and time_value:' in observed_at
+    assert 'checkpoint.get("timestamp")' in observed_at
+    assert 'checkpoint.get("dateTime")' in observed_at
+    assert 'if date_value:' in observed_at
+    assert 'T00:00:00' in observed_at
+    assert observed_at.index('checkpoint.get("timestamp")') < observed_at.rindex('T00:00:00')
+
+
 def test_tracking_refresh_bounds_provider_codes_before_persistence() -> None:
     source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
     assert 'MAX_TRACKING_STATUS_CODE_LENGTH = 60' in source
@@ -772,18 +783,24 @@ def test_booking_replay_runs_before_provider_call_gates() -> None:
     )
 
 
-def test_booking_reconciles_expired_claims_before_authoritative_subject_validation() -> None:
+def test_booking_reconciles_expired_claims_after_order_lock_and_before_provider_gates() -> None:
     source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
     booking_source = source[source.index("async def book_outbound_shipment"):]
-    assert "persisted_intent = await _load_persisted_booking_intent(" in booking_source
-    assert booking_source.index("persisted_intent = await _load_persisted_booking_intent(") < booking_source.index(
-        "await _reconcile_or_release_expired_claim"
+    first_subject_load = "order, package, seal, intent, package_version, cohort_ids = await _load_authoritative_subject"
+    assert first_subject_load in booking_source
+    assert "guard = await _load_or_create_guard(db, intent_id=intent.id)" in booking_source
+    assert booking_source.index(first_subject_load) < booking_source.index(
+        "guard = await _load_or_create_guard(db, intent_id=intent.id)"
     )
     assert booking_source.index("await _reconcile_or_release_expired_claim") < booking_source.index(
-        "await db.commit()"
+        'raise ShipmentPhase4Error("dhl domestic provider calls disabled")'
     )
-    assert booking_source.index("await db.commit()") < booking_source.index(
-        "order, package, seal, intent, package_version, cohort_ids = await _load_authoritative_subject"
+    recovery_reload = booking_source.split("if reconciliation_changed:", 1)[1].split(
+        "replay = await _matching_replay", 1
+    )[0]
+    assert "populate_existing=True" in recovery_reload
+    assert recovery_reload.index(first_subject_load) < recovery_reload.index(
+        "guard = await _load_or_create_guard(db, intent_id=intent.id)"
     )
     post_claim = booking_source.split("booking = await db.get(OutboundShipmentBooking, booking.id)", 1)[1]
     assert 'populate_existing=True' in post_claim.split('prepared_payload = adapter.prepare_booking_payload(', 1)[0]
@@ -962,6 +979,23 @@ def test_booking_reconciliation_acquires_guard_before_locking_booking_row() -> N
     reconcile = service_source.split('async def reconcile_unknown_booking_outcome(', 1)[1].split('async def _load_booking_for_order(', 1)[0]
     assert 'guard = await _load_or_create_guard(db, intent_id=booking.intent_id)' in reconcile
     assert reconcile.index('guard = await _load_or_create_guard(db, intent_id=booking.intent_id)') < reconcile.rindex('lock_for_update=True')
+
+
+def test_booking_replacement_path_locks_order_before_booking_guard() -> None:
+    service_source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    booking_source = service_source.split('async def book_outbound_shipment(', 1)[1].split(
+        'async def get_shipment_label(',
+        1,
+    )[0]
+    first_guard = 'guard = await _load_or_create_guard(db, intent_id=intent.id)'
+    assert 'await _load_authoritative_subject(' in booking_source
+    assert first_guard in booking_source
+    assert booking_source.index('await _load_authoritative_subject(') < booking_source.index(first_guard)
+    recovery_reload = booking_source.split('if reconciliation_changed:', 1)[1].split(
+        'replay = await _matching_replay',
+        1,
+    )[0]
+    assert recovery_reload.index('await _load_authoritative_subject(') < recovery_reload.index(first_guard)
 
 
 def test_booking_late_result_paths_lock_order_then_guard_then_booking() -> None:

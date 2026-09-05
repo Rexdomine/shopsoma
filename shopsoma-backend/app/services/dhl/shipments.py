@@ -1243,12 +1243,8 @@ def _tracking_observed_at(
 ) -> datetime | None:
     date_value = checkpoint.get("date")
     time_value = checkpoint.get("time")
-    combined_datetime = None
     if date_value and time_value:
         combined_datetime = f"{str(date_value).strip()}T{str(time_value).strip()}"
-    elif date_value:
-        combined_datetime = f"{str(date_value).strip()}T00:00:00"
-    if combined_datetime is not None:
         parsed = _utc_or_none(combined_datetime, naive_tz=DHL_TRACKING_LOCAL_TIMEZONE)
         if parsed is not None:
             return parsed
@@ -1259,6 +1255,13 @@ def _tracking_observed_at(
         response.get("timestamp"),
     ):
         parsed = _utc_or_none(candidate)
+        if parsed is not None:
+            return parsed
+    if date_value:
+        parsed = _utc_or_none(
+            f"{str(date_value).strip()}T00:00:00",
+            naive_tz=DHL_TRACKING_LOCAL_TIMEZONE,
+        )
         if parsed is not None:
             return parsed
     return None
@@ -1602,22 +1605,25 @@ async def book_outbound_shipment(
         if not (replay.classification == "pending" and replay.claim_expires_at <= now):
             return _booking_result(replay, replayed=True)
 
-    persisted_intent = await _load_persisted_booking_intent(
+    order, package, seal, intent, package_version, cohort_ids = await _load_authoritative_subject(
         db,
         order_id=order_id,
         command=command,
     )
+    quoted_service = await _load_persisted_quoted_service(db, intent_id=intent.id)
 
-    guard = await _load_or_create_guard(db, intent_id=persisted_intent.id)
+    guard = await _load_or_create_guard(db, intent_id=intent.id)
     reconciliation_changed = await _reconcile_or_release_expired_claim(db, guard=guard)
     if reconciliation_changed:
         await db.commit()
-        persisted_intent = await _load_persisted_booking_intent(
+        order, package, seal, intent, package_version, cohort_ids = await _load_authoritative_subject(
             db,
             order_id=order_id,
             command=command,
+            populate_existing=True,
         )
-        guard = await _load_or_create_guard(db, intent_id=persisted_intent.id)
+        quoted_service = await _load_persisted_quoted_service(db, intent_id=intent.id)
+        guard = await _load_or_create_guard(db, intent_id=intent.id)
     replay = await _matching_replay(db, order_id=order_id, command=command)
     if replay is not None:
         return _booking_result(replay, replayed=True)
@@ -1631,13 +1637,6 @@ async def book_outbound_shipment(
             raise ShipmentPhase4ConflictError(
                 f"booking already exists for intent in state {active.outbound_state}"
             )
-
-    order, package, seal, intent, package_version, cohort_ids = await _load_authoritative_subject(
-        db,
-        order_id=order_id,
-        command=command,
-    )
-    quoted_service = await _load_persisted_quoted_service(db, intent_id=intent.id)
 
     request_fingerprint = hashlib.sha256(
         f"{intent.id}:{package.id}:{package.current_version}:{seal.id}".encode("utf-8")
