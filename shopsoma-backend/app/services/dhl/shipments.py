@@ -2451,6 +2451,8 @@ async def refresh_tracking(
     try:
         observations = list(await adapter.track(booking.tracking_number))
     except (DHLAPIError, TimeoutError) as exc:
+        if isinstance(exc, TimeoutError) or getattr(exc, "retryable", False):
+            raise ShipmentPhase4UnavailableError(str(exc)) from exc
         raise ShipmentPhase4Error(str(exc)) from exc
     if not observations:
         raise ShipmentPhase4Error("tracking adapter returned no observations")

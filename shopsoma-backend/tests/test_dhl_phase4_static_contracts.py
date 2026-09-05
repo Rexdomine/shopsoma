@@ -534,6 +534,8 @@ def test_tracking_refresh_translates_transport_failures_into_service_errors() ->
     source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
     refresh_source = source[source.index("async def refresh_tracking"):]
     assert 'except (DHLAPIError, TimeoutError) as exc:' in refresh_source
+    assert 'if isinstance(exc, TimeoutError) or getattr(exc, "retryable", False):' in refresh_source
+    assert 'raise ShipmentPhase4UnavailableError(str(exc)) from exc' in refresh_source
     assert 'raise ShipmentPhase4Error(str(exc)) from exc' in refresh_source
 
 
