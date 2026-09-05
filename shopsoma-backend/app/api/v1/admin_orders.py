@@ -107,6 +107,25 @@ async def _broadcast_order_update(order: Order) -> None:
         logger.exception("[WebSocket] Failed to broadcast update for order %s", order.id)
 
 
+async def _notify_order_status_change(
+    db: AsyncSession,
+    *,
+    order: Order,
+    old_status: FulfillmentStatus | None,
+) -> None:
+    if old_status is None or old_status == order.fulfillment_status:
+        return
+    notification_service = OrderNotificationService(db)
+    try:
+        await notification_service.notify_status_change(
+            order=order,
+            new_status=order.fulfillment_status,
+            pickup_details=None,
+        )
+    except Exception:
+        logger.exception("Failed to send notifications for order %s", order.id)
+
+
 # ============================================================================
 # HELPER FUNCTIONS
 # ============================================================================
@@ -1168,9 +1187,13 @@ async def refresh_dhl_tracking(
     settings: Settings = Depends(get_app_settings),
 ):
     try:
+        parsed_order_id = UUID(order_id)
+        old_status = await db.scalar(
+            select(Order.fulfillment_status).where(Order.id == parsed_order_id)
+        )
         result = await refresh_tracking(
             db,
-            order_id=UUID(order_id),
+            order_id=parsed_order_id,
             settings=settings,
             command=TrackingRefreshCommand(
                 booking_id=payload.booking_id,
@@ -1179,9 +1202,17 @@ async def refresh_dhl_tracking(
         )
         await db.commit()
         order = (
-            await db.execute(select(Order).where(Order.id == UUID(order_id)))
+            await db.execute(
+                select(Order)
+                .options(
+                    selectinload(Order.customer),
+                    selectinload(Order.items),
+                )
+                .where(Order.id == parsed_order_id)
+            )
         ).scalar_one_or_none()
         if order is not None:
+            await _notify_order_status_change(db, order=order, old_status=old_status)
             await _broadcast_order_update(order)
         return result
     except ValueError as exc:

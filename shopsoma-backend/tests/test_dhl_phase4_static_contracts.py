@@ -552,6 +552,22 @@ def test_tracking_refresh_aggregates_order_status_across_package_bookings() -> N
     assert 'return min(active_states, key=_state_rank)' in source
 
 
+def test_tracking_refresh_derives_delivered_at_from_all_current_packages() -> None:
+    source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    helper = source[source.index('async def _aggregate_order_delivered_at('):source.index('async def _project_order_tracking_number(')]
+    refresh = source[source.index('async def refresh_tracking('):source.index('async def reconcile_unknown_booking_outcome(')]
+    assert 'select(HubPackage.id, HubPackage.current_version).where(' in helper
+    assert 'latest_by_package: dict[tuple[uuid.UUID, int], OutboundShipmentBooking]' in helper
+    assert 'if set(latest_by_package) != current_packages:' in helper
+    assert 'if any(booking.outbound_state != "delivered"' in helper
+    assert 'func.max(OutboundShipmentTrackingSnapshot.observed_at)' in helper
+    assert 'OutboundShipmentTrackingSnapshot.outbound_state == "delivered"' in helper
+    assert 'never let the just-refreshed package alone open payout hold time early' in helper
+    assert 'return max(cast(datetime, delivered_at) for delivered_at in delivered_values)' in helper
+    assert 'order.delivered_at = await _aggregate_order_delivered_at(' in refresh
+    assert 'fallback=order.delivered_at' in refresh
+
+
 def test_tracking_refresh_folds_all_checkpoints_before_advancing_state() -> None:
     source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
     refresh = source[source.index('async def refresh_tracking('):source.index('async def reconcile_unknown_booking_outcome(')]
@@ -908,9 +924,26 @@ def test_admin_tracking_refresh_broadcasts_committed_projection_to_websocket_cli
     assert 'async def _broadcast_order_update(order: Order) -> None:' in api_source
     assert 'await ws_manager.send_order_update(order_id=str(order.id), data=broadcast_data)' in api_source
     assert 'await db.commit()' in refresh_route
-    assert 'await db.execute(select(Order).where(Order.id == UUID(order_id)))' in refresh_route
+    assert 'parsed_order_id = UUID(order_id)' in refresh_route
+    assert '.where(Order.id == parsed_order_id)' in refresh_route
     assert 'await _broadcast_order_update(order)' in refresh_route
     assert refresh_route.index('await db.commit()') < refresh_route.index('await _broadcast_order_update(order)')
+
+
+def test_admin_tracking_refresh_notifies_committed_status_transition_once() -> None:
+    api_source = (ROOT / 'app' / 'api' / 'v1' / 'admin_orders.py').read_text()
+    helper = api_source[api_source.index('async def _notify_order_status_change('):api_source.index('# ============================================================================')]
+    refresh_route = api_source.split('@router.post("/{order_id}/dhl/tracking-refresh", response_model=DHLTrackingRefreshResult)', 1)[1].split('@router.post("/{order_id}/cancel")', 1)[0]
+    assert 'old_status = await db.scalar(' in refresh_route
+    assert 'select(Order.fulfillment_status).where(Order.id == parsed_order_id)' in refresh_route
+    assert 'selectinload(Order.customer)' in refresh_route
+    assert 'selectinload(Order.items)' in refresh_route
+    assert 'await _notify_order_status_change(db, order=order, old_status=old_status)' in refresh_route
+    assert 'if old_status is None or old_status == order.fulfillment_status:' in helper
+    assert 'notification_service = OrderNotificationService(db)' in helper
+    assert 'await notification_service.notify_status_change(' in helper
+    assert refresh_route.index('await db.commit()') < refresh_route.index('await _notify_order_status_change(')
+    assert refresh_route.index('await _notify_order_status_change(') < refresh_route.index('await _broadcast_order_update(order)')
 
 
 def test_admin_dhl_handoff_broadcasts_committed_projection_to_websocket_clients() -> None:

@@ -7,11 +7,11 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta, tzinfo
 from types import SimpleNamespace
-from typing import Protocol, Sequence
+from typing import Protocol, Sequence, cast
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -744,6 +744,82 @@ async def _aggregate_order_outbound_state(
         latest_by_package[key] = candidate.outbound_state
     aggregate_state = _aggregate_order_shipment_state(list(latest_by_package.values()))
     return aggregate_state or fallback
+
+
+async def _aggregate_order_delivered_at(
+    db: AsyncSession,
+    *,
+    order_id: uuid.UUID,
+    fallback: datetime | None,
+) -> datetime | None:
+    packages = (
+        await db.execute(
+            select(HubPackage.id, HubPackage.current_version).where(
+                HubPackage.order_id == order_id
+            )
+        )
+    ).all()
+    if not packages:
+        return fallback
+
+    current_packages = {
+        (package_id, current_version) for package_id, current_version in packages
+    }
+    bookings = (
+        await db.execute(
+            select(OutboundShipmentBooking)
+            .where(
+                OutboundShipmentBooking.order_id == order_id,
+                OutboundShipmentBooking.classification == "success",
+            )
+            .order_by(
+                OutboundShipmentBooking.package_id,
+                OutboundShipmentBooking.package_version,
+                OutboundShipmentBooking.result_recorded_at.desc(),
+                OutboundShipmentBooking.created_at.desc(),
+            )
+        )
+    ).scalars().all()
+    latest_by_package: dict[tuple[uuid.UUID, int], OutboundShipmentBooking] = {}
+    for candidate in bookings:
+        key = (candidate.package_id, candidate.package_version)
+        if key not in current_packages or candidate.outbound_state == "cancelled":
+            continue
+        if key in latest_by_package:
+            continue
+        latest_by_package[key] = candidate
+    if set(latest_by_package) != current_packages:
+        return fallback
+    if any(booking.outbound_state != "delivered" for booking in latest_by_package.values()):
+        return fallback
+
+    delivered_rows = (
+        await db.execute(
+            # Aggregate delivery truth must come from every current package booking;
+            # never let the just-refreshed package alone open payout hold time early.
+            select(
+                OutboundShipmentTrackingSnapshot.booking_id,
+                func.max(OutboundShipmentTrackingSnapshot.observed_at),
+            )
+            .where(
+                OutboundShipmentTrackingSnapshot.booking_id.in_(
+                    [booking.id for booking in latest_by_package.values()]
+                ),
+                OutboundShipmentTrackingSnapshot.outbound_state == "delivered",
+            )
+            .group_by(OutboundShipmentTrackingSnapshot.booking_id)
+        )
+    ).all()
+    delivered_at_by_booking = {
+        booking_id: delivered_at for booking_id, delivered_at in delivered_rows
+    }
+    delivered_values = [
+        delivered_at_by_booking.get(booking.id)
+        for booking in latest_by_package.values()
+    ]
+    if any(delivered_at is None for delivered_at in delivered_values):
+        return fallback
+    return max(cast(datetime, delivered_at) for delivered_at in delivered_values)
 
 
 async def _project_order_tracking_number(
@@ -2444,7 +2520,11 @@ async def refresh_tracking(
                                 current_state != "delivered" or order.delivered_at is None
                             )
                         ):
-                            order.delivered_at = effective_tracking_snapshot.observed_at
+                            order.delivered_at = await _aggregate_order_delivered_at(
+                                db,
+                                order_id=booking.order_id,
+                                fallback=order.delivered_at,
+                            )
                     elif aggregate_state == "exception":
                         order.fulfillment_status = FulfillmentStatus.DELIVERY_FAILED
             refresh = OutboundShipmentTrackingRefresh(
