@@ -862,6 +862,24 @@ def test_booking_reconciles_expired_claims_after_order_lock_and_before_provider_
     assert post_claim.index('order, package, seal, intent, package_version, _ = await _load_authoritative_subject(') < post_claim.index('prepared_payload = adapter.prepare_booking_payload(')
 
 
+def test_booking_reacquires_recovered_quote_after_call_boundary_commit() -> None:
+    source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    booking_source = source[source.index("async def book_outbound_shipment"):]
+    call_boundary = booking_source.split('booking.call_started_at = called_at', 1)[1].split(
+        'adapter_result = await adapter.book(',
+        1,
+    )[0]
+    assert 'await db.commit()' in call_boundary
+    assert call_boundary.index('await db.commit()') < call_boundary.index(
+        'quoted_service = await _load_persisted_quoted_service(db, intent_id=intent.id)'
+    )
+    assert '_recover_selected_quote_if_needed(' in call_boundary
+    assert call_boundary.index('_recover_selected_quote_if_needed(') < call_boundary.rindex(
+        'prepared_payload = adapter.prepare_booking_payload('
+    )
+    assert 'booking.planned_ship_date = quoted_service.planned_ship_date' in call_boundary
+
+
 def test_booking_expiry_reconciliation_preserves_no_call_boundary_marker() -> None:
     source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
     claim_source = source[source.index("async def _reconcile_or_release_expired_claim"):source.index("async def _load_or_create_guard")]
@@ -921,16 +939,16 @@ def test_phase4_booking_binds_selected_quote_to_source_hub_version_before_provid
     assert 'quoted_hub_version != current_hub_version' in source
     assert 'async def _load_shadow_quote_recovery_service(' in source
     assert 'def _selected_quote_requires_recovery(' in source
+    assert 'async def _recover_selected_quote_if_needed(' in source
     assert 'DomesticRateAttempt.source_command == "admin_shadow_quote"' in source
     assert 'DomesticRateAttempt.classification == "success"' in source
     assert 'DomesticRateResponse.expires_at >= now' in source
     assert 'DomesticRateOffer.provider_product_code == selected_service.product_code' in source
     assert 'DomesticRateOffer.provider_service_code == selected_service.service_code' in source
     assert 'DomesticRateAttempt.planned_ship_date >= minimum_planned_ship_date' in source
-    assert 'if _selected_quote_requires_recovery(' in source
+    assert 'if not _selected_quote_requires_recovery(' in source
     assert 'recovered_service = await _load_shadow_quote_recovery_service(' in source
-    assert 'if recovered_service is not None:' in source
-    assert 'quoted_service = recovered_service' in source
+    assert 'return recovered_service or quoted_service' in source
     assert 'booking.planned_ship_date = planned_ship_date' in source
     assert 'selected dhl quote hub version changed; refresh quote before booking' in source
     assert 'planned_ship_date = quoted_service.planned_ship_date' in source

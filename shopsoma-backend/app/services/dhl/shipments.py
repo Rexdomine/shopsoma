@@ -1647,6 +1647,31 @@ async def _load_shadow_quote_recovery_service(
     )
 
 
+async def _recover_selected_quote_if_needed(
+    db: AsyncSession,
+    *,
+    intent: OutboundShipmentIntent,
+    hub: FulfillmentHub,
+    quoted_service: QuotedShipmentService,
+) -> QuotedShipmentService:
+    minimum_planned_ship_date = _planned_ship_date_for_shadow_quote(intent.created_at)
+    current_hub_version = getattr(hub, "version", None)
+    if not _selected_quote_requires_recovery(
+        quoted_service=quoted_service,
+        hub_version=current_hub_version,
+        minimum_planned_ship_date=minimum_planned_ship_date,
+    ):
+        return quoted_service
+    recovered_service = await _load_shadow_quote_recovery_service(
+        db,
+        intent_id=intent.id,
+        selected_service=quoted_service,
+        hub_version=current_hub_version,
+        minimum_planned_ship_date=minimum_planned_ship_date,
+    )
+    return recovered_service or quoted_service
+
+
 def _selected_quote_requires_recovery(
     *,
     quoted_service: QuotedShipmentService,
@@ -1784,26 +1809,14 @@ async def book_outbound_shipment(
         ).scalar_one_or_none()
         if hub is None:
             raise ShipmentPhase4Error("origin hub not found")
-        minimum_planned_ship_date = _planned_ship_date_for_shadow_quote(
-            intent.created_at
-        )
-        current_hub_version = getattr(hub, "version", None)
-        if _selected_quote_requires_recovery(
+        quoted_service = await _recover_selected_quote_if_needed(
+            db,
+            intent=intent,
+            hub=hub,
             quoted_service=quoted_service,
-            hub_version=current_hub_version,
-            minimum_planned_ship_date=minimum_planned_ship_date,
-        ):
-            recovered_service = await _load_shadow_quote_recovery_service(
-                db,
-                intent_id=intent.id,
-                selected_service=quoted_service,
-                hub_version=current_hub_version,
-                minimum_planned_ship_date=minimum_planned_ship_date,
-            )
-            if recovered_service is not None:
-                quoted_service = recovered_service
-                planned_ship_date = quoted_service.planned_ship_date
-                booking.planned_ship_date = planned_ship_date
+        )
+        planned_ship_date = quoted_service.planned_ship_date
+        booking.planned_ship_date = planned_ship_date
         prepared_payload = adapter.prepare_booking_payload(
             intent,
             order,
@@ -1887,6 +1900,13 @@ async def book_outbound_shipment(
         if hub is None:
             raise ShipmentPhase4Error("origin hub not found")
         quoted_service = await _load_persisted_quoted_service(db, intent_id=intent.id)
+        quoted_service = await _recover_selected_quote_if_needed(
+            db,
+            intent=intent,
+            hub=hub,
+            quoted_service=quoted_service,
+        )
+        booking.planned_ship_date = quoted_service.planned_ship_date
         prepared_payload = adapter.prepare_booking_payload(
             intent,
             order,
