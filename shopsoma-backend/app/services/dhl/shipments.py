@@ -2702,6 +2702,8 @@ async def reconcile_unknown_booking_outcome(
 
     if booking.classification != "unknown" or booking.failure_code != "unknown_outcome":
         if command.resolution == "confirm_success" and booking.classification == "success":
+            if booking.reconciliation_resolution != "confirm_success":
+                raise ShipmentPhase4ConflictError("booking is not awaiting reconciliation")
             if (
                 booking.provider_reference != provider_reference
                 or booking.tracking_number != tracking_number

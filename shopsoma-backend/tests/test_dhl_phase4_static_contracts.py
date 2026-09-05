@@ -1202,6 +1202,7 @@ def test_confirm_success_replay_requires_same_provider_label_evidence() -> None:
         'async def _load_booking_for_order(',
         1,
     )[0]
+    assert 'if booking.reconciliation_resolution != "confirm_success":' in reconcile
     assert 'recovered_label_sha256 = hashlib.sha256(recovered_label_content).hexdigest()' in reconcile
     assert 'or booking.label_media_type != recovered_label_media_type' in reconcile
     assert 'or booking.label_sha256 != recovered_label_sha256' in reconcile
