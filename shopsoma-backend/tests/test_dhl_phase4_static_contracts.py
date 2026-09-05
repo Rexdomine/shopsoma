@@ -14,6 +14,7 @@ from app.services.dhl.client import DHLAPIError, DHLConfigurationError
 from app.services.dhl.shipments import (
     _is_definitive_booking_rejection,
     _is_unique_constraint_violation,
+    _tracking_observed_at,
     create_shipment_adapter,
     ShipmentPhase4Error,
 )
@@ -492,6 +493,17 @@ def test_tracking_refresh_prefers_explicit_checkpoint_timestamp_over_date_only_f
     assert 'if date_value:' in observed_at
     assert 'T00:00:00' in observed_at
     assert observed_at.index('checkpoint.get("timestamp")') < observed_at.rindex('T00:00:00')
+
+
+def test_tracking_refresh_prefers_checkpoint_date_over_envelope_timestamp() -> None:
+    observed_at = _tracking_observed_at(
+        checkpoint={"date": "2026-09-05"},
+        shipment={"timestamp": "2026-09-05T12:00:00Z"},
+        response={"timestamp": "2026-09-05T13:00:00Z"},
+    )
+
+    assert observed_at is not None
+    assert observed_at.isoformat() == "2026-09-05T00:00:00+01:00"
 
 
 def test_tracking_refresh_bounds_provider_codes_before_persistence() -> None:

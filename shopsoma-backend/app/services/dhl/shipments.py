@@ -1251,8 +1251,6 @@ def _tracking_observed_at(
     for candidate in (
         checkpoint.get("timestamp"),
         checkpoint.get("dateTime"),
-        shipment.get("timestamp"),
-        response.get("timestamp"),
     ):
         parsed = _utc_or_none(candidate)
         if parsed is not None:
@@ -1262,6 +1260,13 @@ def _tracking_observed_at(
             f"{str(date_value).strip()}T00:00:00",
             naive_tz=DHL_TRACKING_LOCAL_TIMEZONE,
         )
+        if parsed is not None:
+            return parsed
+    for candidate in (
+        shipment.get("timestamp"),
+        response.get("timestamp"),
+    ):
+        parsed = _utc_or_none(candidate)
         if parsed is not None:
             return parsed
     return None
