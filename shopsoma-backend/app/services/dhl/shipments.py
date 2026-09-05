@@ -1864,56 +1864,65 @@ async def book_outbound_shipment(
         # as unknown instead of releasing the guard for a duplicate shipment.
         await db.commit()
 
-        order, package, seal, intent, package_version, _ = await _load_authoritative_subject(
-            db,
-            order_id=order_id,
-            command=command,
-            populate_existing=True,
-        )
-        guard = await _load_guard_for_intent(
-            db,
-            intent_id=intent.id,
-            lock_for_update=True,
-            populate_existing=True,
-        )
-        booking = await _load_booking_for_order(
-            db,
-            order_id=order_id,
-            booking_id=booking.id,
-            lock_for_update=True,
-            populate_existing=True,
-        )
-        if not _booking_still_pending_owner(booking, guard):
-            return _booking_result(
-                booking,
-                replayed=False,
-                note="stale provider call skipped after booking ownership changed",
+        while True:
+            order, package, seal, intent, package_version, _ = await _load_authoritative_subject(
+                db,
+                order_id=order_id,
+                command=command,
+                populate_existing=True,
             )
-        hub = (
-            await db.execute(
-                select(FulfillmentHub)
-                .where(FulfillmentHub.id == intent.origin_hub_id)
-                .execution_options(populate_existing=True)
-                .with_for_update()
+            guard = await _load_guard_for_intent(
+                db,
+                intent_id=intent.id,
+                lock_for_update=True,
+                populate_existing=True,
             )
-        ).scalar_one_or_none()
-        if hub is None:
-            raise ShipmentPhase4Error("origin hub not found")
-        quoted_service = await _load_persisted_quoted_service(db, intent_id=intent.id)
-        quoted_service = await _recover_selected_quote_if_needed(
-            db,
-            intent=intent,
-            hub=hub,
-            quoted_service=quoted_service,
-        )
-        booking.planned_ship_date = quoted_service.planned_ship_date
-        prepared_payload = adapter.prepare_booking_payload(
-            intent,
-            order,
-            hub,
-            package_version,
-            quoted_service,
-        )
+            booking = await _load_booking_for_order(
+                db,
+                order_id=order_id,
+                booking_id=booking.id,
+                lock_for_update=True,
+                populate_existing=True,
+            )
+            if not _booking_still_pending_owner(booking, guard):
+                return _booking_result(
+                    booking,
+                    replayed=False,
+                    note="stale provider call skipped after booking ownership changed",
+                )
+            hub = (
+                await db.execute(
+                    select(FulfillmentHub)
+                    .where(FulfillmentHub.id == intent.origin_hub_id)
+                    .execution_options(populate_existing=True)
+                    .with_for_update()
+                )
+            ).scalar_one_or_none()
+            if hub is None:
+                raise ShipmentPhase4Error("origin hub not found")
+            quoted_service = await _load_persisted_quoted_service(db, intent_id=intent.id)
+            quoted_service = await _recover_selected_quote_if_needed(
+                db,
+                intent=intent,
+                hub=hub,
+                quoted_service=quoted_service,
+            )
+            if booking.planned_ship_date != quoted_service.planned_ship_date:
+                booking.planned_ship_date = quoted_service.planned_ship_date
+                await db.flush()
+                # Persist any recovered post-boundary quote/date before DHL.
+                # The adapter must never receive a fresher planned ship date
+                # than the durable booking audit can later reconstruct.
+                await db.commit()
+                continue
+            prepared_payload = adapter.prepare_booking_payload(
+                intent,
+                order,
+                hub,
+                package_version,
+                quoted_service,
+            )
+            break
         # Keep the refreshed package/seal/intent snapshot locked across the
         # provider call so a concurrent mutation cannot invalidate the payload
         # between durable call-start evidence and DHL acceptance.

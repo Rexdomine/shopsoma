@@ -275,6 +275,25 @@ def test_order_status_routes_block_manual_dhl_carrier_transitions() -> None:
     assert 'FulfillmentStatus.RETURNED.value' in legacy_status_route
 
 
+def test_phase4_booking_persists_post_boundary_recovered_quote_before_dhl_call() -> None:
+    source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    adapter_call = 'adapter_result = await adapter.book('
+    call_start_to_provider = source[source.index('booking.call_started_at = called_at'):source.index(adapter_call)]
+
+    assert 'while True:' in call_start_to_provider
+    assert 'quoted_service = await _recover_selected_quote_if_needed(' in call_start_to_provider
+    assert 'if booking.planned_ship_date != quoted_service.planned_ship_date:' in call_start_to_provider
+    assert 'booking.planned_ship_date = quoted_service.planned_ship_date' in call_start_to_provider
+    assert 'Persist any recovered post-boundary quote/date before DHL' in call_start_to_provider
+    assert 'await db.commit()\n                continue' in call_start_to_provider
+    assert call_start_to_provider.index('if booking.planned_ship_date != quoted_service.planned_ship_date:') < call_start_to_provider.index(
+        'prepared_payload = adapter.prepare_booking_payload('
+    )
+    assert call_start_to_provider.index('await db.commit()\n                continue') < call_start_to_provider.index(
+        'prepared_payload = adapter.prepare_booking_payload('
+    )
+
+
 def test_phase4_booking_persists_unknown_outcome_when_success_flush_hits_unique_provider_conflict() -> None:
     source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
     adapter_call = 'adapter_result = await adapter.book('
