@@ -103,6 +103,10 @@ class ShipmentPhase4ReconciliationRequiredError(ShipmentPhase4ConflictError):
     pass
 
 
+class ShipmentPhase4UnavailableError(ShipmentPhase4Error):
+    pass
+
+
 class ShipmentPhase4UnknownOutcomeError(ShipmentPhase4Error):
     pass
 
@@ -480,7 +484,7 @@ def create_shipment_adapter(settings: Settings) -> ShipmentAdapter:
     try:
         return DHLShipmentAdapter(settings)
     except DHLConfigurationError as exc:
-        raise ShipmentPhase4Error(str(exc)) from exc
+        raise ShipmentPhase4UnavailableError(str(exc)) from exc
 
 
 def _provider_safe_booking_party(
@@ -1749,9 +1753,9 @@ async def book_outbound_shipment(
     ).hexdigest()
 
     if not _setting_bool(settings, "DHL_DOMESTIC_WORKFLOW_ENABLED", "dhl_domestic_workflow_enabled"):
-        raise ShipmentPhase4Error("dhl domestic workflow disabled")
+        raise ShipmentPhase4UnavailableError("dhl domestic workflow disabled")
     if not _setting_bool(settings, "DHL_DOMESTIC_PROVIDER_CALLS_ENABLED", "dhl_domestic_provider_calls_enabled"):
-        raise ShipmentPhase4Error("dhl domestic provider calls disabled")
+        raise ShipmentPhase4UnavailableError("dhl domestic provider calls disabled")
     _ensure_sandbox_booking_allowed(settings, cohort_ids=cohort_ids)
     adapter = adapter or create_shipment_adapter(settings)
 
@@ -2436,7 +2440,7 @@ async def refresh_tracking(
     if replay is not None:
         return replay
     if not _setting_bool(settings, "DHL_DOMESTIC_WORKFLOW_ENABLED", "dhl_domestic_workflow_enabled"):
-        raise ShipmentPhase4Error("dhl domestic workflow disabled")
+        raise ShipmentPhase4UnavailableError("dhl domestic workflow disabled")
     cohort_ids = await _package_cohort_ids(
         db,
         package_id=booking.package_id,

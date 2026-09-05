@@ -67,6 +67,7 @@ from app.services.dhl.shipments import (
     ShipmentPhase4ConflictError,
     ShipmentPhase4Error,
     ShipmentPhase4ReconciliationRequiredError,
+    ShipmentPhase4UnavailableError,
     book_outbound_shipment,
     ensure_order_cancellation_allowed,
     ensure_order_manual_dhl_status_write_allowed,
@@ -1059,6 +1060,8 @@ async def create_dhl_booking(
         status_code = status.HTTP_400_BAD_REQUEST
         if detail == "order not found":
             status_code = status.HTTP_404_NOT_FOUND
+        elif isinstance(exc, ShipmentPhase4UnavailableError):
+            status_code = status.HTTP_503_SERVICE_UNAVAILABLE
         elif isinstance(exc, ShipmentPhase4ReconciliationRequiredError):
             status_code = status.HTTP_409_CONFLICT
         elif isinstance(exc, ShipmentPhase4ConflictError):
@@ -1238,6 +1241,8 @@ async def refresh_dhl_tracking(
         status_code = status.HTTP_400_BAD_REQUEST
         if detail == "booking not found for order":
             status_code = status.HTTP_404_NOT_FOUND
+        elif isinstance(exc, ShipmentPhase4UnavailableError):
+            status_code = status.HTTP_503_SERVICE_UNAVAILABLE
         elif isinstance(exc, ShipmentPhase4ConflictError):
             status_code = status.HTTP_409_CONFLICT
         raise HTTPException(status_code=status_code, detail=detail) from exc

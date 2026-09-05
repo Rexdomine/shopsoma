@@ -18,6 +18,7 @@ from app.services.dhl.shipments import (
     _tracking_observed_at,
     create_shipment_adapter,
     ShipmentPhase4Error,
+    ShipmentPhase4UnavailableError,
 )
 
 
@@ -536,6 +537,28 @@ def test_tracking_refresh_translates_transport_failures_into_service_errors() ->
     assert 'raise ShipmentPhase4Error(str(exc)) from exc' in refresh_source
 
 
+def test_dhl_disabled_gate_errors_return_service_unavailable() -> None:
+    service_source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    admin_source = (ROOT / "app" / "api" / "v1" / "admin_orders.py").read_text()
+    booking_route = admin_source.split('async def create_dhl_booking(', 1)[1].split(
+        'async def reconcile_dhl_booking(',
+        1,
+    )[0]
+    tracking_route = admin_source.split('async def refresh_dhl_tracking(', 1)[1].split(
+        '@router.post("/{order_id}/cancel")',
+        1,
+    )[0]
+
+    assert issubclass(ShipmentPhase4UnavailableError, ShipmentPhase4Error)
+    assert 'class ShipmentPhase4UnavailableError(ShipmentPhase4Error):' in service_source
+    assert 'raise ShipmentPhase4UnavailableError(str(exc)) from exc' in service_source
+    assert 'raise ShipmentPhase4UnavailableError("dhl domestic workflow disabled")' in service_source
+    assert 'raise ShipmentPhase4UnavailableError("dhl domestic provider calls disabled")' in service_source
+    assert 'ShipmentPhase4UnavailableError' in admin_source
+    assert 'status_code = status.HTTP_503_SERVICE_UNAVAILABLE' in booking_route
+    assert 'status_code = status.HTTP_503_SERVICE_UNAVAILABLE' in tracking_route
+
+
 def test_tracking_refresh_bounds_checkpoint_detail_before_persistence() -> None:
     source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
     assert 'MAX_TRACKING_DETAIL_LENGTH = 240' in source
@@ -887,10 +910,10 @@ def test_tracking_refresh_sets_delivered_at_only_on_first_delivery_transition() 
 def test_booking_replay_runs_before_provider_call_gates() -> None:
     source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
     assert source.index("replay = await _matching_replay") < source.index(
-        'raise ShipmentPhase4Error("dhl domestic provider calls disabled")'
+        'raise ShipmentPhase4UnavailableError("dhl domestic provider calls disabled")'
     )
     assert source.index("await _reconcile_or_release_expired_claim") < source.index(
-        'raise ShipmentPhase4Error("dhl domestic provider calls disabled")'
+        'raise ShipmentPhase4UnavailableError("dhl domestic provider calls disabled")'
     )
 
 
@@ -904,7 +927,7 @@ def test_booking_reconciles_expired_claims_after_order_lock_and_before_provider_
         "guard = await _load_or_create_guard(db, intent_id=intent.id)"
     )
     assert booking_source.index("await _reconcile_or_release_expired_claim") < booking_source.index(
-        'raise ShipmentPhase4Error("dhl domestic provider calls disabled")'
+        'raise ShipmentPhase4UnavailableError("dhl domestic provider calls disabled")'
     )
     recovery_reload = booking_source.split("if reconciliation_changed:", 1)[1].split(
         "replay = await _matching_replay", 1
@@ -1224,7 +1247,7 @@ def test_tracking_refresh_replay_runs_before_workflow_gate_and_skips_provider_ca
     source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
     refresh_source = source[source.index("async def refresh_tracking"):]
     assert refresh_source.index("replay = await _matching_tracking_replay") < refresh_source.index(
-        'raise ShipmentPhase4Error("dhl domestic workflow disabled")'
+        'raise ShipmentPhase4UnavailableError("dhl domestic workflow disabled")'
     )
     assert 'raise ShipmentPhase4Error("dhl domestic provider calls disabled")' not in refresh_source
 
