@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.schemas.admin_order import DHLHandoffRequest
 from app.schemas.admin_order import DHLBookingReconciliationRequest
+from app.services.order_notification_service import OrderNotificationService
 from app.services.dhl.client import DHLAPIError, DHLConfigurationError
 from app.services.dhl.shipments import (
     _is_definitive_booking_rejection,
@@ -168,6 +169,42 @@ def test_phase4_tracking_preserves_terminal_exception_marker_from_all_codes() ->
     assert 'def _tracking_exception_code(' in source
     assert 'if code in TERMINAL_TRACKING_EXCEPTION_CODES' in source
     assert 'exception_code=_tracking_exception_code(' in source
+
+
+def test_order_status_customer_email_formats_amounts_in_order_currency() -> None:
+    service = OrderNotificationService(db=cast(Any, None))
+    customer = SimpleNamespace(full_name="Ada Customer", email="ada@example.com")
+    order = SimpleNamespace(
+        order_number="SS-USD-001",
+        currency="USD",
+        total_amount=125.5,
+        created_at=datetime(2026, 9, 5, tzinfo=UTC),
+        estimated_delivery_date=None,
+        tracking_number="DHL123",
+        delivery_provider="DHL",
+        items=[
+            SimpleNamespace(product_title="Silk Dress", quantity=1, subtotal=125.5),
+        ],
+    )
+
+    html = service._build_customer_email(
+        customer=cast(Any, customer),
+        order=cast(Any, order),
+        status_config={"title": "In Transit", "message": "Your order is in transit."},
+    )
+
+    assert "$125.50" in html
+    assert "₦125.50" not in html
+    source = (ROOT / "app" / "services" / "order_notification_service.py").read_text()
+    customer_template = source.split("def _build_customer_email(", 1)[1].split(
+        "async def _create_vendor_notification(",
+        1,
+    )[0]
+    assert 'order_currency = getattr(order, "currency", None) or "NGN"' in customer_template
+    assert "self.email_service._format_amount(item.subtotal, order_currency)" in customer_template
+    assert "self.email_service._format_amount(order.total_amount, order_currency)" in customer_template
+    assert "₦{item.subtotal" not in customer_template
+    assert "₦{order.total_amount" not in customer_template
 
 
 def test_phase4_tracking_snapshot_uniqueness_deduplicates_null_exception_codes() -> None:
