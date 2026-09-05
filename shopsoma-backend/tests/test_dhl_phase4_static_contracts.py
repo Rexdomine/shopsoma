@@ -136,7 +136,9 @@ def test_phase4_booking_locks_and_rejects_cancelled_orders_before_provider_call(
         adapter_call,
         1,
     )[0]
-    assert 'await db.commit()' in segment
+    assert 'await db.flush()' in segment
+    assert 'await db.commit()' not in segment
+    assert 'Keep the locked package/seal/intent snapshot open across the provider' in segment
     assert 'from app.services.admin_shadow_quote import (' in source
     assert '_blank_optional_text_to_none,' in source
     assert 'def _provider_safe_booking_party(' in source
@@ -273,7 +275,8 @@ def test_phase4_booking_persists_unknown_outcome_when_success_flush_hits_unique_
     assert 'constraint_name="uq_outbound_shipment_bookings_provider_reference"' in source
     assert 'constraint_name="uq_outbound_shipment_bookings_tracking"' in source
     assert 'booking.call_started_at = called_at' in source
-    assert 'await db.commit()' in source[source.index('booking.call_started_at = called_at'):source.index(adapter_call)]
+    assert 'await db.flush()' in source[source.index('booking.call_started_at = called_at'):source.index(adapter_call)]
+    assert 'await db.commit()' not in source[source.index('booking.call_started_at = called_at'):source.index(adapter_call)]
     success_reacquire = source[source.index('order = await _load_order(db, order_id=order_id, lock_for_update=True)'):source.index('completed_at = await db.scalar(text("SELECT clock_timestamp()"))')]
     assert success_reacquire.index('order = await _load_order(db, order_id=order_id, lock_for_update=True)') < success_reacquire.index('booking = await _load_booking_for_order(')
     success_tail = source[source.index('booking.classification = "success"'):]
@@ -583,7 +586,19 @@ def test_handoff_persists_delivered_at_when_delivery_is_preserved() -> None:
     handoff = source[source.index('async def record_collection_handoff('):source.index('async def refresh_tracking(')]
     assert 'order.fulfillment_status = FulfillmentStatus.DELIVERED' in handoff
     assert 'latest_tracking_snapshot.outbound_state == "delivered"' in handoff
-    assert 'order.delivered_at = latest_tracking_snapshot.observed_at' in handoff
+    assert 'order.delivered_at = await _aggregate_order_delivered_at(' in handoff
+    assert 'fallback=order.delivered_at' in handoff
+
+
+def test_handoff_derives_delivered_at_from_all_current_packages() -> None:
+    source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    handoff = source[source.index('async def record_collection_handoff('):source.index('async def refresh_tracking(')]
+    helper = source[source.index('async def _aggregate_order_delivered_at('):source.index('async def _project_order_tracking_number(')]
+    assert 'if set(latest_by_package) != current_packages:' in helper
+    assert 'if any(booking.outbound_state != "delivered"' in helper
+    assert 'return max(cast(datetime, delivered_at) for delivered_at in delivered_values)' in helper
+    assert 'order.delivered_at = await _aggregate_order_delivered_at(' in handoff
+    assert 'order.delivered_at = latest_tracking_snapshot.observed_at' not in handoff
 
 
 def test_effective_handoff_tracking_allows_newer_exception_to_supersede_delivery() -> None:
@@ -935,7 +950,9 @@ def test_admin_tracking_refresh_notifies_committed_status_transition_once() -> N
     helper = api_source[api_source.index('async def _notify_order_status_change('):api_source.index('# ============================================================================')]
     refresh_route = api_source.split('@router.post("/{order_id}/dhl/tracking-refresh", response_model=DHLTrackingRefreshResult)', 1)[1].split('@router.post("/{order_id}/cancel")', 1)[0]
     assert 'old_status = await db.scalar(' in refresh_route
-    assert 'select(Order.fulfillment_status).where(Order.id == parsed_order_id)' in refresh_route
+    assert 'select(Order.fulfillment_status)' in refresh_route
+    assert '.where(Order.id == parsed_order_id)' in refresh_route
+    assert '.with_for_update()' in refresh_route
     assert 'selectinload(Order.customer)' in refresh_route
     assert 'selectinload(Order.items)' in refresh_route
     assert 'await _notify_order_status_change(db, order=order, old_status=old_status)' in refresh_route
@@ -946,11 +963,26 @@ def test_admin_tracking_refresh_notifies_committed_status_transition_once() -> N
     assert refresh_route.index('await _notify_order_status_change(') < refresh_route.index('await _broadcast_order_update(order)')
 
 
+def test_admin_dhl_handoff_notifies_committed_status_transition_once() -> None:
+    api_source = (ROOT / 'app' / 'api' / 'v1' / 'admin_orders.py').read_text()
+    handoff_route = api_source.split('@router.post("/{order_id}/dhl/bookings/{booking_id}/handoff", response_model=DHLHandoffResult)', 1)[1].split('@router.post("/{order_id}/dhl/tracking-refresh", response_model=DHLTrackingRefreshResult)', 1)[0]
+    assert 'parsed_order_id = UUID(order_id)' in handoff_route
+    assert 'old_status = await db.scalar(' in handoff_route
+    assert 'select(Order.fulfillment_status)' in handoff_route
+    assert '.where(Order.id == parsed_order_id)' in handoff_route
+    assert '.with_for_update()' in handoff_route
+    assert 'selectinload(Order.customer)' in handoff_route
+    assert 'selectinload(Order.items)' in handoff_route
+    assert 'await _notify_order_status_change(db, order=order, old_status=old_status)' in handoff_route
+    assert handoff_route.index('await db.commit()') < handoff_route.index('await _notify_order_status_change(')
+    assert handoff_route.index('await _notify_order_status_change(') < handoff_route.index('await _broadcast_order_update(order)')
+
+
 def test_admin_dhl_handoff_broadcasts_committed_projection_to_websocket_clients() -> None:
     api_source = (ROOT / 'app' / 'api' / 'v1' / 'admin_orders.py').read_text()
     handoff_route = api_source.split('@router.post("/{order_id}/dhl/bookings/{booking_id}/handoff", response_model=DHLHandoffResult)', 1)[1].split('@router.post("/{order_id}/dhl/tracking-refresh", response_model=DHLTrackingRefreshResult)', 1)[0]
     assert 'await db.commit()' in handoff_route
-    assert 'await db.execute(select(Order).where(Order.id == UUID(order_id)))' in handoff_route
+    assert '.where(Order.id == parsed_order_id)' in handoff_route
     assert 'await _broadcast_order_update(order)' in handoff_route
     assert handoff_route.index('await db.commit()') < handoff_route.index('await _broadcast_order_update(order)')
 

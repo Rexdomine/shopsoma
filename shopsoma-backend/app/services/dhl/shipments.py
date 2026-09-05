@@ -1845,7 +1845,9 @@ async def book_outbound_shipment(
         called_at = await db.scalar(text("SELECT clock_timestamp()"))
         booking.call_started_at = called_at
         await db.flush()
-        await db.commit()
+        # Keep the locked package/seal/intent snapshot open across the provider
+        # call so a concurrent mutation cannot invalidate the payload between
+        # local call-start evidence and DHL acceptance.
         adapter_result = await adapter.book(
             intent,
             order,
@@ -2309,15 +2311,15 @@ async def record_collection_handoff(
             order.fulfillment_status = FulfillmentStatus.OUT_FOR_DELIVERY
         elif aggregate_state == "delivered":
             order.fulfillment_status = FulfillmentStatus.DELIVERED
-            if (
-                latest_tracking_snapshot is not None
-                and latest_tracking_snapshot.outbound_state == "delivered"
-                and (
-                    order.delivered_at is None
-                    or latest_tracking_snapshot.observed_at > order.delivered_at
-                )
+            if latest_tracking_snapshot is not None and (
+                latest_tracking_snapshot.outbound_state == "delivered"
+                and order.delivered_at is None
             ):
-                order.delivered_at = latest_tracking_snapshot.observed_at
+                order.delivered_at = await _aggregate_order_delivered_at(
+                    db,
+                    order_id=booking.order_id,
+                    fallback=order.delivered_at,
+                )
         elif aggregate_state == "exception":
             order.fulfillment_status = FulfillmentStatus.DELIVERY_FAILED
     await db.flush()

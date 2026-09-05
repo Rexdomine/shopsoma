@@ -1146,9 +1146,15 @@ async def create_dhl_handoff(
     db: AsyncSession = Depends(get_db),
 ):
     try:
+        parsed_order_id = UUID(order_id)
+        old_status = await db.scalar(
+            select(Order.fulfillment_status)
+            .where(Order.id == parsed_order_id)
+            .with_for_update()
+        )
         result = await record_collection_handoff(
             db,
-            order_id=UUID(order_id),
+            order_id=parsed_order_id,
             admin=admin,
             command=HandoffCommand(
                 booking_id=UUID(booking_id),
@@ -1161,9 +1167,17 @@ async def create_dhl_handoff(
         )
         await db.commit()
         order = (
-            await db.execute(select(Order).where(Order.id == UUID(order_id)))
+            await db.execute(
+                select(Order)
+                .options(
+                    selectinload(Order.customer),
+                    selectinload(Order.items),
+                )
+                .where(Order.id == parsed_order_id)
+            )
         ).scalar_one_or_none()
         if order is not None:
+            await _notify_order_status_change(db, order=order, old_status=old_status)
             await _broadcast_order_update(order)
         return result
     except ValueError as exc:
@@ -1189,7 +1203,9 @@ async def refresh_dhl_tracking(
     try:
         parsed_order_id = UUID(order_id)
         old_status = await db.scalar(
-            select(Order.fulfillment_status).where(Order.id == parsed_order_id)
+            select(Order.fulfillment_status)
+            .where(Order.id == parsed_order_id)
+            .with_for_update()
         )
         result = await refresh_tracking(
             db,
