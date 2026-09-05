@@ -1845,9 +1845,58 @@ async def book_outbound_shipment(
         called_at = await db.scalar(text("SELECT clock_timestamp()"))
         booking.call_started_at = called_at
         await db.flush()
-        # Keep the locked package/seal/intent snapshot open across the provider
-        # call so a concurrent mutation cannot invalidate the payload between
-        # local call-start evidence and DHL acceptance.
+        # Persist the provider-boundary marker before invoking DHL. If the
+        # process crashes after DHL accepts the booking but before local result
+        # persistence, expired-claim reconciliation must classify the attempt
+        # as unknown instead of releasing the guard for a duplicate shipment.
+        await db.commit()
+
+        order, package, seal, intent, package_version, _ = await _load_authoritative_subject(
+            db,
+            order_id=order_id,
+            command=command,
+            populate_existing=True,
+        )
+        guard = await _load_guard_for_intent(
+            db,
+            intent_id=intent.id,
+            lock_for_update=True,
+            populate_existing=True,
+        )
+        booking = await _load_booking_for_order(
+            db,
+            order_id=order_id,
+            booking_id=booking.id,
+            lock_for_update=True,
+            populate_existing=True,
+        )
+        if not _booking_still_pending_owner(booking, guard):
+            return _booking_result(
+                booking,
+                replayed=False,
+                note="stale provider call skipped after booking ownership changed",
+            )
+        hub = (
+            await db.execute(
+                select(FulfillmentHub)
+                .where(FulfillmentHub.id == intent.origin_hub_id)
+                .execution_options(populate_existing=True)
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+        if hub is None:
+            raise ShipmentPhase4Error("origin hub not found")
+        quoted_service = await _load_persisted_quoted_service(db, intent_id=intent.id)
+        prepared_payload = adapter.prepare_booking_payload(
+            intent,
+            order,
+            hub,
+            package_version,
+            quoted_service,
+        )
+        # Keep the refreshed package/seal/intent snapshot locked across the
+        # provider call so a concurrent mutation cannot invalidate the payload
+        # between durable call-start evidence and DHL acceptance.
         adapter_result = await adapter.book(
             intent,
             order,

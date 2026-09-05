@@ -137,8 +137,15 @@ def test_phase4_booking_locks_and_rejects_cancelled_orders_before_provider_call(
         1,
     )[0]
     assert 'await db.flush()' in segment
-    assert 'await db.commit()' not in segment
-    assert 'Keep the locked package/seal/intent snapshot open across the provider' in segment
+    assert 'Persist the provider-boundary marker before invoking DHL' in segment
+    assert 'await db.commit()' in segment
+    assert segment.index('await db.commit()') < segment.index(
+        'order, package, seal, intent, package_version, _ = await _load_authoritative_subject('
+    )
+    assert 'populate_existing=True' in segment
+    assert '_booking_still_pending_owner(booking, guard)' in segment
+    assert 'stale provider call skipped after booking ownership changed' in segment
+    assert 'Keep the refreshed package/seal/intent snapshot locked across the' in segment
     assert 'from app.services.admin_shadow_quote import (' in source
     assert '_blank_optional_text_to_none,' in source
     assert 'def _provider_safe_booking_party(' in source
@@ -275,8 +282,13 @@ def test_phase4_booking_persists_unknown_outcome_when_success_flush_hits_unique_
     assert 'constraint_name="uq_outbound_shipment_bookings_provider_reference"' in source
     assert 'constraint_name="uq_outbound_shipment_bookings_tracking"' in source
     assert 'booking.call_started_at = called_at' in source
-    assert 'await db.flush()' in source[source.index('booking.call_started_at = called_at'):source.index(adapter_call)]
-    assert 'await db.commit()' not in source[source.index('booking.call_started_at = called_at'):source.index(adapter_call)]
+    call_start_to_provider = source[source.index('booking.call_started_at = called_at'):source.index(adapter_call)]
+    assert 'await db.flush()' in call_start_to_provider
+    assert 'await db.commit()' in call_start_to_provider
+    assert call_start_to_provider.index('await db.flush()') < call_start_to_provider.index('await db.commit()')
+    assert call_start_to_provider.index('await db.commit()') < call_start_to_provider.index(
+        'booking = await _load_booking_for_order('
+    )
     success_reacquire = source[source.index('order = await _load_order(db, order_id=order_id, lock_for_update=True)'):source.index('completed_at = await db.scalar(text("SELECT clock_timestamp()"))')]
     assert success_reacquire.index('order = await _load_order(db, order_id=order_id, lock_for_update=True)') < success_reacquire.index('booking = await _load_booking_for_order(')
     success_tail = source[source.index('booking.classification = "success"'):]
