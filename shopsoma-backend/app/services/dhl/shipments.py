@@ -5,10 +5,11 @@ import binascii
 import hashlib
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta, tzinfo
 from types import SimpleNamespace
 from typing import Protocol, Sequence
 from urllib.parse import quote
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
@@ -65,6 +66,7 @@ TRACKING_SCHEMA_VERSION = "domestic-tracking-v1"
 CANONICALIZATION_VERSION = "shipment-c14n-v1"
 CLAIM_TTL_SECONDS = 300
 NO_CHECKPOINTS_DETAIL = "Shipment booked with no downstream checkpoints yet"
+DHL_TRACKING_LOCAL_TIMEZONE = ZoneInfo("Africa/Lagos")
 MAX_BOOKING_PROVIDER_REFERENCE_LENGTH = 120
 MAX_BOOKING_TRACKING_NUMBER_LENGTH = 120
 MAX_ORDER_TRACKING_NUMBER_LENGTH = 100
@@ -1196,17 +1198,19 @@ async def _latest_effective_tracking_snapshot_for_handoff(
     return _highest_effective_tracking_snapshot_for_handoff(snapshots)
 
 
-def _utc_or_none(value: object) -> datetime | None:
+def _utc_or_none(value: object, *, naive_tz: tzinfo = UTC) -> datetime | None:
     if value is None:
         return None
     if isinstance(value, datetime):
-        return value if value.tzinfo else value.replace(tzinfo=UTC)
+        return value if value.tzinfo else value.replace(tzinfo=naive_tz)
     if isinstance(value, str):
         try:
             parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
         except ValueError:
             return None
-        return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=naive_tz)
+        return parsed
     return None
 
 
@@ -1244,10 +1248,13 @@ def _tracking_observed_at(
         combined_datetime = f"{str(date_value).strip()}T{str(time_value).strip()}"
     elif date_value:
         combined_datetime = f"{str(date_value).strip()}T00:00:00"
+    if combined_datetime is not None:
+        parsed = _utc_or_none(combined_datetime, naive_tz=DHL_TRACKING_LOCAL_TIMEZONE)
+        if parsed is not None:
+            return parsed
     for candidate in (
         checkpoint.get("timestamp"),
         checkpoint.get("dateTime"),
-        combined_datetime,
         shipment.get("timestamp"),
         response.get("timestamp"),
     ):
@@ -1323,16 +1330,18 @@ def _map_tracking_status(*codes: str) -> tuple[str, str]:
     }
     if normalized_codes & TERMINAL_TRACKING_EXCEPTION_CODES:
         return "exception", "delivery_exception"
+    if normalized_codes & {"DELIVERED"}:
+        return "delivered", "delivered"
     if normalized_codes & {"PU", "PICKUP_CONFIRMED", "COLLECTED"}:
         return "collected", "picked_up"
-    if normalized_codes & {"OK", "DELIVERED"}:
-        return "delivered", "delivered"
     if normalized_codes & {"OOD", "OUT_FOR_DELIVERY"}:
         return "out_for_delivery", "out_for_delivery"
     if normalized_codes & {"DEPARTED", "IN_TRANSIT", "ARRIVED_AT_SORT", "TRANSIT"}:
         return "in_transit", "in_transit"
     if normalized_codes & {"EXCEPTION", "HOLD", "RETURNED", "FAILURE"}:
         return "exception", "delivery_exception"
+    if normalized_codes & {"OK"}:
+        return "delivered", "delivered"
     return "booked", "label_created"
 
 
@@ -1723,16 +1732,18 @@ async def book_outbound_shipment(
             quoted_service,
         )
     except ShipmentPhase4Error as exc:
+        order = await _load_order(db, order_id=order_id, lock_for_update=True)
+        _ensure_order_not_cancelled(order, action="record late booking result")
+        guard = await _load_guard_for_intent(
+            db,
+            intent_id=intent.id,
+            lock_for_update=True,
+            populate_existing=True,
+        )
         booking = await _load_booking_for_order(
             db,
             order_id=order_id,
             booking_id=booking.id,
-            lock_for_update=True,
-            populate_existing=True,
-        )
-        guard = await _load_guard_for_intent(
-            db,
-            intent_id=intent.id,
             lock_for_update=True,
             populate_existing=True,
         )
@@ -1764,16 +1775,18 @@ async def book_outbound_shipment(
             prepared_payload=prepared_payload,
         )
     except (DHLAPIError, TimeoutError) as exc:
+        order = await _load_order(db, order_id=order_id, lock_for_update=True)
+        _ensure_order_not_cancelled(order, action="record late booking result")
+        guard = await _load_guard_for_intent(
+            db,
+            intent_id=intent.id,
+            lock_for_update=True,
+            populate_existing=True,
+        )
         booking = await _load_booking_for_order(
             db,
             order_id=order_id,
             booking_id=booking.id,
-            lock_for_update=True,
-            populate_existing=True,
-        )
-        guard = await _load_guard_for_intent(
-            db,
-            intent_id=intent.id,
             lock_for_update=True,
             populate_existing=True,
         )
@@ -1798,16 +1811,18 @@ async def book_outbound_shipment(
         await db.flush()
         return _booking_result(booking, replayed=False, note=str(exc))
     except ShipmentPhase4UnknownOutcomeError as exc:
+        order = await _load_order(db, order_id=order_id, lock_for_update=True)
+        _ensure_order_not_cancelled(order, action="record late booking result")
+        guard = await _load_guard_for_intent(
+            db,
+            intent_id=intent.id,
+            lock_for_update=True,
+            populate_existing=True,
+        )
         booking = await _load_booking_for_order(
             db,
             order_id=order_id,
             booking_id=booking.id,
-            lock_for_update=True,
-            populate_existing=True,
-        )
-        guard = await _load_guard_for_intent(
-            db,
-            intent_id=intent.id,
             lock_for_update=True,
             populate_existing=True,
         )
@@ -1820,16 +1835,18 @@ async def book_outbound_shipment(
         await _mark_booking_unknown_outcome(db, booking=booking, guard=guard)
         return _booking_result(booking, replayed=False, note=str(exc))
     except ShipmentPhase4Error as exc:
+        order = await _load_order(db, order_id=order_id, lock_for_update=True)
+        _ensure_order_not_cancelled(order, action="record late booking result")
+        guard = await _load_guard_for_intent(
+            db,
+            intent_id=intent.id,
+            lock_for_update=True,
+            populate_existing=True,
+        )
         booking = await _load_booking_for_order(
             db,
             order_id=order_id,
             booking_id=booking.id,
-            lock_for_update=True,
-            populate_existing=True,
-        )
-        guard = await _load_guard_for_intent(
-            db,
-            intent_id=intent.id,
             lock_for_update=True,
             populate_existing=True,
         )
@@ -1847,16 +1864,18 @@ async def book_outbound_shipment(
         )
         return _booking_result(booking, replayed=False, note=str(exc))
     except Exception as exc:
+        order = await _load_order(db, order_id=order_id, lock_for_update=True)
+        _ensure_order_not_cancelled(order, action="record late booking result")
+        guard = await _load_guard_for_intent(
+            db,
+            intent_id=intent.id,
+            lock_for_update=True,
+            populate_existing=True,
+        )
         booking = await _load_booking_for_order(
             db,
             order_id=order_id,
             booking_id=booking.id,
-            lock_for_update=True,
-            populate_existing=True,
-        )
-        guard = await _load_guard_for_intent(
-            db,
-            intent_id=intent.id,
             lock_for_update=True,
             populate_existing=True,
         )
@@ -1869,6 +1888,16 @@ async def book_outbound_shipment(
         await _mark_booking_unknown_outcome(db, booking=booking, guard=guard)
         return _booking_result(booking, replayed=False, note=str(exc))
 
+    order = await _load_order(db, order_id=order_id, lock_for_update=True)
+    _ensure_order_not_cancelled(order, action="record late booking result")
+    guard = (
+        await db.execute(
+            select(OutboundIntentShipmentGuard)
+            .where(OutboundIntentShipmentGuard.intent_id == intent.id)
+            .execution_options(populate_existing=True)
+            .with_for_update()
+        )
+    ).scalar_one()
     booking = (
         await db.execute(
             select(OutboundShipmentBooking)
@@ -1880,21 +1909,12 @@ async def book_outbound_shipment(
             .with_for_update()
         )
     ).scalar_one()
-    guard = (
-        await db.execute(
-            select(OutboundIntentShipmentGuard)
-            .where(OutboundIntentShipmentGuard.intent_id == intent.id)
-            .execution_options(populate_existing=True)
-            .with_for_update()
-        )
-    ).scalar_one()
     if not _booking_still_pending_owner(booking, guard):
         return _booking_result(
             booking,
             replayed=False,
             note="stale provider result ignored after booking ownership changed",
         )
-    order = await _load_order(db, order_id=order_id, lock_for_update=True)
     completed_at = await db.scalar(text("SELECT clock_timestamp()"))
     booked_at = adapter_result.booked_at or completed_at
     try:
@@ -1948,6 +1968,14 @@ async def book_outbound_shipment(
         if not _is_booking_success_persistence_conflict(exc):
             raise
         await db.rollback()
+        order = await _load_order(db, order_id=order_id, lock_for_update=True)
+        _ensure_order_not_cancelled(order, action="record late booking result")
+        guard = await _load_guard_for_intent(
+            db,
+            intent_id=intent.id,
+            lock_for_update=True,
+            populate_existing=True,
+        )
         booking = await _load_booking_for_order(
             db,
             order_id=order_id,
@@ -1955,12 +1983,12 @@ async def book_outbound_shipment(
             lock_for_update=True,
             populate_existing=True,
         )
-        guard = await _load_guard_for_intent(
-            db,
-            intent_id=intent.id,
-            lock_for_update=True,
-            populate_existing=True,
-        )
+        if not _booking_still_pending_owner(booking, guard):
+            return _booking_result(
+                booking,
+                replayed=False,
+                note="stale provider result ignored after booking ownership changed",
+            )
         await _mark_booking_unknown_outcome(db, booking=booking, guard=guard)
         return _booking_result(
             booking,
@@ -2481,6 +2509,7 @@ async def reconcile_unknown_booking_outcome(
         lock_for_update=True,
     )
 
+    recovered_label_sha256 = None
     if command.resolution == "confirm_success":
         provider_reference = _normalize_nonempty_text(
             command.provider_reference,
@@ -2493,6 +2522,7 @@ async def reconcile_unknown_booking_outcome(
         recovered_label_content = _decoded_reconciled_pdf_label_content(
             command.label_content_base64
         )
+        recovered_label_sha256 = hashlib.sha256(recovered_label_content).hexdigest()
         recovered_label_media_type = _validated_pdf_label_media_type(
             command.label_media_type
         )
@@ -2511,9 +2541,11 @@ async def reconcile_unknown_booking_outcome(
             if (
                 booking.provider_reference != provider_reference
                 or booking.tracking_number != tracking_number
+                or booking.label_media_type != recovered_label_media_type
+                or booking.label_sha256 != recovered_label_sha256
             ):
                 raise ShipmentPhase4ConflictError(
-                    "booking reconciliation does not match existing provider identifiers"
+                    "booking reconciliation does not match existing provider evidence"
                 )
             return _booking_result(booking, replayed=True)
         if command.resolution == "confirm_failure" and booking.classification == "failure":

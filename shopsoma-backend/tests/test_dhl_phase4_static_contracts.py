@@ -179,7 +179,21 @@ def test_phase4_tracking_status_prioritizes_terminal_exception_codes_over_moveme
     )[0]
     assert 'if normalized_codes & TERMINAL_TRACKING_EXCEPTION_CODES:' in segment
     assert segment.index('if normalized_codes & TERMINAL_TRACKING_EXCEPTION_CODES:') < segment.index('if normalized_codes & {"PU", "PICKUP_CONFIRMED", "COLLECTED"}:')
-    assert segment.index('if normalized_codes & TERMINAL_TRACKING_EXCEPTION_CODES:') < segment.index('if normalized_codes & {"OK", "DELIVERED"}:')
+    assert segment.index('if normalized_codes & TERMINAL_TRACKING_EXCEPTION_CODES:') < segment.index('if normalized_codes & {"OK"}:')
+
+
+def test_phase4_tracking_status_lets_specific_movement_codes_override_generic_ok() -> None:
+    source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    segment = source.split('def _map_tracking_status(*codes: str) -> tuple[str, str]:', 1)[1].split(
+        'async def _load_authoritative_subject(',
+        1,
+    )[0]
+    assert segment.index('if normalized_codes & {"OOD", "OUT_FOR_DELIVERY"}:') < segment.index(
+        'if normalized_codes & {"OK"}:'
+    )
+    assert segment.index('if normalized_codes & {"DEPARTED", "IN_TRANSIT", "ARRIVED_AT_SORT", "TRANSIT"}:') < segment.index(
+        'if normalized_codes & {"OK"}:'
+    )
 
 
 def test_order_cancellation_blocks_inflight_dhl_bookings_after_call_start() -> None:
@@ -453,6 +467,17 @@ def test_tracking_refresh_translates_transport_failures_into_service_errors() ->
 def test_tracking_refresh_bounds_checkpoint_detail_before_persistence() -> None:
     source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
     assert 'MAX_TRACKING_DETAIL_LENGTH = 240' in source
+
+
+def test_tracking_refresh_interprets_naive_dhl_checkpoint_times_as_lagos_local_time() -> None:
+    source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    observed_at = source[source.index('def _utc_or_none('):source.index('def _bounded_tracking_code(')]
+    assert 'from zoneinfo import ZoneInfo' in source
+    assert 'DHL_TRACKING_LOCAL_TIMEZONE = ZoneInfo("Africa/Lagos")' in source
+    assert 'def _utc_or_none(value: object, *, naive_tz: tzinfo = UTC) -> datetime | None:' in observed_at
+    assert 'parsed = parsed.replace(tzinfo=naive_tz)' in observed_at
+    assert '_utc_or_none(combined_datetime, naive_tz=DHL_TRACKING_LOCAL_TIMEZONE)' in observed_at
+    assert 'return parsed' in observed_at
     assert 'def _bounded_tracking_detail(value: object) -> str:' in source
     assert 'detail = _bounded_tracking_detail(' in source
     assert 'detail=observation.detail' in source
@@ -937,6 +962,53 @@ def test_booking_reconciliation_acquires_guard_before_locking_booking_row() -> N
     reconcile = service_source.split('async def reconcile_unknown_booking_outcome(', 1)[1].split('async def _load_booking_for_order(', 1)[0]
     assert 'guard = await _load_or_create_guard(db, intent_id=booking.intent_id)' in reconcile
     assert reconcile.index('guard = await _load_or_create_guard(db, intent_id=booking.intent_id)') < reconcile.rindex('lock_for_update=True')
+
+
+def test_booking_late_result_paths_lock_order_then_guard_then_booking() -> None:
+    service_source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    booking_source = service_source.split('async def book_outbound_shipment(', 1)[1].split(
+        'async def get_shipment_label(',
+        1,
+    )[0]
+    late_result_action = '_ensure_order_not_cancelled(order, action="record late booking result")'
+    assert late_result_action in booking_source
+    late_success = booking_source.split('        return _booking_result(booking, replayed=False, note=str(exc))\n\n    order = await _load_order(db, order_id=order_id, lock_for_update=True)', 1)[1].split(
+        'completed_at = await db.scalar(text("SELECT clock_timestamp()"))',
+        1,
+    )[0]
+    assert late_success.index('_ensure_order_not_cancelled(order, action="record late booking result")') < late_success.index(
+        'select(OutboundIntentShipmentGuard)'
+    )
+    assert late_success.index('select(OutboundIntentShipmentGuard)') < late_success.index(
+        'select(OutboundShipmentBooking)'
+    )
+    assert booking_source.count(late_result_action) >= 6
+
+
+def test_booking_success_conflict_rechecks_owner_before_unknown_outcome() -> None:
+    service_source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    conflict_branch = service_source.split('except IntegrityError as exc:', 1)[1].split(
+        'note="provider success persistence conflict"',
+        1,
+    )[0]
+    assert conflict_branch.index('guard = await _load_guard_for_intent(') < conflict_branch.index(
+        'booking = await _load_booking_for_order('
+    )
+    assert conflict_branch.index('if not _booking_still_pending_owner(booking, guard):') < conflict_branch.index(
+        'await _mark_booking_unknown_outcome(db, booking=booking, guard=guard)'
+    )
+
+
+def test_confirm_success_replay_requires_same_provider_label_evidence() -> None:
+    service_source = (ROOT / "app" / "services" / "dhl" / "shipments.py").read_text()
+    reconcile = service_source.split('async def reconcile_unknown_booking_outcome(', 1)[1].split(
+        'async def _load_booking_for_order(',
+        1,
+    )[0]
+    assert 'recovered_label_sha256 = hashlib.sha256(recovered_label_content).hexdigest()' in reconcile
+    assert 'or booking.label_media_type != recovered_label_media_type' in reconcile
+    assert 'or booking.label_sha256 != recovered_label_sha256' in reconcile
+    assert 'booking reconciliation does not match existing provider evidence' in reconcile
 
 
 def test_phase4_reconciliation_success_requires_a_valid_pdf_label() -> None:
