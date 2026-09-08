@@ -48,6 +48,8 @@ services:
         value: staging
       - key: DEBUG
         value: false
+      - key: DHL_ENVIRONMENT
+        value: sandbox
       - key: LOG_LEVEL
         value: INFO
       - key: DATABASE_ECHO
@@ -98,7 +100,7 @@ services:
     plan: starter
     branch: develop
     buildCommand: "cd shopsoma-backend && pip install -r requirements.txt"
-    startCommand: "cd shopsoma-backend && celery -A app.celery_app:celery_app worker --loglevel=info"
+    startCommand: "cd shopsoma-backend && celery -A app.celery_app:celery_app worker --loglevel=info --pool=solo --concurrency=1"
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.11
