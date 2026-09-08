@@ -1,7 +1,7 @@
 import asyncio
 import base64
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, patch
@@ -27,6 +27,10 @@ from app.services.dhl.shipments import (
 DUMMY_USERNAME = "dummy-api-user"
 DUMMY_PASSWORD = "dummy-api-password"
 DUMMY_ACCOUNT = "123456789"
+
+
+def future_planned_ship_date():
+    return (datetime.now(UTC) + timedelta(days=2)).date()
 
 
 def make_settings(**overrides) -> Settings:
@@ -635,7 +639,7 @@ async def test_booking_adapter_omits_blank_optional_address_line2() -> None:
                     product_code="N",
                     service_code="N_P",
                     hub_version=1,
-                    planned_ship_date=datetime.fromisoformat("2026-09-05T00:00:00+00:00").date(),
+                    planned_ship_date=future_planned_ship_date(),
                 ),
             ),
         )
@@ -715,7 +719,7 @@ async def test_booking_adapter_uses_provider_safe_addresses_and_required_content
                     product_code="N",
                     service_code="N_P",
                     hub_version=1,
-                    planned_ship_date=datetime.fromisoformat("2026-09-05T00:00:00+00:00").date(),
+                    planned_ship_date=future_planned_ship_date(),
                 ),
             ),
         )
@@ -791,7 +795,7 @@ async def test_booking_adapter_preflight_rejects_invalid_address_before_provider
                     product_code="N",
                     service_code="N_P",
                     hub_version=1,
-                    planned_ship_date=datetime.fromisoformat("2026-09-05T00:00:00+00:00").date(),
+                    planned_ship_date=future_planned_ship_date(),
                 ),
             ),
             )
