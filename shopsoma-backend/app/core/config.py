@@ -7,12 +7,17 @@ configuration from environment variables.
 import re
 from typing import List, Literal, Optional
 from uuid import UUID
-
-from pydantic import AliasChoices, Field, SecretStr
-from pydantic_settings import BaseSettings
+from pydantic import AliasChoices, Field, SecretStr, model_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="forbid",
+    )
+
     # Application Settings
     APP_NAME: str = "Shopsoma"
     ENVIRONMENT: str = "development"
@@ -241,12 +246,8 @@ class Settings(BaseSettings):
     # Default Currency
     DEFAULT_CURRENCY: str = "NGN"
 
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        extra = "forbid"
-
-    def model_post_init(self, __context) -> None:
+    @model_validator(mode="after")
+    def _validate_settings(self):
         environment = self.ENVIRONMENT.lower()
 
         if self.DHL_ENABLED:
@@ -304,6 +305,7 @@ class Settings(BaseSettings):
                 raise ValueError(
                     f"Object storage is enabled but required settings are missing: {missing}"
                 )
+        return self
 
     @staticmethod
     def _build_async_db_url(database_url: str) -> str:
@@ -318,6 +320,5 @@ class Settings(BaseSettings):
     @staticmethod
     def get_masked_db_url(database_url: str) -> str:
         return re.sub(r"://([^:]+):([^@]+)@", r"://\\1:***@", database_url)
-
 
 settings = Settings()

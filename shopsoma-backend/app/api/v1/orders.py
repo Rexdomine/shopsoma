@@ -33,6 +33,10 @@ from app.models.stock_payment_persistence import (
     StockReservation,
     coordinate_catalog_write,
 )
+from app.services.dhl.shipments import (
+    ShipmentPhase4ConflictError,
+    ensure_order_cancellation_allowed,
+)
 from app.schemas.order import (
     OrderCreate,
     OrderUpdate,
@@ -1446,16 +1450,17 @@ async def get_order_tracking(
                 detail="Not authorized to view this order",
             )
 
-    # Generate tracking ID based on order number
-    tracking_id = f"GB{order.order_number.replace('-', '')[-8:]}"
+    # Prefer the persisted carrier tracking number when available; otherwise fall back
+    # to the legacy synthetic public identifier.
+    tracking_id = order.tracking_number or f"GB{order.order_number.replace('-', '')[-8:]}"
 
     # Map fulfillment status to tracking status (new 7-status system)
     # Matches frontend OrderStatus type in orderService.ts
     status_map = {
         FulfillmentStatus.ORDER_RECEIVED: "order_placed",
-        FulfillmentStatus.PREPARING_FOR_PICKUP: "in_transit",
-        FulfillmentStatus.PICKUP_SCHEDULED: "in_transit",
-        FulfillmentStatus.PICKED_UP: "in_transit",
+        FulfillmentStatus.PREPARING_FOR_PICKUP: "order_placed",
+        FulfillmentStatus.PICKUP_SCHEDULED: "order_placed",
+        FulfillmentStatus.PICKED_UP: "picked_up",
         FulfillmentStatus.IN_TRANSIT: "in_transit",
         FulfillmentStatus.OUT_FOR_DELIVERY: "out_for_delivery",
         FulfillmentStatus.DELIVERED: "delivered",
@@ -1479,17 +1484,21 @@ async def get_order_tracking(
             }
         )
 
-    # In Transit (consolidates preparing/scheduled/picked_up/in_transit)
-    if order.fulfillment_status in [
-        FulfillmentStatus.PREPARING_FOR_PICKUP,
-        FulfillmentStatus.PICKUP_SCHEDULED,
-        FulfillmentStatus.PICKED_UP,
-        FulfillmentStatus.IN_TRANSIT,
-    ]:
+    # In Transit
+    if order.fulfillment_status == FulfillmentStatus.IN_TRANSIT:
         history.append(
             {
                 "status": "in_transit",
                 "description": "Order is in transit to you",
+                "occurred_at": order.updated_at.isoformat(),
+            }
+        )
+
+    if order.fulfillment_status == FulfillmentStatus.PICKED_UP:
+        history.append(
+            {
+                "status": "picked_up",
+                "description": "Order has been collected by the courier",
                 "occurred_at": order.updated_at.isoformat(),
             }
         )
@@ -1558,6 +1567,7 @@ async def get_order_tracking(
         "order_id": str(order.id),
         "order_number": order.order_number,
         "tracking_id": tracking_id,
+        "tracking_number": order.tracking_number,
         "amount": float(order.total_amount),
         "currency": currency,
         "updated_at": order.updated_at.isoformat(),
@@ -1628,6 +1638,14 @@ async def cancel_order(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Cannot cancel order while payment outcome is unresolved",
             )
+
+    try:
+        await ensure_order_cancellation_allowed(db, order_id=order.id)
+    except ShipmentPhase4ConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
 
     # Cancel order
     order.fulfillment_status = FulfillmentStatus.CANCELLED

@@ -38,7 +38,7 @@ Every write requires the actor, source event/command, idempotency key, aggregate
 - **Vendor preparation:** the order service notifies the vendor only after verified payment. The vendor may only acknowledge, start preparing, or mark ready. Only ShopSoma operations or the server SLA policy may place a block; only ShopSoma operations may resolve blocked to preparing or ready. Vendor reports may provide evidence for an operations decision but cannot execute either transition.
 - **Independent inbound:** operations plans the transfer only after payment and vendor readiness. The inbound provider/operations attest acceptance and vendor handoff; only the inbound provider attests movement. Hub operators record partial or complete receipt and condition evidence; an evidenced hub receipt is authoritative even when the latest provider status is delayed, so it may advance directly from delayed to partial or complete receipt. This movement is never DHL `in transit`.
 - **Hub:** hub services derive receipt/QC queues and cohort readiness. Assigned hub operators perform QC, package recording, measurement, and sealing. The audited package version, composition, and active seal are bound to quote, booking, label, handoff, and evidence; `DomesticRateRequest` and every returned `DomesticRate` carry the same immutable `PackageRef`, so a rate cannot be detached from the package ID, version, measurements, composition, or seal it priced. A changed composition or seal fails closed and requires a new audited version and new rate. QC admin owns failed-QC remediation; a hub supervisor alone authorizes pre-handoff unseal. Shipping policy derives DHL readiness only for a valid destination, final package/rate, active seal, and no shipping exception.
-- **DHL outbound:** shipment-intent/service actors create one hub-origin intent and booking. The DHL adapter supplies label/cancellation results. Operations schedules accepted hub collection. Only a verified DHL event records acceptance handoff, carrier movement, out-for-delivery, delivery, exception, and return movement. Completing a return is instead a ShopSoma hub command that requires both verified DHL return evidence and the ShopSoma hub return receipt. Carrier-only DHL movement starts after verified DHL handoff; operations cannot manually assert it.
+- **DHL outbound:** shipment-intent/service actors create one hub-origin intent and booking. The DHL adapter supplies label/cancellation results. Operations schedules accepted hub collection. Only a verified DHL event records acceptance handoff, carrier movement, out-for-delivery, delivery, exception, and return movement. Completing a return is instead a ShopSoma hub command that requires both verified DHL return evidence and the ShopSoma hub return receipt. Carrier-only DHL movement starts after verified DHL handoff; operations cannot manually assert it. Booking must also fail closed when the selected quote's persisted DHL rate-attempt hub version no longer matches the current hub version.
 
 All transitions require optimistic concurrency, evidence, and an idempotency key. External events are unique by `(source, event_id)` as well as idempotency key. A duplicate is resolved before validating the aggregate's already-advanced or terminal state and must match the durably persisted original aggregate identity, machine, prior state, action, external identity, idempotency key, destination, and result version; the aggregate's current version/state must prove it reached that persisted result. Only then may the policy return the matching durably persisted transition result with recursively immutable replay metadata and no repeated side effect. A duplicate without that durable result, or any illegal, stale, unsupported, mismatched, misrouted, or under-evidenced new transition, fails closed.
 
@@ -166,7 +166,7 @@ Use synthetic data and retain sanitized request/result evidence for every row. A
 ### Phase B — booking and label
 
 - Exactly one booking for one immutable package version/seal/idempotency key.
-- Replay and ambiguous-timeout reconciliation without duplicate shipment.
+- Replay and ambiguous-timeout reconciliation without duplicate shipment; a manual `confirm_failure` retry-release requires durable private provider-absence evidence.
 - Private label receipt, type/format validation, storage, redaction, and access expiry.
 - Invalid package/service/account and changed package version fail closed.
 - Provider cancellation/void capability is separately evidenced; never infer it from pickup cancellation.
@@ -226,3 +226,12 @@ The only active model is independent inbound to the ShopSoma hub, followed by hu
 - `shopsoma-backend/app/services/shipping/capabilities.py`
 - `shopsoma-backend/app/core/config.py`
 - `shopsoma-backend/app/services/dhl/client.py`
+
+### Phase 4 booking/label/hand-off/tracking slice (2026-09-02)
+- 3 additive ORM tables: outbound_intent_shipment_guards, outbound_shipment_bookings, outbound_shipment_tracking_snapshots
+- Service: DHLBookingAdapter (idempotency via request_fingerprint SHA-256, claim_ttl 300s, unknown-outcome reconciliation gate)
+- Routes on admin_orders: POST /dhl/bookings, GET /dhl/bookings/{id}/label, POST /dhl/bookings/{id}/handoff, POST /dhl/tracking-refresh (feature-gated via DHL_DOMESTIC_*_ENABLED)
+- Migration head: 1c2b3d4e (revises 1c2b3d3a repair_domestic_rate_custody_guards)
+- Tests: 7 RED at fixture layer (wrong ORM kwargs booked_at→claim_expires_at; S mock missing DHL_DOMESTIC_* flags; direct ORM construction instead of service API)
+- Verified: service compiles, models compile, pytest reaches live DB (port 5432, shopsoma_dev) and executes all 7 tests
+- Branch: feat/dhl-phase4-booking-label-tracking (from develop d2bfa74)

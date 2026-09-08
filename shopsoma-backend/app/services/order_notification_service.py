@@ -403,6 +403,7 @@ class OrderNotificationService:
 
         # Get customer name
         customer_name = customer.full_name if customer.full_name else customer.email.split('@')[0].title()
+        order_currency = getattr(order, "currency", None) or "NGN"
 
         tracking_info = ""
         if order.tracking_number:
@@ -426,15 +427,18 @@ class OrderNotificationService:
         # Build items list for customer
         items_html = ""
         for item in order.items:
+            item_subtotal = self.email_service._format_amount(item.subtotal, order_currency)
             items_html += f"""
             <div style="padding:12px 0;border-bottom:1px solid #E5E7EB;">
                 <p style="margin:0;color:#111827;font-size:14px;font-weight:500;">{item.product_title}</p>
                 <div style="display:flex;justify-content:space-between;margin-top:4px;">
                     <p style="margin:0;color:#6B7280;font-size:13px;">Qty: {item.quantity}</p>
-                    <p style="margin:0;color:#111827;font-size:13px;font-weight:500;">₦{item.subtotal:,.2f}</p>
+                    <p style="margin:0;color:#111827;font-size:13px;font-weight:500;">{item_subtotal}</p>
                 </div>
             </div>
             """
+
+        order_total = self.email_service._format_amount(order.total_amount, order_currency)
 
         body_content = f"""
         <p style="margin:0 0 24px;color:#111827;font-size:14px;line-height:1.6;">Hello {customer_name},</p>
@@ -452,7 +456,7 @@ class OrderNotificationService:
             </div>
             <div style="background:#F9FAFB;padding:16px;border-radius:8px;">
                 <p style="margin:0;color:#6B7280;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;">Total Amount</p>
-                <p style="margin:4px 0 0;color:#111827;font-size:18px;font-weight:700;">₦{order.total_amount:,.2f}</p>
+                <p style="margin:4px 0 0;color:#111827;font-size:18px;font-weight:700;">{order_total}</p>
             </div>
         </div>
 

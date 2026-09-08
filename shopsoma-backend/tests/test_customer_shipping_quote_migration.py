@@ -14,11 +14,11 @@ from sqlalchemy.engine import make_url
 
 
 REVISION = "e8c0a2d4f6b8"
-HEAD = "e6f7a8b9c0d1"
-CURRENT_HEAD_PARENT = "d5e6f7a8b9c0"
-PREVIOUS_HEAD = "c4d5e6f7a8b9"
-HEAD_PARENT = "b3c4d5e6f7a8"
-HEAD_GRANDPARENT = "a2b3c4d5e6f7"
+HEAD = "1c2b3d4e"
+CURRENT_HEAD_PARENT = "e6f7a8b9c0d1"
+PREVIOUS_HEAD = "d5e6f7a8b9c0"
+HEAD_PARENT = "c4d5e6f7a8b9"
+HEAD_GRANDPARENT = "b3c4d5e6f7a8"
 EXPAND_REVISION = "a0b1c2d3e4f5"
 F9_REVISION = "f9d1b3e5a7c9"
 PARENT = "d7b9f1c3e5a8"
@@ -60,7 +60,8 @@ def test_customer_quote_revision_is_single_linear_head_and_owns_explicit_ddl() -
     assert script.get_revision(CURRENT_HEAD_PARENT).down_revision == PREVIOUS_HEAD
     assert script.get_revision(PREVIOUS_HEAD).down_revision == HEAD_PARENT
     assert script.get_revision(HEAD_PARENT).down_revision == HEAD_GRANDPARENT
-    assert script.get_revision(HEAD_GRANDPARENT).down_revision == "a1b2c3d4e5f6"
+    assert script.get_revision(HEAD_GRANDPARENT).down_revision == "a2b3c4d5e6f7"
+    assert script.get_revision("a2b3c4d5e6f7").down_revision == "a1b2c3d4e5f6"
     assert script.get_revision("a1b2c3d4e5f6").down_revision == EXPAND_REVISION
     assert script.get_revision(EXPAND_REVISION).down_revision == F9_REVISION
     assert script.get_revision(F9_REVISION).down_revision == REVISION

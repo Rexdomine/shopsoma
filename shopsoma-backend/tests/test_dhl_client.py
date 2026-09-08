@@ -1,6 +1,10 @@
 import asyncio
 import base64
 import logging
+from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
+from typing import Any, cast
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
@@ -11,11 +15,22 @@ from app.services.dhl.client import (
     DHLClient,
     DHLConfigurationError,
 )
+from app.services.dhl.shipments import (
+    _aggregate_order_shipment_state,
+    _highest_effective_tracking_snapshot_for_handoff,
+    _map_tracking_status,
+    DHLShipmentAdapter,
+    ShipmentPhase4Error,
+)
 
 
 DUMMY_USERNAME = "dummy-api-user"
 DUMMY_PASSWORD = "dummy-api-password"
 DUMMY_ACCOUNT = "123456789"
+
+
+def future_planned_ship_date():
+    return (datetime.now(UTC) + timedelta(days=2)).date()
 
 
 def make_settings(**overrides) -> Settings:
@@ -270,3 +285,519 @@ async def test_successful_non_json_response_is_rejected_safely() -> None:
     assert exc_info.value.retryable is False
     assert "invalid response" in str(exc_info.value).lower()
     assert "not-json" not in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    ("codes", "expected"),
+    [
+        (("PU",), ("collected", "picked_up")),
+        (("OK",), ("delivered", "delivered")),
+        (("OK", "RETURNED"), ("exception", "delivery_exception")),
+        (("PU", "FAILURE"), ("exception", "delivery_exception")),
+        (("TRANSIT",), ("in_transit", "in_transit")),
+        (("FAILURE",), ("exception", "delivery_exception")),
+        (("PU", "TRANSIT"), ("collected", "picked_up")),
+        (("UNKNOWN",), ("booked", "label_created")),
+    ],
+)
+def test_map_tracking_status_handles_real_mydhl_codes(
+    codes: tuple[str, ...],
+    expected: tuple[str, str],
+) -> None:
+    assert _map_tracking_status(*codes) == expected
+
+
+def test_aggregate_order_shipment_state_uses_slowest_non_cancelled_package() -> None:
+    assert _aggregate_order_shipment_state(["label_ready", "awaiting_collection"]) == "label_ready"
+    assert _aggregate_order_shipment_state(["awaiting_collection", "collected"]) == "awaiting_collection"
+    assert _aggregate_order_shipment_state(["collected", "in_transit"]) == "collected"
+    assert _aggregate_order_shipment_state(["delivered", "out_for_delivery"]) == "out_for_delivery"
+    assert _aggregate_order_shipment_state(["delivered", "in_transit"]) == "in_transit"
+    assert _aggregate_order_shipment_state(["delivered", "booked"]) == "booked"
+    assert _aggregate_order_shipment_state(["delivered", "delivered"]) == "delivered"
+    assert _aggregate_order_shipment_state(["cancelled", "delivered"]) == "delivered"
+    assert _aggregate_order_shipment_state(["exception", "delivered"]) == "exception"
+
+
+def test_handoff_snapshot_fold_preserves_highest_effective_state() -> None:
+    delivered = SimpleNamespace(
+        outbound_state="delivered",
+        observed_at=datetime.fromisoformat("2026-09-04T10:00:00+00:00"),
+        id="1",
+        exception_code=None,
+    )
+    delayed_in_transit = SimpleNamespace(
+        outbound_state="in_transit",
+        observed_at=datetime.fromisoformat("2026-09-04T11:00:00+00:00"),
+        id="2",
+        exception_code=None,
+    )
+
+    snapshots: list[Any] = [delivered, delayed_in_transit]
+    chosen = _highest_effective_tracking_snapshot_for_handoff(snapshots)
+
+    assert chosen is not None
+    assert chosen.snapshot is delivered
+    assert chosen.resolved_observed_at == delivered.observed_at
+
+
+def test_handoff_snapshot_fold_keeps_return_exception_sticky_against_later_movement() -> None:
+    delivered = SimpleNamespace(
+        outbound_state="delivered",
+        observed_at=datetime.fromisoformat("2026-09-04T10:00:00+00:00"),
+        id="1",
+        exception_code=None,
+    )
+    returned = SimpleNamespace(
+        outbound_state="exception",
+        observed_at=datetime.fromisoformat("2026-09-04T11:00:00+00:00"),
+        id="2",
+        exception_code="RETURNED",
+    )
+    pickup_after_return = SimpleNamespace(
+        outbound_state="collected",
+        observed_at=datetime.fromisoformat("2026-09-04T12:00:00+00:00"),
+        id="3",
+        exception_code=None,
+    )
+
+    snapshots: list[Any] = [delivered, returned, pickup_after_return]
+    chosen = _highest_effective_tracking_snapshot_for_handoff(snapshots)
+
+    assert chosen is not None
+    assert chosen.snapshot is returned
+    assert chosen.resolved_observed_at == returned.observed_at
+
+
+def test_handoff_snapshot_fold_allows_delivery_to_resolve_transient_exception() -> None:
+    hold = SimpleNamespace(
+        outbound_state="exception",
+        observed_at=datetime.fromisoformat("2026-09-04T10:00:00+00:00"),
+        id="1",
+        exception_code="HOLD",
+    )
+    delivered = SimpleNamespace(
+        outbound_state="delivered",
+        observed_at=datetime.fromisoformat("2026-09-04T11:00:00+00:00"),
+        id="2",
+        exception_code=None,
+    )
+
+    snapshots: list[Any] = [hold, delivered]
+    chosen = _highest_effective_tracking_snapshot_for_handoff(snapshots)
+
+    assert chosen is not None
+    assert chosen.snapshot is delivered
+    assert chosen.resolved_observed_at == delivered.observed_at
+
+
+def test_handoff_snapshot_fold_preserves_terminal_exception_across_later_transient_exception_and_delivery() -> None:
+    returned = SimpleNamespace(
+        outbound_state="exception",
+        observed_at=datetime.fromisoformat("2026-09-04T10:00:00+00:00"),
+        id="1",
+        exception_code="RETURNED",
+    )
+    hold = SimpleNamespace(
+        outbound_state="exception",
+        observed_at=datetime.fromisoformat("2026-09-04T11:00:00+00:00"),
+        id="2",
+        exception_code="HOLD",
+    )
+    delivered = SimpleNamespace(
+        outbound_state="delivered",
+        observed_at=datetime.fromisoformat("2026-09-04T12:00:00+00:00"),
+        id="3",
+        exception_code=None,
+    )
+
+    snapshots: list[Any] = [returned, hold, delivered]
+    chosen = _highest_effective_tracking_snapshot_for_handoff(snapshots)
+
+    assert chosen is not None
+    assert chosen.snapshot is returned
+    assert chosen.resolved_observed_at == returned.observed_at
+
+
+def test_handoff_snapshot_fold_restores_pre_exception_progress_when_transient_exception_clears() -> None:
+    out_for_delivery = SimpleNamespace(
+        outbound_state="out_for_delivery",
+        observed_at=datetime.fromisoformat("2026-09-04T10:00:00+00:00"),
+        id="1",
+        exception_code=None,
+    )
+    hold = SimpleNamespace(
+        outbound_state="exception",
+        observed_at=datetime.fromisoformat("2026-09-04T11:00:00+00:00"),
+        id="2",
+        exception_code="HOLD",
+    )
+    in_transit = SimpleNamespace(
+        outbound_state="in_transit",
+        observed_at=datetime.fromisoformat("2026-09-04T12:00:00+00:00"),
+        id="3",
+        exception_code=None,
+    )
+
+    snapshots: list[Any] = [out_for_delivery, hold, in_transit]
+    chosen = _highest_effective_tracking_snapshot_for_handoff(snapshots)
+
+    assert chosen is not None
+    assert chosen.snapshot is out_for_delivery
+    assert chosen.resolved_observed_at == in_transit.observed_at
+
+
+@pytest.mark.asyncio
+async def test_tracking_adapter_parses_mydhl_shipments_events_envelope() -> None:
+    tracking_response = {
+        "shipments": [
+            {
+                "events": [
+                    {
+                        "typeCode": "PU",
+                        "statusCode": "TRANSIT",
+                        "description": "Shipment collected",
+                        "date": "2026-09-03",
+                        "time": "13:45:00+01:00",
+                    },
+                    {
+                        "typeCode": "OK",
+                        "statusCode": "DELIVERED",
+                        "description": "Shipment delivered",
+                        "date": "2026-09-04",
+                        "time": "08:15:00+01:00",
+                    },
+                ]
+            }
+        ]
+    }
+    with patch(
+        "app.services.dhl.client.DHLClient.request_json",
+        new_callable=AsyncMock,
+        return_value=tracking_response,
+    ) as request_json:
+        adapter = DHLShipmentAdapter(make_settings())
+        observations = await adapter.track("TRACK123")
+
+    request_json.assert_awaited_once_with("GET", "/shipments/TRACK123/tracking")
+    assert [observation.provider_status_code for observation in observations] == [
+        "PU",
+        "OK",
+    ]
+    assert [observation.outbound_state for observation in observations] == [
+        "collected",
+        "delivered",
+    ]
+    assert observations[0].detail == "Shipment collected"
+    assert observations[0].observed_at.isoformat() == "2026-09-03T13:45:00+01:00"
+    assert observations[1].observed_at.isoformat() == "2026-09-04T08:15:00+01:00"
+
+
+@pytest.mark.asyncio
+async def test_tracking_adapter_preserves_terminal_exception_marker_from_all_codes() -> None:
+    tracking_response = {
+        "shipments": [
+            {
+                "events": [
+                    {
+                        "typeCode": "EXCEPTION",
+                        "statusCode": "RETURNED",
+                        "description": "Shipment returned",
+                        "dateTime": "2026-09-04T08:15:00+01:00",
+                    }
+                ]
+            }
+        ]
+    }
+    with patch(
+        "app.services.dhl.client.DHLClient.request_json",
+        new_callable=AsyncMock,
+        return_value=tracking_response,
+    ):
+        adapter = DHLShipmentAdapter(make_settings())
+        observations = await adapter.track("TRACK123")
+
+    assert len(observations) == 1
+    assert observations[0].outbound_state == "exception"
+    assert observations[0].exception_code == "RETURNED"
+
+
+@pytest.mark.asyncio
+async def test_tracking_adapter_url_encodes_tracking_number_path_segment() -> None:
+    tracking_response = {"shipments": []}
+    with patch(
+        "app.services.dhl.client.DHLClient.request_json",
+        new_callable=AsyncMock,
+        return_value=tracking_response,
+    ) as request_json:
+        adapter = DHLShipmentAdapter(make_settings())
+        await adapter.track("TRACK/123?#frag")
+
+    request_json.assert_awaited_once_with(
+        "GET",
+        "/shipments/TRACK%2F123%3F%23frag/tracking",
+    )
+
+
+@pytest.mark.asyncio
+async def test_tracking_adapter_skips_malformed_checkpoint_timestamp_candidates() -> None:
+    tracking_response = {
+        "shipments": [
+            {
+                "timestamp": "2026-09-04T08:15:00Z",
+                "events": [
+                    {
+                        "typeCode": "PU",
+                        "statusCode": "TRANSIT",
+                        "description": "Shipment collected",
+                        "timestamp": "not-a-timestamp",
+                        "dateTime": "2026-09-03T13:45:00+01:00",
+                    },
+                    {
+                        "typeCode": "OK",
+                        "statusCode": "DELIVERED",
+                        "description": "Shipment delivered",
+                        "timestamp": "still-bad",
+                    },
+                ],
+            }
+        ]
+    }
+    with patch(
+        "app.services.dhl.client.DHLClient.request_json",
+        new_callable=AsyncMock,
+        return_value=tracking_response,
+    ):
+        adapter = DHLShipmentAdapter(make_settings())
+        observations = await adapter.track("TRACK123")
+
+    assert observations[0].observed_at.isoformat() == "2026-09-03T13:45:00+01:00"
+    assert observations[1].observed_at.isoformat() == "2026-09-04T08:15:00+00:00"
+
+
+@pytest.mark.asyncio
+async def test_booking_adapter_omits_blank_optional_address_line2() -> None:
+    booking_response = {
+        "documents": [
+            {
+                "content": base64.b64encode(b"%PDF-1.4 label").decode(),
+                "mimeType": "application/pdf",
+            }
+        ],
+        "trackingNumber": "TRACK123",
+        "shipmentReference": "REF123",
+        "productCode": "N",
+        "timestamp": "2026-09-04T08:15:00Z",
+    }
+    with patch(
+        "app.services.dhl.client.DHLClient.request_json",
+        new_callable=AsyncMock,
+        return_value=booking_response,
+    ) as request_json:
+        adapter = DHLShipmentAdapter(make_settings())
+        await adapter.book(
+            cast(
+                Any,
+                SimpleNamespace(
+                    created_at=datetime.fromisoformat("2026-09-04T08:00:00+00:00"),
+                    destination_country_code="NG",
+                    destination_postal_code=None,
+                    destination_city="Lagos",
+                    destination_state="Lagos",
+                    destination_address_line1="123 Example Street",
+                    destination_address_line2="   ",
+                    destination_name="Receiver Name",
+                    destination_phone="08030000000",
+                ),
+            ),
+            cast(Any, SimpleNamespace()),
+            cast(
+                Any,
+                SimpleNamespace(
+                    country_code="NG",
+                    postal_code=None,
+                    city="Lagos",
+                    state="LA",
+                    address_line1="Warehouse Block 3",
+                    address_line2="",
+                    contact_name="Hub Contact",
+                    contact_phone="08020000000",
+                ),
+            ),
+            cast(
+                Any,
+                SimpleNamespace(
+                    weight_kg=1.25,
+                    length_cm=20,
+                    width_cm=15,
+                    height_cm=10,
+                ),
+            ),
+            cast(
+                Any,
+                SimpleNamespace(
+                    product_code="N",
+                    service_code="N_P",
+                    hub_version=1,
+                    planned_ship_date=future_planned_ship_date(),
+                ),
+            ),
+        )
+
+    payload = cast(Any, request_json.await_args).kwargs["json"]
+    shipper = payload["customerDetails"]["shipperDetails"]["postalAddress"]
+    receiver = payload["customerDetails"]["receiverDetails"]["postalAddress"]
+    assert all(not value.endswith(", ") for key, value in shipper.items() if key.startswith("addressLine"))
+    assert all(not value.endswith(", ") for key, value in receiver.items() if key.startswith("addressLine"))
+    assert all(", ," not in value for key, value in shipper.items() if key.startswith("addressLine"))
+    assert all(", ," not in value for key, value in receiver.items() if key.startswith("addressLine"))
+
+
+@pytest.mark.asyncio
+async def test_booking_adapter_uses_provider_safe_addresses_and_required_content_metadata() -> None:
+    booking_response = {
+        "documents": [
+            {
+                "content": base64.b64encode(b"%PDF-1.4 label").decode(),
+                "mimeType": "application/pdf",
+            }
+        ],
+        "trackingNumber": "TRACK123",
+        "shipmentReference": "REF123",
+        "productCode": "N",
+        "timestamp": "2026-09-04T08:15:00Z",
+    }
+    long_line1 = ("123 Example Street Segment " * 3).strip()
+    destination_line2 = "Apartment 12B, Example Estate"
+    with patch(
+        "app.services.dhl.client.DHLClient.request_json",
+        new_callable=AsyncMock,
+        return_value=booking_response,
+    ) as request_json:
+        adapter = DHLShipmentAdapter(make_settings())
+        result = await adapter.book(
+            cast(
+                Any,
+                SimpleNamespace(
+                    created_at=datetime.fromisoformat("2026-09-04T08:00:00+00:00"),
+                    destination_country_code="NG",
+                    destination_postal_code=None,
+                    destination_city="Lagos",
+                    destination_state="Lagos",
+                    destination_address_line1=long_line1,
+                    destination_address_line2=destination_line2,
+                    destination_name="Receiver Name",
+                    destination_phone="08030000000",
+                ),
+            ),
+            cast(Any, SimpleNamespace()),
+            cast(
+                Any,
+                SimpleNamespace(
+                    country_code="NG",
+                    postal_code=None,
+                    city="Lagos",
+                    state="LA",
+                    address_line1=long_line1,
+                    address_line2="Warehouse Block 3",
+                    contact_name="Hub Contact",
+                    contact_phone="08020000000",
+                ),
+            ),
+            cast(
+                Any,
+                SimpleNamespace(
+                    weight_kg=1.25,
+                    length_cm=20,
+                    width_cm=15,
+                    height_cm=10,
+                ),
+            ),
+            cast(
+                Any,
+                SimpleNamespace(
+                    product_code="N",
+                    service_code="N_P",
+                    hub_version=1,
+                    planned_ship_date=future_planned_ship_date(),
+                ),
+            ),
+        )
+
+    request_json.assert_awaited_once()
+    await_args = cast(Any, request_json.await_args)
+    args = await_args.args
+    payload = await_args.kwargs["json"]
+    assert args == ("POST", "/shipments")
+    assert payload["content"]["unitOfMeasurement"] == "metric"
+    assert payload["content"]["isCustomsDeclarable"] is False
+    shipper = payload["customerDetails"]["shipperDetails"]["postalAddress"]
+    receiver = payload["customerDetails"]["receiverDetails"]["postalAddress"]
+    assert shipper["countryCode"] == "NG"
+    assert receiver["countryCode"] == "NG"
+    assert all(len(value) <= 45 for key, value in shipper.items() if key.startswith("addressLine"))
+    assert all(len(value) <= 45 for key, value in receiver.items() if key.startswith("addressLine"))
+    assert "addressLine2" in shipper
+    assert "addressLine3" in receiver
+    assert result.provider_reference == "REF123"
+    assert result.tracking_number == "TRACK123"
+
+
+@pytest.mark.asyncio
+async def test_booking_adapter_preflight_rejects_invalid_address_before_provider_call() -> None:
+    with patch(
+        "app.services.dhl.client.DHLClient.request_json",
+        new_callable=AsyncMock,
+    ) as request_json:
+        adapter = DHLShipmentAdapter(make_settings())
+        with pytest.raises(ShipmentPhase4Error, match="invalid booking party address"):
+            await adapter.book(
+                cast(
+                    Any,
+                    SimpleNamespace(
+                        created_at=datetime.fromisoformat("2026-09-04T08:00:00+00:00"),
+                        destination_country_code="NG",
+                        destination_postal_code=None,
+                        destination_city="Lagos",
+                        destination_state="Lagos",
+                        destination_address_line1="123 Example Street",
+                        destination_address_line2=None,
+                        destination_name="Receiver Name",
+                        destination_phone="08030000000",
+                    ),
+                ),
+                cast(Any, SimpleNamespace()),
+                cast(
+                    Any,
+                    SimpleNamespace(
+                        country_code="NG",
+                        postal_code=None,
+                        city="Lagos",
+                        state="X" * 36,
+                        address_line1="Warehouse Block 3",
+                        address_line2=None,
+                        contact_name="Hub Contact",
+                        contact_phone="08020000000",
+                    ),
+                ),
+                cast(
+                    Any,
+                    SimpleNamespace(
+                        weight_kg=1.25,
+                        length_cm=20,
+                        width_cm=15,
+                        height_cm=10,
+                    ),
+                ),
+                cast(
+                Any,
+                SimpleNamespace(
+                    product_code="N",
+                    service_code="N_P",
+                    hub_version=1,
+                    planned_ship_date=future_planned_ship_date(),
+                ),
+            ),
+            )
+
+    request_json.assert_not_awaited()

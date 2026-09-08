@@ -73,6 +73,12 @@ from app.models.domestic_rate_quote import (
     DomesticRateOffer,
     DomesticRateResponse,
 )
+from app.models.dhl_shipment import (
+    OutboundIntentShipmentGuard,
+    OutboundShipmentBooking,
+    OutboundShipmentTrackingRefresh,
+    OutboundShipmentTrackingSnapshot,
+)
 from app.models.customer_shipping_quote import (
     CustomerShippingQuote,
     CustomerShippingQuoteOption,
@@ -164,6 +170,10 @@ __all__ = [
     "DomesticRateAttempt",
     "DomesticRateResponse",
     "DomesticRateOffer",
+    "OutboundIntentShipmentGuard",
+    "OutboundShipmentBooking",
+    "OutboundShipmentTrackingRefresh",
+    "OutboundShipmentTrackingSnapshot",
     "CustomerShippingQuote",
     "CustomerShippingQuoteOption",
     "CustomerShippingQuoteSelection",

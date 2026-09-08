@@ -2760,7 +2760,12 @@ async def update_order_status(
 
     Requires admin role
     """
-    from app.models.order import Order
+    from app.models.order import Order, FulfillmentStatus
+    from app.services.dhl.shipments import (
+        ShipmentPhase4ConflictError,
+        ensure_order_cancellation_allowed,
+        ensure_order_manual_dhl_status_write_allowed,
+    )
     from app.services.email_service import email_service
     import logging
 
@@ -2768,7 +2773,10 @@ async def update_order_status(
 
     # Get order
     result = await db.execute(
-        select(Order, User).join(User, Order.customer_id == User.id).where(Order.id == order_id)
+        select(Order, User)
+        .join(User, Order.customer_id == User.id)
+        .where(Order.id == order_id)
+        .with_for_update()
     )
     order_with_user = result.first()
 
@@ -2776,6 +2784,28 @@ async def update_order_status(
         raise HTTPException(status_code=404, detail="Order not found")
 
     order, user = order_with_user
+
+    if status == FulfillmentStatus.CANCELLED.value:
+        try:
+            await ensure_order_cancellation_allowed(db, order_id=order.id)
+        except ShipmentPhase4ConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if status in {
+        FulfillmentStatus.PICKED_UP.value,
+        FulfillmentStatus.IN_TRANSIT.value,
+        FulfillmentStatus.OUT_FOR_DELIVERY.value,
+        FulfillmentStatus.DELIVERED.value,
+        FulfillmentStatus.DELIVERY_FAILED.value,
+        FulfillmentStatus.RETURNED.value,
+    }:
+        try:
+            await ensure_order_manual_dhl_status_write_allowed(
+                db,
+                order_id=order.id,
+                new_status=FulfillmentStatus(status),
+            )
+        except ShipmentPhase4ConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     # Update status
     order.fulfillment_status = status
@@ -2814,6 +2844,10 @@ async def cancel_order(
     Requires admin role
     """
     from app.models.order import Order
+    from app.services.dhl.shipments import (
+        ShipmentPhase4ConflictError,
+        ensure_order_cancellation_allowed,
+    )
     from app.services.email_service import email_service
     import logging
 
@@ -2821,7 +2855,10 @@ async def cancel_order(
 
     # Get order
     result = await db.execute(
-        select(Order, User).join(User, Order.customer_id == User.id).where(Order.id == order_id)
+        select(Order, User)
+        .join(User, Order.customer_id == User.id)
+        .where(Order.id == order_id)
+        .with_for_update()
     )
     order_with_user = result.first()
 
@@ -2829,6 +2866,11 @@ async def cancel_order(
         raise HTTPException(status_code=404, detail="Order not found")
 
     order, user = order_with_user
+
+    try:
+        await ensure_order_cancellation_allowed(db, order_id=order.id)
+    except ShipmentPhase4ConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     # Update status
     order.fulfillment_status = "cancelled"

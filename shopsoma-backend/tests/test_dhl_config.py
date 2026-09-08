@@ -1,3 +1,6 @@
+import os
+from unittest.mock import patch
+
 import pytest
 from pydantic import ValidationError
 
@@ -12,7 +15,13 @@ BASE_SETTINGS = {
 
 
 def make_settings(**overrides) -> Settings:
-    return Settings(**BASE_SETTINGS, **overrides)
+    cleaned_env = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith(("DHL_", "CHECKOUT_CAPABILITY_", "DOMESTIC_CHECKOUT_"))
+    }
+    with patch.dict(os.environ, cleaned_env, clear=True):
+        return Settings(**BASE_SETTINGS, **overrides)
 
 
 def test_dhl_is_disabled_and_unconfigured_by_default() -> None:

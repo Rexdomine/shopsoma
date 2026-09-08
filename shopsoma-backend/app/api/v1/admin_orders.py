@@ -46,11 +46,35 @@ from app.schemas.admin_order import (
     PickupInfo,
     ReadyPackageInfo,
     ShadowQuoteResult,
+    DHLBookingRequest,
+    DHLBookingResult,
+    DHLBookingReconciliationRequest,
+    DHLHandoffRequest,
+    DHLHandoffResult,
+    DHLTrackingRefreshRequest,
+    DHLTrackingRefreshResult,
 )
 from app.services.admin_shadow_quote import (
     run_admin_shadow_quote,
     ShadowQuoteConflictError,
     ShadowQuoteError,
+)
+from app.services.dhl.shipments import (
+    BookingCommand,
+    BookingReconciliationCommand,
+    HandoffCommand,
+    TrackingRefreshCommand,
+    ShipmentPhase4ConflictError,
+    ShipmentPhase4Error,
+    ShipmentPhase4ReconciliationRequiredError,
+    ShipmentPhase4UnavailableError,
+    book_outbound_shipment,
+    ensure_order_cancellation_allowed,
+    ensure_order_manual_dhl_status_write_allowed,
+    get_shipment_label,
+    reconcile_unknown_booking_outcome,
+    record_collection_handoff,
+    refresh_tracking,
 )
 
 router = APIRouter(prefix="/admin/orders", tags=["Admin Orders"])
@@ -58,6 +82,49 @@ router = APIRouter(prefix="/admin/orders", tags=["Admin Orders"])
 
 def get_app_settings() -> Settings:
     return settings
+
+
+async def _broadcast_order_update(order: Order) -> None:
+    try:
+        ws_manager = get_connection_manager()
+        broadcast_data = {
+            "status": order.status.value if hasattr(order, 'status') else None,
+            "fulfillment_status": order.fulfillment_status.value,
+            "payment_status": order.payment_status.value,
+            "delivery_provider": order.delivery_provider,
+            "tracking_number": order.tracking_number,
+            "estimated_delivery_date": order.estimated_delivery_date.isoformat() if order.estimated_delivery_date else None,
+            "delivered_at": order.delivered_at.isoformat() if order.delivered_at else None,
+            "cancelled_at": order.cancelled_at.isoformat() if order.cancelled_at else None,
+            "updated_at": order.updated_at.isoformat(),
+        }
+        logger.info(
+            "[WebSocket] Broadcasting order update for %s to %s connection(s)",
+            order.id,
+            ws_manager.get_connection_count(str(order.id)),
+        )
+        await ws_manager.send_order_update(order_id=str(order.id), data=broadcast_data)
+    except Exception:
+        logger.exception("[WebSocket] Failed to broadcast update for order %s", order.id)
+
+
+async def _notify_order_status_change(
+    db: AsyncSession,
+    *,
+    order: Order,
+    old_status: FulfillmentStatus | None,
+) -> None:
+    if old_status is None or old_status == order.fulfillment_status:
+        return
+    notification_service = OrderNotificationService(db)
+    try:
+        await notification_service.notify_status_change(
+            order=order,
+            new_status=order.fulfillment_status,
+            pickup_details=None,
+        )
+    except Exception:
+        logger.exception("Failed to send notifications for order %s", order.id)
 
 
 # ============================================================================
@@ -568,7 +635,7 @@ async def update_order_status(
 ):
     """Update order fulfillment status"""
 
-    query = select(Order).where(Order.id == order_id).options(
+    query = select(Order).where(Order.id == order_id).with_for_update().options(
         selectinload(Order.customer),
         selectinload(Order.shipping_address),
         selectinload(Order.billing_address),
@@ -589,6 +656,34 @@ async def update_order_status(
     # Store old status for notification
     old_status = order.fulfillment_status
     new_status = update_data.fulfillment_status
+
+    if new_status == FulfillmentStatus.CANCELLED:
+        try:
+            await ensure_order_cancellation_allowed(db, order_id=order.id)
+        except ShipmentPhase4ConflictError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(exc),
+            ) from exc
+    if new_status in {
+        FulfillmentStatus.PICKED_UP,
+        FulfillmentStatus.IN_TRANSIT,
+        FulfillmentStatus.OUT_FOR_DELIVERY,
+        FulfillmentStatus.DELIVERED,
+        FulfillmentStatus.DELIVERY_FAILED,
+        FulfillmentStatus.RETURNED,
+    }:
+        try:
+            await ensure_order_manual_dhl_status_write_allowed(
+                db,
+                order_id=order.id,
+                new_status=new_status,
+            )
+        except ShipmentPhase4ConflictError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(exc),
+            ) from exc
 
     # Update status
     order.fulfillment_status = new_status
@@ -649,39 +744,7 @@ async def update_order_status(
             # Log error but don't fail the request
             print(f"Failed to send notifications for order {order.id}: {str(e)}")
 
-        # Broadcast real-time update via WebSocket
-        try:
-            ws_manager = get_connection_manager()
-            broadcast_data = {
-                "status": order.status.value if hasattr(order, 'status') else None,
-                "fulfillment_status": order.fulfillment_status.value,
-                "payment_status": order.payment_status.value,
-                "delivery_provider": order.delivery_provider,
-                "tracking_number": order.tracking_number,
-                "estimated_delivery_date": order.estimated_delivery_date.isoformat() if order.estimated_delivery_date else None,
-                "delivered_at": order.delivered_at.isoformat() if order.delivered_at else None,
-                "cancelled_at": order.cancelled_at.isoformat() if order.cancelled_at else None,
-                "updated_at": order.updated_at.isoformat()
-            }
-
-            print(f"[WebSocket] ===== BROADCASTING ORDER UPDATE =====")
-            print(f"[WebSocket] Order ID: {order.id}")
-            print(f"[WebSocket] Fulfillment Status: {order.fulfillment_status.value}")
-            print(f"[WebSocket] Active Connections: {ws_manager.get_connection_count(str(order.id))}")
-            print(f"[WebSocket] Broadcast Data: {broadcast_data}")
-
-            await ws_manager.send_order_update(
-                order_id=str(order.id),
-                data=broadcast_data
-            )
-
-            print(f"[WebSocket] ✓ Broadcast complete for order {order.id}")
-            print(f"[WebSocket] =====================================")
-        except Exception as e:
-            # Log error but don't fail the request
-            print(f"[WebSocket] ✗ Failed to broadcast update for order {order.id}: {str(e)}")
-            import traceback
-            traceback.print_exc()
+        await _broadcast_order_update(order)
 
     # Return updated order
     return await get_order_detail(str(order.id), admin, db)
@@ -822,7 +885,7 @@ async def bulk_update_status(
     """Bulk update order statuses"""
 
     # Get all orders
-    query = select(Order).where(Order.id.in_(update_data.order_ids))
+    query = select(Order).where(Order.id.in_(update_data.order_ids)).with_for_update()
     result = await db.execute(query)
     orders = result.scalars().all()
 
@@ -834,6 +897,33 @@ async def bulk_update_status(
 
     updated_count = 0
     for order in orders:
+        if update_data.fulfillment_status == FulfillmentStatus.CANCELLED:
+            try:
+                await ensure_order_cancellation_allowed(db, order_id=order.id)
+            except ShipmentPhase4ConflictError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=str(exc),
+                ) from exc
+        if update_data.fulfillment_status in {
+            FulfillmentStatus.PICKED_UP,
+            FulfillmentStatus.IN_TRANSIT,
+            FulfillmentStatus.OUT_FOR_DELIVERY,
+            FulfillmentStatus.DELIVERED,
+            FulfillmentStatus.DELIVERY_FAILED,
+            FulfillmentStatus.RETURNED,
+        }:
+            try:
+                await ensure_order_manual_dhl_status_write_allowed(
+                    db,
+                    order_id=order.id,
+                    new_status=update_data.fulfillment_status,
+                )
+            except ShipmentPhase4ConflictError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=str(exc),
+                ) from exc
         previous_status = order.fulfillment_status
         order.fulfillment_status = update_data.fulfillment_status
 
@@ -934,6 +1024,230 @@ async def create_shadow_quote(
         raise HTTPException(status_code=status_code, detail=detail) from exc
 
 
+@router.post("/{order_id}/dhl/bookings", response_model=DHLBookingResult)
+async def create_dhl_booking(
+    order_id: str,
+    payload: DHLBookingRequest,
+    admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_app_settings),
+):
+    try:
+        result = await book_outbound_shipment(
+            db,
+            order_id=UUID(order_id),
+            admin=admin,
+            settings=settings,
+            command=BookingCommand(
+                order_id=UUID(order_id),
+                intent_id=payload.intent_id,
+                package_id=payload.package_id,
+                package_version=payload.package_version,
+                seal_id=payload.seal_id,
+                idempotency_key=payload.idempotency_key,
+            ),
+        )
+        await db.commit()
+        order_result = await db.execute(select(Order).where(Order.id == UUID(order_id)))
+        order = order_result.scalar_one_or_none()
+        if order is not None:
+            await _broadcast_order_update(order)
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid order id") from exc
+    except ShipmentPhase4Error as exc:
+        detail = str(exc)
+        status_code = status.HTTP_400_BAD_REQUEST
+        if detail == "order not found":
+            status_code = status.HTTP_404_NOT_FOUND
+        elif isinstance(exc, ShipmentPhase4UnavailableError):
+            status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+        elif isinstance(exc, ShipmentPhase4ReconciliationRequiredError):
+            status_code = status.HTTP_409_CONFLICT
+        elif isinstance(exc, ShipmentPhase4ConflictError):
+            status_code = status.HTTP_409_CONFLICT
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
+@router.post("/{order_id}/dhl/bookings/{booking_id}/reconcile", response_model=DHLBookingResult)
+async def reconcile_dhl_booking(
+    order_id: str,
+    booking_id: str,
+    payload: DHLBookingReconciliationRequest,
+    admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        result = await reconcile_unknown_booking_outcome(
+            db,
+            order_id=UUID(order_id),
+            admin=admin,
+            command=BookingReconciliationCommand(
+                booking_id=UUID(booking_id),
+                resolution=payload.resolution,
+                provider_reference=payload.provider_reference,
+                tracking_number=payload.tracking_number,
+                label_media_type=payload.label_media_type,
+                label_content_base64=payload.label_content_base64,
+                provider_absence_evidence_ref=payload.provider_absence_evidence_ref,
+                provider_absence_evidence_sha256=payload.provider_absence_evidence_sha256,
+            ),
+        )
+        await db.commit()
+        order_result = await db.execute(select(Order).where(Order.id == UUID(order_id)))
+        order = order_result.scalar_one_or_none()
+        if order is not None:
+            await _broadcast_order_update(order)
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid DHL resource id") from exc
+    except ShipmentPhase4Error as exc:
+        detail = str(exc)
+        status_code = status.HTTP_400_BAD_REQUEST
+        if detail == "booking not found for order":
+            status_code = status.HTTP_404_NOT_FOUND
+        elif isinstance(exc, ShipmentPhase4ConflictError):
+            status_code = status.HTTP_409_CONFLICT
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
+@router.get("/{order_id}/dhl/bookings/{booking_id}/label")
+async def download_dhl_label(
+    order_id: str,
+    booking_id: str,
+    admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        label = await get_shipment_label(
+            db,
+            order_id=UUID(order_id),
+            booking_id=UUID(booking_id),
+        )
+        return StreamingResponse(
+            io.BytesIO(label.content),
+            media_type=label.media_type,
+            headers={
+                "Content-Disposition": f'attachment; filename="{label.filename}"',
+                "X-Label-SHA256": label.sha256,
+            },
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid DHL resource id") from exc
+    except ShipmentPhase4Error as exc:
+        detail = str(exc)
+        status_code = status.HTTP_400_BAD_REQUEST if detail != "booking not found for order" else status.HTTP_404_NOT_FOUND
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
+@router.post("/{order_id}/dhl/bookings/{booking_id}/handoff", response_model=DHLHandoffResult)
+async def create_dhl_handoff(
+    order_id: str,
+    booking_id: str,
+    payload: DHLHandoffRequest,
+    admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        parsed_order_id = UUID(order_id)
+        old_status = await db.scalar(
+            select(Order.fulfillment_status)
+            .where(Order.id == parsed_order_id)
+            .with_for_update()
+        )
+        result = await record_collection_handoff(
+            db,
+            order_id=parsed_order_id,
+            admin=admin,
+            command=HandoffCommand(
+                booking_id=UUID(booking_id),
+                occurred_at=payload.occurred_at,
+                idempotency_key=payload.idempotency_key,
+                counterparty=payload.counterparty,
+                evidence_ref=payload.evidence_ref,
+                evidence_sha256=payload.evidence_sha256,
+            ),
+        )
+        await db.commit()
+        order = (
+            await db.execute(
+                select(Order)
+                .options(
+                    selectinload(Order.customer),
+                    selectinload(Order.items),
+                )
+                .where(Order.id == parsed_order_id)
+            )
+        ).scalar_one_or_none()
+        if order is not None:
+            await _notify_order_status_change(db, order=order, old_status=old_status)
+            await _broadcast_order_update(order)
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid DHL resource id") from exc
+    except ShipmentPhase4Error as exc:
+        detail = str(exc)
+        status_code = status.HTTP_400_BAD_REQUEST
+        if detail == "booking not found for order":
+            status_code = status.HTTP_404_NOT_FOUND
+        elif isinstance(exc, ShipmentPhase4ConflictError):
+            status_code = status.HTTP_409_CONFLICT
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
+@router.post("/{order_id}/dhl/tracking-refresh", response_model=DHLTrackingRefreshResult)
+async def refresh_dhl_tracking(
+    order_id: str,
+    payload: DHLTrackingRefreshRequest,
+    admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_app_settings),
+):
+    try:
+        parsed_order_id = UUID(order_id)
+        old_status = await db.scalar(
+            select(Order.fulfillment_status)
+            .where(Order.id == parsed_order_id)
+            .with_for_update()
+        )
+        result = await refresh_tracking(
+            db,
+            order_id=parsed_order_id,
+            settings=settings,
+            command=TrackingRefreshCommand(
+                booking_id=payload.booking_id,
+                idempotency_key=payload.idempotency_key,
+            ),
+        )
+        await db.commit()
+        order = (
+            await db.execute(
+                select(Order)
+                .options(
+                    selectinload(Order.customer),
+                    selectinload(Order.items),
+                )
+                .where(Order.id == parsed_order_id)
+            )
+        ).scalar_one_or_none()
+        if order is not None:
+            await _notify_order_status_change(db, order=order, old_status=old_status)
+            await _broadcast_order_update(order)
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid order id") from exc
+    except ShipmentPhase4Error as exc:
+        detail = str(exc)
+        status_code = status.HTTP_400_BAD_REQUEST
+        if detail == "booking not found for order":
+            status_code = status.HTTP_404_NOT_FOUND
+        elif isinstance(exc, ShipmentPhase4UnavailableError):
+            status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+        elif isinstance(exc, ShipmentPhase4ConflictError):
+            status_code = status.HTTP_409_CONFLICT
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
 @router.post("/{order_id}/cancel")
 async def cancel_order(
     order_id: str,
@@ -943,7 +1257,7 @@ async def cancel_order(
 ):
     """Cancel an order"""
 
-    query = select(Order).where(Order.id == order_id)
+    query = select(Order).where(Order.id == order_id).with_for_update()
     result = await db.execute(query)
     order = result.scalar_one_or_none()
 
@@ -958,6 +1272,14 @@ async def cancel_order(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Order is already cancelled",
         )
+
+    try:
+        await ensure_order_cancellation_allowed(db, order_id=order.id)
+    except ShipmentPhase4ConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
 
     # Cancel order
     order.fulfillment_status = FulfillmentStatus.CANCELLED
