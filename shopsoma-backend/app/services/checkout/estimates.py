@@ -329,8 +329,11 @@ async def _dhl_checkout_options(db, *, order: Order):
         )
         configured_cohorts = settings.dhl_domestic_sandbox_cohort_ids
         package_cohort_ids = {item.cohort_id for item in items}
-        if not configured_cohorts or not package_cohort_ids <= derive_sandbox_cohort_ids(
-            configured_cohorts, order.id, len(package_cohort_ids)
+        if not configured_cohorts or not package_cohort_ids <= (
+            configured_cohorts
+            | derive_sandbox_cohort_ids(
+                configured_cohorts, order.id, len(package_cohort_ids)
+            )
         ):
             raise HTTPException(status_code=503, detail="checkout cohort is outside the configured DHL sandbox allowlist")
         checkout_settings = settings

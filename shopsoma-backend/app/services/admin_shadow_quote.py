@@ -44,6 +44,7 @@ from app.services.dhl.rating import (
     SCHEMA_VERSION,
     MYDHL_TEST_BASE_URL,
     create_sandbox_domestic_rate_adapter,
+    derive_sandbox_cohort_ids,
 )
 from app.services.fulfillment.contracts import (
     HubRef,
@@ -305,7 +306,10 @@ async def run_admin_shadow_quote(
     if not package_items:
         raise ShadowQuoteError("ready package has no package items")
     cohort_ids = {item.cohort_id for item in package_items}
-    if not cohort_ids <= settings.dhl_domestic_sandbox_cohort_ids:
+    authorized_cohort_ids = settings.dhl_domestic_sandbox_cohort_ids | derive_sandbox_cohort_ids(
+        settings.dhl_domestic_sandbox_cohort_ids, order.id, len(cohort_ids)
+    )
+    if not cohort_ids <= authorized_cohort_ids:
         raise ShadowQuoteError("package composition is outside sandbox cohort allowlist")
     composition = tuple(
         PackageItemRef(
