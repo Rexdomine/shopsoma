@@ -17,7 +17,12 @@ from app.models.checkout_shipping_estimate import (
 from app.models.order import FulfillmentStatus, Order, PaymentStatus
 from app.models.product import Product, ProductVariant, SizeStock
 from app.models.stock_payment_persistence import StockReservation
-from app.services.checkout.estimates import order_snapshot, reload_checkout_order
+from app.services.checkout.estimates import (
+    _estimate_request_fingerprint,
+    order_snapshot,
+    parcel_measurement_snapshot,
+    reload_checkout_order,
+)
 
 _CENT = Decimal("0.01")
 _EFFECTIVE_CLAIM_SQL = text(
@@ -263,6 +268,14 @@ async def select_estimate_option(
         or estimate.order_snapshot_hash != snapshot_hash
     ):
         raise HTTPException(status_code=409, detail="stale checkout estimate")
+    if estimate.source_kind == "sandbox_normalized":
+        parcel_snapshot_hash = await parcel_measurement_snapshot(
+            db, order, for_update=True
+        )
+        if estimate.request_fingerprint != _estimate_request_fingerprint(
+            order.id, snapshot_hash, parcel_snapshot_hash
+        ):
+            raise HTTPException(status_code=409, detail="stale checkout estimate")
     if estimate.expires_at <= database_now:
         raise HTTPException(status_code=409, detail="expired checkout estimate")
 

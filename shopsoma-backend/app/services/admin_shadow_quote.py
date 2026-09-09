@@ -32,6 +32,7 @@ from app.models.package_custody import (
     OutboundShipmentIntent,
     OutboundShipmentIntentInvalidation,
 )
+from app.models.fulfillment_cohort import FulfillmentCohort
 from app.models.fulfillment_hub import FulfillmentHub
 from app.models.order import Order
 from app.models.user import User
@@ -306,8 +307,17 @@ async def run_admin_shadow_quote(
     if not package_items:
         raise ShadowQuoteError("ready package has no package items")
     cohort_ids = {item.cohort_id for item in package_items}
+    order_cohort_count = len(
+        (
+            await db.execute(
+                select(FulfillmentCohort.id).where(
+                    FulfillmentCohort.order_id == order.id
+                )
+            )
+        ).scalars().all()
+    )
     authorized_cohort_ids = settings.dhl_domestic_sandbox_cohort_ids | derive_sandbox_cohort_ids(
-        settings.dhl_domestic_sandbox_cohort_ids, order.id, len(cohort_ids)
+        settings.dhl_domestic_sandbox_cohort_ids, order.id, order_cohort_count
     )
     if not cohort_ids <= authorized_cohort_ids:
         raise ShadowQuoteError("package composition is outside sandbox cohort allowlist")

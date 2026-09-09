@@ -366,6 +366,15 @@ def _estimate_expiry_delta(ttl_seconds: int) -> timedelta:
     return timedelta(seconds=ttl_seconds)
 
 
+def _estimate_request_fingerprint(
+    order_id, snapshot_hash: str, parcel_snapshot_hash: str | None = None
+) -> str:
+    value = {"order_id": str(order_id), "snapshot": snapshot_hash}
+    if parcel_snapshot_hash is not None:
+        value["parcel_snapshot"] = parcel_snapshot_hash
+    return _hash(value)
+
+
 def _hash(value: object) -> str:
     return hashlib.sha256(
         json.dumps(value, sort_keys=True, separators=(",", ":"), default=str).encode()
@@ -505,11 +514,6 @@ async def create_estimate(
         )
     ).scalar_one_or_none()
     destination_hash, snapshot_hash = order_snapshot(order)
-    fingerprint = _hash({"order_id": str(order.id), "snapshot": snapshot_hash})
-    if existing:
-        if existing.request_fingerprint != fingerprint:
-            raise HTTPException(status_code=409, detail="idempotency conflict")
-        return existing
 
     successor_estimate = aliased(CheckoutShippingEstimate)
     selection = aliased(CheckoutShippingEstimateSelection)
@@ -544,6 +548,13 @@ async def create_estimate(
         if dhl_provider_enabled
         else None
     )
+    fingerprint = _estimate_request_fingerprint(
+        order.id, snapshot_hash, parcel_snapshot_hash
+    )
+    if existing:
+        if existing.request_fingerprint != fingerprint:
+            raise HTTPException(status_code=409, detail="idempotency conflict")
+        return existing
     usd_to_ngn_rate = None
     if order.currency == "USD":
         rate_setting = await db.scalar(
