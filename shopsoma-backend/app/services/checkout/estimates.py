@@ -21,6 +21,7 @@ from app.models.order import Order, OrderItem
 from app.models.product import Product
 from app.models.setting import Setting
 from app.models.shipping_rate import ShippingRate
+from app.models.fulfillment_cohort import CohortItemAllocation, FulfillmentCohort
 from app.models.fulfillment_hub import FulfillmentHub
 from app.models.package_custody import (
     CustodyEvent,
@@ -81,7 +82,24 @@ async def _rate_pre_payment_quote_subject(db, *, order: Order):
         for _, product in rows
     ):
         raise HTTPException(status_code=422, detail="vendor parcel dimensions required before DHL rating")
-    cohort_id = sorted(configured_cohorts, key=str)[0]
+    allocations = (
+        await db.execute(
+            select(CohortItemAllocation, FulfillmentCohort)
+            .join(FulfillmentCohort, FulfillmentCohort.id == CohortItemAllocation.cohort_id)
+            .where(CohortItemAllocation.order_id == order.id)
+        )
+    ).all()
+    allocation_by_item = {}
+    for allocation, cohort in allocations:
+        if allocation.allocated_quantity != next(
+            item.quantity for item, _ in rows if item.id == allocation.order_item_id
+        ):
+            raise HTTPException(status_code=503, detail="cohort allocation does not cover the order item")
+        allocation_by_item[allocation.order_item_id] = (allocation, cohort)
+    if set(allocation_by_item) != {item.id for item, _ in rows}:
+        raise HTTPException(status_code=503, detail="order is not assigned to a fulfillment cohort")
+    if any(cohort.id not in configured_cohorts for _, cohort in allocation_by_item.values()):
+        raise HTTPException(status_code=503, detail="checkout cohort is outside the configured DHL sandbox allowlist")
     hub_ref = HubRef(id=hub.id)
     package_id = uuid5(NAMESPACE_URL, f"shopsoma:checkout:{order.id}:quote-package")
     seal_id = uuid5(NAMESPACE_URL, f"shopsoma:checkout:{order.id}:quote-seal")
@@ -89,19 +107,30 @@ async def _rate_pre_payment_quote_subject(db, *, order: Order):
     max_length = Decimal("0")
     max_width = Decimal("0")
     max_height = Decimal("0")
+    total_volume = Decimal("0")
     composition = []
     for item, product in rows:
         total_weight += Decimal(product.weight_kg) * item.quantity
         max_length = max(max_length, Decimal(product.length_cm))
         max_width = max(max_width, Decimal(product.width_cm))
         max_height = max(max_height, Decimal(product.height_cm))
+        total_volume += (
+            Decimal(product.length_cm)
+            * Decimal(product.width_cm)
+            * Decimal(product.height_cm)
+            * item.quantity
+        )
+        allocation, cohort = allocation_by_item[item.id]
         composition.append(
             PackageItemRef(
-                cohort=FulfillmentCohortRef(id=cohort_id, hub=hub_ref),
+                cohort=FulfillmentCohortRef(id=cohort.id, hub=hub_ref),
                 order_item_id=item.id,
-                quantity=item.quantity,
+                quantity=allocation.allocated_quantity,
             )
         )
+    if max_length <= 0 or max_width <= 0:
+        raise HTTPException(status_code=422, detail="vendor parcel dimensions must be positive")
+    max_height = max(max_height, total_volume / (max_length * max_width))
     package = PackageRef(
         package_id=package_id,
         package_version=1,
@@ -151,6 +180,8 @@ async def _rate_pre_payment_quote_subject(db, *, order: Order):
         package=package,
         planned_ship_date=planned_ship_date,
     )
+    if not settings.checkout_capability_configured:
+        raise HTTPException(status_code=503, detail="checkout rate identity is not configured")
     identity_key = settings.CHECKOUT_CAPABILITY_ACTIVE_PEPPER.get_secret_value().encode()
     identity_version = f"checkout-capability-v{settings.CHECKOUT_CAPABILITY_ACTIVE_PEPPER_VERSION}"
     try:
@@ -296,6 +327,8 @@ async def _dhl_checkout_options(db, *, order: Order):
         if not configured_cohorts or not {item.cohort_id for item in items} <= configured_cohorts:
             raise HTTPException(status_code=503, detail="checkout cohort is outside the configured DHL sandbox allowlist")
         checkout_settings = settings
+        if not settings.checkout_capability_configured:
+            raise HTTPException(status_code=503, detail="checkout rate identity is not configured")
         identity_key = settings.CHECKOUT_CAPABILITY_ACTIVE_PEPPER.get_secret_value().encode()
         identity_version = f"checkout-capability-v{settings.CHECKOUT_CAPABILITY_ACTIVE_PEPPER_VERSION}"
         try:
@@ -584,8 +617,8 @@ async def create_estimate(
                     service_label=offer.service_label,
                     amount=amount,
                     currency=order.currency,
-                    min_delivery_days=rate.carrier_transit_days,
-                    max_delivery_days=rate.carrier_transit_days,
+                    min_delivery_days=None,
+                    max_delivery_days=None,
                     source_rate_id=None,
                 )
             )

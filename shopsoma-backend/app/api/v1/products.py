@@ -56,6 +56,10 @@ BULK_SINGLE_HEADERS = [
     "made_to_order_timeline",
     "care_instructions",
     "fabric_composition",
+    "weight_kg",
+    "length_cm",
+    "width_cm",
+    "height_cm",
     "status",
 ]
 
@@ -72,6 +76,10 @@ BULK_VARIABLE_HEADERS = [
     "made_to_order_timeline",
     "care_instructions",
     "fabric_composition",
+    "weight_kg",
+    "length_cm",
+    "width_cm",
+    "height_cm",
     "color_name",
     "color_hex",
     "size",
@@ -106,6 +114,14 @@ def _parse_decimal(value: Optional[str], field: str, row: int, errors: List[Dict
     except ValueError:
         errors.append({"row": row, "field": field, "message": "Must be a number"})
         return None
+
+
+def _parse_positive_decimal(value: Optional[str], field: str, row: int, errors: List[Dict[str, Any]]) -> Optional[float]:
+    parsed = _parse_decimal(value, field, row, errors)
+    if parsed is not None and parsed <= 0:
+        errors.append({"row": row, "field": field, "message": "Must be positive"})
+        return None
+    return parsed
 
 
 def _sync_single_product_variant_inventory(product: Product) -> None:
@@ -314,6 +330,10 @@ async def bulk_upload_single_products(
         base_price = _parse_decimal(row.get("base_price"), "base_price", row_index, row_errors)
         compare_price = _parse_decimal(row.get("compare_at_price"), "compare_at_price", row_index, row_errors)
         total_stock = _parse_int(row.get("total_stock"), "total_stock", row_index, row_errors)
+        weight_kg = _parse_positive_decimal(row.get("weight_kg"), "weight_kg", row_index, row_errors)
+        length_cm = _parse_positive_decimal(row.get("length_cm"), "length_cm", row_index, row_errors)
+        width_cm = _parse_positive_decimal(row.get("width_cm"), "width_cm", row_index, row_errors)
+        height_cm = _parse_positive_decimal(row.get("height_cm"), "height_cm", row_index, row_errors)
         status_value = (row.get("status") or "draft").strip().lower()
 
         if not title:
@@ -362,6 +382,10 @@ async def bulk_upload_single_products(
             made_to_order_timeline=(row.get("made_to_order_timeline") or "").strip() or None,
             care_instructions=(row.get("care_instructions") or "").strip() or None,
             fabric_composition=(row.get("fabric_composition") or "").strip() or None,
+            weight_kg=weight_kg,
+            length_cm=length_cm,
+            width_cm=width_cm,
+            height_cm=height_cm,
             moderation_status=ModerationStatus.PENDING,
         )
         products_to_create.append(product)
@@ -411,7 +435,10 @@ async def bulk_upload_variable_products(
         currency = (row.get("currency") or "NGN").strip().upper()
         base_price = _parse_decimal(row.get("base_price"), "base_price", row_index, row_errors)
         compare_price = _parse_decimal(row.get("compare_at_price"), "compare_at_price", row_index, row_errors)
-
+        weight_kg = _parse_positive_decimal(row.get("weight_kg"), "weight_kg", row_index, row_errors)
+        length_cm = _parse_positive_decimal(row.get("length_cm"), "length_cm", row_index, row_errors)
+        width_cm = _parse_positive_decimal(row.get("width_cm"), "width_cm", row_index, row_errors)
+        height_cm = _parse_positive_decimal(row.get("height_cm"), "height_cm", row_index, row_errors)
         color_name = (row.get("color_name") or "").strip()
         color_hex = (row.get("color_hex") or "").strip() or None
         size = (row.get("size") or "").strip()
@@ -468,6 +495,10 @@ async def bulk_upload_variable_products(
                 "made_to_order_timeline": (row.get("made_to_order_timeline") or "").strip() or None,
                 "care_instructions": (row.get("care_instructions") or "").strip() or None,
                 "fabric_composition": (row.get("fabric_composition") or "").strip() or None,
+                "weight_kg": weight_kg,
+                "length_cm": length_cm,
+                "width_cm": width_cm,
+                "height_cm": height_cm,
                 "variations": {},
             }
 
@@ -510,6 +541,10 @@ async def bulk_upload_variable_products(
             made_to_order_timeline=group["made_to_order_timeline"],
             care_instructions=group["care_instructions"],
             fabric_composition=group["fabric_composition"],
+            weight_kg=group["weight_kg"],
+            length_cm=group["length_cm"],
+            width_cm=group["width_cm"],
+            height_cm=group["height_cm"],
             moderation_status=ModerationStatus.PENDING,
         )
         db.add(product)

@@ -65,6 +65,10 @@ export interface Product {
   made_to_order_timeline?: string;
   care_instructions?: string;
   fabric_composition?: string;
+  weight_kg?: number | null;
+  length_cm?: number | null;
+  width_cm?: number | null;
+  height_cm?: number | null;
   moderation_status: 'pending' | 'approved' | 'rejected';
   moderation_notes?: string;
   views_count: number;

@@ -1,7 +1,7 @@
 """add vendor supplied parcel dimensions to products
 
 Revision ID: k7l8m9n0p1q2
-Revises: f9d1b3e5a7c9
+Revises: 1c2b3d4e
 """
 from alembic import op
 import sqlalchemy as sa

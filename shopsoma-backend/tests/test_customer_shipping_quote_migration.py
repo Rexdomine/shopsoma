@@ -14,8 +14,8 @@ from sqlalchemy.engine import make_url
 
 
 REVISION = "e8c0a2d4f6b8"
-HEAD = "1c2b3d4e"
-CURRENT_HEAD_PARENT = "e6f7a8b9c0d1"
+HEAD = "k7l8m9n0p1q2"
+CURRENT_HEAD_PARENT = "1c2b3d4e"
 PREVIOUS_HEAD = "d5e6f7a8b9c0"
 HEAD_PARENT = "c4d5e6f7a8b9"
 HEAD_GRANDPARENT = "b3c4d5e6f7a8"
