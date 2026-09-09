@@ -309,6 +309,15 @@ async def _dhl_checkout_options(db, *, order: Order):
             ),
             seal=SealRef(value=seal.opaque_value),
         )
+        order_cohort_count = len(
+            (
+                await db.execute(
+                    select(FulfillmentCohort.id).where(
+                        FulfillmentCohort.order_id == order.id
+                    )
+                )
+            ).scalars().all()
+        )
         resolved = DHLResolvedHub(
             hub=hub_ref,
             hub_version=hub.version,
@@ -327,7 +336,15 @@ async def _dhl_checkout_options(db, *, order: Order):
             state=hub.state,
             postal_code=hub.postal_code.strip() or None if hub.postal_code else None,
             country_code=hub.country_code,
-            cohort_count=len({item.cohort_id for item in items}),
+            cohort_count=len(
+                (
+                    await db.execute(
+                        select(FulfillmentCohort.id).where(
+                            FulfillmentCohort.order_id == order.id
+                        )
+                    )
+                ).scalars().all()
+            ),
         )
         lagos_now = datetime.now(ZoneInfo("Africa/Lagos"))
         planned_ship_date = lagos_now.date() if lagos_now.hour < 12 else lagos_now.date() + timedelta(days=1)
@@ -342,7 +359,7 @@ async def _dhl_checkout_options(db, *, order: Order):
         if not configured_cohorts or not package_cohort_ids <= (
             configured_cohorts
             | derive_sandbox_cohort_ids(
-                configured_cohorts, order.id, len(package_cohort_ids)
+                configured_cohorts, order.id, order_cohort_count
             )
         ):
             raise HTTPException(status_code=503, detail="checkout cohort is outside the configured DHL sandbox allowlist")
@@ -517,6 +534,17 @@ async def create_estimate(
     ).scalar_one_or_none()
     destination_hash, snapshot_hash = order_snapshot(order)
 
+    capabilities = domestic_shipping_capabilities(settings)
+    dhl_provider_enabled = capabilities.provider_calls_enabled
+    if not dhl_provider_enabled:
+        # Static refreshes must serialize on the checkout aggregate too. The
+        # provider path reacquires this lock after its external await; the
+        # static path has no await boundary, so acquire it before leaf lookup.
+        order = await load_checkout_order(db, order.id, for_update=True)
+        if order is None:
+            raise HTTPException(status_code=404, detail="checkout order no longer exists")
+        destination_hash, snapshot_hash = order_snapshot(order)
+
     successor_estimate = aliased(CheckoutShippingEstimate)
     selection = aliased(CheckoutShippingEstimateSelection)
     current_unselected_leaf = (
@@ -543,8 +571,6 @@ async def create_estimate(
         )
     ).scalar_one_or_none()
 
-    capabilities = domestic_shipping_capabilities(settings)
-    dhl_provider_enabled = capabilities.provider_calls_enabled
     parcel_snapshot_hash = (
         await parcel_measurement_snapshot(db, order)
         if dhl_provider_enabled

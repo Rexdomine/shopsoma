@@ -834,6 +834,12 @@ def test_create_estimate_refresh_supersedes_current_unselected_leaf(monkeypatch)
 
         async def execute(self, statement):
             sql = str(statement)
+            if (
+                "FROM checkout_shipping_estimates" in sql
+                and "WHERE checkout_shipping_estimates.customer_id" in sql
+                and "idempotency_key" in sql
+            ):
+                return FakeResult(None)
             if "FROM checkout_shipping_estimates" in sql and "source_command IN" in sql:
                 return FakeResult(None)
             if "FROM checkout_shipping_estimates" in sql and "ORDER BY checkout_shipping_estimates.created_at DESC" in sql:
@@ -878,6 +884,13 @@ def test_create_estimate_refresh_supersedes_current_unselected_leaf(monkeypatch)
     monkeypatch.setattr(module, "order_snapshot", lambda _order: ("dest-hash", "snap-hash"))
     monkeypatch.setattr(module, "_hash", lambda payload: "f" * 64)
     monkeypatch.setattr(module, "_estimate_expiry_delta", lambda ttl: timedelta(seconds=ttl))
+
+    async def reload_locked_order(_db, order_id, *, for_update=False):
+        assert order_id == order.id
+        assert for_update is True
+        return order
+
+    monkeypatch.setattr(module, "load_checkout_order", reload_locked_order)
 
     import asyncio
     estimate = asyncio.run(

@@ -16,6 +16,14 @@ def test_bulk_measurement_parser_rejects_below_storage_precision_and_non_finite(
     assert _parse_positive_decimal("0.001", "weight_kg", 2, errors) == 0.001
     assert errors == []
 
+    errors = []
+    assert _parse_positive_decimal("9999999.999", "weight_kg", 2, errors) == 9999999.999
+    assert errors == []
+
+    errors = []
+    assert _parse_positive_decimal("10000000", "weight_kg", 2, errors) is None
+    assert errors[0]["field"] == "weight_kg"
+
 
 @pytest.mark.asyncio
 async def test_bulk_upload_single_products_success(client: AsyncClient, vendor_user, db_session):

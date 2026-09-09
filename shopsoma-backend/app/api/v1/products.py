@@ -109,10 +109,21 @@ def _parse_decimal(value: Optional[str], field: str, row: int, errors: List[Dict
         return None
 
 
+_MAX_PRODUCT_MEASUREMENT = 9999999.999
+
+
 def _parse_positive_decimal(value: Optional[str], field: str, row: int, errors: List[Dict[str, Any]]) -> Optional[float]:
     parsed = _parse_decimal(value, field, row, errors)
-    if parsed is not None and (not math.isfinite(parsed) or parsed < 0.001):
-        errors.append({"row": row, "field": field, "message": "Must be at least 0.001 and finite"})
+    if parsed is not None and (
+        not math.isfinite(parsed)
+        or parsed < 0.001
+        or parsed > _MAX_PRODUCT_MEASUREMENT
+    ):
+        errors.append({
+            "row": row,
+            "field": field,
+            "message": "Must be between 0.001 and 9999999.999",
+        })
         return None
     return parsed
 

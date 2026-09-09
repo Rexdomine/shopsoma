@@ -373,6 +373,7 @@ async def run_admin_shadow_quote(
             state=hub.state,
             postal_code=_blank_optional_text_to_none(hub.postal_code),
             country_code=hub.country_code,
+            cohort_count=order_cohort_count,
         )
     except ValueError as exc:
         raise ShadowQuoteError("invalid shipment address details") from exc
