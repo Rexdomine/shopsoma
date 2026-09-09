@@ -50,6 +50,10 @@ export interface CreateProductPayload {
   made_to_order_timeline?: string;
   care_instructions?: string;
   fabric_composition?: string;
+  weight_kg?: number;
+  length_cm?: number;
+  width_cm?: number;
+  height_cm?: number;
   meta_title?: string;
   meta_description?: string;
   images?: CreateProductImagePayload[];

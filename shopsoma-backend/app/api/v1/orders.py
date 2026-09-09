@@ -1014,8 +1014,18 @@ async def create_order(
     await db.flush()  # Get order item IDs
 
     if enforced_checkout:
+        # Build the authoritative package/custody subject before the first
+        # checkout estimate can cross the DHL provider boundary.
+        from app.services.checkout.shipment_subject import ensure_checkout_shipment_subject
+
+        await ensure_checkout_shipment_subject(
+            db,
+            order=new_order,
+            actor_id=customer_id_for_order,
+        )
         # Payment/provider/carrier transport and every fulfilment side effect stay
-        # disabled. Milestone 3 ends at persisted prerequisite coverage.
+        # disabled until the selected estimate is paid. The shipment subject above
+        # is quote evidence only.
         checkout_capability = None
         if current_user is None:
             checkout_capability = await issue_checkout_capability(db, order=new_order)
