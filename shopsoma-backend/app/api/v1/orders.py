@@ -42,6 +42,7 @@ from app.services.dhl.shipments import (
     ShipmentPhase4ConflictError,
     ensure_order_cancellation_allowed,
 )
+from app.services.dhl.rating import derive_sandbox_cohort_id
 from app.schemas.order import (
     OrderCreate,
     OrderUpdate,
@@ -1040,9 +1041,10 @@ async def create_order(
             cohort = cohorts_by_key.get(cohort_key)
             if cohort is None:
                 cohort_ordinals[cohort_key] = len(cohort_ordinals)
-                cohort_id = uuid5(
+                cohort_id = derive_sandbox_cohort_id(
                     cohort_namespace,
-                    f"{new_order.id}:cohort:{cohort_ordinals[cohort_key]}",
+                    new_order.id,
+                    cohort_ordinals[cohort_key],
                 )
                 cohort = FulfillmentCohort(
                     id=cohort_id,

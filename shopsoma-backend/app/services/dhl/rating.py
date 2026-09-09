@@ -28,6 +28,24 @@ _PRODUCT_CODE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,5}\Z")
 _LOCAL_PRODUCT_CODE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,2}\Z")
 _INTERNAL_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,99}\Z")
 _CURRENCY = re.compile(r"[A-Z]{3}\Z")
+
+
+def derive_sandbox_cohort_ids(
+    namespaces: frozenset[UUID], order_id: UUID, count: int
+) -> frozenset[UUID]:
+    """Derive the server-owned cohort IDs authorized by configured namespaces."""
+    return frozenset(
+        derive_sandbox_cohort_id(namespace, order_id, ordinal)
+        for namespace in namespaces
+        for ordinal in range(count)
+    )
+
+
+def derive_sandbox_cohort_id(namespace: UUID, order_id: UUID, ordinal: int) -> UUID:
+    """Derive one deterministic server-owned cohort ID."""
+    return uuid5(namespace, f"{order_id}:cohort:{ordinal}")
+
+
 _SUPPORTED_CURRENCIES = frozenset({"NGN", "USD"})
 _PRICE_TYPE_PRIORITY = ("BILLC", "PULCL", "BASEC")
 
@@ -207,11 +225,9 @@ class DHLDomesticRateAdapter:
                 "rate request must match the authoritative shipment subject"
             )
         request_cohort_ids = {item.cohort.id for item in request.package.composition}
-        expected_cohort_ids = {
-            uuid5(namespace, f"{resolved_hub.order_id}:cohort:{ordinal}")
-            for namespace in sandbox_cohort_ids
-            for ordinal in range(len(request_cohort_ids))
-        }
+        expected_cohort_ids = derive_sandbox_cohort_ids(
+            sandbox_cohort_ids, resolved_hub.order_id, len(request_cohort_ids)
+        )
         if not request_cohort_ids or not request_cohort_ids.issubset(expected_cohort_ids):
             raise DHLRateAdapterError(
                 "domestic DHL rates require a restricted synthetic sandbox cohort"

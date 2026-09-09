@@ -38,6 +38,7 @@ from app.services.dhl.rating import (
     DHLResolvedHub,
     DHLRateAdapterError,
     create_sandbox_domestic_rate_adapter,
+    derive_sandbox_cohort_ids,
 )
 from app.services.fulfillment.contracts import (
     DomesticAddress,
@@ -327,7 +328,10 @@ async def _dhl_checkout_options(db, *, order: Order):
             planned_ship_date=planned_ship_date,
         )
         configured_cohorts = settings.dhl_domestic_sandbox_cohort_ids
-        if not configured_cohorts or not {item.cohort_id for item in items} <= configured_cohorts:
+        package_cohort_ids = {item.cohort_id for item in items}
+        if not configured_cohorts or not package_cohort_ids <= derive_sandbox_cohort_ids(
+            configured_cohorts, order.id, len(package_cohort_ids)
+        ):
             raise HTTPException(status_code=503, detail="checkout cohort is outside the configured DHL sandbox allowlist")
         checkout_settings = settings
         if not settings.checkout_capability_configured:
