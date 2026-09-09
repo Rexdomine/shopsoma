@@ -9,7 +9,7 @@ from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from hashlib import sha256
 from typing import Literal
-from uuid import UUID
+from uuid import UUID, uuid5
 
 import httpx
 
@@ -207,9 +207,12 @@ class DHLDomesticRateAdapter:
                 "rate request must match the authoritative shipment subject"
             )
         request_cohort_ids = {item.cohort.id for item in request.package.composition}
-        if not request_cohort_ids or not request_cohort_ids.issubset(
-            sandbox_cohort_ids
-        ):
+        expected_cohort_ids = {
+            uuid5(namespace, f"{resolved_hub.order_id}:cohort:{ordinal}")
+            for namespace in sandbox_cohort_ids
+            for ordinal in range(len(request_cohort_ids))
+        }
+        if not request_cohort_ids or not request_cohort_ids.issubset(expected_cohort_ids):
             raise DHLRateAdapterError(
                 "domestic DHL rates require a restricted synthetic sandbox cohort"
             )

@@ -1028,6 +1028,7 @@ async def create_order(
         products_by_id = {product.id: product for product in products}
         cohorts_by_key = {}
         cohort_namespace = tuple(configured_cohort_ids)[0]
+        cohort_ordinals = {}
         for order_item in created_order_items:
             product = products_by_id[order_item.product_id]
             readiness_type = (
@@ -1038,9 +1039,10 @@ async def create_order(
             cohort_key = (order_item.vendor_id, readiness_type)
             cohort = cohorts_by_key.get(cohort_key)
             if cohort is None:
+                cohort_ordinals[cohort_key] = len(cohort_ordinals)
                 cohort_id = uuid5(
                     cohort_namespace,
-                    f"{new_order.id}:{order_item.vendor_id}:{readiness_type.value}",
+                    f"{new_order.id}:cohort:{cohort_ordinals[cohort_key]}",
                 )
                 cohort = FulfillmentCohort(
                     id=cohort_id,
