@@ -225,7 +225,7 @@ class DHLDomesticRateAdapter:
                 "rate request must match the authoritative shipment subject"
             )
         request_cohort_ids = {item.cohort.id for item in request.package.composition}
-        expected_cohort_ids = derive_sandbox_cohort_ids(
+        expected_cohort_ids = sandbox_cohort_ids | derive_sandbox_cohort_ids(
             sandbox_cohort_ids, resolved_hub.order_id, len(request_cohort_ids)
         )
         if not request_cohort_ids or not request_cohort_ids.issubset(expected_cohort_ids):

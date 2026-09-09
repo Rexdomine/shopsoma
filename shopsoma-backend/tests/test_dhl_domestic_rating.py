@@ -265,6 +265,28 @@ def test_adapter_public_boundary_has_no_caller_overrides() -> None:
     }
 
 
+def test_adapter_accepts_legacy_configured_raw_cohorts_before_transport() -> None:
+    request = rate_request(
+        composition=(
+            PackageItemRef(
+                FulfillmentCohortRef(COHORT_A, HubRef(HUB_ID)), ITEM_A, 1
+            ),
+        )
+    )
+    adapter = create_sandbox_domestic_rate_adapter(
+        config=config(),
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(200, json={"products": []})
+        ),
+        identity_key=IDENTITY_KEY,
+        identity_key_version="test-key-v1",
+    )
+
+    payload = adapter.prepare_rate_payload(resolved_hub(request=request), request)
+
+    assert payload["packages"]
+
+
 @pytest.mark.parametrize("length", [51, 100])
 def test_factory_rejects_identity_key_versions_wider_than_persistence(
     length: int,
