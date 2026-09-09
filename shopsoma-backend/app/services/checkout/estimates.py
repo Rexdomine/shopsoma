@@ -103,12 +103,6 @@ async def _rate_pre_payment_quote_subject(db, *, order: Order):
         raise HTTPException(status_code=503, detail="cohort allocation does not cover the order item")
     if set(allocation_by_item) != set(expected_quantities):
         raise HTTPException(status_code=503, detail="order is not assigned to a fulfillment cohort")
-    if any(
-        cohort.id not in configured_cohorts
-        for item_allocations in allocation_by_item.values()
-        for _, cohort in item_allocations
-    ):
-        raise HTTPException(status_code=503, detail="checkout cohort is outside the configured DHL sandbox allowlist")
     hub_ref = HubRef(id=hub.id)
     package_id = uuid5(NAMESPACE_URL, f"shopsoma:checkout:{order.id}:quote-package")
     seal_id = uuid5(NAMESPACE_URL, f"shopsoma:checkout:{order.id}:quote-seal")
@@ -178,7 +172,7 @@ async def _rate_pre_payment_quote_subject(db, *, order: Order):
         line2=hub.address_line2.strip() or None if hub.address_line2 else None,
         city=hub.city,
         state=hub.state,
-        postal_code=hub.postal_code,
+        postal_code=hub.postal_code.strip() or None if hub.postal_code else None,
         country_code=hub.country_code,
     )
     lagos_now = datetime.now(ZoneInfo("Africa/Lagos"))
@@ -188,6 +182,7 @@ async def _rate_pre_payment_quote_subject(db, *, order: Order):
         destination=destination,
         package=package,
         planned_ship_date=planned_ship_date,
+        authorized_cohort_ids=frozenset(item.cohort.id for item in package.composition),
     )
     if not settings.checkout_capability_configured:
         raise HTTPException(status_code=503, detail="checkout rate identity is not configured")
@@ -567,6 +562,26 @@ async def create_estimate(
         if fresh_snapshot_hash != snapshot_hash:
             raise HTTPException(status_code=409, detail="order changed during DHL rating")
         order = fresh_order
+        current_unselected_leaf = (
+            await db.execute(
+                select(CheckoutShippingEstimate)
+                .where(
+                    CheckoutShippingEstimate.order_id == order.id,
+                    CheckoutShippingEstimate.customer_id == order.customer_id,
+                    ~select(successor_estimate.id).where(
+                        successor_estimate.supersedes_estimate_id == CheckoutShippingEstimate.id
+                    ).exists(),
+                    ~select(selection.id).where(
+                        selection.estimate_id == CheckoutShippingEstimate.id
+                    ).exists(),
+                )
+                .order_by(
+                    CheckoutShippingEstimate.created_at.desc(),
+                    CheckoutShippingEstimate.id.desc(),
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none()
 
     database_now = await db.scalar(select(text("statement_timestamp()")))
     ttl = _ESTIMATE_TTL_SECONDS

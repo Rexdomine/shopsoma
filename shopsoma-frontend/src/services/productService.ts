@@ -191,6 +191,11 @@ export const productService = {
       compare_at_price: original.compare_at_price,
       category_id: original.category_id,
       collection_id: original.collection_id,
+      fabric_composition: original.fabric_composition,
+      weight_kg: original.weight_kg,
+      length_cm: original.length_cm,
+      width_cm: original.width_cm,
+      height_cm: original.height_cm,
       status: 'draft' as const,
       is_featured: false,
       // Copy variations if they exist

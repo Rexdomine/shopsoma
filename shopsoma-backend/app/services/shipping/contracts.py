@@ -4,6 +4,7 @@ import re
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
+from uuid import UUID
 
 from app.services.fulfillment.contracts import (
     DomesticAddress,
@@ -56,6 +57,7 @@ class DomesticRateRequest:
     planned_ship_date: date
     content_type: str = "merchandise"
     movement_direction: str = "outbound"
+    authorized_cohort_ids: frozenset[UUID] = frozenset()
 
     def __post_init__(self) -> None:
         if not isinstance(self.origin, HubRef):
