@@ -168,10 +168,10 @@ async def _dhl_checkout_options(db, *, order: Order):
         package=package_ref,
         planned_ship_date=date.today(),
     )
-    cohort_ids = ",".join(str(item.cohort_id) for item in items)
-    checkout_settings = settings.model_copy(
-        update={"DHL_DOMESTIC_SANDBOX_COHORT_IDS": cohort_ids}
-    )
+    configured_cohorts = settings.dhl_domestic_sandbox_cohort_ids
+    if not configured_cohorts or not {item.cohort_id for item in items} <= configured_cohorts:
+        raise HTTPException(status_code=503, detail="checkout cohort is outside the configured DHL sandbox allowlist")
+    checkout_settings = settings
     identity_key = settings.CHECKOUT_CAPABILITY_ACTIVE_PEPPER.get_secret_value().encode()
     identity_version = f"checkout-capability-v{settings.CHECKOUT_CAPABILITY_ACTIVE_PEPPER_VERSION}"
     try:
@@ -357,6 +357,12 @@ async def create_estimate(
             amount /= usd_to_ngn_rate
         return amount.quantize(_CENT, rounding=ROUND_HALF_UP)
 
+    dhl_provider_enabled = (
+        settings.DHL_ENABLED
+        and settings.DHL_ENVIRONMENT == "sandbox"
+        and settings.DHL_DOMESTIC_WORKFLOW_ENABLED
+        and settings.DHL_DOMESTIC_PROVIDER_CALLS_ENABLED
+    )
     rates = (
         (
             await db.execute(
@@ -387,15 +393,10 @@ async def create_estimate(
             or ngn_in_order_currency(rate.max_order_value) >= order.subtotal
         )
     ]
-    if not rates:
+    if not rates and not dhl_provider_enabled:
         raise HTTPException(status_code=503, detail="no eligible estimate options")
     dhl_offers = None
-    if (
-        settings.DHL_ENABLED
-        and settings.DHL_ENVIRONMENT == "sandbox"
-        and settings.DHL_DOMESTIC_WORKFLOW_ENABLED
-        and settings.DHL_DOMESTIC_PROVIDER_CALLS_ENABLED
-    ):
+    if dhl_provider_enabled:
         dhl_offers = await _dhl_checkout_options(db, order=order)
 
     database_now = await db.scalar(select(text("statement_timestamp()")))
@@ -429,7 +430,14 @@ async def create_estimate(
     if dhl_offers is not None:
         for offer in dhl_offers:
             rate = offer.rate
-            if rate.currency != order.currency:
+            if rate.currency == order.currency:
+                amount = Decimal(rate.total_amount).quantize(_CENT, rounding=ROUND_HALF_UP)
+            elif rate.currency == "NGN":
+                amount = ngn_in_order_currency(rate.total_amount)
+            elif rate.currency == "USD" and order.currency == "NGN":
+                assert usd_to_ngn_rate is not None
+                amount = (Decimal(rate.total_amount) * usd_to_ngn_rate).quantize(_CENT, rounding=ROUND_HALF_UP)
+            else:
                 raise HTTPException(status_code=503, detail="DHL returned an unsupported checkout currency")
             db.add(
                 CheckoutShippingEstimateOption(
@@ -437,8 +445,8 @@ async def create_estimate(
                     option_key=f"dhl:{offer.provider_product_code}:{offer.provider_service_code}",
                     service_code=offer.provider_service_code,
                     service_label=offer.service_label,
-                    amount=rate.total_amount,
-                    currency=rate.currency,
+                    amount=amount,
+                    currency=order.currency,
                     min_delivery_days=rate.carrier_transit_days,
                     max_delivery_days=rate.carrier_transit_days,
                     source_rate_id=None,
