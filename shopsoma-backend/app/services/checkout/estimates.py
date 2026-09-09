@@ -1,7 +1,7 @@
 """Server-owned checkout-estimate creation and snapshot validation."""
 
 from datetime import datetime, timedelta
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, ROUND_CEILING, ROUND_HALF_UP
 import hashlib
 import json
 from uuid import NAMESPACE_URL, uuid5
@@ -134,7 +134,12 @@ async def _rate_pre_payment_quote_subject(db, *, order: Order):
             )
     if max_length <= 0 or max_width <= 0:
         raise HTTPException(status_code=422, detail="vendor parcel dimensions must be positive")
-    max_height = max(max_height, total_volume / (max_length * max_width))
+    max_height = max(
+        max_height,
+        (total_volume / (max_length * max_width)).quantize(
+            Decimal("0.001"), rounding=ROUND_CEILING
+        ),
+    )
     package = PackageRef(
         package_id=package_id,
         package_version=1,
