@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, and_, or_, func
 from sqlalchemy.orm import selectinload
-from uuid import UUID, uuid4
+from uuid import UUID, uuid4, uuid5
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
 import hashlib
@@ -1026,34 +1026,32 @@ async def create_order(
             )
         ).scalars().all()
         products_by_id = {product.id: product for product in products}
-        cohorts_by_vendor = {}
+        cohorts_by_key = {}
+        cohort_namespace = tuple(configured_cohort_ids)[0]
         for order_item in created_order_items:
             product = products_by_id[order_item.product_id]
-            cohort_id = tuple(configured_cohort_ids)[len(cohorts_by_vendor) % len(configured_cohort_ids)]
-            cohort = cohorts_by_vendor.get(order_item.vendor_id)
+            readiness_type = (
+                FulfillmentReadinessType.MADE_TO_ORDER
+                if product.made_to_order
+                else FulfillmentReadinessType.READY_TO_WEAR
+            )
+            cohort_key = (order_item.vendor_id, readiness_type)
+            cohort = cohorts_by_key.get(cohort_key)
             if cohort is None:
-                existing = await db.scalar(
-                    select(FulfillmentCohort).where(FulfillmentCohort.id == cohort_id)
+                cohort_id = uuid5(
+                    cohort_namespace,
+                    f"{new_order.id}:{order_item.vendor_id}:{readiness_type.value}",
                 )
-                if existing is not None and existing.order_id != new_order.id:
-                    raise HTTPException(
-                        status_code=503,
-                        detail="configured DHL sandbox cohort is already assigned",
-                    )
-                cohort = existing or FulfillmentCohort(
+                cohort = FulfillmentCohort(
                     id=cohort_id,
                     order_id=new_order.id,
                     vendor_id=order_item.vendor_id,
-                    readiness_type=(
-                        FulfillmentReadinessType.MADE_TO_ORDER
-                        if product.made_to_order
-                        else FulfillmentReadinessType.READY_TO_WEAR
-                    ),
+                    readiness_type=readiness_type,
                     ready_from=datetime.now(timezone.utc),
                     ready_through=datetime.now(timezone.utc) + timedelta(days=30),
                 )
                 db.add(cohort)
-                cohorts_by_vendor[order_item.vendor_id] = cohort
+                cohorts_by_key[cohort_key] = cohort
             db.add(
                 CohortItemAllocation(
                     cohort_id=cohort.id,

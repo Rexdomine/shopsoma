@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException, status
 from sqlalchemy import and_, or_, select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import aliased, selectinload
 
 from app.models.checkout_shipping_estimate import (
@@ -158,7 +159,7 @@ async def _rate_pre_payment_quote_subject(db, *, order: Order):
         line2=address.address_line2.strip() or None if address.address_line2 else None,
         city=address.city,
         state=address.state,
-        postal_code=address.postal_code,
+        postal_code=address.postal_code.strip() or None if address.postal_code else None,
         country_code="NG",
     )
     resolved = DHLResolvedHub(
@@ -320,7 +321,7 @@ async def _dhl_checkout_options(db, *, order: Order):
             line2=hub.address_line2.strip() or None if hub.address_line2 else None,
             city=hub.city,
             state=hub.state,
-            postal_code=hub.postal_code,
+            postal_code=hub.postal_code.strip() or None if hub.postal_code else None,
             country_code=hub.country_code,
         )
         lagos_now = datetime.now(ZoneInfo("Africa/Lagos"))
@@ -559,10 +560,13 @@ async def create_estimate(
     dhl_offers = None
     if dhl_provider_enabled:
         dhl_offers = await _dhl_checkout_options(db, order=order)
-        fresh_order = await load_checkout_order(db, order.id)
+        fresh_order = await load_checkout_order(db, order.id, for_update=True)
+        if fresh_order is None:
+            raise HTTPException(status_code=404, detail="checkout order no longer exists")
         _, fresh_snapshot_hash = order_snapshot(fresh_order)
         if fresh_snapshot_hash != snapshot_hash:
             raise HTTPException(status_code=409, detail="order changed during DHL rating")
+        order = fresh_order
 
     database_now = await db.scalar(select(text("statement_timestamp()")))
     ttl = _ESTIMATE_TTL_SECONDS
@@ -591,7 +595,19 @@ async def create_estimate(
         created_by_actor_id=actor_id,
     )
     db.add(estimate)
-    await db.flush()
+    try:
+        await db.flush()
+    except IntegrityError:
+        await db.rollback()
+        replay = await db.scalar(
+            select(CheckoutShippingEstimate).where(
+                CheckoutShippingEstimate.order_id == order.id,
+                CheckoutShippingEstimate.idempotency_key == idempotency_key,
+            )
+        )
+        if replay is None:
+            raise
+        return replay
     if dhl_offers is not None:
         for offer in dhl_offers:
             rate = offer.rate
