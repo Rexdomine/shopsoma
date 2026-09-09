@@ -182,7 +182,6 @@ async def _rate_pre_payment_quote_subject(db, *, order: Order):
         destination=destination,
         package=package,
         planned_ship_date=planned_ship_date,
-        authorized_cohort_ids=frozenset(item.cohort.id for item in package.composition),
     )
     if not settings.checkout_capability_configured:
         raise HTTPException(status_code=503, detail="checkout rate identity is not configured")
@@ -397,6 +396,37 @@ def order_snapshot(order: Order) -> tuple[str, str]:
     )
 
 
+async def parcel_measurement_snapshot(db, order: Order, *, for_update: bool = False) -> str:
+    """Hash mutable product parcel facts for an order-scoped DHL check."""
+    statement = (
+        select(
+            OrderItem.id,
+            Product.id,
+            Product.weight_kg,
+            Product.length_cm,
+            Product.width_cm,
+            Product.height_cm,
+        )
+        .join(Product, Product.id == OrderItem.product_id)
+        .where(OrderItem.order_id == order.id)
+        .order_by(OrderItem.id)
+    )
+    if for_update:
+        statement = statement.with_for_update()
+    rows = (await db.execute(statement)).all()
+    return _hash([
+        {
+            "order_item_id": str(item_id),
+            "product_id": str(product_id),
+            "weight_kg": str(weight),
+            "length_cm": str(length),
+            "width_cm": str(width),
+            "height_cm": str(height),
+        }
+        for item_id, product_id, weight, length, width, height in rows
+    ])
+
+
 async def load_checkout_order(
     db, order_id, *, for_update: bool = False
 ) -> Order | None:
@@ -497,6 +527,11 @@ async def create_estimate(
 
     capabilities = domestic_shipping_capabilities(settings)
     dhl_provider_enabled = capabilities.provider_calls_enabled
+    parcel_snapshot_hash = (
+        await parcel_measurement_snapshot(db, order)
+        if dhl_provider_enabled
+        else None
+    )
     usd_to_ngn_rate = None
     if order.currency == "USD":
         rate_setting = await db.scalar(
@@ -561,6 +596,13 @@ async def create_estimate(
         _, fresh_snapshot_hash = order_snapshot(fresh_order)
         if fresh_snapshot_hash != snapshot_hash:
             raise HTTPException(status_code=409, detail="order changed during DHL rating")
+        fresh_parcel_snapshot_hash = await parcel_measurement_snapshot(
+            db, fresh_order, for_update=True
+        )
+        if fresh_parcel_snapshot_hash != parcel_snapshot_hash:
+            raise HTTPException(
+                status_code=409, detail="parcel measurements changed during DHL rating"
+            )
         order = fresh_order
         current_unselected_leaf = (
             await db.execute(

@@ -4,6 +4,7 @@ Product CRUD API endpoints
 from typing import List, Optional, Dict, Any, Tuple
 import csv
 import io
+import math
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -110,8 +111,8 @@ def _parse_decimal(value: Optional[str], field: str, row: int, errors: List[Dict
 
 def _parse_positive_decimal(value: Optional[str], field: str, row: int, errors: List[Dict[str, Any]]) -> Optional[float]:
     parsed = _parse_decimal(value, field, row, errors)
-    if parsed is not None and parsed <= 0:
-        errors.append({"row": row, "field": field, "message": "Must be positive"})
+    if parsed is not None and (not math.isfinite(parsed) or parsed < 0.001):
+        errors.append({"row": row, "field": field, "message": "Must be at least 0.001 and finite"})
         return None
     return parsed
 

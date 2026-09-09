@@ -3,6 +3,19 @@ import csv
 import pytest
 from httpx import AsyncClient
 
+from app.api.v1.products import _parse_positive_decimal
+
+
+def test_bulk_measurement_parser_rejects_below_storage_precision_and_non_finite() -> None:
+    for value in ("0.0004", "NaN", "inf", "-inf"):
+        errors = []
+        assert _parse_positive_decimal(value, "weight_kg", 2, errors) is None
+        assert errors[0]["field"] == "weight_kg"
+
+    errors = []
+    assert _parse_positive_decimal("0.001", "weight_kg", 2, errors) == 0.001
+    assert errors == []
+
 
 @pytest.mark.asyncio
 async def test_bulk_upload_single_products_success(client: AsyncClient, vendor_user, db_session):
