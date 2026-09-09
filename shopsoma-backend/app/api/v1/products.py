@@ -56,10 +56,6 @@ BULK_SINGLE_HEADERS = [
     "made_to_order_timeline",
     "care_instructions",
     "fabric_composition",
-    "weight_kg",
-    "length_cm",
-    "width_cm",
-    "height_cm",
     "status",
 ]
 
@@ -76,10 +72,6 @@ BULK_VARIABLE_HEADERS = [
     "made_to_order_timeline",
     "care_instructions",
     "fabric_composition",
-    "weight_kg",
-    "length_cm",
-    "width_cm",
-    "height_cm",
     "color_name",
     "color_hex",
     "size",

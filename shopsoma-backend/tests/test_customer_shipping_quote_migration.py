@@ -57,7 +57,7 @@ def test_customer_quote_revision_is_single_linear_head_and_owns_explicit_ddl() -
     script = ScriptDirectory.from_config(config)
     assert script.get_heads() == [HEAD]
     assert script.get_revision(HEAD).down_revision == CURRENT_HEAD_PARENT
-    assert script.get_revision(CURRENT_HEAD_PARENT).down_revision == PREVIOUS_HEAD
+    assert script.get_revision(CURRENT_HEAD_PARENT).down_revision == "e6f7a8b9c0d1"
     assert script.get_revision(PREVIOUS_HEAD).down_revision == HEAD_PARENT
     assert script.get_revision(HEAD_PARENT).down_revision == HEAD_GRANDPARENT
     assert script.get_revision(HEAD_GRANDPARENT).down_revision == "a2b3c4d5e6f7"

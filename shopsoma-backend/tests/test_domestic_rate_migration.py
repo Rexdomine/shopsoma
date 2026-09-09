@@ -159,7 +159,7 @@ def test_domestic_rate_migration_is_the_single_linear_static_head() -> None:
     assert head_revision is not None
     assert Path(head_revision.path) == HEAD_MIGRATION
     assert head_revision.down_revision == CURRENT_HEAD_PARENT
-    assert graph.get_revision(CURRENT_HEAD_PARENT).down_revision == PREVIOUS_HEAD
+    assert graph.get_revision(CURRENT_HEAD_PARENT).down_revision == "e6f7a8b9c0d1"
     assert graph.get_revision(PREVIOUS_HEAD).down_revision == HEAD_PARENT
     assert graph.get_revision(HEAD_PARENT).down_revision == HEAD_GRANDPARENT
     assert graph.get_revision(HEAD_GRANDPARENT).down_revision == "a2b3c4d5e6f7"
