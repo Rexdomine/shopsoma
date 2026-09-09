@@ -152,16 +152,19 @@ async def _rate_pre_payment_quote_subject(db, *, order: Order):
         ),
         seal=SealRef(value=f"checkout-quote-{seal_id}"),
     )
-    destination = DomesticAddress(
-        contact_name=address.full_name,
-        phone=address.phone_number,
-        line1=address.address_line1,
-        line2=address.address_line2.strip() or None if address.address_line2 else None,
-        city=address.city,
-        state=address.state,
-        postal_code=address.postal_code.strip() or None if address.postal_code else None,
-        country_code="NG",
-    )
+    try:
+        destination = DomesticAddress(
+            contact_name=address.full_name,
+            phone=address.phone_number,
+            line1=address.address_line1,
+            line2=address.address_line2.strip() or None if address.address_line2 else None,
+            city=address.city,
+            state=address.state,
+            postal_code=address.postal_code.strip() or None if address.postal_code else None,
+            country_code="NG",
+        )
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422, detail="shipping address is invalid") from None
     resolved = DHLResolvedHub(
         hub=hub_ref,
         hub_version=hub.version,
@@ -180,6 +183,7 @@ async def _rate_pre_payment_quote_subject(db, *, order: Order):
         state=hub.state,
         postal_code=hub.postal_code.strip() or None if hub.postal_code else None,
         country_code=hub.country_code,
+        cohort_count=len({cohort.id for _, cohort in allocations}),
     )
     lagos_now = datetime.now(ZoneInfo("Africa/Lagos"))
     planned_ship_date = lagos_now.date() if lagos_now.hour < 12 else lagos_now.date() + timedelta(days=1)
@@ -323,6 +327,7 @@ async def _dhl_checkout_options(db, *, order: Order):
             state=hub.state,
             postal_code=hub.postal_code.strip() or None if hub.postal_code else None,
             country_code=hub.country_code,
+            cohort_count=len({item.cohort_id for item in items}),
         )
         lagos_now = datetime.now(ZoneInfo("Africa/Lagos"))
         planned_ship_date = lagos_now.date() if lagos_now.hour < 12 else lagos_now.date() + timedelta(days=1)
@@ -506,9 +511,6 @@ async def create_estimate(
         await db.execute(
             select(CheckoutShippingEstimate).where(
                 CheckoutShippingEstimate.customer_id == order.customer_id,
-                CheckoutShippingEstimate.source_command.in_(
-                    ["create_checkout_estimate", "refresh_checkout_estimate"]
-                ),
                 CheckoutShippingEstimate.idempotency_key == idempotency_key,
             )
         )

@@ -86,6 +86,7 @@ class DHLResolvedHub:
     state: str
     postal_code: str | None = None
     country_code: str = "NG"
+    cohort_count: int | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.hub, HubRef):
@@ -123,6 +124,12 @@ class DHLResolvedHub:
             raise ValueError("resolved package facts do not match their identity")
         if self.country_code != "NG":
             raise ValueError("resolved hub must be Nigerian")
+        if self.cohort_count is not None and (
+            not isinstance(self.cohort_count, int)
+            or isinstance(self.cohort_count, bool)
+            or self.cohort_count <= 0
+        ):
+            raise ValueError("resolved cohort count is invalid")
         for field_name in ("contact_name", "phone", "line1", "city", "state"):
             value = getattr(self, field_name)
             if not isinstance(value, str) or not value.strip():
@@ -226,7 +233,9 @@ class DHLDomesticRateAdapter:
             )
         request_cohort_ids = {item.cohort.id for item in request.package.composition}
         expected_cohort_ids = sandbox_cohort_ids | derive_sandbox_cohort_ids(
-            sandbox_cohort_ids, resolved_hub.order_id, len(request_cohort_ids)
+            sandbox_cohort_ids,
+            resolved_hub.order_id,
+            resolved_hub.cohort_count or len(request_cohort_ids),
         )
         if not request_cohort_ids or not request_cohort_ids.issubset(expected_cohort_ids):
             raise DHLRateAdapterError(

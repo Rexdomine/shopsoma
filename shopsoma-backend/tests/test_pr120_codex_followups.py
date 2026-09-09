@@ -913,7 +913,7 @@ def test_create_estimate_replays_refresh_idempotency_key(monkeypatch):
     class FakeDB:
         async def execute(self, statement):
             sql = str(statement)
-            assert "source_command IN" in sql
+            assert "idempotency_key" in sql
             return FakeResult(existing)
 
     order = SimpleNamespace(

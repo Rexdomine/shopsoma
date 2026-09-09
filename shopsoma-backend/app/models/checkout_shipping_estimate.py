@@ -82,7 +82,6 @@ class CheckoutShippingEstimate(Base):
         ),
         UniqueConstraint(
             "customer_id",
-            "source_command",
             "idempotency_key",
             name="uq_checkout_shipping_estimates_replay",
         ),

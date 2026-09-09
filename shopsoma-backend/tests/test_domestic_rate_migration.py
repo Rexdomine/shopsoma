@@ -17,12 +17,12 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 
 ROOT = Path(__file__).resolve().parents[1]
-HEAD = "k7l8m9n0p1q2"
-CURRENT_HEAD_PARENT = "1c2b3d4e"
+HEAD = "l9m0n1o2p3q4"
+CURRENT_HEAD_PARENT = "k7l8m9n0p1q2"
 PREVIOUS_HEAD = "d5e6f7a8b9c0"
 HEAD_PARENT = "c4d5e6f7a8b9"
 HEAD_GRANDPARENT = "b3c4d5e6f7a8"
-HEAD_MIGRATION = ROOT / "alembic" / "versions" / "k7l8m9n0p1q2_add_product_shipping_dimensions.py"
+HEAD_MIGRATION = ROOT / "alembic" / "versions" / "l9m0n1o2p3q4_idempotency_key_scope.py"
 REPAIR_MIGRATION = ROOT / "alembic" / "versions" / "e6f7a8b9c0d1_repair_domestic_rate_custody_guards.py"
 
 EXPAND_REVISION = "a0b1c2d3e4f5"
