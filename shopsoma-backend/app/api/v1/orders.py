@@ -70,7 +70,7 @@ def _domestic_checkout_is_enforced(
     # The DHL checkout bridge is a staging/sandbox capability.  Even if an
     # operator accidentally enables the cohort flag in production, new orders
     # must remain on the legacy path rather than exposing the bridge there.
-    if settings.DHL_ENVIRONMENT != "sandbox":
+    if settings.ENVIRONMENT == "production" or settings.DHL_ENVIRONMENT != "sandbox":
         return False
     if country.casefold() != "nigeria" or currency not in SUPPORTED_ORDER_CURRENCIES:
         return False
