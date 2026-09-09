@@ -1018,10 +1018,8 @@ async def create_order(
 
     await db.flush()  # Get order item IDs
 
-    if enforced_checkout:
+    if enforced_checkout and settings.dhl_domestic_sandbox_cohort_ids:
         configured_cohort_ids = settings.dhl_domestic_sandbox_cohort_ids
-        if not configured_cohort_ids:
-            raise HTTPException(status_code=503, detail="configured DHL sandbox cohort required")
         products = (
             await db.execute(
                 select(Product).where(Product.id.in_([item.product_id for item in created_order_items]))
