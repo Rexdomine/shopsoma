@@ -48,6 +48,7 @@ from app.services.fulfillment.contracts import (
     SealRef,
 )
 from app.services.shipping.contracts import DomesticRateRequest
+from app.services.shipping.capabilities import domestic_shipping_capabilities
 
 _CENT = Decimal("0.01")
 _ESTIMATE_TTL_SECONDS = 1800
@@ -91,14 +92,21 @@ async def _rate_pre_payment_quote_subject(db, *, order: Order):
     ).all()
     allocation_by_item = {}
     for allocation, cohort in allocations:
-        if allocation.allocated_quantity != next(
-            item.quantity for item, _ in rows if item.id == allocation.order_item_id
-        ):
-            raise HTTPException(status_code=503, detail="cohort allocation does not cover the order item")
-        allocation_by_item[allocation.order_item_id] = (allocation, cohort)
-    if set(allocation_by_item) != {item.id for item, _ in rows}:
+        allocation_by_item.setdefault(allocation.order_item_id, []).append((allocation, cohort))
+    expected_quantities = {item.id: item.quantity for item, _ in rows}
+    if any(
+        sum(allocation.allocated_quantity for allocation, _ in item_allocations)
+        != expected_quantities[item_id]
+        for item_id, item_allocations in allocation_by_item.items()
+    ):
+        raise HTTPException(status_code=503, detail="cohort allocation does not cover the order item")
+    if set(allocation_by_item) != set(expected_quantities):
         raise HTTPException(status_code=503, detail="order is not assigned to a fulfillment cohort")
-    if any(cohort.id not in configured_cohorts for _, cohort in allocation_by_item.values()):
+    if any(
+        cohort.id not in configured_cohorts
+        for item_allocations in allocation_by_item.values()
+        for _, cohort in item_allocations
+    ):
         raise HTTPException(status_code=503, detail="checkout cohort is outside the configured DHL sandbox allowlist")
     hub_ref = HubRef(id=hub.id)
     package_id = uuid5(NAMESPACE_URL, f"shopsoma:checkout:{order.id}:quote-package")
@@ -120,14 +128,14 @@ async def _rate_pre_payment_quote_subject(db, *, order: Order):
             * Decimal(product.height_cm)
             * item.quantity
         )
-        allocation, cohort = allocation_by_item[item.id]
-        composition.append(
-            PackageItemRef(
-                cohort=FulfillmentCohortRef(id=cohort.id, hub=hub_ref),
-                order_item_id=item.id,
-                quantity=allocation.allocated_quantity,
+        for allocation, cohort in allocation_by_item[item.id]:
+            composition.append(
+                PackageItemRef(
+                    cohort=FulfillmentCohortRef(id=cohort.id, hub=hub_ref),
+                    order_item_id=item.id,
+                    quantity=allocation.allocated_quantity,
+                )
             )
-        )
     if max_length <= 0 or max_width <= 0:
         raise HTTPException(status_code=422, detail="vendor parcel dimensions must be positive")
     max_height = max(max_height, total_volume / (max_length * max_width))
@@ -491,12 +499,8 @@ async def create_estimate(
         )
     ).scalar_one_or_none()
 
-    dhl_provider_enabled = (
-        settings.DHL_ENABLED
-        and settings.DHL_ENVIRONMENT == "sandbox"
-        and settings.DHL_DOMESTIC_WORKFLOW_ENABLED
-        and settings.DHL_DOMESTIC_PROVIDER_CALLS_ENABLED
-    )
+    capabilities = domestic_shipping_capabilities(settings)
+    dhl_provider_enabled = capabilities.provider_calls_enabled
     usd_to_ngn_rate = None
     if order.currency == "USD":
         rate_setting = await db.scalar(
@@ -555,6 +559,10 @@ async def create_estimate(
     dhl_offers = None
     if dhl_provider_enabled:
         dhl_offers = await _dhl_checkout_options(db, order=order)
+        fresh_order = await load_checkout_order(db, order.id)
+        _, fresh_snapshot_hash = order_snapshot(fresh_order)
+        if fresh_snapshot_hash != snapshot_hash:
+            raise HTTPException(status_code=409, detail="order changed during DHL rating")
 
     database_now = await db.scalar(select(text("statement_timestamp()")))
     ttl = _ESTIMATE_TTL_SECONDS

@@ -5,8 +5,8 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, and_, or_, func
 from sqlalchemy.orm import selectinload
-from uuid import UUID
-from datetime import datetime
+from uuid import UUID, uuid4
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
 import hashlib
 import json
@@ -27,6 +27,11 @@ from app.models.payment import Payment
 from app.models.address import Address
 from app.models.shipping_rate import ShippingRate
 from app.models.vendor import Vendor
+from app.models.fulfillment_cohort import (
+    CohortItemAllocation,
+    FulfillmentCohort,
+    FulfillmentReadinessType,
+)
 from app.models.setting import Setting
 from app.models.stock_payment_persistence import (
     PaymentAttempt,
@@ -1014,6 +1019,55 @@ async def create_order(
     await db.flush()  # Get order item IDs
 
     if enforced_checkout:
+        configured_cohort_ids = settings.dhl_domestic_sandbox_cohort_ids
+        if not configured_cohort_ids:
+            raise HTTPException(status_code=503, detail="configured DHL sandbox cohort required")
+        products = (
+            await db.execute(
+                select(Product).where(Product.id.in_([item.product_id for item in created_order_items]))
+            )
+        ).scalars().all()
+        products_by_id = {product.id: product for product in products}
+        cohorts_by_vendor = {}
+        for order_item in created_order_items:
+            product = products_by_id[order_item.product_id]
+            cohort_id = tuple(configured_cohort_ids)[len(cohorts_by_vendor) % len(configured_cohort_ids)]
+            cohort = cohorts_by_vendor.get(order_item.vendor_id)
+            if cohort is None:
+                existing = await db.scalar(
+                    select(FulfillmentCohort).where(FulfillmentCohort.id == cohort_id)
+                )
+                if existing is not None and existing.order_id != new_order.id:
+                    raise HTTPException(
+                        status_code=503,
+                        detail="configured DHL sandbox cohort is already assigned",
+                    )
+                cohort = existing or FulfillmentCohort(
+                    id=cohort_id,
+                    order_id=new_order.id,
+                    vendor_id=order_item.vendor_id,
+                    readiness_type=(
+                        FulfillmentReadinessType.MADE_TO_ORDER
+                        if product.made_to_order
+                        else FulfillmentReadinessType.READY_TO_WEAR
+                    ),
+                    ready_from=datetime.now(timezone.utc),
+                    ready_through=datetime.now(timezone.utc) + timedelta(days=30),
+                )
+                db.add(cohort)
+                cohorts_by_vendor[order_item.vendor_id] = cohort
+            db.add(
+                CohortItemAllocation(
+                    cohort_id=cohort.id,
+                    order_item_id=order_item.id,
+                    order_id=new_order.id,
+                    vendor_id=order_item.vendor_id,
+                    allocated_quantity=order_item.quantity,
+                )
+            )
+        await db.flush()
+
+    if enforced_checkout:
         # Checkout estimates resolve only fulfillment-owned ready packages.
         # Package creation, QC, sealing, and readiness remain in the custody
         # state machine and are not created as a checkout side effect.
@@ -1040,7 +1094,7 @@ async def create_order(
     # Create vendor pickups and notifications for each order item
     from app.models import VendorPickup, VendorNotification, Vendor
     from app.models.vendor_pickup import OrderType, PickupStatus
-    from datetime import datetime, timedelta
+    from datetime import timedelta
 
     vendor_cache = {}
     vendor_notifications = {}

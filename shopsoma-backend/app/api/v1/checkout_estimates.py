@@ -54,7 +54,7 @@ async def create_checkout_estimate(
     current_user: Optional[User] = Depends(get_optional_user),
     db=Depends(get_db),
 ):
-    order = await load_checkout_order(db, order_id, for_update=True)
+    order = await load_checkout_order(db, order_id, for_update=False)
     if not order:
         raise HTTPException(status_code=404, detail="checkout not available")
     actor_type, actor_id = await _checkout_actor(db, order, current_user, capability)
