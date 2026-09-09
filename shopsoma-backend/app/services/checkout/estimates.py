@@ -1,9 +1,11 @@
 """Server-owned checkout-estimate creation and snapshot validation."""
 
-from datetime import date, timedelta
+from datetime import datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 import hashlib
 import json
+from uuid import NAMESPACE_URL, uuid5
+from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException, status
 from sqlalchemy import and_, or_, select, text
@@ -16,6 +18,7 @@ from app.models.checkout_shipping_estimate import (
 )
 from app.models.address import Address
 from app.models.order import Order, OrderItem
+from app.models.product import Product
 from app.models.setting import Setting
 from app.models.shipping_rate import ShippingRate
 from app.models.fulfillment_hub import FulfillmentHub
@@ -49,134 +52,110 @@ _CENT = Decimal("0.01")
 _ESTIMATE_TTL_SECONDS = 1800
 
 
-async def _dhl_checkout_options(db, *, order: Order):
-    """Rate the exact checkout shipment subject through DHL sandbox."""
-    handed_off = select(CustodyEvent.id).where(
-        CustodyEvent.package_id == HubPackage.id,
-        CustodyEvent.package_version == HubPackage.current_version,
-        CustodyEvent.event_type.in_(("released", "tendered", "provider_accepted")),
-    ).exists()
-    packages = (
+async def _rate_pre_payment_quote_subject(db, *, order: Order):
+    """Rate a non-custodial quote subject before payment/fulfillment handoff."""
+    configured_cohorts = settings.dhl_domestic_sandbox_cohort_ids
+    if not configured_cohorts:
+        raise HTTPException(status_code=503, detail="configured DHL sandbox cohort required")
+    address = order.shipping_address
+    if address is None or not address.postal_code:
+        raise HTTPException(status_code=422, detail="postal code required for DHL rating")
+    hubs = (
         await db.execute(
-            select(HubPackage)
-            .where(HubPackage.order_id == order.id, HubPackage.state == "ready", ~handed_off)
-            .order_by(HubPackage.ready_at.desc(), HubPackage.id.desc())
+            select(FulfillmentHub).where(FulfillmentHub.is_active.is_(True)).order_by(FulfillmentHub.id)
         )
     ).scalars().all()
-    if len(packages) != 1:
-        raise HTTPException(status_code=503, detail="DHL shipment subject is not ready")
-    package = packages[0]
-    seal = (
+    if len(hubs) != 1:
+        raise HTTPException(status_code=503, detail="exactly one active DHL fulfillment hub required")
+    hub = hubs[0]
+    rows = (
         await db.execute(
-            select(HubPackageSeal).where(
-                HubPackageSeal.package_id == package.id,
-                HubPackageSeal.package_version == package.current_version,
-                HubPackageSeal.retired_at.is_(None),
-            )
+            select(OrderItem, Product)
+            .join(Product, Product.id == OrderItem.product_id)
+            .where(OrderItem.order_id == order.id)
+            .order_by(OrderItem.id)
         )
-    ).scalar_one_or_none()
-    intent = (
-        await db.execute(
-            select(OutboundShipmentIntent).where(
-                OutboundShipmentIntent.order_id == order.id,
-                OutboundShipmentIntent.package_id == package.id,
-                OutboundShipmentIntent.package_version == package.current_version,
-                ~select(OutboundShipmentIntentInvalidation.id)
-                .where(OutboundShipmentIntentInvalidation.intent_id == OutboundShipmentIntent.id)
-                .exists(),
-            )
-        )
-    ).scalar_one_or_none()
-    hub = (
-        await db.execute(
-            select(FulfillmentHub).where(
-                FulfillmentHub.id == package.hub_id,
-                FulfillmentHub.is_active.is_(True),
-            )
-        )
-    ).scalar_one_or_none()
-    version = (
-        await db.execute(
-            select(HubPackageVersion).where(
-                HubPackageVersion.package_id == package.id,
-                HubPackageVersion.version == package.current_version,
-            )
-        )
-    ).scalar_one_or_none()
-    items = (
-        await db.execute(
-            select(HubPackageItem).where(
-                HubPackageItem.package_id == package.id,
-                HubPackageItem.package_version == package.current_version,
-            ).order_by(HubPackageItem.id)
-        )
-    ).scalars().all()
-    if not all((seal, intent, hub, version, items)):
-        raise HTTPException(status_code=503, detail="DHL shipment subject is incomplete")
-    destination = DomesticAddress(
-        contact_name=intent.destination_name,
-        phone=intent.destination_phone,
-        line1=intent.destination_address_line1,
-        line2=intent.destination_address_line2,
-        city=intent.destination_city,
-        state=intent.destination_state,
-        postal_code=intent.destination_postal_code,
-        country_code=intent.destination_country_code,
-    )
+    ).all()
+    if not rows or any(
+        None in (product.weight_kg, product.length_cm, product.width_cm, product.height_cm)
+        for _, product in rows
+    ):
+        raise HTTPException(status_code=422, detail="vendor parcel dimensions required before DHL rating")
+    cohort_id = sorted(configured_cohorts, key=str)[0]
     hub_ref = HubRef(id=hub.id)
-    package_ref = PackageRef(
-        package_id=package.id,
-        package_version=package.current_version,
-        composition=tuple(
+    package_id = uuid5(NAMESPACE_URL, f"shopsoma:checkout:{order.id}:quote-package")
+    seal_id = uuid5(NAMESPACE_URL, f"shopsoma:checkout:{order.id}:quote-seal")
+    total_weight = Decimal("0")
+    max_length = Decimal("0")
+    max_width = Decimal("0")
+    max_height = Decimal("0")
+    composition = []
+    for item, product in rows:
+        total_weight += Decimal(product.weight_kg) * item.quantity
+        max_length = max(max_length, Decimal(product.length_cm))
+        max_width = max(max_width, Decimal(product.width_cm))
+        max_height = max(max_height, Decimal(product.height_cm))
+        composition.append(
             PackageItemRef(
-                cohort=FulfillmentCohortRef(id=item.cohort_id, hub=hub_ref),
-                order_item_id=item.order_item_id,
+                cohort=FulfillmentCohortRef(id=cohort_id, hub=hub_ref),
+                order_item_id=item.id,
                 quantity=item.quantity,
             )
-            for item in items
-        ),
+        )
+    package = PackageRef(
+        package_id=package_id,
+        package_version=1,
+        composition=tuple(composition),
         measurement=ParcelMeasurement(
-            weight_kg=version.weight_kg,
-            length_cm=version.length_cm,
-            width_cm=version.width_cm,
-            height_cm=version.height_cm,
+            weight_kg=total_weight,
+            length_cm=max_length,
+            width_cm=max_width,
+            height_cm=max_height,
         ),
-        seal=SealRef(value=seal.opaque_value),
+        seal=SealRef(value=f"checkout-quote-{seal_id}"),
+    )
+    destination = DomesticAddress(
+        contact_name=address.full_name,
+        phone=address.phone_number,
+        line1=address.address_line1,
+        line2=address.address_line2.strip() or None if address.address_line2 else None,
+        city=address.city,
+        state=address.state,
+        postal_code=address.postal_code,
+        country_code="NG",
     )
     resolved = DHLResolvedHub(
         hub=hub_ref,
         hub_version=hub.version,
-        intent_id=intent.id,
+        intent_id=uuid5(NAMESPACE_URL, f"shopsoma:checkout:{order.id}:quote-intent"),
         order_id=order.id,
-        seal_id=seal.id,
-        package_id=package.id,
-        package_version=package.current_version,
+        seal_id=seal_id,
+        package_id=package_id,
+        package_version=1,
         destination=destination,
-        package=package_ref,
+        package=package,
         contact_name=hub.contact_name,
         phone=hub.contact_phone,
         line1=hub.address_line1,
-        line2=hub.address_line2,
+        line2=hub.address_line2.strip() or None if hub.address_line2 else None,
         city=hub.city,
         state=hub.state,
         postal_code=hub.postal_code,
         country_code=hub.country_code,
     )
+    lagos_now = datetime.now(ZoneInfo("Africa/Lagos"))
+    planned_ship_date = lagos_now.date() if lagos_now.hour < 12 else lagos_now.date() + timedelta(days=1)
     request = DomesticRateRequest(
         origin=hub_ref,
         destination=destination,
-        package=package_ref,
-        planned_ship_date=date.today(),
+        package=package,
+        planned_ship_date=planned_ship_date,
     )
-    configured_cohorts = settings.dhl_domestic_sandbox_cohort_ids
-    if not configured_cohorts or not {item.cohort_id for item in items} <= configured_cohorts:
-        raise HTTPException(status_code=503, detail="checkout cohort is outside the configured DHL sandbox allowlist")
-    checkout_settings = settings
     identity_key = settings.CHECKOUT_CAPABILITY_ACTIVE_PEPPER.get_secret_value().encode()
     identity_version = f"checkout-capability-v{settings.CHECKOUT_CAPABILITY_ACTIVE_PEPPER_VERSION}"
     try:
         adapter = create_sandbox_domestic_rate_adapter(
-            config=checkout_settings,
+            config=settings,
             transport=None,
             identity_key=identity_key,
             identity_key_version=identity_version,
@@ -188,6 +167,151 @@ async def _dhl_checkout_options(db, *, order: Order):
     if result.result_kind != "success":
         raise HTTPException(status_code=503, detail="DHL has no service for this shipment")
     return result.offers
+
+
+async def _dhl_checkout_options(db, *, order: Order):
+        """Rate the exact checkout shipment subject through DHL sandbox."""
+        handed_off = select(CustodyEvent.id).where(
+            CustodyEvent.package_id == HubPackage.id,
+            CustodyEvent.package_version == HubPackage.current_version,
+            CustodyEvent.event_type.in_(("released", "tendered", "provider_accepted")),
+        ).exists()
+        packages = (
+            await db.execute(
+                select(HubPackage)
+                .where(HubPackage.order_id == order.id, HubPackage.state == "ready", ~handed_off)
+                .order_by(HubPackage.ready_at.desc(), HubPackage.id.desc())
+            )
+        ).scalars().all()
+        if not packages:
+            return await _rate_pre_payment_quote_subject(db, order=order)
+        if len(packages) != 1:
+            raise HTTPException(status_code=503, detail="DHL shipment subject is not ready")
+        package = packages[0]
+        seal = (
+            await db.execute(
+                select(HubPackageSeal).where(
+                    HubPackageSeal.package_id == package.id,
+                    HubPackageSeal.package_version == package.current_version,
+                    HubPackageSeal.retired_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
+        intent = (
+            await db.execute(
+                select(OutboundShipmentIntent).where(
+                    OutboundShipmentIntent.order_id == order.id,
+                    OutboundShipmentIntent.package_id == package.id,
+                    OutboundShipmentIntent.package_version == package.current_version,
+                    ~select(OutboundShipmentIntentInvalidation.id)
+                    .where(OutboundShipmentIntentInvalidation.intent_id == OutboundShipmentIntent.id)
+                    .exists(),
+                )
+            )
+        ).scalar_one_or_none()
+        hub = (
+            await db.execute(
+                select(FulfillmentHub).where(
+                    FulfillmentHub.id == package.hub_id,
+                    FulfillmentHub.is_active.is_(True),
+                )
+            )
+        ).scalar_one_or_none()
+        version = (
+            await db.execute(
+                select(HubPackageVersion).where(
+                    HubPackageVersion.package_id == package.id,
+                    HubPackageVersion.version == package.current_version,
+                )
+            )
+        ).scalar_one_or_none()
+        items = (
+            await db.execute(
+                select(HubPackageItem).where(
+                    HubPackageItem.package_id == package.id,
+                    HubPackageItem.package_version == package.current_version,
+                ).order_by(HubPackageItem.id)
+            )
+        ).scalars().all()
+        if not all((seal, intent, hub, version, items)):
+            raise HTTPException(status_code=503, detail="DHL shipment subject is incomplete")
+        destination = DomesticAddress(
+            contact_name=intent.destination_name,
+            phone=intent.destination_phone,
+            line1=intent.destination_address_line1,
+            line2=intent.destination_address_line2.strip() or None if intent.destination_address_line2 else None,
+            city=intent.destination_city,
+            state=intent.destination_state,
+            postal_code=intent.destination_postal_code,
+            country_code=intent.destination_country_code,
+        )
+        hub_ref = HubRef(id=hub.id)
+        package_ref = PackageRef(
+            package_id=package.id,
+            package_version=package.current_version,
+            composition=tuple(
+                PackageItemRef(
+                    cohort=FulfillmentCohortRef(id=item.cohort_id, hub=hub_ref),
+                    order_item_id=item.order_item_id,
+                    quantity=item.quantity,
+                )
+                for item in items
+            ),
+            measurement=ParcelMeasurement(
+                weight_kg=version.weight_kg,
+                length_cm=version.length_cm,
+                width_cm=version.width_cm,
+                height_cm=version.height_cm,
+            ),
+            seal=SealRef(value=seal.opaque_value),
+        )
+        resolved = DHLResolvedHub(
+            hub=hub_ref,
+            hub_version=hub.version,
+            intent_id=intent.id,
+            order_id=order.id,
+            seal_id=seal.id,
+            package_id=package.id,
+            package_version=package.current_version,
+            destination=destination,
+            package=package_ref,
+            contact_name=hub.contact_name,
+            phone=hub.contact_phone,
+            line1=hub.address_line1,
+            line2=hub.address_line2.strip() or None if hub.address_line2 else None,
+            city=hub.city,
+            state=hub.state,
+            postal_code=hub.postal_code,
+            country_code=hub.country_code,
+        )
+        lagos_now = datetime.now(ZoneInfo("Africa/Lagos"))
+        planned_ship_date = lagos_now.date() if lagos_now.hour < 12 else lagos_now.date() + timedelta(days=1)
+        request = DomesticRateRequest(
+            origin=hub_ref,
+            destination=destination,
+            package=package_ref,
+            planned_ship_date=planned_ship_date,
+        )
+        configured_cohorts = settings.dhl_domestic_sandbox_cohort_ids
+        if not configured_cohorts or not {item.cohort_id for item in items} <= configured_cohorts:
+            raise HTTPException(status_code=503, detail="checkout cohort is outside the configured DHL sandbox allowlist")
+        checkout_settings = settings
+        identity_key = settings.CHECKOUT_CAPABILITY_ACTIVE_PEPPER.get_secret_value().encode()
+        identity_version = f"checkout-capability-v{settings.CHECKOUT_CAPABILITY_ACTIVE_PEPPER_VERSION}"
+        try:
+            adapter = create_sandbox_domestic_rate_adapter(
+                config=checkout_settings,
+                transport=None,
+                identity_key=identity_key,
+                identity_key_version=identity_version,
+            )
+            payload = adapter.prepare_rate_payload(resolved, request)
+            result = await adapter.rate(resolved, request, prepared_payload=payload)
+        except DHLRateAdapterError:
+            raise HTTPException(status_code=503, detail="DHL sandbox rate request failed") from None
+        if result.result_kind != "success":
+            raise HTTPException(status_code=503, detail="DHL has no service for this shipment")
+        return result.offers
 
 
 def _estimate_expiry_delta(ttl_seconds: int) -> timedelta:
@@ -334,6 +458,12 @@ async def create_estimate(
         )
     ).scalar_one_or_none()
 
+    dhl_provider_enabled = (
+        settings.DHL_ENABLED
+        and settings.DHL_ENVIRONMENT == "sandbox"
+        and settings.DHL_DOMESTIC_WORKFLOW_ENABLED
+        and settings.DHL_DOMESTIC_PROVIDER_CALLS_ENABLED
+    )
     usd_to_ngn_rate = None
     if order.currency == "USD":
         rate_setting = await db.scalar(
@@ -357,12 +487,6 @@ async def create_estimate(
             amount /= usd_to_ngn_rate
         return amount.quantize(_CENT, rounding=ROUND_HALF_UP)
 
-    dhl_provider_enabled = (
-        settings.DHL_ENABLED
-        and settings.DHL_ENVIRONMENT == "sandbox"
-        and settings.DHL_DOMESTIC_WORKFLOW_ENABLED
-        and settings.DHL_DOMESTIC_PROVIDER_CALLS_ENABLED
-    )
     rates = (
         (
             await db.execute(
@@ -435,7 +559,20 @@ async def create_estimate(
             elif rate.currency == "NGN":
                 amount = ngn_in_order_currency(rate.total_amount)
             elif rate.currency == "USD" and order.currency == "NGN":
-                assert usd_to_ngn_rate is not None
+                if usd_to_ngn_rate is None:
+                    rate_setting = await db.scalar(
+                        select(Setting).where(Setting.key == "exchange_rate_usd_to_ngn")
+                    )
+                    try:
+                        usd_to_ngn_rate = Decimal(str(rate_setting.value))
+                    except (ArithmeticError, ValueError, TypeError, AttributeError) as exc:
+                        raise HTTPException(
+                            status_code=503, detail="authoritative exchange rate unavailable"
+                        ) from exc
+                    if not usd_to_ngn_rate.is_finite() or usd_to_ngn_rate <= 0:
+                        raise HTTPException(
+                            status_code=503, detail="authoritative exchange rate unavailable"
+                        )
                 amount = (Decimal(rate.total_amount) * usd_to_ngn_rate).quantize(_CENT, rounding=ROUND_HALF_UP)
             else:
                 raise HTTPException(status_code=503, detail="DHL returned an unsupported checkout currency")
