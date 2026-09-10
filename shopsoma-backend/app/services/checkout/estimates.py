@@ -7,8 +7,8 @@ import json
 from uuid import NAMESPACE_URL, uuid5
 from zoneinfo import ZoneInfo
 
-from fastapi import HTTPException, status
-from sqlalchemy import and_, or_, select, text
+from fastapi import HTTPException
+from sqlalchemy import or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import aliased, selectinload
 
@@ -52,6 +52,7 @@ from app.services.fulfillment.contracts import (
 )
 from app.services.shipping.contracts import DomesticRateRequest
 from app.services.shipping.capabilities import domestic_shipping_capabilities
+from app.services.checkout.capabilities import authorize_checkout_actor
 
 _CENT = Decimal("0.01")
 _MAX_CHECKOUT_OPTION_AMOUNT = Decimal("99999999.99")
@@ -733,7 +734,14 @@ async def reload_checkout_order(db, order: Order) -> Order:
 
 
 async def create_estimate(
-    db, *, order: Order, actor_type: str, actor_id: str, idempotency_key: str
+    db,
+    *,
+    order: Order,
+    actor_type: str,
+    actor_id: str,
+    idempotency_key: str,
+    current_user=None,
+    capability=None,
 ):
     if order.workflow_cohort != "domestic_checkout_v1":
         raise HTTPException(status_code=404, detail="checkout not available")
@@ -923,6 +931,14 @@ async def create_estimate(
         fresh_order = await load_checkout_order(db, order.id, for_update=True)
         if fresh_order is None:
             raise HTTPException(status_code=404, detail="checkout order no longer exists")
+        refreshed_actor_type, refreshed_actor_id = await authorize_checkout_actor(
+            db,
+            order=fresh_order,
+            current_user=current_user,
+            token=capability,
+        )
+        if (refreshed_actor_type, refreshed_actor_id) != (actor_type, actor_id):
+            raise HTTPException(status_code=404, detail="checkout not available")
         fresh_payment_status = getattr(fresh_order, "payment_status", None)
         fresh_fulfillment_status = getattr(fresh_order, "fulfillment_status", None)
         if (
@@ -1012,7 +1028,21 @@ async def create_estimate(
             created_by_actor_id=actor_id,
         )
         db.add(estimate)
-        await db.flush()
+        try:
+            await db.flush()
+        except IntegrityError:
+            await db.rollback()
+            replay = await db.scalar(
+                select(CheckoutShippingEstimate).where(
+                    CheckoutShippingEstimate.customer_id == order.customer_id,
+                    CheckoutShippingEstimate.idempotency_key == idempotency_key,
+                )
+            )
+            if replay is None:
+                raise
+            if replay.request_fingerprint != fingerprint:
+                raise HTTPException(status_code=409, detail="idempotency conflict")
+            return replay
 
     if estimate is None:
         raise HTTPException(status_code=500, detail="checkout estimate was not created")

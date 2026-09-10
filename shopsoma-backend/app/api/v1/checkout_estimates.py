@@ -54,18 +54,24 @@ async def create_checkout_estimate(
     current_user: Optional[User] = Depends(get_optional_user),
     db=Depends(get_db),
 ):
-    # DHL rating must not hold aggregate locks across the provider await;
-    # create_estimate acquires the post-provider lock before persistence.
+    # DHL rating must not hold aggregate or authorization locks across the
+    # provider await; create_estimate reacquires both in canonical order.
     order = await load_checkout_order(db, order_id)
     if not order:
         raise HTTPException(status_code=404, detail="checkout not available")
     actor_type, actor_id = await _checkout_actor(db, order, current_user, capability)
+    await db.commit()
+    order = await load_checkout_order(db, order_id)
+    if not order:
+        raise HTTPException(status_code=404, detail="checkout not available")
     estimate = await create_estimate(
         db,
         order=order,
         actor_type=actor_type,
         actor_id=actor_id,
         idempotency_key=_idempotency_key(idempotency_key),
+        current_user=current_user,
+        capability=capability,
     )
     await db.commit()
     order = await load_checkout_order(db, order_id)
