@@ -366,7 +366,6 @@ export default function VendorProductEdit() {
                         value={value as string}
                         onChange={(e) => (setter as (value: string) => void)(e.target.value)}
                         className="w-full rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
-                        required
                       />
                     </div>
                   ))}

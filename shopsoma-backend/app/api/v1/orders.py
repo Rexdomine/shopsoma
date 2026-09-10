@@ -932,9 +932,10 @@ async def create_order(
         if direct_rate:
             shipping_rates = [direct_rate]
 
-    if not shipping_rates and not domestic_shipping_capabilities(
-        settings
-    ).provider_calls_enabled:
+    if not shipping_rates and not (
+        enforced_checkout
+        and domestic_shipping_capabilities(settings).provider_calls_enabled
+    ):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No shipping available for this location",

@@ -710,20 +710,22 @@ async def create_estimate(
         created_by_actor_type=actor_type,
         created_by_actor_id=actor_id,
     )
+    customer_id = order.customer_id
     db.add(estimate)
     try:
         await db.flush()
     except IntegrityError:
-        order_id = order.id
         await db.rollback()
         replay = await db.scalar(
             select(CheckoutShippingEstimate).where(
-                CheckoutShippingEstimate.order_id == order_id,
+                CheckoutShippingEstimate.customer_id == customer_id,
                 CheckoutShippingEstimate.idempotency_key == idempotency_key,
             )
         )
         if replay is None:
             raise
+        if replay.request_fingerprint != fingerprint:
+            raise HTTPException(status_code=409, detail="idempotency conflict")
         return replay
     if dhl_offers is not None:
         for offer in dhl_offers:
