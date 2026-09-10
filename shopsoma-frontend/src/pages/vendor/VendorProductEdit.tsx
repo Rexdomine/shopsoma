@@ -99,8 +99,13 @@ export default function VendorProductEdit() {
       return;
     }
 
-    if (![weightKg, lengthCm, widthCm, heightCm].every((value) => value && parseFloat(value) > 0)) {
-      warning('Positive weight and dimensions are required for shipping');
+    const parcelMeasurements = [weightKg, lengthCm, widthCm, heightCm];
+    const hasParcelMeasurement = parcelMeasurements.some((value) => value.trim());
+    if (
+      hasParcelMeasurement &&
+      !parcelMeasurements.every((value) => value.trim() && parseFloat(value) > 0)
+    ) {
+      warning('Enter positive values for all parcel measurements, or leave them all blank');
       return;
     }
 
@@ -116,10 +121,10 @@ export default function VendorProductEdit() {
         status,
         made_to_order: madeToOrder,
         made_to_order_timeline: madeToOrder ? productionTimeline.trim() : undefined,
-        weight_kg: parseFloat(weightKg),
-        length_cm: parseFloat(lengthCm),
-        width_cm: parseFloat(widthCm),
-        height_cm: parseFloat(heightCm),
+        weight_kg: weightKg.trim() ? parseFloat(weightKg) : undefined,
+        length_cm: lengthCm.trim() ? parseFloat(lengthCm) : undefined,
+        width_cm: widthCm.trim() ? parseFloat(widthCm) : undefined,
+        height_cm: heightCm.trim() ? parseFloat(heightCm) : undefined,
       };
 
       await productService.updateProduct(id, updateData as any);

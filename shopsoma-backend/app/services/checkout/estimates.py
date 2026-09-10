@@ -583,6 +583,14 @@ async def create_estimate(
         if existing.request_fingerprint != fingerprint:
             raise HTTPException(status_code=409, detail="idempotency conflict")
         return existing
+    payment_status = getattr(order, "payment_status", None)
+    fulfillment_status = getattr(order, "fulfillment_status", None)
+    if (
+        getattr(order, "checkout_prerequisites_completed_at", None) is not None
+        or getattr(payment_status, "value", payment_status) == "paid"
+        or getattr(fulfillment_status, "value", fulfillment_status) == "cancelled"
+    ):
+        raise HTTPException(status_code=409, detail="checkout estimate is no longer available")
     usd_to_ngn_rate = None
     if order.currency == "USD":
         rate_setting = await db.scalar(
@@ -706,10 +714,11 @@ async def create_estimate(
     try:
         await db.flush()
     except IntegrityError:
+        order_id = order.id
         await db.rollback()
         replay = await db.scalar(
             select(CheckoutShippingEstimate).where(
-                CheckoutShippingEstimate.order_id == order.id,
+                CheckoutShippingEstimate.order_id == order_id,
                 CheckoutShippingEstimate.idempotency_key == idempotency_key,
             )
         )
