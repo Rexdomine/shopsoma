@@ -561,7 +561,30 @@ async def dhl_subject_snapshot(
             .order_by(CohortItemAllocation.order_item_id, CohortItemAllocation.cohort_id)
         )
     ).all()
-    return _hash({"hubs": hubs, "allocations": allocations, "planned_ship_date": planned_ship_date})
+    return _hash(
+        {
+            "ready_package_count": len(packages),
+            "hubs": hubs,
+            "allocations": allocations,
+            "planned_ship_date": planned_ship_date,
+        }
+    )
+
+
+async def _unhanded_ready_package_ids(db, order: Order) -> list:
+    """Return ready package identities that are still eligible for rating."""
+    handed_off = select(CustodyEvent.id).where(
+        CustodyEvent.package_id == HubPackage.id,
+        CustodyEvent.package_version == HubPackage.current_version,
+        CustodyEvent.event_type.in_(("released", "tendered", "provider_accepted")),
+    ).exists()
+    return (
+        await db.execute(
+            select(HubPackage.id)
+            .where(HubPackage.order_id == order.id, HubPackage.state == "ready", ~handed_off)
+            .order_by(HubPackage.ready_at.desc(), HubPackage.id.desc())
+        )
+    ).scalars().all()
 
 
 async def load_checkout_order(
@@ -675,9 +698,16 @@ async def create_estimate(
         )
     ).scalar_one_or_none()
 
+    ready_package_ids = (
+        await _unhanded_ready_package_ids(db, order)
+        if dhl_provider_enabled
+        else []
+    )
+    # Ready packages rate their immutable HubPackageVersion measurements;
+    # mutable catalog dimensions only belong to the pre-payment quote subject.
     parcel_snapshot_hash = (
         await parcel_measurement_snapshot(db, order)
-        if dhl_provider_enabled
+        if dhl_provider_enabled and not ready_package_ids
         else None
     )
     subject_snapshot_hash = (

@@ -947,6 +947,16 @@ def test_create_estimate_replays_refresh_idempotency_key(monkeypatch):
         return None
 
     monkeypatch.setattr(module, "parcel_measurement_snapshot", no_parcel_snapshot)
+    async def no_ready_packages(*_args, **_kwargs):
+        return []
+
+    monkeypatch.setattr(module, "_unhanded_ready_package_ids", no_ready_packages)
+    async def reload_locked_order(_db, order_id, *, for_update=False):
+        assert order_id == order.id
+        assert for_update is True
+        return order
+
+    monkeypatch.setattr(module, "load_checkout_order", reload_locked_order)
     async def dhl_subject_snapshot_stub(*_args, **_kwargs):
         return "subject-hash"
 
