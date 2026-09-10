@@ -127,6 +127,10 @@ export default function VendorProductAdd() {
   const [sizingSystem, setSizingSystem] = useState<SizingSystem>('US Sizing');
   const [productCare, setProductCare] = useState('');
   const [stockAmount, setStockAmount] = useState('');
+  const [weightKg, setWeightKg] = useState('');
+  const [lengthCm, setLengthCm] = useState('');
+  const [widthCm, setWidthCm] = useState('');
+  const [heightCm, setHeightCm] = useState('');
 
   // Category state
   const [primaryCategories, setPrimaryCategories] = useState<Category[]>([]);
@@ -762,6 +766,11 @@ export default function VendorProductAdd() {
       return;
     }
 
+    if ([weightKg, lengthCm, widthCm, heightCm].some((value) => !value || Number(value) <= 0)) {
+      warning('Weight and all parcel dimensions are required for DHL shipping', 'Missing shipping details');
+      return;
+    }
+
     if (!productPrice || Number.isNaN(Number(productPrice))) {
       warning('Product price is required', 'Missing info');
       return;
@@ -848,6 +857,10 @@ export default function VendorProductAdd() {
         made_to_order_timeline: estimatedProductionTime.trim() || undefined,
         care_instructions: productCare || undefined,
         fabric_composition: materials || undefined,
+        weight_kg: Number(weightKg),
+        length_cm: Number(lengthCm),
+        width_cm: Number(widthCm),
+        height_cm: Number(heightCm),
         images: uploadedImages.map((image, index) => ({
           image_url: image.imageUrl!,
           thumbnail_url: image.thumbnailUrl,
@@ -1330,6 +1343,24 @@ export default function VendorProductAdd() {
                           ))}
                         </div>
                       )}
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border border-[#105E53]/15 bg-[#105E53]/5 p-4">
+                    <p className="text-sm font-semibold text-[#105E53]">Shipping parcel details</p>
+                    <p className="mt-1 text-xs text-gray-500">Enter packed measurements for DHL rates: weight in kilograms and dimensions in centimetres.</p>
+                    <div className="mt-3 grid grid-cols-2 gap-4">
+                      {[
+                        ['Weight (kg)', weightKg, setWeightKg],
+                        ['Length (cm)', lengthCm, setLengthCm],
+                        ['Width (cm)', widthCm, setWidthCm],
+                        ['Height (cm)', heightCm, setHeightCm],
+                      ].map(([label, value, setter]) => (
+                        <div key={String(label)}>
+                          <label className="mb-1 block text-xs font-medium text-gray-700">{String(label)} *</label>
+                          <input type="number" min="0.001" step="0.001" value={String(value)} onChange={(e) => (setter as (next: string) => void)(e.target.value)} className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20" required />
+                        </div>
+                      ))}
                     </div>
                   </div>
 

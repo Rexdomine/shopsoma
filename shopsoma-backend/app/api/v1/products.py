@@ -4,6 +4,7 @@ Product CRUD API endpoints
 from typing import List, Optional, Dict, Any, Tuple
 import csv
 import io
+import math
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -108,6 +109,25 @@ def _parse_decimal(value: Optional[str], field: str, row: int, errors: List[Dict
         return None
 
 
+_MAX_PRODUCT_MEASUREMENT = 9999999.999
+
+
+def _parse_positive_decimal(value: Optional[str], field: str, row: int, errors: List[Dict[str, Any]]) -> Optional[float]:
+    parsed = _parse_decimal(value, field, row, errors)
+    if parsed is not None and (
+        not math.isfinite(parsed)
+        or parsed < 0.001
+        or parsed > _MAX_PRODUCT_MEASUREMENT
+    ):
+        errors.append({
+            "row": row,
+            "field": field,
+            "message": "Must be between 0.001 and 9999999.999",
+        })
+        return None
+    return parsed
+
+
 def _sync_single_product_variant_inventory(product: Product) -> None:
     """Keep legacy variant stock aligned with single-product total_stock."""
     if product.product_type != ProductType.SINGLE:
@@ -198,6 +218,10 @@ async def create_product(
         made_to_order_timeline=product_data.made_to_order_timeline,
         care_instructions=product_data.care_instructions,
         fabric_composition=product_data.fabric_composition,
+        weight_kg=product_data.weight_kg,
+        length_cm=product_data.length_cm,
+        width_cm=product_data.width_cm,
+        height_cm=product_data.height_cm,
         meta_title=product_data.meta_title,
         meta_description=product_data.meta_description,
         size_guide=product_data.size_guide.model_dump() if product_data.size_guide else None,
@@ -310,6 +334,10 @@ async def bulk_upload_single_products(
         base_price = _parse_decimal(row.get("base_price"), "base_price", row_index, row_errors)
         compare_price = _parse_decimal(row.get("compare_at_price"), "compare_at_price", row_index, row_errors)
         total_stock = _parse_int(row.get("total_stock"), "total_stock", row_index, row_errors)
+        weight_kg = _parse_positive_decimal(row.get("weight_kg"), "weight_kg", row_index, row_errors)
+        length_cm = _parse_positive_decimal(row.get("length_cm"), "length_cm", row_index, row_errors)
+        width_cm = _parse_positive_decimal(row.get("width_cm"), "width_cm", row_index, row_errors)
+        height_cm = _parse_positive_decimal(row.get("height_cm"), "height_cm", row_index, row_errors)
         status_value = (row.get("status") or "draft").strip().lower()
 
         if not title:
@@ -358,6 +386,10 @@ async def bulk_upload_single_products(
             made_to_order_timeline=(row.get("made_to_order_timeline") or "").strip() or None,
             care_instructions=(row.get("care_instructions") or "").strip() or None,
             fabric_composition=(row.get("fabric_composition") or "").strip() or None,
+            weight_kg=weight_kg,
+            length_cm=length_cm,
+            width_cm=width_cm,
+            height_cm=height_cm,
             moderation_status=ModerationStatus.PENDING,
         )
         products_to_create.append(product)
@@ -407,7 +439,10 @@ async def bulk_upload_variable_products(
         currency = (row.get("currency") or "NGN").strip().upper()
         base_price = _parse_decimal(row.get("base_price"), "base_price", row_index, row_errors)
         compare_price = _parse_decimal(row.get("compare_at_price"), "compare_at_price", row_index, row_errors)
-
+        weight_kg = _parse_positive_decimal(row.get("weight_kg"), "weight_kg", row_index, row_errors)
+        length_cm = _parse_positive_decimal(row.get("length_cm"), "length_cm", row_index, row_errors)
+        width_cm = _parse_positive_decimal(row.get("width_cm"), "width_cm", row_index, row_errors)
+        height_cm = _parse_positive_decimal(row.get("height_cm"), "height_cm", row_index, row_errors)
         color_name = (row.get("color_name") or "").strip()
         color_hex = (row.get("color_hex") or "").strip() or None
         size = (row.get("size") or "").strip()
@@ -464,6 +499,10 @@ async def bulk_upload_variable_products(
                 "made_to_order_timeline": (row.get("made_to_order_timeline") or "").strip() or None,
                 "care_instructions": (row.get("care_instructions") or "").strip() or None,
                 "fabric_composition": (row.get("fabric_composition") or "").strip() or None,
+                "weight_kg": weight_kg,
+                "length_cm": length_cm,
+                "width_cm": width_cm,
+                "height_cm": height_cm,
                 "variations": {},
             }
 
@@ -506,6 +545,10 @@ async def bulk_upload_variable_products(
             made_to_order_timeline=group["made_to_order_timeline"],
             care_instructions=group["care_instructions"],
             fabric_composition=group["fabric_composition"],
+            weight_kg=group["weight_kg"],
+            length_cm=group["length_cm"],
+            width_cm=group["width_cm"],
+            height_cm=group["height_cm"],
             moderation_status=ModerationStatus.PENDING,
         )
         db.add(product)

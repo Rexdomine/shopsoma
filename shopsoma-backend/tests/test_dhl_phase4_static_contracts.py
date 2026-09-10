@@ -1384,3 +1384,53 @@ def test_create_shipment_adapter_translates_dhl_configuration_failures(monkeypat
 
     with pytest.raises(ShipmentPhase4Error, match='DHL integration is disabled'):
         create_shipment_adapter(cast(Any, object()))
+
+
+def test_checkout_parcel_revalidation_locks_logistics_profiles() -> None:
+    source = (ROOT / "app" / "services" / "checkout" / "estimates.py").read_text()
+    helper = source.split(
+        "async def _authoritative_parcel_measurements(", 1
+    )[1].split("async def parcel_measurement_snapshot(", 1)[0]
+    assert "if for_update:" in helper
+    assert "profile_statement = profile_statement.with_for_update()" in helper
+
+
+def test_checkout_ready_package_revalidation_locks_packages_and_custody() -> None:
+    source = (ROOT / "app" / "services" / "checkout" / "estimates.py").read_text()
+    helper = source.split(
+        "async def _unhanded_ready_package_ids(", 1
+    )[1].split("async def _prepayment_parcel_snapshot(", 1)[0]
+    assert "select(HubPackage.id, HubPackage.current_version, HubPackage.state)" in helper
+    assert ".where(HubPackage.order_id == order.id)" in helper
+    assert ".order_by(HubPackage.id)" in helper
+    assert "row.state == \"ready\"" in helper
+    assert "package_query = package_query.with_for_update()" in helper
+    assert "custody_query = custody_query.with_for_update()" in helper
+    assert "CustodyEvent.event_type" in helper
+    assert "for_update=for_update" in source.split(
+        "async def _prepayment_parcel_snapshot(", 1
+    )[1].split("async def load_checkout_order(", 1)[0]
+
+
+def test_dhl_estimate_serializes_provider_boundary_and_rechecks_replay() -> None:
+    source = (ROOT / "app" / "services" / "checkout" / "estimates.py").read_text()
+    dhl_path = source.split("if dhl_provider_enabled:", 1)[1]
+    assert "pg_advisory_xact_lock" in dhl_path
+    assert "hashtextextended(:lock_key, 0)" in dhl_path
+    assert dhl_path.index("pg_advisory_xact_lock") < dhl_path.index(
+        "dhl_offers = await _dhl_checkout_options"
+    )
+    assert dhl_path.index("existing = await db.scalar") < dhl_path.index(
+        "dhl_offers = await _dhl_checkout_options"
+    )
+
+
+def test_dhl_estimate_conflict_recovery_caches_customer_before_rollback() -> None:
+    source = (ROOT / "app" / "services" / "checkout" / "estimates.py").read_text()
+    dhl_path = source.split("if dhl_provider_enabled:", 1)[1]
+    claim_path = dhl_path.split("dhl_offers = await _dhl_checkout_options", 1)[1]
+    recovery = claim_path.split("except IntegrityError:", 1)[1]
+    assert "customer_id = order.customer_id" in dhl_path
+    assert recovery.index("await db.rollback()") < recovery.index(
+        "CheckoutShippingEstimate.customer_id == customer_id"
+    )

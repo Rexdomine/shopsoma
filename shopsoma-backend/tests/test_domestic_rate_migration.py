@@ -17,12 +17,12 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 
 ROOT = Path(__file__).resolve().parents[1]
-HEAD = "1c2b3d4e"
-CURRENT_HEAD_PARENT = "e6f7a8b9c0d1"
+HEAD = "l9m0n1o2p3q4"
+CURRENT_HEAD_PARENT = "k7l8m9n0p1q2"
 PREVIOUS_HEAD = "d5e6f7a8b9c0"
 HEAD_PARENT = "c4d5e6f7a8b9"
 HEAD_GRANDPARENT = "b3c4d5e6f7a8"
-HEAD_MIGRATION = ROOT / "alembic" / "versions" / "2026_09_03_1200_1c2b3d4e_phase4_dhl_shipment_evidence.py"
+HEAD_MIGRATION = ROOT / "alembic" / "versions" / "l9m0n1o2p3q4_idempotency_key_scope.py"
 REPAIR_MIGRATION = ROOT / "alembic" / "versions" / "e6f7a8b9c0d1_repair_domestic_rate_custody_guards.py"
 
 EXPAND_REVISION = "a0b1c2d3e4f5"
@@ -159,7 +159,7 @@ def test_domestic_rate_migration_is_the_single_linear_static_head() -> None:
     assert head_revision is not None
     assert Path(head_revision.path) == HEAD_MIGRATION
     assert head_revision.down_revision == CURRENT_HEAD_PARENT
-    assert graph.get_revision(CURRENT_HEAD_PARENT).down_revision == PREVIOUS_HEAD
+    assert graph.get_revision(CURRENT_HEAD_PARENT).down_revision == "1c2b3d4e"
     assert graph.get_revision(PREVIOUS_HEAD).down_revision == HEAD_PARENT
     assert graph.get_revision(HEAD_PARENT).down_revision == HEAD_GRANDPARENT
     assert graph.get_revision(HEAD_GRANDPARENT).down_revision == "a2b3c4d5e6f7"

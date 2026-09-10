@@ -104,6 +104,12 @@ class Product(Base):
     care_instructions = Column(Text, nullable=True)
     fabric_composition = Column(Text, nullable=True)
 
+    # Shipping parcel facts supplied by the vendor and used for DHL rating.
+    weight_kg = Column(Numeric(10, 3), nullable=True)
+    length_cm = Column(Numeric(10, 3), nullable=True)
+    width_cm = Column(Numeric(10, 3), nullable=True)
+    height_cm = Column(Numeric(10, 3), nullable=True)
+
     # SEO
     meta_title = Column(String(255), nullable=True)
     meta_description = Column(Text, nullable=True)

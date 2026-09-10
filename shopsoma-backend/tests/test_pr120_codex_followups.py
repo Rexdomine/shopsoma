@@ -834,6 +834,12 @@ def test_create_estimate_refresh_supersedes_current_unselected_leaf(monkeypatch)
 
         async def execute(self, statement):
             sql = str(statement)
+            if (
+                "FROM checkout_shipping_estimates" in sql
+                and "WHERE checkout_shipping_estimates.customer_id" in sql
+                and "idempotency_key" in sql
+            ):
+                return FakeResult(None)
             if "FROM checkout_shipping_estimates" in sql and "source_command IN" in sql:
                 return FakeResult(None)
             if "FROM checkout_shipping_estimates" in sql and "ORDER BY checkout_shipping_estimates.created_at DESC" in sql:
@@ -879,6 +885,13 @@ def test_create_estimate_refresh_supersedes_current_unselected_leaf(monkeypatch)
     monkeypatch.setattr(module, "_hash", lambda payload: "f" * 64)
     monkeypatch.setattr(module, "_estimate_expiry_delta", lambda ttl: timedelta(seconds=ttl))
 
+    async def reload_locked_order(_db, order_id, *, for_update=False):
+        assert order_id == order.id
+        assert for_update is True
+        return order
+
+    monkeypatch.setattr(module, "load_checkout_order", reload_locked_order)
+
     import asyncio
     estimate = asyncio.run(
         module.create_estimate(
@@ -913,7 +926,7 @@ def test_create_estimate_replays_refresh_idempotency_key(monkeypatch):
     class FakeDB:
         async def execute(self, statement):
             sql = str(statement)
-            assert "source_command IN" in sql
+            assert "idempotency_key" in sql
             return FakeResult(existing)
 
     order = SimpleNamespace(
@@ -924,7 +937,30 @@ def test_create_estimate_replays_refresh_idempotency_key(monkeypatch):
 
     monkeypatch.setattr(module, "order_snapshot", lambda _order: ("dest-hash", "snap-hash"))
     monkeypatch.setattr(module, "_hash", lambda payload: "f" * 64)
+    monkeypatch.setattr(
+        module,
+        "domestic_shipping_capabilities",
+        lambda _settings: SimpleNamespace(provider_calls_enabled=True, checkout_enabled=True),
+    )
 
+    async def no_parcel_snapshot(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(module, "parcel_measurement_snapshot", no_parcel_snapshot)
+    async def no_ready_packages(*_args, **_kwargs):
+        return []
+
+    monkeypatch.setattr(module, "_unhanded_ready_package_ids", no_ready_packages)
+    async def reload_locked_order(_db, order_id, *, for_update=False):
+        assert order_id == order.id
+        assert for_update is True
+        return order
+
+    monkeypatch.setattr(module, "load_checkout_order", reload_locked_order)
+    async def dhl_subject_snapshot_stub(*_args, **_kwargs):
+        return "subject-hash"
+
+    monkeypatch.setattr(module, "dhl_subject_snapshot", dhl_subject_snapshot_stub)
     import asyncio
     replay = asyncio.run(
         module.create_estimate(

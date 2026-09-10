@@ -26,6 +26,10 @@ export default function VendorProductEdit() {
   const [status, setStatus] = useState<'draft' | 'active' | 'inactive' | 'archived'>('draft');
   const [madeToOrder, setMadeToOrder] = useState(false);
   const [productionTimeline, setProductionTimeline] = useState('');
+  const [weightKg, setWeightKg] = useState('');
+  const [lengthCm, setLengthCm] = useState('');
+  const [widthCm, setWidthCm] = useState('');
+  const [heightCm, setHeightCm] = useState('');
 
   useEffect(() => {
     const fetchProduct = async () => {
@@ -49,6 +53,10 @@ export default function VendorProductEdit() {
         setStatus(data.status);
         setMadeToOrder(Boolean(data.made_to_order));
         setProductionTimeline(data.made_to_order_timeline || '');
+        setWeightKg(data.weight_kg?.toString() || '');
+        setLengthCm(data.length_cm?.toString() || '');
+        setWidthCm(data.width_cm?.toString() || '');
+        setHeightCm(data.height_cm?.toString() || '');
       } catch (err: any) {
         console.error('Failed to load product', err);
         error(
@@ -91,9 +99,40 @@ export default function VendorProductEdit() {
       return;
     }
 
+    const parcelMeasurements = [weightKg, lengthCm, widthCm, heightCm];
+    const hasParcelMeasurement = parcelMeasurements.some((value) => value.trim());
+    if (
+      hasParcelMeasurement &&
+      !parcelMeasurements.every((value) => value.trim() && parseFloat(value) > 0)
+    ) {
+      warning('Enter positive values for all parcel measurements, or leave them all blank');
+      return;
+    }
+
     try {
       setSaving(true);
 
+      const hasExistingParcelMeasurement = [
+        product?.weight_kg,
+        product?.length_cm,
+        product?.width_cm,
+        product?.height_cm,
+      ].some((value) => value !== null && value !== undefined);
+      const parcelUpdate = hasParcelMeasurement
+        ? {
+            weight_kg: parseFloat(weightKg),
+            length_cm: parseFloat(lengthCm),
+            width_cm: parseFloat(widthCm),
+            height_cm: parseFloat(heightCm),
+          }
+        : hasExistingParcelMeasurement
+          ? {
+              weight_kg: null,
+              length_cm: null,
+              width_cm: null,
+              height_cm: null,
+            }
+          : {};
       const updateData: Partial<Product> = {
         title: title.trim(),
         description: description.trim(),
@@ -103,6 +142,7 @@ export default function VendorProductEdit() {
         status,
         made_to_order: madeToOrder,
         made_to_order_timeline: madeToOrder ? productionTimeline.trim() : undefined,
+        ...parcelUpdate,
       };
 
       await productService.updateProduct(id, updateData as any);
@@ -325,6 +365,28 @@ export default function VendorProductEdit() {
                       <option value="archived">Archived</option>
                     </select>
                   </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+                  {[
+                    ['weightKg', 'Weight (kg)', weightKg, setWeightKg],
+                    ['lengthCm', 'Length (cm)', lengthCm, setLengthCm],
+                    ['widthCm', 'Width (cm)', widthCm, setWidthCm],
+                    ['heightCm', 'Height (cm)', heightCm, setHeightCm],
+                  ].map(([field, label, value, setter]) => (
+                    <div key={field as string}>
+                      <label htmlFor={field as string} className="block text-sm font-medium text-gray-700 mb-2">{label as string} *</label>
+                      <input
+                        id={field as string}
+                        type="number"
+                        min="0.001"
+                        step="0.001"
+                        value={value as string}
+                        onChange={(e) => (setter as (value: string) => void)(e.target.value)}
+                        className="w-full rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
+                      />
+                    </div>
+                  ))}
                 </div>
 
                 {/* Info Note */}

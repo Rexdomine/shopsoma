@@ -32,6 +32,7 @@ from app.models.package_custody import (
     OutboundShipmentIntent,
     OutboundShipmentIntentInvalidation,
 )
+from app.models.fulfillment_cohort import FulfillmentCohort
 from app.models.fulfillment_hub import FulfillmentHub
 from app.models.order import Order
 from app.models.user import User
@@ -44,6 +45,7 @@ from app.services.dhl.rating import (
     SCHEMA_VERSION,
     MYDHL_TEST_BASE_URL,
     create_sandbox_domestic_rate_adapter,
+    derive_sandbox_cohort_ids,
 )
 from app.services.fulfillment.contracts import (
     HubRef,
@@ -305,7 +307,19 @@ async def run_admin_shadow_quote(
     if not package_items:
         raise ShadowQuoteError("ready package has no package items")
     cohort_ids = {item.cohort_id for item in package_items}
-    if not cohort_ids <= settings.dhl_domestic_sandbox_cohort_ids:
+    order_cohort_count = len(
+        (
+            await db.execute(
+                select(FulfillmentCohort.id).where(
+                    FulfillmentCohort.order_id == order.id
+                )
+            )
+        ).scalars().all()
+    )
+    authorized_cohort_ids = settings.dhl_domestic_sandbox_cohort_ids | derive_sandbox_cohort_ids(
+        settings.dhl_domestic_sandbox_cohort_ids, order.id, order_cohort_count
+    )
+    if not cohort_ids <= authorized_cohort_ids:
         raise ShadowQuoteError("package composition is outside sandbox cohort allowlist")
     composition = tuple(
         PackageItemRef(
@@ -359,6 +373,7 @@ async def run_admin_shadow_quote(
             state=hub.state,
             postal_code=_blank_optional_text_to_none(hub.postal_code),
             country_code=hub.country_code,
+            cohort_count=order_cohort_count,
         )
     except ValueError as exc:
         raise ShadowQuoteError("invalid shipment address details") from exc

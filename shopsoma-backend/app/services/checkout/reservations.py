@@ -6,7 +6,7 @@ import json
 import uuid
 
 from fastapi import HTTPException
-from sqlalchemy import select, text
+from sqlalchemy import select, text, tuple_
 
 from app.models.checkout_shipping_estimate import (
     CheckoutShippingEstimate,
@@ -17,7 +17,14 @@ from app.models.checkout_shipping_estimate import (
 from app.models.order import FulfillmentStatus, Order, PaymentStatus
 from app.models.product import Product, ProductVariant, SizeStock
 from app.models.stock_payment_persistence import StockReservation
-from app.services.checkout.estimates import order_snapshot, reload_checkout_order
+from app.services.checkout.estimates import (
+    _estimate_request_fingerprint,
+    _planned_ship_date,
+    dhl_subject_snapshot,
+    order_snapshot,
+    _prepayment_parcel_snapshot,
+    reload_checkout_order,
+)
 
 _CENT = Decimal("0.01")
 _EFFECTIVE_CLAIM_SQL = text(
@@ -169,10 +176,26 @@ async def select_estimate_option(
         raise HTTPException(
             status_code=409, detail="checkout prerequisites already completed"
         )
+    if order.fulfillment_status == FulfillmentStatus.CANCELLED:
+        raise HTTPException(
+            status_code=409, detail="cancelled order cannot select checkout estimate"
+        )
 
     estimate = await db.get(CheckoutShippingEstimate, estimate_id)
     option = await db.get(CheckoutShippingEstimateOption, option_id)
     destination_hash, snapshot_hash = order_snapshot(order)
+    subject_snapshot_hash = (
+        await dhl_subject_snapshot(
+            db, order, planned_ship_date=_planned_ship_date(), for_update=True
+        )
+        if estimate and estimate.source_kind == "sandbox_normalized"
+        else None
+    )
+    parcel_snapshot_hash = (
+        await _prepayment_parcel_snapshot(db, order)
+        if estimate and estimate.source_kind == "sandbox_normalized"
+        else None
+    )
     if (
         not estimate
         or not option
@@ -180,6 +203,13 @@ async def select_estimate_option(
         or option.estimate_id != estimate.id
         or estimate.destination_snapshot_hash != destination_hash
         or estimate.order_snapshot_hash != snapshot_hash
+        or (
+            estimate.source_kind == "sandbox_normalized"
+            and estimate.request_fingerprint
+            != _estimate_request_fingerprint(
+                order.id, snapshot_hash, parcel_snapshot_hash, subject_snapshot_hash
+            )
+        )
     ):
         raise HTTPException(status_code=409, detail="stale checkout estimate")
 
@@ -263,6 +293,19 @@ async def select_estimate_option(
         or estimate.order_snapshot_hash != snapshot_hash
     ):
         raise HTTPException(status_code=409, detail="stale checkout estimate")
+    if estimate.source_kind == "sandbox_normalized":
+        parcel_snapshot_hash = await _prepayment_parcel_snapshot(
+            db, order, for_update=True
+        )
+        if estimate.request_fingerprint != _estimate_request_fingerprint(
+            order.id,
+            snapshot_hash,
+            parcel_snapshot_hash,
+            # The hub is part of the provider subject and must remain locked
+            # through the final fingerprint check.
+            await dhl_subject_snapshot(db, order, for_update=True),
+        ):
+            raise HTTPException(status_code=409, detail="stale checkout estimate")
     if estimate.expires_at <= database_now:
         raise HTTPException(status_code=409, detail="expired checkout estimate")
 

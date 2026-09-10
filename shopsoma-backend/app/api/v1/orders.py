@@ -5,8 +5,8 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, and_, or_, func
 from sqlalchemy.orm import selectinload
-from uuid import UUID
-from datetime import datetime
+from uuid import UUID, uuid4, uuid5
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
 import hashlib
 import json
@@ -27,6 +27,11 @@ from app.models.payment import Payment
 from app.models.address import Address
 from app.models.shipping_rate import ShippingRate
 from app.models.vendor import Vendor
+from app.models.fulfillment_cohort import (
+    CohortItemAllocation,
+    FulfillmentCohort,
+    FulfillmentReadinessType,
+)
 from app.models.setting import Setting
 from app.models.stock_payment_persistence import (
     PaymentAttempt,
@@ -37,6 +42,7 @@ from app.services.dhl.shipments import (
     ShipmentPhase4ConflictError,
     ensure_order_cancellation_allowed,
 )
+from app.services.dhl.rating import derive_sandbox_cohort_id
 from app.schemas.order import (
     OrderCreate,
     OrderUpdate,
@@ -53,6 +59,7 @@ from app.services.vendor_notification_service import VendorNotificationService
 from app.services.commission import get_vendor_commission_rate
 from app.core.config import settings
 from app.services.checkout.capabilities import issue_checkout_capability
+from app.services.shipping.capabilities import domestic_shipping_capabilities
 from app.services.checkout.reservations import release_active_order_reservations
 
 router = APIRouter(prefix="/orders", tags=["Orders"])
@@ -925,7 +932,10 @@ async def create_order(
         if direct_rate:
             shipping_rates = [direct_rate]
 
-    if not shipping_rates:
+    if not shipping_rates and not (
+        enforced_checkout
+        and domestic_shipping_capabilities(settings).checkout_enabled
+    ):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No shipping available for this location",
@@ -1013,9 +1023,58 @@ async def create_order(
 
     await db.flush()  # Get order item IDs
 
+    if enforced_checkout and settings.dhl_domestic_sandbox_cohort_ids:
+        configured_cohort_ids = settings.dhl_domestic_sandbox_cohort_ids
+        products = (
+            await db.execute(
+                select(Product).where(Product.id.in_([item.product_id for item in created_order_items]))
+            )
+        ).scalars().all()
+        products_by_id = {product.id: product for product in products}
+        cohorts_by_key = {}
+        cohort_namespace = tuple(configured_cohort_ids)[0]
+        cohort_ordinals = {}
+        for order_item in created_order_items:
+            product = products_by_id[order_item.product_id]
+            readiness_type = (
+                FulfillmentReadinessType.MADE_TO_ORDER
+                if product.made_to_order
+                else FulfillmentReadinessType.READY_TO_WEAR
+            )
+            cohort_key = (order_item.vendor_id, readiness_type)
+            cohort = cohorts_by_key.get(cohort_key)
+            if cohort is None:
+                cohort_ordinals[cohort_key] = len(cohort_ordinals)
+                cohort_id = derive_sandbox_cohort_id(
+                    cohort_namespace,
+                    new_order.id,
+                    cohort_ordinals[cohort_key],
+                )
+                cohort = FulfillmentCohort(
+                    id=cohort_id,
+                    order_id=new_order.id,
+                    vendor_id=order_item.vendor_id,
+                    readiness_type=readiness_type,
+                    ready_from=datetime.now(timezone.utc),
+                    ready_through=datetime.now(timezone.utc) + timedelta(days=30),
+                )
+                db.add(cohort)
+                cohorts_by_key[cohort_key] = cohort
+            db.add(
+                CohortItemAllocation(
+                    cohort_id=cohort.id,
+                    order_item_id=order_item.id,
+                    order_id=new_order.id,
+                    vendor_id=order_item.vendor_id,
+                    allocated_quantity=order_item.quantity,
+                )
+            )
+        await db.flush()
+
     if enforced_checkout:
-        # Payment/provider/carrier transport and every fulfilment side effect stay
-        # disabled. Milestone 3 ends at persisted prerequisite coverage.
+        # Checkout estimates resolve only fulfillment-owned ready packages.
+        # Package creation, QC, sealing, and readiness remain in the custody
+        # state machine and are not created as a checkout side effect.
         checkout_capability = None
         if current_user is None:
             checkout_capability = await issue_checkout_capability(db, order=new_order)
@@ -1039,7 +1098,7 @@ async def create_order(
     # Create vendor pickups and notifications for each order item
     from app.models import VendorPickup, VendorNotification, Vendor
     from app.models.vendor_pickup import OrderType, PickupStatus
-    from datetime import datetime, timedelta
+    from datetime import timedelta
 
     vendor_cache = {}
     vendor_notifications = {}

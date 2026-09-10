@@ -9,7 +9,7 @@ from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from hashlib import sha256
 from typing import Literal
-from uuid import UUID
+from uuid import UUID, uuid5
 
 import httpx
 
@@ -28,6 +28,24 @@ _PRODUCT_CODE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,5}\Z")
 _LOCAL_PRODUCT_CODE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,2}\Z")
 _INTERNAL_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,99}\Z")
 _CURRENCY = re.compile(r"[A-Z]{3}\Z")
+
+
+def derive_sandbox_cohort_ids(
+    namespaces: frozenset[UUID], order_id: UUID, count: int
+) -> frozenset[UUID]:
+    """Derive the server-owned cohort IDs authorized by configured namespaces."""
+    return frozenset(
+        derive_sandbox_cohort_id(namespace, order_id, ordinal)
+        for namespace in namespaces
+        for ordinal in range(count)
+    )
+
+
+def derive_sandbox_cohort_id(namespace: UUID, order_id: UUID, ordinal: int) -> UUID:
+    """Derive one deterministic server-owned cohort ID."""
+    return uuid5(namespace, f"{order_id}:cohort:{ordinal}")
+
+
 _SUPPORTED_CURRENCIES = frozenset({"NGN", "USD"})
 _PRICE_TYPE_PRIORITY = ("BILLC", "PULCL", "BASEC")
 
@@ -68,6 +86,7 @@ class DHLResolvedHub:
     state: str
     postal_code: str | None = None
     country_code: str = "NG"
+    cohort_count: int | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.hub, HubRef):
@@ -105,6 +124,12 @@ class DHLResolvedHub:
             raise ValueError("resolved package facts do not match their identity")
         if self.country_code != "NG":
             raise ValueError("resolved hub must be Nigerian")
+        if self.cohort_count is not None and (
+            not isinstance(self.cohort_count, int)
+            or isinstance(self.cohort_count, bool)
+            or self.cohort_count <= 0
+        ):
+            raise ValueError("resolved cohort count is invalid")
         for field_name in ("contact_name", "phone", "line1", "city", "state"):
             value = getattr(self, field_name)
             if not isinstance(value, str) or not value.strip():
@@ -207,9 +232,12 @@ class DHLDomesticRateAdapter:
                 "rate request must match the authoritative shipment subject"
             )
         request_cohort_ids = {item.cohort.id for item in request.package.composition}
-        if not request_cohort_ids or not request_cohort_ids.issubset(
-            sandbox_cohort_ids
-        ):
+        expected_cohort_ids = sandbox_cohort_ids | derive_sandbox_cohort_ids(
+            sandbox_cohort_ids,
+            resolved_hub.order_id,
+            resolved_hub.cohort_count or len(request_cohort_ids),
+        )
+        if not request_cohort_ids or not request_cohort_ids.issubset(expected_cohort_ids):
             raise DHLRateAdapterError(
                 "domestic DHL rates require a restricted synthetic sandbox cohort"
             )

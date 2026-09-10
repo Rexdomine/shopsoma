@@ -24,6 +24,7 @@ def test_all_domestic_shipping_capabilities_are_false_by_default() -> None:
         "workflow_enabled": False,
         "quote_enforcement_enabled": False,
         "provider_calls_enabled": False,
+        "checkout_enabled": False,
     }
 
 
@@ -95,6 +96,27 @@ def test_provider_calls_require_workflow_gate_and_configured_dhl() -> None:
 
     assert without_workflow.provider_calls_enabled is False
     assert enabled.provider_calls_enabled is True
+    assert enabled.checkout_enabled is False
+
+
+def test_checkout_calls_require_the_dedicated_activation_gate() -> None:
+    credentials = {
+        "DHL_ENABLED": True,
+        "DHL_API_USERNAME": "dummy-api-user",
+        "DHL_API_PASSWORD": "dummy-api-password",
+        "DHL_EXPORT_ACCOUNT_NUMBER": "123456789",
+        "DHL_DOMESTIC_WORKFLOW_ENABLED": True,
+        "DHL_DOMESTIC_PROVIDER_CALLS_ENABLED": True,
+        "DHL_DOMESTIC_SANDBOX_COHORT_IDS": "22222222-2222-4222-8222-222222222222",
+    }
+    disabled = domestic_shipping_capabilities(make_settings(**credentials))
+    enabled = domestic_shipping_capabilities(
+        make_settings(**credentials, DHL_DOMESTIC_CHECKOUT_ENABLED=True)
+    )
+
+    assert disabled.provider_calls_enabled is True
+    assert disabled.checkout_enabled is False
+    assert enabled.checkout_enabled is True
 
 
 def test_provider_calls_fail_closed_in_production_with_all_gates_and_config() -> None:
