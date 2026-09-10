@@ -925,6 +925,28 @@ async def create_estimate(
         raise HTTPException(status_code=503, detail="no eligible estimate options")
     dhl_offers = None
     if dhl_provider_enabled:
+        # Serialize the provider boundary for one customer/idempotency key.  A
+        # row-level estimate claim cannot be inserted until the provider result
+        # is known, so use a transaction-scoped advisory lock to prevent two
+        # concurrent requests from both consuming a DHL rating attempt.
+        dhl_idempotency_lock_key = f"{order.customer_id}:{idempotency_key}"
+        await db.execute(
+            text(
+                "SELECT pg_advisory_xact_lock("
+                "hashtextextended(:lock_key, 0))"
+            ),
+            {"lock_key": dhl_idempotency_lock_key},
+        )
+        existing = await db.scalar(
+            select(CheckoutShippingEstimate).where(
+                CheckoutShippingEstimate.customer_id == order.customer_id,
+                CheckoutShippingEstimate.idempotency_key == idempotency_key,
+            )
+        )
+        if existing is not None:
+            if existing.request_fingerprint != fingerprint:
+                raise HTTPException(status_code=409, detail="idempotency conflict")
+            return existing
         dhl_offers = await _dhl_checkout_options(
             db, order=order, planned_ship_date=planned_ship_date
         )
@@ -1003,9 +1025,10 @@ async def create_estimate(
                 raise HTTPException(status_code=409, detail="idempotency conflict")
             return existing
         database_now = await db.scalar(select(text("statement_timestamp()")))
+        customer_id = order.customer_id
         estimate = CheckoutShippingEstimate(
             order_id=order.id,
-            customer_id=order.customer_id,
+            customer_id=customer_id,
             supersedes_estimate_id=(
                 current_unselected_leaf.id if current_unselected_leaf is not None else None
             ),
@@ -1034,7 +1057,7 @@ async def create_estimate(
             await db.rollback()
             replay = await db.scalar(
                 select(CheckoutShippingEstimate).where(
-                    CheckoutShippingEstimate.customer_id == order.customer_id,
+                    CheckoutShippingEstimate.customer_id == customer_id,
                     CheckoutShippingEstimate.idempotency_key == idempotency_key,
                 )
             )
