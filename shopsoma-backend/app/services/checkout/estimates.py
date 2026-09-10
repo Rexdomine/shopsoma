@@ -54,6 +54,7 @@ from app.services.shipping.contracts import DomesticRateRequest
 from app.services.shipping.capabilities import domestic_shipping_capabilities
 
 _CENT = Decimal("0.01")
+_MAX_CHECKOUT_OPTION_AMOUNT = Decimal("99999999.99")
 _ESTIMATE_TTL_SECONDS = 1800
 _LAGOS_TZ = ZoneInfo("Africa/Lagos")
 
@@ -521,7 +522,7 @@ async def parcel_measurement_snapshot(db, order: Order, *, for_update: bool = Fa
 
 
 async def dhl_subject_snapshot(
-    db, order: Order, *, planned_ship_date=None
+    db, order: Order, *, planned_ship_date=None, for_update: bool = False
 ) -> str:
     """Hash the persisted DHL subject identity, not only mutable order facts."""
     planned_ship_date = planned_ship_date or _planned_ship_date()
@@ -562,13 +563,12 @@ async def dhl_subject_snapshot(
                 .order_by(HubPackageItem.id)
             )
         ).all()
-        hub = (
-            await db.execute(
-                select(FulfillmentHub.id, FulfillmentHub.version).where(
-                    FulfillmentHub.id == hub_id
-                )
-            )
-        ).one_or_none()
+        hub_statement = select(FulfillmentHub.id, FulfillmentHub.version).where(
+            FulfillmentHub.id == hub_id
+        )
+        if for_update:
+            hub_statement = hub_statement.with_for_update()
+        hub = (await db.execute(hub_statement)).one_or_none()
         version = await db.scalar(
             select(HubPackageVersion.id).where(
                 HubPackageVersion.package_id == package_id,
@@ -583,13 +583,14 @@ async def dhl_subject_snapshot(
             )
         )
         return _hash({"package": [str(package_id), package_version, str(hub_id)], "intent": intent, "items": items, "hub": hub, "version": version, "seal": seal, "planned_ship_date": planned_ship_date})
-    hubs = (
-        await db.execute(
-            select(FulfillmentHub.id, FulfillmentHub.version)
-            .where(FulfillmentHub.is_active.is_(True))
-            .order_by(FulfillmentHub.id)
-        )
-    ).all()
+    hub_statement = (
+        select(FulfillmentHub.id, FulfillmentHub.version)
+        .where(FulfillmentHub.is_active.is_(True))
+        .order_by(FulfillmentHub.id)
+    )
+    if for_update:
+        hub_statement = hub_statement.with_for_update()
+    hubs = (await db.execute(hub_statement)).all()
     allocations = (
         await db.execute(
             select(CohortItemAllocation.order_item_id, CohortItemAllocation.cohort_id, CohortItemAllocation.allocated_quantity)
@@ -930,6 +931,16 @@ async def create_estimate(
             raise HTTPException(
                 status_code=409, detail="parcel measurements changed during DHL rating"
             )
+        fresh_subject_snapshot_hash = await dhl_subject_snapshot(
+            db,
+            fresh_order,
+            planned_ship_date=planned_ship_date,
+            for_update=True,
+        )
+        if fresh_subject_snapshot_hash != subject_snapshot_hash:
+            raise HTTPException(
+                status_code=409, detail="DHL shipment subject changed during rating"
+            )
         order = fresh_order
 
 
@@ -958,6 +969,11 @@ async def create_estimate(
                 amount = (Decimal(rate.total_amount) * usd_to_ngn_rate).quantize(_CENT, rounding=ROUND_HALF_UP)
             else:
                 raise HTTPException(status_code=503, detail="DHL returned an unsupported checkout currency")
+            if amount > _MAX_CHECKOUT_OPTION_AMOUNT:
+                raise HTTPException(
+                    status_code=503,
+                    detail="DHL returned a checkout amount outside the supported range",
+                )
             db.add(
                 CheckoutShippingEstimateOption(
                     estimate_id=estimate.id,

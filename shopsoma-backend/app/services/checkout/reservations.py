@@ -186,7 +186,7 @@ async def select_estimate_option(
     destination_hash, snapshot_hash = order_snapshot(order)
     subject_snapshot_hash = (
         await dhl_subject_snapshot(
-            db, order, planned_ship_date=_planned_ship_date()
+            db, order, planned_ship_date=_planned_ship_date(), for_update=True
         )
         if estimate and estimate.source_kind == "sandbox_normalized"
         else None
@@ -301,7 +301,9 @@ async def select_estimate_option(
             order.id,
             snapshot_hash,
             parcel_snapshot_hash,
-            await dhl_subject_snapshot(db, order),
+            # The hub is part of the provider subject and must remain locked
+            # through the final fingerprint check.
+            await dhl_subject_snapshot(db, order, for_update=True),
         ):
             raise HTTPException(status_code=409, detail="stale checkout estimate")
     if estimate.expires_at <= database_now:
