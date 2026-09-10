@@ -488,15 +488,34 @@ async def _authoritative_parcel_measurements(
     measurements = []
     for item, product in rows:
         profile = profiles_by_item.get((product.id, item.variant_id))
-        if profile is None or (
-            profile.variant_id is not None and profile.variant_id != item.variant_id
-        ):
+        values = None
+        if profile is not None:
+            values = (
+                profile.weight_kg,
+                profile.length_cm,
+                profile.width_cm,
+                profile.height_cm,
+            )
+        if profile is None or (values is not None and all(value is None for value in values)):
             profile = profiles_by_item.get((product.id, None))
-        values = (
-            (profile.weight_kg, profile.length_cm, profile.width_cm, profile.height_cm)
-            if profile is not None
-            else (product.weight_kg, product.length_cm, product.width_cm, product.height_cm)
-        )
+            values = (
+                (
+                    profile.weight_kg,
+                    profile.length_cm,
+                    profile.width_cm,
+                    profile.height_cm,
+                )
+                if profile is not None
+                else None
+            )
+        if profile is None or values is None or all(value is None for value in values):
+            profile = None
+            values = (
+                product.weight_kg,
+                product.length_cm,
+                product.width_cm,
+                product.height_cm,
+            )
         measurements.append((item, product, profile, values))
     return measurements
 
@@ -742,15 +761,6 @@ async def create_estimate(
 
     successor_estimate = aliased(CheckoutShippingEstimate)
     selection = aliased(CheckoutShippingEstimateSelection)
-    if dhl_provider_enabled:
-        # The predecessor lookup and immutable claim must be serialized on the
-        # checkout aggregate. Otherwise two refresh keys can both observe the
-        # same leaf (or no leaf) before either claim becomes visible.
-        order = await load_checkout_order(db, order.id, for_update=True)
-        if order is None:
-            raise HTTPException(status_code=404, detail="checkout order no longer exists")
-        destination_hash, snapshot_hash = order_snapshot(order)
-
     current_unselected_leaf = (
         await db.execute(
             select(CheckoutShippingEstimate)
@@ -805,32 +815,7 @@ async def create_estimate(
     ):
         raise HTTPException(status_code=409, detail="checkout estimate is no longer available")
 
-    database_now = await db.scalar(select(text("statement_timestamp()")))
-    ttl = _ESTIMATE_TTL_SECONDS
-    estimate = CheckoutShippingEstimate(
-        order_id=order.id,
-        customer_id=order.customer_id,
-        supersedes_estimate_id=(
-            current_unselected_leaf.id if current_unselected_leaf is not None else None
-        ),
-        destination_snapshot_hash=destination_hash,
-        order_snapshot_hash=snapshot_hash,
-        currency=order.currency,
-        ttl_seconds=ttl,
-        expires_at=database_now + _estimate_expiry_delta(ttl),
-        source_kind="sandbox_normalized" if dhl_provider_enabled else "static_domestic_rate",
-        source_reference="dhl:mydhlapi:test" if dhl_provider_enabled else "shipping_rates:v1",
-        source_command=(
-            "refresh_checkout_estimate"
-            if current_unselected_leaf is not None
-            else "create_checkout_estimate"
-        ),
-        idempotency_key=idempotency_key,
-        request_fingerprint=fingerprint,
-        schema_version="checkout_estimate_v1",
-        created_by_actor_type=actor_type,
-        created_by_actor_id=actor_id,
-    )
+    estimate = None
     usd_to_ngn_rate = None
     if order.currency == "USD":
         rate_setting = await db.scalar(
@@ -847,23 +832,49 @@ async def create_estimate(
                 status_code=503, detail="authoritative exchange rate unavailable"
             )
 
-    customer_id = order.customer_id
-    db.add(estimate)
-    try:
-        await db.flush()
-    except IntegrityError:
-        await db.rollback()
-        replay = await db.scalar(
-            select(CheckoutShippingEstimate).where(
-                CheckoutShippingEstimate.customer_id == customer_id,
-                CheckoutShippingEstimate.idempotency_key == idempotency_key,
-            )
+    if not dhl_provider_enabled:
+        database_now = await db.scalar(select(text("statement_timestamp()")))
+        estimate = CheckoutShippingEstimate(
+            order_id=order.id,
+            customer_id=order.customer_id,
+            supersedes_estimate_id=(
+                current_unselected_leaf.id if current_unselected_leaf is not None else None
+            ),
+            destination_snapshot_hash=destination_hash,
+            order_snapshot_hash=snapshot_hash,
+            currency=order.currency,
+            ttl_seconds=_ESTIMATE_TTL_SECONDS,
+            expires_at=database_now + _estimate_expiry_delta(_ESTIMATE_TTL_SECONDS),
+            source_kind="static_domestic_rate",
+            source_reference="shipping_rates:v1",
+            source_command=(
+                "refresh_checkout_estimate"
+                if current_unselected_leaf is not None
+                else "create_checkout_estimate"
+            ),
+            idempotency_key=idempotency_key,
+            request_fingerprint=fingerprint,
+            schema_version="checkout_estimate_v1",
+            created_by_actor_type=actor_type,
+            created_by_actor_id=actor_id,
         )
-        if replay is None:
-            raise
-        if replay.request_fingerprint != fingerprint:
-            raise HTTPException(status_code=409, detail="idempotency conflict")
-        return replay
+        customer_id = order.customer_id
+        db.add(estimate)
+        try:
+            await db.flush()
+        except IntegrityError:
+            await db.rollback()
+            replay = await db.scalar(
+                select(CheckoutShippingEstimate).where(
+                    CheckoutShippingEstimate.customer_id == customer_id,
+                    CheckoutShippingEstimate.idempotency_key == idempotency_key,
+                )
+            )
+            if replay is None:
+                raise
+            if replay.request_fingerprint != fingerprint:
+                raise HTTPException(status_code=409, detail="idempotency conflict")
+            return replay
 
     def ngn_in_order_currency(value) -> Decimal:
         amount = Decimal(value)
@@ -942,8 +953,69 @@ async def create_estimate(
                 status_code=409, detail="DHL shipment subject changed during rating"
             )
         order = fresh_order
+        current_unselected_leaf = (
+            await db.execute(
+                select(CheckoutShippingEstimate)
+                .where(
+                    CheckoutShippingEstimate.order_id == order.id,
+                    CheckoutShippingEstimate.customer_id == order.customer_id,
+                    ~select(successor_estimate.id)
+                    .where(
+                        successor_estimate.supersedes_estimate_id
+                        == CheckoutShippingEstimate.id
+                    )
+                    .exists(),
+                    ~select(selection.id)
+                    .where(selection.estimate_id == CheckoutShippingEstimate.id)
+                    .exists(),
+                )
+                .order_by(
+                    CheckoutShippingEstimate.created_at.desc(),
+                    CheckoutShippingEstimate.id.desc(),
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        existing = await db.scalar(
+            select(CheckoutShippingEstimate).where(
+                CheckoutShippingEstimate.customer_id == order.customer_id,
+                CheckoutShippingEstimate.idempotency_key == idempotency_key,
+            )
+        )
+        if existing is not None:
+            if existing.request_fingerprint != fingerprint:
+                raise HTTPException(status_code=409, detail="idempotency conflict")
+            return existing
+        database_now = await db.scalar(select(text("statement_timestamp()")))
+        estimate = CheckoutShippingEstimate(
+            order_id=order.id,
+            customer_id=order.customer_id,
+            supersedes_estimate_id=(
+                current_unselected_leaf.id if current_unselected_leaf is not None else None
+            ),
+            destination_snapshot_hash=destination_hash,
+            order_snapshot_hash=snapshot_hash,
+            currency=order.currency,
+            ttl_seconds=_ESTIMATE_TTL_SECONDS,
+            expires_at=database_now + _estimate_expiry_delta(_ESTIMATE_TTL_SECONDS),
+            source_kind="sandbox_normalized",
+            source_reference="dhl:mydhlapi:test",
+            source_command=(
+                "refresh_checkout_estimate"
+                if current_unselected_leaf is not None
+                else "create_checkout_estimate"
+            ),
+            idempotency_key=idempotency_key,
+            request_fingerprint=fingerprint,
+            schema_version="checkout_estimate_v1",
+            created_by_actor_type=actor_type,
+            created_by_actor_id=actor_id,
+        )
+        db.add(estimate)
+        await db.flush()
 
-
+    if estimate is None:
+        raise HTTPException(status_code=500, detail="checkout estimate was not created")
     if dhl_offers is not None:
         for offer in dhl_offers:
             rate = offer.rate

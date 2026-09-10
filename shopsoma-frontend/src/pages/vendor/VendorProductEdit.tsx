@@ -112,6 +112,27 @@ export default function VendorProductEdit() {
     try {
       setSaving(true);
 
+      const hasExistingParcelMeasurement = [
+        product?.weight_kg,
+        product?.length_cm,
+        product?.width_cm,
+        product?.height_cm,
+      ].some((value) => value !== null && value !== undefined);
+      const parcelUpdate = hasParcelMeasurement
+        ? {
+            weight_kg: parseFloat(weightKg),
+            length_cm: parseFloat(lengthCm),
+            width_cm: parseFloat(widthCm),
+            height_cm: parseFloat(heightCm),
+          }
+        : hasExistingParcelMeasurement
+          ? {
+              weight_kg: null,
+              length_cm: null,
+              width_cm: null,
+              height_cm: null,
+            }
+          : {};
       const updateData: Partial<Product> = {
         title: title.trim(),
         description: description.trim(),
@@ -121,10 +142,7 @@ export default function VendorProductEdit() {
         status,
         made_to_order: madeToOrder,
         made_to_order_timeline: madeToOrder ? productionTimeline.trim() : undefined,
-        weight_kg: weightKg.trim() ? parseFloat(weightKg) : undefined,
-        length_cm: lengthCm.trim() ? parseFloat(lengthCm) : undefined,
-        width_cm: widthCm.trim() ? parseFloat(widthCm) : undefined,
-        height_cm: heightCm.trim() ? parseFloat(heightCm) : undefined,
+        ...parcelUpdate,
       };
 
       await productService.updateProduct(id, updateData as any);
