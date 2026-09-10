@@ -474,13 +474,12 @@ async def _authoritative_parcel_measurements(
     if for_update:
         statement = statement.with_for_update()
     rows = (await db.execute(statement)).all()
-    profile_rows = (
-        await db.execute(
-            select(ProductLogisticsProfile).where(
-                ProductLogisticsProfile.product_id.in_({product.id for _, product in rows})
-            )
-        )
-    ).scalars().all()
+    profile_statement = select(ProductLogisticsProfile).where(
+        ProductLogisticsProfile.product_id.in_({product.id for _, product in rows})
+    )
+    if for_update:
+        profile_statement = profile_statement.with_for_update()
+    profile_rows = (await db.execute(profile_statement)).scalars().all()
     profiles_by_item = {
         (profile.product_id, profile.variant_id): profile for profile in profile_rows
     }

@@ -1384,3 +1384,12 @@ def test_create_shipment_adapter_translates_dhl_configuration_failures(monkeypat
 
     with pytest.raises(ShipmentPhase4Error, match='DHL integration is disabled'):
         create_shipment_adapter(cast(Any, object()))
+
+
+def test_checkout_parcel_revalidation_locks_logistics_profiles() -> None:
+    source = (ROOT / "app" / "services" / "checkout" / "estimates.py").read_text()
+    helper = source.split(
+        "async def _authoritative_parcel_measurements(", 1
+    )[1].split("async def parcel_measurement_snapshot(", 1)[0]
+    assert "if for_update:" in helper
+    assert "profile_statement = profile_statement.with_for_update()" in helper
