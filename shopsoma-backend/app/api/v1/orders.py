@@ -934,7 +934,7 @@ async def create_order(
 
     if not shipping_rates and not (
         enforced_checkout
-        and domestic_shipping_capabilities(settings).provider_calls_enabled
+        and domestic_shipping_capabilities(settings).checkout_enabled
     ):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

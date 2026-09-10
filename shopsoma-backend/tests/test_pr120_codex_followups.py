@@ -937,6 +937,16 @@ def test_create_estimate_replays_refresh_idempotency_key(monkeypatch):
 
     monkeypatch.setattr(module, "order_snapshot", lambda _order: ("dest-hash", "snap-hash"))
     monkeypatch.setattr(module, "_hash", lambda payload: "f" * 64)
+    monkeypatch.setattr(
+        module,
+        "domestic_shipping_capabilities",
+        lambda _settings: SimpleNamespace(provider_calls_enabled=True, checkout_enabled=True),
+    )
+
+    async def no_parcel_snapshot(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(module, "parcel_measurement_snapshot", no_parcel_snapshot)
 
     import asyncio
     replay = asyncio.run(

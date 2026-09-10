@@ -6,7 +6,7 @@ import json
 import uuid
 
 from fastapi import HTTPException
-from sqlalchemy import select, text
+from sqlalchemy import select, text, tuple_
 
 from app.models.checkout_shipping_estimate import (
     CheckoutShippingEstimate,
@@ -19,6 +19,7 @@ from app.models.product import Product, ProductVariant, SizeStock
 from app.models.stock_payment_persistence import StockReservation
 from app.services.checkout.estimates import (
     _estimate_request_fingerprint,
+    dhl_subject_snapshot,
     order_snapshot,
     parcel_measurement_snapshot,
     reload_checkout_order,
@@ -178,6 +179,16 @@ async def select_estimate_option(
     estimate = await db.get(CheckoutShippingEstimate, estimate_id)
     option = await db.get(CheckoutShippingEstimateOption, option_id)
     destination_hash, snapshot_hash = order_snapshot(order)
+    subject_snapshot_hash = (
+        await dhl_subject_snapshot(db, order)
+        if estimate and estimate.source_kind == "sandbox_normalized"
+        else None
+    )
+    parcel_snapshot_hash = (
+        await parcel_measurement_snapshot(db, order)
+        if estimate and estimate.source_kind == "sandbox_normalized"
+        else None
+    )
     if (
         not estimate
         or not option
@@ -185,6 +196,13 @@ async def select_estimate_option(
         or option.estimate_id != estimate.id
         or estimate.destination_snapshot_hash != destination_hash
         or estimate.order_snapshot_hash != snapshot_hash
+        or (
+            estimate.source_kind == "sandbox_normalized"
+            and estimate.request_fingerprint
+            != _estimate_request_fingerprint(
+                order.id, snapshot_hash, parcel_snapshot_hash, subject_snapshot_hash
+            )
+        )
     ):
         raise HTTPException(status_code=409, detail="stale checkout estimate")
 
@@ -273,7 +291,10 @@ async def select_estimate_option(
             db, order, for_update=True
         )
         if estimate.request_fingerprint != _estimate_request_fingerprint(
-            order.id, snapshot_hash, parcel_snapshot_hash
+            order.id,
+            snapshot_hash,
+            parcel_snapshot_hash,
+            await dhl_subject_snapshot(db, order),
         ):
             raise HTTPException(status_code=409, detail="stale checkout estimate")
     if estimate.expires_at <= database_now:

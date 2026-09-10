@@ -389,11 +389,16 @@ def _estimate_expiry_delta(ttl_seconds: int) -> timedelta:
 
 
 def _estimate_request_fingerprint(
-    order_id, snapshot_hash: str, parcel_snapshot_hash: str | None = None
+    order_id,
+    snapshot_hash: str,
+    parcel_snapshot_hash: str | None = None,
+    subject_snapshot_hash: str | None = None,
 ) -> str:
     value = {"order_id": str(order_id), "snapshot": snapshot_hash}
     if parcel_snapshot_hash is not None:
         value["parcel_snapshot"] = parcel_snapshot_hash
+    if subject_snapshot_hash is not None:
+        value["subject_snapshot"] = subject_snapshot_hash
     return _hash(value)
 
 
@@ -470,6 +475,79 @@ async def parcel_measurement_snapshot(db, order: Order, *, for_update: bool = Fa
     ])
 
 
+async def dhl_subject_snapshot(db, order: Order) -> str:
+    """Hash the persisted DHL subject identity, not only mutable order facts."""
+    handed_off = select(CustodyEvent.id).where(
+        CustodyEvent.package_id == HubPackage.id,
+        CustodyEvent.package_version == HubPackage.current_version,
+        CustodyEvent.event_type.in_(("released", "tendered", "provider_accepted")),
+    ).exists()
+    packages = (
+        await db.execute(
+            select(HubPackage.id, HubPackage.current_version, HubPackage.hub_id)
+            .where(HubPackage.order_id == order.id, HubPackage.state == "ready", ~handed_off)
+            .order_by(HubPackage.ready_at.desc(), HubPackage.id.desc())
+        )
+    ).all()
+    if len(packages) == 1:
+        package_id, package_version, hub_id = packages[0]
+        intent = (
+            await db.execute(
+                select(OutboundShipmentIntent.id, OutboundShipmentIntent.destination_postal_code)
+                .where(
+                    OutboundShipmentIntent.order_id == order.id,
+                    OutboundShipmentIntent.package_id == package_id,
+                    OutboundShipmentIntent.package_version == package_version,
+                    ~select(OutboundShipmentIntentInvalidation.id)
+                    .where(OutboundShipmentIntentInvalidation.intent_id == OutboundShipmentIntent.id)
+                    .exists(),
+                )
+            )
+        ).all()
+        items = (
+            await db.execute(
+                select(HubPackageItem.order_item_id, HubPackageItem.cohort_id, HubPackageItem.quantity)
+                .where(
+                    HubPackageItem.package_id == package_id,
+                    HubPackageItem.package_version == package_version,
+                )
+                .order_by(HubPackageItem.id)
+            )
+        ).all()
+        hub = await db.scalar(
+            select(FulfillmentHub.id, FulfillmentHub.version).where(FulfillmentHub.id == hub_id)
+        )
+        version = await db.scalar(
+            select(HubPackageVersion.id).where(
+                HubPackageVersion.package_id == package_id,
+                HubPackageVersion.version == package_version,
+            )
+        )
+        seal = await db.scalar(
+            select(HubPackageSeal.id).where(
+                HubPackageSeal.package_id == package_id,
+                HubPackageSeal.package_version == package_version,
+                HubPackageSeal.retired_at.is_(None),
+            )
+        )
+        return _hash({"package": [str(package_id), package_version, str(hub_id)], "intent": intent, "items": items, "hub": hub, "version": version, "seal": seal})
+    hubs = (
+        await db.execute(
+            select(FulfillmentHub.id, FulfillmentHub.version)
+            .where(FulfillmentHub.is_active.is_(True))
+            .order_by(FulfillmentHub.id)
+        )
+    ).all()
+    allocations = (
+        await db.execute(
+            select(CohortItemAllocation.order_item_id, CohortItemAllocation.cohort_id, CohortItemAllocation.allocated_quantity)
+            .where(CohortItemAllocation.order_id == order.id)
+            .order_by(CohortItemAllocation.order_item_id, CohortItemAllocation.cohort_id)
+        )
+    ).all()
+    return _hash({"hubs": hubs, "allocations": allocations})
+
+
 async def load_checkout_order(
     db, order_id, *, for_update: bool = False
 ) -> Order | None:
@@ -535,7 +613,7 @@ async def create_estimate(
     destination_hash, snapshot_hash = order_snapshot(order)
 
     capabilities = domestic_shipping_capabilities(settings)
-    dhl_provider_enabled = capabilities.provider_calls_enabled
+    dhl_provider_enabled = capabilities.checkout_enabled
     if not dhl_provider_enabled:
         # Static refreshes must serialize on the checkout aggregate too. The
         # provider path reacquires this lock after its external await; the
@@ -576,8 +654,11 @@ async def create_estimate(
         if dhl_provider_enabled
         else None
     )
+    subject_snapshot_hash = (
+        await dhl_subject_snapshot(db, order) if dhl_provider_enabled else None
+    )
     fingerprint = _estimate_request_fingerprint(
-        order.id, snapshot_hash, parcel_snapshot_hash
+        order.id, snapshot_hash, parcel_snapshot_hash, subject_snapshot_hash
     )
     if existing:
         if existing.request_fingerprint != fingerprint:
@@ -591,6 +672,50 @@ async def create_estimate(
         or getattr(fulfillment_status, "value", fulfillment_status) == "cancelled"
     ):
         raise HTTPException(status_code=409, detail="checkout estimate is no longer available")
+
+    database_now = await db.scalar(select(text("statement_timestamp()")))
+    ttl = _ESTIMATE_TTL_SECONDS
+    estimate = CheckoutShippingEstimate(
+        order_id=order.id,
+        customer_id=order.customer_id,
+        supersedes_estimate_id=(
+            current_unselected_leaf.id if current_unselected_leaf is not None else None
+        ),
+        destination_snapshot_hash=destination_hash,
+        order_snapshot_hash=snapshot_hash,
+        currency=order.currency,
+        ttl_seconds=ttl,
+        expires_at=database_now + _estimate_expiry_delta(ttl),
+        source_kind="sandbox_normalized" if dhl_provider_enabled else "static_domestic_rate",
+        source_reference="dhl:mydhlapi:test" if dhl_provider_enabled else "shipping_rates:v1",
+        source_command=(
+            "refresh_checkout_estimate"
+            if current_unselected_leaf is not None
+            else "create_checkout_estimate"
+        ),
+        idempotency_key=idempotency_key,
+        request_fingerprint=fingerprint,
+        schema_version="checkout_estimate_v1",
+        created_by_actor_type=actor_type,
+        created_by_actor_id=actor_id,
+    )
+    customer_id = order.customer_id
+    db.add(estimate)
+    try:
+        await db.flush()
+    except IntegrityError:
+        await db.rollback()
+        replay = await db.scalar(
+            select(CheckoutShippingEstimate).where(
+                CheckoutShippingEstimate.customer_id == customer_id,
+                CheckoutShippingEstimate.idempotency_key == idempotency_key,
+            )
+        )
+        if replay is None:
+            raise
+        if replay.request_fingerprint != fingerprint:
+            raise HTTPException(status_code=409, detail="idempotency conflict")
+        return replay
     usd_to_ngn_rate = None
     if order.currency == "USD":
         rate_setting = await db.scalar(
@@ -652,6 +777,15 @@ async def create_estimate(
         fresh_order = await load_checkout_order(db, order.id, for_update=True)
         if fresh_order is None:
             raise HTTPException(status_code=404, detail="checkout order no longer exists")
+        fresh_payment_status = getattr(fresh_order, "payment_status", None)
+        fresh_fulfillment_status = getattr(fresh_order, "fulfillment_status", None)
+        if (
+            getattr(fresh_order, "checkout_prerequisites_completed_at", None) is not None
+            or getattr(fresh_payment_status, "value", fresh_payment_status) == "paid"
+            or getattr(fresh_fulfillment_status, "value", fresh_fulfillment_status)
+            == "cancelled"
+        ):
+            raise HTTPException(status_code=409, detail="checkout estimate is no longer available")
         _, fresh_snapshot_hash = order_snapshot(fresh_order)
         if fresh_snapshot_hash != snapshot_hash:
             raise HTTPException(status_code=409, detail="order changed during DHL rating")
@@ -683,50 +817,11 @@ async def create_estimate(
                 .limit(1)
             )
         ).scalar_one_or_none()
-
-    database_now = await db.scalar(select(text("statement_timestamp()")))
-    ttl = _ESTIMATE_TTL_SECONDS
-    estimate = CheckoutShippingEstimate(
-        order_id=order.id,
-        customer_id=order.customer_id,
-        supersedes_estimate_id=(
+        estimate.supersedes_estimate_id = (
             current_unselected_leaf.id if current_unselected_leaf is not None else None
-        ),
-        destination_snapshot_hash=destination_hash,
-        order_snapshot_hash=snapshot_hash,
-        currency=order.currency,
-        ttl_seconds=ttl,
-        expires_at=database_now + _estimate_expiry_delta(ttl),
-        source_kind="sandbox_normalized" if dhl_offers is not None else "static_domestic_rate",
-        source_reference="dhl:mydhlapi:test" if dhl_offers is not None else "shipping_rates:v1",
-        source_command=(
-            "refresh_checkout_estimate"
-            if current_unselected_leaf is not None
-            else "create_checkout_estimate"
-        ),
-        idempotency_key=idempotency_key,
-        request_fingerprint=fingerprint,
-        schema_version="checkout_estimate_v1",
-        created_by_actor_type=actor_type,
-        created_by_actor_id=actor_id,
-    )
-    customer_id = order.customer_id
-    db.add(estimate)
-    try:
-        await db.flush()
-    except IntegrityError:
-        await db.rollback()
-        replay = await db.scalar(
-            select(CheckoutShippingEstimate).where(
-                CheckoutShippingEstimate.customer_id == customer_id,
-                CheckoutShippingEstimate.idempotency_key == idempotency_key,
-            )
         )
-        if replay is None:
-            raise
-        if replay.request_fingerprint != fingerprint:
-            raise HTTPException(status_code=409, detail="idempotency conflict")
-        return replay
+
+
     if dhl_offers is not None:
         for offer in dhl_offers:
             rate = offer.rate
