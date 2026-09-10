@@ -514,9 +514,13 @@ async def dhl_subject_snapshot(db, order: Order) -> str:
                 .order_by(HubPackageItem.id)
             )
         ).all()
-        hub = await db.scalar(
-            select(FulfillmentHub.id, FulfillmentHub.version).where(FulfillmentHub.id == hub_id)
-        )
+        hub = (
+            await db.execute(
+                select(FulfillmentHub.id, FulfillmentHub.version).where(
+                    FulfillmentHub.id == hub_id
+                )
+            )
+        ).one_or_none()
         version = await db.scalar(
             select(HubPackageVersion.id).where(
                 HubPackageVersion.package_id == package_id,
@@ -797,29 +801,6 @@ async def create_estimate(
                 status_code=409, detail="parcel measurements changed during DHL rating"
             )
         order = fresh_order
-        current_unselected_leaf = (
-            await db.execute(
-                select(CheckoutShippingEstimate)
-                .where(
-                    CheckoutShippingEstimate.order_id == order.id,
-                    CheckoutShippingEstimate.customer_id == order.customer_id,
-                    ~select(successor_estimate.id).where(
-                        successor_estimate.supersedes_estimate_id == CheckoutShippingEstimate.id
-                    ).exists(),
-                    ~select(selection.id).where(
-                        selection.estimate_id == CheckoutShippingEstimate.id
-                    ).exists(),
-                )
-                .order_by(
-                    CheckoutShippingEstimate.created_at.desc(),
-                    CheckoutShippingEstimate.id.desc(),
-                )
-                .limit(1)
-            )
-        ).scalar_one_or_none()
-        estimate.supersedes_estimate_id = (
-            current_unselected_leaf.id if current_unselected_leaf is not None else None
-        )
 
 
     if dhl_offers is not None:
