@@ -22,7 +22,7 @@ from app.services.checkout.estimates import (
     _planned_ship_date,
     dhl_subject_snapshot,
     order_snapshot,
-    parcel_measurement_snapshot,
+    _prepayment_parcel_snapshot,
     reload_checkout_order,
 )
 
@@ -192,7 +192,7 @@ async def select_estimate_option(
         else None
     )
     parcel_snapshot_hash = (
-        await parcel_measurement_snapshot(db, order)
+        await _prepayment_parcel_snapshot(db, order)
         if estimate and estimate.source_kind == "sandbox_normalized"
         else None
     )
@@ -294,7 +294,7 @@ async def select_estimate_option(
     ):
         raise HTTPException(status_code=409, detail="stale checkout estimate")
     if estimate.source_kind == "sandbox_normalized":
-        parcel_snapshot_hash = await parcel_measurement_snapshot(
+        parcel_snapshot_hash = await _prepayment_parcel_snapshot(
             db, order, for_update=True
         )
         if estimate.request_fingerprint != _estimate_request_fingerprint(

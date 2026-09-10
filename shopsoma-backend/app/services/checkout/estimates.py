@@ -587,6 +587,15 @@ async def _unhanded_ready_package_ids(db, order: Order) -> list:
     ).scalars().all()
 
 
+async def _prepayment_parcel_snapshot(
+    db, order: Order, *, for_update: bool = False
+) -> str | None:
+    """Return mutable parcel evidence only when no ready package is rated."""
+    if await _unhanded_ready_package_ids(db, order):
+        return None
+    return await parcel_measurement_snapshot(db, order, for_update=for_update)
+
+
 async def load_checkout_order(
     db, order_id, *, for_update: bool = False
 ) -> Order | None:
@@ -698,16 +707,11 @@ async def create_estimate(
         )
     ).scalar_one_or_none()
 
-    ready_package_ids = (
-        await _unhanded_ready_package_ids(db, order)
-        if dhl_provider_enabled
-        else []
-    )
     # Ready packages rate their immutable HubPackageVersion measurements;
     # mutable catalog dimensions only belong to the pre-payment quote subject.
     parcel_snapshot_hash = (
-        await parcel_measurement_snapshot(db, order)
-        if dhl_provider_enabled and not ready_package_ids
+        await _prepayment_parcel_snapshot(db, order)
+        if dhl_provider_enabled
         else None
     )
     subject_snapshot_hash = (
@@ -852,7 +856,7 @@ async def create_estimate(
         _, fresh_snapshot_hash = order_snapshot(fresh_order)
         if fresh_snapshot_hash != snapshot_hash:
             raise HTTPException(status_code=409, detail="order changed during DHL rating")
-        fresh_parcel_snapshot_hash = await parcel_measurement_snapshot(
+        fresh_parcel_snapshot_hash = await _prepayment_parcel_snapshot(
             db, fresh_order, for_update=True
         )
         if fresh_parcel_snapshot_hash != parcel_snapshot_hash:
