@@ -92,34 +92,13 @@ async def _rate_pre_payment_quote_subject(
     ).all()
     if not rows:
         raise HTTPException(status_code=422, detail="checkout has no shippable items")
-    profile_rows = (
-        await db.execute(
-            select(ProductLogisticsProfile).where(
-                ProductLogisticsProfile.product_id.in_({product.id for _, product in rows})
-            )
+    item_measurements = [
+        (item, product, values)
+        for item, product, _profile, values in await _authoritative_parcel_measurements(
+            db, order
         )
-    ).scalars().all()
-    profiles_by_item = {}
-    for profile in profile_rows:
-        profiles_by_item[(profile.product_id, profile.variant_id)] = profile
-
-    def measurement(item, product):
-        # A verified variant profile is the most specific authority; otherwise
-        # use the product profile before falling back to legacy product fields.
-        profile = profiles_by_item.get((product.id, item.variant_id))
-        if profile is None or profile.variant_id is not None and profile.variant_id != item.variant_id:
-            profile = profiles_by_item.get((product.id, None))
-        values = (
-            (profile.weight_kg, profile.length_cm, profile.width_cm, profile.height_cm)
-            if profile is not None
-            else (product.weight_kg, product.length_cm, product.width_cm, product.height_cm)
-        )
-        if any(value is None for value in values):
-            return None
-        return values
-
-    item_measurements = [(item, product, measurement(item, product)) for item, product in rows]
-    if any(values is None for _, _, values in item_measurements):
+    ]
+    if any(values is None or any(value is None for value in values) for _, _, values in item_measurements):
         raise HTTPException(status_code=422, detail="vendor parcel dimensions required before DHL rating")
     allocations = (
         await db.execute(
@@ -482,17 +461,12 @@ def order_snapshot(order: Order) -> tuple[str, str]:
     )
 
 
-async def parcel_measurement_snapshot(db, order: Order, *, for_update: bool = False) -> str:
-    """Hash mutable product parcel facts for an order-scoped DHL check."""
+async def _authoritative_parcel_measurements(
+    db, order: Order, *, for_update: bool = False
+):
+    """Resolve parcel measurements through the same profile path used for rating."""
     statement = (
-        select(
-            OrderItem.id,
-            Product.id,
-            Product.weight_kg,
-            Product.length_cm,
-            Product.width_cm,
-            Product.height_cm,
-        )
+        select(OrderItem, Product)
         .join(Product, Product.id == OrderItem.product_id)
         .where(OrderItem.order_id == order.id)
         .order_by(OrderItem.id)
@@ -500,16 +474,50 @@ async def parcel_measurement_snapshot(db, order: Order, *, for_update: bool = Fa
     if for_update:
         statement = statement.with_for_update()
     rows = (await db.execute(statement)).all()
+    profile_rows = (
+        await db.execute(
+            select(ProductLogisticsProfile).where(
+                ProductLogisticsProfile.product_id.in_({product.id for _, product in rows})
+            )
+        )
+    ).scalars().all()
+    profiles_by_item = {
+        (profile.product_id, profile.variant_id): profile for profile in profile_rows
+    }
+
+    measurements = []
+    for item, product in rows:
+        profile = profiles_by_item.get((product.id, item.variant_id))
+        if profile is None or (
+            profile.variant_id is not None and profile.variant_id != item.variant_id
+        ):
+            profile = profiles_by_item.get((product.id, None))
+        values = (
+            (profile.weight_kg, profile.length_cm, profile.width_cm, profile.height_cm)
+            if profile is not None
+            else (product.weight_kg, product.length_cm, product.width_cm, product.height_cm)
+        )
+        measurements.append((item, product, profile, values))
+    return measurements
+
+
+async def parcel_measurement_snapshot(db, order: Order, *, for_update: bool = False) -> str:
+    """Hash the authoritative parcel facts used by the DHL rating request."""
+    measurements = await _authoritative_parcel_measurements(
+        db, order, for_update=for_update
+    )
     return _hash([
         {
-            "order_item_id": str(item_id),
-            "product_id": str(product_id),
-            "weight_kg": str(weight),
-            "length_cm": str(length),
-            "width_cm": str(width),
-            "height_cm": str(height),
+            "order_item_id": str(item.id),
+            "product_id": str(product.id),
+            "variant_id": str(item.variant_id) if item.variant_id else None,
+            "measurement_source_id": str(profile.id) if profile else None,
+            "weight_kg": str(values[0]),
+            "length_cm": str(values[1]),
+            "width_cm": str(values[2]),
+            "height_cm": str(values[3]),
         }
-        for item_id, product_id, weight, length, width, height in rows
+        for item, product, profile, values in measurements
     ])
 
 

@@ -25,21 +25,45 @@ def upgrade() -> None:
     try:
         op.execute(
             """
-            WITH duplicates AS (
-                SELECT id,
-                       idempotency_key,
-                       ROW_NUMBER() OVER (
-                           PARTITION BY customer_id, idempotency_key
-                           ORDER BY created_at, id
-                       ) AS duplicate_number
-                FROM checkout_shipping_estimates
-            )
-            UPDATE checkout_shipping_estimates AS estimate
-            SET idempotency_key = LEFT(duplicates.idempotency_key, 150)
-                || ':legacy:' || duplicates.id::text
-            FROM duplicates
-            WHERE estimate.id = duplicates.id
-              AND duplicates.duplicate_number > 1
+            DO $$
+            DECLARE
+                duplicate RECORD;
+                candidate TEXT;
+                suffix INTEGER;
+            BEGIN
+                FOR duplicate IN
+                    SELECT id, customer_id, idempotency_key
+                    FROM (
+                        SELECT id,
+                               customer_id,
+                               idempotency_key,
+                               ROW_NUMBER() OVER (
+                                   PARTITION BY customer_id, idempotency_key
+                                   ORDER BY created_at, id
+                               ) AS duplicate_number
+                        FROM checkout_shipping_estimates
+                    ) AS ranked
+                    WHERE duplicate_number > 1
+                LOOP
+                    suffix := 0;
+                    LOOP
+                        candidate := LEFT(duplicate.idempotency_key, 140)
+                            || ':legacy:' || duplicate.id::text
+                            || CASE WHEN suffix = 0 THEN '' ELSE ':' || suffix::text END;
+                        EXIT WHEN NOT EXISTS (
+                            SELECT 1
+                            FROM checkout_shipping_estimates existing
+                            WHERE existing.customer_id = duplicate.customer_id
+                              AND existing.idempotency_key = candidate
+                        );
+                        suffix := suffix + 1;
+                    END LOOP;
+
+                    UPDATE checkout_shipping_estimates
+                    SET idempotency_key = candidate
+                    WHERE id = duplicate.id;
+                END LOOP;
+            END $$;
             """
         )
     finally:
