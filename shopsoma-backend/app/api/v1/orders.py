@@ -1059,6 +1059,7 @@ async def create_order(
                     ready_through=datetime.now(timezone.utc) + timedelta(days=30),
                 )
                 db.add(cohort)
+                await db.flush()
                 cohorts_by_key[cohort_key] = cohort
             db.add(
                 CohortItemAllocation(
