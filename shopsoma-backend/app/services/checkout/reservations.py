@@ -175,6 +175,10 @@ async def select_estimate_option(
         raise HTTPException(
             status_code=409, detail="checkout prerequisites already completed"
         )
+    if order.fulfillment_status == FulfillmentStatus.CANCELLED:
+        raise HTTPException(
+            status_code=409, detail="cancelled order cannot select checkout estimate"
+        )
 
     estimate = await db.get(CheckoutShippingEstimate, estimate_id)
     option = await db.get(CheckoutShippingEstimateOption, option_id)

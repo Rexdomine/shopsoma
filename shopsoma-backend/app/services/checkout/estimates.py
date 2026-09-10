@@ -703,6 +703,22 @@ async def create_estimate(
         created_by_actor_type=actor_type,
         created_by_actor_id=actor_id,
     )
+    usd_to_ngn_rate = None
+    if order.currency == "USD":
+        rate_setting = await db.scalar(
+            select(Setting).where(Setting.key == "exchange_rate_usd_to_ngn")
+        )
+        try:
+            usd_to_ngn_rate = Decimal(str(rate_setting.value))
+        except (ArithmeticError, ValueError, TypeError, AttributeError) as exc:
+            raise HTTPException(
+                status_code=503, detail="authoritative exchange rate unavailable"
+            ) from exc
+        if not usd_to_ngn_rate.is_finite() or usd_to_ngn_rate <= 0:
+            raise HTTPException(
+                status_code=503, detail="authoritative exchange rate unavailable"
+            )
+
     customer_id = order.customer_id
     db.add(estimate)
     try:
@@ -720,21 +736,6 @@ async def create_estimate(
         if replay.request_fingerprint != fingerprint:
             raise HTTPException(status_code=409, detail="idempotency conflict")
         return replay
-    usd_to_ngn_rate = None
-    if order.currency == "USD":
-        rate_setting = await db.scalar(
-            select(Setting).where(Setting.key == "exchange_rate_usd_to_ngn")
-        )
-        try:
-            usd_to_ngn_rate = Decimal(str(rate_setting.value))
-        except (ArithmeticError, ValueError, TypeError, AttributeError) as exc:
-            raise HTTPException(
-                status_code=503, detail="authoritative exchange rate unavailable"
-            ) from exc
-        if not usd_to_ngn_rate.is_finite() or usd_to_ngn_rate <= 0:
-            raise HTTPException(
-                status_code=503, detail="authoritative exchange rate unavailable"
-            )
 
     def ngn_in_order_currency(value) -> Decimal:
         amount = Decimal(value)
