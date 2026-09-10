@@ -1,6 +1,6 @@
 """Server-owned checkout-estimate creation and snapshot validation."""
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal, ROUND_CEILING, ROUND_HALF_UP
 import hashlib
 import json
@@ -54,9 +54,18 @@ from app.services.shipping.capabilities import domestic_shipping_capabilities
 
 _CENT = Decimal("0.01")
 _ESTIMATE_TTL_SECONDS = 1800
+_LAGOS_TZ = ZoneInfo("Africa/Lagos")
 
 
-async def _rate_pre_payment_quote_subject(db, *, order: Order):
+def _planned_ship_date() -> date:
+    """Return the next DHL tender date in the provider's local timezone."""
+    now = datetime.now(_LAGOS_TZ)
+    return now.date() if now.hour < 12 else now.date() + timedelta(days=1)
+
+
+async def _rate_pre_payment_quote_subject(
+    db, *, order: Order, planned_ship_date=None
+):
     """Rate a non-custodial quote subject before payment/fulfillment handoff."""
     configured_cohorts = settings.dhl_domestic_sandbox_cohort_ids
     if not configured_cohorts:
@@ -185,8 +194,7 @@ async def _rate_pre_payment_quote_subject(db, *, order: Order):
         country_code=hub.country_code,
         cohort_count=len({cohort.id for _, cohort in allocations}),
     )
-    lagos_now = datetime.now(ZoneInfo("Africa/Lagos"))
-    planned_ship_date = lagos_now.date() if lagos_now.hour < 12 else lagos_now.date() + timedelta(days=1)
+    planned_ship_date = planned_ship_date or _planned_ship_date()
     request = DomesticRateRequest(
         origin=hub_ref,
         destination=destination,
@@ -213,7 +221,7 @@ async def _rate_pre_payment_quote_subject(db, *, order: Order):
     return result.offers
 
 
-async def _dhl_checkout_options(db, *, order: Order):
+async def _dhl_checkout_options(db, *, order: Order, planned_ship_date=None):
         """Rate the exact checkout shipment subject through DHL sandbox."""
         handed_off = select(CustodyEvent.id).where(
             CustodyEvent.package_id == HubPackage.id,
@@ -228,7 +236,9 @@ async def _dhl_checkout_options(db, *, order: Order):
             )
         ).scalars().all()
         if not packages:
-            return await _rate_pre_payment_quote_subject(db, order=order)
+            return await _rate_pre_payment_quote_subject(
+                db, order=order, planned_ship_date=planned_ship_date
+            )
         if len(packages) != 1:
             raise HTTPException(status_code=503, detail="DHL shipment subject is not ready")
         package = packages[0]
@@ -346,8 +356,7 @@ async def _dhl_checkout_options(db, *, order: Order):
                 ).scalars().all()
             ),
         )
-        lagos_now = datetime.now(ZoneInfo("Africa/Lagos"))
-        planned_ship_date = lagos_now.date() if lagos_now.hour < 12 else lagos_now.date() + timedelta(days=1)
+        planned_ship_date = planned_ship_date or _planned_ship_date()
         request = DomesticRateRequest(
             origin=hub_ref,
             destination=destination,
@@ -475,8 +484,11 @@ async def parcel_measurement_snapshot(db, order: Order, *, for_update: bool = Fa
     ])
 
 
-async def dhl_subject_snapshot(db, order: Order) -> str:
+async def dhl_subject_snapshot(
+    db, order: Order, *, planned_ship_date=None
+) -> str:
     """Hash the persisted DHL subject identity, not only mutable order facts."""
+    planned_ship_date = planned_ship_date or _planned_ship_date()
     handed_off = select(CustodyEvent.id).where(
         CustodyEvent.package_id == HubPackage.id,
         CustodyEvent.package_version == HubPackage.current_version,
@@ -534,7 +546,7 @@ async def dhl_subject_snapshot(db, order: Order) -> str:
                 HubPackageSeal.retired_at.is_(None),
             )
         )
-        return _hash({"package": [str(package_id), package_version, str(hub_id)], "intent": intent, "items": items, "hub": hub, "version": version, "seal": seal})
+        return _hash({"package": [str(package_id), package_version, str(hub_id)], "intent": intent, "items": items, "hub": hub, "version": version, "seal": seal, "planned_ship_date": planned_ship_date})
     hubs = (
         await db.execute(
             select(FulfillmentHub.id, FulfillmentHub.version)
@@ -549,7 +561,7 @@ async def dhl_subject_snapshot(db, order: Order) -> str:
             .order_by(CohortItemAllocation.order_item_id, CohortItemAllocation.cohort_id)
         )
     ).all()
-    return _hash({"hubs": hubs, "allocations": allocations})
+    return _hash({"hubs": hubs, "allocations": allocations, "planned_ship_date": planned_ship_date})
 
 
 async def load_checkout_order(
@@ -618,6 +630,7 @@ async def create_estimate(
 
     capabilities = domestic_shipping_capabilities(settings)
     dhl_provider_enabled = capabilities.checkout_enabled
+    planned_ship_date = _planned_ship_date() if dhl_provider_enabled else None
     if not dhl_provider_enabled:
         # Static refreshes must serialize on the checkout aggregate too. The
         # provider path reacquires this lock after its external await; the
@@ -629,6 +642,15 @@ async def create_estimate(
 
     successor_estimate = aliased(CheckoutShippingEstimate)
     selection = aliased(CheckoutShippingEstimateSelection)
+    if dhl_provider_enabled:
+        # The predecessor lookup and immutable claim must be serialized on the
+        # checkout aggregate. Otherwise two refresh keys can both observe the
+        # same leaf (or no leaf) before either claim becomes visible.
+        order = await load_checkout_order(db, order.id, for_update=True)
+        if order is None:
+            raise HTTPException(status_code=404, detail="checkout order no longer exists")
+        destination_hash, snapshot_hash = order_snapshot(order)
+
     current_unselected_leaf = (
         await db.execute(
             select(CheckoutShippingEstimate)
@@ -659,7 +681,11 @@ async def create_estimate(
         else None
     )
     subject_snapshot_hash = (
-        await dhl_subject_snapshot(db, order) if dhl_provider_enabled else None
+        await dhl_subject_snapshot(
+            db, order, planned_ship_date=planned_ship_date
+        )
+        if dhl_provider_enabled
+        else None
     )
     fingerprint = _estimate_request_fingerprint(
         order.id, snapshot_hash, parcel_snapshot_hash, subject_snapshot_hash
@@ -778,7 +804,9 @@ async def create_estimate(
         raise HTTPException(status_code=503, detail="no eligible estimate options")
     dhl_offers = None
     if dhl_provider_enabled:
-        dhl_offers = await _dhl_checkout_options(db, order=order)
+        dhl_offers = await _dhl_checkout_options(
+            db, order=order, planned_ship_date=planned_ship_date
+        )
         fresh_order = await load_checkout_order(db, order.id, for_update=True)
         if fresh_order is None:
             raise HTTPException(status_code=404, detail="checkout order no longer exists")

@@ -19,6 +19,7 @@ from app.models.product import Product, ProductVariant, SizeStock
 from app.models.stock_payment_persistence import StockReservation
 from app.services.checkout.estimates import (
     _estimate_request_fingerprint,
+    _planned_ship_date,
     dhl_subject_snapshot,
     order_snapshot,
     parcel_measurement_snapshot,
@@ -184,7 +185,9 @@ async def select_estimate_option(
     option = await db.get(CheckoutShippingEstimateOption, option_id)
     destination_hash, snapshot_hash = order_snapshot(order)
     subject_snapshot_hash = (
-        await dhl_subject_snapshot(db, order)
+        await dhl_subject_snapshot(
+            db, order, planned_ship_date=_planned_ship_date()
+        )
         if estimate and estimate.source_kind == "sandbox_normalized"
         else None
     )

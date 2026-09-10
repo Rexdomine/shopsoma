@@ -947,9 +947,10 @@ def test_create_estimate_replays_refresh_idempotency_key(monkeypatch):
         return None
 
     monkeypatch.setattr(module, "parcel_measurement_snapshot", no_parcel_snapshot)
-    monkeypatch.setattr(
-        module, "dhl_subject_snapshot", lambda *_args, **_kwargs: "subject-hash"
-    )
+    async def dhl_subject_snapshot_stub(*_args, **_kwargs):
+        return "subject-hash"
+
+    monkeypatch.setattr(module, "dhl_subject_snapshot", dhl_subject_snapshot_stub)
     import asyncio
     replay = asyncio.run(
         module.create_estimate(
