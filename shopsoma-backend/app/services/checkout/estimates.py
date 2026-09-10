@@ -20,6 +20,7 @@ from app.models.checkout_shipping_estimate import (
 from app.models.address import Address
 from app.models.order import Order, OrderItem
 from app.models.product import Product
+from app.models.product_logistics_profile import ProductLogisticsProfile
 from app.models.setting import Setting
 from app.models.shipping_rate import ShippingRate
 from app.models.fulfillment_cohort import CohortItemAllocation, FulfillmentCohort
@@ -89,10 +90,36 @@ async def _rate_pre_payment_quote_subject(
             .order_by(OrderItem.id)
         )
     ).all()
-    if not rows or any(
-        None in (product.weight_kg, product.length_cm, product.width_cm, product.height_cm)
-        for _, product in rows
-    ):
+    if not rows:
+        raise HTTPException(status_code=422, detail="checkout has no shippable items")
+    profile_rows = (
+        await db.execute(
+            select(ProductLogisticsProfile).where(
+                ProductLogisticsProfile.product_id.in_({product.id for _, product in rows})
+            )
+        )
+    ).scalars().all()
+    profiles_by_item = {}
+    for profile in profile_rows:
+        profiles_by_item[(profile.product_id, profile.variant_id)] = profile
+
+    def measurement(item, product):
+        # A verified variant profile is the most specific authority; otherwise
+        # use the product profile before falling back to legacy product fields.
+        profile = profiles_by_item.get((product.id, item.variant_id))
+        if profile is None or profile.variant_id is not None and profile.variant_id != item.variant_id:
+            profile = profiles_by_item.get((product.id, None))
+        values = (
+            (profile.weight_kg, profile.length_cm, profile.width_cm, profile.height_cm)
+            if profile is not None
+            else (product.weight_kg, product.length_cm, product.width_cm, product.height_cm)
+        )
+        if any(value is None for value in values):
+            return None
+        return values
+
+    item_measurements = [(item, product, measurement(item, product)) for item, product in rows]
+    if any(values is None for _, _, values in item_measurements):
         raise HTTPException(status_code=422, detail="vendor parcel dimensions required before DHL rating")
     allocations = (
         await db.execute(
@@ -122,15 +149,17 @@ async def _rate_pre_payment_quote_subject(
     max_height = Decimal("0")
     total_volume = Decimal("0")
     composition = []
-    for item, product in rows:
-        total_weight += Decimal(product.weight_kg) * item.quantity
-        max_length = max(max_length, Decimal(product.length_cm))
-        max_width = max(max_width, Decimal(product.width_cm))
-        max_height = max(max_height, Decimal(product.height_cm))
+    for item, product, values in item_measurements:
+        assert values is not None
+        weight_kg, length_cm, width_cm, height_cm = values
+        total_weight += Decimal(weight_kg) * item.quantity
+        max_length = max(max_length, Decimal(length_cm))
+        max_width = max(max_width, Decimal(width_cm))
+        max_height = max(max_height, Decimal(height_cm))
         total_volume += (
-            Decimal(product.length_cm)
-            * Decimal(product.width_cm)
-            * Decimal(product.height_cm)
+            Decimal(length_cm)
+            * Decimal(width_cm)
+            * Decimal(height_cm)
             * item.quantity
         )
         for allocation, cohort in allocation_by_item[item.id]:
