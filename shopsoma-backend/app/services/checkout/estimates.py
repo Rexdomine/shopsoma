@@ -612,17 +612,19 @@ async def _unhanded_ready_package_ids(
 ) -> list:
     """Return ready packages still eligible for rating, locking state when requested."""
     package_query = (
-        select(HubPackage.id, HubPackage.current_version)
-        .where(HubPackage.order_id == order.id, HubPackage.state == "ready")
-        .order_by(HubPackage.ready_at.desc(), HubPackage.id.desc())
+        select(HubPackage.id, HubPackage.current_version, HubPackage.state)
+        .where(HubPackage.order_id == order.id)
+        .order_by(HubPackage.id)
     )
     if for_update:
+        # Lock every package, not only ready ones: sealed -> ready is a
+        # supported transition that must serialize with final revalidation.
         package_query = package_query.with_for_update()
     package_rows = (await db.execute(package_query)).all()
     if not package_rows:
         return []
 
-    package_ids = [row[0] for row in package_rows]
+    package_ids = [row.id for row in package_rows]
     custody_query = select(
         CustodyEvent.package_id,
         CustodyEvent.package_version,
@@ -643,9 +645,10 @@ async def _unhanded_ready_package_ids(
         if row.event_type in ("released", "tendered", "provider_accepted")
     }
     return [
-        package_id
-        for package_id, package_version in package_rows
-        if (package_id, package_version) not in handed_off
+        row.id
+        for row in package_rows
+        if row.state == "ready"
+        and (row.id, row.current_version) not in handed_off
     ]
 
 

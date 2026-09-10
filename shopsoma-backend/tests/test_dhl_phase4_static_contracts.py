@@ -1400,6 +1400,10 @@ def test_checkout_ready_package_revalidation_locks_packages_and_custody() -> Non
     helper = source.split(
         "async def _unhanded_ready_package_ids(", 1
     )[1].split("async def _prepayment_parcel_snapshot(", 1)[0]
+    assert "select(HubPackage.id, HubPackage.current_version, HubPackage.state)" in helper
+    assert ".where(HubPackage.order_id == order.id)" in helper
+    assert ".order_by(HubPackage.id)" in helper
+    assert "row.state == \"ready\"" in helper
     assert "package_query = package_query.with_for_update()" in helper
     assert "custody_query = custody_query.with_for_update()" in helper
     assert "CustodyEvent.event_type" in helper
