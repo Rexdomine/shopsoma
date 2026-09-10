@@ -1098,8 +1098,6 @@ async def create_order(
     # Create vendor pickups and notifications for each order item
     from app.models import VendorPickup, VendorNotification, Vendor
     from app.models.vendor_pickup import OrderType, PickupStatus
-    from datetime import timedelta
-
     vendor_cache = {}
     vendor_notifications = {}
 
