@@ -1393,3 +1393,16 @@ def test_checkout_parcel_revalidation_locks_logistics_profiles() -> None:
     )[1].split("async def parcel_measurement_snapshot(", 1)[0]
     assert "if for_update:" in helper
     assert "profile_statement = profile_statement.with_for_update()" in helper
+
+
+def test_checkout_ready_package_revalidation_locks_packages_and_custody() -> None:
+    source = (ROOT / "app" / "services" / "checkout" / "estimates.py").read_text()
+    helper = source.split(
+        "async def _unhanded_ready_package_ids(", 1
+    )[1].split("async def _prepayment_parcel_snapshot(", 1)[0]
+    assert "package_query = package_query.with_for_update()" in helper
+    assert "custody_query = custody_query.with_for_update()" in helper
+    assert "CustodyEvent.event_type" in helper
+    assert "for_update=for_update" in source.split(
+        "async def _prepayment_parcel_snapshot(", 1
+    )[1].split("async def load_checkout_order(", 1)[0]

@@ -607,27 +607,55 @@ async def dhl_subject_snapshot(
     )
 
 
-async def _unhanded_ready_package_ids(db, order: Order) -> list:
-    """Return ready package identities that are still eligible for rating."""
-    handed_off = select(CustodyEvent.id).where(
-        CustodyEvent.package_id == HubPackage.id,
-        CustodyEvent.package_version == HubPackage.current_version,
-        CustodyEvent.event_type.in_(("released", "tendered", "provider_accepted")),
-    ).exists()
-    return (
-        await db.execute(
-            select(HubPackage.id)
-            .where(HubPackage.order_id == order.id, HubPackage.state == "ready", ~handed_off)
-            .order_by(HubPackage.ready_at.desc(), HubPackage.id.desc())
-        )
-    ).scalars().all()
+async def _unhanded_ready_package_ids(
+    db, order: Order, *, for_update: bool = False
+) -> list:
+    """Return ready packages still eligible for rating, locking state when requested."""
+    package_query = (
+        select(HubPackage.id, HubPackage.current_version)
+        .where(HubPackage.order_id == order.id, HubPackage.state == "ready")
+        .order_by(HubPackage.ready_at.desc(), HubPackage.id.desc())
+    )
+    if for_update:
+        package_query = package_query.with_for_update()
+    package_rows = (await db.execute(package_query)).all()
+    if not package_rows:
+        return []
+
+    package_ids = [row[0] for row in package_rows]
+    custody_query = select(
+        CustodyEvent.package_id,
+        CustodyEvent.package_version,
+        CustodyEvent.event_type,
+    ).where(
+        CustodyEvent.order_id == order.id,
+        CustodyEvent.package_id.in_(package_ids),
+    )
+    if for_update:
+        # Keep package and custody state stable through the final eligibility
+        # fingerprint. Fulfillment handoff paths lock the package before
+        # appending a custody event at this same serialization boundary.
+        custody_query = custody_query.with_for_update()
+    custody_rows = (await db.execute(custody_query)).all()
+    handed_off = {
+        (row.package_id, row.package_version)
+        for row in custody_rows
+        if row.event_type in ("released", "tendered", "provider_accepted")
+    }
+    return [
+        package_id
+        for package_id, package_version in package_rows
+        if (package_id, package_version) not in handed_off
+    ]
+
+
 
 
 async def _prepayment_parcel_snapshot(
     db, order: Order, *, for_update: bool = False
 ) -> str | None:
     """Return mutable parcel evidence only when no ready package is rated."""
-    if await _unhanded_ready_package_ids(db, order):
+    if await _unhanded_ready_package_ids(db, order, for_update=for_update):
         return None
     return await parcel_measurement_snapshot(db, order, for_update=for_update)
 
