@@ -182,6 +182,7 @@ async def test_http_errors_map_without_leaking_response_body(
     status_code: int,
     expected_message: str,
     retryable: bool,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
@@ -209,6 +210,15 @@ async def test_http_errors_map_without_leaking_response_body(
     assert "raw-customer-address" not in str(error)
     assert DUMMY_PASSWORD not in str(error)
     assert DUMMY_ACCOUNT not in str(error)
+    records = [record.getMessage() for record in caplog.records if record.name == "app.services.dhl.client"]
+    assert any(
+        f"classification=http_error" in message
+        and f"status={status_code}" in message
+        and "request_reference=safe-request-reference" in message
+        for message in records
+    )
+    assert all("raw-customer-address" not in message for message in records)
+    assert all(DUMMY_PASSWORD not in message for message in records)
 
 
 @pytest.mark.asyncio

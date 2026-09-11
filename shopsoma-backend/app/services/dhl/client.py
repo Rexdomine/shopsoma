@@ -127,21 +127,38 @@ class DHLClient:
                         params=params,
                     )
             except httpx.TimeoutException as exc:
-                logger.warning("DHL API request timed out: method=%s", method.upper())
+                logger.warning(
+                    "DHL API request failed: classification=timeout method=%s",
+                    method.upper(),
+                )
                 raise DHLAPIError("DHL API request timed out", retryable=True) from exc
             except httpx.RequestError as exc:
-                logger.warning("DHL API transport failure: method=%s", method.upper())
+                logger.warning(
+                    "DHL API request failed: classification=transport_failure method=%s",
+                    method.upper(),
+                )
                 raise DHLAPIError("DHL API is unavailable", retryable=True) from exc
         finally:
             _dhl_httpx_log_context.reset(log_context_token)
 
         request_reference = response.headers.get("Message-Reference")
         if response.status_code >= 400:
+            logger.warning(
+                "DHL API request failed: classification=http_error method=%s status=%s "
+                "request_reference=%s",
+                method.upper(), response.status_code, request_reference or "absent",
+            )
             raise self._map_http_error(response.status_code, request_reference)
 
         try:
             payload = response.json()
         except ValueError as exc:
+            logger.warning(
+                "DHL API request failed: classification=invalid_response status=%s "
+                "request_reference=%s",
+                response.status_code,
+                request_reference or "absent",
+            )
             raise DHLAPIError(
                 "DHL API returned an invalid response",
                 status_code=response.status_code,

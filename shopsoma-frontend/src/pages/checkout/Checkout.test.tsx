@@ -130,10 +130,11 @@ async function reachPaymentStep(selectStripe = true) {
   render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
   await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
   fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
-  await screen.findByText('Standard');
+  await screen.findByText('Delivery options will be calculated from the verified shipment after you continue.');
   const continueButtons = screen.getAllByRole('button', { name: 'Continue' });
   fireEvent.click(continueButtons[continueButtons.length - 1]);
   await waitFor(() => expect(mocks.reviewOrder).toHaveBeenCalled());
+  expect(mocks.calculateShipping).not.toHaveBeenCalled();
   if (selectStripe) fireEvent.click(screen.getByRole('radio', { name: /Stripe/ }));
   fireEvent.click(screen.getAllByRole('button', { name: 'Purchase' })[0]);
   await waitFor(() => expect(mocks.createOrder).toHaveBeenCalled());

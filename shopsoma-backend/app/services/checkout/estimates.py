@@ -1,5 +1,6 @@
 """Server-owned checkout-estimate creation and snapshot validation."""
 
+import logging
 from datetime import date, datetime, timedelta
 from decimal import Decimal, ROUND_CEILING, ROUND_HALF_UP
 import hashlib
@@ -53,6 +54,8 @@ from app.services.fulfillment.contracts import (
 from app.services.shipping.contracts import DomesticRateRequest
 from app.services.shipping.capabilities import domestic_shipping_capabilities
 from app.services.checkout.capabilities import authorize_checkout_actor
+
+logger = logging.getLogger(__name__)
 
 _CENT = Decimal("0.01")
 _MAX_CHECKOUT_OPTION_AMOUNT = Decimal("99999999.99")
@@ -224,7 +227,14 @@ async def _rate_pre_payment_quote_subject(
         )
         payload = adapter.prepare_rate_payload(resolved, request)
         result = await adapter.rate(resolved, request, prepared_payload=payload)
-    except DHLRateAdapterError:
+    except DHLRateAdapterError as exc:
+        logger.warning(
+            "DHL checkout estimate failed: classification=adapter_failure status=%s "
+            "retryable=%s request_reference=%s",
+            exc.status_code if exc.status_code is not None else "absent",
+            exc.retryable,
+            exc.request_reference or "absent",
+        )
         raise HTTPException(status_code=503, detail="DHL sandbox rate request failed") from None
     if result.result_kind != "success":
         raise HTTPException(status_code=503, detail="DHL has no service for this shipment")
@@ -396,7 +406,14 @@ async def _dhl_checkout_options(db, *, order: Order, planned_ship_date=None):
             )
             payload = adapter.prepare_rate_payload(resolved, request)
             result = await adapter.rate(resolved, request, prepared_payload=payload)
-        except DHLRateAdapterError:
+        except DHLRateAdapterError as exc:
+            logger.warning(
+                "DHL checkout estimate failed: classification=adapter_failure status=%s "
+                "retryable=%s request_reference=%s",
+                exc.status_code if exc.status_code is not None else "absent",
+                exc.retryable,
+                exc.request_reference or "absent",
+            )
             raise HTTPException(status_code=503, detail="DHL sandbox rate request failed") from None
         if result.result_kind != "success":
             raise HTTPException(status_code=503, detail="DHL has no service for this shipment")
