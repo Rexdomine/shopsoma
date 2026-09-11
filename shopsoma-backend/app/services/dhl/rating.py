@@ -59,10 +59,12 @@ class DHLRateAdapterError(RuntimeError):
         *,
         retryable: bool = False,
         status_code: int | None = None,
+        request_reference: str | None = None,
     ) -> None:
         super().__init__(message)
         self.retryable = retryable
         self.status_code = status_code
+        self.request_reference = request_reference
 
 
 @dataclass(frozen=True, slots=True)
@@ -280,6 +282,7 @@ class DHLDomesticRateAdapter:
                 message,
                 retryable=exc.retryable,
                 status_code=exc.status_code,
+                request_reference=exc.request_reference,
             ) from None
         return self._parse_response(response, request, resolved_hub)
 

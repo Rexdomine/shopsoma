@@ -4,7 +4,7 @@ import { buildPaystackWidgetConfig, type PaymentGateway, type InitializePaymentR
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import Layout from '../../components/layout/Layout';
 import { ROUTES } from '../../config/constants';
-import { checkoutService, type Address, type ShippingRate, type OrderReview, type CreateAddressData, type CheckoutEstimate, type Order } from '../../services/checkoutService';
+import { checkoutService, type Address, type OrderReview, type CreateAddressData, type CheckoutEstimate, type Order } from '../../services/checkoutService';
 import { CartService } from '../../services/cartService';
 import { paymentService } from '../../services/paymentService';
 import { useAuth } from '../../context/AuthContext';
@@ -107,10 +107,6 @@ export default function Checkout() {
     is_default: false,
   });
 
-  // Shipping state
-  const [shippingRates, setShippingRates] = useState<ShippingRate[]>([]);
-  const [selectedShippingRateId, setSelectedShippingRateId] = useState<string>('');
-
   // Promo code state
   const [promo, setPromo] = useState('');
   const [promoError, setPromoError] = useState('');
@@ -155,7 +151,6 @@ export default function Checkout() {
 
   // Loading states
   const [isLoadingAddresses, setIsLoadingAddresses] = useState(false);
-  const [isLoadingShipping, setIsLoadingShipping] = useState(false);
   const [isReviewingOrder, setIsReviewingOrder] = useState(false);
   const [isApplyingPromo, setIsApplyingPromo] = useState(false);
   const [isCreatingOrder, setIsCreatingOrder] = useState(false);
@@ -314,33 +309,6 @@ export default function Checkout() {
     }
   };
 
-  const handleCalculateShipping = async () => {
-    const selectedAddress = addresses.find(addr => addr.id === selectedAddressId);
-    if (!selectedAddress) return;
-
-    setIsLoadingShipping(true);
-    try {
-      const data = await checkoutService.calculateShipping({
-        country: selectedAddress.country,
-        state: selectedAddress.state,
-        order_value: cartSubtotalInNgn,
-      });
-
-      setShippingRates(data.available_rates);
-
-      // Auto-select recommended or first rate
-      if (data.recommended_rate) {
-        setSelectedShippingRateId(data.recommended_rate.id);
-      } else if (data.available_rates.length > 0) {
-        setSelectedShippingRateId(data.available_rates[0].id);
-      }
-    } catch (error) {
-      console.error('Error calculating shipping:', error);
-      alert('Failed to calculate shipping rates. Please try again.');
-    } finally {
-      setIsLoadingShipping(false);
-    }
-  };
 
   const handleApplyPromo = async () => {
     if (!promo.trim()) {
@@ -395,7 +363,6 @@ export default function Checkout() {
       const reviewRequest: any = {
         items,
         currency,
-        shipping_rate_id: selectedShippingRateId || undefined,
         promo_code: appliedPromo?.code,
       };
 
@@ -598,7 +565,6 @@ export default function Checkout() {
       const orderRequest: any = {
         items,
         currency,
-        shipping_rate_id: selectedShippingRateId || undefined,
         promo_code: appliedPromo?.code,
       };
 
@@ -775,13 +741,8 @@ export default function Checkout() {
       : ''
   );
   const hasSelectedAddress = !!selectedAddressId;
-  const hasSelectedShipping = !!selectedShippingRateId;
-  const canPurchase = step === 'payment' && hasEmail && hasSelectedAddress && hasSelectedShipping && orderReview && !enforcedOrder;
+  const canPurchase = step === 'payment' && hasEmail && hasSelectedAddress && orderReview && !enforcedOrder;
 
-  const selectedShippingRate = shippingRates.find(rate => rate.id === selectedShippingRateId);
-  const shippingRateInSelectedCurrency = selectedShippingRate
-    ? convertCurrencyWithRates(Number(selectedShippingRate.base_rate), 'NGN', currency, exchangeRates)
-    : 0;
   const promoDiscountInSelectedCurrency = appliedPromo
     ? convertCurrencyWithRates(Number(appliedPromo.discount_amount || 0), 'NGN', currency, exchangeRates)
     : 0;
@@ -803,7 +764,7 @@ export default function Checkout() {
     if (orderReview) return orderReview.summary.total_amount;
     // Calculate total (before order review is created)
     const subtotal = Number(cartSubtotalInSelectedCurrency);
-    const shipping = Number(shippingRateInSelectedCurrency);
+    const shipping = Number(0);
     const tax = calculateCheckoutTax();
     const discount = Number(promoDiscountInSelectedCurrency);
     return subtotal + shipping + tax - discount;
@@ -840,7 +801,6 @@ export default function Checkout() {
 
   const handleAddressSave = async () => {
     if (hasSelectedAddress) {
-      await handleCalculateShipping();
       setStep('shipping');
     }
   };
@@ -1146,6 +1106,17 @@ export default function Checkout() {
                                   />
                                 </div>
                               </div>
+                              <div>
+                                <label className="text-xs text-gray-500">Postal Code <span className="text-red-500">*</span></label>
+                                <input
+                                  type="text"
+                                  value={newAddress.postal_code}
+                                  onChange={(e) => setNewAddress({ ...newAddress, postal_code: e.target.value })}
+                                  className="w-full border-b border-gray-300 focus:border-primary focus:outline-none py-2 text-sm"
+                                  inputMode="numeric"
+                                  required
+                                />
+                              </div>
                               <div className="pt-2">
                                 <label className="inline-flex items-center gap-2 text-sm text-gray-600 cursor-pointer">
                                   <input
@@ -1194,10 +1165,10 @@ export default function Checkout() {
                             <button
                               type="button"
                               onClick={handleAddressSave}
-                              disabled={!hasSelectedAddress || isLoadingShipping}
+                              disabled={!hasSelectedAddress}
                               className="w-full py-3 rounded-sm bg-primary text-white text-sm font-semibold disabled:opacity-50"
                             >
-                              {isLoadingShipping ? 'Calculating Shipping...' : 'Continue'}
+                              Continue
                             </button>
                           </div>
                         </>
@@ -1213,31 +1184,13 @@ export default function Checkout() {
                   {renderStepTitle('Shipping Method', step === 'shipping' || step === 'payment')}
                   {step === 'shipping' || step === 'payment' ? (
                     <div className="space-y-3">
-                      {shippingRates.map((rate) => (
-                        <button
-                          key={rate.id}
-                          type="button"
-                          onClick={() => setSelectedShippingRateId(rate.id)}
-                          className={`w-full text-left border border-gray-200 px-4 py-3 flex items-center gap-4 ${
-                            selectedShippingRateId === rate.id ? 'bg-gray-50 border-primary' : ''
-                          }`}
-                        >
-                          <div className="w-12 h-12 border border-gray-300 rounded flex items-center justify-center text-gray-500 text-sm">
-                            📦
-                          </div>
-                          <div className="flex-1">
-                            <p className="text-sm font-semibold text-gray-800">{rate.name}</p>
-                            <p className="text-xs text-gray-500">
-                              {rate.description} ({rate.min_delivery_days} - {rate.max_delivery_days} business days)
-                            </p>
-                          </div>
-                          <p className="text-sm font-semibold text-gray-800">{formatPrice(rate.base_rate)}</p>
-                        </button>
-                      ))}
+                      <p role="status" className="border border-gray-200 px-4 py-3 text-sm text-gray-600">
+                        Delivery options will be calculated from the verified shipment after you continue.
+                      </p>
                       <button
                         type="button"
                         onClick={handleShippingSave}
-                        disabled={!hasSelectedShipping || isReviewingOrder}
+                        disabled={isReviewingOrder}
                         aria-busy={isReviewingOrder}
                         className="px-6 py-2 rounded-sm bg-primary text-white text-sm font-semibold disabled:opacity-50 flex items-center justify-center gap-2"
                       >
@@ -1388,7 +1341,7 @@ export default function Checkout() {
                   <span>{checkoutEstimate?.selected_option?.service_label ?? 'Shipping cost'}</span>
                   <span>{checkoutEstimate?.selected_option
                     ? formatServerMoney(checkoutEstimate.selected_option.amount, checkoutEstimate.selected_option.currency)
-                    : formatPrice(orderReview?.summary.shipping_cost ?? Number(shippingRateInSelectedCurrency), orderReview ? reviewSummaryCurrency : currency)}</span>
+                    : formatPrice(orderReview?.summary.shipping_cost ?? Number(0), orderReview ? reviewSummaryCurrency : currency)}</span>
                 </div>
                 <div className="flex items-center justify-between">
                   <span>Tax (VAT 7.5%)</span>
