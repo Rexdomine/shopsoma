@@ -1106,6 +1106,17 @@ export default function Checkout() {
                                   />
                                 </div>
                               </div>
+                              <div>
+                                <label className="text-xs text-gray-500">Postal Code <span className="text-red-500">*</span></label>
+                                <input
+                                  type="text"
+                                  value={newAddress.postal_code}
+                                  onChange={(e) => setNewAddress({ ...newAddress, postal_code: e.target.value })}
+                                  className="w-full border-b border-gray-300 focus:border-primary focus:outline-none py-2 text-sm"
+                                  inputMode="numeric"
+                                  required
+                                />
+                              </div>
                               <div className="pt-2">
                                 <label className="inline-flex items-center gap-2 text-sm text-gray-600 cursor-pointer">
                                   <input
