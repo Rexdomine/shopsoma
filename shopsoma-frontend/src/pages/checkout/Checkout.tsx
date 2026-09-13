@@ -707,7 +707,8 @@ export default function Checkout() {
   };
 
   const restartCheckout = async () => {
-    if (!enforcedOrder) return;
+    if (!enforcedOrder || isCreatingOrder) return;
+    setIsCreatingOrder(true);
     try {
       await checkoutService.cancelOrder(
         enforcedOrder.id,
@@ -720,6 +721,8 @@ export default function Checkout() {
       setStep('address');
     } catch (error: any) {
       alert(error.response?.data?.detail || error.message || 'We could not safely restart checkout. Please retry.');
+    } finally {
+      setIsCreatingOrder(false);
     }
   };
 

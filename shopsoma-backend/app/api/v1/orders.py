@@ -1700,9 +1700,9 @@ async def cancel_order(
         )
 
     if order.fulfillment_status == FulfillmentStatus.CANCELLED:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Order is already cancelled"
-        )
+        # Cancellation is intentionally idempotent so a lost response or a
+        # client retry converges on the committed terminal state.
+        return order
 
     if order.workflow_cohort == "domestic_checkout_v1":
         unresolved_attempt = await db.scalar(
