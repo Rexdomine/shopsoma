@@ -11,6 +11,7 @@ from pydantic import SecretStr
 from pydantic import ValidationError
 
 from app.schemas.app_setting import ShippingProviderSettingsUpdate
+from app.schemas.shipping_rate import ShippingRateCreate, ShippingRateUpdate
 
 
 def test_legacy_provider_payload_is_preserved():
@@ -33,6 +34,13 @@ def test_dhl_selection_is_a_valid_mode_subject_to_server_readiness():
 def rate_payload(**changes):
     return {"name": "Free delivery", "base_rate": 0, "country": " ng ", "state": " LAGOS ",
             "min_delivery_days": 2, "max_delivery_days": 4, "is_default": True, **changes}
+
+
+def test_shipping_rate_delivery_window_matches_estimate_constraint():
+    with pytest.raises(ValidationError):
+        ShippingRateCreate(**rate_payload(max_delivery_days=366))
+    with pytest.raises(ValidationError):
+        ShippingRateUpdate(max_delivery_days=366)
 
 
 @pytest.mark.asyncio

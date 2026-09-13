@@ -16,7 +16,7 @@ class ShippingRateBase(BaseModel):
     min_order_value: Optional[Decimal] = Field(default=Decimal("0.00"), ge=0, max_digits=10, decimal_places=2, description="Minimum order value")
     max_order_value: Optional[Decimal] = Field(None, ge=0, max_digits=10, decimal_places=2, description="Maximum order value")
     min_delivery_days: int = Field(default=2, ge=1, description="Minimum delivery days")
-    max_delivery_days: int = Field(default=5, ge=1, description="Maximum delivery days")
+    max_delivery_days: int = Field(default=5, ge=1, le=365, description="Maximum delivery days")
     is_active: bool = Field(default=True, description="Active status")
     is_default: bool = Field(default=False, description="Default rate")
     priority: int = Field(default=0, description="Priority (lower = higher priority)")
@@ -63,7 +63,7 @@ class ShippingRateUpdate(BaseModel):
     min_order_value: Optional[Decimal] = Field(None, ge=0, max_digits=10, decimal_places=2)
     max_order_value: Optional[Decimal] = Field(None, ge=0, max_digits=10, decimal_places=2)
     min_delivery_days: Optional[int] = Field(None, ge=1)
-    max_delivery_days: Optional[int] = Field(None, ge=1)
+    max_delivery_days: Optional[int] = Field(None, ge=1, le=365)
     is_active: Optional[bool] = None
     is_default: Optional[bool] = None
     priority: Optional[int] = None

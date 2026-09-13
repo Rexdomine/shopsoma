@@ -235,7 +235,7 @@ describe('Checkout M5 sequencing and recovery', () => {
     expect(screen.getAllByText('NGN 2,500.00').length).toBeGreaterThan(0);
   });
 
-  it('uses the committed legacy order when secure configuration races order creation', async () => {
+  it('requires confirmation of the committed server-priced legacy order before payment', async () => {
     mocks.getShippingProviderSettings.mockResolvedValue({ provider: 'dhl', checkout_estimates_required: true });
     mocks.createOrder.mockResolvedValueOnce({ ...order, workflow_cohort: 'legacy_pre_bridge' });
 
@@ -247,6 +247,10 @@ describe('Checkout M5 sequencing and recovery', () => {
     await waitFor(() => expect(mocks.createOrder).toHaveBeenCalledTimes(1));
 
     expect(mocks.createCheckoutEstimate).not.toHaveBeenCalled();
+    expect(mocks.initializePayment).not.toHaveBeenCalled();
+    const confirm = await screen.findByRole('button', { name: 'Confirm total and continue to payment' });
+    expect(confirm).toBeEnabled();
+    fireEvent.click(confirm);
     await waitFor(() => expect(mocks.initializePayment).toHaveBeenCalledTimes(1));
     expect(mocks.initializePayment).toHaveBeenCalledWith({
       order_id: 'order-1', email: 'buyer@example.com', payment_gateway: 'stripe',
@@ -268,6 +272,7 @@ describe('Checkout M5 sequencing and recovery', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
     fireEvent.click(screen.getByRole('radio', { name: /Paystack/ }));
     fireEvent.click(screen.getAllByRole('button', { name: 'Purchase' })[0]);
+    fireEvent.click(await screen.findByRole('button', { name: 'Confirm total and continue to payment' }));
 
     await waitFor(() => expect(mocks.initializePayment).toHaveBeenCalledTimes(1));
     expect(await screen.findByRole('button', { name: 'Retry payment' })).toBeEnabled();
@@ -289,6 +294,7 @@ describe('Checkout M5 sequencing and recovery', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
     fireEvent.click(screen.getByRole('radio', { name: /Stripe/ }));
     fireEvent.click(screen.getAllByRole('button', { name: 'Purchase' })[0]);
+    fireEvent.click(await screen.findByRole('button', { name: 'Confirm total and continue to payment' }));
 
     await waitFor(() => expect(mocks.initializePayment).toHaveBeenCalledTimes(1));
     expect(await screen.findByText('Stripe form')).toBeInTheDocument();

@@ -153,6 +153,7 @@ export default function Checkout() {
   const [showStripePaymentModal, setShowStripePaymentModal] = useState(false);
   const [currentOrderId, setCurrentOrderId] = useState<string>('');
   const [enforcedOrder, setEnforcedOrder] = useState<Order | null>(null);
+  const [legacyOrderNeedsConfirmation, setLegacyOrderNeedsConfirmation] = useState(false);
   const [checkoutEstimate, setCheckoutEstimate] = useState<CheckoutEstimate | null>(null);
   const [checkoutCapability, setCheckoutCapability] = useState<string | undefined>();
   const [paymentRetryAvailable, setPaymentRetryAvailable] = useState(false);
@@ -464,6 +465,7 @@ export default function Checkout() {
   const discardExpiredCheckout = () => {
     clearCheckoutCapability();
     setEnforcedOrder(null);
+    setLegacyOrderNeedsConfirmation(false);
     setCheckoutEstimate(null);
     setShowStripePaymentModal(false);
     setStripeClientSecret('');
@@ -655,7 +657,8 @@ export default function Checkout() {
         // continue with that server-priced order rather than discarding its ID
         // and creating duplicate inventory/notification side effects on retry.
         setEnforcedOrder(order);
-        await initializeOrderPayment(order);
+        setLegacyOrderNeedsConfirmation(true);
+        setIsCreatingOrder(false);
         return;
       }
 
@@ -675,6 +678,12 @@ export default function Checkout() {
       alert(error.response?.data?.detail || error.message || 'Failed to create order. Please try again.');
       setIsCreatingOrder(false);
     }
+  };
+
+  const confirmLegacyOrderTotal = async () => {
+    if (!enforcedOrder || !legacyOrderNeedsConfirmation) return;
+    setLegacyOrderNeedsConfirmation(false);
+    await initializeOrderPayment(enforcedOrder);
   };
 
   const refreshCheckoutEstimate = async () => {
@@ -1397,6 +1406,25 @@ export default function Checkout() {
                           </button>
                         </div>
                       )}
+                      {legacyOrderNeedsConfirmation && enforcedOrder && (
+                        <div className="space-y-3 rounded-sm border border-amber-200 bg-amber-50 p-4" role="alert">
+                          <p className="text-sm text-amber-900">
+                            Delivery configuration changed while your order was being prepared. Please confirm the server-priced total before payment.
+                          </p>
+                          <dl className="space-y-1 text-sm text-gray-700">
+                            <div className="flex justify-between"><dt>Shipping</dt><dd>{formatPrice(enforcedOrder.shipping_cost, enforcedOrder.currency || currency)}</dd></div>
+                            <div className="flex justify-between font-semibold"><dt>Total</dt><dd>{formatPrice(enforcedOrder.total_amount, enforcedOrder.currency || currency)}</dd></div>
+                          </dl>
+                          <button
+                            type="button"
+                            onClick={() => void confirmLegacyOrderTotal()}
+                            disabled={isCreatingOrder}
+                            className="w-full py-2 bg-primary text-white text-sm font-semibold disabled:opacity-50"
+                          >
+                            {isCreatingOrder ? 'Preparing payment…' : 'Confirm total and continue to payment'}
+                          </button>
+                        </div>
+                      )}
                       {paymentRetryAvailable && enforcedOrder && (
                         <div className="space-y-2" role="status">
                           <p className="text-sm text-amber-700">
@@ -1456,7 +1484,7 @@ export default function Checkout() {
                       <button
                         type="button"
                         onClick={handlePurchase}
-                        disabled={!canPurchase || isCreatingOrder}
+                        disabled={!canPurchase || isCreatingOrder || legacyOrderNeedsConfirmation}
                         className="w-full py-3 rounded-sm bg-primary text-white text-sm font-semibold disabled:opacity-50"
                       >
                         {isCreatingOrder ? 'Processing...' : 'Purchase'}
