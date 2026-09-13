@@ -6,6 +6,10 @@ import {
   AlertCircle,
   Database,
   RefreshCw,
+  Truck,
+  WalletCards,
+  Percent,
+  ListChecks,
 } from 'lucide-react';
 import ManualShippingSettings from '../../components/admin/ManualShippingSettings';
 import type { ShippingProviderSettings } from '../../services/settingsService';
@@ -361,17 +365,22 @@ export default function AdminSettings() {
       <AdminSidebar activePrimary="settings" />
 
       <div className="flex-1 overflow-auto">
-        <div className="px-8 py-8 space-y-6">
+        <div className="mx-auto w-full max-w-[1440px] px-4 py-6 sm:px-6 lg:px-8">
           {/* Header */}
-          <div>
+          <div className="mb-6 flex flex-col gap-4 border-b border-slate-200 pb-6 lg:flex-row lg:items-end lg:justify-between">
+            <div>
             <h1 className="text-2xl font-semibold text-gray-900">Settings</h1>
             <p className="text-sm text-gray-600 mt-1">
               Manage application settings and configurations
             </p>
+            </div>
+            <nav aria-label="Settings categories" className="flex max-w-full gap-2 overflow-x-auto pb-1 text-sm">
+              {[['#currency', 'Currency', DollarSign], ['#shipping', 'Shipping', Truck], ['#rates', 'Manual rates', ListChecks], ['#payout', 'Payout hold', WalletCards], ['#commission', 'Commission', Percent], ['#featured', 'Featured', RefreshCw], ['#database', 'Database', Database]].map(([href, label, Icon]) => <a key={href as string} href={href as string} className="flex shrink-0 items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 font-medium text-slate-600 shadow-sm transition hover:border-[#105E53] hover:text-[#105E53] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#105E53]"><Icon className="h-4 w-4" aria-hidden="true" />{label as string}</a>)}
+            </nav>
           </div>
 
           {/* Currency Settings Card */}
-          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+          <div id="currency" className="scroll-mt-6 bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
             <div className="border-b border-gray-200 px-6 py-4">
               <div className="flex items-center gap-3">
                 <div className="h-10 w-10 rounded-xl bg-[#0B1D2C] text-white flex items-center justify-center">
@@ -489,7 +498,7 @@ export default function AdminSettings() {
             </div>
           </div>
 
-          <section className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6 space-y-4">
+          <section id="shipping" className="scroll-mt-6 bg-white rounded-2xl border border-gray-200 shadow-sm p-6 space-y-4">
             <h2 className="text-lg font-semibold">Shipping Provider</h2>
             <label className="block">Current provider
               <select aria-label="Shipping provider" value={shippingProvider?.provider ?? ''} disabled={savingShipping || !shippingProvider}
@@ -504,10 +513,10 @@ export default function AdminSettings() {
             {savingShipping && <p role="status">Saving provider…</p>}
             <p className="text-sm text-gray-600">Manual rates make no carrier calls. DHL remains subject to existing sandbox gates. Provider changes apply to new quotes; issued quotes and payment recovery keep their saved terms.</p>
           </section>
-          <ManualShippingSettings />
+          <div id="rates" className="scroll-mt-6"><ManualShippingSettings /></div>
 
           {/* Payout Hold Settings Card */}
-          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+          <div id="payout" className="scroll-mt-6 bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
             <div className="border-b border-gray-200 px-6 py-4">
               <div className="flex items-center gap-3">
                 <div className="h-10 w-10 rounded-xl bg-[#0B1D2C] text-white flex items-center justify-center">
@@ -601,7 +610,7 @@ export default function AdminSettings() {
           </div>
 
           {/* Commission Settings Card */}
-          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+          <div id="commission" className="scroll-mt-6 bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
             <div className="border-b border-gray-200 px-6 py-4">
               <div className="flex items-center gap-3">
                 <div className="h-10 w-10 rounded-xl bg-[#105E53] text-white flex items-center justify-center">
@@ -728,7 +737,7 @@ export default function AdminSettings() {
           </div>
 
           {/* Featured Rotation Settings Card */}
-          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+          <div id="featured" className="scroll-mt-6 bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
             <div className="border-b border-gray-200 px-6 py-4">
               <div className="flex items-center gap-3">
                 <div className="h-10 w-10 rounded-xl bg-[#105E53] text-white flex items-center justify-center">
@@ -822,7 +831,7 @@ export default function AdminSettings() {
           </div>
 
           {/* Database Sync Card */}
-          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+          <div id="database" className="scroll-mt-6 bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
             <div className="border-b border-gray-200 px-6 py-4">
               <div className="flex items-center gap-3">
                 <div className="h-10 w-10 rounded-xl bg-[#105E53] text-white flex items-center justify-center">

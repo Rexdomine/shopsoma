@@ -53,25 +53,25 @@ export default function ManualShippingSettings() {
     }, 'Shipping rate saved and reloaded.');
   };
   const inputClass = 'mt-1 w-full rounded-lg border border-gray-300 p-2 text-sm';
-  return <section aria-label="Manual shipping rates" className="rounded-2xl border border-gray-200 bg-white p-6 space-y-4">
-    <h2 className="text-lg font-semibold">Manual shipping rates</h2>
+  return <section aria-label="Manual shipping rates" className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6 space-y-6">
+    <div className="border-b border-slate-100 pb-4"><p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#105E53]">Rate operations</p><h2 className="mt-1 text-xl font-semibold text-slate-900">Manual shipping rates</h2></div>
     <p className="text-sm text-gray-600">Prices and subtotal ranges are in NGN. USD quotes use the server exchange rate. Fulfilment is manual; saving a rate does not book a carrier. Edits affect new quotes only; issued quotes keep their price until expiry.</p>
     {error && <p role="alert" className="text-red-700">{error}</p>}
     {message && <p role="status" className="text-green-700">{message}</p>}
     {loading ? <p role="status">Loading shipping rates…</p> : <>
       <button type="button" disabled={busy} onClick={() => void run(reload, 'Rates reloaded.')} className="text-sm underline">Reload rates</button>
       {rates.length === 0 && <p>No manual rates configured. Add an active rate before accepting orders.</p>}
-      <ul className="space-y-2">{rates.map(rate => <li key={rate.id} className="rounded-lg border p-3 flex flex-wrap gap-3 items-center">
+      <div className="space-y-3"><h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Saved rate list</h3><ul className="space-y-2">{rates.map(rate => <li key={rate.id} className="rounded-xl border border-slate-200 bg-slate-50/60 p-3 flex flex-wrap gap-3 items-center">
         <span className="flex-1">{rate.name} — NGN {Number(rate.base_rate).toFixed(2)} · {rate.country}, {rate.state || 'All states'} · {rate.min_delivery_days}–{rate.max_delivery_days} days · Priority {rate.priority} · {rate.is_active ? 'Active' : 'Inactive'}{rate.is_default ? ' · Default' : ''}</span>
         <button type="button" disabled={busy} onClick={() => { setEditing(rate.id); setForm({ ...rate }); setError(''); setMessage(''); }} className="underline">Edit {rate.name}</button>
         {rate.is_active && <>
           <button type="button" disabled={busy || rate.is_default} onClick={() => void run(() => setDefaultManualShippingRate(rate.id), 'Default rate saved.')} className="underline">Set default {rate.name}</button>
           <button type="button" disabled={busy} onClick={() => void run(() => deactivateManualShippingRate(rate.id), 'Rate deactivated. Issued quotes are unchanged.')} className="text-red-700 underline">Deactivate {rate.name}</button>
         </>}
-      </li>)}</ul>
+      </li>)}</ul></div>
     </>}
     <form onSubmit={save} className="space-y-4">
-      <h3 className="font-semibold">{editing ? 'Edit rate' : 'Add rate'}</h3>
+      <h3 className="border-t border-slate-100 pt-5 font-semibold text-slate-900">{editing ? 'Edit rate' : 'Add rate'}</h3>
       <fieldset disabled={busy || loading} className="grid gap-3 sm:grid-cols-2">
         <label>Rate name<input required maxLength={100} className={inputClass} value={form.name} onChange={e => change('name', e.target.value)} /></label>
         <label>Description<input maxLength={500} className={inputClass} value={form.description ?? ''} onChange={e => change('description', e.target.value)} /></label>
@@ -95,7 +95,7 @@ export default function ManualShippingSettings() {
       event.preventDefault(); setBusy(true); setError(''); setOptions(null);
       void previewManualShippingRates(preview).then(result => setOptions(result.available_rates)).catch(e => setError(failure(e))).finally(() => setBusy(false));
     }}>
-      <h3 className="font-semibold">Preview saved rates</h3>
+      <h3 className="font-semibold text-slate-900">Preview saved rates</h3>
       <div className="grid gap-3 sm:grid-cols-3">
         <label>Preview country<input required className={inputClass} value={preview.country} onChange={e => setPreview({ ...preview, country: e.target.value })} /></label>
         <label>Preview state<input required className={inputClass} value={preview.state} onChange={e => setPreview({ ...preview, state: e.target.value })} /></label>
