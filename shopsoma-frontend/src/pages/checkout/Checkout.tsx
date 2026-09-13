@@ -17,6 +17,7 @@ import { loadStripe } from '@stripe/stripe-js';
 import { Elements } from '@stripe/react-stripe-js';
 import StripePaymentForm from '../../components/payment/StripePaymentForm';
 import CheckoutEstimateSelector from './CheckoutEstimateSelector';
+import { clearStoredCheckoutCapability, saveCheckoutCapability } from '../../utils/checkoutCapability';
 
 // Declare Paystack type
 declare global {
@@ -440,6 +441,13 @@ export default function Checkout() {
   };
 
   const clearCheckoutCapability = () => {
+    clearStoredCheckoutCapability(enforcedOrder?.id || currentOrderId);
+    setCheckoutCapability(undefined);
+    setPaymentRetryAvailable(false);
+  };
+
+  const preserveCheckoutCapabilityForReadback = (orderId: string, capability?: string) => {
+    if (capability) saveCheckoutCapability(orderId, capability);
     setCheckoutCapability(undefined);
     setPaymentRetryAvailable(false);
   };
@@ -511,7 +519,7 @@ export default function Checkout() {
             reference: response.reference,
             payment_gateway: gateway,
           }).then(() => {
-            clearCheckoutCapability();
+            preserveCheckoutCapabilityForReadback(order.id, checkoutCapability);
             CartService.clearCart();
             navigate(`${ROUTES.ORDER_SUCCESS}?orderId=${order.id}&payment=success`);
           }).catch((error) => {
@@ -642,6 +650,7 @@ export default function Checkout() {
 
       const capability = order.checkout_capability ?? undefined;
       setCheckoutCapability(capability);
+      saveCheckoutCapability(order.id, capability);
       setEnforcedOrder(order);
       const requestKey = newIdempotencyKey('estimate');
       setEstimateRequestKey(requestKey);
@@ -724,7 +733,7 @@ export default function Checkout() {
       }
 
       // Clear cart and navigate to success
-      clearCheckoutCapability();
+      preserveCheckoutCapabilityForReadback(currentOrderId, checkoutCapability);
       CartService.clearCart();
       setShowStripePaymentModal(false);
       navigate(`${ROUTES.ORDER_SUCCESS}?orderId=${currentOrderId}&payment=success`);

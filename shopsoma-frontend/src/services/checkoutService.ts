@@ -319,8 +319,8 @@ export const checkoutService = {
   },
 
   // Get order by ID
-  async getOrder(id: string): Promise<Order> {
-    const response = await api.get(`/orders/${id}`);
+  async getOrder(id: string, capability?: string): Promise<Order> {
+    const response = await api.get(`/orders/${id}`, checkoutHeaders(capability));
     return response.data;
   },
 

@@ -11,6 +11,7 @@ import { checkoutService } from '../../services/checkoutService';
 import websocketService, { type OrderUpdateData } from '../../services/websocketService';
 import { useCurrencyStore } from '../../store/currencyStore';
 import { formatPriceWithConversion, type Currency } from '../../utils/pricing';
+import { loadCheckoutCapability } from '../../utils/checkoutCapability';
 
 const STATUS_STEPS: Array<{ key: OrderStatus; label: string }> = [
   { key: 'order_placed', label: 'Order Placed' },
@@ -71,7 +72,7 @@ export default function OrderTracking() {
     let isMounted = true;
     (async () => {
       try {
-        const data = await orderService.getOrderTracking(orderId);
+        const data = await orderService.getOrderTracking(orderId, loadCheckoutCapability(orderId));
         if (isMounted) {
           setTracking(data);
           setError(null);
@@ -190,7 +191,7 @@ export default function OrderTracking() {
       if (!websocketService.isConnected()) {
         console.log('[OrderTracking] WebSocket not connected, polling for updates...');
         try {
-          const data = await orderService.getOrderTracking(orderId);
+          const data = await orderService.getOrderTracking(orderId, loadCheckoutCapability(orderId));
           console.log('[OrderTracking] Polling update received:', data);
           setTracking(data);
         } catch (err) {
@@ -225,7 +226,7 @@ export default function OrderTracking() {
 
     setLoadingOrder(true);
     try {
-      const order = await checkoutService.getOrder(orderId);
+      const order = await checkoutService.getOrder(orderId, loadCheckoutCapability(orderId));
       setOrderDetails(order);
       setShowOrderModal(true);
     } catch (err) {

@@ -323,6 +323,11 @@ async def update_shipping_provider_settings(
     effective = await shipping_provider_settings(db)
     if not effective.readiness[settings.provider]:
         raise HTTPException(status_code=409, detail=f"{settings.provider} is not available for secure checkout")
+    if settings.provider == "dhl" and not effective.checkout_estimates_required:
+        raise HTTPException(
+            status_code=409,
+            detail="DHL requires full secure-checkout cohort routing before admin selection",
+        )
     # A transaction advisory lock also serializes the first write when neither
     # setting row exists. Both keys and operator metadata commit together.
     await db.execute(text("SELECT pg_advisory_xact_lock(736401, 1)"))

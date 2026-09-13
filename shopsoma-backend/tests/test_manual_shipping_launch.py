@@ -6,6 +6,7 @@ from app.models.shipping_rate import ShippingRate
 from tests.test_checkout_estimate_api import _domestic_catalogue, _create_authenticated_estimate
 
 import pytest
+from pydantic import SecretStr
 from pydantic import ValidationError
 
 from app.schemas.app_setting import ShippingProviderSettingsUpdate
@@ -50,6 +51,40 @@ async def test_admin_provider_persistence_readiness_and_legacy(client, admin_use
         rejected = await client.put('/api/v1/settings/shipping-provider', headers=admin_user['headers'], json=payload)
         assert rejected.status_code == 409, rejected.text
     assert (await client.get('/api/v1/settings/shipping-provider')).json()['provider'] == 'manual'
+
+
+@pytest.mark.asyncio
+async def test_admin_cannot_select_dhl_until_full_secure_checkout_routing(client, admin_user, monkeypatch):
+    monkeypatch.setattr(settings, 'ENVIRONMENT', 'test')
+    monkeypatch.setattr(settings, 'DHL_ENVIRONMENT', 'sandbox')
+    monkeypatch.setattr(settings, 'DOMESTIC_CHECKOUT_PREREQUISITES_ENABLED', True)
+    monkeypatch.setattr(settings, 'DOMESTIC_CHECKOUT_COHORT_PERCENTAGE', 50)
+    monkeypatch.setattr(settings, 'DHL_DOMESTIC_SANDBOX_COHORT_IDS', str(admin_user['user'].id))
+    for flag in (
+        'DHL_ENABLED', 'DHL_DOMESTIC_WORKFLOW_ENABLED',
+        'DHL_DOMESTIC_PROVIDER_CALLS_ENABLED', 'DHL_DOMESTIC_CHECKOUT_ENABLED',
+    ):
+        monkeypatch.setattr(settings, flag, True)
+    for credential in ('DHL_API_USERNAME', 'DHL_API_PASSWORD', 'DHL_EXPORT_ACCOUNT_NUMBER'):
+        monkeypatch.setattr(settings, credential, SecretStr('local-test-only'))
+
+    rejected = await client.put(
+        '/api/v1/settings/shipping-provider',
+        headers=admin_user['headers'],
+        json={'provider': 'dhl'},
+    )
+
+    assert rejected.status_code == 409, rejected.text
+    assert 'full secure-checkout cohort routing' in rejected.json()['detail']
+
+    monkeypatch.setattr(settings, 'DOMESTIC_CHECKOUT_COHORT_PERCENTAGE', 100)
+    accepted = await client.put(
+        '/api/v1/settings/shipping-provider',
+        headers=admin_user['headers'],
+        json={'provider': 'dhl'},
+    )
+    assert accepted.status_code == 200, accepted.text
+    assert accepted.json()['provider'] == 'dhl'
 
 
 @pytest.mark.asyncio

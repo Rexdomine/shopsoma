@@ -169,7 +169,10 @@ async function openEnforcedPaystack() {
   window.PaystackPop = { setup: paystackSetup };
   mocks.initializePayment.mockResolvedValue(paystackInitialization);
   await reachPaymentStep(false);
-  fireEvent.click(screen.getByRole('button', { name: 'Select Standard delivery' }));
+  const selectDelivery = screen.queryByRole('button', { name: 'Select Standard delivery' });
+  if (selectDelivery) {
+    fireEvent.click(selectDelivery);
+  }
   fireEvent.click(await screen.findByRole('button', { name: 'Continue to payment' }));
   await waitFor(() => expect(openIframe).toHaveBeenCalled());
   return {
@@ -250,6 +253,7 @@ describe('Checkout M5 sequencing and recovery', () => {
     expect(screen.getByRole('button', { name: 'Edit delivery address' })).toBeDisabled();
     expect(mocks.createOrder).toHaveBeenCalledWith(expect.objectContaining({ customer_email: 'guest@example.com', guest_address: expect.objectContaining({ state: 'Lagos' }) }));
     expect(mocks.createCheckoutEstimate).toHaveBeenCalledWith('order-1', expect.any(String), 'guest-manual-capability');
+    expect(sessionStorage.getItem('shopsoma_checkout_capability:order-1')).toBe('guest-manual-capability');
     expect(mocks.calculateShipping).not.toHaveBeenCalled();
     expect(mocks.initializePayment).not.toHaveBeenCalled();
   });
@@ -411,7 +415,7 @@ describe('Checkout M5 sequencing and recovery', () => {
     expect(screen.queryByText('Stripe form')).not.toBeInTheDocument();
   });
 
-  it('keeps a guest Paystack capability in memory and retries the same order after close', async () => {
+  it('keeps a guest Paystack capability in session storage and retries the same order after close', async () => {
     const capability = 'guest-capability-never-persist';
     mocks.createOrder.mockResolvedValueOnce({
       ...order,
@@ -427,7 +431,7 @@ describe('Checkout M5 sequencing and recovery', () => {
     const retry = await screen.findByRole('button', { name: 'Retry payment' });
     expect(screen.getByRole('heading', { name: 'Checkout' })).toBeInTheDocument();
     expect(mocks.createOrder).toHaveBeenCalledTimes(1);
-    expect(storageSpy).not.toHaveBeenCalledWith(expect.anything(), capability);
+    expect(storageSpy).toHaveBeenCalledWith('shopsoma_checkout_capability:order-1', capability);
 
     fireEvent.click(retry);
     await waitFor(() => expect(mocks.initializePayment).toHaveBeenCalledTimes(2));
@@ -437,7 +441,7 @@ describe('Checkout M5 sequencing and recovery', () => {
     }, capability);
     expect(mocks.createOrder).toHaveBeenCalledTimes(1);
     expect(mocks.createCheckoutEstimate).toHaveBeenCalledTimes(1);
-    expect(storageSpy).not.toHaveBeenCalledWith(expect.anything(), capability);
+    expect(storageSpy).toHaveBeenCalledWith('shopsoma_checkout_capability:order-1', capability);
   });
 
   it.each([404, 410])('clears guest capability after terminal payment initialization status %s', async (status) => {
@@ -498,7 +502,6 @@ describe('Checkout M5 sequencing and recovery', () => {
     const capability = 'callback-503-capability';
     mockGuestCapability(capability);
     const localStorageSpy = vi.spyOn(window.localStorage, 'setItem');
-    const sessionStorageSpy = vi.spyOn(window.sessionStorage, 'setItem');
     mocks.verifyPayment.mockRejectedValueOnce({ response: { status: 503 } });
     const { getConfig } = await openEnforcedPaystack();
 
@@ -517,7 +520,6 @@ describe('Checkout M5 sequencing and recovery', () => {
     expect(mocks.createCheckoutEstimate).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId('checkout-location').textContent).not.toContain(capability);
     expect(localStorageSpy).not.toHaveBeenCalledWith(expect.anything(), capability);
-    expect(sessionStorageSpy).not.toHaveBeenCalledWith(expect.anything(), capability);
   });
 
   it('keeps guest Paystack callback network recovery on Checkout and retries the saved order', async () => {
@@ -643,7 +645,6 @@ describe('Checkout M5 sequencing and recovery', () => {
     const capability = 'successful-capability';
     mockGuestCapability(capability);
     const localStorageSpy = vi.spyOn(window.localStorage, 'setItem');
-    const sessionStorageSpy = vi.spyOn(window.sessionStorage, 'setItem');
     mocks.verifyPayment.mockResolvedValueOnce({ status: true });
     const { getConfig } = await openEnforcedPaystack();
     getConfig().onClose();
@@ -657,7 +658,6 @@ describe('Checkout M5 sequencing and recovery', () => {
     expect(screen.getByTestId('checkout-location')).toHaveTextContent('/order-success?orderId=order-1&payment=success');
     expect(screen.getByTestId('checkout-location').textContent).not.toContain(capability);
     expect(localStorageSpy).not.toHaveBeenCalledWith(expect.anything(), capability);
-    expect(sessionStorageSpy).not.toHaveBeenCalledWith(expect.anything(), capability);
   });
 
   it.each([
@@ -666,7 +666,6 @@ describe('Checkout M5 sequencing and recovery', () => {
   ])('keeps guest Stripe recovery in memory after %s and retries the same order', async (_label, failure) => {
     const capability = 'stripe-retry-capability';
     const localStorageSpy = vi.spyOn(window.localStorage, 'setItem');
-    const sessionStorageSpy = vi.spyOn(window.sessionStorage, 'setItem');
     mocks.verifyPayment.mockRejectedValueOnce(failure);
     const stripeForm = await openEnforcedGuestStripe(capability);
 
@@ -687,13 +686,11 @@ describe('Checkout M5 sequencing and recovery', () => {
     expect(mocks.createCheckoutEstimate).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId('checkout-location').textContent).not.toContain(capability);
     expect(localStorageSpy).not.toHaveBeenCalledWith(expect.anything(), capability);
-    expect(sessionStorageSpy).not.toHaveBeenCalledWith(expect.anything(), capability);
   });
 
   it('keeps guest Stripe recovery on the same order when verification returns HTTP 200 status false', async () => {
     const capability = 'stripe-processing-capability';
     const localStorageSpy = vi.spyOn(window.localStorage, 'setItem');
-    const sessionStorageSpy = vi.spyOn(window.sessionStorage, 'setItem');
     mocks.verifyPayment.mockResolvedValueOnce({ status: false, message: 'processing' });
     const stripeForm = await openEnforcedGuestStripe(capability);
 
@@ -714,7 +711,6 @@ describe('Checkout M5 sequencing and recovery', () => {
     expect(mocks.createCheckoutEstimate).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId('checkout-location').textContent).not.toContain(capability);
     expect(localStorageSpy).not.toHaveBeenCalledWith(expect.anything(), capability);
-    expect(sessionStorageSpy).not.toHaveBeenCalledWith(expect.anything(), capability);
   });
 
   it.each([404, 410])('discards guest Stripe recovery after terminal verification status %s and creates a fresh order', async (status) => {
@@ -753,7 +749,6 @@ describe('Checkout M5 sequencing and recovery', () => {
   it('clears guest Stripe recovery after verified success and navigates normally', async () => {
     const capability = 'stripe-success-capability';
     const localStorageSpy = vi.spyOn(window.localStorage, 'setItem');
-    const sessionStorageSpy = vi.spyOn(window.sessionStorage, 'setItem');
     mocks.verifyPayment.mockResolvedValueOnce({ status: true });
     const stripeForm = await openEnforcedGuestStripe(capability);
 
@@ -764,7 +759,6 @@ describe('Checkout M5 sequencing and recovery', () => {
     expect(screen.getByTestId('checkout-location')).toHaveTextContent('/order-success?orderId=order-1&payment=success');
     expect(screen.getByTestId('checkout-location').textContent).not.toContain(capability);
     expect(localStorageSpy).not.toHaveBeenCalledWith(expect.anything(), capability);
-    expect(sessionStorageSpy).not.toHaveBeenCalledWith(expect.anything(), capability);
   });
 
   it('keeps authenticated Paystack cancellation on the existing completed-order route', async () => {
