@@ -870,7 +870,9 @@ export default function Checkout() {
     ? convertCurrencyWithRates(Number(appliedPromo.discount_amount || 0), 'NGN', currency, exchangeRates)
     : 0;
   const reviewSummaryCurrency = orderReview?.summary.currency ?? 'NGN';
-  const committedLegacyOrder = legacyOrderNeedsConfirmation ? enforcedOrder : null;
+  const committedLegacyOrder = enforcedOrder?.workflow_cohort !== 'domestic_checkout_v1'
+    ? enforcedOrder
+    : null;
 
   // Calculate tax and total for checkout display (before order review is available)
   const TAX_RATE = 0.075; // 7.5% VAT
