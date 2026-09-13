@@ -773,6 +773,15 @@ export default function Checkout() {
     setIsCreatingOrder(false);
   };
 
+  const handleStripePaymentClose = () => {
+    setShowStripePaymentModal(false);
+    setIsCreatingOrder(false);
+    if (enforcedOrder && currentOrderId === enforcedOrder.id) {
+      setPaymentRetryAvailable(true);
+      alert('Payment cancelled. Your order is saved; retry payment when you are ready.');
+    }
+  };
+
   // Email validation regex
   const isValidEmail = (email: string): boolean => {
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -1523,9 +1532,9 @@ export default function Checkout() {
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-semibold">Complete Payment</h2>
               <button
+                aria-label="Close payment"
                 onClick={() => {
-                  setShowStripePaymentModal(false);
-                  setIsCreatingOrder(false);
+                  handleStripePaymentClose();
                 }}
                 className="text-gray-400 hover:text-gray-600"
               >

@@ -9,6 +9,7 @@ import logging
 
 from app.core.database import get_db
 from app.models.order import Order
+from app.models.order_guest_capability import OrderCurrentOwner
 from app.services.websocket_manager import get_connection_manager
 from app.api.dependencies import get_current_user_from_token
 
@@ -80,8 +81,19 @@ async def websocket_order_updates(
             await websocket.close(code=1008, reason="Order not found")
             return
 
-        # Authenticated sockets are limited to the canonical order owner.
-        if order.customer_id != user.id:
+        # Authenticated sockets are limited to the canonical current owner.
+        # A claimed guest order retains its original customer_id, while
+        # OrderCurrentOwner records the account that now owns the order.
+        owner_result = await db.execute(
+            select(OrderCurrentOwner).where(OrderCurrentOwner.order_id == order_id)
+        )
+        current_owner = owner_result.scalar_one_or_none()
+        canonical_owner_id = (
+            current_owner.current_authenticated_user_id
+            if current_owner and current_owner.current_authenticated_user_id
+            else current_owner.original_customer_id if current_owner else order.customer_id
+        )
+        if canonical_owner_id != user.id:
             logger.warning(f"[WebSocket] User {user.id} does not own order {order_id}")
             await websocket.close(code=1008, reason="Unauthorized")
             return

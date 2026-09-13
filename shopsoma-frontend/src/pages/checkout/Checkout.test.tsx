@@ -278,6 +278,28 @@ describe('Checkout M5 sequencing and recovery', () => {
     expect(mocks.createCheckoutEstimate).not.toHaveBeenCalled();
   });
 
+  it('reopens same-order retry after closing raced legacy Stripe payment', async () => {
+    mocks.getShippingProviderSettings.mockResolvedValue({ provider: 'dhl', checkout_estimates_required: true });
+    mocks.createOrder.mockResolvedValueOnce({ ...order, workflow_cohort: 'legacy_pre_bridge' });
+
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getByRole('radio', { name: /Stripe/ }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Purchase' })[0]);
+
+    await waitFor(() => expect(mocks.initializePayment).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText('Stripe form')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Close payment' }));
+
+    const retry = await screen.findByRole('button', { name: 'Retry payment' });
+    expect(retry).toBeEnabled();
+    fireEvent.click(retry);
+    await waitFor(() => expect(mocks.initializePayment).toHaveBeenCalledTimes(2));
+    expect(mocks.initializePayment).toHaveBeenLastCalledWith(expect.objectContaining({ order_id: 'order-1' }), undefined);
+    expect(mocks.createOrder).toHaveBeenCalledTimes(1);
+  });
+
   it('creates manual shipping estimates for a guest address and preserves its capability', async () => {
     mocks.auth.isAuthenticated = false;
     mocks.getShippingProviderSettings.mockResolvedValue({ provider: 'manual', checkout_estimates_required: true });
