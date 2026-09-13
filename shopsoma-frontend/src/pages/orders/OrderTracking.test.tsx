@@ -55,4 +55,25 @@ describe('OrderTracking', () => {
     expect(screen.queryByText(/85,000|latest available information/i)).not.toBeInTheDocument();
     await waitFor(() => expect(getOrderTracking).toHaveBeenCalledWith('order-1', undefined));
   });
+
+  it('clears previously loaded tracking when a protected poll loses authorization', async () => {
+    getOrderTracking
+      .mockResolvedValueOnce({
+        current_status: 'in_transit',
+        tracking_number: 'TRACK-1',
+        updated_at: '2026-01-01T00:00:00Z',
+        delivery_provider: 'manual',
+        currency: 'NGN',
+        amount: 100,
+        history: [],
+      })
+      .mockRejectedValueOnce({ response: { status: 404 } });
+    render(<OrderTracking />);
+    await waitFor(() => expect(screen.getAllByText('In Transit').length).toBeGreaterThan(0));
+
+    await new Promise((resolve) => setTimeout(resolve, 10050));
+
+    expect(await screen.findByText('Tracking information is unavailable. Please try again later.')).toBeInTheDocument();
+    expect(screen.queryByText('In Transit')).not.toBeInTheDocument();
+  }, 15000);
 });

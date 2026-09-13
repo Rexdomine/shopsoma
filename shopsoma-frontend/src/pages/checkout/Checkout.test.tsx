@@ -544,6 +544,21 @@ describe('Checkout M5 sequencing and recovery', () => {
     expect(screen.queryByText('Stripe form')).not.toBeInTheDocument();
   });
 
+  it('recovers to the paid order when retry races a completed provider payment', async () => {
+    mocks.initializePayment.mockRejectedValueOnce({
+      response: { status: 400, data: { detail: 'Order has already been paid' } },
+    });
+    await reachPaymentStep();
+    fireEvent.click(screen.getByRole('button', { name: 'Select Standard delivery' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Continue to payment' }));
+
+    await waitFor(() => expect(screen.getByTestId('checkout-location')).toHaveTextContent(
+      '/order-success?orderId=order-1&payment=success',
+    ));
+    expect(screen.queryByRole('button', { name: 'Retry payment' })).not.toBeInTheDocument();
+    expect(mocks.clearCart).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps a guest Paystack capability in session storage and retries the same order after close', async () => {
     const capability = 'guest-capability-never-persist';
     mocks.createOrder.mockResolvedValueOnce({

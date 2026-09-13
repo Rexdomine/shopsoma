@@ -489,6 +489,11 @@ export default function Checkout() {
     );
   };
 
+  const isAlreadyPaidConflict = (error: any) => {
+    const detail = String(error?.response?.data?.detail || '').toLowerCase();
+    return error?.response?.status === 400 && detail === 'order has already been paid';
+  };
+
   const openInitializedPayment = (
     order: Order,
     paymentData: InitializePaymentResponse,
@@ -608,6 +613,16 @@ export default function Checkout() {
       }, enforced ? capability : undefined);
       openInitializedPayment(order, paymentData);
     } catch (error: any) {
+      if (isAlreadyPaidConflict(error)) {
+        // A provider callback may have completed payment after the original
+        // response was lost. Treat the committed order as the recovery source
+        // instead of leaving the customer in a retry loop.
+        preserveCheckoutCapabilityForReadback(order.id, capability);
+        CartService.clearCart();
+        navigate(`${ROUTES.ORDER_SUCCESS}?orderId=${order.id}&payment=success`);
+        setIsCreatingOrder(false);
+        return;
+      }
       const terminalCheckout = error.response?.status === 404
         || error.response?.status === 410
         || isTerminalGuestCheckoutConflict(error);
