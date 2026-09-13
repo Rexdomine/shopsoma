@@ -24,9 +24,8 @@ beforeEach(() => { vi.clearAllMocks(); mocks.getManualShippingRates.mockResolved
 
 it('saves a genuine zero rate, reloads persisted values, previews and deactivates it', async () => {
   render(<AdminSettings />);
+  fireEvent.click(await screen.findByRole('button', { name: /Manual rates/ }));
   await screen.findByText('No manual rates configured. Add an active rate before accepting orders.');
-  expect(screen.getByRole('option', { name: /DHL — pending/ })).toBeDisabled();
-  expect(screen.getByRole('option', { name: /ShipBubble — unavailable/ })).toBeDisabled();
   fireEvent.change(screen.getByLabelText('Rate name'), { target: { value: 'Free Lagos' } });
   fireEvent.change(screen.getByLabelText('State (blank for all)'), { target: { value: 'Lagos' } });
   mocks.saveManualShippingRate.mockResolvedValue(saved);
@@ -49,6 +48,7 @@ it('saves a genuine zero rate, reloads persisted values, previews and deactivate
 it('hydrates edits and rejects crossed ranges without submitting; displays save failures', async () => {
   mocks.getManualShippingRates.mockResolvedValue([saved]);
   render(<AdminSettings />);
+  fireEvent.click(await screen.findByRole('button', { name: /Manual rates/ }));
   fireEvent.click(await screen.findByRole('button', { name: 'Edit Free Lagos' }));
   expect(screen.getByLabelText('Price (NGN)')).toHaveValue(0);
   fireEvent.change(screen.getByLabelText('Minimum delivery days'), { target: { value: '9' } });
@@ -71,13 +71,15 @@ it('keeps DHL disabled when sandbox readiness lacks secure-checkout routing', as
     checkout_estimates_required: false,
   });
   render(<AdminSettings />);
-  expect(await screen.findByRole('option', { name: /DHL — pending/ })).toBeDisabled();
+  fireEvent.click(await screen.findByRole('button', { name: /Shipping/ }));
+  expect(await screen.findByRole('option', { name: 'DHL' })).toBeDisabled();
 });
 
-it('keeps a visible gap between the settings cards', async () => {
-  const { container } = render(<AdminSettings />);
-  await screen.findByText('Currency Settings');
-  const currencyCard = container.querySelector('#currency');
-  expect(currencyCard?.parentElement).toHaveClass('space-y-6');
-  expect(currencyCard?.parentElement?.querySelector('#shipping')).toBeInTheDocument();
+it('switches between focused settings workspaces', async () => {
+  render(<AdminSettings />);
+  const rates = await screen.findByRole('button', { name: /Manual rates/ });
+  expect(screen.getByRole('heading', { name: 'Exchange rate' })).toBeInTheDocument();
+  fireEvent.click(rates);
+  expect(await screen.findByRole('heading', { name: 'Manual shipping rates' })).toBeInTheDocument();
+  expect(rates).toHaveAttribute('aria-current', 'page');
 });
