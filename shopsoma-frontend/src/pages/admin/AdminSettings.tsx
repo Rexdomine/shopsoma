@@ -383,6 +383,7 @@ export default function AdminSettings() {
             </nav>
           </div>
 
+          <div className="space-y-6">
           {/* Currency Settings Card */}
           <div id="currency" className="scroll-mt-6 bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
             <div className="border-b border-gray-200 px-6 py-4">
@@ -905,6 +906,7 @@ export default function AdminSettings() {
                 </div>
               )}
             </div>
+          </div>
           </div>
         </div>
       </div>
