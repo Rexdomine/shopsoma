@@ -53,10 +53,15 @@ export interface CreateAddressData {
 export interface ShippingRate {
   id: string;
   name: string;
-  description: string;
+  description: string | null;
   base_rate: number;
   country: string;
-  state?: string;
+  state?: string | null;
+  min_order_value?: number | null;
+  max_order_value?: number | null;
+  is_active?: boolean;
+  is_default?: boolean;
+  priority?: number;
   min_delivery_days: number;
   max_delivery_days: number;
 }
@@ -314,16 +319,16 @@ export const checkoutService = {
   },
 
   // Get order by ID
-  async getOrder(id: string): Promise<Order> {
-    const response = await api.get(`/orders/${id}`);
+  async getOrder(id: string, capability?: string): Promise<Order> {
+    const response = await api.get(`/orders/${id}`, checkoutHeaders(capability));
     return response.data;
   },
 
   // Cancel order
-  async cancelOrder(id: string, reason: string): Promise<Order> {
+  async cancelOrder(id: string, reason: string, capability?: string): Promise<Order> {
     const response = await api.post(`/orders/${id}/cancel`, {
       cancellation_reason: reason,
-    });
+    }, checkoutHeaders(capability));
     return response.data;
   },
 };

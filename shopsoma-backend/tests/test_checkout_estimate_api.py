@@ -7,6 +7,7 @@ from decimal import Decimal
 import hashlib
 import hmac
 import uuid
+from types import SimpleNamespace
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -276,6 +277,21 @@ async def test_create_order_then_create_estimate_requires_explicit_selection(
         moderation_status=ModerationStatus.APPROVED,
     )
     db_session.add(made_to_order)
+    db_session.add(
+        ShippingRate(
+            id=uuid.uuid4(),
+            name="Historical invalid window",
+            description="Legacy data that must not enter a new estimate",
+            base_rate=Decimal("500.00"),
+            country="Nigeria",
+            state="Lagos",
+            min_delivery_days=5,
+            max_delivery_days=366,
+            is_active=True,
+            is_default=False,
+            priority=99,
+        )
+    )
     await db_session.commit()
     monkeypatch.setattr(settings, "DOMESTIC_CHECKOUT_PREREQUISITES_ENABLED", True)
     monkeypatch.setattr(
@@ -351,6 +367,7 @@ async def test_create_order_then_create_estimate_requires_explicit_selection(
     estimate = estimate_response.json()
     assert len(estimate["options"]) == 2
     assert estimate["selected_option"] is None
+
 
     selection_count = await db_session.scalar(
         select(func.count()).select_from(CheckoutShippingEstimateSelection)
@@ -433,6 +450,36 @@ async def test_create_order_then_create_estimate_requires_explicit_selection(
         await db_session.scalar(select(func.count()).select_from(VendorNotification))
         == 0
     )
+
+
+@pytest.mark.asyncio
+async def test_enforced_order_rejects_unavailable_provider_before_commit(
+    client, db_session, vendor_user, customer_user, monkeypatch
+):
+    address, product = await _domestic_catalogue(db_session, vendor_user, customer_user)
+    monkeypatch.setattr(settings, "DOMESTIC_CHECKOUT_PREREQUISITES_ENABLED", True)
+    monkeypatch.setattr(
+        settings, "DOMESTIC_CHECKOUT_COHORT_ALLOWLIST", str(customer_user["user"].id)
+    )
+
+    async def unavailable_provider(_db):
+        return SimpleNamespace(provider="shipbubble", readiness={"shipbubble": False})
+
+    monkeypatch.setattr("app.api.v1.orders.shipping_provider_settings", unavailable_provider)
+    before = await db_session.scalar(select(func.count()).select_from(Order))
+
+    response = await client.post(
+        "/api/v1/orders",
+        headers=customer_user["headers"],
+        json={
+            "items": [{"product_id": str(product.id), "quantity": 1}],
+            "shipping_address_id": str(address.id),
+            "currency": "NGN",
+        },
+    )
+
+    assert response.status_code == 503, response.text
+    assert await db_session.scalar(select(func.count()).select_from(Order)) == before
 
 
 @pytest.mark.asyncio

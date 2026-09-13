@@ -1,5 +1,13 @@
 import api from './api';
 
+function capabilityHeaders(capability?: string) {
+  return {
+    headers: {
+      ...(capability ? { 'X-ShopSoma-Checkout-Capability': capability } : {}),
+    },
+  };
+}
+
 export type OrderStatus =
   | 'order_placed'
   | 'pending_confirmation'
@@ -30,8 +38,8 @@ export interface OrderTracking {
 }
 
 export const orderService = {
-  async getOrderTracking(orderId: string): Promise<OrderTracking> {
-    const response = await api.get(`/orders/${orderId}/tracking`);
+  async getOrderTracking(orderId: string, capability?: string): Promise<OrderTracking> {
+    const response = await api.get(`/orders/${orderId}/tracking`, capabilityHeaders(capability));
     return response.data;
   },
 };

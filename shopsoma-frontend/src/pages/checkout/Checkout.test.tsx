@@ -4,12 +4,14 @@ import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
+  getShippingProviderSettings: vi.fn(),
   getAddresses: vi.fn(),
   calculateShipping: vi.fn(),
   reviewOrder: vi.fn(),
   createOrder: vi.fn(),
   createCheckoutEstimate: vi.fn(),
   selectCheckoutEstimateOption: vi.fn(),
+  cancelOrder: vi.fn(),
   initializePayment: vi.fn(),
   verifyPayment: vi.fn(),
   buildPaystackWidgetConfig: vi.fn(),
@@ -72,9 +74,11 @@ vi.mock('../../services/checkoutService', () => ({
     createOrder: mocks.createOrder,
     createCheckoutEstimate: mocks.createCheckoutEstimate,
     selectCheckoutEstimateOption: mocks.selectCheckoutEstimateOption,
+    cancelOrder: mocks.cancelOrder,
     validatePromoCode: vi.fn(),
   },
 }));
+vi.mock('../../services/settingsService', () => ({ getShippingProviderSettings: mocks.getShippingProviderSettings }));
 vi.mock('../../services/paymentService', () => ({
   paymentService: {
     initializePayment: mocks.initializePayment,
@@ -167,7 +171,10 @@ async function openEnforcedPaystack() {
   window.PaystackPop = { setup: paystackSetup };
   mocks.initializePayment.mockResolvedValue(paystackInitialization);
   await reachPaymentStep(false);
-  fireEvent.click(screen.getByRole('button', { name: 'Select Standard delivery' }));
+  const selectDelivery = screen.queryByRole('button', { name: 'Select Standard delivery' });
+  if (selectDelivery) {
+    fireEvent.click(selectDelivery);
+  }
   fireEvent.click(await screen.findByRole('button', { name: 'Continue to payment' }));
   await waitFor(() => expect(openIframe).toHaveBeenCalled());
   return {
@@ -200,15 +207,184 @@ async function openEnforcedGuestStripe(capability: string) {
 }
 
 describe('Checkout M5 sequencing and recovery', () => {
+  it.each(['', 'default-product-1', '550e8400-e29b-41d4-a716-446655440000'])('normalizes optional cart variant %j in review and create', async (variantId) => {
+    // cartService supplies an empty ID for a real single-product cart item.
+    mocks.cartState.cart.items[0].variant.id = variantId;
+    await reachPaymentStep();
+    const expected = !variantId || variantId.startsWith('default-') ? null : variantId;
+    for (const request of [mocks.reviewOrder, mocks.createOrder]) {
+      expect(request.mock.calls[0][0].items[0].variant_id).toBe(expected);
+    }
+  });
+
+  it('uses saved manual estimates without legacy quote or review before payment', async () => {
+    mocks.getShippingProviderSettings.mockResolvedValue({ provider: 'manual', checkout_estimates_required: true });
+    mocks.calculateShipping.mockRejectedValue(new Error('Legacy quote must not run'));
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Continue' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Purchase' })[0]);
+    await screen.findByRole('button', { name: 'Select Standard delivery' });
+    expect(mocks.calculateShipping).not.toHaveBeenCalled();
+    expect(mocks.reviewOrder).not.toHaveBeenCalled();
+    expect(mocks.initializePayment).not.toHaveBeenCalled();
+    expect(mocks.createOrder.mock.calls[0][0].shipping_rate_id).toBeUndefined();
+    expect(screen.getByRole('button', { name: 'Continue to payment' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Select Standard delivery' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Continue to payment' })).toBeEnabled());
+    expect(screen.getAllByText('NGN 2,500.00').length).toBeGreaterThan(0);
+  });
+
+  it('requires confirmation of the committed server-priced legacy order before payment', async () => {
+    mocks.getShippingProviderSettings.mockResolvedValue({ provider: 'dhl', checkout_estimates_required: true });
+    mocks.createOrder.mockResolvedValueOnce({ ...order, workflow_cohort: 'legacy_pre_bridge' });
+
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getByRole('radio', { name: /Stripe/ }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Purchase' })[0]);
+    await waitFor(() => expect(mocks.createOrder).toHaveBeenCalledTimes(1));
+
+    expect(mocks.createCheckoutEstimate).not.toHaveBeenCalled();
+    expect(mocks.initializePayment).not.toHaveBeenCalled();
+    const confirm = await screen.findByRole('button', { name: 'Confirm total and continue to payment' });
+    expect(confirm).toBeEnabled();
+    fireEvent.click(confirm);
+    await waitFor(() => expect(mocks.initializePayment).toHaveBeenCalledTimes(1));
+    expect(mocks.initializePayment).toHaveBeenCalledWith({
+      order_id: 'order-1', email: 'buyer@example.com', payment_gateway: 'stripe',
+      currency: 'NGN', callback_url: `${window.location.origin}/payment/verify`,
+    }, undefined);
+  });
+
+  it('initializes a raced legacy order with its committed currency', async () => {
+    mocks.getShippingProviderSettings.mockResolvedValue({ provider: 'dhl', checkout_estimates_required: true });
+    mocks.createOrder.mockResolvedValueOnce({ ...order, currency: 'USD', workflow_cohort: 'legacy_pre_bridge' });
+
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getByRole('radio', { name: /Stripe/ }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Purchase' })[0]);
+    fireEvent.click(await screen.findByRole('button', { name: 'Confirm total and continue to payment' }));
+
+    await waitFor(() => expect(mocks.initializePayment).toHaveBeenCalledTimes(1));
+    expect(mocks.initializePayment).toHaveBeenCalledWith(expect.objectContaining({
+      order_id: 'order-1',
+      currency: 'USD',
+    }), undefined);
+    expect(screen.getByText('Currency: USD')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'NGN' })).toBeDisabled();
+    expect(screen.getByRole('radio', { name: /Paystack/ })).toBeDisabled();
+    expect(screen.queryByText('Select delivery option')).not.toBeInTheDocument();
+    expect(screen.getByText(/62,500\.00/)).toBeInTheDocument();
+  });
+
+  it('retries payment for the committed legacy order without creating a replacement', async () => {
+    mocks.getShippingProviderSettings.mockResolvedValue({ provider: 'dhl', checkout_estimates_required: true });
+    mocks.createOrder.mockResolvedValueOnce({ ...order, workflow_cohort: 'legacy_pre_bridge' });
+    mocks.initializePayment
+      .mockRejectedValueOnce({ response: { status: 503 } })
+      .mockResolvedValueOnce(paystackInitialization);
+    const openIframe = vi.fn();
+    window.PaystackPop = { setup: vi.fn(() => ({ openIframe })) };
+
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getByRole('radio', { name: /Paystack/ }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Purchase' })[0]);
+    fireEvent.click(await screen.findByRole('button', { name: 'Confirm total and continue to payment' }));
+
+    await waitFor(() => expect(mocks.initializePayment).toHaveBeenCalledTimes(1));
+    expect(await screen.findByRole('button', { name: 'Retry payment' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry payment' }));
+
+    await waitFor(() => expect(openIframe).toHaveBeenCalled());
+    expect(mocks.initializePayment).toHaveBeenCalledTimes(2);
+    expect(mocks.initializePayment).toHaveBeenLastCalledWith(expect.objectContaining({ order_id: 'order-1' }), undefined);
+    expect(mocks.createOrder).toHaveBeenCalledTimes(1);
+    expect(mocks.createCheckoutEstimate).not.toHaveBeenCalled();
+  });
+
+  it('reopens same-order retry after closing raced legacy Stripe payment', async () => {
+    mocks.getShippingProviderSettings.mockResolvedValue({ provider: 'dhl', checkout_estimates_required: true });
+    mocks.createOrder.mockResolvedValueOnce({ ...order, workflow_cohort: 'legacy_pre_bridge' });
+
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getByRole('radio', { name: /Stripe/ }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Purchase' })[0]);
+    fireEvent.click(await screen.findByRole('button', { name: 'Confirm total and continue to payment' }));
+
+    await waitFor(() => expect(mocks.initializePayment).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText('Stripe form')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Close payment' }));
+
+    const retry = await screen.findByRole('button', { name: 'Retry payment' });
+    expect(retry).toBeEnabled();
+    fireEvent.click(retry);
+    await waitFor(() => expect(mocks.initializePayment).toHaveBeenCalledTimes(2));
+    expect(mocks.initializePayment).toHaveBeenLastCalledWith(expect.objectContaining({ order_id: 'order-1' }), undefined);
+    expect(mocks.createOrder).toHaveBeenCalledTimes(1);
+  });
+
+  it('creates manual shipping estimates for a guest address and preserves its capability', async () => {
+    mocks.auth.isAuthenticated = false;
+    mocks.getShippingProviderSettings.mockResolvedValue({ provider: 'manual', checkout_estimates_required: true });
+    mockGuestCapability('guest-manual-capability');
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    fireEvent.change(await screen.findByPlaceholderText('you@example.com'), { target: { value: 'guest@example.com' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    fireEvent.click(screen.getByRole('button', { name: '+ Add New Address' }));
+    for (const [label, value] of [['Full Name', 'Guest Buyer'], ['Street Address', '1 Test Street'], ['City', 'Lagos'], ['State', 'Lagos']]) {
+      fireEvent.change(screen.getByLabelText(label), { target: { value } });
+    }
+    fireEvent.change(screen.getByPlaceholderText('08012345678'), { target: { value: '08012345678' } });
+    fireEvent.click(screen.getByRole('button', { name: /Save Address/i }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Continue' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Purchase' })[0]);
+    await screen.findByRole('button', { name: 'Select Standard delivery' });
+    expect(screen.getByRole('button', { name: 'Edit delivery address' })).toBeDisabled();
+    expect(mocks.createOrder).toHaveBeenCalledWith(expect.objectContaining({ customer_email: 'guest@example.com', guest_address: expect.objectContaining({ state: 'Lagos' }) }));
+    expect(mocks.createCheckoutEstimate).toHaveBeenCalledWith('order-1', expect.any(String), 'guest-manual-capability');
+    expect(sessionStorage.getItem('shopsoma_checkout_capability:order-1')).toBe('guest-manual-capability');
+    expect(mocks.calculateShipping).not.toHaveBeenCalled();
+    expect(mocks.initializePayment).not.toHaveBeenCalled();
+  });
+
+  it('blocks checkout and offers retry when shipping configuration fails', async () => {
+    mocks.getShippingProviderSettings
+      .mockRejectedValueOnce(new Error('temporary settings outage'))
+      .mockResolvedValueOnce({ provider: 'manual', checkout_estimates_required: false });
+
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('could not be loaded');
+    expect(screen.getByRole('button', { name: 'Continue' })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry delivery configuration' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Continue' })).toBeEnabled());
+    expect(mocks.getShippingProviderSettings).toHaveBeenCalledTimes(2);
+  });
+
   beforeEach(() => {
     vi.resetAllMocks();
+    mocks.auth.isAuthenticated = true;
+    mocks.cartState.cart.items[0].variant.id = 'default-product-1';
+    sessionStorage.clear();
     vi.stubGlobal('alert', vi.fn());
     vi.stubGlobal('crypto', { randomUUID: vi.fn(() => `id-${Math.random()}`) });
+    mocks.getShippingProviderSettings.mockResolvedValue({ provider: 'manual', checkout_estimates_required: false });
     mocks.getAddresses.mockResolvedValue({ addresses: [address] });
     mocks.calculateShipping.mockResolvedValue({ available_rates: [rate], recommended_rate: rate });
     mocks.reviewOrder.mockResolvedValue(review);
     mocks.createOrder.mockResolvedValue(order);
     mocks.createCheckoutEstimate.mockResolvedValue(estimate);
+    mocks.cancelOrder.mockResolvedValue({ ...order, fulfillment_status: 'cancelled' });
     mocks.selectCheckoutEstimateOption.mockResolvedValue({ ...estimate, selected_option: estimate.options[0] });
     mocks.buildPaystackWidgetConfig.mockImplementation((initialization, customer) => ({
       key: customer.key,
@@ -243,6 +419,23 @@ describe('Checkout M5 sequencing and recovery', () => {
     }, undefined));
     expect(mocks.createOrder.mock.invocationCallOrder[0]).toBeLessThan(mocks.createCheckoutEstimate.mock.invocationCallOrder[0]);
     expect(mocks.createCheckoutEstimate.mock.invocationCallOrder[0]).toBeLessThan(mocks.initializePayment.mock.invocationCallOrder[0]);
+  });
+
+  it('displays the committed subtotal for a secure checkout order', async () => {
+    mocks.getShippingProviderSettings.mockResolvedValue({ provider: 'manual', checkout_estimates_required: true });
+    mocks.createOrder.mockResolvedValueOnce({
+      ...order,
+      subtotal: 61000,
+      total_amount: 63500,
+    });
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Purchase' })[0]);
+    await screen.findByRole('button', { name: 'Select Standard delivery' });
+
+    expect(screen.getByText('₦61,000')).toBeInTheDocument();
+    expect(screen.queryByText('₦60,000')).not.toBeInTheDocument();
   });
 
   it('commits selected server shipping, tax, and payable truth before Paystack opens', async () => {
@@ -340,6 +533,34 @@ describe('Checkout M5 sequencing and recovery', () => {
     expect(await screen.findByRole('button', { name: 'Select Standard delivery' })).toBeEnabled();
     expect(mocks.createOrder).toHaveBeenCalledTimes(1);
     expect(mocks.createCheckoutEstimate).toHaveBeenCalledTimes(2);
+
+  });
+
+  it('cancels the saved order before restarting after estimate failure', async () => {
+    mocks.createCheckoutEstimate.mockRejectedValueOnce({ response: { status: 503, data: { detail: 'temporarily unavailable' } } });
+    await reachPaymentStep();
+
+    expect(await screen.findByRole('button', { name: 'Start again with another address' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Start again with another address' }));
+    await waitFor(() => expect(mocks.cancelOrder).toHaveBeenCalledWith(
+      'order-1',
+      'Customer restarted checkout before payment',
+      undefined,
+    ));
+    expect(mocks.createOrder).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([404, 410])('clears expired checkout state when restarting returns %s', async (status) => {
+    mocks.createCheckoutEstimate.mockRejectedValueOnce({ response: { status: 503, data: { detail: 'temporarily unavailable' } } });
+    await reachPaymentStep();
+
+    mocks.cancelOrder.mockRejectedValueOnce({ response: { status, data: { detail: 'Checkout access expired' } } });
+    fireEvent.click(await screen.findByRole('button', { name: 'Start again with another address' }));
+
+    await waitFor(() => expect(mocks.cancelOrder).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole('heading', { name: 'Checkout' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Continue' })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: 'Retry delivery options' })).not.toBeInTheDocument();
   });
 
   it('keeps a 503 payment initialization visibly incomplete and retryable', async () => {
@@ -353,7 +574,22 @@ describe('Checkout M5 sequencing and recovery', () => {
     expect(screen.queryByText('Stripe form')).not.toBeInTheDocument();
   });
 
-  it('keeps a guest Paystack capability in memory and retries the same order after close', async () => {
+  it('recovers to the paid order when retry races a completed provider payment', async () => {
+    mocks.initializePayment.mockRejectedValueOnce({
+      response: { status: 400, data: { detail: 'Order has already been paid' } },
+    });
+    await reachPaymentStep();
+    fireEvent.click(screen.getByRole('button', { name: 'Select Standard delivery' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Continue to payment' }));
+
+    await waitFor(() => expect(screen.getByTestId('checkout-location')).toHaveTextContent(
+      '/order-success?orderId=order-1&payment=success',
+    ));
+    expect(screen.queryByRole('button', { name: 'Retry payment' })).not.toBeInTheDocument();
+    expect(mocks.clearCart).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a guest Paystack capability in session storage and retries the same order after close', async () => {
     const capability = 'guest-capability-never-persist';
     mocks.createOrder.mockResolvedValueOnce({
       ...order,
@@ -369,7 +605,7 @@ describe('Checkout M5 sequencing and recovery', () => {
     const retry = await screen.findByRole('button', { name: 'Retry payment' });
     expect(screen.getByRole('heading', { name: 'Checkout' })).toBeInTheDocument();
     expect(mocks.createOrder).toHaveBeenCalledTimes(1);
-    expect(storageSpy).not.toHaveBeenCalledWith(expect.anything(), capability);
+    expect(storageSpy).toHaveBeenCalledWith('shopsoma_checkout_capability:order-1', capability);
 
     fireEvent.click(retry);
     await waitFor(() => expect(mocks.initializePayment).toHaveBeenCalledTimes(2));
@@ -379,7 +615,7 @@ describe('Checkout M5 sequencing and recovery', () => {
     }, capability);
     expect(mocks.createOrder).toHaveBeenCalledTimes(1);
     expect(mocks.createCheckoutEstimate).toHaveBeenCalledTimes(1);
-    expect(storageSpy).not.toHaveBeenCalledWith(expect.anything(), capability);
+    expect(storageSpy).toHaveBeenCalledWith('shopsoma_checkout_capability:order-1', capability);
   });
 
   it.each([404, 410])('clears guest capability after terminal payment initialization status %s', async (status) => {
@@ -440,7 +676,6 @@ describe('Checkout M5 sequencing and recovery', () => {
     const capability = 'callback-503-capability';
     mockGuestCapability(capability);
     const localStorageSpy = vi.spyOn(window.localStorage, 'setItem');
-    const sessionStorageSpy = vi.spyOn(window.sessionStorage, 'setItem');
     mocks.verifyPayment.mockRejectedValueOnce({ response: { status: 503 } });
     const { getConfig } = await openEnforcedPaystack();
 
@@ -459,7 +694,6 @@ describe('Checkout M5 sequencing and recovery', () => {
     expect(mocks.createCheckoutEstimate).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId('checkout-location').textContent).not.toContain(capability);
     expect(localStorageSpy).not.toHaveBeenCalledWith(expect.anything(), capability);
-    expect(sessionStorageSpy).not.toHaveBeenCalledWith(expect.anything(), capability);
   });
 
   it('keeps guest Paystack callback network recovery on Checkout and retries the saved order', async () => {
@@ -585,7 +819,6 @@ describe('Checkout M5 sequencing and recovery', () => {
     const capability = 'successful-capability';
     mockGuestCapability(capability);
     const localStorageSpy = vi.spyOn(window.localStorage, 'setItem');
-    const sessionStorageSpy = vi.spyOn(window.sessionStorage, 'setItem');
     mocks.verifyPayment.mockResolvedValueOnce({ status: true });
     const { getConfig } = await openEnforcedPaystack();
     getConfig().onClose();
@@ -599,7 +832,6 @@ describe('Checkout M5 sequencing and recovery', () => {
     expect(screen.getByTestId('checkout-location')).toHaveTextContent('/order-success?orderId=order-1&payment=success');
     expect(screen.getByTestId('checkout-location').textContent).not.toContain(capability);
     expect(localStorageSpy).not.toHaveBeenCalledWith(expect.anything(), capability);
-    expect(sessionStorageSpy).not.toHaveBeenCalledWith(expect.anything(), capability);
   });
 
   it.each([
@@ -608,7 +840,6 @@ describe('Checkout M5 sequencing and recovery', () => {
   ])('keeps guest Stripe recovery in memory after %s and retries the same order', async (_label, failure) => {
     const capability = 'stripe-retry-capability';
     const localStorageSpy = vi.spyOn(window.localStorage, 'setItem');
-    const sessionStorageSpy = vi.spyOn(window.sessionStorage, 'setItem');
     mocks.verifyPayment.mockRejectedValueOnce(failure);
     const stripeForm = await openEnforcedGuestStripe(capability);
 
@@ -629,13 +860,11 @@ describe('Checkout M5 sequencing and recovery', () => {
     expect(mocks.createCheckoutEstimate).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId('checkout-location').textContent).not.toContain(capability);
     expect(localStorageSpy).not.toHaveBeenCalledWith(expect.anything(), capability);
-    expect(sessionStorageSpy).not.toHaveBeenCalledWith(expect.anything(), capability);
   });
 
   it('keeps guest Stripe recovery on the same order when verification returns HTTP 200 status false', async () => {
     const capability = 'stripe-processing-capability';
     const localStorageSpy = vi.spyOn(window.localStorage, 'setItem');
-    const sessionStorageSpy = vi.spyOn(window.sessionStorage, 'setItem');
     mocks.verifyPayment.mockResolvedValueOnce({ status: false, message: 'processing' });
     const stripeForm = await openEnforcedGuestStripe(capability);
 
@@ -656,7 +885,6 @@ describe('Checkout M5 sequencing and recovery', () => {
     expect(mocks.createCheckoutEstimate).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId('checkout-location').textContent).not.toContain(capability);
     expect(localStorageSpy).not.toHaveBeenCalledWith(expect.anything(), capability);
-    expect(sessionStorageSpy).not.toHaveBeenCalledWith(expect.anything(), capability);
   });
 
   it.each([404, 410])('discards guest Stripe recovery after terminal verification status %s and creates a fresh order', async (status) => {
@@ -695,7 +923,6 @@ describe('Checkout M5 sequencing and recovery', () => {
   it('clears guest Stripe recovery after verified success and navigates normally', async () => {
     const capability = 'stripe-success-capability';
     const localStorageSpy = vi.spyOn(window.localStorage, 'setItem');
-    const sessionStorageSpy = vi.spyOn(window.sessionStorage, 'setItem');
     mocks.verifyPayment.mockResolvedValueOnce({ status: true });
     const stripeForm = await openEnforcedGuestStripe(capability);
 
@@ -706,7 +933,6 @@ describe('Checkout M5 sequencing and recovery', () => {
     expect(screen.getByTestId('checkout-location')).toHaveTextContent('/order-success?orderId=order-1&payment=success');
     expect(screen.getByTestId('checkout-location').textContent).not.toContain(capability);
     expect(localStorageSpy).not.toHaveBeenCalledWith(expect.anything(), capability);
-    expect(sessionStorageSpy).not.toHaveBeenCalledWith(expect.anything(), capability);
   });
 
   it('keeps authenticated Paystack cancellation on the existing completed-order route', async () => {
