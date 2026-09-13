@@ -352,6 +352,10 @@ export default function AdminSettings() {
     );
   }
 
+  const dhlReadyForCheckout = Boolean(
+    shippingProvider?.readiness.dhl && shippingProvider?.checkout_estimates_required,
+  );
+
   return (
     <div className="flex min-h-screen bg-[var(--color-page-bg)]">
       <AdminSidebar activePrimary="settings" />
@@ -494,7 +498,7 @@ export default function AdminSettings() {
                 {!shippingProvider && <option value="">Loading…</option>}
                 <option value="manual">Manual rates</option>
                 <option value="shipbubble" disabled={!shippingProvider?.readiness.shipbubble}>ShipBubble — unavailable for secure checkout</option>
-                <option value="dhl" disabled={!shippingProvider?.readiness.dhl}>DHL — {shippingProvider?.readiness.dhl ? 'sandbox ready' : 'pending / not enabled'}</option>
+                <option value="dhl" disabled={!dhlReadyForCheckout}>DHL — {dhlReadyForCheckout ? 'sandbox ready' : 'pending / not enabled'}</option>
               </select>
             </label>
             {savingShipping && <p role="status">Saving provider…</p>}

@@ -315,3 +315,23 @@ def test_shipping_rate_response_accepts_legacy_cross_field_ranges():
 
     assert response.max_order_value == Decimal("10000.00")
     assert response.max_delivery_days == 2
+
+
+@pytest.mark.asyncio
+async def test_checkout_estimate_preserves_manual_rate_priority(client, db_session, vendor_user, customer_user):
+    address, product = await _domestic_catalogue(db_session, vendor_user, customer_user)
+    standard = await db_session.scalar(select(ShippingRate).where(ShippingRate.name == 'Standard'))
+    express = await db_session.scalar(select(ShippingRate).where(ShippingRate.name == 'Express'))
+    standard.is_default = False
+    standard.priority = 2
+    express.is_default = True
+    express.priority = 99
+    await db_session.commit()
+
+    _, estimate = await _create_authenticated_estimate(
+        client, customer_user, address, product, key='manual-priority-order'
+    )
+
+    assert [option['service_label'] for option in estimate['options']] == [
+        'Express', 'Standard'
+    ]

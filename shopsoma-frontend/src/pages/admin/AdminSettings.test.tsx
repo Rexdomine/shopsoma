@@ -61,3 +61,15 @@ it('hydrates edits and rejects crossed ranges without submitting; displays save 
   await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Unable to save or load'));
   expect(screen.getByLabelText('Rate name')).toHaveValue('Free Lagos');
 });
+
+it('keeps DHL disabled when sandbox readiness lacks secure-checkout routing', async () => {
+  const { getShippingProviderSettings } = await import('../../services/settingsService');
+  vi.mocked(getShippingProviderSettings).mockResolvedValue({
+    provider: 'manual',
+    use_shipbubble: false,
+    readiness: { manual: true, shipbubble: false, dhl: true },
+    checkout_estimates_required: false,
+  });
+  render(<AdminSettings />);
+  expect(await screen.findByRole('option', { name: /DHL — pending/ })).toBeDisabled();
+});

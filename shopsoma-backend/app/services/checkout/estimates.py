@@ -1114,12 +1114,15 @@ async def create_estimate(
                 )
             )
     else:
-        for rate in rates:
+        for rank, rate in enumerate(rates):
             amount = ngn_in_order_currency(rate.base_rate)
             db.add(
                 CheckoutShippingEstimateOption(
                     estimate_id=estimate.id,
-                    option_key=f"static:{rate.id}",
+                    # The query order is the configured default/priority order.
+                    # Persist that rank because estimate_payload() reloads rows
+                    # later and must not sort by the random UUID suffix.
+                    option_key=f"static:{rank:09d}:{rate.id}",
                     service_code=f"static-{rate.priority}",
                     service_label=rate.name,
                     amount=amount,
