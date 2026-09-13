@@ -127,6 +127,7 @@ async def authorize_checkout_actor(
                 allow_expired_order_read
                 and capability.scope == _SCOPE
                 and order.payment_status == PaymentStatus.PAID
+                and capability.created_at + timedelta(days=30) > database_now
             )
         )
     ):

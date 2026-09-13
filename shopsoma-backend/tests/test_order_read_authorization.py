@@ -149,6 +149,24 @@ async def test_secure_guest_read_capabilities(
     actual["paid_expired"] = (
         await client.get(url, headers={"X-ShopSoma-Checkout-Capability": expired})
     ).status_code
+    too_old = "too-old-order-read-test-token"
+    db_session.add(
+        OrderGuestCapability(
+            order_id=uuid.UUID(payload["id"]),
+            original_customer_id=uuid.UUID(payload["customer_id"]),
+            scope="checkout_prerequisites",
+            token_digest=hmac.new(
+                b"read-test-pepper", too_old.encode(), hashlib.sha256
+            ).digest(),
+            pepper_key_version=7,
+            created_at=now - timedelta(days=31),
+            expires_at=now - timedelta(days=30),
+        )
+    )
+    await db_session.commit()
+    actual["paid_too_old"] = (
+        await client.get(url, headers={"X-ShopSoma-Checkout-Capability": too_old})
+    ).status_code
     assert actual == {
         "valid": 200,
         "missing": 404,
@@ -159,6 +177,7 @@ async def test_secure_guest_read_capabilities(
         "revoked": 404,
         "expired": 404,
         "paid_expired": 200,
+        "paid_too_old": 404,
     }
 
 

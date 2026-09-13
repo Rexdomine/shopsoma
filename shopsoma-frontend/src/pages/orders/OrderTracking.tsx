@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
-import { ROUTES } from '../../config/constants';
+import { ROUTES, STORAGE_KEYS } from '../../config/constants';
 import {
   orderService,
   type OrderTracking,
@@ -100,7 +100,7 @@ export default function OrderTracking() {
     if (!orderId) return;
 
     // Get JWT token from localStorage (optional for guest users)
-    const token = localStorage.getItem('token');
+    const token = localStorage.getItem(STORAGE_KEYS.ACCESS_TOKEN);
 
     if (token) {
       console.log('[OrderTracking] Connecting to WebSocket with authentication for order:', orderId);
