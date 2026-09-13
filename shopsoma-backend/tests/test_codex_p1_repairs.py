@@ -62,7 +62,9 @@ async def test_authenticated_unpaid_enforced_cancellation_releases_reservation_w
     )
 
     assert cancelled.status_code == 200, cancelled.text
-    assert replay.status_code == 400, replay.text
+    # Cancellation is idempotent: a lost response or client retry returns the
+    # already-committed terminal order without repeating stock side effects.
+    assert replay.status_code == 200, replay.text
     db_session.expire_all()
     persisted_order = await db_session.get(Order, order_id)
     persisted_product = await db_session.get(Product, product_id)

@@ -132,6 +132,11 @@ async def test_rate_crud_normalization_defaults_zero_and_preview(client, admin_u
 @pytest.mark.asyncio
 async def test_preview_excludes_legacy_whitespace_padded_rate_labels(client, db_session):
     db_session.add(ShippingRate(
+        name='Standard', description='Valid baseline', base_rate=Decimal('1500'),
+        country='Nigeria', state='Lagos', min_delivery_days=1, max_delivery_days=3,
+        is_active=True, is_default=True, priority=1,
+    ))
+    db_session.add(ShippingRate(
         name='  Legacy padded  ', description='Historical row', base_rate=Decimal('1200'),
         country='Nigeria', state='Lagos', min_delivery_days=1, max_delivery_days=3,
         is_active=True, is_default=False, priority=99,
@@ -144,8 +149,9 @@ async def test_preview_excludes_legacy_whitespace_padded_rate_labels(client, db_
     )
 
     assert response.status_code == 200, response.text
-    assert all(rate['name'] == rate['name'].strip() for rate in response.json()['available_rates'])
-    assert all(rate['name'] != '  Legacy padded  ' for rate in response.json()['available_rates'])
+    rates = response.json()['available_rates']
+    assert [rate['name'] for rate in rates] == ['Standard']
+    assert all(rate['name'] != '  Legacy padded  ' for rate in rates)
 
 
 @pytest.mark.asyncio

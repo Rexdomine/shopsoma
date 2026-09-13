@@ -24,4 +24,5 @@ def test_order_creation_requires_effective_dhl_for_rate_less_secure_checkout():
     assert "effective_shipping_settings.provider == \"dhl\"" in source
     assert "No shipping available for this location" in source
     assert "Cancellation is intentionally idempotent" in source
-    assert source.index('if order.workflow_cohort == "domestic_checkout_v1":') < source.index("if order.fulfillment_status == FulfillmentStatus.CANCELLED:")
+    cancel_source = source[source.index("async def cancel_order"):]
+    assert cancel_source.index('if order.workflow_cohort == "domestic_checkout_v1":') < cancel_source.index("if order.fulfillment_status == FulfillmentStatus.CANCELLED:")

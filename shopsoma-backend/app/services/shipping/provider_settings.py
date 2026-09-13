@@ -32,8 +32,12 @@ async def shipping_provider_settings(db):
         # already-classified domestic orders can create DHL estimates during a
         # partial rollout. The public preliminary endpoint still remains
         # manual because checkout_estimates_required is false below.
-        provider = "dhl" if dhl_ready else (
-            "shipbubble" if (rows.get("shipping_use_shipbubble") or "").lower() == "true" else "manual"
+        # The legacy ShipBubble flag is an explicit persisted selection and
+        # must take precedence over the implicit DHL capability fallback.
+        provider = (
+            "shipbubble"
+            if (rows.get("shipping_use_shipbubble") or "").lower() == "true"
+            else ("dhl" if dhl_ready else "manual")
         )
     elif provider == "dhl" and not secure_checkout_routing:
         # A rollout rollback must not strand the partial/legacy population on
