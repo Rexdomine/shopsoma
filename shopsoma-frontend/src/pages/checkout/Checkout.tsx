@@ -594,7 +594,9 @@ export default function Checkout() {
         order_id: order.id,
         email: email || 'guest@shopsoma.com',
         payment_gateway: paymentMethod,
-        ...(enforced ? {} : { currency }),
+        // Legacy orders were priced before the current preference could change;
+        // payment initialization must use the server-committed currency.
+        ...(enforced ? {} : { currency: order.currency }),
         callback_url: `${window.location.origin}/payment/verify`,
       }, enforced ? capability : undefined);
       openInitializedPayment(order, paymentData);

@@ -75,6 +75,9 @@ class ShippingRateResponse(ShippingRateBase):
     id: UUID
     created_at: datetime
     updated_at: datetime
+    # Historical rows may contain delivery windows above the current create/update
+    # limit. Keep reads compatible so admins can inspect and repair those rows.
+    max_delivery_days: int = Field(default=5, ge=1)
 
     class Config:
         from_attributes = True

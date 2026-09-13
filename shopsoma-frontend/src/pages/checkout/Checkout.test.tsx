@@ -258,6 +258,24 @@ describe('Checkout M5 sequencing and recovery', () => {
     }, undefined);
   });
 
+  it('initializes a raced legacy order with its committed currency', async () => {
+    mocks.getShippingProviderSettings.mockResolvedValue({ provider: 'dhl', checkout_estimates_required: true });
+    mocks.createOrder.mockResolvedValueOnce({ ...order, currency: 'USD', workflow_cohort: 'legacy_pre_bridge' });
+
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getByRole('radio', { name: /Stripe/ }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Purchase' })[0]);
+    fireEvent.click(await screen.findByRole('button', { name: 'Confirm total and continue to payment' }));
+
+    await waitFor(() => expect(mocks.initializePayment).toHaveBeenCalledTimes(1));
+    expect(mocks.initializePayment).toHaveBeenCalledWith(expect.objectContaining({
+      order_id: 'order-1',
+      currency: 'USD',
+    }), undefined);
+  });
+
   it('retries payment for the committed legacy order without creating a replacement', async () => {
     mocks.getShippingProviderSettings.mockResolvedValue({ provider: 'dhl', checkout_estimates_required: true });
     mocks.createOrder.mockResolvedValueOnce({ ...order, workflow_cohort: 'legacy_pre_bridge' });
