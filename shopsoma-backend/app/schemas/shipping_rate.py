@@ -75,6 +75,9 @@ class ShippingRateResponse(ShippingRateBase):
     id: UUID
     created_at: datetime
     updated_at: datetime
+    # Historical rows may contain whitespace-only names. Keep reads compatible
+    # so admins can inspect and repair those rows; write schemas stay strict.
+    name: str = Field(default="", max_length=100)
     # Historical rows may contain blank countries. Keep reads compatible so
     # admins can inspect and repair those rows; write schemas stay strict.
     country: str = Field(default="Nigeria", max_length=100)

@@ -753,6 +753,13 @@ export default function Checkout() {
       setSelectedShippingRateId('');
       setStep('address');
     } catch (error: any) {
+      const terminalAuthorization = error.response?.status === 404 || error.response?.status === 410;
+      if (terminalAuthorization) {
+        discardExpiredCheckout();
+        setOrderReview(null);
+        setSelectedShippingRateId('');
+        setStep('address');
+      }
       alert(error.response?.data?.detail || error.message || 'We could not safely restart checkout. Please retry.');
     } finally {
       setIsCreatingOrder(false);

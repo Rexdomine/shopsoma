@@ -550,6 +550,19 @@ describe('Checkout M5 sequencing and recovery', () => {
     expect(mocks.createOrder).toHaveBeenCalledTimes(1);
   });
 
+  it.each([404, 410])('clears expired checkout state when restarting returns %s', async (status) => {
+    mocks.createCheckoutEstimate.mockRejectedValueOnce({ response: { status: 503, data: { detail: 'temporarily unavailable' } } });
+    await reachPaymentStep();
+
+    mocks.cancelOrder.mockRejectedValueOnce({ response: { status, data: { detail: 'Checkout access expired' } } });
+    fireEvent.click(await screen.findByRole('button', { name: 'Start again with another address' }));
+
+    await waitFor(() => expect(mocks.cancelOrder).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole('heading', { name: 'Checkout' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Continue' })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: 'Retry delivery options' })).not.toBeInTheDocument();
+  });
+
   it('keeps a 503 payment initialization visibly incomplete and retryable', async () => {
     mocks.initializePayment.mockRejectedValueOnce({ response: { status: 503 } });
     await reachPaymentStep();

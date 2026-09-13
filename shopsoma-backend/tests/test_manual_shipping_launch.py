@@ -57,6 +57,20 @@ def test_shipping_rate_response_keeps_legacy_blank_country_readable():
         ShippingRateCreate(**rate_payload(country='   '))
 
 
+def test_shipping_rate_response_keeps_legacy_blank_name_readable():
+    response = ShippingRateResponse.model_validate({
+        'id': uuid4(), 'name': '   ', 'description': None,
+        'base_rate': Decimal('0.00'), 'country': 'Nigeria', 'state': None,
+        'min_order_value': Decimal('0.00'), 'max_order_value': None,
+        'min_delivery_days': 1, 'max_delivery_days': 5,
+        'is_active': True, 'is_default': False, 'priority': 0,
+        'created_at': '2026-01-01T00:00:00Z', 'updated_at': '2026-01-01T00:00:00Z',
+    })
+    assert response.name == ''
+    with pytest.raises(ValidationError):
+        ShippingRateCreate(**rate_payload(name='   '))
+
+
 @pytest.mark.asyncio
 async def test_admin_provider_persistence_readiness_and_legacy(client, admin_user, customer_user, db_session):
     for headers in ({}, customer_user['headers']):
