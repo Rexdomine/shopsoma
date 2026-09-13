@@ -133,3 +133,40 @@ it('restores preview constraints and renders returned price and ETA', async () =
   fireEvent.click(screen.getByRole('button', { name: 'Preview shipping' }));
   expect(await screen.findByText(/NGN 1250\.00 · 3–6 business days/)).toBeInTheDocument();
 });
+
+it('marks an empty exchange rate as dirty so it cannot silently bypass discard protection', async () => {
+  render(<AdminSettings />);
+  const input = await screen.findByRole('spinbutton');
+  fireEvent.change(input, { target: { value: '' } });
+  expect(screen.getByText('Draft edits pending')).toBeInTheDocument();
+  vi.spyOn(window, 'confirm').mockReturnValue(false);
+  fireEvent.click(screen.getByRole('button', { name: /Manual rates/ }));
+  expect(screen.getByRole('heading', { name: 'Exchange rate' })).toBeInTheDocument();
+  expect(window.confirm).toHaveBeenCalled();
+});
+
+it('routes browser hash navigation through the guarded transition', async () => {
+  render(<AdminSettings />);
+  await screen.findByRole('heading', { name: 'Exchange rate' });
+  fireEvent.change(screen.getByRole('spinbutton'), { target: { value: '1700' } });
+  vi.spyOn(window, 'confirm').mockReturnValue(false);
+  window.history.pushState(null, '', '#shipping');
+  window.dispatchEvent(new HashChangeEvent('hashchange'));
+  expect(screen.getByRole('heading', { name: 'Exchange rate' })).toBeInTheDocument();
+  expect(window.confirm).toHaveBeenCalled();
+});
+
+it('blocks category transitions while any settings save is in flight', async () => {
+  let resolveSave!: (value: any) => void;
+  const save = new Promise<any>((resolve) => { resolveSave = resolve; });
+  const { updateExchangeRate } = await import('../../services/settingsService');
+  vi.mocked(updateExchangeRate).mockReturnValue(save);
+  render(<AdminSettings />);
+  const input = await screen.findByRole('spinbutton');
+  fireEvent.change(input, { target: { value: '1700' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+  fireEvent.click(screen.getByRole('button', { name: /Manual rates/ }));
+  expect(screen.getByRole('heading', { name: 'Exchange rate' })).toBeInTheDocument();
+  expect(screen.getByText('Please wait for the current save to finish before switching categories.')).toBeInTheDocument();
+  resolveSave({ rate: 1700 });
+});
