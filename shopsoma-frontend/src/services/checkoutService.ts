@@ -53,10 +53,15 @@ export interface CreateAddressData {
 export interface ShippingRate {
   id: string;
   name: string;
-  description: string;
+  description: string | null;
   base_rate: number;
   country: string;
-  state?: string;
+  state?: string | null;
+  min_order_value?: number | null;
+  max_order_value?: number | null;
+  is_active?: boolean;
+  is_default?: boolean;
+  priority?: number;
   min_delivery_days: number;
   max_delivery_days: number;
 }

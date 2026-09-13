@@ -8,7 +8,7 @@ from uuid import NAMESPACE_URL, uuid5
 from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
-from sqlalchemy import or_, select, text
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import aliased, selectinload
 
@@ -22,7 +22,8 @@ from app.models.order import Order, OrderItem
 from app.models.product import Product
 from app.models.product_logistics_profile import ProductLogisticsProfile
 from app.models.setting import Setting
-from app.models.shipping_rate import ShippingRate
+from app.services.shipping.provider_settings import shipping_provider_settings
+from app.services.shipping.manual_rates import manual_rates_query
 from app.models.fulfillment_cohort import CohortItemAllocation, FulfillmentCohort
 from app.models.fulfillment_hub import FulfillmentHub
 from app.models.package_custody import (
@@ -755,8 +756,17 @@ async def create_estimate(
     ).scalar_one_or_none()
     destination_hash, snapshot_hash = order_snapshot(order)
 
+    provider_config = await shipping_provider_settings(db)
+    provider = provider_config.provider
+    if not existing and not provider_config.readiness[provider]:
+        raise HTTPException(status_code=503, detail=f"{provider} is not available for secure checkout")
+    # Explicit manual overrides the environment; absent selection preserves
+    # existing gated DHL behavior. Recovery of issued estimates is unchanged.
     capabilities = domestic_shipping_capabilities(settings)
-    dhl_provider_enabled = capabilities.checkout_enabled
+    dhl_provider_enabled = (
+        existing.source_kind == "sandbox_normalized" if existing
+        else provider == "dhl" and capabilities.checkout_enabled
+    )
     planned_ship_date = _planned_ship_date() if dhl_provider_enabled else None
     if not dhl_provider_enabled:
         # Static refreshes must serialize on the checkout aggregate too. The
@@ -894,16 +904,7 @@ async def create_estimate(
     rates = (
         (
             await db.execute(
-                select(ShippingRate)
-                .where(
-                    ShippingRate.is_active.is_(True),
-                    ShippingRate.country == order.shipping_address.country,
-                    or_(
-                        ShippingRate.state == order.shipping_address.state,
-                        ShippingRate.state.is_(None),
-                    ),
-                )
-                .order_by(ShippingRate.priority, ShippingRate.id)
+                manual_rates_query(order.shipping_address.country, order.shipping_address.state)
             )
         )
         .scalars()

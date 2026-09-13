@@ -3,12 +3,12 @@ import {
   Save,
   DollarSign,
   Loader2,
-  CheckCircle2,
   AlertCircle,
-  Truck,
   Database,
   RefreshCw,
 } from 'lucide-react';
+import ManualShippingSettings from '../../components/admin/ManualShippingSettings';
+import type { ShippingProviderSettings } from '../../services/settingsService';
 import AdminSidebar from '../../components/admin/AdminSidebar';
 import {
   getExchangeRate,
@@ -42,7 +42,7 @@ export default function AdminSettings() {
   const [hasChanges, setHasChanges] = useState(false);
 
   // ShipBubble settings state
-  const [useShipBubble, setUseShipBubble] = useState(false);
+  const [shippingProvider, setShippingProvider] = useState<ShippingProviderSettings | null>(null);
   const [savingShipping, setSavingShipping] = useState(false);
   const [payoutHold, setPayoutHold] = useState<PayoutHoldSettings | null>(null);
   const [payoutHoldInput, setPayoutHoldInput] = useState('');
@@ -87,7 +87,7 @@ export default function AdminSettings() {
       ]);
       setExchangeRate(rate);
       setRateInput(rate.rate.toString());
-      setUseShipBubble(shipping.use_shipbubble);
+      setShippingProvider(shipping);
       setPayoutHold(hold);
       setPayoutHoldInput(hold.hold_days.toString());
       setCommissionSettings(commission);
@@ -154,13 +154,13 @@ export default function AdminSettings() {
     }
   };
 
-  const handleToggleShipBubble = async (enabled: boolean) => {
+  const handleShippingProvider = async (provider: ShippingProviderSettings['provider']) => {
     try {
       setSavingShipping(true);
-      const updated = await updateShippingProviderSettings(enabled);
-      setUseShipBubble(updated.use_shipbubble);
+      const updated = await updateShippingProviderSettings(provider);
+      setShippingProvider(updated);
       success(
-        `Shipping provider ${enabled ? 'switched to ShipBubble' : 'switched to local rates'}`,
+        `Shipping provider saved: ${updated.provider}`,
         'Success'
       );
     } catch (err: any) {
@@ -169,8 +169,6 @@ export default function AdminSettings() {
         err.response?.data?.detail || 'Failed to update shipping provider',
         'Error'
       );
-      // Revert toggle on error
-      setUseShipBubble(!enabled);
     } finally {
       setSavingShipping(false);
     }
@@ -487,109 +485,22 @@ export default function AdminSettings() {
             </div>
           </div>
 
-          {/* Shipping Provider Settings Card */}
-          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-            <div className="border-b border-gray-200 px-6 py-4">
-              <div className="flex items-center gap-3">
-                <div className="h-10 w-10 rounded-xl bg-[#105E53] text-white flex items-center justify-center">
-                  <Truck className="w-5 h-5" />
-                </div>
-                <div>
-                  <h2 className="text-lg font-semibold text-gray-900">Shipping Provider</h2>
-                  <p className="text-sm text-gray-600">Configure shipping rate calculation method</p>
-                </div>
-              </div>
-            </div>
-
-            <div className="p-6 space-y-6">
-              {/* Toggle Switch */}
-              <div className="flex items-center justify-between">
-                <div className="flex-1">
-                  <label htmlFor="shipbubble-toggle" className="block text-sm font-medium text-gray-900 mb-1">
-                    Use ShipBubble API
-                  </label>
-                  <p className="text-sm text-gray-600">
-                    Get real-time shipping rates from ShipBubble couriers
-                  </p>
-                </div>
-
-                <button
-                  id="shipbubble-toggle"
-                  type="button"
-                  role="switch"
-                  aria-checked={useShipBubble}
-                  disabled={savingShipping}
-                  onClick={() => handleToggleShipBubble(!useShipBubble)}
-                  className={`
-                    relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent
-                    transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-[#105E53] focus:ring-offset-2
-                    disabled:opacity-50 disabled:cursor-not-allowed
-                    ${useShipBubble ? 'bg-[#105E53]' : 'bg-gray-200'}
-                  `}
-                >
-                  <span className="sr-only">Use ShipBubble</span>
-                  <span
-                    aria-hidden="true"
-                    className={`
-                      pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0
-                      transition duration-200 ease-in-out
-                      ${useShipBubble ? 'translate-x-5' : 'translate-x-0'}
-                    `}
-                  >
-                    {savingShipping && (
-                      <Loader2 className="h-5 w-5 animate-spin text-[#105E53]" />
-                    )}
-                  </span>
-                </button>
-              </div>
-
-              {/* Status Display */}
-              <div className={`rounded-lg p-4 border ${
-                useShipBubble
-                  ? 'bg-green-50 border-green-200'
-                  : 'bg-gray-50 border-gray-200'
-              }`}>
-                <div className="flex items-start gap-3">
-                  {useShipBubble ? (
-                    <CheckCircle2 className="w-5 h-5 text-green-600 mt-0.5 flex-shrink-0" />
-                  ) : (
-                    <AlertCircle className="w-5 h-5 text-gray-600 mt-0.5 flex-shrink-0" />
-                  )}
-                  <div className="flex-1">
-                    <p className={`text-sm font-semibold mb-1 ${
-                      useShipBubble ? 'text-green-900' : 'text-gray-900'
-                    }`}>
-                      Current Provider: {useShipBubble ? 'ShipBubble API' : 'Local Database Rates'}
-                    </p>
-                    <p className={`text-sm ${
-                      useShipBubble ? 'text-green-800' : 'text-gray-700'
-                    }`}>
-                      {useShipBubble
-                        ? 'Using real-time courier rates from ShipBubble. Rates are fetched dynamically during checkout.'
-                        : 'Using static rates from the database. Rates are based on predefined zones and weight ranges.'
-                      }
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              {/* Info Box */}
-              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                <div className="flex items-start gap-3">
-                  <AlertCircle className="w-5 h-5 text-blue-600 mt-0.5 flex-shrink-0" />
-                  <div>
-                    <p className="text-sm font-semibold text-blue-900 mb-1">About Shipping Providers</p>
-                    <ul className="text-sm text-blue-800 space-y-1">
-                      <li><strong>ShipBubble API:</strong> Get real-time rates from multiple couriers (DHL, GIG Logistics, etc.). Requires active API key.</li>
-                      <li><strong>Local Rates:</strong> Use predefined shipping rates from your database. Good for testing or custom pricing.</li>
-                      <li>• Changes take effect immediately at checkout</li>
-                      <li>• ShipBubble automatically falls back to local rates if API fails</li>
-                    </ul>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
+          <section className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6 space-y-4">
+            <h2 className="text-lg font-semibold">Shipping Provider</h2>
+            <label className="block">Current provider
+              <select aria-label="Shipping provider" value={shippingProvider?.provider ?? ''} disabled={savingShipping || !shippingProvider}
+                onChange={event => void handleShippingProvider(event.target.value as ShippingProviderSettings['provider'])}
+                className="block mt-2 rounded-lg border border-gray-300 p-2">
+                {!shippingProvider && <option value="">Loading…</option>}
+                <option value="manual">Manual rates</option>
+                <option value="shipbubble" disabled={!shippingProvider?.readiness.shipbubble}>ShipBubble — unavailable for secure checkout</option>
+                <option value="dhl" disabled={!shippingProvider?.readiness.dhl}>DHL — {shippingProvider?.readiness.dhl ? 'sandbox ready' : 'pending / not enabled'}</option>
+              </select>
+            </label>
+            {savingShipping && <p role="status">Saving provider…</p>}
+            <p className="text-sm text-gray-600">Manual rates make no carrier calls. DHL remains subject to existing sandbox gates. Provider changes apply to new quotes; issued quotes and payment recovery keep their saved terms.</p>
+          </section>
+          <ManualShippingSettings />
 
           {/* Payout Hold Settings Card */}
           <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">

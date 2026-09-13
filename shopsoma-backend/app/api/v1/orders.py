@@ -3,7 +3,7 @@
 from typing import Optional, List, Dict
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update, and_, or_, func
+from sqlalchemy import select, update, func
 from sqlalchemy.orm import selectinload
 from uuid import UUID, uuid4, uuid5
 from datetime import datetime, timedelta, timezone
@@ -25,7 +25,8 @@ from app.models.product import (
 )
 from app.models.payment import Payment
 from app.models.address import Address
-from app.models.shipping_rate import ShippingRate
+from app.services.shipping.manual_rates import manual_rates_query
+from app.services.shipping.provider_settings import require_manual_order_pricing
 from app.models.vendor import Vendor
 from app.models.fulfillment_cohort import (
     CohortItemAllocation,
@@ -79,7 +80,7 @@ def _domestic_checkout_is_enforced(
     # must remain on the legacy path rather than exposing the bridge there.
     if settings.ENVIRONMENT == "production" or settings.DHL_ENVIRONMENT != "sandbox":
         return False
-    if country.casefold() != "nigeria" or currency not in SUPPORTED_ORDER_CURRENCIES:
+    if country.strip().casefold() not in {"nigeria", "ng"} or currency not in SUPPORTED_ORDER_CURRENCIES:
         return False
     if customer_id in settings.domestic_checkout_cohort_ids:
         return True
@@ -569,6 +570,8 @@ async def review_order(
             detail=f"Minimum order amount is {checkout_currency} {minimum_order_amount} equivalent. Please add more items before checkout.",
         )
 
+    await require_manual_order_pricing(db)
+
     # Calculate shipping
     # Use either saved address or guest address for shipping calculation
     shipping_country = (
@@ -578,33 +581,12 @@ async def review_order(
         shipping_address.state if shipping_address else guest_shipping_state
     )
 
-    shipping_query = (
-        select(ShippingRate)
-        .where(
-            and_(
-                ShippingRate.is_active == True,
-                ShippingRate.country == shipping_country,
-                or_(ShippingRate.state == shipping_state, ShippingRate.state == None),
-            )
-        )
-        .order_by(ShippingRate.priority.asc())
-    )
-
-    shipping_result = await db.execute(shipping_query)
-    shipping_rates = shipping_result.scalars().all()
-
-    # Fallback: if no rates match filters but a specific rate was selected, try loading it directly
-    if not shipping_rates and review_data.shipping_rate_id:
-        direct_rate_query = select(ShippingRate).where(
-            and_(
-                ShippingRate.id == review_data.shipping_rate_id,
-                ShippingRate.is_active == True,
-            )
-        )
-        direct_result = await db.execute(direct_rate_query)
-        direct_rate = direct_result.scalar_one_or_none()
-        if direct_rate:
-            shipping_rates = [direct_rate]
+    shipping_rates = list((await db.scalars(manual_rates_query(shipping_country, shipping_state))).all())
+    shipping_rates = [rate for rate in shipping_rates if (
+        rate.min_order_value is None or _convert_currency(_as_decimal(rate.min_order_value), "NGN", checkout_currency, usd_to_ngn_rate) <= subtotal
+    ) and (
+        rate.max_order_value is None or _convert_currency(_as_decimal(rate.max_order_value), "NGN", checkout_currency, usd_to_ngn_rate) >= subtotal
+    )]
 
     if not shipping_rates:
         raise HTTPException(
@@ -614,6 +596,8 @@ async def review_order(
 
     selected_rate = next((r for r in shipping_rates if r.is_default), shipping_rates[0])
     if review_data.shipping_rate_id:
+        if not any(r.id == review_data.shipping_rate_id for r in shipping_rates):
+            raise HTTPException(status_code=422, detail="Selected shipping rate is not eligible")
         selected_rate = (
             next(
                 (r for r in shipping_rates if r.id == review_data.shipping_rate_id),
@@ -901,36 +885,16 @@ async def create_order(
             detail=f"Minimum order amount is {checkout_currency} {minimum_order_amount} equivalent. Please add more items before checkout.",
         )
 
+    if not enforced_checkout:
+        await require_manual_order_pricing(db)
+
     # Get shipping rate
-    shipping_query = (
-        select(ShippingRate)
-        .where(
-            and_(
-                ShippingRate.is_active == True,
-                ShippingRate.country == shipping_address.country,
-                or_(
-                    ShippingRate.state == shipping_address.state,
-                    ShippingRate.state == None,
-                ),
-            )
-        )
-        .order_by(ShippingRate.priority.asc())
-    )
-
-    shipping_result = await db.execute(shipping_query)
-    shipping_rates = shipping_result.scalars().all()
-
-    if not shipping_rates and order_data.shipping_rate_id:
-        direct_rate_query = select(ShippingRate).where(
-            and_(
-                ShippingRate.id == order_data.shipping_rate_id,
-                ShippingRate.is_active == True,
-            )
-        )
-        direct_result = await db.execute(direct_rate_query)
-        direct_rate = direct_result.scalar_one_or_none()
-        if direct_rate:
-            shipping_rates = [direct_rate]
+    shipping_rates = list((await db.scalars(manual_rates_query(shipping_address.country, shipping_address.state))).all())
+    shipping_rates = [rate for rate in shipping_rates if (
+        rate.min_order_value is None or _convert_currency(_as_decimal(rate.min_order_value), "NGN", checkout_currency, usd_to_ngn_rate) <= subtotal
+    ) and (
+        rate.max_order_value is None or _convert_currency(_as_decimal(rate.max_order_value), "NGN", checkout_currency, usd_to_ngn_rate) >= subtotal
+    )]
 
     if not shipping_rates and not (
         enforced_checkout
@@ -951,6 +915,8 @@ async def create_order(
             (r for r in shipping_rates if r.is_default), shipping_rates[0]
         )
         if order_data.shipping_rate_id:
+            if not any(r.id == order_data.shipping_rate_id for r in shipping_rates):
+                raise HTTPException(status_code=422, detail="Selected shipping rate is not eligible")
             selected_rate = (
                 next(
                     (r for r in shipping_rates if r.id == order_data.shipping_rate_id),

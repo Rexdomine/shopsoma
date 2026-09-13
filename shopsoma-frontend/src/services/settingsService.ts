@@ -23,11 +23,15 @@ export interface ExchangeRateUpdate {
 }
 
 export interface ShippingProviderSettings {
+  provider: 'manual' | 'shipbubble' | 'dhl';
   use_shipbubble: boolean;
+  readiness: Record<'manual' | 'shipbubble' | 'dhl', boolean>;
+  checkout_estimates_required: boolean;
 }
 
 export interface ShippingProviderUpdate {
-  use_shipbubble: boolean;
+  provider: 'manual' | 'shipbubble' | 'dhl';
+  use_shipbubble?: boolean;
 }
 
 export interface PayoutHoldSettings {
@@ -114,11 +118,14 @@ export const getShippingProviderSettings = async (): Promise<ShippingProviderSet
  * Update shipping provider settings (admin only)
  */
 export const updateShippingProviderSettings = async (
-  useShipBubble: boolean
+  providerOrLegacy: 'manual' | 'shipbubble' | 'dhl' | boolean
 ): Promise<ShippingProviderSettings> => {
+  const provider = typeof providerOrLegacy === 'boolean'
+    ? (providerOrLegacy ? 'shipbubble' : 'manual')
+    : providerOrLegacy;
   const response = await api.put<ShippingProviderSettings>(
     '/settings/shipping-provider',
-    { use_shipbubble: useShipBubble }
+    { provider }
   );
   return response.data;
 };
@@ -209,3 +216,31 @@ export const syncRenderDatabase = async (): Promise<DatabaseSyncResponse> => {
   );
   return response.data;
 };
+
+export interface ManualShippingRate {
+  id: string;
+  name: string;
+  description: string | null;
+  country: string;
+  state: string | null;
+  base_rate: number;
+  min_order_value: number | null;
+  max_order_value: number | null;
+  min_delivery_days: number;
+  max_delivery_days: number;
+  is_active: boolean;
+  is_default: boolean;
+  priority: number;
+}
+export type ManualShippingRateInput = Omit<ManualShippingRate, 'id'>;
+export const getManualShippingRates = async (): Promise<ManualShippingRate[]> =>
+  (await api.get<{ shipping_rates: ManualShippingRate[] }>('/shipping-rates')).data.shipping_rates;
+export const saveManualShippingRate = async (data: ManualShippingRateInput, id?: string): Promise<ManualShippingRate> =>
+  (id ? await api.put<ManualShippingRate>(`/shipping-rates/${id}`, data) : await api.post<ManualShippingRate>('/shipping-rates', data)).data;
+export const deactivateManualShippingRate = async (id: string): Promise<void> => {
+  await api.delete(`/shipping-rates/${id}`);
+};
+export const setDefaultManualShippingRate = async (id: string): Promise<ManualShippingRate> =>
+  (await api.post<ManualShippingRate>(`/shipping-rates/${id}/set-default`)).data;
+export const previewManualShippingRates = async (data: { country: string; state: string; order_value: number }): Promise<{ available_rates: ManualShippingRate[] }> =>
+  (await api.post('/shipping-rates/calculate', data)).data;
