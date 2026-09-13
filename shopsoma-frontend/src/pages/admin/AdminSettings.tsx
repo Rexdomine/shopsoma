@@ -345,7 +345,9 @@ export default function AdminSettings() {
   if (loading) {
     return (
       <div className="flex min-h-screen bg-[var(--color-page-bg)]">
-        <AdminSidebar activePrimary="settings" />
+        <div className="hidden md:flex">
+          <AdminSidebar activePrimary="settings" />
+        </div>
         <div className="flex-1 flex items-center justify-center">
           <div className="flex items-center gap-3 text-gray-600">
             <Loader2 className="h-6 w-6 animate-spin" />
@@ -362,7 +364,9 @@ export default function AdminSettings() {
 
   return (
     <div className="flex min-h-screen bg-[var(--color-page-bg)]">
-      <AdminSidebar activePrimary="settings" />
+      <div className="hidden md:flex">
+        <AdminSidebar activePrimary="settings" />
+      </div>
 
       <div className="flex-1 overflow-auto">
         <div className="mx-auto w-full max-w-[1440px] px-4 py-6 sm:px-6 lg:px-8">
