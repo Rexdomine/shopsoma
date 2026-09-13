@@ -18,20 +18,28 @@ async def shipping_provider_settings(db):
         settings.ENVIRONMENT != "production"
         and domestic_shipping_capabilities(settings).checkout_enabled
     )
+    secure_checkout_routing = (
+        settings.DOMESTIC_CHECKOUT_PREREQUISITES_ENABLED
+        and settings.DOMESTIC_CHECKOUT_COHORT_PERCENTAGE == 100
+        and settings.ENVIRONMENT != "production"
+        and settings.DHL_ENVIRONMENT == "sandbox"
+    )
     provider = rows.get("shipping_provider")
     if not provider:
         # Before the exclusive setting existed the secure route used the DHL
         # capability gate. Preserve that behavior without activating new gates.
-        provider = "dhl" if dhl_ready else (
+        provider = "dhl" if dhl_ready and secure_checkout_routing else (
             "shipbubble" if (rows.get("shipping_use_shipbubble") or "").lower() == "true" else "manual"
         )
+    elif provider == "dhl" and not secure_checkout_routing:
+        # A rollout rollback must not strand the partial/legacy population on
+        # the provider-only preview endpoint. Resolve the stale persisted
+        # selection to the safe manual preview mode until full routing returns.
+        provider = "manual"
     return ShippingProviderSettings(
         provider=provider,
         checkout_estimates_required=(
-            settings.DOMESTIC_CHECKOUT_PREREQUISITES_ENABLED
-            and settings.DOMESTIC_CHECKOUT_COHORT_PERCENTAGE == 100
-            and settings.ENVIRONMENT != "production"
-            and settings.DHL_ENVIRONMENT == "sandbox"
+            secure_checkout_routing
         ),
         use_shipbubble=provider == "shipbubble",
         readiness={"manual": True, "shipbubble": False, "dhl": dhl_ready},
@@ -48,5 +56,15 @@ async def require_manual_order_pricing(db):
     provider = rows.get("shipping_provider") or (
         "shipbubble" if (rows.get("shipping_use_shipbubble") or "").lower() == "true" else "manual"
     )
+    secure_checkout_routing = (
+        settings.DOMESTIC_CHECKOUT_PREREQUISITES_ENABLED
+        and settings.DOMESTIC_CHECKOUT_COHORT_PERCENTAGE == 100
+        and settings.ENVIRONMENT != "production"
+        and settings.DHL_ENVIRONMENT == "sandbox"
+    )
+    if provider == "dhl" and not secure_checkout_routing:
+        # Match shipping_provider_settings(): a stale DHL selection is
+        # effectively manual while the rollout is partial or rolled back.
+        provider = "manual"
     if provider != "manual":
         raise HTTPException(status_code=503, detail="Use secure checkout delivery estimates; manual pricing requires manual mode")

@@ -9,6 +9,7 @@ from fastapi import HTTPException
 from sqlalchemy import select, text
 
 from app.core.config import settings
+from app.models.order import PaymentStatus
 from app.models.order_guest_capability import OrderCurrentOwner, OrderGuestCapability
 
 _SCOPE = "checkout_prerequisites"
@@ -62,8 +63,10 @@ async def issue_checkout_capability(db, *, order) -> str:
     return token
 
 
-async def authorize_checkout_actor(db, *, order, current_user, token):
-    """Authorize an authenticated owner or an order-scoped guest capability."""
+async def authorize_checkout_actor(
+    db, *, order, current_user, token, allow_expired_order_read=False
+):
+    """Authorize an owner or capability, with a paid-order read lifecycle."""
     if order.workflow_cohort in {"legacy_ambiguous_quarantined", "legacy_pre_bridge"}:
         raise HTTPException(status_code=404, detail="checkout not available")
     owner = (
@@ -118,7 +121,14 @@ async def authorize_checkout_actor(db, *, order, current_user, token):
         or capability.revoked_at is not None
         or capability.replaced_by_id is not None
         or capability.claimed_by_user_id is not None
-        or capability.expires_at <= database_now
+        or (
+            capability.expires_at <= database_now
+            and not (
+                allow_expired_order_read
+                and capability.scope == _SCOPE
+                and order.payment_status == PaymentStatus.PAID
+            )
+        )
     ):
         raise HTTPException(status_code=404, detail="checkout not available")
     return "guest_capability", str(capability.id)

@@ -1401,7 +1401,11 @@ async def _authorize_order_read(db, *, order, current_user, capability):
         "legacy_ambiguous_quarantined",
     }:
         await authorize_checkout_actor(
-            db, order=order, current_user=current_user, token=capability
+            db,
+            order=order,
+            current_user=current_user,
+            token=capability,
+            allow_expired_order_read=True,
         )
         return
     if current_user:

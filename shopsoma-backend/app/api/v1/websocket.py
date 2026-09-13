@@ -11,7 +11,7 @@ from app.core.database import get_db
 from app.models.order import Order
 from app.services.websocket_manager import get_connection_manager
 from app.api.dependencies import get_current_user_from_token
-from app.models.user import User
+
 
 logger = logging.getLogger(__name__)
 
@@ -35,9 +35,9 @@ async def websocket_order_updates(
        - For logged-in users
        - Verifies user owns the order
 
-    2. Guest: ws://localhost:8000/api/v1/ws/orders/{order_id}
-       - For guest users tracking by order number
-       - Only verifies order exists
+    2. Guest: not supported. Guest tracking uses the capability-protected
+       REST endpoint and bounded polling; capabilities must never be put in a
+       WebSocket URL.
 
     Messages sent to client:
     {
@@ -64,10 +64,11 @@ async def websocket_order_updates(
                 logger.info(f"[WebSocket] Authenticated user {user.email} connecting to order {order_id}")
             except Exception as e:
                 logger.warning(f"[WebSocket] Token authentication failed: {str(e)}")
-                # Don't fail here - allow guest access
-                logger.info(f"[WebSocket] Falling back to guest access for order {order_id}")
+                await websocket.close(code=1008, reason="Authentication required")
+                return
         else:
-            logger.info(f"[WebSocket] Guest user connecting to order {order_id}")
+            await websocket.close(code=1008, reason="Authentication required")
+            return
 
         # Verify order exists
         order_query = select(Order).where(Order.id == order_id)
@@ -79,12 +80,11 @@ async def websocket_order_updates(
             await websocket.close(code=1008, reason="Order not found")
             return
 
-        # If authenticated, verify user owns this order
-        if is_authenticated and user:
-            if order.customer_id != user.id:
-                logger.warning(f"[WebSocket] User {user.id} does not own order {order_id}")
-                await websocket.close(code=1008, reason="Unauthorized")
-                return
+        # Authenticated sockets are limited to the canonical order owner.
+        if order.customer_id != user.id:
+            logger.warning(f"[WebSocket] User {user.id} does not own order {order_id}")
+            await websocket.close(code=1008, reason="Unauthorized")
+            return
 
         # Accept connection
         await manager.connect(websocket, str(order_id))

@@ -12,6 +12,7 @@ from sqlalchemy import select, text, func
 from app.core.config import settings
 from app.core.security import create_access_token
 from app.models.user import User, UserRole
+from app.models.order import Order, PaymentStatus
 from app.models.order_guest_capability import OrderGuestCapability, OrderCurrentOwner
 from tests.test_checkout_estimate_api import _domestic_catalogue, _guest_order_payload
 
@@ -142,6 +143,12 @@ async def test_secure_guest_read_capabilities(
     actual["expired"] = (
         await client.get(url, headers={"X-ShopSoma-Checkout-Capability": expired})
     ).status_code
+    paid_order = await db_session.get(Order, uuid.UUID(payload["id"]))
+    paid_order.payment_status = PaymentStatus.PAID
+    await db_session.commit()
+    actual["paid_expired"] = (
+        await client.get(url, headers={"X-ShopSoma-Checkout-Capability": expired})
+    ).status_code
     assert actual == {
         "valid": 200,
         "missing": 404,
@@ -151,6 +158,7 @@ async def test_secure_guest_read_capabilities(
         "admin": 200,
         "revoked": 404,
         "expired": 404,
+        "paid_expired": 200,
     }
 
 

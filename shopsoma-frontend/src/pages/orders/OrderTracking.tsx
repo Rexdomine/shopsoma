@@ -175,14 +175,21 @@ export default function OrderTracking() {
       });
     };
 
-    // Connect to WebSocket
-    try {
-      websocketService.connect(orderId, token, handleOrderUpdate);
-      setWsError(null);
-      console.log('[OrderTracking] WebSocket connection initiated');
-    } catch (error) {
-      console.error('[OrderTracking] WebSocket connection error:', error);
-      setWsError('WebSocket connection failed');
+    // Guest capabilities are header-only and cannot be sent by the browser
+    // WebSocket API without putting them in the URL. Use protected REST
+    // polling for guests; only authenticated users open a JWT socket.
+    if (token) {
+      try {
+        websocketService.connect(orderId, token, handleOrderUpdate);
+        setWsError(null);
+        console.log('[OrderTracking] WebSocket connection initiated');
+      } catch (error) {
+        console.error('[OrderTracking] WebSocket connection error:', error);
+        setWsError('WebSocket connection failed');
+        setIsConnectedToWebSocket(false);
+      }
+    } else {
+      setWsError('Guest tracking uses protected polling');
       setIsConnectedToWebSocket(false);
     }
 

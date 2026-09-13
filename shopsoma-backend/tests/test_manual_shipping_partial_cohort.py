@@ -20,7 +20,7 @@ from app.services.checkout import estimates
     "key,value,expected_status",
     [
         (None, None, 200),
-        ("shipping_provider", "dhl", 503),
+        ("shipping_provider", "dhl", 200),
         ("shipping_provider", "manual", 200),
         ("shipping_provider", "shipbubble", 503),
         ("shipping_use_shipbubble", "true", 503),
@@ -67,8 +67,8 @@ async def test_public_preview_with_ready_dhl_partial_cohort(
     assert config.status_code == 200, config.text
     assert config.json()["readiness"]["dhl"] is True
     assert config.json()["checkout_estimates_required"] is False
-    if key is None:
-        assert config.json()["provider"] == "dhl"
+    expected_provider = "shipbubble" if key == "shipping_use_shipbubble" or value == "shipbubble" else "manual"
+    assert config.json()["provider"] == expected_provider
 
     headers = {} if audience == "guest" else customer_user["headers"]
     response = await client.post(
