@@ -265,3 +265,46 @@ async def test_claimed_order_reads_use_canonical_owner(
         404,
         404,
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cohort", [True], indirect=True)
+async def test_claimed_guest_order_cancellation_uses_canonical_owner(
+    client, db_session, vendor_user, customer_user, cohort
+):
+    """A claimant can cancel after the guest capability is revoked."""
+    _, product = await _domestic_catalogue(db_session, vendor_user)
+    created = await client.post(
+        "/api/v1/orders",
+        json=_guest_order_payload(product.id, "claimed-cancel@example.test"),
+    )
+    assert created.status_code == 201, created.text
+    payload = created.json()
+    order_id = uuid.UUID(payload["id"])
+    now = await db_session.scalar(select(text("clock_timestamp()")))
+    claim = OrderGuestCapability(
+        order_id=order_id,
+        original_customer_id=uuid.UUID(payload["customer_id"]),
+        scope="claim_order",
+        token_digest=hashlib.sha256(b"claim-cancel-test").digest(),
+        pepper_key_version=7,
+        created_at=now,
+        expires_at=now + timedelta(days=1),
+    )
+    db_session.add(claim)
+    await db_session.flush()
+    owner = await db_session.get(OrderCurrentOwner, order_id)
+    owner.current_authenticated_user_id = customer_user["user"].id
+    owner.claim_capability_id = claim.id
+    owner.claim_idempotency_key = "cancel-claim-test"
+    owner.claimed_at = func.statement_timestamp()
+    owner.row_version += 1
+    await db_session.commit()
+
+    cancelled = await client.post(
+        f"/api/v1/orders/{order_id}/cancel",
+        headers=customer_user["headers"],
+        json={"cancellation_reason": "Claimed owner cancellation"},
+    )
+
+    assert cancelled.status_code == 200, cancelled.text

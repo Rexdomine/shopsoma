@@ -1677,13 +1677,14 @@ async def cancel_order(
             status_code=status.HTTP_404_NOT_FOUND, detail="Order not found"
         )
 
-    # Authenticated owners use the existing account path. Guest enforced
-    # orders may cancel only through their order-scoped capability.
-    if current_user is None and capability and order.workflow_cohort == "domestic_checkout_v1":
+    # Domestic orders use the canonical owner/capability path. This matters
+    # after a guest order is claimed: customer_id remains the original guest,
+    # while OrderCurrentOwner records the authenticated claimant.
+    if order.workflow_cohort == "domestic_checkout_v1":
         await authorize_checkout_actor(
             db,
             order=order,
-            current_user=None,
+            current_user=current_user,
             token=capability,
         )
     elif current_user is None or order.customer_id != current_user.id:
