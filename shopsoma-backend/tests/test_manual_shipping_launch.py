@@ -332,7 +332,11 @@ def test_shipping_rate_response_accepts_legacy_cross_field_ranges():
 
 
 @pytest.mark.asyncio
-async def test_checkout_estimate_preserves_manual_rate_priority(client, db_session, vendor_user, customer_user):
+async def test_checkout_estimate_preserves_manual_rate_priority(
+    client, db_session, vendor_user, customer_user, monkeypatch
+):
+    monkeypatch.setattr(settings, 'DOMESTIC_CHECKOUT_PREREQUISITES_ENABLED', True)
+    monkeypatch.setattr(settings, 'DOMESTIC_CHECKOUT_COHORT_ALLOWLIST', str(customer_user['user'].id))
     address, product = await _domestic_catalogue(db_session, vendor_user, customer_user)
     standard = await db_session.scalar(select(ShippingRate).where(ShippingRate.name == 'Standard'))
     express = await db_session.scalar(select(ShippingRate).where(ShippingRate.name == 'Express'))
