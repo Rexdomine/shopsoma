@@ -602,7 +602,7 @@ export default function Checkout() {
         || isTerminalGuestCheckoutConflict(error);
       if (terminalCheckout) {
         discardExpiredCheckout();
-      } else if (order.checkout_access_mode === 'guest_capability' && capability) {
+      } else if (!terminalCheckout) {
         setPaymentRetryAvailable(true);
       }
       const retryable = error.response?.status === 503;
@@ -654,6 +654,7 @@ export default function Checkout() {
         // committed a legacy order after this page advertised secure estimates;
         // continue with that server-priced order rather than discarding its ID
         // and creating duplicate inventory/notification side effects on retry.
+        setEnforcedOrder(order);
         await initializeOrderPayment(order);
         return;
       }
@@ -1348,7 +1349,7 @@ export default function Checkout() {
                           }}
                         />
                       )}
-                      {enforcedOrder && !checkoutEstimate && (
+                      {enforcedOrder?.workflow_cohort === 'domestic_checkout_v1' && !checkoutEstimate && (
                         <div className="space-y-2">
                           <p role="status" className="text-sm text-amber-700">
                             Your order was saved, but delivery options are not ready. Retry without creating another order.
@@ -1367,7 +1368,7 @@ export default function Checkout() {
                           </button>
                         </div>
                       )}
-                      {paymentRetryAvailable && enforcedOrder?.checkout_access_mode === 'guest_capability' && checkoutCapability && (
+                      {paymentRetryAvailable && enforcedOrder && (
                         <div className="space-y-2" role="status">
                           <p className="text-sm text-amber-700">
                             Payment was not completed, or we could not confirm your payment yet. Your order is saved and ready to retry.

@@ -252,6 +252,32 @@ describe('Checkout M5 sequencing and recovery', () => {
     }, undefined);
   });
 
+  it('retries payment for the committed legacy order without creating a replacement', async () => {
+    mocks.getShippingProviderSettings.mockResolvedValue({ provider: 'dhl', checkout_estimates_required: true });
+    mocks.createOrder.mockResolvedValueOnce({ ...order, workflow_cohort: 'legacy_pre_bridge' });
+    mocks.initializePayment
+      .mockRejectedValueOnce({ response: { status: 503 } })
+      .mockResolvedValueOnce(paystackInitialization);
+    const openIframe = vi.fn();
+    window.PaystackPop = { setup: vi.fn(() => ({ openIframe })) };
+
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getByRole('radio', { name: /Paystack/ }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Purchase' })[0]);
+
+    await waitFor(() => expect(mocks.initializePayment).toHaveBeenCalledTimes(1));
+    expect(await screen.findByRole('button', { name: 'Retry payment' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry payment' }));
+
+    await waitFor(() => expect(openIframe).toHaveBeenCalled());
+    expect(mocks.initializePayment).toHaveBeenCalledTimes(2);
+    expect(mocks.initializePayment).toHaveBeenLastCalledWith(expect.objectContaining({ order_id: 'order-1' }), undefined);
+    expect(mocks.createOrder).toHaveBeenCalledTimes(1);
+    expect(mocks.createCheckoutEstimate).not.toHaveBeenCalled();
+  });
+
   it('creates manual shipping estimates for a guest address and preserves its capability', async () => {
     mocks.auth.isAuthenticated = false;
     mocks.getShippingProviderSettings.mockResolvedValue({ provider: 'manual', checkout_estimates_required: true });
