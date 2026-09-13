@@ -64,13 +64,28 @@ export default function AdminSettings() {
   const [lastDbSync, setLastDbSync] = useState<string | null>(null);
   const [syncProgress, setSyncProgress] = useState(0);
   const [syncStatus, setSyncStatus] = useState<'idle' | 'running' | 'success' | 'error'>('idle');
-  const [category, setCategory] = useState('currency');
+  const settingsCategories = ['currency', 'shipping', 'rates', 'payout', 'commission', 'featured', 'database'] as const;
+  const categoryFromHash = () => {
+    const value = window.location.hash.replace(/^#/, '');
+    return settingsCategories.includes(value as typeof settingsCategories[number]) ? value : 'currency';
+  };
+  const [category, setCategory] = useState(categoryFromHash);
   const [manualRatesDirty, setManualRatesDirty] = useState(false);
   const discardManualRatesRef = useRef<(() => void) | null>(null);
   const syncTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     fetchSettings();
+  }, []);
+
+  useEffect(() => {
+    const syncCategory = () => setCategory(categoryFromHash());
+    window.addEventListener('hashchange', syncCategory);
+    window.addEventListener('popstate', syncCategory);
+    return () => {
+      window.removeEventListener('hashchange', syncCategory);
+      window.removeEventListener('popstate', syncCategory);
+    };
   }, []);
 
   useEffect(() => {
@@ -182,10 +197,7 @@ export default function AdminSettings() {
 
   const handlePayoutHoldChange = (value: string) => {
     setPayoutHoldInput(value);
-    const parsed = Number(value);
-    if (!Number.isNaN(parsed) && payoutHold) {
-      setPayoutHoldChanged(parsed !== payoutHold.hold_days);
-    }
+    setPayoutHoldChanged(payoutHold ? value !== payoutHold.hold_days.toString() : value !== '');
   };
 
   const handleSavePayoutHold = async () => {
@@ -219,10 +231,7 @@ export default function AdminSettings() {
 
   const handleCommissionChange = (value: string) => {
     setCommissionInput(value);
-    const parsed = Number(value);
-    if (!Number.isNaN(parsed) && commissionSettings) {
-      setCommissionChanged(parsed !== commissionSettings.commission_rate);
-    }
+    setCommissionChanged(commissionSettings ? value !== commissionSettings.commission_rate.toString() : value !== '');
   };
 
   const handleSaveCommission = async () => {
@@ -384,6 +393,9 @@ export default function AdminSettings() {
     handleResetFeaturedRotation();
     discardManualRatesRef.current?.();
     setManualRatesDirty(false);
+    if (settingsCategories.includes(next as typeof settingsCategories[number])) {
+      window.history.pushState(null, '', `#${next}`);
+    }
     setCategory(next);
   };
   return <div className="flex min-h-screen bg-[var(--color-page-bg)]"><div className="hidden md:flex"><AdminSidebar activePrimary="settings" /></div><main className="min-w-0 flex-1"><div className="mx-auto max-w-[1280px] px-4 py-6 sm:px-6 lg:px-10 lg:py-10">

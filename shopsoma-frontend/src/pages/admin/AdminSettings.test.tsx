@@ -20,7 +20,7 @@ vi.mock('../../services/settingsService', () => ({
   updateFeaturedRotationSettings: vi.fn(), syncRenderDatabase: vi.fn(),
 }));
 const saved = { id: 'rate-1', name: 'Free Lagos', country: 'Nigeria', state: 'Lagos', base_rate: 0, description: '', min_order_value: 0, max_order_value: null, min_delivery_days: 2, max_delivery_days: 5, is_active: true, is_default: true, priority: 0 };
-beforeEach(() => { vi.restoreAllMocks(); vi.clearAllMocks(); mocks.getManualShippingRates.mockResolvedValue([]); });
+beforeEach(() => { window.history.replaceState(null, '', window.location.pathname); vi.restoreAllMocks(); vi.clearAllMocks(); mocks.getManualShippingRates.mockResolvedValue([]); });
 
 it('saves a genuine zero rate, reloads persisted values, previews and deactivates it', async () => {
   render(<AdminSettings />);
