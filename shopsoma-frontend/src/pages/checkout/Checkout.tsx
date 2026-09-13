@@ -111,10 +111,19 @@ export default function Checkout() {
 
   const [allDomesticEstimates, setAllDomesticEstimates] = useState(false);
   const [shippingConfigLoaded, setShippingConfigLoaded] = useState(false);
+  const [shippingConfigError, setShippingConfigError] = useState(false);
+  const [shippingConfigRetry, setShippingConfigRetry] = useState(0);
   useEffect(() => {
-    void getShippingProviderSettings().then(config => setAllDomesticEstimates(config.checkout_estimates_required))
-      .catch(() => setAllDomesticEstimates(false)).finally(() => setShippingConfigLoaded(true));
-  }, []);
+    setShippingConfigLoaded(false);
+    setShippingConfigError(false);
+    void getShippingProviderSettings()
+      .then(config => setAllDomesticEstimates(config.checkout_estimates_required))
+      .catch(() => {
+        setAllDomesticEstimates(false);
+        setShippingConfigError(true);
+      })
+      .finally(() => setShippingConfigLoaded(true));
+  }, [shippingConfigRetry]);
 
   const destinationCountry = addresses.find(address => address.id === selectedAddressId)?.country.trim().toLowerCase();
   const secureShipping = allDomesticEstimates && (destinationCountry === 'nigeria' || destinationCountry === 'ng');
@@ -1229,10 +1238,24 @@ export default function Checkout() {
                           ) : null}
 
                           <div className="pt-4">
+                            {shippingConfigError && (
+                              <div className="mb-3 space-y-2" role="alert">
+                                <p className="text-sm text-red-700">
+                                  Delivery configuration could not be loaded. Retry before continuing.
+                                </p>
+                                <button
+                                  type="button"
+                                  onClick={() => setShippingConfigRetry(value => value + 1)}
+                                  className="text-sm font-semibold text-primary underline"
+                                >
+                                  Retry delivery configuration
+                                </button>
+                              </div>
+                            )}
                             <button
                               type="button"
                               onClick={handleAddressSave}
-                              disabled={!hasSelectedAddress || isLoadingShipping || !shippingConfigLoaded || !!enforcedOrder}
+                              disabled={!hasSelectedAddress || isLoadingShipping || !shippingConfigLoaded || shippingConfigError || !!enforcedOrder}
                               className="w-full py-3 rounded-sm bg-primary text-white text-sm font-semibold disabled:opacity-50"
                             >
                               {isLoadingShipping ? 'Calculating Shipping...' : 'Continue'}

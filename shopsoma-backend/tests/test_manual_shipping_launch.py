@@ -1,4 +1,5 @@
 from decimal import Decimal
+from uuid import uuid4
 from sqlalchemy import select
 from app.core.config import settings
 from app.models.app_setting import AppSetting
@@ -257,3 +258,27 @@ async def test_implicit_dhl_gate_keeps_legacy_pricing_compatibility(db_session, 
     monkeypatch.setattr(settings, 'ENVIRONMENT', 'test')
     assert (await provider_settings.shipping_provider_settings(db_session)).provider == 'dhl'
     await provider_settings.require_manual_order_pricing(db_session)
+
+
+def test_shipping_rate_response_accepts_legacy_cross_field_ranges():
+    from datetime import datetime, timezone
+    from app.schemas.shipping_rate import ShippingRateResponse
+
+    response = ShippingRateResponse.model_validate({
+        "id": uuid4(),
+        "name": "Historical rate",
+        "base_rate": Decimal("1500.00"),
+        "country": "Nigeria",
+        "min_order_value": Decimal("50000.00"),
+        "max_order_value": Decimal("10000.00"),
+        "min_delivery_days": 5,
+        "max_delivery_days": 2,
+        "is_active": True,
+        "is_default": False,
+        "priority": 0,
+        "created_at": datetime.now(timezone.utc),
+        "updated_at": datetime.now(timezone.utc),
+    })
+
+    assert response.max_order_value == Decimal("10000.00")
+    assert response.max_delivery_days == 2

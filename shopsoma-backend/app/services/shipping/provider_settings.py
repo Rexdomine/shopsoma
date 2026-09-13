@@ -28,7 +28,11 @@ async def shipping_provider_settings(db):
     if not provider:
         # Before the exclusive setting existed the secure route used the DHL
         # capability gate. Preserve that behavior without activating new gates.
-        provider = "dhl" if dhl_ready and secure_checkout_routing else (
+        # Keep the effective provider as DHL when the capability is ready so
+        # already-classified domestic orders can create DHL estimates during a
+        # partial rollout. The public preliminary endpoint still remains
+        # manual because checkout_estimates_required is false below.
+        provider = "dhl" if dhl_ready else (
             "shipbubble" if (rows.get("shipping_use_shipbubble") or "").lower() == "true" else "manual"
         )
     elif provider == "dhl" and not secure_checkout_routing:

@@ -33,6 +33,15 @@ class ShippingRateBase(BaseModel):
             return 'Nigeria' if value.casefold() in {'ng', 'nigeria'} else value.title()
         return value
 
+    @field_serializer('base_rate', 'min_order_value', 'max_order_value')
+    def serialize_decimal(self, value: Optional[Decimal]) -> Optional[float]:
+        """Serialize Decimal fields as float for JSON"""
+        return float(value) if value is not None else None
+
+
+class ShippingRateCreate(ShippingRateBase):
+    """Schema for creating a shipping rate"""
+
     @model_validator(mode='after')
     def validate_range(self):
         if self.max_order_value is not None and self.min_order_value is not None and self.max_order_value < self.min_order_value:
@@ -42,16 +51,6 @@ class ShippingRateBase(BaseModel):
         if not self.is_active:
             self.is_default = False
         return self
-
-    @field_serializer('base_rate', 'min_order_value', 'max_order_value')
-    def serialize_decimal(self, value: Optional[Decimal]) -> Optional[float]:
-        """Serialize Decimal fields as float for JSON"""
-        return float(value) if value is not None else None
-
-
-class ShippingRateCreate(ShippingRateBase):
-    """Schema for creating a shipping rate"""
-    pass
 
 
 class ShippingRateUpdate(BaseModel):

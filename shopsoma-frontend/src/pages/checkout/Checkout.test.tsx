@@ -258,6 +258,21 @@ describe('Checkout M5 sequencing and recovery', () => {
     expect(mocks.initializePayment).not.toHaveBeenCalled();
   });
 
+  it('blocks checkout and offers retry when shipping configuration fails', async () => {
+    mocks.getShippingProviderSettings
+      .mockRejectedValueOnce(new Error('temporary settings outage'))
+      .mockResolvedValueOnce({ provider: 'manual', checkout_estimates_required: false });
+
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('could not be loaded');
+    expect(screen.getByRole('button', { name: 'Continue' })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry delivery configuration' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Continue' })).toBeEnabled());
+    expect(mocks.getShippingProviderSettings).toHaveBeenCalledTimes(2);
+  });
+
   beforeEach(() => {
     vi.resetAllMocks();
     mocks.auth.isAuthenticated = true;

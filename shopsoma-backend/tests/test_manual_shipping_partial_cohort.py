@@ -67,7 +67,9 @@ async def test_public_preview_with_ready_dhl_partial_cohort(
     assert config.status_code == 200, config.text
     assert config.json()["readiness"]["dhl"] is True
     assert config.json()["checkout_estimates_required"] is False
-    expected_provider = "shipbubble" if key == "shipping_use_shipbubble" or value == "shipbubble" else "manual"
+    expected_provider = "shipbubble" if key == "shipping_use_shipbubble" or value == "shipbubble" else (
+        "dhl" if key is None else "manual"
+    )
     assert config.json()["provider"] == expected_provider
 
     headers = {} if audience == "guest" else customer_user["headers"]
