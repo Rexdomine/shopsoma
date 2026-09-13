@@ -73,3 +73,11 @@ it('keeps DHL disabled when sandbox readiness lacks secure-checkout routing', as
   render(<AdminSettings />);
   expect(await screen.findByRole('option', { name: /DHL — pending/ })).toBeDisabled();
 });
+
+it('keeps a visible gap between the settings cards', async () => {
+  const { container } = render(<AdminSettings />);
+  await screen.findByText('Currency Settings');
+  const currencyCard = container.querySelector('#currency');
+  expect(currencyCard?.parentElement).toHaveClass('space-y-6');
+  expect(currencyCard?.parentElement?.querySelector('#shipping')).toBeInTheDocument();
+});
