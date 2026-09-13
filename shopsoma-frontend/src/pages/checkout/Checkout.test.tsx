@@ -277,6 +277,8 @@ describe('Checkout M5 sequencing and recovery', () => {
     expect(screen.getByText('Currency: USD')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'NGN' })).toBeDisabled();
     expect(screen.getByRole('radio', { name: /Paystack/ })).toBeDisabled();
+    expect(screen.queryByText('Select delivery option')).not.toBeInTheDocument();
+    expect(screen.getByText(/62,500\.00/)).toBeInTheDocument();
   });
 
   it('retries payment for the committed legacy order without creating a replacement', async () => {

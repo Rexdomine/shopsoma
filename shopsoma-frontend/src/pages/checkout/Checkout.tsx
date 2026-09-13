@@ -870,6 +870,7 @@ export default function Checkout() {
     ? convertCurrencyWithRates(Number(appliedPromo.discount_amount || 0), 'NGN', currency, exchangeRates)
     : 0;
   const reviewSummaryCurrency = orderReview?.summary.currency ?? 'NGN';
+  const committedLegacyOrder = legacyOrderNeedsConfirmation ? enforcedOrder : null;
 
   // Calculate tax and total for checkout display (before order review is available)
   const TAX_RATE = 0.075; // 7.5% VAT
@@ -1517,22 +1518,37 @@ export default function Checkout() {
               <div className="text-sm text-gray-700 space-y-2">
                 <div className="flex items-center justify-between">
                   <span>Subtotal</span>
-                  <span>{formatPrice(orderReview?.summary.subtotal ?? cartSubtotalInSelectedCurrency, orderReview ? reviewSummaryCurrency : currency)}</span>
+                  <span>{formatPrice(
+                    committedLegacyOrder?.subtotal
+                      ?? orderReview?.summary.subtotal
+                      ?? cartSubtotalInSelectedCurrency,
+                    committedLegacyOrder?.currency ?? (orderReview ? reviewSummaryCurrency : currency),
+                  )}</span>
                 </div>
                 <div className="flex items-center justify-between">
                   <span>{checkoutEstimate?.selected_option?.service_label ?? 'Shipping cost'}</span>
                   <span>{checkoutEstimate?.selected_option
                     ? formatServerMoney(checkoutEstimate.selected_option.amount, checkoutEstimate.selected_option.currency)
-                    : secureShipping ? 'Select delivery option' : formatPrice(orderReview?.summary.shipping_cost ?? Number(shippingRateInSelectedCurrency), orderReview ? reviewSummaryCurrency : currency)}</span>
+                    : committedLegacyOrder
+                      ? formatPrice(committedLegacyOrder.shipping_cost, committedLegacyOrder.currency)
+                      : secureShipping ? 'Select delivery option' : formatPrice(orderReview?.summary.shipping_cost ?? Number(shippingRateInSelectedCurrency), orderReview ? reviewSummaryCurrency : currency)}</span>
                 </div>
                 <div className="flex items-center justify-between">
                   <span>Tax (VAT 7.5%)</span>
-                  <span>{formatPrice(calculateCheckoutTax(), orderReview ? reviewSummaryCurrency : currency)}</span>
+                  <span>{formatPrice(
+                    committedLegacyOrder?.tax_amount ?? calculateCheckoutTax(),
+                    committedLegacyOrder?.currency ?? (orderReview ? reviewSummaryCurrency : currency),
+                  )}</span>
                 </div>
                 {(appliedPromo || (orderReview?.summary.discount_amount ?? 0) > 0) && (
                   <div className="flex items-center justify-between text-primary">
                     <span>Promo {appliedPromo && `(${appliedPromo.code})`}</span>
-                    <span>-{formatPrice(orderReview?.summary.discount_amount ?? promoDiscountInSelectedCurrency, orderReview ? reviewSummaryCurrency : currency)}</span>
+                    <span>-{formatPrice(
+                      committedLegacyOrder?.discount_amount
+                        ?? orderReview?.summary.discount_amount
+                        ?? promoDiscountInSelectedCurrency,
+                      committedLegacyOrder?.currency ?? (orderReview ? reviewSummaryCurrency : currency),
+                    )}</span>
                   </div>
                 )}
                 <div className="flex items-center gap-2 pt-2">
@@ -1568,7 +1584,10 @@ export default function Checkout() {
                 <span>Total</span>
                 <span>{checkoutEstimate?.selected_option
                   ? formatServerMoney(checkoutEstimate.server_payable_total, checkoutEstimate.currency)
-                  : formatPrice(calculateCheckoutTotal(), orderReview ? reviewSummaryCurrency : currency)}</span>
+                  : formatPrice(
+                    committedLegacyOrder?.total_amount ?? calculateCheckoutTotal(),
+                    committedLegacyOrder?.currency ?? (orderReview ? reviewSummaryCurrency : currency),
+                  )}</span>
               </div>
               <button
                 className={`w-full py-3 rounded-sm text-sm font-semibold ${
