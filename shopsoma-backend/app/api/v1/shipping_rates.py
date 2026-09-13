@@ -10,7 +10,7 @@ import logging
 from app.core.database import get_db
 from app.models.user import User, UserRole
 from app.models.shipping_rate import ShippingRate
-from app.services.shipping.provider_settings import shipping_provider_settings
+from app.services.shipping.provider_settings import require_manual_order_pricing
 from app.services.shipping.manual_rates import manual_rates_query
 from app.models.address import Address
 from app.schemas.shipping_rate import (
@@ -217,9 +217,8 @@ async def calculate_shipping(
     - **state**: Delivery state
     - **order_value**: Order subtotal
     """
-    config = await shipping_provider_settings(db)
-    if config.provider != "manual":
-        raise HTTPException(status_code=503, detail="Use secure checkout delivery estimates; manual preview requires manual mode")
+    # Preserve preliminary manual pricing before partial-cohort classification.
+    await require_manual_order_pricing(db)
     return await _get_local_rates(calc_data, db)
 
 

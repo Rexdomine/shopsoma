@@ -1,7 +1,7 @@
 """Order management endpoints"""
 
 from typing import Optional, List, Dict
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Header
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, func
 from sqlalchemy.orm import selectinload
@@ -59,7 +59,10 @@ from app.services.email_service import email_service
 from app.services.vendor_notification_service import VendorNotificationService
 from app.services.commission import get_vendor_commission_rate
 from app.core.config import settings
-from app.services.checkout.capabilities import issue_checkout_capability
+from app.services.checkout.capabilities import (
+    issue_checkout_capability,
+    authorize_checkout_actor,
+)
 from app.services.shipping.capabilities import domestic_shipping_capabilities
 from app.services.checkout.reservations import release_active_order_reservations
 
@@ -1389,9 +1392,40 @@ async def list_orders(
     return OrderListResponse(orders=orders, total=total, page=page, page_size=page_size)
 
 
+async def _authorize_order_read(db, *, order, current_user, capability):
+    """Keep legacy passwordless guest reads; use canonical checkout auth otherwise."""
+    if current_user and current_user.role == UserRole.ADMIN:
+        return
+    if order.workflow_cohort not in {
+        "legacy_pre_bridge",
+        "legacy_ambiguous_quarantined",
+    }:
+        await authorize_checkout_actor(
+            db, order=order, current_user=current_user, token=capability
+        )
+        return
+    if current_user:
+        if order.customer_id == current_user.id:
+            return
+    else:
+        owner = await db.get(User, order.customer_id)
+        if (
+            owner is not None
+            and owner.is_guest_created
+            and owner.hashed_password is None
+            and owner.is_active
+        ):
+            return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Not authorized to view this order",
+    )
+
+
 @router.get("/{order_id}", response_model=OrderResponse)
 async def get_order(
     order_id: UUID,
+    capability: Optional[str] = Header(None, alias="X-ShopSoma-Checkout-Capability"),
     current_user: Optional[User] = Depends(get_optional_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -1399,7 +1433,7 @@ async def get_order(
     Get a specific order by ID
 
     Works for both authenticated users and guest checkout.
-    Guests can view orders without authentication.
+    Legacy passwordless guests retain access; modern guests need their capability.
     """
     from app.models.product import ProductImage
 
@@ -1414,6 +1448,7 @@ async def get_order(
             selectinload(Order.payments),
         )
         .where(Order.id == order_id)
+        .with_for_update()
     )
 
     result = await db.execute(query)
@@ -1424,13 +1459,13 @@ async def get_order(
             status_code=status.HTTP_404_NOT_FOUND, detail="Order not found"
         )
 
-    # Verify ownership if user is authenticated (unless admin)
-    if current_user:
-        if current_user.role != UserRole.ADMIN and order.customer_id != current_user.id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Not authorized to view this order",
-            )
+    # Lock the order before the canonical owner/capability rows used by checkout auth.
+    await _authorize_order_read(
+        db, order=order, current_user=current_user, capability=capability
+    )
+
+    # The plaintext capability is returned only by order creation, never by reads.
+    order.checkout_capability = None
 
     # Add product image URLs to order items
     for item in order.items:
@@ -1453,6 +1488,7 @@ async def get_order(
 @router.get("/{order_id}/tracking")
 async def get_order_tracking(
     order_id: UUID,
+    capability: Optional[str] = Header(None, alias="X-ShopSoma-Checkout-Capability"),
     current_user: Optional[User] = Depends(get_optional_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -1462,7 +1498,7 @@ async def get_order_tracking(
     Returns tracking details including order status, history, and amount.
     Works for both authenticated users and guest checkout.
     """
-    query = select(Order).where(Order.id == order_id)
+    query = select(Order).where(Order.id == order_id).with_for_update()
     result = await db.execute(query)
     order = result.scalar_one_or_none()
 
@@ -1471,13 +1507,10 @@ async def get_order_tracking(
             status_code=status.HTTP_404_NOT_FOUND, detail="Order not found"
         )
 
-    # Verify ownership if user is authenticated (unless admin)
-    if current_user:
-        if current_user.role != UserRole.ADMIN and order.customer_id != current_user.id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Not authorized to view this order",
-            )
+    # Lock the order before the canonical owner/capability rows used by checkout auth.
+    await _authorize_order_read(
+        db, order=order, current_user=current_user, capability=capability
+    )
 
     # Prefer the persisted carrier tracking number when available; otherwise fall back
     # to the legacy synthetic public identifier.
