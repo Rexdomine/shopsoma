@@ -17,3 +17,9 @@ def test_authenticated_websocket_uses_canonical_current_owner():
     assert "from app.models.order_guest_capability import OrderCurrentOwner" in source
     assert "current_owner.current_authenticated_user_id" in source
     assert "canonical_owner_id" in source
+
+
+def test_order_creation_requires_effective_dhl_for_rate_less_secure_checkout():
+    source = Path("app/api/v1/orders.py").read_text()
+    assert "effective_shipping_settings.provider == \"dhl\"" in source
+    assert "No shipping available for this location" in source

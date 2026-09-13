@@ -706,6 +706,23 @@ export default function Checkout() {
     }
   };
 
+  const restartCheckout = async () => {
+    if (!enforcedOrder) return;
+    try {
+      await checkoutService.cancelOrder(
+        enforcedOrder.id,
+        'Customer restarted checkout before payment',
+        checkoutCapability,
+      );
+      discardExpiredCheckout();
+      setOrderReview(null);
+      setSelectedShippingRateId('');
+      setStep('address');
+    } catch (error: any) {
+      alert(error.response?.data?.detail || error.message || 'We could not safely restart checkout. Please retry.');
+    }
+  };
+
   const selectCheckoutOption = async (estimateId: string, optionId: string) => {
     if (!enforcedOrder) throw new Error('Checkout order is unavailable');
     const identity = `${estimateId}:${optionId}`;
@@ -1372,7 +1389,7 @@ export default function Checkout() {
                             {isCreatingOrder ? 'Retrying delivery options…' : 'Retry delivery options'}
                           </button>
                           <button type="button" disabled={isCreatingOrder} className="text-sm underline"
-                            onClick={() => { discardExpiredCheckout(); setOrderReview(null); setSelectedShippingRateId(''); setStep('address'); }}>
+                            onClick={() => void restartCheckout()}>
                             Start again with another address
                           </button>
                         </div>

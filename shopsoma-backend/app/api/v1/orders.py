@@ -26,7 +26,10 @@ from app.models.product import (
 from app.models.payment import Payment
 from app.models.address import Address
 from app.services.shipping.manual_rates import manual_rates_query
-from app.services.shipping.provider_settings import require_manual_order_pricing
+from app.services.shipping.provider_settings import (
+    require_manual_order_pricing,
+    shipping_provider_settings,
+)
 from app.models.vendor import Vendor
 from app.models.fulfillment_cohort import (
     CohortItemAllocation,
@@ -899,8 +902,10 @@ async def create_order(
         rate.max_order_value is None or _convert_currency(_as_decimal(rate.max_order_value), "NGN", checkout_currency, usd_to_ngn_rate) >= subtotal
     )]
 
+    effective_shipping_settings = await shipping_provider_settings(db)
     if not shipping_rates and not (
         enforced_checkout
+        and effective_shipping_settings.provider == "dhl"
         and domestic_shipping_capabilities(settings).checkout_enabled
     ):
         raise HTTPException(
@@ -1646,7 +1651,8 @@ async def get_order_tracking(
 async def cancel_order(
     order_id: UUID,
     cancel_data: OrderCancelRequest,
-    current_user: User = Depends(get_current_active_user),
+    capability: Optional[str] = Header(None, alias="X-ShopSoma-Checkout-Capability"),
+    current_user: Optional[User] = Depends(get_optional_user),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -1666,8 +1672,16 @@ async def cancel_order(
             status_code=status.HTTP_404_NOT_FOUND, detail="Order not found"
         )
 
-    # Verify ownership
-    if order.customer_id != current_user.id:
+    # Authenticated owners use the existing account path. Guest enforced
+    # orders may cancel only through their order-scoped capability.
+    if current_user is None and capability and order.workflow_cohort == "domestic_checkout_v1":
+        await authorize_checkout_actor(
+            db,
+            order=order,
+            current_user=None,
+            token=capability,
+        )
+    elif current_user is None or order.customer_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Not authorized to cancel this order",

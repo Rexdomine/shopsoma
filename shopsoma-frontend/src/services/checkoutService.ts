@@ -325,10 +325,10 @@ export const checkoutService = {
   },
 
   // Cancel order
-  async cancelOrder(id: string, reason: string): Promise<Order> {
+  async cancelOrder(id: string, reason: string, capability?: string): Promise<Order> {
     const response = await api.post(`/orders/${id}/cancel`, {
       cancellation_reason: reason,
-    });
+    }, checkoutHeaders(capability));
     return response.data;
   },
 };

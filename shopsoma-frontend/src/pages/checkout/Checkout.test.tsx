@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   createOrder: vi.fn(),
   createCheckoutEstimate: vi.fn(),
   selectCheckoutEstimateOption: vi.fn(),
+  cancelOrder: vi.fn(),
   initializePayment: vi.fn(),
   verifyPayment: vi.fn(),
   buildPaystackWidgetConfig: vi.fn(),
@@ -73,6 +74,7 @@ vi.mock('../../services/checkoutService', () => ({
     createOrder: mocks.createOrder,
     createCheckoutEstimate: mocks.createCheckoutEstimate,
     selectCheckoutEstimateOption: mocks.selectCheckoutEstimateOption,
+    cancelOrder: mocks.cancelOrder,
     validatePromoCode: vi.fn(),
   },
 }));
@@ -353,6 +355,7 @@ describe('Checkout M5 sequencing and recovery', () => {
     mocks.reviewOrder.mockResolvedValue(review);
     mocks.createOrder.mockResolvedValue(order);
     mocks.createCheckoutEstimate.mockResolvedValue(estimate);
+    mocks.cancelOrder.mockResolvedValue({ ...order, fulfillment_status: 'cancelled' });
     mocks.selectCheckoutEstimateOption.mockResolvedValue({ ...estimate, selected_option: estimate.options[0] });
     mocks.buildPaystackWidgetConfig.mockImplementation((initialization, customer) => ({
       key: customer.key,
@@ -484,6 +487,21 @@ describe('Checkout M5 sequencing and recovery', () => {
     expect(await screen.findByRole('button', { name: 'Select Standard delivery' })).toBeEnabled();
     expect(mocks.createOrder).toHaveBeenCalledTimes(1);
     expect(mocks.createCheckoutEstimate).toHaveBeenCalledTimes(2);
+
+  });
+
+  it('cancels the saved order before restarting after estimate failure', async () => {
+    mocks.createCheckoutEstimate.mockRejectedValueOnce({ response: { status: 503, data: { detail: 'temporarily unavailable' } } });
+    await reachPaymentStep();
+
+    expect(await screen.findByRole('button', { name: 'Start again with another address' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Start again with another address' }));
+    await waitFor(() => expect(mocks.cancelOrder).toHaveBeenCalledWith(
+      'order-1',
+      'Customer restarted checkout before payment',
+      undefined,
+    ));
+    expect(mocks.createOrder).toHaveBeenCalledTimes(1);
   });
 
   it('keeps a 503 payment initialization visibly incomplete and retryable', async () => {
