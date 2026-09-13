@@ -10,6 +10,12 @@ def manual_rates_query(country, state):
     return select(ShippingRate).where(
         ShippingRate.is_active.is_(True),
         func.lower(func.trim(ShippingRate.country)).in_(countries),
+        # Historical rows may predate the estimate-option constraint. Keep
+        # them available for admin reads, but never project invalid delivery
+        # windows into a new checkout estimate or order.
+        ShippingRate.min_delivery_days >= 0,
+        ShippingRate.min_delivery_days <= ShippingRate.max_delivery_days,
+        ShippingRate.max_delivery_days <= 365,
         or_(
             func.lower(func.trim(ShippingRate.state)) == (state or "").strip().lower(),
             ShippingRate.state.is_(None),

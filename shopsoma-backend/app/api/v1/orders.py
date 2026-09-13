@@ -903,6 +903,11 @@ async def create_order(
     )]
 
     effective_shipping_settings = await shipping_provider_settings(db)
+    if enforced_checkout and not effective_shipping_settings.readiness[effective_shipping_settings.provider]:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"{effective_shipping_settings.provider} is not available for secure checkout",
+        )
     if not shipping_rates and not (
         enforced_checkout
         and effective_shipping_settings.provider == "dhl"

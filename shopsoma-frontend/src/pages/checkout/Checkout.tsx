@@ -1414,8 +1414,8 @@ export default function Checkout() {
                             Delivery configuration changed while your order was being prepared. Please confirm the server-priced total before payment.
                           </p>
                           <dl className="space-y-1 text-sm text-gray-700">
-                            <div className="flex justify-between"><dt>Shipping</dt><dd>{formatPrice(enforcedOrder.shipping_cost, enforcedOrder.currency || currency)}</dd></div>
-                            <div className="flex justify-between font-semibold"><dt>Total</dt><dd>{formatPrice(enforcedOrder.total_amount, enforcedOrder.currency || currency)}</dd></div>
+                            <div className="flex justify-between"><dt>Shipping</dt><dd>{formatPriceWithConversion(enforcedOrder.shipping_cost, enforcedOrder.currency || 'NGN', enforcedOrder.currency || 'NGN', exchangeRates)}</dd></div>
+                            <div className="flex justify-between font-semibold"><dt>Total</dt><dd>{formatPriceWithConversion(enforcedOrder.total_amount, enforcedOrder.currency || 'NGN', enforcedOrder.currency || 'NGN', exchangeRates)}</dd></div>
                           </dl>
                           <button
                             type="button"
