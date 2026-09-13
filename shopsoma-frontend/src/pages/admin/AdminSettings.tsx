@@ -375,7 +375,17 @@ export default function AdminSettings() {
     <div className="rounded-xl border border-slate-200 bg-slate-50 p-4"><p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{title}</p><p className="mt-2 text-xl font-semibold text-slate-950">{value}</p><p className="mt-1 text-xs text-slate-500">{detail}</p></div>
   );
   const saveBar = (onSave: () => void, onReset: () => void, changed: boolean, busy: boolean) => <div className="flex flex-wrap items-center gap-3 border-t border-slate-100 pt-5"><button type="button" onClick={onSave} disabled={!changed || busy} className="inline-flex items-center gap-2 rounded-lg bg-[#105E53] px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40"><Save className="h-4 w-4" />{busy ? 'Saving…' : 'Save changes'}</button><button type="button" onClick={onReset} disabled={!changed || busy} className="rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-semibold text-slate-700 disabled:opacity-40">Discard edits</button>{changed && <span className="text-xs font-medium text-amber-700">Unsaved changes</span>}</div>;
-  const switchCategory = (next: string) => { if (next === category) return; if (dirty && !window.confirm('You have unsaved edits. Switch category and discard them?')) return; discardManualRatesRef.current?.(); setManualRatesDirty(false); setCategory(next); };
+  const switchCategory = (next: string) => {
+    if (next === category) return;
+    if (dirty && !window.confirm('You have unsaved edits. Switch category and discard them?')) return;
+    handleReset();
+    handleResetPayoutHold();
+    handleResetCommission();
+    handleResetFeaturedRotation();
+    discardManualRatesRef.current?.();
+    setManualRatesDirty(false);
+    setCategory(next);
+  };
   return <div className="flex min-h-screen bg-[var(--color-page-bg)]"><div className="hidden md:flex"><AdminSidebar activePrimary="settings" /></div><main className="min-w-0 flex-1"><div className="mx-auto max-w-[1280px] px-4 py-6 sm:px-6 lg:px-10 lg:py-10">
     <header className="mb-8"><p className="text-xs font-bold uppercase tracking-[0.18em] text-[#105E53]">ShopSoma admin</p><div className="mt-2 flex flex-col justify-between gap-4 sm:flex-row sm:items-end"><div><h1 className="text-3xl font-semibold tracking-tight text-slate-950">Settings</h1><p className="mt-2 max-w-2xl text-sm text-slate-600">One focused workspace at a time. Review the current value first, then make a deliberate change.</p></div>{dirty && <div className="rounded-full bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-800">Draft edits pending</div>}</div></header>
     <div className="grid gap-6 lg:grid-cols-[250px_minmax(0,1fr)]"><nav aria-label="Settings categories" className="h-fit rounded-2xl border border-slate-200 bg-white p-2 shadow-sm lg:sticky lg:top-6"><p className="px-3 pb-2 pt-2 text-[11px] font-bold uppercase tracking-[0.16em] text-slate-400">Configuration</p>{categories.map(([id,label,desc,Icon]) => <button key={id} type="button" onClick={() => switchCategory(id)} aria-current={category === id ? 'page' : undefined} className={`flex w-full items-start gap-3 rounded-xl px-3 py-3 text-left transition ${category === id ? 'bg-[#E7F3EF] text-[#105E53]' : 'text-slate-600 hover:bg-slate-50'}`}><Icon className="mt-0.5 h-4 w-4 shrink-0" /><span><span className="block text-sm font-semibold">{label}</span><span className="mt-0.5 block text-xs leading-4 opacity-70">{desc}</span></span></button>)}</nav>

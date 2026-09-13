@@ -119,3 +119,17 @@ it('traps Tab in both directions and preserves a draft when cancelled', async ()
   expect(dialog).toBeInTheDocument();
   expect(screen.getByLabelText('Rate name')).toHaveValue('Keep this draft');
 });
+
+it('restores preview constraints and renders returned price and ETA', async () => {
+  render(<AdminSettings />);
+  fireEvent.click(await screen.findByRole('button', { name: /Manual rates/ }));
+  expect(screen.getByLabelText('Preview country')).toBeRequired();
+  expect(screen.getByLabelText('Preview state')).toBeRequired();
+  const subtotal = screen.getByLabelText('Preview subtotal (NGN)');
+  expect(subtotal).toHaveAttribute('type', 'number');
+  expect(subtotal).toHaveAttribute('min', '0.01');
+  expect(subtotal).toHaveAttribute('step', '0.01');
+  mocks.previewManualShippingRates.mockResolvedValue({ available_rates: [{ ...saved, base_rate: 1250, min_delivery_days: 3, max_delivery_days: 6 }] });
+  fireEvent.click(screen.getByRole('button', { name: 'Preview shipping' }));
+  expect(await screen.findByText(/NGN 1250\.00 · 3–6 business days/)).toBeInTheDocument();
+});
