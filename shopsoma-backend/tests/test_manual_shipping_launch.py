@@ -200,8 +200,8 @@ async def test_create_rate_rejects_unstorable_monetary_bounds(client, admin_user
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("key,value", [("shipping_provider", "shipbubble"), ("shipping_provider", "dhl"), ("shipping_use_shipbubble", "true")])
-async def test_legacy_order_routes_reject_nonmanual_provider(client, db_session, customer_user, vendor_user, monkeypatch, key, value):
+@pytest.mark.parametrize("key,value", [("shipping_provider", "shipbubble"), ("shipping_use_shipbubble", "true")])
+async def test_legacy_order_routes_reject_shipbubble_provider(client, db_session, customer_user, vendor_user, monkeypatch, key, value):
     monkeypatch.setattr(settings, 'DOMESTIC_CHECKOUT_PREREQUISITES_ENABLED', False)
     address, product = await _domestic_catalogue(db_session, vendor_user, customer_user)
     db_session.add(AppSetting(key=key, value=value, value_type='string'))
@@ -212,6 +212,21 @@ async def test_legacy_order_routes_reject_nonmanual_provider(client, db_session,
         response = await client.post(path, headers=customer_user['headers'], json=payload)
         assert response.status_code == 503, response.text
         assert 'manual pricing requires manual mode' in response.json()['detail']
+
+
+@pytest.mark.asyncio
+async def test_legacy_order_routes_treat_stale_dhl_selection_as_manual(client, db_session, customer_user, vendor_user, monkeypatch):
+    monkeypatch.setattr(settings, 'DOMESTIC_CHECKOUT_PREREQUISITES_ENABLED', False)
+    address, product = await _domestic_catalogue(db_session, vendor_user, customer_user)
+    db_session.add(AppSetting(key='shipping_provider', value='dhl', value_type='string'))
+    await db_session.commit()
+    payload = {'items': [{'product_id': str(product.id), 'quantity': 1}],
+               'shipping_address_id': str(address.id), 'currency': 'NGN'}
+    review = await client.post('/api/v1/orders/review', headers=customer_user['headers'], json=payload)
+    assert review.status_code == 200, review.text
+    created = await client.post('/api/v1/orders', headers=customer_user['headers'], json=payload)
+    assert created.status_code == 201, created.text
+    assert Decimal(str(created.json()['shipping_cost'])) == Decimal(str(review.json()['summary']['shipping_cost']))
 
 
 @pytest.mark.asyncio
@@ -236,6 +251,9 @@ async def test_implicit_dhl_gate_keeps_legacy_pricing_compatibility(db_session, 
     from types import SimpleNamespace
     from app.services.shipping import provider_settings
     monkeypatch.setattr(provider_settings, 'domestic_shipping_capabilities', lambda config: SimpleNamespace(checkout_enabled=True))
+    monkeypatch.setattr(settings, 'DOMESTIC_CHECKOUT_PREREQUISITES_ENABLED', True)
+    monkeypatch.setattr(settings, 'DOMESTIC_CHECKOUT_COHORT_PERCENTAGE', 100)
+    monkeypatch.setattr(settings, 'DHL_ENVIRONMENT', 'sandbox')
     monkeypatch.setattr(settings, 'ENVIRONMENT', 'test')
     assert (await provider_settings.shipping_provider_settings(db_session)).provider == 'dhl'
     await provider_settings.require_manual_order_pricing(db_session)

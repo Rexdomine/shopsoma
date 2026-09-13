@@ -834,6 +834,8 @@ def test_create_estimate_refresh_supersedes_current_unselected_leaf(monkeypatch)
 
         async def execute(self, statement):
             sql = str(statement)
+            if "FROM app_settings" in sql:
+                return FakeResult([])
             if (
                 "FROM checkout_shipping_estimates" in sql
                 and "WHERE checkout_shipping_estimates.customer_id" in sql
@@ -912,6 +914,7 @@ def test_create_estimate_replays_refresh_idempotency_key(monkeypatch):
     module = _load_module(ESTIMATES_PATH, "estimates_refresh_replay_followup")
     existing = SimpleNamespace(
         request_fingerprint="f" * 64,
+        source_kind="static_domestic_rate",
         source_command="refresh_checkout_estimate",
         idempotency_key="estimate-2",
     )
@@ -923,9 +926,18 @@ def test_create_estimate_replays_refresh_idempotency_key(monkeypatch):
         def scalar_one_or_none(self):
             return self._value
 
+        def all(self):
+            if isinstance(self._value, list):
+                return self._value
+            if self._value is None:
+                return []
+            return [self._value]
+
     class FakeDB:
         async def execute(self, statement):
             sql = str(statement)
+            if "FROM app_settings" in sql:
+                return FakeResult([])
             assert "idempotency_key" in sql
             return FakeResult(existing)
 
