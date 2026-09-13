@@ -650,9 +650,10 @@ export default function Checkout() {
 
       const order = await checkoutService.createOrder(orderRequest);
       if (order.workflow_cohort !== 'domestic_checkout_v1') {
-        if (secureShipping) {
-          throw new Error('Checkout configuration changed. Reload checkout to review shipping before payment.');
-        }
+        // The order endpoint is authoritative. A configuration race may have
+        // committed a legacy order after this page advertised secure estimates;
+        // continue with that server-priced order rather than discarding its ID
+        // and creating duplicate inventory/notification side effects on retry.
         await initializeOrderPayment(order);
         return;
       }

@@ -233,6 +233,25 @@ describe('Checkout M5 sequencing and recovery', () => {
     expect(screen.getAllByText('NGN 2,500.00').length).toBeGreaterThan(0);
   });
 
+  it('uses the committed legacy order when secure configuration races order creation', async () => {
+    mocks.getShippingProviderSettings.mockResolvedValue({ provider: 'dhl', checkout_estimates_required: true });
+    mocks.createOrder.mockResolvedValueOnce({ ...order, workflow_cohort: 'legacy_pre_bridge' });
+
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getByRole('radio', { name: /Stripe/ }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Purchase' })[0]);
+    await waitFor(() => expect(mocks.createOrder).toHaveBeenCalledTimes(1));
+
+    expect(mocks.createCheckoutEstimate).not.toHaveBeenCalled();
+    await waitFor(() => expect(mocks.initializePayment).toHaveBeenCalledTimes(1));
+    expect(mocks.initializePayment).toHaveBeenCalledWith({
+      order_id: 'order-1', email: 'buyer@example.com', payment_gateway: 'stripe',
+      currency: 'NGN', callback_url: `${window.location.origin}/payment/verify`,
+    }, undefined);
+  });
+
   it('creates manual shipping estimates for a guest address and preserves its capability', async () => {
     mocks.auth.isAuthenticated = false;
     mocks.getShippingProviderSettings.mockResolvedValue({ provider: 'manual', checkout_estimates_required: true });
