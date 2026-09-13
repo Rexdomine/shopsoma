@@ -1699,11 +1699,6 @@ async def cancel_order(
             detail="Cannot cancel order that has been shipped or delivered",
         )
 
-    if order.fulfillment_status == FulfillmentStatus.CANCELLED:
-        # Cancellation is intentionally idempotent so a lost response or a
-        # client retry converges on the committed terminal state.
-        return order
-
     if order.workflow_cohort == "domestic_checkout_v1":
         unresolved_attempt = await db.scalar(
             select(PaymentAttempt)
@@ -1718,6 +1713,12 @@ async def cancel_order(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Cannot cancel order while payment outcome is unresolved",
             )
+
+    if order.fulfillment_status == FulfillmentStatus.CANCELLED:
+        # Cancellation is intentionally idempotent so a lost response or a
+        # client retry converges on the committed terminal state, but the
+        # unresolved-payment fence above remains authoritative.
+        return order
 
     try:
         await ensure_order_cancellation_allowed(db, order_id=order.id)
