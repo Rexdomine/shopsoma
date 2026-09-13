@@ -20,13 +20,13 @@ vi.mock('../../services/settingsService', () => ({
   updateFeaturedRotationSettings: vi.fn(), syncRenderDatabase: vi.fn(),
 }));
 const saved = { id: 'rate-1', name: 'Free Lagos', country: 'Nigeria', state: 'Lagos', base_rate: 0, description: '', min_order_value: 0, max_order_value: null, min_delivery_days: 2, max_delivery_days: 5, is_active: true, is_default: true, priority: 0 };
-beforeEach(() => { vi.clearAllMocks(); mocks.getManualShippingRates.mockResolvedValue([]); });
+beforeEach(() => { vi.restoreAllMocks(); vi.clearAllMocks(); mocks.getManualShippingRates.mockResolvedValue([]); });
 
 it('saves a genuine zero rate, reloads persisted values, previews and deactivates it', async () => {
   render(<AdminSettings />);
   fireEvent.click(await screen.findByRole('button', { name: /Manual rates/ }));
   await screen.findByText('No manual rates configured. Add an active rate before accepting orders.');
-  fireEvent.click(screen.getByRole('button', { name: 'Add shipping rate' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Add shipping rate' }));
   fireEvent.change(screen.getByLabelText('Rate name'), { target: { value: 'Free Lagos' } });
   fireEvent.change(screen.getByLabelText('State (blank for all)'), { target: { value: 'Lagos' } });
   mocks.saveManualShippingRate.mockResolvedValue(saved);
@@ -83,4 +83,39 @@ it('switches between focused settings workspaces', async () => {
   fireEvent.click(rates);
   expect(await screen.findByRole('heading', { name: 'Manual shipping rates' })).toBeInTheDocument();
   expect(rates).toHaveAttribute('aria-current', 'page');
+});
+
+it('clears manual-rate dirtiness after confirming a category switch', async () => {
+  render(<AdminSettings />);
+  fireEvent.click(await screen.findByRole('button', { name: /Manual rates/ }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Add shipping rate' }));
+  fireEvent.change(screen.getByLabelText('Rate name'), { target: { value: 'Draft rate' } });
+  vi.spyOn(window, 'confirm').mockReturnValue(true);
+  fireEvent.click(screen.getByRole('button', { name: /Shipping/ }));
+  expect(await screen.findByRole('heading', { name: 'Shipping provider' })).toBeInTheDocument();
+  vi.mocked(window.confirm).mockClear();
+  fireEvent.click(screen.getByRole('button', { name: /Manual rates/ }));
+  fireEvent.click(screen.getByRole('button', { name: /Exchange rate/ }));
+  expect(window.confirm).not.toHaveBeenCalled();
+});
+
+it('traps Tab in both directions and preserves a draft when cancelled', async () => {
+  render(<AdminSettings />);
+  fireEvent.click(await screen.findByRole('button', { name: /Manual rates/ }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Add shipping rate' }));
+  const dialog = screen.getByRole('dialog');
+  const first = screen.getByLabelText('Rate name');
+  const last = screen.getByRole('button', { name: 'Cancel' });
+  expect(document.activeElement).toBe(first);
+  last.focus();
+  fireEvent.keyDown(document, { key: 'Tab' });
+  expect(document.activeElement).toBe(first);
+  first.focus();
+  fireEvent.keyDown(document, { key: 'Tab', shiftKey: true });
+  expect(document.activeElement).toBe(last);
+  fireEvent.change(first, { target: { value: 'Keep this draft' } });
+  vi.spyOn(window, 'confirm').mockReturnValue(false);
+  fireEvent.click(last);
+  expect(dialog).toBeInTheDocument();
+  expect(screen.getByLabelText('Rate name')).toHaveValue('Keep this draft');
 });
