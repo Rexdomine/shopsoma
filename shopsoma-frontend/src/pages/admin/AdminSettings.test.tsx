@@ -26,6 +26,7 @@ it('saves a genuine zero rate, reloads persisted values, previews and deactivate
   render(<AdminSettings />);
   fireEvent.click(await screen.findByRole('button', { name: /Manual rates/ }));
   await screen.findByText('No manual rates configured. Add an active rate before accepting orders.');
+  fireEvent.click(screen.getByRole('button', { name: 'Add shipping rate' }));
   fireEvent.change(screen.getByLabelText('Rate name'), { target: { value: 'Free Lagos' } });
   fireEvent.change(screen.getByLabelText('State (blank for all)'), { target: { value: 'Lagos' } });
   mocks.saveManualShippingRate.mockResolvedValue(saved);
