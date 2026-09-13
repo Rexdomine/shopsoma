@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 
 import anyio
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy import update as sqlalchemy_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -39,6 +39,8 @@ from app.schemas.app_setting import (
 )
 from app.api.dependencies import get_current_user, require_admin
 from app.services.commission import COMMISSION_SETTING_KEY, DEFAULT_COMMISSION_RATE, normalize_commission_rate
+
+from app.services.shipping.provider_settings import shipping_provider_settings
 
 logger = logging.getLogger(__name__)
 
@@ -274,14 +276,9 @@ async def get_shipping_provider_settings(
     """
     Get shipping provider settings (public endpoint)
 
-    Returns whether ShipBubble is enabled for shipping rates.
+    Returns the effective provider and secure checkout readiness.
     """
-    use_shipbubble_str = await get_app_setting_value(db, "shipping_use_shipbubble", "false")
-    use_shipbubble = use_shipbubble_str.lower() == "true"
-
-    logger.info(f"[Settings] ShipBubble enabled: {use_shipbubble}")
-
-    return ShippingProviderSettings(use_shipbubble=use_shipbubble)
+    return await shipping_provider_settings(db)
 
 
 @router.get("/public/featured-rotation", response_model=FeaturedRotationSettings)
@@ -321,14 +318,26 @@ async def update_shipping_provider_settings(
     """
     Update shipping provider settings (Admin only)
 
-    Toggle between ShipBubble and local shipping rates.
+    Select one ready provider and atomically maintain the legacy setting.
     """
-    value_str = "true" if settings.use_shipbubble else "false"
-    await update_app_setting_value(db, "shipping_use_shipbubble", value_str)
-
-    logger.info(f"[Settings] Admin {current_user.email} updated ShipBubble to: {settings.use_shipbubble}")
-
-    return ShippingProviderSettings(use_shipbubble=settings.use_shipbubble)
+    effective = await shipping_provider_settings(db)
+    if not effective.readiness[settings.provider]:
+        raise HTTPException(status_code=409, detail=f"{settings.provider} is not available for secure checkout")
+    # A transaction advisory lock also serializes the first write when neither
+    # setting row exists. Both keys and operator metadata commit together.
+    await db.execute(text("SELECT pg_advisory_xact_lock(736401, 1)"))
+    for key, value, value_type in (
+        ("shipping_provider", settings.provider, "string"),
+        ("shipping_use_shipbubble", "true" if settings.provider == "shipbubble" else "false", "boolean"),
+    ):
+        row = await db.scalar(select(AppSetting).where(AppSetting.key == key))
+        if row is None:
+            row = AppSetting(key=key, value_type=value_type)
+            db.add(row)
+        row.value = value
+        row.description = f"Shipping provider updated by admin {current_user.id}"
+    await db.commit()
+    return await shipping_provider_settings(db)
 
 
 @router.get("/admin/featured-rotation", response_model=FeaturedRotationSettings)

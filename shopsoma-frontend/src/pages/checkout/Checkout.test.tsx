@@ -4,6 +4,7 @@ import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
+  getShippingProviderSettings: vi.fn(),
   getAddresses: vi.fn(),
   calculateShipping: vi.fn(),
   reviewOrder: vi.fn(),
@@ -75,6 +76,7 @@ vi.mock('../../services/checkoutService', () => ({
     validatePromoCode: vi.fn(),
   },
 }));
+vi.mock('../../services/settingsService', () => ({ getShippingProviderSettings: mocks.getShippingProviderSettings }));
 vi.mock('../../services/paymentService', () => ({
   paymentService: {
     initializePayment: mocks.initializePayment,
@@ -200,10 +202,66 @@ async function openEnforcedGuestStripe(capability: string) {
 }
 
 describe('Checkout M5 sequencing and recovery', () => {
+  it.each(['', 'default-product-1', '550e8400-e29b-41d4-a716-446655440000'])('normalizes optional cart variant %j in review and create', async (variantId) => {
+    // cartService supplies an empty ID for a real single-product cart item.
+    mocks.cartState.cart.items[0].variant.id = variantId;
+    await reachPaymentStep();
+    const expected = !variantId || variantId.startsWith('default-') ? null : variantId;
+    for (const request of [mocks.reviewOrder, mocks.createOrder]) {
+      expect(request.mock.calls[0][0].items[0].variant_id).toBe(expected);
+    }
+  });
+
+  it('uses saved manual estimates without legacy quote or review before payment', async () => {
+    mocks.getShippingProviderSettings.mockResolvedValue({ provider: 'manual', checkout_estimates_required: true });
+    mocks.calculateShipping.mockRejectedValue(new Error('Legacy quote must not run'));
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Continue' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Purchase' })[0]);
+    await screen.findByRole('button', { name: 'Select Standard delivery' });
+    expect(mocks.calculateShipping).not.toHaveBeenCalled();
+    expect(mocks.reviewOrder).not.toHaveBeenCalled();
+    expect(mocks.initializePayment).not.toHaveBeenCalled();
+    expect(mocks.createOrder.mock.calls[0][0].shipping_rate_id).toBeUndefined();
+    expect(screen.getByRole('button', { name: 'Continue to payment' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Select Standard delivery' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Continue to payment' })).toBeEnabled());
+    expect(screen.getAllByText('NGN 2,500.00').length).toBeGreaterThan(0);
+  });
+
+  it('creates manual shipping estimates for a guest address and preserves its capability', async () => {
+    mocks.auth.isAuthenticated = false;
+    mocks.getShippingProviderSettings.mockResolvedValue({ provider: 'manual', checkout_estimates_required: true });
+    mockGuestCapability('guest-manual-capability');
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    fireEvent.change(await screen.findByPlaceholderText('you@example.com'), { target: { value: 'guest@example.com' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    fireEvent.click(screen.getByRole('button', { name: '+ Add New Address' }));
+    for (const [label, value] of [['Full Name', 'Guest Buyer'], ['Street Address', '1 Test Street'], ['City', 'Lagos'], ['State', 'Lagos']]) {
+      fireEvent.change(screen.getByLabelText(label), { target: { value } });
+    }
+    fireEvent.change(screen.getByPlaceholderText('08012345678'), { target: { value: '08012345678' } });
+    fireEvent.click(screen.getByRole('button', { name: /Save Address/i }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Continue' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Purchase' })[0]);
+    await screen.findByRole('button', { name: 'Select Standard delivery' });
+    expect(screen.getByRole('button', { name: 'Edit delivery address' })).toBeDisabled();
+    expect(mocks.createOrder).toHaveBeenCalledWith(expect.objectContaining({ customer_email: 'guest@example.com', guest_address: expect.objectContaining({ state: 'Lagos' }) }));
+    expect(mocks.createCheckoutEstimate).toHaveBeenCalledWith('order-1', expect.any(String), 'guest-manual-capability');
+    expect(mocks.calculateShipping).not.toHaveBeenCalled();
+    expect(mocks.initializePayment).not.toHaveBeenCalled();
+  });
+
   beforeEach(() => {
     vi.resetAllMocks();
+    mocks.auth.isAuthenticated = true;
+    mocks.cartState.cart.items[0].variant.id = 'default-product-1';
+    sessionStorage.clear();
     vi.stubGlobal('alert', vi.fn());
     vi.stubGlobal('crypto', { randomUUID: vi.fn(() => `id-${Math.random()}`) });
+    mocks.getShippingProviderSettings.mockResolvedValue({ provider: 'manual', checkout_estimates_required: false });
     mocks.getAddresses.mockResolvedValue({ addresses: [address] });
     mocks.calculateShipping.mockResolvedValue({ available_rates: [rate], recommended_rate: rate });
     mocks.reviewOrder.mockResolvedValue(review);

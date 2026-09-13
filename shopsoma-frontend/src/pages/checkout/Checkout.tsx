@@ -1,3 +1,4 @@
+import { getShippingProviderSettings } from '../../services/settingsService';
 import { useState, useEffect } from 'react';
 import { flushSync } from 'react-dom';
 import { buildPaystackWidgetConfig, type PaymentGateway, type InitializePaymentResponse } from '../../services/paymentService';
@@ -106,6 +107,16 @@ export default function Checkout() {
     address_type: 'shipping',
     is_default: false,
   });
+
+  const [allDomesticEstimates, setAllDomesticEstimates] = useState(false);
+  const [shippingConfigLoaded, setShippingConfigLoaded] = useState(false);
+  useEffect(() => {
+    void getShippingProviderSettings().then(config => setAllDomesticEstimates(config.checkout_estimates_required))
+      .catch(() => setAllDomesticEstimates(false)).finally(() => setShippingConfigLoaded(true));
+  }, []);
+
+  const destinationCountry = addresses.find(address => address.id === selectedAddressId)?.country.trim().toLowerCase();
+  const secureShipping = allDomesticEstimates && (destinationCountry === 'nigeria' || destinationCountry === 'ng');
 
   // Shipping state
   const [shippingRates, setShippingRates] = useState<ShippingRate[]>([]);
@@ -250,6 +261,7 @@ export default function Checkout() {
   };
 
   const handleCreateAddress = async () => {
+    if (enforcedOrder) return;
     // For guest checkout, just use the address locally without saving to backend
     if (isGuestCheckout) {
       const guestAddress: Address = {
@@ -384,7 +396,7 @@ export default function Checkout() {
     try {
       const items = cart.items.map(item => ({
         product_id: item.product_id,
-        variant_id: item.variant?.id?.startsWith('default-') ? null : item.variant?.id,
+        variant_id: !item.variant?.id || item.variant.id.startsWith('default-') ? null : item.variant.id,
         quantity: item.quantity,
       }));
 
@@ -395,7 +407,7 @@ export default function Checkout() {
       const reviewRequest: any = {
         items,
         currency,
-        shipping_rate_id: selectedShippingRateId || undefined,
+        shipping_rate_id: secureShipping ? undefined : selectedShippingRateId || undefined,
         promo_code: appliedPromo?.code,
       };
 
@@ -585,20 +597,20 @@ export default function Checkout() {
   };
 
   const handlePurchase = async () => {
-    if (!selectedAddressId || !orderReview || enforcedOrder) return;
+    if (!selectedAddressId || (!secureShipping && !orderReview) || enforcedOrder) return;
 
     setIsCreatingOrder(true);
     try {
       const items = cart.items.map(item => ({
         product_id: item.product_id,
-        variant_id: item.variant?.id?.startsWith('default-') ? null : item.variant?.id,
+        variant_id: !item.variant?.id || item.variant.id.startsWith('default-') ? null : item.variant.id,
         quantity: item.quantity,
       }));
       const selectedAddress = addresses.find(addr => addr.id === selectedAddressId);
       const orderRequest: any = {
         items,
         currency,
-        shipping_rate_id: selectedShippingRateId || undefined,
+        shipping_rate_id: secureShipping ? undefined : selectedShippingRateId || undefined,
         promo_code: appliedPromo?.code,
       };
 
@@ -621,6 +633,9 @@ export default function Checkout() {
 
       const order = await checkoutService.createOrder(orderRequest);
       if (order.workflow_cohort !== 'domestic_checkout_v1') {
+        if (secureShipping) {
+          throw new Error('Checkout configuration changed. Reload checkout to review shipping before payment.');
+        }
         await initializeOrderPayment(order);
         return;
       }
@@ -677,13 +692,15 @@ export default function Checkout() {
     const selectionKey = selectionKeys.get(identity) ?? newIdempotencyKey('selection');
     selectionKeys.set(identity, selectionKey);
     try {
-      return await checkoutService.selectCheckoutEstimateOption(
+      const selectedEstimate = await checkoutService.selectCheckoutEstimateOption(
         enforcedOrder.id,
         estimateId,
         optionId,
         selectionKey,
         checkoutCapability,
       );
+      setCheckoutEstimate(selectedEstimate);
+      return selectedEstimate;
     } catch (error: any) {
       if (error.response?.status === 404 || error.response?.status === 410) {
         discardExpiredCheckout();
@@ -776,7 +793,7 @@ export default function Checkout() {
   );
   const hasSelectedAddress = !!selectedAddressId;
   const hasSelectedShipping = !!selectedShippingRateId;
-  const canPurchase = step === 'payment' && hasEmail && hasSelectedAddress && hasSelectedShipping && orderReview && !enforcedOrder;
+  const canPurchase = step === 'payment' && hasEmail && hasSelectedAddress && (secureShipping || (hasSelectedShipping && orderReview)) && !enforcedOrder;
 
   const selectedShippingRate = shippingRates.find(rate => rate.id === selectedShippingRateId);
   const shippingRateInSelectedCurrency = selectedShippingRate
@@ -840,8 +857,12 @@ export default function Checkout() {
 
   const handleAddressSave = async () => {
     if (hasSelectedAddress) {
-      await handleCalculateShipping();
-      setStep('shipping');
+      if (secureShipping) {
+        setStep('payment');
+      } else {
+        await handleCalculateShipping();
+        setStep('shipping');
+      }
     }
   };
 
@@ -1037,6 +1058,7 @@ export default function Checkout() {
                             >
                               <button
                                 type="button"
+                                disabled={!!enforcedOrder}
                                 onClick={() => setSelectedAddressId(addr.id)}
                                 className="flex-1 text-left"
                               >
@@ -1049,6 +1071,8 @@ export default function Checkout() {
                               {isGuestCheckout && addr.id === 'guest-address' && (
                                 <button
                                   type="button"
+                                  aria-label="Edit delivery address"
+                                  disabled={!!enforcedOrder}
                                   onClick={() => {
                                     setNewAddress({
                                       full_name: addr.full_name,
@@ -1081,7 +1105,8 @@ export default function Checkout() {
                                 <label className="text-xs text-gray-500">Full Name</label>
                                 <input
                                   type="text"
-                                  value={newAddress.full_name}
+                                  aria-label="Full Name"
+                                    value={newAddress.full_name}
                                   onChange={(e) => setNewAddress({ ...newAddress, full_name: e.target.value })}
                                   className="w-full border-b border-gray-300 focus:border-primary focus:outline-none py-2 text-sm"
                                   required
@@ -1118,7 +1143,8 @@ export default function Checkout() {
                                 <label className="text-xs text-gray-500">Street Address</label>
                                 <input
                                   type="text"
-                                  value={newAddress.address_line1}
+                                  aria-label="Street Address"
+                                    value={newAddress.address_line1}
                                   onChange={(e) => setNewAddress({ ...newAddress, address_line1: e.target.value })}
                                   className="w-full border-b border-gray-300 focus:border-primary focus:outline-none py-2 text-sm"
                                   required
@@ -1129,6 +1155,7 @@ export default function Checkout() {
                                   <label className="text-xs text-gray-500">City</label>
                                   <input
                                     type="text"
+                                    aria-label="City"
                                     value={newAddress.city}
                                     onChange={(e) => setNewAddress({ ...newAddress, city: e.target.value })}
                                     className="w-full border-b border-gray-300 focus:border-primary focus:outline-none py-2 text-sm"
@@ -1139,6 +1166,7 @@ export default function Checkout() {
                                   <label className="text-xs text-gray-500">State</label>
                                   <input
                                     type="text"
+                                    aria-label="State"
                                     value={newAddress.state}
                                     onChange={(e) => setNewAddress({ ...newAddress, state: e.target.value })}
                                     className="w-full border-b border-gray-300 focus:border-primary focus:outline-none py-2 text-sm"
@@ -1183,6 +1211,7 @@ export default function Checkout() {
                           ) : !isGuestCheckout || addresses.length === 0 ? (
                             <button
                               type="button"
+                              disabled={!!enforcedOrder}
                               onClick={() => setShowNewAddressForm(true)}
                               className="w-full py-3 border border-dashed border-gray-300 rounded-sm text-sm text-gray-600 hover:border-primary hover:text-primary"
                             >
@@ -1194,7 +1223,7 @@ export default function Checkout() {
                             <button
                               type="button"
                               onClick={handleAddressSave}
-                              disabled={!hasSelectedAddress || isLoadingShipping}
+                              disabled={!hasSelectedAddress || isLoadingShipping || !shippingConfigLoaded || !!enforcedOrder}
                               className="w-full py-3 rounded-sm bg-primary text-white text-sm font-semibold disabled:opacity-50"
                             >
                               {isLoadingShipping ? 'Calculating Shipping...' : 'Continue'}
@@ -1211,7 +1240,7 @@ export default function Checkout() {
                 {/* Shipping Step */}
                 <div className="space-y-4">
                   {renderStepTitle('Shipping Method', step === 'shipping' || step === 'payment')}
-                  {step === 'shipping' || step === 'payment' ? (
+                  {secureShipping ? <p className="text-sm text-gray-600">Delivery options are saved after you continue. Select a delivery option before payment.</p> : step === 'shipping' || step === 'payment' ? (
                     <div className="space-y-3">
                       {shippingRates.map((rate) => (
                         <button
@@ -1231,7 +1260,7 @@ export default function Checkout() {
                               {rate.description} ({rate.min_delivery_days} - {rate.max_delivery_days} business days)
                             </p>
                           </div>
-                          <p className="text-sm font-semibold text-gray-800">{formatPrice(rate.base_rate)}</p>
+                          <p className="text-sm font-semibold text-gray-800">{formatPrice(rate.base_rate, 'NGN')}</p>
                         </button>
                       ))}
                       <button
@@ -1298,6 +1327,10 @@ export default function Checkout() {
                             className="w-full py-2 border border-primary text-primary text-sm font-semibold disabled:opacity-50"
                           >
                             {isCreatingOrder ? 'Retrying delivery options…' : 'Retry delivery options'}
+                          </button>
+                          <button type="button" disabled={isCreatingOrder} className="text-sm underline"
+                            onClick={() => { discardExpiredCheckout(); setOrderReview(null); setSelectedShippingRateId(''); setStep('address'); }}>
+                            Start again with another address
                           </button>
                         </div>
                       )}
@@ -1388,7 +1421,7 @@ export default function Checkout() {
                   <span>{checkoutEstimate?.selected_option?.service_label ?? 'Shipping cost'}</span>
                   <span>{checkoutEstimate?.selected_option
                     ? formatServerMoney(checkoutEstimate.selected_option.amount, checkoutEstimate.selected_option.currency)
-                    : formatPrice(orderReview?.summary.shipping_cost ?? Number(shippingRateInSelectedCurrency), orderReview ? reviewSummaryCurrency : currency)}</span>
+                    : secureShipping ? 'Select delivery option' : formatPrice(orderReview?.summary.shipping_cost ?? Number(shippingRateInSelectedCurrency), orderReview ? reviewSummaryCurrency : currency)}</span>
                 </div>
                 <div className="flex items-center justify-between">
                   <span>Tax (VAT 7.5%)</span>
@@ -1404,6 +1437,7 @@ export default function Checkout() {
                   <input
                     type="text"
                     value={promo}
+                    disabled={!!enforcedOrder}
                     onChange={(e) => setPromo(e.target.value)}
                     placeholder="Promo code"
                     className="flex-1 border border-gray-300 rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-primary"
@@ -1411,7 +1445,7 @@ export default function Checkout() {
                   <button
                     type="button"
                     onClick={handleApplyPromo}
-                    disabled={isApplyingPromo}
+                    disabled={isApplyingPromo || !!enforcedOrder}
                     className="px-4 py-2 rounded-sm bg-primary text-white text-sm font-semibold disabled:opacity-50"
                   >
                     {isApplyingPromo ? '...' : 'Apply'}

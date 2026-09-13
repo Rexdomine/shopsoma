@@ -1,9 +1,9 @@
 """Order management endpoints"""
 
 from typing import Optional, List, Dict
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Header
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update, and_, or_, func
+from sqlalchemy import select, update, func
 from sqlalchemy.orm import selectinload
 from uuid import UUID, uuid4, uuid5
 from datetime import datetime, timedelta, timezone
@@ -25,7 +25,8 @@ from app.models.product import (
 )
 from app.models.payment import Payment
 from app.models.address import Address
-from app.models.shipping_rate import ShippingRate
+from app.services.shipping.manual_rates import manual_rates_query
+from app.services.shipping.provider_settings import require_manual_order_pricing
 from app.models.vendor import Vendor
 from app.models.fulfillment_cohort import (
     CohortItemAllocation,
@@ -58,7 +59,10 @@ from app.services.email_service import email_service
 from app.services.vendor_notification_service import VendorNotificationService
 from app.services.commission import get_vendor_commission_rate
 from app.core.config import settings
-from app.services.checkout.capabilities import issue_checkout_capability
+from app.services.checkout.capabilities import (
+    issue_checkout_capability,
+    authorize_checkout_actor,
+)
 from app.services.shipping.capabilities import domestic_shipping_capabilities
 from app.services.checkout.reservations import release_active_order_reservations
 
@@ -79,7 +83,7 @@ def _domestic_checkout_is_enforced(
     # must remain on the legacy path rather than exposing the bridge there.
     if settings.ENVIRONMENT == "production" or settings.DHL_ENVIRONMENT != "sandbox":
         return False
-    if country.casefold() != "nigeria" or currency not in SUPPORTED_ORDER_CURRENCIES:
+    if country.strip().casefold() not in {"nigeria", "ng"} or currency not in SUPPORTED_ORDER_CURRENCIES:
         return False
     if customer_id in settings.domestic_checkout_cohort_ids:
         return True
@@ -569,6 +573,8 @@ async def review_order(
             detail=f"Minimum order amount is {checkout_currency} {minimum_order_amount} equivalent. Please add more items before checkout.",
         )
 
+    await require_manual_order_pricing(db)
+
     # Calculate shipping
     # Use either saved address or guest address for shipping calculation
     shipping_country = (
@@ -578,33 +584,12 @@ async def review_order(
         shipping_address.state if shipping_address else guest_shipping_state
     )
 
-    shipping_query = (
-        select(ShippingRate)
-        .where(
-            and_(
-                ShippingRate.is_active == True,
-                ShippingRate.country == shipping_country,
-                or_(ShippingRate.state == shipping_state, ShippingRate.state == None),
-            )
-        )
-        .order_by(ShippingRate.priority.asc())
-    )
-
-    shipping_result = await db.execute(shipping_query)
-    shipping_rates = shipping_result.scalars().all()
-
-    # Fallback: if no rates match filters but a specific rate was selected, try loading it directly
-    if not shipping_rates and review_data.shipping_rate_id:
-        direct_rate_query = select(ShippingRate).where(
-            and_(
-                ShippingRate.id == review_data.shipping_rate_id,
-                ShippingRate.is_active == True,
-            )
-        )
-        direct_result = await db.execute(direct_rate_query)
-        direct_rate = direct_result.scalar_one_or_none()
-        if direct_rate:
-            shipping_rates = [direct_rate]
+    shipping_rates = list((await db.scalars(manual_rates_query(shipping_country, shipping_state))).all())
+    shipping_rates = [rate for rate in shipping_rates if (
+        rate.min_order_value is None or _convert_currency(_as_decimal(rate.min_order_value), "NGN", checkout_currency, usd_to_ngn_rate) <= subtotal
+    ) and (
+        rate.max_order_value is None or _convert_currency(_as_decimal(rate.max_order_value), "NGN", checkout_currency, usd_to_ngn_rate) >= subtotal
+    )]
 
     if not shipping_rates:
         raise HTTPException(
@@ -614,6 +599,8 @@ async def review_order(
 
     selected_rate = next((r for r in shipping_rates if r.is_default), shipping_rates[0])
     if review_data.shipping_rate_id:
+        if not any(r.id == review_data.shipping_rate_id for r in shipping_rates):
+            raise HTTPException(status_code=422, detail="Selected shipping rate is not eligible")
         selected_rate = (
             next(
                 (r for r in shipping_rates if r.id == review_data.shipping_rate_id),
@@ -901,36 +888,16 @@ async def create_order(
             detail=f"Minimum order amount is {checkout_currency} {minimum_order_amount} equivalent. Please add more items before checkout.",
         )
 
+    if not enforced_checkout:
+        await require_manual_order_pricing(db)
+
     # Get shipping rate
-    shipping_query = (
-        select(ShippingRate)
-        .where(
-            and_(
-                ShippingRate.is_active == True,
-                ShippingRate.country == shipping_address.country,
-                or_(
-                    ShippingRate.state == shipping_address.state,
-                    ShippingRate.state == None,
-                ),
-            )
-        )
-        .order_by(ShippingRate.priority.asc())
-    )
-
-    shipping_result = await db.execute(shipping_query)
-    shipping_rates = shipping_result.scalars().all()
-
-    if not shipping_rates and order_data.shipping_rate_id:
-        direct_rate_query = select(ShippingRate).where(
-            and_(
-                ShippingRate.id == order_data.shipping_rate_id,
-                ShippingRate.is_active == True,
-            )
-        )
-        direct_result = await db.execute(direct_rate_query)
-        direct_rate = direct_result.scalar_one_or_none()
-        if direct_rate:
-            shipping_rates = [direct_rate]
+    shipping_rates = list((await db.scalars(manual_rates_query(shipping_address.country, shipping_address.state))).all())
+    shipping_rates = [rate for rate in shipping_rates if (
+        rate.min_order_value is None or _convert_currency(_as_decimal(rate.min_order_value), "NGN", checkout_currency, usd_to_ngn_rate) <= subtotal
+    ) and (
+        rate.max_order_value is None or _convert_currency(_as_decimal(rate.max_order_value), "NGN", checkout_currency, usd_to_ngn_rate) >= subtotal
+    )]
 
     if not shipping_rates and not (
         enforced_checkout
@@ -951,6 +918,8 @@ async def create_order(
             (r for r in shipping_rates if r.is_default), shipping_rates[0]
         )
         if order_data.shipping_rate_id:
+            if not any(r.id == order_data.shipping_rate_id for r in shipping_rates):
+                raise HTTPException(status_code=422, detail="Selected shipping rate is not eligible")
             selected_rate = (
                 next(
                     (r for r in shipping_rates if r.id == order_data.shipping_rate_id),
@@ -1423,9 +1392,40 @@ async def list_orders(
     return OrderListResponse(orders=orders, total=total, page=page, page_size=page_size)
 
 
+async def _authorize_order_read(db, *, order, current_user, capability):
+    """Keep legacy passwordless guest reads; use canonical checkout auth otherwise."""
+    if current_user and current_user.role == UserRole.ADMIN:
+        return
+    if order.workflow_cohort not in {
+        "legacy_pre_bridge",
+        "legacy_ambiguous_quarantined",
+    }:
+        await authorize_checkout_actor(
+            db, order=order, current_user=current_user, token=capability
+        )
+        return
+    if current_user:
+        if order.customer_id == current_user.id:
+            return
+    else:
+        owner = await db.get(User, order.customer_id)
+        if (
+            owner is not None
+            and owner.is_guest_created
+            and owner.hashed_password is None
+            and owner.is_active
+        ):
+            return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Not authorized to view this order",
+    )
+
+
 @router.get("/{order_id}", response_model=OrderResponse)
 async def get_order(
     order_id: UUID,
+    capability: Optional[str] = Header(None, alias="X-ShopSoma-Checkout-Capability"),
     current_user: Optional[User] = Depends(get_optional_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -1433,7 +1433,7 @@ async def get_order(
     Get a specific order by ID
 
     Works for both authenticated users and guest checkout.
-    Guests can view orders without authentication.
+    Legacy passwordless guests retain access; modern guests need their capability.
     """
     from app.models.product import ProductImage
 
@@ -1448,6 +1448,7 @@ async def get_order(
             selectinload(Order.payments),
         )
         .where(Order.id == order_id)
+        .with_for_update()
     )
 
     result = await db.execute(query)
@@ -1458,13 +1459,13 @@ async def get_order(
             status_code=status.HTTP_404_NOT_FOUND, detail="Order not found"
         )
 
-    # Verify ownership if user is authenticated (unless admin)
-    if current_user:
-        if current_user.role != UserRole.ADMIN and order.customer_id != current_user.id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Not authorized to view this order",
-            )
+    # Lock the order before the canonical owner/capability rows used by checkout auth.
+    await _authorize_order_read(
+        db, order=order, current_user=current_user, capability=capability
+    )
+
+    # The plaintext capability is returned only by order creation, never by reads.
+    order.checkout_capability = None
 
     # Add product image URLs to order items
     for item in order.items:
@@ -1487,6 +1488,7 @@ async def get_order(
 @router.get("/{order_id}/tracking")
 async def get_order_tracking(
     order_id: UUID,
+    capability: Optional[str] = Header(None, alias="X-ShopSoma-Checkout-Capability"),
     current_user: Optional[User] = Depends(get_optional_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -1496,7 +1498,7 @@ async def get_order_tracking(
     Returns tracking details including order status, history, and amount.
     Works for both authenticated users and guest checkout.
     """
-    query = select(Order).where(Order.id == order_id)
+    query = select(Order).where(Order.id == order_id).with_for_update()
     result = await db.execute(query)
     order = result.scalar_one_or_none()
 
@@ -1505,13 +1507,10 @@ async def get_order_tracking(
             status_code=status.HTTP_404_NOT_FOUND, detail="Order not found"
         )
 
-    # Verify ownership if user is authenticated (unless admin)
-    if current_user:
-        if current_user.role != UserRole.ADMIN and order.customer_id != current_user.id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Not authorized to view this order",
-            )
+    # Lock the order before the canonical owner/capability rows used by checkout auth.
+    await _authorize_order_read(
+        db, order=order, current_user=current_user, capability=capability
+    )
 
     # Prefer the persisted carrier tracking number when available; otherwise fall back
     # to the legacy synthetic public identifier.

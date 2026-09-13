@@ -1,7 +1,7 @@
 """Shipping rate configuration endpoints"""
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update, delete, and_, or_
+from sqlalchemy import select, update, and_, or_, text
 from uuid import UUID
 from decimal import Decimal
 from datetime import datetime, timedelta
@@ -10,7 +10,8 @@ import logging
 from app.core.database import get_db
 from app.models.user import User, UserRole
 from app.models.shipping_rate import ShippingRate
-from app.models.app_setting import AppSetting
+from app.services.shipping.provider_settings import require_manual_order_pricing
+from app.services.shipping.manual_rates import manual_rates_query
 from app.models.address import Address
 from app.schemas.shipping_rate import (
     ShippingRateCreate,
@@ -60,6 +61,7 @@ async def create_shipping_rate(
     - **is_default**: Default rate
     - **priority**: Priority (lower number = higher priority)
     """
+    await db.execute(text("SELECT pg_advisory_xact_lock(736401, 2)"))
     # If setting as default, unset other defaults
     if rate_data.is_default:
         await db.execute(
@@ -140,6 +142,7 @@ async def update_shipping_rate(
     """
     Update a shipping rate (Admin only)
     """
+    await db.execute(text("SELECT pg_advisory_xact_lock(736401, 2)"))
     # Get existing rate
     query = select(ShippingRate).where(ShippingRate.id == rate_id)
     result = await db.execute(query)
@@ -151,17 +154,18 @@ async def update_shipping_rate(
             detail="Shipping rate not found"
         )
 
-    # If setting as default, unset other defaults
-    if rate_data.is_default and rate_data.is_default != rate.is_default:
-        await db.execute(
-            update(ShippingRate)
-            .where(ShippingRate.id != rate_id)
-            .values(is_default=False)
-        )
-
     # Update rate fields
     update_data = rate_data.model_dump(exclude_unset=True)
-    for field, value in update_data.items():
+    merged = {column.name: getattr(rate, column.name) for column in ShippingRate.__table__.columns}
+    merged.update(update_data)
+    # Validate the merged state, not only the partial PATCH payload.
+    try:
+        normalized = ShippingRateCreate(**{k: merged[k] for k in ShippingRateCreate.model_fields if k in merged})
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if normalized.is_default:
+        await db.execute(update(ShippingRate).where(ShippingRate.id != rate_id).values(is_default=False))
+    for field, value in normalized.model_dump().items():
         setattr(rate, field, value)
 
     await db.commit()
@@ -179,6 +183,7 @@ async def delete_shipping_rate(
     """
     Delete a shipping rate (Admin only)
     """
+    await db.execute(text("SELECT pg_advisory_xact_lock(736401, 2)"))
     query = select(ShippingRate).where(ShippingRate.id == rate_id)
     result = await db.execute(query)
     rate = result.scalar_one_or_none()
@@ -189,9 +194,11 @@ async def delete_shipping_rate(
             detail="Shipping rate not found"
         )
 
-    await db.execute(delete(ShippingRate).where(ShippingRate.id == rate_id))
+    # Rates may be referenced by immutable checkout snapshots; deactivate
+    # instead of deleting historical configuration.
+    rate.is_active = False
+    rate.is_default = False
     await db.commit()
-
     return None
 
 
@@ -204,37 +211,14 @@ async def calculate_shipping(
     Calculate available shipping rates for an order
 
     Returns all matching rates sorted by priority, with a recommended rate.
-    Uses ShipBubble API if enabled, otherwise falls back to local rates.
+    Preview saved manual rates; unavailable provider modes fail closed.
 
     - **country**: Delivery country
     - **state**: Delivery state
     - **order_value**: Order subtotal
-    - **address_id**: (Optional) Delivery address ID for ShipBubble integration
     """
-    # Check if ShipBubble is enabled
-    use_shipbubble = False
-    setting_query = select(AppSetting).where(AppSetting.key == "shipping_use_shipbubble")
-    setting_result = await db.execute(setting_query)
-    setting = setting_result.scalar_one_or_none()
-    if setting:
-        use_shipbubble = setting.value.lower() == "true"
-
-    logger.info(f"[Shipping] Calculating rates with ShipBubble={use_shipbubble}")
-
-    # Try ShipBubble if enabled
-    if use_shipbubble:
-        try:
-            shipbubble_rates = await _get_shipbubble_rates(calc_data, db)
-            if shipbubble_rates:
-                logger.info(f"[Shipping] Using {len(shipbubble_rates)} ShipBubble rates")
-                return shipbubble_rates
-            else:
-                logger.warning("[Shipping] ShipBubble returned no rates, falling back to local")
-        except Exception as e:
-            logger.error(f"[Shipping] ShipBubble error: {str(e)}, falling back to local rates")
-
-    # Fall back to local rates
-    logger.info("[Shipping] Using local database rates")
+    # Preserve preliminary manual pricing before partial-cohort classification.
+    await require_manual_order_pricing(db)
     return await _get_local_rates(calc_data, db)
 
 
@@ -362,33 +346,11 @@ async def _get_local_rates(
     db: AsyncSession
 ) -> ShippingCalculationResponse:
     """Get shipping rates from local database"""
-    # Build query to find matching rates
-    query = select(ShippingRate).where(
-        and_(
-            ShippingRate.is_active == True,
-            ShippingRate.country == calc_data.country,
-            or_(
-                ShippingRate.state == calc_data.state,
-                ShippingRate.state == None
-            ),
-            or_(
-                ShippingRate.min_order_value == None,
-                ShippingRate.min_order_value <= calc_data.order_value
-            ),
-            or_(
-                ShippingRate.max_order_value == None,
-                ShippingRate.max_order_value >= calc_data.order_value
-            )
-        )
-    ).order_by(ShippingRate.priority.asc(), ShippingRate.base_rate.asc())
-
-    result = await db.execute(query)
-    available_rates = []
-    for rate in result.scalars().all():
-        # Ensure base_rate respects schema validation
-        if rate.base_rate <= Decimal("0.00"):
-            rate.base_rate = Decimal("0.01")
-        available_rates.append(rate)
+    query = manual_rates_query(calc_data.country, calc_data.state).where(
+        or_(ShippingRate.min_order_value.is_(None), ShippingRate.min_order_value <= calc_data.order_value),
+        or_(ShippingRate.max_order_value.is_(None), ShippingRate.max_order_value >= calc_data.order_value),
+    )
+    available_rates = list((await db.scalars(query)).all())
 
     if not available_rates:
         raise HTTPException(
@@ -423,6 +385,7 @@ async def set_default_rate(
     """
     Set a shipping rate as the default (Admin only)
     """
+    await db.execute(text("SELECT pg_advisory_xact_lock(736401, 2)"))
     # Get rate
     query = select(ShippingRate).where(ShippingRate.id == rate_id)
     result = await db.execute(query)
@@ -434,6 +397,8 @@ async def set_default_rate(
             detail="Shipping rate not found"
         )
 
+    if not rate.is_active:
+        raise HTTPException(status_code=422, detail="Only an active rate can be the default")
     # Unset other defaults
     await db.execute(
         update(ShippingRate)
