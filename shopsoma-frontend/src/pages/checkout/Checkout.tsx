@@ -1536,10 +1536,13 @@ export default function Checkout() {
                 <div className="flex items-center justify-between">
                   <span>Subtotal</span>
                   <span>{formatPrice(
-                    committedLegacyOrder?.subtotal
+                    enforcedOrder?.subtotal
+                      ?? committedLegacyOrder?.subtotal
                       ?? orderReview?.summary.subtotal
                       ?? cartSubtotalInSelectedCurrency,
-                    committedLegacyOrder?.currency ?? (orderReview ? reviewSummaryCurrency : currency),
+                    enforcedOrder?.currency
+                      ?? committedLegacyOrder?.currency
+                      ?? (orderReview ? reviewSummaryCurrency : currency),
                   )}</span>
                 </div>
                 <div className="flex items-center justify-between">

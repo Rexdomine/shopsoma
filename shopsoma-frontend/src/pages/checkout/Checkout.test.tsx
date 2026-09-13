@@ -421,6 +421,23 @@ describe('Checkout M5 sequencing and recovery', () => {
     expect(mocks.createCheckoutEstimate.mock.invocationCallOrder[0]).toBeLessThan(mocks.initializePayment.mock.invocationCallOrder[0]);
   });
 
+  it('displays the committed subtotal for a secure checkout order', async () => {
+    mocks.getShippingProviderSettings.mockResolvedValue({ provider: 'manual', checkout_estimates_required: true });
+    mocks.createOrder.mockResolvedValueOnce({
+      ...order,
+      subtotal: 61000,
+      total_amount: 63500,
+    });
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Purchase' })[0]);
+    await screen.findByRole('button', { name: 'Select Standard delivery' });
+
+    expect(screen.getByText('₦61,000')).toBeInTheDocument();
+    expect(screen.queryByText('₦60,000')).not.toBeInTheDocument();
+  });
+
   it('commits selected server shipping, tax, and payable truth before Paystack opens', async () => {
     const selectedEstimate = {
       ...estimate,
