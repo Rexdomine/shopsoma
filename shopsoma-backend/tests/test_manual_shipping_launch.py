@@ -11,7 +11,7 @@ from pydantic import SecretStr
 from pydantic import ValidationError
 
 from app.schemas.app_setting import ShippingProviderSettingsUpdate
-from app.schemas.shipping_rate import ShippingRateCreate, ShippingRateUpdate
+from app.schemas.shipping_rate import ShippingRateCreate, ShippingRateResponse, ShippingRateUpdate
 
 
 def test_legacy_provider_payload_is_preserved():
@@ -41,6 +41,20 @@ def test_shipping_rate_delivery_window_matches_estimate_constraint():
         ShippingRateCreate(**rate_payload(max_delivery_days=366))
     with pytest.raises(ValidationError):
         ShippingRateUpdate(max_delivery_days=366)
+
+
+def test_shipping_rate_response_keeps_legacy_blank_country_readable():
+    response = ShippingRateResponse.model_validate({
+        'id': uuid4(), 'name': 'Historical rate', 'description': None,
+        'base_rate': Decimal('0.00'), 'country': '   ', 'state': None,
+        'min_order_value': Decimal('0.00'), 'max_order_value': None,
+        'min_delivery_days': 1, 'max_delivery_days': 400,
+        'is_active': True, 'is_default': False, 'priority': 0,
+        'created_at': '2026-01-01T00:00:00Z', 'updated_at': '2026-01-01T00:00:00Z',
+    })
+    assert response.country == ''
+    with pytest.raises(ValidationError):
+        ShippingRateCreate(**rate_payload(country='   '))
 
 
 @pytest.mark.asyncio

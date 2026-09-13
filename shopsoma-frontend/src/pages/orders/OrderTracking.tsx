@@ -5,7 +5,6 @@ import {
   orderService,
   type OrderTracking,
   type OrderStatus,
-  buildMockTracking,
 } from '../../services/orderService';
 import { checkoutService } from '../../services/checkoutService';
 import websocketService, { type OrderUpdateData } from '../../services/websocketService';
@@ -80,8 +79,9 @@ export default function OrderTracking() {
       } catch (err) {
         console.error('Failed to fetch tracking details', err);
         if (isMounted) {
-          setError('Unable to fetch live tracking details. Showing latest available information.');
-          setTracking(buildMockTracking(orderId));
+          setError('Tracking information is unavailable. Please try again later.');
+          // Never replace an authorized response with fabricated order data.
+          setTracking(null);
         }
       } finally {
         if (isMounted) {
@@ -314,7 +314,7 @@ export default function OrderTracking() {
           <div className="bg-white border border-gray-100 rounded-sm px-6 py-8 shadow-sm space-y-8">
             {loading ? (
               <div className="text-center text-sm text-gray-500">Fetching latest tracking updates...</div>
-            ) : (
+            ) : tracking ? (
               <>
                 {/* Terminal State Alert Banner */}
                 {isTerminalState && tracking && (
@@ -462,6 +462,10 @@ export default function OrderTracking() {
                   </div>
                 </div>
               </>
+            ) : (
+              <div className="text-center text-sm text-gray-600" role="status">
+                Tracking information is unavailable for this order. Please try again later.
+              </div>
             )}
           </div>
         </div>
