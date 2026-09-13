@@ -162,9 +162,16 @@ export default function Checkout() {
 
   const newIdempotencyKey = (prefix: string) => `${prefix}-${crypto.randomUUID()}`;
 
-  // Filter payment options based on currency
+  const committedCheckoutCurrency = checkoutEstimate?.currency
+    ?? orderReview?.summary.currency
+    ?? enforcedOrder?.currency;
+  const displayCurrency = committedCheckoutCurrency ?? currency;
+  const checkoutCurrencyLocked = Boolean(committedCheckoutCurrency);
+
+  // Filter payment options based on the committed order currency once an
+  // order/estimate exists; the preference remains selectable before that.
   const paymentOptions = ALL_PAYMENT_OPTIONS.filter(option =>
-    option.supportedCurrencies.includes(currency)
+    option.supportedCurrencies.includes(displayCurrency)
   );
 
   // Auto-select first available payment method when currency changes
@@ -173,7 +180,7 @@ export default function Checkout() {
     if (!currentMethodSupported && paymentOptions.length > 0) {
       setPaymentMethod(paymentOptions[0].id);
     }
-  }, [currency, paymentMethod, paymentOptions]);
+  }, [displayCurrency, paymentMethod, paymentOptions]);
 
   // Loading states
   const [isLoadingAddresses, setIsLoadingAddresses] = useState(false);
@@ -946,7 +953,7 @@ export default function Checkout() {
 
   // Helper function to format price in selected currency
   const formatPrice = (amount: number, sourceCurrency: Currency = 'NGN') => {
-    return formatPriceWithConversion(amount, sourceCurrency, currency, exchangeRates);
+    return formatPriceWithConversion(amount, sourceCurrency, displayCurrency, exchangeRates);
   };
 
   return (
@@ -969,10 +976,11 @@ export default function Checkout() {
             <div className="flex items-center gap-2 border border-gray-300 rounded-sm px-3 py-1.5">
               <button
                 onClick={() => setCurrency('NGN')}
+                disabled={checkoutCurrencyLocked}
                 className={`text-xs font-semibold transition ${
-                  currency === 'NGN'
+                  displayCurrency === 'NGN'
                     ? 'text-primary'
-                    : 'text-gray-400 hover:text-gray-600'
+                    : 'text-gray-400 hover:text-gray-600 disabled:cursor-not-allowed'
                 }`}
               >
                 NGN
@@ -980,10 +988,11 @@ export default function Checkout() {
               <span className="text-gray-300">|</span>
               <button
                 onClick={() => setCurrency('USD')}
+                disabled={checkoutCurrencyLocked}
                 className={`text-xs font-semibold transition ${
-                  currency === 'USD'
+                  displayCurrency === 'USD'
                     ? 'text-primary'
-                    : 'text-gray-400 hover:text-gray-600'
+                    : 'text-gray-400 hover:text-gray-600 disabled:cursor-not-allowed'
                 }`}
               >
                 USD
@@ -1443,7 +1452,7 @@ export default function Checkout() {
                         </div>
                       )}
                       {ALL_PAYMENT_OPTIONS.map((option) => {
-                        const isSupported = option.supportedCurrencies.includes(currency);
+                        const isSupported = option.supportedCurrencies.includes(displayCurrency);
                         return (
                           <label
                             key={option.id}
@@ -1468,7 +1477,7 @@ export default function Checkout() {
                                 {option.name}
                                 {!isSupported && (
                                   <span className="ml-2 text-xs text-gray-400">
-                                    (Not available for {currency})
+                                    (Not available for {displayCurrency})
                                   </span>
                                 )}
                               </span>
@@ -1503,7 +1512,7 @@ export default function Checkout() {
             <aside className="border border-gray-200 rounded-sm p-5 space-y-4 sticky top-6 h-fit">
               <div className="flex items-center justify-between text-sm font-semibold text-gray-800">
                 <span>Order</span>
-                <span className="text-xs text-gray-500">Currency: {currency}</span>
+                <span className="text-xs text-gray-500">Currency: {displayCurrency}</span>
               </div>
               <div className="text-sm text-gray-700 space-y-2">
                 <div className="flex items-center justify-between">

@@ -130,6 +130,25 @@ async def test_rate_crud_normalization_defaults_zero_and_preview(client, admin_u
 
 
 @pytest.mark.asyncio
+async def test_preview_excludes_legacy_whitespace_padded_rate_labels(client, db_session):
+    db_session.add(ShippingRate(
+        name='  Legacy padded  ', description='Historical row', base_rate=Decimal('1200'),
+        country='Nigeria', state='Lagos', min_delivery_days=1, max_delivery_days=3,
+        is_active=True, is_default=False, priority=99,
+    ))
+    await db_session.commit()
+
+    response = await client.post(
+        '/api/v1/shipping-rates/calculate',
+        json={'country': 'Nigeria', 'state': 'Lagos', 'order_value': 60000},
+    )
+
+    assert response.status_code == 200, response.text
+    assert all(rate['name'] == rate['name'].strip() for rate in response.json()['available_rates'])
+    assert all(rate['name'] != '  Legacy padded  ' for rate in response.json()['available_rates'])
+
+
+@pytest.mark.asyncio
 async def test_manual_quote_keeps_snapshot_after_deactivation_with_dhl_gate_on(client, db_session, admin_user, vendor_user, customer_user, monkeypatch):
     from app.services.checkout import estimates
     from unittest.mock import AsyncMock

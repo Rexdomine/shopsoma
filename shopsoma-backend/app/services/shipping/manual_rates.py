@@ -10,6 +10,9 @@ def manual_rates_query(country, state):
     return select(ShippingRate).where(
         ShippingRate.is_active.is_(True),
         func.lower(func.trim(ShippingRate.country)).in_(countries),
+        # Preserve an admin repair path for legacy labels, but never project
+        # whitespace-padded names into the strict estimate-option contract.
+        ShippingRate.name == func.trim(ShippingRate.name),
         # Historical rows may predate the estimate-option constraint. Keep
         # them available for admin reads, but never project invalid delivery
         # windows into a new checkout estimate or order.
