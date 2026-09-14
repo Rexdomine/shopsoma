@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import Home from '../Home';
@@ -70,74 +70,9 @@ describe('Home', () => {
     expect(hero).toHaveAttribute('aria-roledescription', 'carousel');
     expect(screen.getByRole('img', { name: /campaign look 1/i })).toBeInTheDocument();
     expect(screen.queryByRole('img', { name: /campaign look 3/i })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Pause automatic slideshow' })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Show next campaign image' }));
-    const nextImage = screen.getByAltText(/campaign look 2/i);
-    expect(nextImage).toHaveAttribute('loading', 'eager');
-    expect(screen.getByText('1 / 3')).toBeInTheDocument();
-    fireEvent.load(nextImage);
-    expect(screen.getByText('2 / 3')).toBeInTheDocument();
-  });
-
-  it('recovers from a failed pending campaign image without losing the active slide', () => {
-    render(
-      <MemoryRouter>
-        <Home />
-      </MemoryRouter>
-    );
-
-    fireEvent.click(screen.getByRole('button', { name: 'Show next campaign image' }));
-    const failedImage = screen.getByAltText(/campaign look 2/i);
-    fireEvent.error(failedImage);
-    expect(screen.queryByAltText(/campaign look 2/i)).not.toBeInTheDocument();
-    expect(screen.getByRole('img', { name: /campaign look 1/i })).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Show next campaign image' }));
-    expect(screen.getByAltText(/campaign look 2/i)).toBeInTheDocument();
-  });
-
-  it('cancels an obsolete pending slide and removes a stale failed asset', () => {
-    render(
-      <MemoryRouter>
-        <Home />
-      </MemoryRouter>
-    );
-
-    fireEvent.click(screen.getByRole('button', { name: 'Show next campaign image' }));
-    fireEvent.load(screen.getByAltText(/campaign look 2/i));
-    fireEvent.click(screen.getByRole('button', { name: 'Show next campaign image' }));
-    const staleImage = screen.getByAltText(/campaign look 3/i);
-    fireEvent.click(screen.getByRole('button', { name: 'Show previous campaign image' }));
-    expect(screen.getByText('1 / 3')).toBeInTheDocument();
-
-    fireEvent.load(staleImage);
-    expect(screen.getByText('1 / 3')).toBeInTheDocument();
-    fireEvent.error(staleImage);
-    expect(screen.queryByAltText(/campaign look 3/i)).not.toBeInTheDocument();
-  });
-
-  it('continues failover and retries a previously failed active slide', () => {
-    render(
-      <MemoryRouter>
-        <Home />
-      </MemoryRouter>
-    );
-
-    fireEvent.error(screen.getByAltText(/campaign look 1/i));
-    fireEvent.error(screen.getByAltText(/campaign look 2/i));
-    const lastFallbackImage = screen.getByAltText(/campaign look 3/i);
-    fireEvent.error(lastFallbackImage);
-    expect(screen.getByRole('status')).toHaveTextContent('Campaign imagery is temporarily unavailable.');
-
-    fireEvent.click(screen.getByRole('button', { name: 'Show previous campaign image' }));
-    const retriedSlide = screen.getByAltText(/campaign look 3/i);
-    fireEvent.load(retriedSlide);
-    expect(screen.getByText('3 / 3')).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Show next campaign image' }));
-    const retriedInitialImage = screen.getByAltText(/campaign look 1/i);
-    fireEvent.load(retriedInitialImage);
-    expect(screen.getByText('1 / 3')).toBeInTheDocument();
+    expect(screen.getByText('Orange Culture: A night Beyond')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /campaign image|automatic slideshow/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/1 \/ 3/)).not.toBeInTheDocument();
   });
 
   it('shows the updated shop by category labels', () => {
