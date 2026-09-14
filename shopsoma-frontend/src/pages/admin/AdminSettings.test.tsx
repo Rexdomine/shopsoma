@@ -182,6 +182,22 @@ it('reverses rejected indexed history navigation instead of overwriting the dest
   expect(window.history.state).toEqual({ settingsHistoryIndex: -1 });
 });
 
+it('restores the settings URL when rejecting navigation to a non-settings entry', async () => {
+  window.history.replaceState(null, '', '/admin/settings#rates');
+  render(<AdminSettings />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Add shipping rate' }));
+  fireEvent.change(screen.getByLabelText('Rate name'), { target: { value: 'Keep this draft' } });
+  vi.spyOn(window, 'confirm').mockReturnValue(false);
+
+  window.history.pushState(null, '', '/admin/dashboard');
+  window.dispatchEvent(new PopStateEvent('popstate'));
+
+  expect(screen.getByRole('heading', { name: 'Manual shipping rates' })).toBeInTheDocument();
+  expect(window.location.pathname).toBe('/admin/settings');
+  expect(window.location.hash).toBe('#rates');
+  expect(window.confirm).toHaveBeenCalled();
+});
+
 it('blocks category transitions while any settings save is in flight', async () => {
   let resolveSave!: (value: any) => void;
   const save = new Promise<any>((resolve) => { resolveSave = resolve; });

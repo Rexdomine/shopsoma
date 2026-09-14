@@ -76,6 +76,11 @@ export default function AdminSettings() {
   const syncTimerRef = useRef<number | null>(null);
   const switchCategoryRef = useRef<(next: string, writeHistory?: boolean) => boolean>(() => false);
   const historyIndexRef = useRef(typeof window.history.state?.settingsHistoryIndex === 'number' ? window.history.state.settingsHistoryIndex : 0);
+  const settingsLocationRef = useRef({
+    pathname: window.location.pathname,
+    search: window.location.search,
+    hash: `#${categoryFromHash()}`,
+  });
   const restoringHistoryRef = useRef(false);
 
   useEffect(() => {
@@ -96,10 +101,14 @@ export default function AdminSettings() {
         return;
       }
       const next = categoryFromHash();
-      const previous = category;
       const accepted = switchCategoryRef.current(next, false);
       if (accepted && typeof window.history.state?.settingsHistoryIndex === 'number') {
         historyIndexRef.current = window.history.state.settingsHistoryIndex;
+        settingsLocationRef.current = {
+          pathname: window.location.pathname,
+          search: window.location.search,
+          hash: `#${next}`,
+        };
       }
       if (!accepted) {
         const destinationIndex = window.history.state?.settingsHistoryIndex;
@@ -110,7 +119,7 @@ export default function AdminSettings() {
           window.history.replaceState(
             { ...window.history.state, settingsHistoryIndex: historyIndexRef.current },
             '',
-            `${window.location.pathname}${window.location.search}#${previous}`,
+            `${settingsLocationRef.current.pathname}${settingsLocationRef.current.search}${settingsLocationRef.current.hash}`,
           );
         }
       }
@@ -438,6 +447,11 @@ export default function AdminSettings() {
         '',
         `#${next}`,
       );
+      settingsLocationRef.current = {
+        pathname: window.location.pathname,
+        search: window.location.search,
+        hash: `#${next}`,
+      };
     }
     setCategory(next);
     return true;
