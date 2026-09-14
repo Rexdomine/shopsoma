@@ -105,7 +105,8 @@ it('traps Tab in both directions and preserves a draft when cancelled', async ()
   fireEvent.click(await screen.findByRole('button', { name: 'Add shipping rate' }));
   const dialog = screen.getByRole('dialog');
   const first = screen.getByLabelText('Rate name');
-  const last = screen.getByRole('button', { name: 'Cancel' });
+  const last = screen.getByRole('button', { name: 'Save shipping rate' });
+  const cancel = screen.getByRole('button', { name: 'Cancel' });
   expect(document.activeElement).toBe(first);
   last.focus();
   fireEvent.keyDown(document, { key: 'Tab' });
@@ -115,7 +116,7 @@ it('traps Tab in both directions and preserves a draft when cancelled', async ()
   expect(document.activeElement).toBe(last);
   fireEvent.change(first, { target: { value: 'Keep this draft' } });
   vi.spyOn(window, 'confirm').mockReturnValue(false);
-  fireEvent.click(last);
+  fireEvent.click(cancel);
   expect(dialog).toBeInTheDocument();
   expect(screen.getByLabelText('Rate name')).toHaveValue('Keep this draft');
 });
@@ -131,7 +132,9 @@ it('restores preview constraints and renders returned price and ETA', async () =
   expect(subtotal).toHaveAttribute('step', '0.01');
   mocks.previewManualShippingRates.mockResolvedValue({ available_rates: [{ ...saved, base_rate: 1250, min_delivery_days: 3, max_delivery_days: 6 }] });
   fireEvent.click(screen.getByRole('button', { name: 'Preview shipping' }));
-  expect(await screen.findByText(/NGN 1250\.00 · 3–6 business days/)).toBeInTheDocument();
+  const results = await screen.findByRole('list', { name: 'Preview results' });
+  expect(results).toHaveTextContent('NGN 1250.00');
+  expect(results).toHaveTextContent('3–6 business days');
 });
 
 it('marks an empty exchange rate as dirty so it cannot silently bypass discard protection', async () => {
