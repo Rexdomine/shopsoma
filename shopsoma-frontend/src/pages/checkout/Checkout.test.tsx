@@ -481,6 +481,37 @@ describe('Checkout M5 sequencing and recovery', () => {
     expect(screen.getByLabelText('Full Name')).toHaveValue('Buyer');
   });
 
+  it('locks address changes while a delivery calculation is pending', async () => {
+    let resolveShipping!: (value: { available_rates: Array<typeof rate>; recommended_rate: typeof rate }) => void;
+    mocks.calculateShipping.mockReturnValueOnce(new Promise(resolve => { resolveShipping = resolve; }));
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    await waitFor(() => expect(mocks.calculateShipping).toHaveBeenCalled());
+    expect(screen.getByRole('button', { name: 'Edit delivery address' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '+ Add New Address' })).toBeDisabled();
+
+    resolveShipping!({ available_rates: [rate], recommended_rate: rate });
+    await screen.findByText('Standard');
+  });
+
+  it('clears the prior local default when an edited address becomes the default', async () => {
+    const secondary = { ...address, id: 'address-2', address_line1: '2 Test Street', is_default: false };
+    mocks.getAddresses.mockResolvedValueOnce({ addresses: [address, secondary] });
+    mocks.updateAddress.mockResolvedValueOnce({ ...secondary, is_default: true });
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Edit delivery address' })[1]);
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(mocks.updateAddress).toHaveBeenCalledWith('address-2', expect.objectContaining({ is_default: true })));
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Edit delivery address' })[0]);
+    expect(screen.getByRole('checkbox')).not.toBeChecked();
+  });
+
   it('creates the order then estimate and waits for explicit server option selection before payment', async () => {
     await reachPaymentStep();
 

@@ -201,6 +201,7 @@ export default function Checkout() {
   const [isApplyingPromo, setIsApplyingPromo] = useState(false);
   const [isCreatingOrder, setIsCreatingOrder] = useState(false);
   const [isSwitchingCurrency, setIsSwitchingCurrency] = useState(false);
+  const isCheckoutRequestPending = isLoadingShipping || isReviewingOrder || isCreatingOrder;
 
   // Email validation state
   const [emailError, setEmailError] = useState('');
@@ -336,7 +337,13 @@ export default function Checkout() {
 
       if (editingAddressId) {
         const updated = await checkoutService.updateAddress(editingAddressId, addressData);
-        setAddresses(addresses.map(address => address.id === updated.id ? updated : address));
+        setAddresses(addresses.map(address => {
+          if (address.id === updated.id) return updated;
+          if (updated.is_default && address.address_type === updated.address_type) {
+            return { ...address, is_default: false };
+          }
+          return address;
+        }));
         setSelectedAddressId(updated.id);
         // A destination change invalidates all location-derived delivery and review state.
         setShippingRates([]);
@@ -1217,7 +1224,7 @@ export default function Checkout() {
                             >
                               <button
                                 type="button"
-                                disabled={!!enforcedOrder}
+                                disabled={!!enforcedOrder || isCheckoutRequestPending}
                                 onClick={() => setSelectedAddressId(addr.id)}
                                 className="flex-1 text-left"
                               >
@@ -1230,7 +1237,7 @@ export default function Checkout() {
                               <button
                                 type="button"
                                 aria-label="Edit delivery address"
-                                disabled={!!enforcedOrder}
+                                disabled={!!enforcedOrder || isCheckoutRequestPending}
                                 onClick={() => {
                                   setNewAddress({
                                     full_name: addr.full_name,
@@ -1347,7 +1354,7 @@ export default function Checkout() {
                                 <button
                                   type="button"
                                   onClick={handleCreateAddress}
-                                  disabled={!isAddressComplete}
+                                  disabled={!isAddressComplete || isCheckoutRequestPending}
                                   className="flex-1 py-2 rounded-sm bg-primary text-white text-sm font-semibold disabled:opacity-50"
                                 >
                                   {editingAddressId ? 'Save changes' : 'Save Address'}
@@ -1358,7 +1365,8 @@ export default function Checkout() {
                                     setShowNewAddressForm(false);
                                     setEditingAddressId(null);
                                   }}
-                                  className="px-4 py-2 rounded-sm border border-gray-300 text-sm"
+                                  disabled={isCheckoutRequestPending}
+                                  className="px-4 py-2 rounded-sm border border-gray-300 text-sm disabled:opacity-50"
                                 >
                                   Cancel
                                 </button>
@@ -1372,7 +1380,7 @@ export default function Checkout() {
                           ) : !isGuestCheckout || addresses.length === 0 ? (
                             <button
                               type="button"
-                              disabled={!!enforcedOrder}
+                              disabled={!!enforcedOrder || isCheckoutRequestPending}
                               onClick={() => {
                                 setEditingAddressId(null);
                                 resetNewAddress();
