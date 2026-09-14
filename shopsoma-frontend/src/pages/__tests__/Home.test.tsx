@@ -69,7 +69,8 @@ describe('Home', () => {
     const hero = screen.getByRole('region', { name: 'Orange Culture campaign' });
     expect(hero).toHaveAttribute('aria-roledescription', 'carousel');
     expect(screen.getByRole('img', { name: /campaign look 1/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Show previous campaign image' })).toBeInTheDocument();
+    expect(screen.queryByRole('img', { name: /campaign look 3/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Pause automatic slideshow' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Show next campaign image' }));
     expect(screen.getByText('2 / 3')).toBeInTheDocument();
     expect(screen.getByRole('img', { name: /campaign look 2/i })).toHaveAttribute('loading', 'lazy');

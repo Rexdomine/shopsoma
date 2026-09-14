@@ -192,6 +192,9 @@ function HomeProductCard({
 function Hero() {
   const [activeSlide, setActiveSlide] = useState(0);
   const [reducedMotion, setReducedMotion] = useState(false);
+  const [loadedSlides, setLoadedSlides] = useState<Set<number>>(() => new Set([0]));
+  const [isPaused, setIsPaused] = useState(false);
+  const [isInteracting, setIsInteracting] = useState(false);
 
   useEffect(() => {
     if (!window.matchMedia) return;
@@ -203,16 +206,22 @@ function Hero() {
   }, []);
 
   useEffect(() => {
-    if (reducedMotion) return;
-    const timer = window.setInterval(
-      () => setActiveSlide((current) => (current + 1) % HERO_SLIDES.length),
-      6500,
-    );
+    if (reducedMotion || isPaused || isInteracting) return;
+    const timer = window.setInterval(() => {
+      setActiveSlide((current) => {
+        const next = (current + 1) % HERO_SLIDES.length;
+        setLoadedSlides((loaded) => new Set(loaded).add(next));
+        return next;
+      });
+    }, 6500);
     return () => window.clearInterval(timer);
-  }, [reducedMotion]);
+  }, [isInteracting, isPaused, reducedMotion]);
 
   const showSlide = (next: number) => {
-    setActiveSlide((next + HERO_SLIDES.length) % HERO_SLIDES.length);
+    const target = (next + HERO_SLIDES.length) % HERO_SLIDES.length;
+    setLoadedSlides((loaded) => new Set(loaded).add(target));
+    setActiveSlide(target);
+    setIsPaused(true);
   };
 
   return (
@@ -220,8 +229,14 @@ function Hero() {
       aria-label="Orange Culture campaign"
       aria-roledescription="carousel"
       className="hero relative isolate flex min-h-[520px] w-full items-end overflow-hidden bg-[#1b1715] sm:min-h-[600px] lg:min-h-[700px]"
+      onMouseEnter={() => setIsInteracting(true)}
+      onMouseLeave={() => setIsInteracting(false)}
+      onFocusCapture={() => setIsInteracting(true)}
+      onBlurCapture={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setIsInteracting(false);
+      }}
     >
-      {HERO_SLIDES.map((slide, index) => (
+      {HERO_SLIDES.map((slide, index) => loadedSlides.has(index) && (
         <picture
           key={slide.desktop}
           aria-hidden={index !== activeSlide}
@@ -254,7 +269,8 @@ function Hero() {
 
         <div className="pointer-events-auto flex shrink-0 items-center gap-3 text-white">
           <button type="button" aria-label="Show previous campaign image" onClick={() => showSlide(activeSlide - 1)} className="grid h-10 w-10 place-items-center rounded-full border border-white/45 bg-black/15 text-lg transition hover:bg-white hover:text-[#1b1715]" aria-controls="home-campaign-status">←</button>
-          <span id="home-campaign-status" aria-live="polite" className="min-w-9 text-center text-[10px] font-ui tracking-[0.18em]">{activeSlide + 1} / {HERO_SLIDES.length}</span>
+          <button type="button" aria-label={isPaused ? 'Resume automatic slideshow' : 'Pause automatic slideshow'} onClick={() => setIsPaused((paused) => !paused)} className="grid h-10 w-10 place-items-center rounded-full border border-white/45 bg-black/15 text-xs font-ui transition hover:bg-white hover:text-[#1b1715]">{isPaused ? '▶' : 'Ⅱ'}</button>
+          <span id="home-campaign-status" aria-live={isPaused ? 'polite' : 'off'} className="min-w-9 text-center text-[10px] font-ui tracking-[0.18em]">{activeSlide + 1} / {HERO_SLIDES.length}</span>
           <button type="button" aria-label="Show next campaign image" onClick={() => showSlide(activeSlide + 1)} className="grid h-10 w-10 place-items-center rounded-full border border-white/45 bg-black/15 text-lg transition hover:bg-white hover:text-[#1b1715]">→</button>
         </div>
       </div>
