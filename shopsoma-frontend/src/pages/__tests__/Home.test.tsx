@@ -79,6 +79,23 @@ describe('Home', () => {
     expect(screen.getByText('2 / 3')).toBeInTheDocument();
   });
 
+  it('recovers from a failed pending campaign image without losing the active slide', () => {
+    render(
+      <MemoryRouter>
+        <Home />
+      </MemoryRouter>
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show next campaign image' }));
+    const failedImage = screen.getByAltText(/campaign look 2/i);
+    fireEvent.error(failedImage);
+    expect(screen.queryByAltText(/campaign look 2/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('img', { name: /campaign look 1/i })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show next campaign image' }));
+    expect(screen.getByAltText(/campaign look 2/i)).toBeInTheDocument();
+  });
+
   it('shows the updated shop by category labels', () => {
     render(
       <MemoryRouter>

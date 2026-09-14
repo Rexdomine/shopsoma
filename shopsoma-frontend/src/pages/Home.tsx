@@ -208,9 +208,9 @@ function Hero() {
   }, []);
 
   const requestSlide = (target: number, userInitiated = false) => {
+    if (userInitiated) setIsPaused(true);
     const next = (target + HERO_SLIDES.length) % HERO_SLIDES.length;
     if (next === activeSlide || pendingSlide === next) return;
-    if (userInitiated) setIsPaused(true);
     if (readySlides.has(next)) {
       setActiveSlide(next);
       return;
@@ -225,6 +225,21 @@ function Hero() {
       setActiveSlide(index);
       setPendingSlide(null);
     }
+  };
+
+  const handleSlideError = (index: number) => {
+    if (pendingSlide !== index) return;
+    setPendingSlide(null);
+    setMountedSlides((mounted) => {
+      const next = new Set(mounted);
+      next.delete(index);
+      return next;
+    });
+    setReadySlides((ready) => {
+      const next = new Set(ready);
+      next.delete(index);
+      return next;
+    });
   };
 
   useEffect(() => {
@@ -262,6 +277,7 @@ function Hero() {
             fetchPriority={index === 0 ? 'high' : pendingSlide === index ? 'auto' : 'low'}
             decoding="async"
             onLoad={() => handleSlideReady(index)}
+            onError={() => handleSlideError(index)}
           />
         </picture>
       ))}
