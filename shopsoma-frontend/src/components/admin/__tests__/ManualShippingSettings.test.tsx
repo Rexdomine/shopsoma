@@ -76,6 +76,20 @@ describe('ManualShippingSettings', () => {
     await waitFor(() => expect(screen.getByRole('dialog').querySelector('[role="alert"]')).toHaveTextContent(/unable to save/i));
   });
 
+  it('preserves a legacy FCT rate value while it is being edited', async () => {
+    vi.mocked(getManualShippingRates).mockResolvedValue([{
+      id: 'rate-fct', name: 'FCT delivery', description: '', country: 'Nigeria', state: 'FCT',
+      base_rate: 1500, min_order_value: 0, max_order_value: null, min_delivery_days: 2, max_delivery_days: 5,
+      is_active: true, is_default: false, priority: 1,
+    }]);
+    render(<ManualShippingSettings />);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Edit FCT delivery' })).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit FCT delivery' }));
+    expect(screen.getByRole('combobox', { name: 'State (blank for all)' })).toHaveValue('FCT');
+    expect(screen.getByRole('option', { name: 'FCT (legacy)' })).toBeInTheDocument();
+  });
+
   it('keeps rate ordering metadata visible in the saved-rate list', async () => {
     vi.mocked(getManualShippingRates).mockResolvedValue([{
       id: 'rate-1', name: 'Lagos delivery', description: '', country: 'Nigeria', state: 'Lagos',
