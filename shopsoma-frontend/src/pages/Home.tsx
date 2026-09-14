@@ -229,7 +229,27 @@ function Hero() {
   };
 
   const handleSlideError = (index: number) => {
-    if (index === activeSlide) return;
+    if (index === activeSlide) {
+      const fallback = (index + 1) % HERO_SLIDES.length;
+      setReadySlides((ready) => {
+        const next = new Set(ready);
+        next.delete(index);
+        return next;
+      });
+      setMountedSlides((mounted) => {
+        const next = new Set(mounted);
+        next.delete(index);
+        next.add(fallback);
+        return next;
+      });
+      if (readySlides.has(fallback)) {
+        setActiveSlide(fallback);
+        setPendingSlide(null);
+      } else {
+        setPendingSlide(fallback);
+      }
+      return;
+    }
     if (pendingSlide === index) setPendingSlide(null);
     setMountedSlides((mounted) => {
       const next = new Set(mounted);

@@ -116,6 +116,20 @@ describe('Home', () => {
     expect(screen.queryByAltText(/campaign look 3/i)).not.toBeInTheDocument();
   });
 
+  it('fails over from a broken initial campaign image to the next slide', () => {
+    render(
+      <MemoryRouter>
+        <Home />
+      </MemoryRouter>
+    );
+
+    fireEvent.error(screen.getByAltText(/campaign look 1/i));
+    expect(screen.queryByAltText(/campaign look 1/i)).not.toBeInTheDocument();
+    const fallbackImage = screen.getByAltText(/campaign look 2/i);
+    fireEvent.load(fallbackImage);
+    expect(screen.getByText('2 / 3')).toBeInTheDocument();
+  });
+
   it('shows the updated shop by category labels', () => {
     render(
       <MemoryRouter>
