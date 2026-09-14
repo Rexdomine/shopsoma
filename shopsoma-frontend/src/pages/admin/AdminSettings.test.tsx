@@ -156,6 +156,17 @@ it('routes browser hash navigation through the guarded transition', async () => 
   expect(window.confirm).toHaveBeenCalled();
 });
 
+it('restores the current hash when popstate navigation is rejected', async () => {
+  render(<AdminSettings />);
+  await screen.findByRole('heading', { name: 'Exchange rate' });
+  fireEvent.change(screen.getByRole('spinbutton'), { target: { value: '1700' } });
+  vi.spyOn(window, 'confirm').mockReturnValue(false);
+  window.history.pushState(null, '', '#shipping');
+  window.dispatchEvent(new PopStateEvent('popstate'));
+  expect(screen.getByRole('heading', { name: 'Exchange rate' })).toBeInTheDocument();
+  expect(window.location.hash).toBe('#currency');
+});
+
 it('blocks category transitions while any settings save is in flight', async () => {
   let resolveSave!: (value: any) => void;
   const save = new Promise<any>((resolve) => { resolveSave = resolve; });

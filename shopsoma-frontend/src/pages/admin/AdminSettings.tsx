@@ -71,23 +71,31 @@ export default function AdminSettings() {
   };
   const [category, setCategory] = useState(categoryFromHash);
   const [manualRatesDirty, setManualRatesDirty] = useState(false);
+  const [manualRatesBusy, setManualRatesBusy] = useState(false);
   const discardManualRatesRef = useRef<(() => void) | null>(null);
   const syncTimerRef = useRef<number | null>(null);
-  const switchCategoryRef = useRef<(next: string, writeHistory?: boolean) => void>(() => undefined);
+  const switchCategoryRef = useRef<(next: string, writeHistory?: boolean) => boolean>(() => false);
 
   useEffect(() => {
     fetchSettings();
   }, []);
 
   useEffect(() => {
-    const syncCategory = () => switchCategoryRef.current(categoryFromHash(), false);
+    const syncCategory = () => {
+      const next = categoryFromHash();
+      const previous = category;
+      const accepted = switchCategoryRef.current(next, false);
+      if (!accepted) {
+        window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}#${previous}`);
+      }
+    };
     window.addEventListener('hashchange', syncCategory);
     window.addEventListener('popstate', syncCategory);
     return () => {
       window.removeEventListener('hashchange', syncCategory);
       window.removeEventListener('popstate', syncCategory);
     };
-  }, []);
+  }, [category]);
 
   useEffect(() => {
     return () => {
@@ -379,18 +387,18 @@ export default function AdminSettings() {
     ['database', 'Database', 'Local-only development tools', Database],
   ] as const;
   const dirty = hasChanges || payoutHoldChanged || commissionChanged || applyCommissionToExisting || featuredRotationChanged || manualRatesDirty;
-  const savingAny = saving || savingShipping || savingPayoutHold || savingCommission || savingFeaturedRotation;
+  const savingAny = saving || savingShipping || savingPayoutHold || savingCommission || savingFeaturedRotation || manualRatesBusy;
   const Summary = ({ title, value, detail }: { title: string; value: string; detail: string }) => (
     <div className="rounded-xl border border-slate-200 bg-slate-50 p-4"><p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{title}</p><p className="mt-2 text-xl font-semibold text-slate-950">{value}</p><p className="mt-1 text-xs text-slate-500">{detail}</p></div>
   );
   const saveBar = (onSave: () => void, onReset: () => void, changed: boolean, busy: boolean) => <div className="flex flex-wrap items-center gap-3 border-t border-slate-100 pt-5"><button type="button" onClick={onSave} disabled={!changed || busy} className="inline-flex items-center gap-2 rounded-lg bg-[#105E53] px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40"><Save className="h-4 w-4" />{busy ? 'Saving…' : 'Save changes'}</button><button type="button" onClick={onReset} disabled={!changed || busy} className="rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-semibold text-slate-700 disabled:opacity-40">Discard edits</button>{changed && <span className="text-xs font-medium text-amber-700">Unsaved changes</span>}</div>;
   const switchCategory = (next: string, writeHistory = true) => {
-    if (next === category) return;
+    if (next === category) return true;
     if (savingAny) {
       error('Please wait for the current save to finish before switching categories.', 'Save in progress');
-      return;
+      return false;
     }
-    if (dirty && !window.confirm('You have unsaved edits. Switch category and discard them?')) return;
+    if (dirty && !window.confirm('You have unsaved edits. Switch category and discard them?')) return false;
     handleReset();
     handleResetPayoutHold();
     handleResetCommission();
@@ -401,6 +409,7 @@ export default function AdminSettings() {
       window.history.pushState(null, '', `#${next}`);
     }
     setCategory(next);
+    return true;
   };
   switchCategoryRef.current = switchCategory;
   return <div className="flex min-h-screen bg-[var(--color-page-bg)]"><div className="hidden md:flex"><AdminSidebar activePrimary="settings" /></div><main className="min-w-0 flex-1"><div className="mx-auto max-w-[1280px] px-4 py-6 sm:px-6 lg:px-10 lg:py-10">
@@ -408,7 +417,7 @@ export default function AdminSettings() {
     <div className="grid gap-6 lg:grid-cols-[250px_minmax(0,1fr)]"><nav aria-label="Settings categories" className="h-fit rounded-2xl border border-slate-200 bg-white p-2 shadow-sm lg:sticky lg:top-6"><p className="px-3 pb-2 pt-2 text-[11px] font-bold uppercase tracking-[0.16em] text-slate-400">Configuration</p>{categories.map(([id,label,desc,Icon]) => <button key={id} type="button" onClick={() => switchCategory(id)} aria-current={category === id ? 'page' : undefined} className={`flex w-full items-start gap-3 rounded-xl px-3 py-3 text-left transition ${category === id ? 'bg-[#E7F3EF] text-[#105E53]' : 'text-slate-600 hover:bg-slate-50'}`}><Icon className="mt-0.5 h-4 w-4 shrink-0" /><span><span className="block text-sm font-semibold">{label}</span><span className="mt-0.5 block text-xs leading-4 opacity-70">{desc}</span></span></button>)}</nav>
     <section aria-live="polite" className="min-w-0">{category === 'currency' && <div className="space-y-5"><div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-7"><div className="mb-6 flex flex-wrap items-start justify-between gap-4"><div><p className="text-xs font-bold uppercase tracking-[0.16em] text-[#105E53]">Currency</p><h2 className="mt-1 text-2xl font-semibold text-slate-950">Exchange rate</h2><p className="mt-1 text-sm text-slate-600">Controls how NGN prices are represented in USD across the storefront.</p></div>{exchangeRate && <Summary title="Current value" value={`₦${exchangeRate.rate.toLocaleString('en-NG', { minimumFractionDigits: 2 })}`} detail="per 1 USD" />}</div><label htmlFor="exchange-rate" className="block max-w-sm text-sm font-semibold text-slate-800">USD to NGN<input id="exchange-rate" type="number" min="100" max="10000" step="0.01" value={rateInput} onChange={e => handleRateChange(e.target.value)} className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2.5 text-slate-900" /><span className="mt-1 block text-xs font-normal text-slate-500">Allowed range: 100–10,000 NGN. Changes apply immediately after saving.</span></label>{saveBar(handleSaveRate, handleReset, hasChanges, saving)}</div></div>}
     {category === 'shipping' && <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-7"><p className="text-xs font-bold uppercase tracking-[0.16em] text-[#105E53]">Fulfilment</p><h2 className="mt-1 text-2xl font-semibold text-slate-950">Shipping provider</h2><p className="mt-1 text-sm text-slate-600">Choose the provider used for checkout estimates. Availability and readiness gates remain enforced by the existing service.</p><div className="mt-7 grid gap-4 sm:grid-cols-2"><label className="text-sm font-semibold text-slate-800">Active provider<select aria-label="Shipping provider" value={shippingProvider?.provider ?? ''} disabled={savingShipping || !shippingProvider} onChange={e => handleShippingProvider(e.target.value as ShippingProviderSettings['provider'])} className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2.5"><option value="manual">Manual rates</option><option value="shipbubble" disabled={!shippingProvider?.readiness.shipbubble}>ShipBubble — unavailable for secure checkout</option><option value="dhl" disabled={!dhlReadyForCheckout}>DHL</option></select></label><div className="rounded-xl border border-slate-200 bg-slate-50 p-4"><p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Checkout readiness</p><p className={`mt-2 text-sm font-semibold ${dhlReadyForCheckout ? 'text-emerald-700' : 'text-slate-700'}`}>{dhlReadyForCheckout ? 'DHL estimates enabled' : 'Provider gate active'}</p><p className="mt-1 text-xs text-slate-500">Provider activation and credentials are not changed here.</p></div></div></div>}
-    {category === 'rates' && <ManualShippingSettings onDirtyChange={setManualRatesDirty} onDiscard={clear => { discardManualRatesRef.current = clear; }} />}
+    {category === 'rates' && <ManualShippingSettings onDirtyChange={setManualRatesDirty} onBusyChange={setManualRatesBusy} onDiscard={clear => { discardManualRatesRef.current = clear; }} />}
     {category === 'payout' && <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-7"><p className="text-xs font-bold uppercase tracking-[0.16em] text-[#105E53]">Settlements</p><h2 className="mt-1 text-2xl font-semibold text-slate-950">Payout hold</h2><p className="mt-1 text-sm text-slate-600">Keep vendor funds on hold for the configured number of days before payout eligibility.</p>{payoutHold && <div className="mt-6 mb-6"><Summary title="Current value" value={`${payoutHold.hold_days} days`} detail="applies to future payout eligibility" /></div>}<label className="block max-w-sm text-sm font-semibold">Hold duration<input type="number" min="0" max="3650" value={payoutHoldInput} onChange={e => handlePayoutHoldChange(e.target.value)} className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2.5" /><span className="mt-1 block text-xs font-normal text-slate-500">Allowed range: 0–3,650 days.</span></label>{saveBar(handleSavePayoutHold, handleResetPayoutHold, payoutHoldChanged, savingPayoutHold)}</div>}
     {category === 'commission' && <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-7"><p className="text-xs font-bold uppercase tracking-[0.16em] text-[#105E53]">Vendor economics</p><h2 className="mt-1 text-2xl font-semibold text-slate-950">Commission default</h2><p className="mt-1 text-sm text-slate-600">Set the default percentage for new vendors without changing historical order math.</p>{commissionSettings && <div className="mt-6 mb-6"><Summary title="Current value" value={`${commissionSettings.commission_rate}%`} detail="default commission" /></div>}<label className="block max-w-sm text-sm font-semibold">Commission percentage<input type="number" min="0" max="100" value={commissionInput} onChange={e => handleCommissionChange(e.target.value)} className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2.5" /></label><label className="mt-5 flex max-w-xl gap-3 text-sm text-slate-600"><input type="checkbox" checked={applyCommissionToExisting} onChange={e => setApplyCommissionToExisting(e.target.checked)} className="mt-1" />Also update existing vendor defaults for future orders.</label>{saveBar(handleSaveCommission, handleResetCommission, commissionChanged || applyCommissionToExisting, savingCommission)}</div>}
     {category === 'featured' && <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-7"><p className="text-xs font-bold uppercase tracking-[0.16em] text-[#105E53]">Storefront curation</p><h2 className="mt-1 text-2xl font-semibold text-slate-950">Featured rotation</h2><p className="mt-1 text-sm text-slate-600">Control how often the homepage featured selection changes.</p>{featuredRotation && <div className="mt-6 mb-6"><Summary title="Current value" value={`${featuredRotation.rotation_minutes} minutes`} detail="between automatic rotations" /></div>}<label className="block max-w-sm text-sm font-semibold">Rotation interval<input type="number" min="1" max="1440" value={featuredRotationInput} onChange={e => handleFeaturedRotationChange(e.target.value)} className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2.5" /><span className="mt-1 block text-xs font-normal text-slate-500">Allowed range: 1–1,440 minutes.</span></label>{saveBar(handleSaveFeaturedRotation, handleResetFeaturedRotation, featuredRotationChanged, savingFeaturedRotation)}</div>}

@@ -32,4 +32,20 @@ describe('ManualShippingSettings', () => {
     fireEvent.keyDown(document, { key: 'Escape' });
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
+
+  it('reports save busy state until the request completes', async () => {
+    let resolveSave!: (value: unknown) => void;
+    const pending = new Promise<unknown>(resolve => { resolveSave = resolve; });
+    const { saveManualShippingRate } = await import('../../../services/settingsService');
+    vi.mocked(saveManualShippingRate).mockReturnValue(pending as Promise<any>);
+    const onBusyChange = vi.fn();
+    render(<ManualShippingSettings onBusyChange={onBusyChange} />);
+    await waitFor(() => expect(screen.getByRole('button', { name: /add shipping rate/i })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /add shipping rate/i }));
+    fireEvent.change(screen.getByLabelText('Rate name'), { target: { value: 'Lagos delivery' } });
+    fireEvent.click(screen.getByRole('button', { name: /save shipping rate/i }));
+    await waitFor(() => expect(onBusyChange).toHaveBeenCalledWith(true));
+    resolveSave({});
+    await waitFor(() => expect(onBusyChange).toHaveBeenLastCalledWith(false));
+  });
 });
