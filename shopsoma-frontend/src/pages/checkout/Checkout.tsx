@@ -1380,6 +1380,14 @@ export default function Checkout() {
                           >
                             {isCreatingOrder ? 'Retrying delivery options…' : 'Retry delivery options'}
                           </button>
+                          <button
+                            type="button"
+                            onClick={() => void restartCheckout()}
+                            disabled={isCreatingOrder}
+                            className="text-sm underline disabled:opacity-50"
+                          >
+                            Start again with another address
+                          </button>
                         </div>
                       ) : null}
                     </div>

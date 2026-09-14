@@ -561,6 +561,26 @@ describe('Checkout M5 sequencing and recovery', () => {
     expect(mocks.initializePayment).not.toHaveBeenCalled();
   });
 
+  it('cancels a shipping-stage domestic order so the guest can correct an invalid address', async () => {
+    mocks.getShippingProviderSettings.mockResolvedValue({ provider: 'manual', checkout_estimates_required: true });
+    mocks.createCheckoutEstimate.mockRejectedValueOnce({ response: { status: 422, data: { detail: 'Postal code required for DHL rating' } } });
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to delivery options' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Start again with another address' }));
+
+    await waitFor(() => expect(mocks.cancelOrder).toHaveBeenCalledWith(
+      'order-1',
+      'Customer restarted checkout before payment',
+      undefined,
+    ));
+    expect(screen.getByRole('button', { name: '+ Add New Address' })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: 'Retry delivery options' })).not.toBeInTheDocument();
+    expect(mocks.initializePayment).not.toHaveBeenCalled();
+  });
+
   it('cancels the saved order before restarting after estimate failure', async () => {
     mocks.createCheckoutEstimate.mockRejectedValueOnce({ response: { status: 503, data: { detail: 'temporarily unavailable' } } });
     await reachPaymentStep();
