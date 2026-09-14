@@ -192,7 +192,9 @@ function HomeProductCard({
 function Hero() {
   const [activeSlide, setActiveSlide] = useState(0);
   const [reducedMotion, setReducedMotion] = useState(false);
-  const [loadedSlides, setLoadedSlides] = useState<Set<number>>(() => new Set([0]));
+  const [mountedSlides, setMountedSlides] = useState<Set<number>>(() => new Set([0]));
+  const [readySlides, setReadySlides] = useState<Set<number>>(() => new Set([0]));
+  const [pendingSlide, setPendingSlide] = useState<number | null>(null);
   const [isPaused, setIsPaused] = useState(false);
   const [isInteracting, setIsInteracting] = useState(false);
 
@@ -205,24 +207,33 @@ function Hero() {
     return () => media.removeEventListener('change', update);
   }, []);
 
-  useEffect(() => {
-    if (reducedMotion || isPaused || isInteracting) return;
-    const timer = window.setInterval(() => {
-      setActiveSlide((current) => {
-        const next = (current + 1) % HERO_SLIDES.length;
-        setLoadedSlides((loaded) => new Set(loaded).add(next));
-        return next;
-      });
-    }, 6500);
-    return () => window.clearInterval(timer);
-  }, [isInteracting, isPaused, reducedMotion]);
-
-  const showSlide = (next: number) => {
-    const target = (next + HERO_SLIDES.length) % HERO_SLIDES.length;
-    setLoadedSlides((loaded) => new Set(loaded).add(target));
-    setActiveSlide(target);
-    setIsPaused(true);
+  const requestSlide = (target: number, userInitiated = false) => {
+    const next = (target + HERO_SLIDES.length) % HERO_SLIDES.length;
+    if (next === activeSlide || pendingSlide === next) return;
+    if (userInitiated) setIsPaused(true);
+    if (readySlides.has(next)) {
+      setActiveSlide(next);
+      return;
+    }
+    setMountedSlides((mounted) => new Set(mounted).add(next));
+    setPendingSlide(next);
   };
+
+  const handleSlideReady = (index: number) => {
+    setReadySlides((ready) => new Set(ready).add(index));
+    if (pendingSlide === index) {
+      setActiveSlide(index);
+      setPendingSlide(null);
+    }
+  };
+
+  useEffect(() => {
+    if (reducedMotion || isPaused || isInteracting || pendingSlide !== null) return;
+    const timer = window.setTimeout(() => requestSlide(activeSlide + 1), 6500);
+    return () => window.clearTimeout(timer);
+  }, [activeSlide, isInteracting, isPaused, pendingSlide, reducedMotion]);
+
+  const showSlide = (next: number) => requestSlide(next, true);
 
   return (
     <section
@@ -236,7 +247,7 @@ function Hero() {
         if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setIsInteracting(false);
       }}
     >
-      {HERO_SLIDES.map((slide, index) => loadedSlides.has(index) && (
+      {HERO_SLIDES.map((slide, index) => mountedSlides.has(index) && (
         <picture
           key={slide.desktop}
           aria-hidden={index !== activeSlide}
@@ -247,21 +258,22 @@ function Hero() {
             src={slide.desktop}
             alt={slide.alt}
             className="h-full w-full object-cover"
-            loading={index === 0 ? 'eager' : 'lazy'}
-            fetchPriority={index === 0 ? 'high' : 'auto'}
+            loading={index === 0 || pendingSlide === index ? 'eager' : 'lazy'}
+            fetchPriority={index === 0 ? 'high' : pendingSlide === index ? 'auto' : 'low'}
             decoding="async"
+            onLoad={() => handleSlideReady(index)}
           />
         </picture>
       ))}
 
       <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-[#17110eee] via-[#17110e38] to-transparent" />
-      <div className="relative z-10 flex w-full items-end justify-between gap-5 px-5 pb-7 sm:px-10 sm:pb-10 lg:px-16 lg:pb-14">
+      <div className="relative z-10 flex w-full flex-col items-start gap-6 px-5 pb-7 sm:flex-row sm:items-end sm:justify-between sm:gap-5 sm:px-10 sm:pb-10 lg:px-16 lg:pb-14">
         <div className="max-w-xl text-white">
           <p className="mb-3 text-[10px] font-ui font-semibold uppercase tracking-[0.32em] text-white/75">ShopSoma presents</p>
           <h1 className="font-serif text-3xl font-normal leading-tight sm:text-4xl lg:text-5xl" style={{ fontFamily: 'var(--font-serif)', textShadow: '0 2px 12px rgba(0,0,0,0.35)' }}>
             Orange Culture: A night Beyond
           </h1>
-          <div className="mt-5 flex items-center gap-7">
+          <div className="mt-5 flex flex-wrap items-center gap-x-7 gap-y-3">
             <Link to="/men" className="pointer-events-auto border-b border-white pb-1 text-xs font-ui uppercase tracking-[0.2em] text-white transition-opacity hover:opacity-75">Shop Men</Link>
             <Link to="/women" className="pointer-events-auto border-b border-white pb-1 text-xs font-ui uppercase tracking-[0.2em] text-white transition-opacity hover:opacity-75">Shop Women</Link>
           </div>

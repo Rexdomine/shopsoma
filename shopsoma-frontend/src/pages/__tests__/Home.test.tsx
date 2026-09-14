@@ -72,8 +72,11 @@ describe('Home', () => {
     expect(screen.queryByRole('img', { name: /campaign look 3/i })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Pause automatic slideshow' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Show next campaign image' }));
+    const nextImage = screen.getByAltText(/campaign look 2/i);
+    expect(nextImage).toHaveAttribute('loading', 'eager');
+    expect(screen.getByText('1 / 3')).toBeInTheDocument();
+    fireEvent.load(nextImage);
     expect(screen.getByText('2 / 3')).toBeInTheDocument();
-    expect(screen.getByRole('img', { name: /campaign look 2/i })).toHaveAttribute('loading', 'lazy');
   });
 
   it('shows the updated shop by category labels', () => {
