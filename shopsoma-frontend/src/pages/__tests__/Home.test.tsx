@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import Home from '../Home';
@@ -73,6 +73,23 @@ describe('Home', () => {
     expect(screen.getByText('Orange Culture: A night Beyond')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /campaign image|automatic slideshow/i })).not.toBeInTheDocument();
     expect(screen.queryByText(/1 \/ 3/)).not.toBeInTheDocument();
+  });
+
+  it('skips a failed deferred slide during automatic rotation', () => {
+    vi.useFakeTimers();
+    render(
+      <MemoryRouter>
+        <Home />
+      </MemoryRouter>
+    );
+
+    act(() => vi.advanceTimersByTime(6500));
+    const failedSecondSlide = screen.getByAltText(/campaign look 2/i);
+    fireEvent.error(failedSecondSlide);
+
+    act(() => vi.advanceTimersByTime(6500));
+    expect(screen.getByAltText(/campaign look 3/i)).toBeInTheDocument();
+    vi.useRealTimers();
   });
 
   it('shows the updated shop by category labels', () => {

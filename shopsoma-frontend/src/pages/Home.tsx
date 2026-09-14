@@ -208,7 +208,15 @@ function Hero() {
   }, []);
 
   const requestSlide = (target: number) => {
-    const next = (target + HERO_SLIDES.length) % HERO_SLIDES.length;
+    let next: number | null = null;
+    for (let offset = 0; offset < HERO_SLIDES.length; offset += 1) {
+      const candidate = (target + offset + HERO_SLIDES.length) % HERO_SLIDES.length;
+      if (!failedSlides.has(candidate)) {
+        next = candidate;
+        break;
+      }
+    }
+    if (next === null) return;
     if (
       (next === activeSlide && mountedSlides.has(next) && readySlides.has(next) && !failedSlides.has(next))
       || (pendingSlide === next && mountedSlides.has(next) && !failedSlides.has(next))
@@ -280,7 +288,7 @@ function Hero() {
     if (reducedMotion || isInteracting || pendingSlide !== null) return;
     const timer = window.setTimeout(() => requestSlide(activeSlide + 1), 6500);
     return () => window.clearTimeout(timer);
-  }, [activeSlide, isInteracting, pendingSlide, reducedMotion]);
+  }, [activeSlide, failedSlides, isInteracting, pendingSlide, reducedMotion]);
 
   return (
     <section
