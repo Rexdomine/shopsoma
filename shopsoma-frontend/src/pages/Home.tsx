@@ -253,23 +253,25 @@ function Hero() {
     }
   };
 
-  const scheduleRetry = (index: number) => {
+  const scheduleRetry = (index: number, preservePendingFallback = false) => {
     if (retryTimers.current.has(index)) return;
     const timer = window.setTimeout(() => {
       retryTimers.current.delete(index);
-      setFailedSlides((failed) => {
-        const next = new Set(failed);
-        next.delete(index);
-        return next;
-      });
+      if (!preservePendingFallback) {
+        setFailedSlides((failed) => {
+          const next = new Set(failed);
+          next.delete(index);
+          return next;
+        });
+      }
       setMountedSlides((mounted) => new Set(mounted).add(index));
-      setPendingSlide(index);
+      if (!preservePendingFallback) setPendingSlide(index);
     }, 15000);
     retryTimers.current.set(index, timer);
   };
 
   const handleSlideError = (index: number) => {
-    scheduleRetry(index);
+    scheduleRetry(index, index === activeSlide);
     const failed = new Set(failedSlides).add(index);
     const findFallback = () => {
       for (let offset = 1; offset < HERO_SLIDES.length; offset += 1) {
@@ -317,7 +319,7 @@ function Hero() {
   }, [activeSlide, failedSlides, isInteracting, isPaused, pendingSlide, reducedMotion]);
 
   useEffect(() => {
-    if (pendingSlide === null) return;
+    if (pendingSlide === null || failedSlides.has(pendingSlide)) return;
     const isFailureFallback = failedSlides.has(activeSlide);
     if (!isFailureFallback && (isPaused || isInteracting || reducedMotion)) return;
     if (readySlides.has(pendingSlide)) {
@@ -343,8 +345,8 @@ function Hero() {
       {HERO_SLIDES.map((slide, index) => mountedSlides.has(index) && (
         <picture
           key={slide.desktop}
-          aria-hidden={index !== activeSlide}
-          className={`absolute inset-0 transition-opacity duration-[1400ms] ease-out ${index === activeSlide ? 'opacity-100' : 'pointer-events-none opacity-0'}`}
+          aria-hidden={index !== activeSlide || failedSlides.has(index)}
+          className={`absolute inset-0 transition-opacity duration-[1400ms] ease-out ${index === activeSlide && !failedSlides.has(index) ? 'opacity-100' : 'pointer-events-none opacity-0'}`}
         >
           <source media="(max-width: 767px)" srcSet={slide.mobile} />
           <img

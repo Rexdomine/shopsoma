@@ -146,6 +146,25 @@ describe('Home', () => {
     expect(screen.getByAltText(/campaign look 2/i).parentElement).toHaveAttribute('aria-hidden', 'false');
   });
 
+  it('keeps an in-flight fallback visible while the failed active slide retries', () => {
+    vi.useFakeTimers();
+    render(
+      <MemoryRouter>
+        <Home />
+      </MemoryRouter>
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /pause automatic campaign slideshow/i }));
+    fireEvent.error(screen.getByAltText(/campaign look 1/i));
+    act(() => vi.advanceTimersByTime(15000));
+
+    expect(screen.getByAltText(/campaign look 1/i).parentElement).toHaveAttribute('aria-hidden', 'true');
+    expect(screen.getByAltText(/campaign look 2/i).parentElement).toHaveAttribute('aria-hidden', 'true');
+    fireEvent.load(screen.getByAltText(/campaign look 2/i));
+    expect(screen.getByAltText(/campaign look 2/i).parentElement).toHaveAttribute('aria-hidden', 'false');
+    vi.useRealTimers();
+  });
+
   it('shows the updated shop by category labels', () => {
     render(
       <MemoryRouter>
