@@ -467,6 +467,20 @@ describe('Checkout M5 sequencing and recovery', () => {
     expect(mocks.createAddress).not.toHaveBeenCalled();
   });
 
+  it('clears canceled edit values before opening a fresh authenticated address form', async () => {
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit delivery address' }));
+    fireEvent.change(screen.getByLabelText('Street Address'), { target: { value: 'Unsubmitted edit' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    fireEvent.click(screen.getByRole('button', { name: '+ Add New Address' }));
+
+    expect(screen.getByRole('heading', { name: 'New Address' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Street Address')).toHaveValue('');
+    expect(screen.getByLabelText('Full Name')).toHaveValue('Buyer');
+  });
+
   it('creates the order then estimate and waits for explicit server option selection before payment', async () => {
     await reachPaymentStep();
 

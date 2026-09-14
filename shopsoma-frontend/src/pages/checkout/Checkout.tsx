@@ -109,6 +109,18 @@ export default function Checkout() {
     address_type: 'shipping',
     is_default: false,
   });
+  const resetNewAddress = () => setNewAddress({
+    full_name: user?.full_name || '',
+    phone_number: user?.phone_number || '',
+    address_line1: '',
+    address_line2: '',
+    city: '',
+    state: '',
+    postal_code: '',
+    country: 'Nigeria',
+    address_type: 'shipping',
+    is_default: false,
+  });
 
   const [allDomesticEstimates, setAllDomesticEstimates] = useState(false);
   const [shippingConfigLoaded, setShippingConfigLoaded] = useState(false);
@@ -326,6 +338,12 @@ export default function Checkout() {
         const updated = await checkoutService.updateAddress(editingAddressId, addressData);
         setAddresses(addresses.map(address => address.id === updated.id ? updated : address));
         setSelectedAddressId(updated.id);
+        // A destination change invalidates all location-derived delivery and review state.
+        setShippingRates([]);
+        setSelectedShippingRateId('');
+        setOrderReview(null);
+        setCurrentOrderId('');
+        setStep('address');
       } else {
         const created = await checkoutService.createAddress(addressData);
         setAddresses([...addresses, created]);
@@ -335,18 +353,7 @@ export default function Checkout() {
       setEditingAddressId(null);
 
       // Reset form
-      setNewAddress({
-        full_name: user?.full_name || '',
-        phone_number: user?.phone_number || '',
-        address_line1: '',
-        address_line2: '',
-        city: '',
-        state: '',
-        postal_code: '',
-        country: 'Nigeria',
-        address_type: 'shipping',
-        is_default: false,
-      });
+      resetNewAddress();
     } catch (error: any) {
       console.error('Error creating address:', error);
       alert(error.response?.data?.detail || 'Failed to create address. Please try again.');
@@ -1368,6 +1375,7 @@ export default function Checkout() {
                               disabled={!!enforcedOrder}
                               onClick={() => {
                                 setEditingAddressId(null);
+                                resetNewAddress();
                                 setShowNewAddressForm(true);
                               }}
                               className="w-full py-3 border border-dashed border-gray-300 rounded-sm text-sm text-gray-600 hover:border-primary hover:text-primary"
