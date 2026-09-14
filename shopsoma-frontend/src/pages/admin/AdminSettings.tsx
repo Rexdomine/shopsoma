@@ -3,7 +3,6 @@ import {
   Save,
   DollarSign,
   Loader2,
-  AlertCircle,
   Database,
   RefreshCw,
   Truck,
@@ -65,11 +64,105 @@ export default function AdminSettings() {
   const [lastDbSync, setLastDbSync] = useState<string | null>(null);
   const [syncProgress, setSyncProgress] = useState(0);
   const [syncStatus, setSyncStatus] = useState<'idle' | 'running' | 'success' | 'error'>('idle');
+  const settingsCategories = ['currency', 'shipping', 'rates', 'payout', 'commission', 'featured', 'database'] as const;
+  const categoryFromHash = () => {
+    const value = window.location.hash.replace(/^#/, '');
+    return settingsCategories.includes(value as typeof settingsCategories[number]) ? value : 'currency';
+  };
+  const [category, setCategory] = useState(categoryFromHash);
+  const [manualRatesDirty, setManualRatesDirty] = useState(false);
+  const [manualRatesBusy, setManualRatesBusy] = useState(false);
+  const discardManualRatesRef = useRef<(() => void) | null>(null);
   const syncTimerRef = useRef<number | null>(null);
+  const switchCategoryRef = useRef<(next: string, writeHistory?: boolean) => boolean>((next) => {
+    if (settingsCategories.includes(next as typeof settingsCategories[number])) {
+      setCategory(next as typeof settingsCategories[number]);
+    }
+    return true;
+  });
+  const historyIndexRef = useRef(typeof window.history.state?.settingsHistoryIndex === 'number' ? window.history.state.settingsHistoryIndex : 0);
+  const browserHistoryIndexRef = useRef<number>(typeof window.history.state?.idx === 'number' ? window.history.state.idx : 0);
+  const settingsLocationRef = useRef({
+    pathname: window.location.pathname,
+    search: window.location.search,
+    hash: `#${categoryFromHash()}`,
+  });
+  const restoringHistoryRef = useRef(false);
+  const lastNavigationSignatureRef = useRef<{ signature: string; eventType: string } | null>(null);
 
   useEffect(() => {
+    if (typeof window.history.state?.settingsHistoryIndex !== 'number') {
+      window.history.replaceState(
+        { ...window.history.state, idx: browserHistoryIndexRef.current, settingsHistoryIndex: historyIndexRef.current },
+        '',
+        window.location.href,
+      );
+    }
     fetchSettings();
   }, []);
+
+  useEffect(() => {
+    const syncCategory = (event: PopStateEvent | HashChangeEvent) => {
+      const navigationSignature = `${window.location.href}|${window.history.state?.idx ?? ''}|${window.history.state?.settingsHistoryIndex ?? ''}`;
+      const previousNavigation = lastNavigationSignatureRef.current;
+      if (previousNavigation?.signature === navigationSignature && previousNavigation.eventType !== event.type) {
+        lastNavigationSignatureRef.current = null;
+        return;
+      }
+      const currentNavigation = { signature: navigationSignature, eventType: event.type };
+      lastNavigationSignatureRef.current = currentNavigation;
+      queueMicrotask(() => {
+        if (lastNavigationSignatureRef.current === currentNavigation) {
+          lastNavigationSignatureRef.current = null;
+        }
+      });
+      if (restoringHistoryRef.current) {
+        restoringHistoryRef.current = false;
+        return;
+      }
+      const next = categoryFromHash();
+      const accepted = switchCategoryRef.current(next, false);
+      const isSettingsPath = window.location.pathname === settingsLocationRef.current.pathname
+        && window.location.search === settingsLocationRef.current.search;
+      if (accepted && isSettingsPath && typeof window.history.state?.idx === 'number') {
+        browserHistoryIndexRef.current = window.history.state.idx;
+      }
+      if (accepted && isSettingsPath && typeof window.history.state?.settingsHistoryIndex === 'number') {
+        historyIndexRef.current = window.history.state.settingsHistoryIndex;
+        settingsLocationRef.current = {
+          pathname: window.location.pathname,
+          search: window.location.search,
+          hash: `#${next}`,
+        };
+      }
+      if (!accepted) {
+        const destinationBrowserIndex = window.history.state?.idx;
+        if (typeof destinationBrowserIndex === 'number' && destinationBrowserIndex !== browserHistoryIndexRef.current) {
+          event.stopImmediatePropagation();
+          restoringHistoryRef.current = true;
+          window.history.go(browserHistoryIndexRef.current - destinationBrowserIndex);
+          return;
+        }
+        const destinationIndex = window.history.state?.settingsHistoryIndex;
+        if (typeof destinationIndex === 'number' && destinationIndex !== historyIndexRef.current) {
+          restoringHistoryRef.current = true;
+          window.history.go(historyIndexRef.current - destinationIndex);
+        } else {
+          window.history.replaceState(
+            { ...window.history.state, settingsHistoryIndex: historyIndexRef.current },
+            '',
+            `${settingsLocationRef.current.pathname}${settingsLocationRef.current.search}${settingsLocationRef.current.hash}`,
+          );
+        }
+      }
+    };
+    window.addEventListener('hashchange', syncCategory);
+    window.addEventListener('popstate', syncCategory, true);
+    return () => {
+      window.removeEventListener('hashchange', syncCategory);
+      window.removeEventListener('popstate', syncCategory, true);
+    };
+  }, [category]);
 
   useEffect(() => {
     return () => {
@@ -110,9 +203,7 @@ export default function AdminSettings() {
   const handleRateChange = (value: string) => {
     setRateInput(value);
     const numValue = parseFloat(value);
-    if (!isNaN(numValue) && exchangeRate) {
-      setHasChanges(numValue !== exchangeRate.rate);
-    }
+    setHasChanges(exchangeRate ? value.trim() === '' || Number.isNaN(numValue) || numValue !== exchangeRate.rate : value.trim() !== '');
   };
 
   const handleSaveRate = async () => {
@@ -180,10 +271,7 @@ export default function AdminSettings() {
 
   const handlePayoutHoldChange = (value: string) => {
     setPayoutHoldInput(value);
-    const parsed = Number(value);
-    if (!Number.isNaN(parsed) && payoutHold) {
-      setPayoutHoldChanged(parsed !== payoutHold.hold_days);
-    }
+    setPayoutHoldChanged(payoutHold ? value !== payoutHold.hold_days.toString() : value !== '');
   };
 
   const handleSavePayoutHold = async () => {
@@ -217,10 +305,7 @@ export default function AdminSettings() {
 
   const handleCommissionChange = (value: string) => {
     setCommissionInput(value);
-    const parsed = Number(value);
-    if (!Number.isNaN(parsed) && commissionSettings) {
-      setCommissionChanged(parsed !== commissionSettings.commission_rate);
-    }
+    setCommissionChanged(commissionSettings ? value !== commissionSettings.commission_rate.toString() : value !== '');
   };
 
   const handleSaveCommission = async () => {
@@ -358,560 +443,64 @@ export default function AdminSettings() {
     );
   }
 
-  const dhlReadyForCheckout = Boolean(
-    shippingProvider?.readiness.dhl && shippingProvider?.checkout_estimates_required,
+  const dhlReadyForCheckout = Boolean(shippingProvider?.readiness.dhl && shippingProvider?.checkout_estimates_required);
+  const categories = [
+    ['currency', 'Currency', 'Exchange rates and display values', DollarSign],
+    ['shipping', 'Shipping', 'Provider and checkout readiness', Truck],
+    ['rates', 'Manual rates', 'Destination-based delivery pricing', ListChecks],
+    ['payout', 'Payouts', 'Hold periods and settlement rules', WalletCards],
+    ['commission', 'Commission', 'Vendor defaults and future orders', Percent],
+    ['featured', 'Featured', 'Homepage rotation timing', RefreshCw],
+    ['database', 'Database', 'Local-only development tools', Database],
+  ] as const;
+  const dirty = hasChanges || payoutHoldChanged || commissionChanged || applyCommissionToExisting || featuredRotationChanged || manualRatesDirty;
+  const savingAny = saving || savingShipping || savingPayoutHold || savingCommission || savingFeaturedRotation || manualRatesBusy;
+  const Summary = ({ title, value, detail }: { title: string; value: string; detail: string }) => (
+    <div className="rounded-xl border border-slate-200 bg-slate-50 p-4"><p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{title}</p><p className="mt-2 text-xl font-semibold text-slate-950">{value}</p><p className="mt-1 text-xs text-slate-500">{detail}</p></div>
   );
-
-  return (
-    <div className="flex min-h-screen bg-[var(--color-page-bg)]">
-      <div className="hidden md:flex">
-        <AdminSidebar activePrimary="settings" />
-      </div>
-
-      <div className="flex-1 overflow-auto">
-        <div className="mx-auto w-full max-w-[1440px] px-4 py-6 sm:px-6 lg:px-8">
-          {/* Header */}
-          <div className="mb-6 flex flex-col gap-4 border-b border-slate-200 pb-6 lg:flex-row lg:items-end lg:justify-between">
-            <div>
-            <h1 className="text-2xl font-semibold text-gray-900">Settings</h1>
-            <p className="text-sm text-gray-600 mt-1">
-              Manage application settings and configurations
-            </p>
-            </div>
-            <nav aria-label="Settings categories" className="flex max-w-full gap-2 overflow-x-auto pb-1 text-sm">
-              {[['#currency', 'Currency', DollarSign], ['#shipping', 'Shipping', Truck], ['#rates', 'Manual rates', ListChecks], ['#payout', 'Payout hold', WalletCards], ['#commission', 'Commission', Percent], ['#featured', 'Featured', RefreshCw], ['#database', 'Database', Database]].map(([href, label, Icon]) => <a key={href as string} href={href as string} className="flex shrink-0 items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 font-medium text-slate-600 shadow-sm transition hover:border-[#105E53] hover:text-[#105E53] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#105E53]"><Icon className="h-4 w-4" aria-hidden="true" />{label as string}</a>)}
-            </nav>
-          </div>
-
-          <div className="space-y-6">
-          {/* Currency Settings Card */}
-          <div id="currency" className="scroll-mt-6 bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-            <div className="border-b border-gray-200 px-6 py-4">
-              <div className="flex items-center gap-3">
-                <div className="h-10 w-10 rounded-xl bg-[#0B1D2C] text-white flex items-center justify-center">
-                  <DollarSign className="w-5 h-5" />
-                </div>
-                <div>
-                  <h2 className="text-lg font-semibold text-gray-900">Currency Settings</h2>
-                  <p className="text-sm text-gray-600">Manage exchange rates for currency conversion</p>
-                </div>
-              </div>
-            </div>
-
-            <div className="p-6 space-y-6">
-              {/* Exchange Rate Input */}
-              <div>
-                <label htmlFor="exchange-rate" className="block text-sm font-medium text-gray-700 mb-2">
-                  USD to NGN Exchange Rate
-                  <span className="text-gray-500 font-normal ml-2">(1 USD = X NGN)</span>
-                </label>
-                <div className="flex items-start gap-4">
-                  <div className="flex-1 max-w-md">
-                    <div className="relative">
-                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 font-medium">
-                        ₦
-                      </span>
-                      <input
-                        id="exchange-rate"
-                        type="number"
-                        min="100"
-                        max="10000"
-                        step="0.01"
-                        value={rateInput}
-                        onChange={(e) => handleRateChange(e.target.value)}
-                        className="w-full pl-8 pr-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#105E53] focus:border-transparent text-gray-900"
-                        placeholder="Enter exchange rate"
-                      />
-                    </div>
-                    <p className="text-xs text-gray-500 mt-2">
-                      Valid range: 100 - 10,000 NGN per USD
-                    </p>
-                  </div>
-
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={handleReset}
-                      disabled={!hasChanges || saving}
-                      className="px-4 py-2.5 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      Reset
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleSaveRate}
-                      disabled={!hasChanges || saving}
-                      className="px-4 py-2.5 bg-[#105E53] text-white rounded-lg text-sm font-medium hover:bg-[#0d4a42] transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-                    >
-                      {saving ? (
-                        <>
-                          <Loader2 className="w-4 h-4 animate-spin" />
-                          Saving...
-                        </>
-                      ) : (
-                        <>
-                          <Save className="w-4 h-4" />
-                          Save Changes
-                        </>
-                      )}
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              {/* Current Rate Display */}
-              {exchangeRate && (
-                <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-sm font-medium text-gray-700">Current Exchange Rate</p>
-                      <p className="text-2xl font-semibold text-[#0B1D2C] mt-1">
-                        1 USD = ₦{exchangeRate.rate.toLocaleString('en-NG', {
-                          minimumFractionDigits: 2,
-                          maximumFractionDigits: 2
-                        })}
-                      </p>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-xs text-gray-500">Last Updated</p>
-                      <p className="text-sm text-gray-700 mt-0.5">
-                        {new Date(exchangeRate.updated_at).toLocaleString('en-US', {
-                          dateStyle: 'medium',
-                          timeStyle: 'short'
-                        })}
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Info Box */}
-              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                <div className="flex items-start gap-3">
-                  <AlertCircle className="w-5 h-5 text-blue-600 mt-0.5 flex-shrink-0" />
-                  <div>
-                    <p className="text-sm font-semibold text-blue-900 mb-1">About Exchange Rates</p>
-                    <ul className="text-sm text-blue-800 space-y-1">
-                      <li>• All product prices are stored in NGN (Nigerian Naira)</li>
-                      <li>• The exchange rate is used to convert prices to USD for display</li>
-                      <li>• Changes take effect immediately across the platform</li>
-                      <li>• Update regularly to reflect current market rates</li>
-                    </ul>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <section id="shipping" className="scroll-mt-6 bg-white rounded-2xl border border-gray-200 shadow-sm p-6 space-y-4">
-            <h2 className="text-lg font-semibold">Shipping Provider</h2>
-            <label className="block">Current provider
-              <select aria-label="Shipping provider" value={shippingProvider?.provider ?? ''} disabled={savingShipping || !shippingProvider}
-                onChange={event => void handleShippingProvider(event.target.value as ShippingProviderSettings['provider'])}
-                className="block mt-2 rounded-lg border border-gray-300 p-2">
-                {!shippingProvider && <option value="">Loading…</option>}
-                <option value="manual">Manual rates</option>
-                <option value="shipbubble" disabled={!shippingProvider?.readiness.shipbubble}>ShipBubble — unavailable for secure checkout</option>
-                <option value="dhl" disabled={!dhlReadyForCheckout}>DHL — {dhlReadyForCheckout ? 'sandbox ready' : 'pending / not enabled'}</option>
-              </select>
-            </label>
-            {savingShipping && <p role="status">Saving provider…</p>}
-            <p className="text-sm text-gray-600">Manual rates make no carrier calls. DHL remains subject to existing sandbox gates. Provider changes apply to new quotes; issued quotes and payment recovery keep their saved terms.</p>
-          </section>
-          <div id="rates" className="scroll-mt-6"><ManualShippingSettings /></div>
-
-          {/* Payout Hold Settings Card */}
-          <div id="payout" className="scroll-mt-6 bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-            <div className="border-b border-gray-200 px-6 py-4">
-              <div className="flex items-center gap-3">
-                <div className="h-10 w-10 rounded-xl bg-[#0B1D2C] text-white flex items-center justify-center">
-                  <DollarSign className="w-5 h-5" />
-                </div>
-                <div>
-                  <h2 className="text-lg font-semibold text-gray-900">Payout Hold</h2>
-                  <p className="text-sm text-gray-600">Set how long vendors wait before withdrawing</p>
-                </div>
-              </div>
-            </div>
-
-            <div className="p-6 space-y-6">
-              <div>
-                <label htmlFor="payout-hold" className="block text-sm font-medium text-gray-700 mb-2">
-                  Hold period (days)
-                </label>
-                <div className="flex items-start gap-4">
-                  <div className="flex-1 max-w-md">
-                    <input
-                      id="payout-hold"
-                      type="number"
-                      min="0"
-                      max="3650"
-                      step="1"
-                      value={payoutHoldInput}
-                      onChange={(event) => handlePayoutHoldChange(event.target.value)}
-                      className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#105E53] focus:border-transparent text-gray-900"
-                      placeholder="Enter hold days"
-                    />
-                    <p className="text-xs text-gray-500 mt-2">
-                      Set to 0 for no hold. Max 3650 days.
-                    </p>
-                  </div>
-
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={handleResetPayoutHold}
-                      disabled={!payoutHoldChanged || savingPayoutHold}
-                      className="px-4 py-2.5 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      Reset
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleSavePayoutHold}
-                      disabled={!payoutHoldChanged || savingPayoutHold}
-                      className="px-4 py-2.5 bg-[#105E53] text-white rounded-lg text-sm font-medium hover:bg-[#0d4a42] transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-                    >
-                      {savingPayoutHold ? (
-                        <>
-                          <Loader2 className="w-4 h-4 animate-spin" />
-                          Saving...
-                        </>
-                      ) : (
-                        <>
-                          <Save className="w-4 h-4" />
-                          Save Changes
-                        </>
-                      )}
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              {payoutHold && (
-                <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-sm font-medium text-gray-700">Current Hold Period</p>
-                      <p className="text-2xl font-semibold text-[#0B1D2C] mt-1">
-                        {payoutHold.hold_days} day{payoutHold.hold_days === 1 ? '' : 's'}
-                      </p>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-xs text-gray-500">Last Updated</p>
-                      <p className="text-sm text-gray-700 mt-0.5">
-                        {payoutHold.updated_at
-                          ? new Date(payoutHold.updated_at).toLocaleString('en-US', {
-                              dateStyle: 'medium',
-                              timeStyle: 'short'
-                            })
-                          : 'Not set'}
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Commission Settings Card */}
-          <div id="commission" className="scroll-mt-6 bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-            <div className="border-b border-gray-200 px-6 py-4">
-              <div className="flex items-center gap-3">
-                <div className="h-10 w-10 rounded-xl bg-[#105E53] text-white flex items-center justify-center">
-                  <DollarSign className="w-5 h-5" />
-                </div>
-                <div>
-                  <h2 className="text-lg font-semibold text-gray-900">Commission</h2>
-                  <p className="text-sm text-gray-600">Control default vendor commission for future order calculations</p>
-                </div>
-              </div>
-            </div>
-
-            <div className="p-6 space-y-6">
-              <div>
-                <label htmlFor="commission-rate" className="block text-sm font-medium text-gray-700 mb-2">
-                  Default commission percentage
-                </label>
-                <div className="flex items-start gap-4">
-                  <div className="flex-1 max-w-md">
-                    <div className="relative">
-                      <input
-                        id="commission-rate"
-                        type="number"
-                        min="0"
-                        max="100"
-                        step="0.01"
-                        value={commissionInput}
-                        onChange={(event) => handleCommissionChange(event.target.value)}
-                        className="w-full pr-10 px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#105E53] focus:border-transparent text-gray-900"
-                        placeholder="Enter commission percentage"
-                      />
-                      <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 font-medium">
-                        %
-                      </span>
-                    </div>
-                    <p className="text-xs text-gray-500 mt-2">
-                      New orders snapshot the vendor commission at order creation. Old orders and payouts are not changed.
-                    </p>
-                    <label className="mt-4 flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
-                      <input
-                        type="checkbox"
-                        checked={applyCommissionToExisting}
-                        onChange={(event) => setApplyCommissionToExisting(event.target.checked)}
-                        className="mt-1 h-4 w-4 rounded border-amber-300 text-[#105E53] focus:ring-[#105E53]"
-                      />
-                      <span>
-                        Also update existing vendor commission rates for future orders. Leave unchecked to apply this only as the default for newly created vendors.
-                      </span>
-                    </label>
-                  </div>
-
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={handleResetCommission}
-                      disabled={(!commissionChanged && !applyCommissionToExisting) || savingCommission}
-                      className="px-4 py-2.5 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      Reset
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleSaveCommission}
-                      disabled={(!commissionChanged && !applyCommissionToExisting) || savingCommission}
-                      className="px-4 py-2.5 bg-[#105E53] text-white rounded-lg text-sm font-medium hover:bg-[#0d4a42] transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-                    >
-                      {savingCommission ? (
-                        <>
-                          <Loader2 className="w-4 h-4 animate-spin" />
-                          Saving...
-                        </>
-                      ) : (
-                        <>
-                          <Save className="w-4 h-4" />
-                          Save Changes
-                        </>
-                      )}
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              {commissionSettings && (
-                <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-sm font-medium text-gray-700">Current Default Commission</p>
-                      <p className="text-2xl font-semibold text-[#0B1D2C] mt-1">
-                        {commissionSettings.commission_rate.toLocaleString('en-US', {
-                          minimumFractionDigits: 0,
-                          maximumFractionDigits: 2
-                        })}%
-                      </p>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-xs text-gray-500">Last Updated</p>
-                      <p className="text-sm text-gray-700 mt-0.5">
-                        {commissionSettings.updated_at
-                          ? new Date(commissionSettings.updated_at).toLocaleString('en-US', {
-                              dateStyle: 'medium',
-                              timeStyle: 'short'
-                            })
-                          : 'Not set'}
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                <div className="flex items-start gap-3">
-                  <AlertCircle className="w-5 h-5 text-blue-600 mt-0.5 flex-shrink-0" />
-                  <div>
-                    <p className="text-sm font-semibold text-blue-900 mb-1">About Commission</p>
-                    <ul className="text-sm text-blue-800 space-y-1">
-                      <li>• Vendor-level commission rates are used for new order item snapshots</li>
-                      <li>• Historical order and payout records keep their original commission math</li>
-                      <li>• Use the checkbox only when the new percentage should apply to existing vendors going forward</li>
-                    </ul>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Featured Rotation Settings Card */}
-          <div id="featured" className="scroll-mt-6 bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-            <div className="border-b border-gray-200 px-6 py-4">
-              <div className="flex items-center gap-3">
-                <div className="h-10 w-10 rounded-xl bg-[#105E53] text-white flex items-center justify-center">
-                  <RefreshCw className="w-5 h-5" />
-                </div>
-                <div>
-                  <h2 className="text-lg font-semibold text-gray-900">Featured Rotation</h2>
-                  <p className="text-sm text-gray-600">Control how often the homepage feature changes</p>
-                </div>
-              </div>
-            </div>
-
-            <div className="p-6 space-y-6">
-              <div>
-                <label htmlFor="featured-rotation" className="block text-sm font-medium text-gray-700 mb-2">
-                  Rotation interval (minutes)
-                </label>
-                <div className="flex items-start gap-4">
-                  <div className="flex-1 max-w-md">
-                    <input
-                      id="featured-rotation"
-                      type="number"
-                      min="1"
-                      max="1440"
-                      step="1"
-                      value={featuredRotationInput}
-                      onChange={(event) => handleFeaturedRotationChange(event.target.value)}
-                      className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#105E53] focus:border-transparent text-gray-900"
-                      placeholder="Enter minutes"
-                    />
-                    <p className="text-xs text-gray-500 mt-2">
-                      Set between 1 and 1440 minutes (24 hours).
-                    </p>
-                  </div>
-
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={handleResetFeaturedRotation}
-                      disabled={!featuredRotationChanged || savingFeaturedRotation}
-                      className="px-4 py-2.5 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      Reset
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleSaveFeaturedRotation}
-                      disabled={!featuredRotationChanged || savingFeaturedRotation}
-                      className="px-4 py-2.5 bg-[#105E53] text-white rounded-lg text-sm font-medium hover:bg-[#0d4a42] transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-                    >
-                      {savingFeaturedRotation ? (
-                        <>
-                          <Loader2 className="w-4 h-4 animate-spin" />
-                          Saving...
-                        </>
-                      ) : (
-                        <>
-                          <Save className="w-4 h-4" />
-                          Save Changes
-                        </>
-                      )}
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              {featuredRotation && (
-                <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-sm font-medium text-gray-700">Current Rotation Interval</p>
-                      <p className="text-2xl font-semibold text-[#0B1D2C] mt-1">
-                        {featuredRotation.rotation_minutes} minute{featuredRotation.rotation_minutes === 1 ? '' : 's'}
-                      </p>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-xs text-gray-500">Last Updated</p>
-                      <p className="text-sm text-gray-700 mt-0.5">
-                        {featuredRotation.updated_at
-                          ? new Date(featuredRotation.updated_at).toLocaleString('en-US', {
-                              dateStyle: 'medium',
-                              timeStyle: 'short'
-                            })
-                          : 'Not set'}
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Database Sync Card */}
-          <div id="database" className="scroll-mt-6 bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-            <div className="border-b border-gray-200 px-6 py-4">
-              <div className="flex items-center gap-3">
-                <div className="h-10 w-10 rounded-xl bg-[#105E53] text-white flex items-center justify-center">
-                  <Database className="w-5 h-5" />
-                </div>
-                <div>
-                  <h2 className="text-lg font-semibold text-gray-900">Database Sync (Local)</h2>
-                  <p className="text-sm text-gray-600">Replace local data with Render staging data</p>
-                </div>
-              </div>
-            </div>
-
-            <div className="p-6 space-y-4">
-              <div className="flex items-start gap-3">
-                <AlertCircle className="w-5 h-5 text-orange-600 mt-0.5 flex-shrink-0" />
-                <div>
-                  <p className="text-sm font-semibold text-orange-900">Destructive action</p>
-                  <p className="text-sm text-orange-800">
-                    This will overwrite your local database. Use only in local development.
-                  </p>
-                </div>
-              </div>
-
-              {lastDbSync && (
-                <div className="bg-gray-50 rounded-lg p-4 border border-gray-200 text-sm text-gray-700">
-                  {lastDbSync}
-                </div>
-              )}
-
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={handleDbSync}
-                  disabled={syncingDb}
-                  className="px-4 py-2.5 bg-[#0B1D2C] text-white rounded-lg text-sm font-medium hover:bg-[#081620] transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-                >
-                  {syncingDb ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      Syncing...
-                    </>
-                  ) : (
-                    <>
-                      <RefreshCw className="w-4 h-4" />
-                      Sync Render to Local
-                    </>
-                  )}
-                </button>
-              </div>
-
-              {(syncStatus === 'running' || syncProgress > 0) && (
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between text-xs text-gray-600">
-                    <span>
-                      {syncStatus === 'running' ? 'Sync in progress' : 'Sync complete'}
-                    </span>
-                    <span>{syncProgress}%</span>
-                  </div>
-                  <div className="h-2 w-full rounded-full bg-gray-100 overflow-hidden">
-                    <div
-                      className={`h-full transition-all duration-300 ${
-                        syncStatus === 'error' ? 'bg-red-500' : 'bg-[#105E53]'
-                      }`}
-                      style={{ width: `${syncProgress}%` }}
-                    />
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-          </div>
-        </div>
-      </div>
-
-      <ToastContainer toasts={toasts} onClose={hideToast} />
-    </div>
-  );
+  const saveBar = (onSave: () => void, onReset: () => void, changed: boolean, busy: boolean) => <div className="flex flex-wrap items-center gap-3 border-t border-slate-100 pt-5"><button type="button" onClick={onSave} disabled={!changed || busy} className="inline-flex items-center gap-2 rounded-lg bg-[#105E53] px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40"><Save className="h-4 w-4" />{busy ? 'Saving…' : 'Save changes'}</button><button type="button" onClick={onReset} disabled={!changed || busy} className="rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-semibold text-slate-700 disabled:opacity-40">Discard edits</button>{changed && <span className="text-xs font-medium text-amber-700">Unsaved changes</span>}</div>;
+  const switchCategory = (next: string, writeHistory = true) => {
+    const isSettingsPath = window.location.pathname === settingsLocationRef.current.pathname
+      && window.location.search === settingsLocationRef.current.search;
+    if (next === category && isSettingsPath) return true;
+    if (savingAny) {
+      error('Please wait for the current save to finish before switching categories.', 'Save in progress');
+      return false;
+    }
+    if (dirty && !window.confirm('You have unsaved edits. Switch category and discard them?')) return false;
+    handleReset();
+    handleResetPayoutHold();
+    handleResetCommission();
+    handleResetFeaturedRotation();
+    discardManualRatesRef.current?.();
+    setManualRatesDirty(false);
+    if (writeHistory && settingsCategories.includes(next as typeof settingsCategories[number])) {
+      historyIndexRef.current += 1;
+      browserHistoryIndexRef.current += 1;
+      window.history.pushState(
+        { ...window.history.state, idx: browserHistoryIndexRef.current, settingsHistoryIndex: historyIndexRef.current },
+        '',
+        `#${next}`,
+      );
+      settingsLocationRef.current = {
+        pathname: window.location.pathname,
+        search: window.location.search,
+        hash: `#${next}`,
+      };
+    }
+    setCategory(next);
+    return true;
+  };
+  switchCategoryRef.current = switchCategory;
+  return <div className="flex min-h-screen bg-[var(--color-page-bg)]"><div className="hidden md:flex"><AdminSidebar activePrimary="settings" /></div><main className="min-w-0 flex-1"><div className="mx-auto max-w-[1280px] px-4 py-6 sm:px-6 lg:px-10 lg:py-10">
+    <header className="mb-8"><p className="text-xs font-bold uppercase tracking-[0.18em] text-[#105E53]">ShopSoma admin</p><div className="mt-2 flex flex-col justify-between gap-4 sm:flex-row sm:items-end"><div><h1 className="text-3xl font-semibold tracking-tight text-slate-950">Settings</h1><p className="mt-2 max-w-2xl text-sm text-slate-600">One focused workspace at a time. Review the current value first, then make a deliberate change.</p></div>{dirty && <div className="rounded-full bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-800">Draft edits pending</div>}</div></header>
+    <div className="grid gap-6 lg:grid-cols-[250px_minmax(0,1fr)]"><nav aria-label="Settings categories" className="h-fit rounded-2xl border border-slate-200 bg-white p-2 shadow-sm lg:sticky lg:top-6"><p className="px-3 pb-2 pt-2 text-[11px] font-bold uppercase tracking-[0.16em] text-slate-400">Configuration</p>{categories.map(([id,label,desc,Icon]) => <button key={id} type="button" onClick={() => switchCategory(id)} aria-current={category === id ? 'page' : undefined} className={`flex w-full items-start gap-3 rounded-xl px-3 py-3 text-left transition ${category === id ? 'bg-[#E7F3EF] text-[#105E53]' : 'text-slate-600 hover:bg-slate-50'}`}><Icon className="mt-0.5 h-4 w-4 shrink-0" /><span><span className="block text-sm font-semibold">{label}</span><span className="mt-0.5 block text-xs leading-4 opacity-70">{desc}</span></span></button>)}</nav>
+    <section aria-live="polite" className="min-w-0">{category === 'currency' && <div className="space-y-5"><div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-7"><div className="mb-6 flex flex-wrap items-start justify-between gap-4"><div><p className="text-xs font-bold uppercase tracking-[0.16em] text-[#105E53]">Currency</p><h2 className="mt-1 text-2xl font-semibold text-slate-950">Exchange rate</h2><p className="mt-1 text-sm text-slate-600">Controls how NGN prices are represented in USD across the storefront.</p></div>{exchangeRate && <Summary title="Current value" value={`₦${exchangeRate.rate.toLocaleString('en-NG', { minimumFractionDigits: 2 })}`} detail="per 1 USD" />}</div><label htmlFor="exchange-rate" className="block max-w-sm text-sm font-semibold text-slate-800">USD to NGN<input id="exchange-rate" type="number" min="100" max="10000" step="0.01" value={rateInput} onChange={e => handleRateChange(e.target.value)} className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2.5 text-slate-900" /><span className="mt-1 block text-xs font-normal text-slate-500">Allowed range: 100–10,000 NGN. Changes apply immediately after saving.</span></label>{saveBar(handleSaveRate, handleReset, hasChanges, saving)}</div></div>}
+    {category === 'shipping' && <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-7"><p className="text-xs font-bold uppercase tracking-[0.16em] text-[#105E53]">Fulfilment</p><h2 className="mt-1 text-2xl font-semibold text-slate-950">Shipping provider</h2><p className="mt-1 text-sm text-slate-600">Choose the provider used for checkout estimates. Availability and readiness gates remain enforced by the existing service.</p><div className="mt-7 grid gap-4 sm:grid-cols-2"><label className="text-sm font-semibold text-slate-800">Active provider<select aria-label="Shipping provider" value={shippingProvider?.provider ?? ''} disabled={savingShipping || !shippingProvider} onChange={e => handleShippingProvider(e.target.value as ShippingProviderSettings['provider'])} className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2.5"><option value="manual">Manual rates</option><option value="shipbubble" disabled={!shippingProvider?.readiness.shipbubble}>ShipBubble — unavailable for secure checkout</option><option value="dhl" disabled={!dhlReadyForCheckout}>DHL</option></select></label><div className="rounded-xl border border-slate-200 bg-slate-50 p-4"><p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Checkout readiness</p><p className={`mt-2 text-sm font-semibold ${dhlReadyForCheckout ? 'text-emerald-700' : 'text-slate-700'}`}>{dhlReadyForCheckout ? 'DHL estimates enabled' : 'Provider gate active'}</p><p className="mt-1 text-xs text-slate-500">Provider activation and credentials are not changed here.</p></div></div></div>}
+    {category === 'rates' && <ManualShippingSettings onDirtyChange={setManualRatesDirty} onBusyChange={setManualRatesBusy} onDiscard={clear => { discardManualRatesRef.current = clear; }} />}
+    {category === 'payout' && <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-7"><p className="text-xs font-bold uppercase tracking-[0.16em] text-[#105E53]">Settlements</p><h2 className="mt-1 text-2xl font-semibold text-slate-950">Payout hold</h2><p className="mt-1 text-sm text-slate-600">Keep vendor funds on hold for the configured number of days before payout eligibility.</p>{payoutHold && <div className="mt-6 mb-6"><Summary title="Current value" value={`${payoutHold.hold_days} days`} detail="applies to future payout eligibility" /></div>}<label className="block max-w-sm text-sm font-semibold">Hold duration<input type="number" min="0" max="3650" value={payoutHoldInput} onChange={e => handlePayoutHoldChange(e.target.value)} className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2.5" /><span className="mt-1 block text-xs font-normal text-slate-500">Allowed range: 0–3,650 days.</span></label>{saveBar(handleSavePayoutHold, handleResetPayoutHold, payoutHoldChanged, savingPayoutHold)}</div>}
+    {category === 'commission' && <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-7"><p className="text-xs font-bold uppercase tracking-[0.16em] text-[#105E53]">Vendor economics</p><h2 className="mt-1 text-2xl font-semibold text-slate-950">Commission default</h2><p className="mt-1 text-sm text-slate-600">Set the default percentage for new vendors without changing historical order math.</p>{commissionSettings && <div className="mt-6 mb-6"><Summary title="Current value" value={`${commissionSettings.commission_rate}%`} detail="default commission" /></div>}<label className="block max-w-sm text-sm font-semibold">Commission percentage<input type="number" min="0" max="100" value={commissionInput} onChange={e => handleCommissionChange(e.target.value)} className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2.5" /></label><label className="mt-5 flex max-w-xl gap-3 text-sm text-slate-600"><input type="checkbox" checked={applyCommissionToExisting} onChange={e => setApplyCommissionToExisting(e.target.checked)} className="mt-1" />Also update existing vendor defaults for future orders.</label>{saveBar(handleSaveCommission, handleResetCommission, commissionChanged || applyCommissionToExisting, savingCommission)}</div>}
+    {category === 'featured' && <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-7"><p className="text-xs font-bold uppercase tracking-[0.16em] text-[#105E53]">Storefront curation</p><h2 className="mt-1 text-2xl font-semibold text-slate-950">Featured rotation</h2><p className="mt-1 text-sm text-slate-600">Control how often the homepage featured selection changes.</p>{featuredRotation && <div className="mt-6 mb-6"><Summary title="Current value" value={`${featuredRotation.rotation_minutes} minutes`} detail="between automatic rotations" /></div>}<label className="block max-w-sm text-sm font-semibold">Rotation interval<input type="number" min="1" max="1440" value={featuredRotationInput} onChange={e => handleFeaturedRotationChange(e.target.value)} className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2.5" /><span className="mt-1 block text-xs font-normal text-slate-500">Allowed range: 1–1,440 minutes.</span></label>{saveBar(handleSaveFeaturedRotation, handleResetFeaturedRotation, featuredRotationChanged, savingFeaturedRotation)}</div>}
+    {category === 'database' && <div className="rounded-2xl border border-amber-200 bg-white p-5 shadow-sm sm:p-7"><p className="text-xs font-bold uppercase tracking-[0.16em] text-amber-700">Developer tools</p><h2 className="mt-1 text-2xl font-semibold text-slate-950">Local database sync</h2><p className="mt-1 text-sm text-slate-600">This destructive action is intentionally available only in local development. It never runs against hosted environments.</p><div className="mt-6 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"><strong>Local-only gate.</strong> Syncing replaces local data with Render staging data.</div><button type="button" onClick={handleDbSync} disabled={syncingDb} className="mt-6 inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50"><RefreshCw className="h-4 w-4" />{syncingDb ? 'Syncing…' : 'Sync Render to Local'}</button>{lastDbSync && <p className="mt-4 text-sm text-slate-600">{lastDbSync}</p>}{syncStatus === 'running' && <p className="mt-2 text-xs text-slate-500">Sync progress: {syncProgress}%</p>}</div>}
+    </section></div></div></main><ToastContainer toasts={toasts} onClose={hideToast} /></div>;
 }
