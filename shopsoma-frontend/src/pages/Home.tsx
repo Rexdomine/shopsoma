@@ -10,7 +10,23 @@ import { useCurrency } from '../hooks/useCurrency';
 import { formatPriceWithConversion } from '../utils/pricing';
 import { getProductImageSource, getProductImageSources } from '../utils/productImages';
 
-const HERO_IMAGE = '/images/hero/demo-image-2.png';
+const HERO_SLIDES = [
+  {
+    desktop: '/images/hero/campaign/campaign-exterior-desktop.webp',
+    mobile: '/images/hero/campaign/campaign-exterior-mobile.webp',
+    alt: 'Orange Culture campaign look 1: three models outside a terracotta building',
+  },
+  {
+    desktop: '/images/hero/campaign/campaign-stairwell-desktop.webp',
+    mobile: '/images/hero/campaign/campaign-stairwell-mobile.webp',
+    alt: 'Orange Culture campaign look 2: a model in a warm stairwell',
+  },
+  {
+    desktop: '/images/hero/campaign/campaign-lounge-desktop.webp',
+    mobile: '/images/hero/campaign/campaign-lounge-mobile.webp',
+    alt: 'Orange Culture campaign look 3: a model relaxing in an editorial lounge',
+  },
+] as const;
 
 type HomeProductCardProps = {
   product: Product;
@@ -174,35 +190,72 @@ function HomeProductCard({
 }
 
 function Hero() {
+  const [activeSlide, setActiveSlide] = useState(0);
+  const [reducedMotion, setReducedMotion] = useState(false);
+
+  useEffect(() => {
+    if (!window.matchMedia) return;
+    const media = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const update = () => setReducedMotion(media.matches);
+    update();
+    media.addEventListener('change', update);
+    return () => media.removeEventListener('change', update);
+  }, []);
+
+  useEffect(() => {
+    if (reducedMotion) return;
+    const timer = window.setInterval(
+      () => setActiveSlide((current) => (current + 1) % HERO_SLIDES.length),
+      6500,
+    );
+    return () => window.clearInterval(timer);
+  }, [reducedMotion]);
+
+  const showSlide = (next: number) => {
+    setActiveSlide((next + HERO_SLIDES.length) % HERO_SLIDES.length);
+  };
+
   return (
     <section
-      className="hero relative w-full min-h-[45vh] sm:min-h-[60vh] lg:min-h-[70vh] bg-cover bg-center flex items-end justify-center"
-      style={{ backgroundImage: `url(${HERO_IMAGE})` }}
+      aria-label="Orange Culture campaign"
+      aria-roledescription="carousel"
+      className="hero relative isolate flex min-h-[520px] w-full items-end overflow-hidden bg-[#1b1715] sm:min-h-[600px] lg:min-h-[700px]"
     >
-      <div className="text-center pb-10 sm:pb-14 lg:pb-16 px-4">
-        <h1
-          className="text-xl sm:text-2xl lg:text-4xl font-serif font-normal text-white mb-4 sm:mb-6"
-          style={{
-            fontFamily: 'var(--font-serif)',
-            fontWeight: 400,
-            textShadow: '0 2px 8px rgba(0,0,0,0.3)'
-          }}
+      {HERO_SLIDES.map((slide, index) => (
+        <picture
+          key={slide.desktop}
+          aria-hidden={index !== activeSlide}
+          className={`absolute inset-0 transition-opacity duration-[1400ms] ease-out ${index === activeSlide ? 'opacity-100' : 'pointer-events-none opacity-0'}`}
         >
-          Orange Culture: A night Beyond
-        </h1>
-        <div className="flex items-center justify-center gap-10">
-          <Link
-            to="/men"
-            className="text-white font-ui uppercase tracking-[0.2em] text-sm border-b border-white pb-1 hover:opacity-80 transition-opacity"
-          >
-            Shop Men
-          </Link>
-          <Link
-            to="/women"
-            className="text-white font-ui uppercase tracking-[0.2em] text-sm border-b border-white pb-1 hover:opacity-80 transition-opacity"
-          >
-            Shop Women
-          </Link>
+          <source media="(max-width: 767px)" srcSet={slide.mobile} />
+          <img
+            src={slide.desktop}
+            alt={slide.alt}
+            className="h-full w-full object-cover"
+            loading={index === 0 ? 'eager' : 'lazy'}
+            fetchPriority={index === 0 ? 'high' : 'auto'}
+            decoding="async"
+          />
+        </picture>
+      ))}
+
+      <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-[#17110eee] via-[#17110e38] to-transparent" />
+      <div className="relative z-10 flex w-full items-end justify-between gap-5 px-5 pb-7 sm:px-10 sm:pb-10 lg:px-16 lg:pb-14">
+        <div className="max-w-xl text-white">
+          <p className="mb-3 text-[10px] font-ui font-semibold uppercase tracking-[0.32em] text-white/75">ShopSoma presents</p>
+          <h1 className="font-serif text-3xl font-normal leading-tight sm:text-4xl lg:text-5xl" style={{ fontFamily: 'var(--font-serif)', textShadow: '0 2px 12px rgba(0,0,0,0.35)' }}>
+            Orange Culture: A night Beyond
+          </h1>
+          <div className="mt-5 flex items-center gap-7">
+            <Link to="/men" className="pointer-events-auto border-b border-white pb-1 text-xs font-ui uppercase tracking-[0.2em] text-white transition-opacity hover:opacity-75">Shop Men</Link>
+            <Link to="/women" className="pointer-events-auto border-b border-white pb-1 text-xs font-ui uppercase tracking-[0.2em] text-white transition-opacity hover:opacity-75">Shop Women</Link>
+          </div>
+        </div>
+
+        <div className="pointer-events-auto flex shrink-0 items-center gap-3 text-white">
+          <button type="button" aria-label="Show previous campaign image" onClick={() => showSlide(activeSlide - 1)} className="grid h-10 w-10 place-items-center rounded-full border border-white/45 bg-black/15 text-lg transition hover:bg-white hover:text-[#1b1715]" aria-controls="home-campaign-status">←</button>
+          <span id="home-campaign-status" aria-live="polite" className="min-w-9 text-center text-[10px] font-ui tracking-[0.18em]">{activeSlide + 1} / {HERO_SLIDES.length}</span>
+          <button type="button" aria-label="Show next campaign image" onClick={() => showSlide(activeSlide + 1)} className="grid h-10 w-10 place-items-center rounded-full border border-white/45 bg-black/15 text-lg transition hover:bg-white hover:text-[#1b1715]">→</button>
         </div>
       </div>
     </section>

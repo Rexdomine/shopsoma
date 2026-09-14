@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import Home from '../Home';
@@ -57,6 +57,22 @@ describe('Home', () => {
     getProductsMock.mockResolvedValue({ products: [] });
     getFeaturedProductsMock.mockResolvedValue([]);
     getFeaturedRotationSettingsMock.mockResolvedValue({ rotation_minutes: 10 });
+  });
+
+  it('presents a premium three-image campaign hero with accessible navigation', () => {
+    render(
+      <MemoryRouter>
+        <Home />
+      </MemoryRouter>
+    );
+
+    const hero = screen.getByRole('region', { name: 'Orange Culture campaign' });
+    expect(hero).toHaveAttribute('aria-roledescription', 'carousel');
+    expect(screen.getByRole('img', { name: /campaign look 1/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Show previous campaign image' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Show next campaign image' }));
+    expect(screen.getByText('2 / 3')).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: /campaign look 2/i })).toHaveAttribute('loading', 'lazy');
   });
 
   it('shows the updated shop by category labels', () => {
