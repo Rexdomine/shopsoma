@@ -223,7 +223,9 @@ describe('Checkout M5 sequencing and recovery', () => {
     render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
     await waitFor(() => expect(screen.getByRole('button', { name: 'Continue' })).toBeEnabled());
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
-    fireEvent.click(screen.getAllByRole('button', { name: 'Purchase' })[0]);
+    expect(screen.getByText(/show the delivery options available for this address before payment/i)).toBeInTheDocument();
+    expect(screen.queryByRole('radio', { name: /Stripe/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to delivery options' }));
     await screen.findByRole('button', { name: 'Select Standard delivery' });
     expect(mocks.calculateShipping).not.toHaveBeenCalled();
     expect(mocks.reviewOrder).not.toHaveBeenCalled();
@@ -242,7 +244,8 @@ describe('Checkout M5 sequencing and recovery', () => {
     render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
     await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
-    fireEvent.click(screen.getByRole('radio', { name: /Stripe/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to delivery options' }));
+    fireEvent.click(await screen.findByRole('radio', { name: /Stripe/ }));
     fireEvent.click(screen.getAllByRole('button', { name: 'Purchase' })[0]);
     await waitFor(() => expect(mocks.createOrder).toHaveBeenCalledTimes(1));
 
@@ -265,7 +268,8 @@ describe('Checkout M5 sequencing and recovery', () => {
     render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
     await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
-    fireEvent.click(screen.getByRole('radio', { name: /Stripe/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to delivery options' }));
+    fireEvent.click(await screen.findByRole('radio', { name: /Stripe/ }));
     fireEvent.click(screen.getAllByRole('button', { name: 'Purchase' })[0]);
     fireEvent.click(await screen.findByRole('button', { name: 'Confirm total and continue to payment' }));
 
@@ -293,7 +297,8 @@ describe('Checkout M5 sequencing and recovery', () => {
     render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
     await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
-    fireEvent.click(screen.getByRole('radio', { name: /Paystack/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to delivery options' }));
+    fireEvent.click(await screen.findByRole('radio', { name: /Paystack/ }));
     fireEvent.click(screen.getAllByRole('button', { name: 'Purchase' })[0]);
     fireEvent.click(await screen.findByRole('button', { name: 'Confirm total and continue to payment' }));
 
@@ -315,7 +320,8 @@ describe('Checkout M5 sequencing and recovery', () => {
     render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
     await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
-    fireEvent.click(screen.getByRole('radio', { name: /Stripe/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to delivery options' }));
+    fireEvent.click(await screen.findByRole('radio', { name: /Stripe/ }));
     fireEvent.click(screen.getAllByRole('button', { name: 'Purchase' })[0]);
     fireEvent.click(await screen.findByRole('button', { name: 'Confirm total and continue to payment' }));
 
@@ -346,7 +352,9 @@ describe('Checkout M5 sequencing and recovery', () => {
     fireEvent.click(screen.getByRole('button', { name: /Save Address/i }));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Continue' })).toBeEnabled());
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
-    fireEvent.click(screen.getAllByRole('button', { name: 'Purchase' })[0]);
+    expect(screen.getByText(/show the delivery options available for this address before payment/i)).toBeInTheDocument();
+    expect(screen.queryByRole('radio', { name: /Stripe/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to delivery options' }));
     await screen.findByRole('button', { name: 'Select Standard delivery' });
     expect(screen.getByRole('button', { name: 'Edit delivery address' })).toBeDisabled();
     expect(mocks.createOrder).toHaveBeenCalledWith(expect.objectContaining({ customer_email: 'guest@example.com', guest_address: expect.objectContaining({ state: 'Lagos' }) }));
@@ -431,7 +439,7 @@ describe('Checkout M5 sequencing and recovery', () => {
     render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
     await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
-    fireEvent.click(screen.getAllByRole('button', { name: 'Purchase' })[0]);
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to delivery options' }));
     await screen.findByRole('button', { name: 'Select Standard delivery' });
 
     expect(screen.getByText('₦61,000')).toBeInTheDocument();

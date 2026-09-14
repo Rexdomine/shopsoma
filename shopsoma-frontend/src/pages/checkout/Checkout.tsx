@@ -682,6 +682,7 @@ export default function Checkout() {
         // and creating duplicate inventory/notification side effects on retry.
         setEnforcedOrder(order);
         setLegacyOrderNeedsConfirmation(true);
+        setStep('payment');
         setIsCreatingOrder(false);
         return;
       }
@@ -694,6 +695,9 @@ export default function Checkout() {
       setEstimateRequestKey(requestKey);
       const estimate = await checkoutService.createCheckoutEstimate(order.id, requestKey, capability);
       setCheckoutEstimate(estimate);
+      // The estimate is server-owned. Only expose payment after its delivery
+      // options are available for the newly created checkout order.
+      setStep('payment');
       setIsCreatingOrder(false);
     } catch (error: any) {
       if (error.response?.status === 404 || error.response?.status === 410) {
@@ -950,7 +954,9 @@ export default function Checkout() {
   const handleAddressSave = async () => {
     if (hasSelectedAddress) {
       if (secureShipping) {
-        setStep('payment');
+        // Domestic server-owned estimates require a durable order, but the
+        // customer must see a delivery step before any payment controls.
+        setStep('shipping');
       } else {
         await handleCalculateShipping();
         setStep('shipping');
@@ -1348,7 +1354,35 @@ export default function Checkout() {
                 {/* Shipping Step */}
                 <div className="space-y-4">
                   {renderStepTitle('Shipping Method', step === 'shipping' || step === 'payment')}
-                  {secureShipping ? <p className="text-sm text-gray-600">Delivery options are saved after you continue. Select a delivery option before payment.</p> : step === 'shipping' || step === 'payment' ? (
+                  {secureShipping ? step === 'shipping' ? (
+                    <div className="space-y-3 rounded-sm border border-gray-200 p-4">
+                      <p className="text-sm text-gray-700">We will prepare your order securely, then show the delivery options available for this address before payment.</p>
+                      {!enforcedOrder ? (
+                        <button
+                          type="button"
+                          onClick={() => void handlePurchase()}
+                          disabled={isCreatingOrder}
+                          className="w-full py-3 rounded-sm bg-primary text-white text-sm font-semibold disabled:opacity-50"
+                        >
+                          {isCreatingOrder ? 'Loading delivery options…' : 'Continue to delivery options'}
+                        </button>
+                      ) : !checkoutEstimate ? (
+                        <div className="space-y-2">
+                          <p role="status" className="text-sm text-amber-700">Your order was saved, but delivery options are not ready. Retry without creating another order.</p>
+                          <button
+                            type="button"
+                            onClick={() => void recoverCheckoutEstimate()}
+                            disabled={isCreatingOrder}
+                            className="w-full py-2 border border-primary text-primary text-sm font-semibold disabled:opacity-50"
+                          >
+                            {isCreatingOrder ? 'Retrying delivery options…' : 'Retry delivery options'}
+                          </button>
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : (
+                    <p className="text-sm text-gray-600">Choose a delivery option below before payment.</p>
+                  ) : step === 'shipping' || step === 'payment' ? (
                     <div className="space-y-3">
                       {shippingRates.map((rate) => (
                         <button
