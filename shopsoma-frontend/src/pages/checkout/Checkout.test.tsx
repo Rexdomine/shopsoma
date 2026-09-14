@@ -12,6 +12,8 @@ const mocks = vi.hoisted(() => ({
   createCheckoutEstimate: vi.fn(),
   selectCheckoutEstimateOption: vi.fn(),
   cancelOrder: vi.fn(),
+  createAddress: vi.fn(),
+  updateAddress: vi.fn(),
   initializePayment: vi.fn(),
   verifyPayment: vi.fn(),
   buildPaystackWidgetConfig: vi.fn(),
@@ -75,6 +77,8 @@ vi.mock('../../services/checkoutService', () => ({
     createCheckoutEstimate: mocks.createCheckoutEstimate,
     selectCheckoutEstimateOption: mocks.selectCheckoutEstimateOption,
     cancelOrder: mocks.cancelOrder,
+    createAddress: mocks.createAddress,
+    updateAddress: mocks.updateAddress,
     validatePromoCode: vi.fn(),
   },
 }));
@@ -443,6 +447,99 @@ describe('Checkout M5 sequencing and recovery', () => {
       amount: '62500.00', amount_minor: 6250000, currency: 'NGN',
       provider_payload: { client_secret: 'secret', payment_intent_id: 'pi-1' },
     });
+  });
+
+  it('lets an authenticated customer edit the selected checkout address in place', async () => {
+    const updated = { ...address, address_line1: '2 Updated Street' };
+    mocks.updateAddress.mockResolvedValueOnce(updated);
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit delivery address' }));
+    expect(screen.getByRole('heading', { name: 'Edit Address' })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Street Address'), { target: { value: '2 Updated Street' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() => expect(mocks.updateAddress).toHaveBeenCalledWith('address-1', expect.objectContaining({
+      address_line1: '2 Updated Street',
+    })));
+    expect(screen.getByText(/2 Updated Street/)).toBeInTheDocument();
+    expect(mocks.createAddress).not.toHaveBeenCalled();
+  });
+
+  it('clears canceled edit values before opening a fresh authenticated address form', async () => {
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit delivery address' }));
+    fireEvent.change(screen.getByLabelText('Street Address'), { target: { value: 'Unsubmitted edit' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    fireEvent.click(screen.getByRole('button', { name: '+ Add New Address' }));
+
+    expect(screen.getByRole('heading', { name: 'New Address' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Street Address')).toHaveValue('');
+    expect(screen.getByLabelText('Full Name')).toHaveValue('Buyer');
+  });
+
+  it('keeps the selected delivery address when a different address edit is cancelled', async () => {
+    const secondary = { ...address, id: 'address-2', address_line1: '2 Test Street', state: 'Abuja', is_default: false };
+    mocks.getAddresses.mockResolvedValueOnce({ addresses: [address, secondary] });
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Edit delivery address' })[1]);
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+
+    await waitFor(() => expect(mocks.calculateShipping).toHaveBeenCalledWith(expect.objectContaining({ state: 'Lagos' })));
+  });
+
+  it('blocks checkout progression until an authenticated address save settles', async () => {
+    let resolveUpdate!: (value: typeof address) => void;
+    mocks.updateAddress.mockReturnValueOnce(new Promise(resolve => { resolveUpdate = resolve; }));
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit delivery address' }));
+    fireEvent.change(screen.getByLabelText('Street Address'), { target: { value: '2 Updated Street' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(mocks.updateAddress).toHaveBeenCalled());
+    expect(screen.getByRole('button', { name: 'Continue' })).toBeDisabled();
+
+    resolveUpdate({ ...address, address_line1: '2 Updated Street' });
+    await waitFor(() => expect(screen.getByText(/2 Updated Street/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Continue' })).toBeEnabled());
+  });
+
+  it('locks address changes while a delivery calculation is pending', async () => {
+    let resolveShipping!: (value: { available_rates: Array<typeof rate>; recommended_rate: typeof rate }) => void;
+    mocks.calculateShipping.mockReturnValueOnce(new Promise(resolve => { resolveShipping = resolve; }));
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    await waitFor(() => expect(mocks.calculateShipping).toHaveBeenCalled());
+    expect(screen.getByRole('button', { name: 'Edit delivery address' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '+ Add New Address' })).toBeDisabled();
+
+    resolveShipping!({ available_rates: [rate], recommended_rate: rate });
+    await screen.findByText('Standard');
+  });
+
+  it('clears the prior local default when an edited address becomes the default', async () => {
+    const secondary = { ...address, id: 'address-2', address_line1: '2 Test Street', is_default: false };
+    mocks.getAddresses.mockResolvedValueOnce({ addresses: [address, secondary] });
+    mocks.updateAddress.mockResolvedValueOnce({ ...secondary, is_default: true });
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Edit delivery address' })[1]);
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(mocks.updateAddress).toHaveBeenCalledWith('address-2', expect.objectContaining({ is_default: true })));
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Edit delivery address' })[0]);
+    expect(screen.getByRole('checkbox')).not.toBeChecked();
   });
 
   it('creates the order then estimate and waits for explicit server option selection before payment', async () => {

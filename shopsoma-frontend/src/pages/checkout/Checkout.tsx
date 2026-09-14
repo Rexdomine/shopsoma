@@ -96,9 +96,22 @@ export default function Checkout() {
   const [addresses, setAddresses] = useState<Address[]>([]);
   const [selectedAddressId, setSelectedAddressId] = useState<string>('');
   const [showNewAddressForm, setShowNewAddressForm] = useState(false);
+  const [editingAddressId, setEditingAddressId] = useState<string | null>(null);
   const [newAddress, setNewAddress] = useState<NewAddress>({
     full_name: '',
     phone_number: '',
+    address_line1: '',
+    address_line2: '',
+    city: '',
+    state: '',
+    postal_code: '',
+    country: 'Nigeria',
+    address_type: 'shipping',
+    is_default: false,
+  });
+  const resetNewAddress = () => setNewAddress({
+    full_name: user?.full_name || '',
+    phone_number: user?.phone_number || '',
     address_line1: '',
     address_line2: '',
     city: '',
@@ -187,7 +200,9 @@ export default function Checkout() {
   const [isReviewingOrder, setIsReviewingOrder] = useState(false);
   const [isApplyingPromo, setIsApplyingPromo] = useState(false);
   const [isCreatingOrder, setIsCreatingOrder] = useState(false);
+  const [isSavingAddress, setIsSavingAddress] = useState(false);
   const [isSwitchingCurrency, setIsSwitchingCurrency] = useState(false);
+  const isCheckoutRequestPending = isLoadingShipping || isReviewingOrder || isCreatingOrder || isSavingAddress;
 
   // Email validation state
   const [emailError, setEmailError] = useState('');
@@ -283,7 +298,7 @@ export default function Checkout() {
     // For guest checkout, just use the address locally without saving to backend
     if (isGuestCheckout) {
       const guestAddress: Address = {
-        id: 'guest-address',
+        id: editingAddressId || 'guest-address',
         user_id: 'guest',
         full_name: newAddress.full_name,
         phone_number: newAddress.phone_number,
@@ -302,10 +317,12 @@ export default function Checkout() {
       setAddresses([guestAddress]);
       setSelectedAddressId(guestAddress.id);
       setShowNewAddressForm(false);
+      setEditingAddressId(null);
       return;
     }
 
     // For logged-in users, save to backend
+    setIsSavingAddress(true);
     try {
       const addressData: CreateAddressData = {
         full_name: newAddress.full_name,
@@ -320,27 +337,37 @@ export default function Checkout() {
         is_default: newAddress.is_default,
       };
 
-      const created = await checkoutService.createAddress(addressData);
-      setAddresses([...addresses, created]);
-      setSelectedAddressId(created.id);
+      if (editingAddressId) {
+        const updated = await checkoutService.updateAddress(editingAddressId, addressData);
+        setAddresses(addresses.map(address => {
+          if (address.id === updated.id) return updated;
+          if (updated.is_default && address.address_type === updated.address_type) {
+            return { ...address, is_default: false };
+          }
+          return address;
+        }));
+        setSelectedAddressId(updated.id);
+        // A destination change invalidates all location-derived delivery and review state.
+        setShippingRates([]);
+        setSelectedShippingRateId('');
+        setOrderReview(null);
+        setCurrentOrderId('');
+        setStep('address');
+      } else {
+        const created = await checkoutService.createAddress(addressData);
+        setAddresses([...addresses, created]);
+        setSelectedAddressId(created.id);
+      }
       setShowNewAddressForm(false);
+      setEditingAddressId(null);
 
       // Reset form
-      setNewAddress({
-        full_name: user?.full_name || '',
-        phone_number: user?.phone_number || '',
-        address_line1: '',
-        address_line2: '',
-        city: '',
-        state: '',
-        postal_code: '',
-        country: 'Nigeria',
-        address_type: 'shipping',
-        is_default: false,
-      });
+      resetNewAddress();
     } catch (error: any) {
       console.error('Error creating address:', error);
       alert(error.response?.data?.detail || 'Failed to create address. Please try again.');
+    } finally {
+      setIsSavingAddress(false);
     }
   };
 
@@ -1201,7 +1228,7 @@ export default function Checkout() {
                             >
                               <button
                                 type="button"
-                                disabled={!!enforcedOrder}
+                                disabled={!!enforcedOrder || isCheckoutRequestPending}
                                 onClick={() => setSelectedAddressId(addr.id)}
                                 className="flex-1 text-left"
                               >
@@ -1211,39 +1238,37 @@ export default function Checkout() {
                                 </p>
                                 <p className="text-xs text-gray-500">{addr.phone_number}</p>
                               </button>
-                              {isGuestCheckout && addr.id === 'guest-address' && (
-                                <button
-                                  type="button"
-                                  aria-label="Edit delivery address"
-                                  disabled={!!enforcedOrder}
-                                  onClick={() => {
-                                    setNewAddress({
-                                      full_name: addr.full_name,
-                                      phone_number: addr.phone_number,
-                                      address_line1: addr.address_line1,
-                                      address_line2: addr.address_line2 || '',
-                                      city: addr.city,
-                                      state: addr.state,
-                                      postal_code: addr.postal_code || '',
-                                      country: addr.country,
-                                      address_type: addr.address_type,
-                                      is_default: addr.is_default,
-                                    });
-                                    setSelectedAddressId(addr.id);
-                                    setShowNewAddressForm(true);
-                                  }}
-                                  className="text-xs font-ui uppercase tracking-[0.2em] text-primary hover:text-primary-dark"
-                                >
-                                  Edit
-                                </button>
-                              )}
+                              <button
+                                type="button"
+                                aria-label="Edit delivery address"
+                                disabled={!!enforcedOrder || isCheckoutRequestPending}
+                                onClick={() => {
+                                  setNewAddress({
+                                    full_name: addr.full_name,
+                                    phone_number: addr.phone_number,
+                                    address_line1: addr.address_line1,
+                                    address_line2: addr.address_line2 || '',
+                                    city: addr.city,
+                                    state: addr.state,
+                                    postal_code: addr.postal_code || '',
+                                    country: addr.country,
+                                    address_type: addr.address_type,
+                                    is_default: addr.is_default,
+                                  });
+                                  setEditingAddressId(addr.id);
+                                  setShowNewAddressForm(true);
+                                }}
+                                className="text-xs font-ui uppercase tracking-[0.2em] text-primary hover:text-primary-dark"
+                              >
+                                Edit
+                              </button>
                             </div>
                           ))}
 
                           {/* New Address Form */}
                           {showNewAddressForm ? (
                             <div className="border border-gray-200 p-4 rounded-sm space-y-3">
-                              <h3 className="text-sm font-semibold text-gray-800">New Address</h3>
+                              <h3 className="text-sm font-semibold text-gray-800">{editingAddressId ? 'Edit Address' : 'New Address'}</h3>
                               <div>
                                 <label className="text-xs text-gray-500">Full Name</label>
                                 <input
@@ -1332,15 +1357,19 @@ export default function Checkout() {
                                 <button
                                   type="button"
                                   onClick={handleCreateAddress}
-                                  disabled={!isAddressComplete}
+                                  disabled={!isAddressComplete || isCheckoutRequestPending}
                                   className="flex-1 py-2 rounded-sm bg-primary text-white text-sm font-semibold disabled:opacity-50"
                                 >
-                                  Save Address
+                                  {editingAddressId ? 'Save changes' : 'Save Address'}
                                 </button>
                                 <button
                                   type="button"
-                                  onClick={() => setShowNewAddressForm(false)}
-                                  className="px-4 py-2 rounded-sm border border-gray-300 text-sm"
+                                  onClick={() => {
+                                    setShowNewAddressForm(false);
+                                    setEditingAddressId(null);
+                                  }}
+                                  disabled={isCheckoutRequestPending}
+                                  className="px-4 py-2 rounded-sm border border-gray-300 text-sm disabled:opacity-50"
                                 >
                                   Cancel
                                 </button>
@@ -1354,8 +1383,12 @@ export default function Checkout() {
                           ) : !isGuestCheckout || addresses.length === 0 ? (
                             <button
                               type="button"
-                              disabled={!!enforcedOrder}
-                              onClick={() => setShowNewAddressForm(true)}
+                              disabled={!!enforcedOrder || isCheckoutRequestPending}
+                              onClick={() => {
+                                setEditingAddressId(null);
+                                resetNewAddress();
+                                setShowNewAddressForm(true);
+                              }}
                               className="w-full py-3 border border-dashed border-gray-300 rounded-sm text-sm text-gray-600 hover:border-primary hover:text-primary"
                             >
                               + Add New Address
@@ -1380,7 +1413,7 @@ export default function Checkout() {
                             <button
                               type="button"
                               onClick={handleAddressSave}
-                              disabled={!hasSelectedAddress || isLoadingShipping || !shippingConfigLoaded || shippingConfigError || !!enforcedOrder}
+                              disabled={!hasSelectedAddress || isCheckoutRequestPending || !shippingConfigLoaded || shippingConfigError || !!enforcedOrder}
                               className="w-full py-3 rounded-sm bg-primary text-white text-sm font-semibold disabled:opacity-50"
                             >
                               {isLoadingShipping ? 'Calculating Shipping...' : 'Continue'}
