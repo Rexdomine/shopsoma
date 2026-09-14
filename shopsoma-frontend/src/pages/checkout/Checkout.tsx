@@ -5,6 +5,7 @@ import { buildPaystackWidgetConfig, type PaymentGateway, type InitializePaymentR
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import Layout from '../../components/layout/Layout';
 import { ROUTES } from '../../config/constants';
+import { NIGERIA_STATES } from '../../config/nigeriaStates';
 import { checkoutService, type Address, type ShippingRate, type OrderReview, type CreateAddressData, type CheckoutEstimate, type Order } from '../../services/checkoutService';
 import { CartService } from '../../services/cartService';
 import { paymentService } from '../../services/paymentService';
@@ -1307,14 +1308,16 @@ export default function Checkout() {
                                 </div>
                                 <div>
                                   <label className="text-xs text-gray-500">State</label>
-                                  <input
-                                    type="text"
+                                  <select
                                     aria-label="State"
                                     value={newAddress.state}
                                     onChange={(e) => setNewAddress({ ...newAddress, state: e.target.value })}
-                                    className="w-full border-b border-gray-300 focus:border-primary focus:outline-none py-2 text-sm"
+                                    className="w-full border-b border-gray-300 bg-white focus:border-primary focus:outline-none py-2 text-sm"
                                     required
-                                  />
+                                  >
+                                    <option value="" disabled>Select state</option>
+                                    {NIGERIA_STATES.map((state) => <option key={state} value={state}>{state}</option>)}
+                                  </select>
                                 </div>
                               </div>
                               <div className="pt-2">

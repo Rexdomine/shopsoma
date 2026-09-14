@@ -17,6 +17,18 @@ describe('ManualShippingSettings', () => {
     vi.stubGlobal('confirm', vi.fn());
   });
 
+  it('uses Nigerian state selectors for rate setup and quote preview', async () => {
+    render(<ManualShippingSettings />);
+    await waitFor(() => expect(screen.getByRole('button', { name: /add shipping rate/i })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /add shipping rate/i }));
+
+    const rateState = screen.getByRole('combobox', { name: 'State (blank for all)' });
+    expect(screen.getAllByRole('option', { name: 'Lagos' })).toHaveLength(2);
+    fireEvent.change(rateState, { target: { value: 'Lagos' } });
+    expect(rateState).toHaveValue('Lagos');
+    expect(screen.getByRole('combobox', { name: 'Preview state' })).toHaveValue('Lagos');
+  });
+
   it('checks current dirty state when Escape is pressed after an edit', async () => {
     render(<ManualShippingSettings />);
     await waitFor(() => expect(screen.getByRole('button', { name: /add shipping rate/i })).toBeInTheDocument());
