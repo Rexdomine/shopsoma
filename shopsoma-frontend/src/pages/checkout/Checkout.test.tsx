@@ -217,6 +217,22 @@ describe('Checkout M5 sequencing and recovery', () => {
     }
   });
 
+  it('disables delivery-estimate creation if the email is edited until it is reconfirmed', async () => {
+    mocks.getShippingProviderSettings.mockResolvedValue({ provider: 'manual', checkout_estimates_required: true });
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Continue' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+
+    const deliveryButton = screen.getByRole('button', { name: 'Continue to delivery options' });
+    expect(deliveryButton).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.change(screen.getByPlaceholderText('you@example.com'), { target: { value: 'not-an-email' } });
+
+    expect(deliveryButton).toBeDisabled();
+    fireEvent.click(deliveryButton);
+    expect(mocks.createOrder).not.toHaveBeenCalled();
+  });
+
   it('uses saved manual estimates without legacy quote or review before payment', async () => {
     mocks.getShippingProviderSettings.mockResolvedValue({ provider: 'manual', checkout_estimates_required: true });
     mocks.calculateShipping.mockRejectedValue(new Error('Legacy quote must not run'));

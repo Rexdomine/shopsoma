@@ -1364,7 +1364,7 @@ export default function Checkout() {
                         <button
                           type="button"
                           onClick={() => void handlePurchase()}
-                          disabled={isCreatingOrder}
+                          disabled={isCreatingOrder || !hasEmail || !isEmailConfirmed}
                           className="w-full py-3 rounded-sm bg-primary text-white text-sm font-semibold disabled:opacity-50"
                         >
                           {isCreatingOrder ? 'Loading delivery options…' : 'Continue to delivery options'}
