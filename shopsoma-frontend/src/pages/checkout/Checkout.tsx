@@ -200,8 +200,9 @@ export default function Checkout() {
   const [isReviewingOrder, setIsReviewingOrder] = useState(false);
   const [isApplyingPromo, setIsApplyingPromo] = useState(false);
   const [isCreatingOrder, setIsCreatingOrder] = useState(false);
+  const [isSavingAddress, setIsSavingAddress] = useState(false);
   const [isSwitchingCurrency, setIsSwitchingCurrency] = useState(false);
-  const isCheckoutRequestPending = isLoadingShipping || isReviewingOrder || isCreatingOrder;
+  const isCheckoutRequestPending = isLoadingShipping || isReviewingOrder || isCreatingOrder || isSavingAddress;
 
   // Email validation state
   const [emailError, setEmailError] = useState('');
@@ -321,6 +322,7 @@ export default function Checkout() {
     }
 
     // For logged-in users, save to backend
+    setIsSavingAddress(true);
     try {
       const addressData: CreateAddressData = {
         full_name: newAddress.full_name,
@@ -364,6 +366,8 @@ export default function Checkout() {
     } catch (error: any) {
       console.error('Error creating address:', error);
       alert(error.response?.data?.detail || 'Failed to create address. Please try again.');
+    } finally {
+      setIsSavingAddress(false);
     }
   };
 
@@ -1251,7 +1255,6 @@ export default function Checkout() {
                                     address_type: addr.address_type,
                                     is_default: addr.is_default,
                                   });
-                                  setSelectedAddressId(addr.id);
                                   setEditingAddressId(addr.id);
                                   setShowNewAddressForm(true);
                                 }}
@@ -1410,7 +1413,7 @@ export default function Checkout() {
                             <button
                               type="button"
                               onClick={handleAddressSave}
-                              disabled={!hasSelectedAddress || isLoadingShipping || !shippingConfigLoaded || shippingConfigError || !!enforcedOrder}
+                              disabled={!hasSelectedAddress || isCheckoutRequestPending || !shippingConfigLoaded || shippingConfigError || !!enforcedOrder}
                               className="w-full py-3 rounded-sm bg-primary text-white text-sm font-semibold disabled:opacity-50"
                             >
                               {isLoadingShipping ? 'Calculating Shipping...' : 'Continue'}
