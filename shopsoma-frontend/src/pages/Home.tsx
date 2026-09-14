@@ -211,7 +211,10 @@ function Hero() {
   const requestSlide = (target: number, userInitiated = false) => {
     if (userInitiated) setIsPaused(true);
     const next = (target + HERO_SLIDES.length) % HERO_SLIDES.length;
-    if (next === activeSlide || pendingSlide === next) return;
+    if (
+      (next === activeSlide && mountedSlides.has(next) && readySlides.has(next) && !failedSlides.has(next))
+      || (pendingSlide === next && mountedSlides.has(next) && !failedSlides.has(next))
+    ) return;
     if (readySlides.has(next)) {
       if (userInitiated) setPendingSlide(null);
       setActiveSlide(next);

@@ -116,7 +116,7 @@ describe('Home', () => {
     expect(screen.queryByAltText(/campaign look 3/i)).not.toBeInTheDocument();
   });
 
-  it('fails over from a broken initial campaign image to the next available slide', () => {
+  it('continues failover and retries a previously failed active slide', () => {
     render(
       <MemoryRouter>
         <Home />
@@ -124,13 +124,20 @@ describe('Home', () => {
     );
 
     fireEvent.error(screen.getByAltText(/campaign look 1/i));
-    expect(screen.queryByAltText(/campaign look 1/i)).not.toBeInTheDocument();
-    const fallbackImage = screen.getByAltText(/campaign look 2/i);
-    fireEvent.error(fallbackImage);
-    expect(screen.queryByAltText(/campaign look 2/i)).not.toBeInTheDocument();
-    const secondFallbackImage = screen.getByAltText(/campaign look 3/i);
-    fireEvent.load(secondFallbackImage);
+    fireEvent.error(screen.getByAltText(/campaign look 2/i));
+    const lastFallbackImage = screen.getByAltText(/campaign look 3/i);
+    fireEvent.error(lastFallbackImage);
+    expect(screen.getByRole('status')).toHaveTextContent('Campaign imagery is temporarily unavailable.');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show previous campaign image' }));
+    const retriedSlide = screen.getByAltText(/campaign look 3/i);
+    fireEvent.load(retriedSlide);
     expect(screen.getByText('3 / 3')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show next campaign image' }));
+    const retriedInitialImage = screen.getByAltText(/campaign look 1/i);
+    fireEvent.load(retriedInitialImage);
+    expect(screen.getByText('1 / 3')).toBeInTheDocument();
   });
 
   it('shows the updated shop by category labels', () => {
