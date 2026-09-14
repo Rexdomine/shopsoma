@@ -17,9 +17,9 @@ const HERO_SLIDES = [
     alt: 'Orange Culture campaign look 1: three models outside a terracotta building',
   },
   {
-    desktop: '/images/hero/campaign/campaign-stairwell-desktop.webp',
-    mobile: '/images/hero/campaign/campaign-stairwell-mobile.webp',
-    alt: 'Orange Culture campaign look 2: a model in a warm stairwell',
+    desktop: '/images/hero/campaign/campaign-interior-desktop.webp',
+    mobile: '/images/hero/campaign/campaign-interior-mobile.webp',
+    alt: 'Orange Culture campaign look 2: models gathered in an editorial interior',
   },
   {
     desktop: '/images/hero/campaign/campaign-lounge-desktop.webp',
@@ -196,7 +196,6 @@ function Hero() {
   const [readySlides, setReadySlides] = useState<Set<number>>(() => new Set([0]));
   const [pendingSlide, setPendingSlide] = useState<number | null>(null);
   const [failedSlides, setFailedSlides] = useState<Set<number>>(() => new Set());
-  const [isPaused, setIsPaused] = useState(false);
   const [isInteracting, setIsInteracting] = useState(false);
 
   useEffect(() => {
@@ -208,15 +207,14 @@ function Hero() {
     return () => media.removeEventListener('change', update);
   }, []);
 
-  const requestSlide = (target: number, userInitiated = false) => {
-    if (userInitiated) setIsPaused(true);
+  const requestSlide = (target: number) => {
     const next = (target + HERO_SLIDES.length) % HERO_SLIDES.length;
     if (
       (next === activeSlide && mountedSlides.has(next) && readySlides.has(next) && !failedSlides.has(next))
       || (pendingSlide === next && mountedSlides.has(next) && !failedSlides.has(next))
     ) return;
     if (readySlides.has(next)) {
-      if (userInitiated) setPendingSlide(null);
+      setPendingSlide(null);
       setActiveSlide(next);
       return;
     }
@@ -279,12 +277,10 @@ function Hero() {
   };
 
   useEffect(() => {
-    if (reducedMotion || isPaused || isInteracting || pendingSlide !== null) return;
+    if (reducedMotion || isInteracting || pendingSlide !== null) return;
     const timer = window.setTimeout(() => requestSlide(activeSlide + 1), 6500);
     return () => window.clearTimeout(timer);
-  }, [activeSlide, isInteracting, isPaused, pendingSlide, reducedMotion]);
-
-  const showSlide = (next: number) => requestSlide(next, true);
+  }, [activeSlide, isInteracting, pendingSlide, reducedMotion]);
 
   return (
     <section
@@ -323,8 +319,8 @@ function Hero() {
         </div>
       )}
 
-      <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-[#17110eee] via-[#17110e38] to-transparent" />
-      <div className="relative z-10 flex w-full flex-col items-start gap-6 px-5 pb-7 sm:flex-row sm:items-end sm:justify-between sm:gap-5 sm:px-10 sm:pb-10 lg:px-16 lg:pb-14">
+      <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-[#105E53]/[0.82] via-[#105E53]/[0.30] to-transparent" />
+      <div className="relative z-10 flex w-full flex-col items-start px-5 pb-7 sm:px-10 sm:pb-10 lg:px-16 lg:pb-14">
         <div className="max-w-xl text-white">
           <p className="mb-3 text-[10px] font-ui font-semibold uppercase tracking-[0.32em] text-white/75">ShopSoma presents</p>
           <h1 className="font-serif text-3xl font-normal leading-tight sm:text-4xl lg:text-5xl" style={{ fontFamily: 'var(--font-serif)', textShadow: '0 2px 12px rgba(0,0,0,0.35)' }}>
@@ -334,13 +330,6 @@ function Hero() {
             <Link to="/men" className="pointer-events-auto border-b border-white pb-1 text-xs font-ui uppercase tracking-[0.2em] text-white transition-opacity hover:opacity-75">Shop Men</Link>
             <Link to="/women" className="pointer-events-auto border-b border-white pb-1 text-xs font-ui uppercase tracking-[0.2em] text-white transition-opacity hover:opacity-75">Shop Women</Link>
           </div>
-        </div>
-
-        <div className="pointer-events-auto flex shrink-0 items-center gap-3 text-white">
-          <button type="button" aria-label="Show previous campaign image" onClick={() => showSlide(activeSlide - 1)} className="grid h-10 w-10 place-items-center rounded-full border border-white/45 bg-black/15 text-lg transition hover:bg-white hover:text-[#1b1715]" aria-controls="home-campaign-status">←</button>
-          <button type="button" aria-label={isPaused ? 'Resume automatic slideshow' : 'Pause automatic slideshow'} onClick={() => setIsPaused((paused) => !paused)} className="grid h-10 w-10 place-items-center rounded-full border border-white/45 bg-black/15 text-xs font-ui transition hover:bg-white hover:text-[#1b1715]">{isPaused ? '▶' : 'Ⅱ'}</button>
-          <span id="home-campaign-status" aria-live={isPaused ? 'polite' : 'off'} className="min-w-9 text-center text-[10px] font-ui tracking-[0.18em]">{activeSlide + 1} / {HERO_SLIDES.length}</span>
-          <button type="button" aria-label="Show next campaign image" onClick={() => showSlide(activeSlide + 1)} className="grid h-10 w-10 place-items-center rounded-full border border-white/45 bg-black/15 text-lg transition hover:bg-white hover:text-[#1b1715]">→</button>
         </div>
       </div>
     </section>
