@@ -10,7 +10,23 @@ import { useCurrency } from '../hooks/useCurrency';
 import { formatPriceWithConversion } from '../utils/pricing';
 import { getProductImageSource, getProductImageSources } from '../utils/productImages';
 
-const HERO_IMAGE = '/images/hero/demo-image-2.png';
+const HERO_SLIDES = [
+  {
+    desktop: '/images/hero/campaign/campaign-exterior-desktop.webp',
+    mobile: '/images/hero/campaign/campaign-exterior-mobile.webp',
+    alt: 'Orange Culture campaign look 1: three models outside a terracotta building',
+  },
+  {
+    desktop: '/images/hero/campaign/campaign-stairwell-desktop.webp',
+    mobile: '/images/hero/campaign/campaign-stairwell-mobile.webp',
+    alt: 'Orange Culture campaign look 2: a model in a warm stairwell',
+  },
+  {
+    desktop: '/images/hero/campaign/campaign-lounge-desktop.webp',
+    mobile: '/images/hero/campaign/campaign-lounge-mobile.webp',
+    alt: 'Orange Culture campaign look 3: a model relaxing in an editorial lounge',
+  },
+] as const;
 
 type HomeProductCardProps = {
   product: Product;
@@ -174,35 +190,157 @@ function HomeProductCard({
 }
 
 function Hero() {
+  const [activeSlide, setActiveSlide] = useState(0);
+  const [reducedMotion, setReducedMotion] = useState(false);
+  const [mountedSlides, setMountedSlides] = useState<Set<number>>(() => new Set([0]));
+  const [readySlides, setReadySlides] = useState<Set<number>>(() => new Set([0]));
+  const [pendingSlide, setPendingSlide] = useState<number | null>(null);
+  const [failedSlides, setFailedSlides] = useState<Set<number>>(() => new Set());
+  const [isPaused, setIsPaused] = useState(false);
+  const [isInteracting, setIsInteracting] = useState(false);
+
+  useEffect(() => {
+    if (!window.matchMedia) return;
+    const media = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const update = () => setReducedMotion(media.matches);
+    update();
+    media.addEventListener('change', update);
+    return () => media.removeEventListener('change', update);
+  }, []);
+
+  const requestSlide = (target: number, userInitiated = false) => {
+    if (userInitiated) setIsPaused(true);
+    const next = (target + HERO_SLIDES.length) % HERO_SLIDES.length;
+    if (
+      (next === activeSlide && mountedSlides.has(next) && readySlides.has(next) && !failedSlides.has(next))
+      || (pendingSlide === next && mountedSlides.has(next) && !failedSlides.has(next))
+    ) return;
+    if (readySlides.has(next)) {
+      if (userInitiated) setPendingSlide(null);
+      setActiveSlide(next);
+      return;
+    }
+    setMountedSlides((mounted) => new Set(mounted).add(next));
+    setPendingSlide(next);
+  };
+
+  const handleSlideReady = (index: number) => {
+    setFailedSlides((failed) => {
+      const next = new Set(failed);
+      next.delete(index);
+      return next;
+    });
+    setReadySlides((ready) => new Set(ready).add(index));
+    if (pendingSlide === index) {
+      setActiveSlide(index);
+      setPendingSlide(null);
+    }
+  };
+
+  const handleSlideError = (index: number) => {
+    const failed = new Set(failedSlides).add(index);
+    const findFallback = () => {
+      for (let offset = 1; offset < HERO_SLIDES.length; offset += 1) {
+        const candidate = (index + offset) % HERO_SLIDES.length;
+        if (!failed.has(candidate)) return candidate;
+      }
+      return null;
+    };
+
+    setFailedSlides(failed);
+    setReadySlides((ready) => {
+      const next = new Set(ready);
+      next.delete(index);
+      return next;
+    });
+    setMountedSlides((mounted) => {
+      const next = new Set(mounted);
+      next.delete(index);
+      return next;
+    });
+
+    if (index === activeSlide || (pendingSlide === index && failed.has(activeSlide))) {
+      const fallback = findFallback();
+      if (fallback === null) {
+        setPendingSlide(null);
+        return;
+      }
+      setMountedSlides((mounted) => new Set(mounted).add(fallback));
+      if (readySlides.has(fallback)) {
+        setActiveSlide(fallback);
+        setPendingSlide(null);
+      } else {
+        setPendingSlide(fallback);
+      }
+      return;
+    }
+
+    if (pendingSlide === index) setPendingSlide(null);
+  };
+
+  useEffect(() => {
+    if (reducedMotion || isPaused || isInteracting || pendingSlide !== null) return;
+    const timer = window.setTimeout(() => requestSlide(activeSlide + 1), 6500);
+    return () => window.clearTimeout(timer);
+  }, [activeSlide, isInteracting, isPaused, pendingSlide, reducedMotion]);
+
+  const showSlide = (next: number) => requestSlide(next, true);
+
   return (
     <section
-      className="hero relative w-full min-h-[45vh] sm:min-h-[60vh] lg:min-h-[70vh] bg-cover bg-center flex items-end justify-center"
-      style={{ backgroundImage: `url(${HERO_IMAGE})` }}
+      aria-label="Orange Culture campaign"
+      aria-roledescription="carousel"
+      className="hero relative isolate flex min-h-[520px] w-full items-end overflow-hidden bg-[#1b1715] sm:min-h-[600px] lg:min-h-[700px]"
+      onMouseEnter={() => setIsInteracting(true)}
+      onMouseLeave={() => setIsInteracting(false)}
+      onFocusCapture={() => setIsInteracting(true)}
+      onBlurCapture={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setIsInteracting(false);
+      }}
     >
-      <div className="text-center pb-10 sm:pb-14 lg:pb-16 px-4">
-        <h1
-          className="text-xl sm:text-2xl lg:text-4xl font-serif font-normal text-white mb-4 sm:mb-6"
-          style={{
-            fontFamily: 'var(--font-serif)',
-            fontWeight: 400,
-            textShadow: '0 2px 8px rgba(0,0,0,0.3)'
-          }}
+      {HERO_SLIDES.map((slide, index) => mountedSlides.has(index) && (
+        <picture
+          key={slide.desktop}
+          aria-hidden={index !== activeSlide}
+          className={`absolute inset-0 transition-opacity duration-[1400ms] ease-out ${index === activeSlide ? 'opacity-100' : 'pointer-events-none opacity-0'}`}
         >
-          Orange Culture: A night Beyond
-        </h1>
-        <div className="flex items-center justify-center gap-10">
-          <Link
-            to="/men"
-            className="text-white font-ui uppercase tracking-[0.2em] text-sm border-b border-white pb-1 hover:opacity-80 transition-opacity"
-          >
-            Shop Men
-          </Link>
-          <Link
-            to="/women"
-            className="text-white font-ui uppercase tracking-[0.2em] text-sm border-b border-white pb-1 hover:opacity-80 transition-opacity"
-          >
-            Shop Women
-          </Link>
+          <source media="(max-width: 767px)" srcSet={slide.mobile} />
+          <img
+            src={slide.desktop}
+            alt={slide.alt}
+            className="h-full w-full object-cover"
+            loading={index === 0 || pendingSlide === index ? 'eager' : 'lazy'}
+            fetchPriority={index === 0 ? 'high' : pendingSlide === index ? 'auto' : 'low'}
+            decoding="async"
+            onLoad={() => handleSlideReady(index)}
+            onError={() => handleSlideError(index)}
+          />
+        </picture>
+      ))}
+      {failedSlides.size === HERO_SLIDES.length && (
+        <div className="absolute inset-0 grid place-items-center px-6 text-center text-sm text-white/80" role="status">
+          Campaign imagery is temporarily unavailable.
+        </div>
+      )}
+
+      <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-[#17110eee] via-[#17110e38] to-transparent" />
+      <div className="relative z-10 flex w-full flex-col items-start gap-6 px-5 pb-7 sm:flex-row sm:items-end sm:justify-between sm:gap-5 sm:px-10 sm:pb-10 lg:px-16 lg:pb-14">
+        <div className="max-w-xl text-white">
+          <p className="mb-3 text-[10px] font-ui font-semibold uppercase tracking-[0.32em] text-white/75">ShopSoma presents</p>
+          <h1 className="font-serif text-3xl font-normal leading-tight sm:text-4xl lg:text-5xl" style={{ fontFamily: 'var(--font-serif)', textShadow: '0 2px 12px rgba(0,0,0,0.35)' }}>
+            Orange Culture: A night Beyond
+          </h1>
+          <div className="mt-5 flex flex-wrap items-center gap-x-7 gap-y-3">
+            <Link to="/men" className="pointer-events-auto border-b border-white pb-1 text-xs font-ui uppercase tracking-[0.2em] text-white transition-opacity hover:opacity-75">Shop Men</Link>
+            <Link to="/women" className="pointer-events-auto border-b border-white pb-1 text-xs font-ui uppercase tracking-[0.2em] text-white transition-opacity hover:opacity-75">Shop Women</Link>
+          </div>
+        </div>
+
+        <div className="pointer-events-auto flex shrink-0 items-center gap-3 text-white">
+          <button type="button" aria-label="Show previous campaign image" onClick={() => showSlide(activeSlide - 1)} className="grid h-10 w-10 place-items-center rounded-full border border-white/45 bg-black/15 text-lg transition hover:bg-white hover:text-[#1b1715]" aria-controls="home-campaign-status">←</button>
+          <button type="button" aria-label={isPaused ? 'Resume automatic slideshow' : 'Pause automatic slideshow'} onClick={() => setIsPaused((paused) => !paused)} className="grid h-10 w-10 place-items-center rounded-full border border-white/45 bg-black/15 text-xs font-ui transition hover:bg-white hover:text-[#1b1715]">{isPaused ? '▶' : 'Ⅱ'}</button>
+          <span id="home-campaign-status" aria-live={isPaused ? 'polite' : 'off'} className="min-w-9 text-center text-[10px] font-ui tracking-[0.18em]">{activeSlide + 1} / {HERO_SLIDES.length}</span>
+          <button type="button" aria-label="Show next campaign image" onClick={() => showSlide(activeSlide + 1)} className="grid h-10 w-10 place-items-center rounded-full border border-white/45 bg-black/15 text-lg transition hover:bg-white hover:text-[#1b1715]">→</button>
         </div>
       </div>
     </section>
