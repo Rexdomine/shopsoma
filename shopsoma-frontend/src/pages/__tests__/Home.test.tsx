@@ -96,6 +96,26 @@ describe('Home', () => {
     expect(screen.getByAltText(/campaign look 2/i)).toBeInTheDocument();
   });
 
+  it('cancels an obsolete pending slide and removes a stale failed asset', () => {
+    render(
+      <MemoryRouter>
+        <Home />
+      </MemoryRouter>
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show next campaign image' }));
+    fireEvent.load(screen.getByAltText(/campaign look 2/i));
+    fireEvent.click(screen.getByRole('button', { name: 'Show next campaign image' }));
+    const staleImage = screen.getByAltText(/campaign look 3/i);
+    fireEvent.click(screen.getByRole('button', { name: 'Show previous campaign image' }));
+    expect(screen.getByText('1 / 3')).toBeInTheDocument();
+
+    fireEvent.load(staleImage);
+    expect(screen.getByText('1 / 3')).toBeInTheDocument();
+    fireEvent.error(staleImage);
+    expect(screen.queryByAltText(/campaign look 3/i)).not.toBeInTheDocument();
+  });
+
   it('shows the updated shop by category labels', () => {
     render(
       <MemoryRouter>

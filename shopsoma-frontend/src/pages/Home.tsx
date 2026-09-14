@@ -212,6 +212,7 @@ function Hero() {
     const next = (target + HERO_SLIDES.length) % HERO_SLIDES.length;
     if (next === activeSlide || pendingSlide === next) return;
     if (readySlides.has(next)) {
+      if (userInitiated) setPendingSlide(null);
       setActiveSlide(next);
       return;
     }
@@ -228,8 +229,8 @@ function Hero() {
   };
 
   const handleSlideError = (index: number) => {
-    if (pendingSlide !== index) return;
-    setPendingSlide(null);
+    if (index === activeSlide) return;
+    if (pendingSlide === index) setPendingSlide(null);
     setMountedSlides((mounted) => {
       const next = new Set(mounted);
       next.delete(index);
