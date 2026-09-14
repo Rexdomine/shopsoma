@@ -253,7 +253,7 @@ function Hero() {
       return next;
     });
     const isFailureFallback = failedSlides.has(activeSlide);
-    if (pendingSlide === index && (isFailureFallback || (!isPaused && !isInteracting && !reducedMotion))) {
+    if (isFailureFallback || (pendingSlide === index && (!isPaused && !isInteracting && !reducedMotion))) {
       setActiveSlide(index);
       setPendingSlide(null);
     }
