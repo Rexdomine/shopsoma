@@ -96,6 +96,7 @@ export default function Checkout() {
   const [addresses, setAddresses] = useState<Address[]>([]);
   const [selectedAddressId, setSelectedAddressId] = useState<string>('');
   const [showNewAddressForm, setShowNewAddressForm] = useState(false);
+  const [editingAddressId, setEditingAddressId] = useState<string | null>(null);
   const [newAddress, setNewAddress] = useState<NewAddress>({
     full_name: '',
     phone_number: '',
@@ -283,7 +284,7 @@ export default function Checkout() {
     // For guest checkout, just use the address locally without saving to backend
     if (isGuestCheckout) {
       const guestAddress: Address = {
-        id: 'guest-address',
+        id: editingAddressId || 'guest-address',
         user_id: 'guest',
         full_name: newAddress.full_name,
         phone_number: newAddress.phone_number,
@@ -302,6 +303,7 @@ export default function Checkout() {
       setAddresses([guestAddress]);
       setSelectedAddressId(guestAddress.id);
       setShowNewAddressForm(false);
+      setEditingAddressId(null);
       return;
     }
 
@@ -320,10 +322,17 @@ export default function Checkout() {
         is_default: newAddress.is_default,
       };
 
-      const created = await checkoutService.createAddress(addressData);
-      setAddresses([...addresses, created]);
-      setSelectedAddressId(created.id);
+      if (editingAddressId) {
+        const updated = await checkoutService.updateAddress(editingAddressId, addressData);
+        setAddresses(addresses.map(address => address.id === updated.id ? updated : address));
+        setSelectedAddressId(updated.id);
+      } else {
+        const created = await checkoutService.createAddress(addressData);
+        setAddresses([...addresses, created]);
+        setSelectedAddressId(created.id);
+      }
       setShowNewAddressForm(false);
+      setEditingAddressId(null);
 
       // Reset form
       setNewAddress({
@@ -1211,39 +1220,38 @@ export default function Checkout() {
                                 </p>
                                 <p className="text-xs text-gray-500">{addr.phone_number}</p>
                               </button>
-                              {isGuestCheckout && addr.id === 'guest-address' && (
-                                <button
-                                  type="button"
-                                  aria-label="Edit delivery address"
-                                  disabled={!!enforcedOrder}
-                                  onClick={() => {
-                                    setNewAddress({
-                                      full_name: addr.full_name,
-                                      phone_number: addr.phone_number,
-                                      address_line1: addr.address_line1,
-                                      address_line2: addr.address_line2 || '',
-                                      city: addr.city,
-                                      state: addr.state,
-                                      postal_code: addr.postal_code || '',
-                                      country: addr.country,
-                                      address_type: addr.address_type,
-                                      is_default: addr.is_default,
-                                    });
-                                    setSelectedAddressId(addr.id);
-                                    setShowNewAddressForm(true);
-                                  }}
-                                  className="text-xs font-ui uppercase tracking-[0.2em] text-primary hover:text-primary-dark"
-                                >
-                                  Edit
-                                </button>
-                              )}
+                              <button
+                                type="button"
+                                aria-label="Edit delivery address"
+                                disabled={!!enforcedOrder}
+                                onClick={() => {
+                                  setNewAddress({
+                                    full_name: addr.full_name,
+                                    phone_number: addr.phone_number,
+                                    address_line1: addr.address_line1,
+                                    address_line2: addr.address_line2 || '',
+                                    city: addr.city,
+                                    state: addr.state,
+                                    postal_code: addr.postal_code || '',
+                                    country: addr.country,
+                                    address_type: addr.address_type,
+                                    is_default: addr.is_default,
+                                  });
+                                  setSelectedAddressId(addr.id);
+                                  setEditingAddressId(addr.id);
+                                  setShowNewAddressForm(true);
+                                }}
+                                className="text-xs font-ui uppercase tracking-[0.2em] text-primary hover:text-primary-dark"
+                              >
+                                Edit
+                              </button>
                             </div>
                           ))}
 
                           {/* New Address Form */}
                           {showNewAddressForm ? (
                             <div className="border border-gray-200 p-4 rounded-sm space-y-3">
-                              <h3 className="text-sm font-semibold text-gray-800">New Address</h3>
+                              <h3 className="text-sm font-semibold text-gray-800">{editingAddressId ? 'Edit Address' : 'New Address'}</h3>
                               <div>
                                 <label className="text-xs text-gray-500">Full Name</label>
                                 <input
@@ -1335,11 +1343,14 @@ export default function Checkout() {
                                   disabled={!isAddressComplete}
                                   className="flex-1 py-2 rounded-sm bg-primary text-white text-sm font-semibold disabled:opacity-50"
                                 >
-                                  Save Address
+                                  {editingAddressId ? 'Save changes' : 'Save Address'}
                                 </button>
                                 <button
                                   type="button"
-                                  onClick={() => setShowNewAddressForm(false)}
+                                  onClick={() => {
+                                    setShowNewAddressForm(false);
+                                    setEditingAddressId(null);
+                                  }}
                                   className="px-4 py-2 rounded-sm border border-gray-300 text-sm"
                                 >
                                   Cancel
@@ -1355,7 +1366,10 @@ export default function Checkout() {
                             <button
                               type="button"
                               disabled={!!enforcedOrder}
-                              onClick={() => setShowNewAddressForm(true)}
+                              onClick={() => {
+                                setEditingAddressId(null);
+                                setShowNewAddressForm(true);
+                              }}
                               className="w-full py-3 border border-dashed border-gray-300 rounded-sm text-sm text-gray-600 hover:border-primary hover:text-primary"
                             >
                               + Add New Address

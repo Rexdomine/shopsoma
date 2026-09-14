@@ -12,6 +12,8 @@ const mocks = vi.hoisted(() => ({
   createCheckoutEstimate: vi.fn(),
   selectCheckoutEstimateOption: vi.fn(),
   cancelOrder: vi.fn(),
+  createAddress: vi.fn(),
+  updateAddress: vi.fn(),
   initializePayment: vi.fn(),
   verifyPayment: vi.fn(),
   buildPaystackWidgetConfig: vi.fn(),
@@ -75,6 +77,8 @@ vi.mock('../../services/checkoutService', () => ({
     createCheckoutEstimate: mocks.createCheckoutEstimate,
     selectCheckoutEstimateOption: mocks.selectCheckoutEstimateOption,
     cancelOrder: mocks.cancelOrder,
+    createAddress: mocks.createAddress,
+    updateAddress: mocks.updateAddress,
     validatePromoCode: vi.fn(),
   },
 }));
@@ -443,6 +447,24 @@ describe('Checkout M5 sequencing and recovery', () => {
       amount: '62500.00', amount_minor: 6250000, currency: 'NGN',
       provider_payload: { client_secret: 'secret', payment_intent_id: 'pi-1' },
     });
+  });
+
+  it('lets an authenticated customer edit the selected checkout address in place', async () => {
+    const updated = { ...address, address_line1: '2 Updated Street' };
+    mocks.updateAddress.mockResolvedValueOnce(updated);
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit delivery address' }));
+    expect(screen.getByRole('heading', { name: 'Edit Address' })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Street Address'), { target: { value: '2 Updated Street' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() => expect(mocks.updateAddress).toHaveBeenCalledWith('address-1', expect.objectContaining({
+      address_line1: '2 Updated Street',
+    })));
+    expect(screen.getByText(/2 Updated Street/)).toBeInTheDocument();
+    expect(mocks.createAddress).not.toHaveBeenCalled();
   });
 
   it('creates the order then estimate and waits for explicit server option selection before payment', async () => {
