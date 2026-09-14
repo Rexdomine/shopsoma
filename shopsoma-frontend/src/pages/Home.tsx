@@ -246,7 +246,8 @@ function Hero() {
       return next;
     });
     setReadySlides((ready) => new Set(ready).add(index));
-    if (pendingSlide === index && !isPaused && !isInteracting && !reducedMotion) {
+    const isFailureFallback = failedSlides.has(activeSlide);
+    if (pendingSlide === index && (isFailureFallback || (!isPaused && !isInteracting && !reducedMotion))) {
       setActiveSlide(index);
       setPendingSlide(null);
     }
@@ -316,14 +317,16 @@ function Hero() {
   }, [activeSlide, failedSlides, isInteracting, isPaused, pendingSlide, reducedMotion]);
 
   useEffect(() => {
-    if (isPaused || isInteracting || reducedMotion || pendingSlide === null) return;
+    if (pendingSlide === null) return;
+    const isFailureFallback = failedSlides.has(activeSlide);
+    if (!isFailureFallback && (isPaused || isInteracting || reducedMotion)) return;
     if (readySlides.has(pendingSlide)) {
       setActiveSlide(pendingSlide);
       setPendingSlide(null);
       return;
     }
     requestSlide(pendingSlide);
-  }, [isInteracting, isPaused, pendingSlide, readySlides, reducedMotion]);
+  }, [activeSlide, failedSlides, isInteracting, isPaused, pendingSlide, readySlides, reducedMotion]);
 
   return (
     <section

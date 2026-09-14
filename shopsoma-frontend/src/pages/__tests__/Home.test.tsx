@@ -132,6 +132,20 @@ describe('Home', () => {
     vi.useRealTimers();
   });
 
+  it('reveals a loaded fallback when the active hero slide fails while paused', () => {
+    render(
+      <MemoryRouter>
+        <Home />
+      </MemoryRouter>
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /pause automatic campaign slideshow/i }));
+    fireEvent.error(screen.getByAltText(/campaign look 1/i));
+    fireEvent.load(screen.getByAltText(/campaign look 2/i));
+
+    expect(screen.getByAltText(/campaign look 2/i).parentElement).toHaveAttribute('aria-hidden', 'false');
+  });
+
   it('shows the updated shop by category labels', () => {
     render(
       <MemoryRouter>
