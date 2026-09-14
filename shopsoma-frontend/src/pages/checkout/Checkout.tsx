@@ -166,7 +166,6 @@ export default function Checkout() {
     ?? orderReview?.summary.currency
     ?? enforcedOrder?.currency;
   const displayCurrency = committedCheckoutCurrency ?? currency;
-  const checkoutCurrencyLocked = Boolean(committedCheckoutCurrency);
 
   // Filter payment options based on the committed order currency once an
   // order/estimate exists; the preference remains selectable before that.
@@ -188,6 +187,7 @@ export default function Checkout() {
   const [isReviewingOrder, setIsReviewingOrder] = useState(false);
   const [isApplyingPromo, setIsApplyingPromo] = useState(false);
   const [isCreatingOrder, setIsCreatingOrder] = useState(false);
+  const [isSwitchingCurrency, setIsSwitchingCurrency] = useState(false);
 
   // Email validation state
   const [emailError, setEmailError] = useState('');
@@ -479,6 +479,43 @@ export default function Checkout() {
     setStripePaymentIntentId('');
     setCurrentPaymentGateway(null);
     setCurrentOrderId('');
+  };
+
+  const changeCheckoutCurrency = async (nextCurrency: Currency) => {
+    if (nextCurrency === currency || isCreatingOrder || isSwitchingCurrency) return;
+    if (currentPaymentGateway || showStripePaymentModal) {
+      alert('Currency cannot be changed after payment has been initialized. Cancel this payment attempt and start checkout again.');
+      return;
+    }
+
+    setIsSwitchingCurrency(true);
+    try {
+      if (enforcedOrder) {
+        await checkoutService.cancelOrder(
+          enforcedOrder.id,
+          'Customer changed checkout currency before payment',
+          checkoutCapability,
+        );
+      }
+      discardExpiredCheckout();
+      setOrderReview(null);
+      setSelectedShippingRateId('');
+      setCurrency(nextCurrency);
+      setStep(selectedAddressId ? 'shipping' : 'address');
+    } catch (error: any) {
+      const terminalAuthorization = error.response?.status === 404 || error.response?.status === 410;
+      if (terminalAuthorization) {
+        discardExpiredCheckout();
+        setOrderReview(null);
+        setSelectedShippingRateId('');
+        setCurrency(nextCurrency);
+        setStep(selectedAddressId ? 'shipping' : 'address');
+      } else {
+        alert(error.response?.data?.detail || error.message || 'We could not safely change currency. Please retry.');
+      }
+    } finally {
+      setIsSwitchingCurrency(false);
+    }
   };
 
   const isTerminalGuestCheckoutConflict = (error: any) => {
@@ -1009,10 +1046,10 @@ export default function Checkout() {
             {/* Currency Switcher */}
             <div className="flex items-center gap-2 border border-gray-300 rounded-sm px-3 py-1.5">
               <button
-                onClick={() => setCurrency('NGN')}
-                disabled={checkoutCurrencyLocked}
+                onClick={() => void changeCheckoutCurrency('NGN')}
+                disabled={isCreatingOrder || isSwitchingCurrency || Boolean(currentPaymentGateway) || showStripePaymentModal}
                 className={`text-xs font-semibold transition ${
-                  displayCurrency === 'NGN'
+                  currency === 'NGN'
                     ? 'text-primary'
                     : 'text-gray-400 hover:text-gray-600 disabled:cursor-not-allowed'
                 }`}
@@ -1021,10 +1058,10 @@ export default function Checkout() {
               </button>
               <span className="text-gray-300">|</span>
               <button
-                onClick={() => setCurrency('USD')}
-                disabled={checkoutCurrencyLocked}
+                onClick={() => void changeCheckoutCurrency('USD')}
+                disabled={isCreatingOrder || isSwitchingCurrency || Boolean(currentPaymentGateway) || showStripePaymentModal}
                 className={`text-xs font-semibold transition ${
-                  displayCurrency === 'USD'
+                  currency === 'USD'
                     ? 'text-primary'
                     : 'text-gray-400 hover:text-gray-600 disabled:cursor-not-allowed'
                 }`}
