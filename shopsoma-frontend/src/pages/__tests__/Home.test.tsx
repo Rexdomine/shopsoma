@@ -116,7 +116,7 @@ describe('Home', () => {
     expect(screen.queryByAltText(/campaign look 3/i)).not.toBeInTheDocument();
   });
 
-  it('fails over from a broken initial campaign image to the next slide', () => {
+  it('fails over from a broken initial campaign image to the next available slide', () => {
     render(
       <MemoryRouter>
         <Home />
@@ -126,8 +126,11 @@ describe('Home', () => {
     fireEvent.error(screen.getByAltText(/campaign look 1/i));
     expect(screen.queryByAltText(/campaign look 1/i)).not.toBeInTheDocument();
     const fallbackImage = screen.getByAltText(/campaign look 2/i);
-    fireEvent.load(fallbackImage);
-    expect(screen.getByText('2 / 3')).toBeInTheDocument();
+    fireEvent.error(fallbackImage);
+    expect(screen.queryByAltText(/campaign look 2/i)).not.toBeInTheDocument();
+    const secondFallbackImage = screen.getByAltText(/campaign look 3/i);
+    fireEvent.load(secondFallbackImage);
+    expect(screen.getByText('3 / 3')).toBeInTheDocument();
   });
 
   it('shows the updated shop by category labels', () => {

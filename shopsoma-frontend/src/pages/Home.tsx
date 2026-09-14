@@ -195,6 +195,7 @@ function Hero() {
   const [mountedSlides, setMountedSlides] = useState<Set<number>>(() => new Set([0]));
   const [readySlides, setReadySlides] = useState<Set<number>>(() => new Set([0]));
   const [pendingSlide, setPendingSlide] = useState<number | null>(null);
+  const [failedSlides, setFailedSlides] = useState<Set<number>>(() => new Set());
   const [isPaused, setIsPaused] = useState(false);
   const [isInteracting, setIsInteracting] = useState(false);
 
@@ -221,6 +222,11 @@ function Hero() {
   };
 
   const handleSlideReady = (index: number) => {
+    setFailedSlides((failed) => {
+      const next = new Set(failed);
+      next.delete(index);
+      return next;
+    });
     setReadySlides((ready) => new Set(ready).add(index));
     if (pendingSlide === index) {
       setActiveSlide(index);
@@ -229,19 +235,34 @@ function Hero() {
   };
 
   const handleSlideError = (index: number) => {
-    if (index === activeSlide) {
-      const fallback = (index + 1) % HERO_SLIDES.length;
-      setReadySlides((ready) => {
-        const next = new Set(ready);
-        next.delete(index);
-        return next;
-      });
-      setMountedSlides((mounted) => {
-        const next = new Set(mounted);
-        next.delete(index);
-        next.add(fallback);
-        return next;
-      });
+    const failed = new Set(failedSlides).add(index);
+    const findFallback = () => {
+      for (let offset = 1; offset < HERO_SLIDES.length; offset += 1) {
+        const candidate = (index + offset) % HERO_SLIDES.length;
+        if (!failed.has(candidate)) return candidate;
+      }
+      return null;
+    };
+
+    setFailedSlides(failed);
+    setReadySlides((ready) => {
+      const next = new Set(ready);
+      next.delete(index);
+      return next;
+    });
+    setMountedSlides((mounted) => {
+      const next = new Set(mounted);
+      next.delete(index);
+      return next;
+    });
+
+    if (index === activeSlide || (pendingSlide === index && failed.has(activeSlide))) {
+      const fallback = findFallback();
+      if (fallback === null) {
+        setPendingSlide(null);
+        return;
+      }
+      setMountedSlides((mounted) => new Set(mounted).add(fallback));
       if (readySlides.has(fallback)) {
         setActiveSlide(fallback);
         setPendingSlide(null);
@@ -250,17 +271,8 @@ function Hero() {
       }
       return;
     }
+
     if (pendingSlide === index) setPendingSlide(null);
-    setMountedSlides((mounted) => {
-      const next = new Set(mounted);
-      next.delete(index);
-      return next;
-    });
-    setReadySlides((ready) => {
-      const next = new Set(ready);
-      next.delete(index);
-      return next;
-    });
   };
 
   useEffect(() => {
@@ -302,6 +314,11 @@ function Hero() {
           />
         </picture>
       ))}
+      {failedSlides.size === HERO_SLIDES.length && (
+        <div className="absolute inset-0 grid place-items-center px-6 text-center text-sm text-white/80" role="status">
+          Campaign imagery is temporarily unavailable.
+        </div>
+      )}
 
       <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-[#17110eee] via-[#17110e38] to-transparent" />
       <div className="relative z-10 flex w-full flex-col items-start gap-6 px-5 pb-7 sm:flex-row sm:items-end sm:justify-between sm:gap-5 sm:px-10 sm:pb-10 lg:px-16 lg:pb-14">
