@@ -465,6 +465,28 @@ describe('Checkout M5 sequencing and recovery', () => {
     expect(mocks.createCheckoutEstimate.mock.invocationCallOrder[0]).toBeLessThan(mocks.initializePayment.mock.invocationCallOrder[0]);
   });
 
+  it('cancels the unpaid committed checkout before recalculating delivery in another currency', async () => {
+    mocks.getShippingProviderSettings.mockResolvedValue({ provider: 'manual', checkout_estimates_required: true });
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to delivery options' }));
+    await screen.findByRole('button', { name: 'Select Standard delivery' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'USD' }));
+
+    await waitFor(() => expect(mocks.cancelOrder).toHaveBeenCalledWith(
+      'order-1',
+      'Customer changed checkout currency before payment',
+      undefined,
+    ));
+    expect(mocks.preference.setCurrency).toHaveBeenCalledWith('USD');
+    expect(screen.queryByRole('button', { name: 'Select Standard delivery' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Continue to delivery options' })).toBeEnabled();
+    expect(mocks.createOrder).toHaveBeenCalledTimes(1);
+    expect(mocks.initializePayment).not.toHaveBeenCalled();
+  });
+
   it('displays the committed subtotal for a secure checkout order', async () => {
     mocks.getShippingProviderSettings.mockResolvedValue({ provider: 'manual', checkout_estimates_required: true });
     mocks.createOrder.mockResolvedValueOnce({
@@ -685,6 +707,8 @@ describe('Checkout M5 sequencing and recovery', () => {
 
     const retry = await screen.findByRole('button', { name: 'Retry payment' });
     expect(screen.getByRole('heading', { name: 'Checkout' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'USD' })).toBeDisabled();
+    expect(mocks.cancelOrder).not.toHaveBeenCalled();
     expect(mocks.createOrder).toHaveBeenCalledTimes(1);
     expect(storageSpy).toHaveBeenCalledWith('shopsoma_checkout_capability:order-1', capability);
 
