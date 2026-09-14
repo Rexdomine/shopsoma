@@ -217,13 +217,31 @@ describe('Checkout M5 sequencing and recovery', () => {
     }
   });
 
+  it('disables delivery-estimate creation if the email is edited until it is reconfirmed', async () => {
+    mocks.getShippingProviderSettings.mockResolvedValue({ provider: 'manual', checkout_estimates_required: true });
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Continue' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+
+    const deliveryButton = screen.getByRole('button', { name: 'Continue to delivery options' });
+    expect(deliveryButton).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.change(screen.getByPlaceholderText('you@example.com'), { target: { value: 'not-an-email' } });
+
+    expect(deliveryButton).toBeDisabled();
+    fireEvent.click(deliveryButton);
+    expect(mocks.createOrder).not.toHaveBeenCalled();
+  });
+
   it('uses saved manual estimates without legacy quote or review before payment', async () => {
     mocks.getShippingProviderSettings.mockResolvedValue({ provider: 'manual', checkout_estimates_required: true });
     mocks.calculateShipping.mockRejectedValue(new Error('Legacy quote must not run'));
     render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
     await waitFor(() => expect(screen.getByRole('button', { name: 'Continue' })).toBeEnabled());
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
-    fireEvent.click(screen.getAllByRole('button', { name: 'Purchase' })[0]);
+    expect(screen.getByText(/show the delivery options available for this address before payment/i)).toBeInTheDocument();
+    expect(screen.queryByRole('radio', { name: /Stripe/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to delivery options' }));
     await screen.findByRole('button', { name: 'Select Standard delivery' });
     expect(mocks.calculateShipping).not.toHaveBeenCalled();
     expect(mocks.reviewOrder).not.toHaveBeenCalled();
@@ -242,7 +260,8 @@ describe('Checkout M5 sequencing and recovery', () => {
     render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
     await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
-    fireEvent.click(screen.getByRole('radio', { name: /Stripe/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to delivery options' }));
+    fireEvent.click(await screen.findByRole('radio', { name: /Stripe/ }));
     fireEvent.click(screen.getAllByRole('button', { name: 'Purchase' })[0]);
     await waitFor(() => expect(mocks.createOrder).toHaveBeenCalledTimes(1));
 
@@ -265,7 +284,8 @@ describe('Checkout M5 sequencing and recovery', () => {
     render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
     await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
-    fireEvent.click(screen.getByRole('radio', { name: /Stripe/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to delivery options' }));
+    fireEvent.click(await screen.findByRole('radio', { name: /Stripe/ }));
     fireEvent.click(screen.getAllByRole('button', { name: 'Purchase' })[0]);
     fireEvent.click(await screen.findByRole('button', { name: 'Confirm total and continue to payment' }));
 
@@ -293,7 +313,8 @@ describe('Checkout M5 sequencing and recovery', () => {
     render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
     await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
-    fireEvent.click(screen.getByRole('radio', { name: /Paystack/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to delivery options' }));
+    fireEvent.click(await screen.findByRole('radio', { name: /Paystack/ }));
     fireEvent.click(screen.getAllByRole('button', { name: 'Purchase' })[0]);
     fireEvent.click(await screen.findByRole('button', { name: 'Confirm total and continue to payment' }));
 
@@ -315,7 +336,8 @@ describe('Checkout M5 sequencing and recovery', () => {
     render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
     await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
-    fireEvent.click(screen.getByRole('radio', { name: /Stripe/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to delivery options' }));
+    fireEvent.click(await screen.findByRole('radio', { name: /Stripe/ }));
     fireEvent.click(screen.getAllByRole('button', { name: 'Purchase' })[0]);
     fireEvent.click(await screen.findByRole('button', { name: 'Confirm total and continue to payment' }));
 
@@ -346,7 +368,9 @@ describe('Checkout M5 sequencing and recovery', () => {
     fireEvent.click(screen.getByRole('button', { name: /Save Address/i }));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Continue' })).toBeEnabled());
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
-    fireEvent.click(screen.getAllByRole('button', { name: 'Purchase' })[0]);
+    expect(screen.getByText(/show the delivery options available for this address before payment/i)).toBeInTheDocument();
+    expect(screen.queryByRole('radio', { name: /Stripe/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to delivery options' }));
     await screen.findByRole('button', { name: 'Select Standard delivery' });
     expect(screen.getByRole('button', { name: 'Edit delivery address' })).toBeDisabled();
     expect(mocks.createOrder).toHaveBeenCalledWith(expect.objectContaining({ customer_email: 'guest@example.com', guest_address: expect.objectContaining({ state: 'Lagos' }) }));
@@ -431,7 +455,7 @@ describe('Checkout M5 sequencing and recovery', () => {
     render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
     await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
-    fireEvent.click(screen.getAllByRole('button', { name: 'Purchase' })[0]);
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to delivery options' }));
     await screen.findByRole('button', { name: 'Select Standard delivery' });
 
     expect(screen.getByText('₦61,000')).toBeInTheDocument();
@@ -534,6 +558,43 @@ describe('Checkout M5 sequencing and recovery', () => {
     expect(mocks.createOrder).toHaveBeenCalledTimes(1);
     expect(mocks.createCheckoutEstimate).toHaveBeenCalledTimes(2);
 
+  });
+
+  it('returns a recovered domestic estimate to delivery options before payment', async () => {
+    mocks.getShippingProviderSettings.mockResolvedValue({ provider: 'manual', checkout_estimates_required: true });
+    mocks.createCheckoutEstimate.mockRejectedValueOnce({ response: { status: 503, data: { detail: 'temporarily unavailable' } } });
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to delivery options' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry delivery options' }));
+
+    expect(await screen.findByRole('button', { name: 'Select Standard delivery' })).toBeEnabled();
+    expect(screen.getByRole('radio', { name: /Stripe/ })).toBeInTheDocument();
+    expect(mocks.createOrder).toHaveBeenCalledTimes(1);
+    expect(mocks.createCheckoutEstimate).toHaveBeenCalledTimes(2);
+    expect(mocks.initializePayment).not.toHaveBeenCalled();
+  });
+
+  it('cancels a shipping-stage domestic order so the guest can correct an invalid address', async () => {
+    mocks.getShippingProviderSettings.mockResolvedValue({ provider: 'manual', checkout_estimates_required: true });
+    mocks.createCheckoutEstimate.mockRejectedValueOnce({ response: { status: 422, data: { detail: 'Postal code required for DHL rating' } } });
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to delivery options' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Start again with another address' }));
+
+    await waitFor(() => expect(mocks.cancelOrder).toHaveBeenCalledWith(
+      'order-1',
+      'Customer restarted checkout before payment',
+      undefined,
+    ));
+    expect(screen.getByRole('button', { name: '+ Add New Address' })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: 'Retry delivery options' })).not.toBeInTheDocument();
+    expect(mocks.initializePayment).not.toHaveBeenCalled();
   });
 
   it('cancels the saved order before restarting after estimate failure', async () => {
