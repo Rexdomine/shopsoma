@@ -1370,25 +1370,32 @@ export default function Checkout() {
                           {isCreatingOrder ? 'Loading delivery options…' : 'Continue to delivery options'}
                         </button>
                       ) : !checkoutEstimate ? (
-                        <div className="space-y-2">
-                          <p role="status" className="text-sm text-amber-700">Your order was saved, but delivery options are not ready. Retry without creating another order.</p>
-                          <button
-                            type="button"
-                            onClick={() => void recoverCheckoutEstimate()}
-                            disabled={isCreatingOrder}
-                            className="w-full py-2 border border-primary text-primary text-sm font-semibold disabled:opacity-50"
-                          >
-                            {isCreatingOrder ? 'Retrying delivery options…' : 'Retry delivery options'}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => void restartCheckout()}
-                            disabled={isCreatingOrder}
-                            className="text-sm underline disabled:opacity-50"
-                          >
-                            Start again with another address
-                          </button>
-                        </div>
+                        isCreatingOrder ? (
+                          <div className="flex items-center gap-2 text-sm text-gray-700" role="status">
+                            <span className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                            Loading delivery options…
+                          </div>
+                        ) : (
+                          <div className="space-y-2">
+                            <p role="status" className="text-sm text-amber-700">Your order was saved, but delivery options are not ready. Retry without creating another order.</p>
+                            <button
+                              type="button"
+                              onClick={() => void recoverCheckoutEstimate()}
+                              disabled={isCreatingOrder}
+                              className="w-full py-2 border border-primary text-primary text-sm font-semibold disabled:opacity-50"
+                            >
+                              {isCreatingOrder ? 'Retrying delivery options…' : 'Retry delivery options'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => void restartCheckout()}
+                              disabled={isCreatingOrder}
+                              className="text-sm underline disabled:opacity-50"
+                            >
+                              Start again with another address
+                            </button>
+                          </div>
+                        )
                       ) : null}
                     </div>
                   ) : (

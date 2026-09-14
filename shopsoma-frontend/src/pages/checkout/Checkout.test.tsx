@@ -233,6 +233,26 @@ describe('Checkout M5 sequencing and recovery', () => {
     expect(mocks.createOrder).not.toHaveBeenCalled();
   });
 
+  it('shows an in-progress delivery state instead of a retry warning while the initial estimate is pending', async () => {
+    mocks.getShippingProviderSettings.mockResolvedValue({ provider: 'manual', checkout_estimates_required: true });
+    let resolveEstimate: (value: typeof estimate) => void = () => undefined;
+    mocks.createCheckoutEstimate.mockImplementationOnce(() => new Promise<typeof estimate>((resolve) => {
+      resolveEstimate = resolve;
+    }));
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Continue' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    await screen.findByText(/show the delivery options available for this address before payment/i);
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to delivery options' }));
+
+    expect(await screen.findByText('Loading delivery options…', { selector: 'div[role="status"]' })).toBeInTheDocument();
+    expect(screen.queryByText(/Your order was saved, but delivery options are not ready/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Retry delivery options' })).not.toBeInTheDocument();
+
+    resolveEstimate(estimate);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Select Standard delivery' })).toBeEnabled());
+  });
+
   it('uses saved manual estimates without legacy quote or review before payment', async () => {
     mocks.getShippingProviderSettings.mockResolvedValue({ provider: 'manual', checkout_estimates_required: true });
     mocks.calculateShipping.mockRejectedValue(new Error('Legacy quote must not run'));
