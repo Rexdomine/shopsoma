@@ -198,6 +198,38 @@ it('restores the settings URL when rejecting navigation to a non-settings entry'
   expect(window.confirm).toHaveBeenCalled();
 });
 
+it('stops the router from committing a rejected non-settings popstate', async () => {
+  window.history.replaceState({ idx: 3 }, '', '/admin/settings#rates');
+  render(<AdminSettings />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Add shipping rate' }));
+  fireEvent.change(screen.getByLabelText('Rate name'), { target: { value: 'Keep this draft' } });
+  vi.spyOn(window, 'confirm').mockReturnValue(false);
+
+  window.history.replaceState({ idx: 2 }, '', '/admin/dashboard');
+  const go = vi.spyOn(window.history, 'go').mockImplementation(() => {});
+  const event = new PopStateEvent('popstate');
+  const stopImmediatePropagation = vi.spyOn(event, 'stopImmediatePropagation');
+  window.dispatchEvent(event);
+
+  expect(stopImmediatePropagation).toHaveBeenCalled();
+  expect(go).toHaveBeenCalledWith(1);
+  expect(screen.getByRole('heading', { name: 'Manual shipping rates' })).toBeInTheDocument();
+});
+
+it('handles one browser traversal once when both history events are emitted', async () => {
+  render(<AdminSettings />);
+  await screen.findByRole('heading', { name: 'Exchange rate' });
+  fireEvent.change(screen.getByRole('spinbutton'), { target: { value: '1700' } });
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+
+  window.history.pushState(null, '', '#shipping');
+  window.dispatchEvent(new PopStateEvent('popstate'));
+  window.dispatchEvent(new HashChangeEvent('hashchange'));
+
+  expect(confirm).toHaveBeenCalledTimes(1);
+  expect(screen.getByRole('heading', { name: 'Exchange rate' })).toBeInTheDocument();
+});
+
 it('blocks category transitions while any settings save is in flight', async () => {
   let resolveSave!: (value: any) => void;
   const save = new Promise<any>((resolve) => { resolveSave = resolve; });

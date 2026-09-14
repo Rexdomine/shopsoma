@@ -76,17 +76,19 @@ export default function AdminSettings() {
   const syncTimerRef = useRef<number | null>(null);
   const switchCategoryRef = useRef<(next: string, writeHistory?: boolean) => boolean>(() => false);
   const historyIndexRef = useRef(typeof window.history.state?.settingsHistoryIndex === 'number' ? window.history.state.settingsHistoryIndex : 0);
+  const browserHistoryIndexRef = useRef<number>(typeof window.history.state?.idx === 'number' ? window.history.state.idx : 0);
   const settingsLocationRef = useRef({
     pathname: window.location.pathname,
     search: window.location.search,
     hash: `#${categoryFromHash()}`,
   });
   const restoringHistoryRef = useRef(false);
+  const lastNavigationSignatureRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (typeof window.history.state?.settingsHistoryIndex !== 'number') {
       window.history.replaceState(
-        { ...window.history.state, settingsHistoryIndex: historyIndexRef.current },
+        { ...window.history.state, idx: browserHistoryIndexRef.current, settingsHistoryIndex: historyIndexRef.current },
         '',
         window.location.href,
       );
@@ -95,13 +97,19 @@ export default function AdminSettings() {
   }, []);
 
   useEffect(() => {
-    const syncCategory = () => {
+    const syncCategory = (event: PopStateEvent | HashChangeEvent) => {
+      const navigationSignature = `${window.location.href}|${window.history.state?.idx ?? ''}|${window.history.state?.settingsHistoryIndex ?? ''}`;
+      if (navigationSignature === lastNavigationSignatureRef.current) return;
+      lastNavigationSignatureRef.current = navigationSignature;
       if (restoringHistoryRef.current) {
         restoringHistoryRef.current = false;
         return;
       }
       const next = categoryFromHash();
       const accepted = switchCategoryRef.current(next, false);
+      if (accepted && typeof window.history.state?.idx === 'number') {
+        browserHistoryIndexRef.current = window.history.state.idx;
+      }
       if (accepted && typeof window.history.state?.settingsHistoryIndex === 'number') {
         historyIndexRef.current = window.history.state.settingsHistoryIndex;
         settingsLocationRef.current = {
@@ -111,6 +119,13 @@ export default function AdminSettings() {
         };
       }
       if (!accepted) {
+        const destinationBrowserIndex = window.history.state?.idx;
+        if (typeof destinationBrowserIndex === 'number' && destinationBrowserIndex !== browserHistoryIndexRef.current) {
+          event.stopImmediatePropagation();
+          restoringHistoryRef.current = true;
+          window.history.go(browserHistoryIndexRef.current - destinationBrowserIndex);
+          return;
+        }
         const destinationIndex = window.history.state?.settingsHistoryIndex;
         if (typeof destinationIndex === 'number' && destinationIndex !== historyIndexRef.current) {
           restoringHistoryRef.current = true;
@@ -125,10 +140,10 @@ export default function AdminSettings() {
       }
     };
     window.addEventListener('hashchange', syncCategory);
-    window.addEventListener('popstate', syncCategory);
+    window.addEventListener('popstate', syncCategory, true);
     return () => {
       window.removeEventListener('hashchange', syncCategory);
-      window.removeEventListener('popstate', syncCategory);
+      window.removeEventListener('popstate', syncCategory, true);
     };
   }, [category]);
 
@@ -442,8 +457,9 @@ export default function AdminSettings() {
     setManualRatesDirty(false);
     if (writeHistory && settingsCategories.includes(next as typeof settingsCategories[number])) {
       historyIndexRef.current += 1;
+      browserHistoryIndexRef.current += 1;
       window.history.pushState(
-        { ...window.history.state, settingsHistoryIndex: historyIndexRef.current },
+        { ...window.history.state, idx: browserHistoryIndexRef.current, settingsHistoryIndex: historyIndexRef.current },
         '',
         `#${next}`,
       );
