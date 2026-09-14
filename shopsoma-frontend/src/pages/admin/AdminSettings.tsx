@@ -75,18 +75,44 @@ export default function AdminSettings() {
   const discardManualRatesRef = useRef<(() => void) | null>(null);
   const syncTimerRef = useRef<number | null>(null);
   const switchCategoryRef = useRef<(next: string, writeHistory?: boolean) => boolean>(() => false);
+  const historyIndexRef = useRef(typeof window.history.state?.settingsHistoryIndex === 'number' ? window.history.state.settingsHistoryIndex : 0);
+  const restoringHistoryRef = useRef(false);
 
   useEffect(() => {
+    if (typeof window.history.state?.settingsHistoryIndex !== 'number') {
+      window.history.replaceState(
+        { ...window.history.state, settingsHistoryIndex: historyIndexRef.current },
+        '',
+        window.location.href,
+      );
+    }
     fetchSettings();
   }, []);
 
   useEffect(() => {
     const syncCategory = () => {
+      if (restoringHistoryRef.current) {
+        restoringHistoryRef.current = false;
+        return;
+      }
       const next = categoryFromHash();
       const previous = category;
       const accepted = switchCategoryRef.current(next, false);
+      if (accepted && typeof window.history.state?.settingsHistoryIndex === 'number') {
+        historyIndexRef.current = window.history.state.settingsHistoryIndex;
+      }
       if (!accepted) {
-        window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}#${previous}`);
+        const destinationIndex = window.history.state?.settingsHistoryIndex;
+        if (typeof destinationIndex === 'number' && destinationIndex !== historyIndexRef.current) {
+          restoringHistoryRef.current = true;
+          window.history.go(historyIndexRef.current - destinationIndex);
+        } else {
+          window.history.replaceState(
+            { ...window.history.state, settingsHistoryIndex: historyIndexRef.current },
+            '',
+            `${window.location.pathname}${window.location.search}#${previous}`,
+          );
+        }
       }
     };
     window.addEventListener('hashchange', syncCategory);
@@ -406,7 +432,12 @@ export default function AdminSettings() {
     discardManualRatesRef.current?.();
     setManualRatesDirty(false);
     if (writeHistory && settingsCategories.includes(next as typeof settingsCategories[number])) {
-      window.history.pushState(null, '', `#${next}`);
+      historyIndexRef.current += 1;
+      window.history.pushState(
+        { ...window.history.state, settingsHistoryIndex: historyIndexRef.current },
+        '',
+        `#${next}`,
+      );
     }
     setCategory(next);
     return true;

@@ -167,6 +167,21 @@ it('restores the current hash when popstate navigation is rejected', async () =>
   expect(window.location.hash).toBe('#currency');
 });
 
+it('reverses rejected indexed history navigation instead of overwriting the destination entry', async () => {
+  render(<AdminSettings />);
+  await screen.findByRole('heading', { name: 'Exchange rate' });
+  fireEvent.change(screen.getByRole('spinbutton'), { target: { value: '1700' } });
+  vi.spyOn(window, 'confirm').mockReturnValue(false);
+  window.history.replaceState({ settingsHistoryIndex: 0 }, '', '#currency');
+  window.history.pushState({ settingsHistoryIndex: -1 }, '', '#shipping');
+  const go = vi.spyOn(window.history, 'go').mockImplementation(() => {});
+
+  window.dispatchEvent(new PopStateEvent('popstate'));
+
+  expect(go).toHaveBeenCalledWith(1);
+  expect(window.history.state).toEqual({ settingsHistoryIndex: -1 });
+});
+
 it('blocks category transitions while any settings save is in flight', async () => {
   let resolveSave!: (value: any) => void;
   const save = new Promise<any>((resolve) => { resolveSave = resolve; });
