@@ -385,9 +385,12 @@ describe('Checkout M5 sequencing and recovery', () => {
     fireEvent.change(await screen.findByPlaceholderText('you@example.com'), { target: { value: 'guest@example.com' } });
     fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
     fireEvent.click(screen.getByRole('button', { name: '+ Add New Address' }));
+    const stateSelect = screen.getByRole('combobox', { name: 'State' });
+    expect(screen.getByRole('option', { name: 'Lagos' })).toBeInTheDocument();
     for (const [label, value] of [['Full Name', 'Guest Buyer'], ['Street Address', '1 Test Street'], ['City', 'Lagos'], ['State', 'Lagos']]) {
       fireEvent.change(screen.getByLabelText(label), { target: { value } });
     }
+    expect(stateSelect).toHaveValue('Lagos');
     fireEvent.change(screen.getByPlaceholderText('08012345678'), { target: { value: '08012345678' } });
     fireEvent.click(screen.getByRole('button', { name: /Save Address/i }));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Continue' })).toBeEnabled());

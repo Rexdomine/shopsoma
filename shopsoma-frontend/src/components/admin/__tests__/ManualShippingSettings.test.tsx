@@ -17,6 +17,18 @@ describe('ManualShippingSettings', () => {
     vi.stubGlobal('confirm', vi.fn());
   });
 
+  it('uses Nigerian state selectors for rate setup and quote preview', async () => {
+    render(<ManualShippingSettings />);
+    await waitFor(() => expect(screen.getByRole('button', { name: /add shipping rate/i })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /add shipping rate/i }));
+
+    const rateState = screen.getByRole('combobox', { name: 'State (blank for all)' });
+    expect(screen.getAllByRole('option', { name: 'Lagos' })).toHaveLength(2);
+    fireEvent.change(rateState, { target: { value: 'Lagos' } });
+    expect(rateState).toHaveValue('Lagos');
+    expect(screen.getByRole('combobox', { name: 'Preview state' })).toHaveValue('Lagos');
+  });
+
   it('checks current dirty state when Escape is pressed after an edit', async () => {
     render(<ManualShippingSettings />);
     await waitFor(() => expect(screen.getByRole('button', { name: /add shipping rate/i })).toBeInTheDocument());
@@ -62,6 +74,20 @@ describe('ManualShippingSettings', () => {
     fireEvent.click(screen.getByRole('button', { name: /save shipping rate/i }));
 
     await waitFor(() => expect(screen.getByRole('dialog').querySelector('[role="alert"]')).toHaveTextContent(/unable to save/i));
+  });
+
+  it('preserves a legacy FCT rate value while it is being edited', async () => {
+    vi.mocked(getManualShippingRates).mockResolvedValue([{
+      id: 'rate-fct', name: 'FCT delivery', description: '', country: 'Nigeria', state: 'FCT',
+      base_rate: 1500, min_order_value: 0, max_order_value: null, min_delivery_days: 2, max_delivery_days: 5,
+      is_active: true, is_default: false, priority: 1,
+    }]);
+    render(<ManualShippingSettings />);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Edit FCT delivery' })).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit FCT delivery' }));
+    expect(screen.getByRole('combobox', { name: 'State (blank for all)' })).toHaveValue('FCT');
+    expect(screen.getByRole('option', { name: 'FCT (legacy)' })).toBeInTheDocument();
   });
 
   it('keeps rate ordering metadata visible in the saved-rate list', async () => {
