@@ -122,11 +122,13 @@ describe('Home', () => {
 
     act(() => vi.advanceTimersByTime(15000));
     fireEvent.load(screen.getByAltText(/campaign look 2/i));
-    expect(screen.getByAltText(/campaign look 1/i)).toBeInTheDocument();
+    expect(screen.getByAltText(/campaign look 1/i).parentElement).toHaveAttribute('aria-hidden', 'false');
+    expect(screen.getByAltText(/campaign look 2/i).parentElement).toHaveAttribute('aria-hidden', 'true');
     expect(screen.getByRole('button', { name: /resume automatic campaign slideshow/i })).toHaveAttribute('aria-pressed', 'true');
 
     fireEvent.click(screen.getByRole('button', { name: /resume automatic campaign slideshow/i }));
-    expect(screen.getByAltText(/campaign look 2/i)).toBeInTheDocument();
+    fireEvent.blur(screen.getByRole('region', { name: 'Orange Culture campaign' }));
+    expect(screen.getByAltText(/campaign look 2/i).parentElement).toHaveAttribute('aria-hidden', 'false');
     vi.useRealTimers();
   });
 

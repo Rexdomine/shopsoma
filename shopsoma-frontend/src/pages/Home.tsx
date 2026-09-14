@@ -317,8 +317,13 @@ function Hero() {
 
   useEffect(() => {
     if (isPaused || isInteracting || reducedMotion || pendingSlide === null) return;
+    if (readySlides.has(pendingSlide)) {
+      setActiveSlide(pendingSlide);
+      setPendingSlide(null);
+      return;
+    }
     requestSlide(pendingSlide);
-  }, [isInteracting, isPaused, pendingSlide, reducedMotion]);
+  }, [isInteracting, isPaused, pendingSlide, readySlides, reducedMotion]);
 
   return (
     <section
