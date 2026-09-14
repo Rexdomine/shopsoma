@@ -687,6 +687,8 @@ describe('Checkout M5 sequencing and recovery', () => {
 
     const retry = await screen.findByRole('button', { name: 'Retry payment' });
     expect(screen.getByRole('heading', { name: 'Checkout' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'USD' })).toBeDisabled();
+    expect(mocks.cancelOrder).not.toHaveBeenCalled();
     expect(mocks.createOrder).toHaveBeenCalledTimes(1);
     expect(storageSpy).toHaveBeenCalledWith('shopsoma_checkout_capability:order-1', capability);
 

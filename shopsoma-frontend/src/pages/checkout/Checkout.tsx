@@ -572,6 +572,9 @@ export default function Checkout() {
         key: import.meta.env.VITE_PAYSTACK_PUBLIC_KEY,
         email: email || 'guest@shopsoma.com',
       });
+      // Keep the committed currency immutable through close/retry windows;
+      // Paystack callbacks may arrive after the iframe is dismissed.
+      setCurrentPaymentGateway('paystack');
       const handler = window.PaystackPop.setup({
         ...widgetTruth,
         callback: (response: { reference: string }) => {
