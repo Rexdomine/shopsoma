@@ -196,6 +196,7 @@ function Hero() {
   const [readySlides, setReadySlides] = useState<Set<number>>(() => new Set([0]));
   const [pendingSlide, setPendingSlide] = useState<number | null>(null);
   const [failedSlides, setFailedSlides] = useState<Set<number>>(() => new Set());
+  const [retryingSlides, setRetryingSlides] = useState<Set<number>>(() => new Set());
   const retryTimers = useRef<Map<number, number>>(new Map());
   const [isInteracting, setIsInteracting] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
@@ -246,6 +247,11 @@ function Hero() {
       return next;
     });
     setReadySlides((ready) => new Set(ready).add(index));
+    setRetryingSlides((retrying) => {
+      const next = new Set(retrying);
+      next.delete(index);
+      return next;
+    });
     const isFailureFallback = failedSlides.has(activeSlide);
     if (pendingSlide === index && (isFailureFallback || (!isPaused && !isInteracting && !reducedMotion))) {
       setActiveSlide(index);
@@ -253,25 +259,19 @@ function Hero() {
     }
   };
 
-  const scheduleRetry = (index: number, preservePendingFallback = false) => {
+  const scheduleRetry = (index: number) => {
     if (retryTimers.current.has(index)) return;
     const timer = window.setTimeout(() => {
       retryTimers.current.delete(index);
-      if (!preservePendingFallback) {
-        setFailedSlides((failed) => {
-          const next = new Set(failed);
-          next.delete(index);
-          return next;
-        });
-      }
       setMountedSlides((mounted) => new Set(mounted).add(index));
-      if (!preservePendingFallback) setPendingSlide(index);
+      setRetryingSlides((retrying) => new Set(retrying).add(index));
+      setPendingSlide((pending) => pending ?? index);
     }, 15000);
     retryTimers.current.set(index, timer);
   };
 
   const handleSlideError = (index: number) => {
-    scheduleRetry(index, index === activeSlide);
+    scheduleRetry(index);
     const failed = new Set(failedSlides).add(index);
     const findFallback = () => {
       for (let offset = 1; offset < HERO_SLIDES.length; offset += 1) {
@@ -353,8 +353,8 @@ function Hero() {
             src={slide.desktop}
             alt={slide.alt}
             className="h-full w-full object-cover"
-            loading={index === 0 || pendingSlide === index ? 'eager' : 'lazy'}
-            fetchPriority={index === 0 ? 'high' : pendingSlide === index ? 'auto' : 'low'}
+            loading={index === 0 || pendingSlide === index || retryingSlides.has(index) ? 'eager' : 'lazy'}
+            fetchPriority={index === 0 ? 'high' : pendingSlide === index || retryingSlides.has(index) ? 'auto' : 'low'}
             decoding="async"
             onLoad={() => handleSlideReady(index)}
             onError={() => handleSlideError(index)}
