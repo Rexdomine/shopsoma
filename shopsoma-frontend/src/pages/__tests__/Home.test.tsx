@@ -71,7 +71,7 @@ describe('Home', () => {
     expect(screen.getByRole('img', { name: /campaign look 1/i })).toBeInTheDocument();
     expect(screen.queryByRole('img', { name: /campaign look 3/i })).not.toBeInTheDocument();
     expect(screen.getByText('Orange Culture: A night Beyond')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /pause automatic campaign slideshow/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /pause automatic campaign slideshow/i })).not.toBeInTheDocument();
     expect(screen.queryByText(/1 \/ 3/)).not.toBeInTheDocument();
   });
 
@@ -105,63 +105,6 @@ describe('Home', () => {
     act(() => vi.advanceTimersByTime(15000));
 
     expect(screen.getByAltText(/campaign look 2/i)).toHaveAttribute('loading', 'eager');
-    vi.useRealTimers();
-  });
-
-  it('does not promote a cooldown retry while the hero is paused', () => {
-    vi.useFakeTimers();
-    render(
-      <MemoryRouter>
-        <Home />
-      </MemoryRouter>
-    );
-
-    act(() => vi.advanceTimersByTime(6500));
-    fireEvent.error(screen.getByAltText(/campaign look 2/i));
-    fireEvent.click(screen.getByRole('button', { name: /pause automatic campaign slideshow/i }));
-
-    act(() => vi.advanceTimersByTime(15000));
-    fireEvent.load(screen.getByAltText(/campaign look 2/i));
-    expect(screen.getByAltText(/campaign look 1/i).parentElement).toHaveAttribute('aria-hidden', 'false');
-    expect(screen.getByAltText(/campaign look 2/i).parentElement).toHaveAttribute('aria-hidden', 'true');
-    expect(screen.getByRole('button', { name: /resume automatic campaign slideshow/i })).toHaveAttribute('aria-pressed', 'true');
-
-    fireEvent.click(screen.getByRole('button', { name: /resume automatic campaign slideshow/i }));
-    fireEvent.blur(screen.getByRole('region', { name: 'Orange Culture campaign' }));
-    expect(screen.getByAltText(/campaign look 2/i).parentElement).toHaveAttribute('aria-hidden', 'false');
-    vi.useRealTimers();
-  });
-
-  it('reveals a loaded fallback when the active hero slide fails while paused', () => {
-    render(
-      <MemoryRouter>
-        <Home />
-      </MemoryRouter>
-    );
-
-    fireEvent.click(screen.getByRole('button', { name: /pause automatic campaign slideshow/i }));
-    fireEvent.error(screen.getByAltText(/campaign look 1/i));
-    fireEvent.load(screen.getByAltText(/campaign look 2/i));
-
-    expect(screen.getByAltText(/campaign look 2/i).parentElement).toHaveAttribute('aria-hidden', 'false');
-  });
-
-  it('keeps an in-flight fallback visible while the failed active slide retries', () => {
-    vi.useFakeTimers();
-    render(
-      <MemoryRouter>
-        <Home />
-      </MemoryRouter>
-    );
-
-    fireEvent.click(screen.getByRole('button', { name: /pause automatic campaign slideshow/i }));
-    fireEvent.error(screen.getByAltText(/campaign look 1/i));
-    act(() => vi.advanceTimersByTime(15000));
-
-    expect(screen.getByAltText(/campaign look 1/i).parentElement).toHaveAttribute('aria-hidden', 'true');
-    expect(screen.getByAltText(/campaign look 2/i).parentElement).toHaveAttribute('aria-hidden', 'true');
-    fireEvent.load(screen.getByAltText(/campaign look 2/i));
-    expect(screen.getByAltText(/campaign look 2/i).parentElement).toHaveAttribute('aria-hidden', 'false');
     vi.useRealTimers();
   });
 
