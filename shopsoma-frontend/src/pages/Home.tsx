@@ -199,7 +199,6 @@ function Hero() {
   const [retryingSlides, setRetryingSlides] = useState<Set<number>>(() => new Set());
   const retryTimers = useRef<Map<number, number>>(new Map());
   const [isInteracting, setIsInteracting] = useState(false);
-  const [isPaused, setIsPaused] = useState(false);
 
   useEffect(() => {
     if (!window.matchMedia) return;
@@ -253,7 +252,7 @@ function Hero() {
       return next;
     });
     const isFailureFallback = failedSlides.has(activeSlide);
-    if (isFailureFallback || (pendingSlide === index && (!isPaused && !isInteracting && !reducedMotion))) {
+    if (isFailureFallback || (pendingSlide === index && (!isInteracting && !reducedMotion))) {
       setActiveSlide(index);
       setPendingSlide(null);
     }
@@ -313,22 +312,22 @@ function Hero() {
   };
 
   useEffect(() => {
-    if (reducedMotion || isInteracting || isPaused || pendingSlide !== null) return;
+    if (reducedMotion || isInteracting || pendingSlide !== null) return;
     const timer = window.setTimeout(() => requestSlide(activeSlide + 1), 6500);
     return () => window.clearTimeout(timer);
-  }, [activeSlide, failedSlides, isInteracting, isPaused, pendingSlide, reducedMotion]);
+  }, [activeSlide, failedSlides, isInteracting, pendingSlide, reducedMotion]);
 
   useEffect(() => {
     if (pendingSlide === null || failedSlides.has(pendingSlide)) return;
     const isFailureFallback = failedSlides.has(activeSlide);
-    if (!isFailureFallback && (isPaused || isInteracting || reducedMotion)) return;
+    if (!isFailureFallback && (isInteracting || reducedMotion)) return;
     if (readySlides.has(pendingSlide)) {
       setActiveSlide(pendingSlide);
       setPendingSlide(null);
       return;
     }
     requestSlide(pendingSlide);
-  }, [activeSlide, failedSlides, isInteracting, isPaused, pendingSlide, readySlides, reducedMotion]);
+  }, [activeSlide, failedSlides, isInteracting, pendingSlide, readySlides, reducedMotion]);
 
   return (
     <section
@@ -368,15 +367,6 @@ function Hero() {
       )}
 
       <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-[#105E53]/[0.82] via-[#105E53]/[0.30] to-transparent" />
-      <button
-        type="button"
-        aria-label={isPaused ? 'Resume automatic campaign slideshow' : 'Pause automatic campaign slideshow'}
-        aria-pressed={isPaused}
-        onClick={() => setIsPaused((paused) => !paused)}
-        className="pointer-events-auto absolute right-5 top-5 z-20 rounded-full border border-white/60 bg-black/20 px-3 py-2 text-[10px] font-ui uppercase tracking-[0.16em] text-white backdrop-blur-sm transition-colors hover:bg-black/35 focus:outline-none focus:ring-2 focus:ring-white focus:ring-offset-2 focus:ring-offset-transparent"
-      >
-        {isPaused ? 'Resume' : 'Pause'}
-      </button>
       <div className="relative z-10 flex w-full flex-col items-start px-5 pb-7 sm:px-10 sm:pb-10 lg:px-16 lg:pb-14">
         <div className="max-w-xl text-white">
           <p className="mb-3 text-[10px] font-ui font-semibold uppercase tracking-[0.32em] text-white/75">ShopSoma presents</p>
