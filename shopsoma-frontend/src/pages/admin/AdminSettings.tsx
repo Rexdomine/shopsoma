@@ -74,7 +74,12 @@ export default function AdminSettings() {
   const [manualRatesBusy, setManualRatesBusy] = useState(false);
   const discardManualRatesRef = useRef<(() => void) | null>(null);
   const syncTimerRef = useRef<number | null>(null);
-  const switchCategoryRef = useRef<(next: string, writeHistory?: boolean) => boolean>(() => false);
+  const switchCategoryRef = useRef<(next: string, writeHistory?: boolean) => boolean>((next) => {
+    if (settingsCategories.includes(next as typeof settingsCategories[number])) {
+      setCategory(next as typeof settingsCategories[number]);
+    }
+    return true;
+  });
   const historyIndexRef = useRef(typeof window.history.state?.settingsHistoryIndex === 'number' ? window.history.state.settingsHistoryIndex : 0);
   const browserHistoryIndexRef = useRef<number>(typeof window.history.state?.idx === 'number' ? window.history.state.idx : 0);
   const settingsLocationRef = useRef({
@@ -107,10 +112,12 @@ export default function AdminSettings() {
       }
       const next = categoryFromHash();
       const accepted = switchCategoryRef.current(next, false);
-      if (accepted && typeof window.history.state?.idx === 'number') {
+      const isSettingsPath = window.location.pathname === settingsLocationRef.current.pathname
+        && window.location.search === settingsLocationRef.current.search;
+      if (accepted && isSettingsPath && typeof window.history.state?.idx === 'number') {
         browserHistoryIndexRef.current = window.history.state.idx;
       }
-      if (accepted && typeof window.history.state?.settingsHistoryIndex === 'number') {
+      if (accepted && isSettingsPath && typeof window.history.state?.settingsHistoryIndex === 'number') {
         historyIndexRef.current = window.history.state.settingsHistoryIndex;
         settingsLocationRef.current = {
           pathname: window.location.pathname,
@@ -443,7 +450,9 @@ export default function AdminSettings() {
   );
   const saveBar = (onSave: () => void, onReset: () => void, changed: boolean, busy: boolean) => <div className="flex flex-wrap items-center gap-3 border-t border-slate-100 pt-5"><button type="button" onClick={onSave} disabled={!changed || busy} className="inline-flex items-center gap-2 rounded-lg bg-[#105E53] px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40"><Save className="h-4 w-4" />{busy ? 'Saving…' : 'Save changes'}</button><button type="button" onClick={onReset} disabled={!changed || busy} className="rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-semibold text-slate-700 disabled:opacity-40">Discard edits</button>{changed && <span className="text-xs font-medium text-amber-700">Unsaved changes</span>}</div>;
   const switchCategory = (next: string, writeHistory = true) => {
-    if (next === category) return true;
+    const isSettingsPath = window.location.pathname === settingsLocationRef.current.pathname
+      && window.location.search === settingsLocationRef.current.search;
+    if (next === category && isSettingsPath) return true;
     if (savingAny) {
       error('Please wait for the current save to finish before switching categories.', 'Save in progress');
       return false;

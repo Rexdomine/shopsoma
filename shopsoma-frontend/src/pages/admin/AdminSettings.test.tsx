@@ -216,6 +216,37 @@ it('stops the router from committing a rejected non-settings popstate', async ()
   expect(screen.getByRole('heading', { name: 'Manual shipping rates' })).toBeInTheDocument();
 });
 
+it('guards a same-category traversal that leaves the settings pathname', async () => {
+  window.history.replaceState(null, '', '/admin/settings');
+  render(<AdminSettings />);
+  await screen.findByRole('heading', { name: 'Exchange rate' });
+  fireEvent.change(screen.getByRole('spinbutton'), { target: { value: '1700' } });
+  vi.spyOn(window, 'confirm').mockReturnValue(false);
+
+  window.history.replaceState({ idx: 1 }, '', '/admin/dashboard');
+  const go = vi.spyOn(window.history, 'go').mockImplementation(() => {});
+  const event = new PopStateEvent('popstate');
+  window.dispatchEvent(event);
+
+  expect(window.confirm).toHaveBeenCalled();
+  expect(go).toHaveBeenCalledWith(-1);
+  expect(screen.getByRole('heading', { name: 'Exchange rate' })).toBeInTheDocument();
+});
+
+it('allows history navigation while settings are still loading', async () => {
+  const { getExchangeRate } = await import('../../services/settingsService');
+  let resolveRate!: (value: any) => void;
+  vi.mocked(getExchangeRate).mockReturnValue(new Promise(resolve => { resolveRate = resolve; }));
+  render(<AdminSettings />);
+
+  window.history.replaceState({ idx: 1 }, '', '/admin/dashboard');
+  const go = vi.spyOn(window.history, 'go').mockImplementation(() => {});
+  window.dispatchEvent(new PopStateEvent('popstate'));
+
+  expect(go).not.toHaveBeenCalled();
+  resolveRate({ rate: 1600 });
+});
+
 it('handles one browser traversal once when both history events are emitted', async () => {
   render(<AdminSettings />);
   await screen.findByRole('heading', { name: 'Exchange rate' });
