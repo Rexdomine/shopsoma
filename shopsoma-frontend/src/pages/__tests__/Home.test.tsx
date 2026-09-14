@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import Home from '../Home';
@@ -70,74 +70,99 @@ describe('Home', () => {
     expect(hero).toHaveAttribute('aria-roledescription', 'carousel');
     expect(screen.getByRole('img', { name: /campaign look 1/i })).toBeInTheDocument();
     expect(screen.queryByRole('img', { name: /campaign look 3/i })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Pause automatic slideshow' })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Show next campaign image' }));
-    const nextImage = screen.getByAltText(/campaign look 2/i);
-    expect(nextImage).toHaveAttribute('loading', 'eager');
-    expect(screen.getByText('1 / 3')).toBeInTheDocument();
-    fireEvent.load(nextImage);
-    expect(screen.getByText('2 / 3')).toBeInTheDocument();
+    expect(screen.getByText('Orange Culture: A night Beyond')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /pause automatic campaign slideshow/i })).toBeInTheDocument();
+    expect(screen.queryByText(/1 \/ 3/)).not.toBeInTheDocument();
   });
 
-  it('recovers from a failed pending campaign image without losing the active slide', () => {
+  it('skips a failed deferred slide during automatic rotation', () => {
+    vi.useFakeTimers();
     render(
       <MemoryRouter>
         <Home />
       </MemoryRouter>
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Show next campaign image' }));
-    const failedImage = screen.getByAltText(/campaign look 2/i);
-    fireEvent.error(failedImage);
-    expect(screen.queryByAltText(/campaign look 2/i)).not.toBeInTheDocument();
-    expect(screen.getByRole('img', { name: /campaign look 1/i })).toBeInTheDocument();
+    act(() => vi.advanceTimersByTime(6500));
+    const failedSecondSlide = screen.getByAltText(/campaign look 2/i);
+    fireEvent.error(failedSecondSlide);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Show next campaign image' }));
-    expect(screen.getByAltText(/campaign look 2/i)).toBeInTheDocument();
+    act(() => vi.advanceTimersByTime(6500));
+    expect(screen.getByAltText(/campaign look 3/i)).toBeInTheDocument();
+    vi.useRealTimers();
   });
 
-  it('cancels an obsolete pending slide and removes a stale failed asset', () => {
+  it('retries a skipped slide after a short cooldown', () => {
+    vi.useFakeTimers();
     render(
       <MemoryRouter>
         <Home />
       </MemoryRouter>
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Show next campaign image' }));
-    fireEvent.load(screen.getByAltText(/campaign look 2/i));
-    fireEvent.click(screen.getByRole('button', { name: 'Show next campaign image' }));
-    const staleImage = screen.getByAltText(/campaign look 3/i);
-    fireEvent.click(screen.getByRole('button', { name: 'Show previous campaign image' }));
-    expect(screen.getByText('1 / 3')).toBeInTheDocument();
-
-    fireEvent.load(staleImage);
-    expect(screen.getByText('1 / 3')).toBeInTheDocument();
-    fireEvent.error(staleImage);
-    expect(screen.queryByAltText(/campaign look 3/i)).not.toBeInTheDocument();
-  });
-
-  it('continues failover and retries a previously failed active slide', () => {
-    render(
-      <MemoryRouter>
-        <Home />
-      </MemoryRouter>
-    );
-
-    fireEvent.error(screen.getByAltText(/campaign look 1/i));
+    act(() => vi.advanceTimersByTime(6500));
     fireEvent.error(screen.getByAltText(/campaign look 2/i));
-    const lastFallbackImage = screen.getByAltText(/campaign look 3/i);
-    fireEvent.error(lastFallbackImage);
-    expect(screen.getByRole('status')).toHaveTextContent('Campaign imagery is temporarily unavailable.');
+    act(() => vi.advanceTimersByTime(15000));
 
-    fireEvent.click(screen.getByRole('button', { name: 'Show previous campaign image' }));
-    const retriedSlide = screen.getByAltText(/campaign look 3/i);
-    fireEvent.load(retriedSlide);
-    expect(screen.getByText('3 / 3')).toBeInTheDocument();
+    expect(screen.getByAltText(/campaign look 2/i)).toHaveAttribute('loading', 'eager');
+    vi.useRealTimers();
+  });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Show next campaign image' }));
-    const retriedInitialImage = screen.getByAltText(/campaign look 1/i);
-    fireEvent.load(retriedInitialImage);
-    expect(screen.getByText('1 / 3')).toBeInTheDocument();
+  it('does not promote a cooldown retry while the hero is paused', () => {
+    vi.useFakeTimers();
+    render(
+      <MemoryRouter>
+        <Home />
+      </MemoryRouter>
+    );
+
+    act(() => vi.advanceTimersByTime(6500));
+    fireEvent.error(screen.getByAltText(/campaign look 2/i));
+    fireEvent.click(screen.getByRole('button', { name: /pause automatic campaign slideshow/i }));
+
+    act(() => vi.advanceTimersByTime(15000));
+    fireEvent.load(screen.getByAltText(/campaign look 2/i));
+    expect(screen.getByAltText(/campaign look 1/i).parentElement).toHaveAttribute('aria-hidden', 'false');
+    expect(screen.getByAltText(/campaign look 2/i).parentElement).toHaveAttribute('aria-hidden', 'true');
+    expect(screen.getByRole('button', { name: /resume automatic campaign slideshow/i })).toHaveAttribute('aria-pressed', 'true');
+
+    fireEvent.click(screen.getByRole('button', { name: /resume automatic campaign slideshow/i }));
+    fireEvent.blur(screen.getByRole('region', { name: 'Orange Culture campaign' }));
+    expect(screen.getByAltText(/campaign look 2/i).parentElement).toHaveAttribute('aria-hidden', 'false');
+    vi.useRealTimers();
+  });
+
+  it('reveals a loaded fallback when the active hero slide fails while paused', () => {
+    render(
+      <MemoryRouter>
+        <Home />
+      </MemoryRouter>
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /pause automatic campaign slideshow/i }));
+    fireEvent.error(screen.getByAltText(/campaign look 1/i));
+    fireEvent.load(screen.getByAltText(/campaign look 2/i));
+
+    expect(screen.getByAltText(/campaign look 2/i).parentElement).toHaveAttribute('aria-hidden', 'false');
+  });
+
+  it('keeps an in-flight fallback visible while the failed active slide retries', () => {
+    vi.useFakeTimers();
+    render(
+      <MemoryRouter>
+        <Home />
+      </MemoryRouter>
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /pause automatic campaign slideshow/i }));
+    fireEvent.error(screen.getByAltText(/campaign look 1/i));
+    act(() => vi.advanceTimersByTime(15000));
+
+    expect(screen.getByAltText(/campaign look 1/i).parentElement).toHaveAttribute('aria-hidden', 'true');
+    expect(screen.getByAltText(/campaign look 2/i).parentElement).toHaveAttribute('aria-hidden', 'true');
+    fireEvent.load(screen.getByAltText(/campaign look 2/i));
+    expect(screen.getByAltText(/campaign look 2/i).parentElement).toHaveAttribute('aria-hidden', 'false');
+    vi.useRealTimers();
   });
 
   it('shows the updated shop by category labels', () => {

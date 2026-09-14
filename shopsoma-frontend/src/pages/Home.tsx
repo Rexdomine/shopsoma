@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import Layout from '../components/layout/Layout';
 import type { Product } from '../types';
@@ -17,9 +17,9 @@ const HERO_SLIDES = [
     alt: 'Orange Culture campaign look 1: three models outside a terracotta building',
   },
   {
-    desktop: '/images/hero/campaign/campaign-stairwell-desktop.webp',
-    mobile: '/images/hero/campaign/campaign-stairwell-mobile.webp',
-    alt: 'Orange Culture campaign look 2: a model in a warm stairwell',
+    desktop: '/images/hero/campaign/campaign-interior-desktop.webp',
+    mobile: '/images/hero/campaign/campaign-interior-mobile.webp',
+    alt: 'Orange Culture campaign look 2: models gathered in an editorial interior',
   },
   {
     desktop: '/images/hero/campaign/campaign-lounge-desktop.webp',
@@ -196,8 +196,10 @@ function Hero() {
   const [readySlides, setReadySlides] = useState<Set<number>>(() => new Set([0]));
   const [pendingSlide, setPendingSlide] = useState<number | null>(null);
   const [failedSlides, setFailedSlides] = useState<Set<number>>(() => new Set());
-  const [isPaused, setIsPaused] = useState(false);
+  const [retryingSlides, setRetryingSlides] = useState<Set<number>>(() => new Set());
+  const retryTimers = useRef<Map<number, number>>(new Map());
   const [isInteracting, setIsInteracting] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
 
   useEffect(() => {
     if (!window.matchMedia) return;
@@ -208,15 +210,29 @@ function Hero() {
     return () => media.removeEventListener('change', update);
   }, []);
 
-  const requestSlide = (target: number, userInitiated = false) => {
-    if (userInitiated) setIsPaused(true);
-    const next = (target + HERO_SLIDES.length) % HERO_SLIDES.length;
+  useEffect(() => {
+    return () => {
+      retryTimers.current.forEach((timer) => window.clearTimeout(timer));
+      retryTimers.current.clear();
+    };
+  }, []);
+
+  const requestSlide = (target: number) => {
+    let next: number | null = null;
+    for (let offset = 0; offset < HERO_SLIDES.length; offset += 1) {
+      const candidate = (target + offset + HERO_SLIDES.length) % HERO_SLIDES.length;
+      if (!failedSlides.has(candidate)) {
+        next = candidate;
+        break;
+      }
+    }
+    if (next === null) return;
     if (
       (next === activeSlide && mountedSlides.has(next) && readySlides.has(next) && !failedSlides.has(next))
       || (pendingSlide === next && mountedSlides.has(next) && !failedSlides.has(next))
     ) return;
     if (readySlides.has(next)) {
-      if (userInitiated) setPendingSlide(null);
+      setPendingSlide(null);
       setActiveSlide(next);
       return;
     }
@@ -231,13 +247,31 @@ function Hero() {
       return next;
     });
     setReadySlides((ready) => new Set(ready).add(index));
-    if (pendingSlide === index) {
+    setRetryingSlides((retrying) => {
+      const next = new Set(retrying);
+      next.delete(index);
+      return next;
+    });
+    const isFailureFallback = failedSlides.has(activeSlide);
+    if (isFailureFallback || (pendingSlide === index && (!isPaused && !isInteracting && !reducedMotion))) {
       setActiveSlide(index);
       setPendingSlide(null);
     }
   };
 
+  const scheduleRetry = (index: number) => {
+    if (retryTimers.current.has(index)) return;
+    const timer = window.setTimeout(() => {
+      retryTimers.current.delete(index);
+      setMountedSlides((mounted) => new Set(mounted).add(index));
+      setRetryingSlides((retrying) => new Set(retrying).add(index));
+      setPendingSlide((pending) => pending ?? index);
+    }, 15000);
+    retryTimers.current.set(index, timer);
+  };
+
   const handleSlideError = (index: number) => {
+    scheduleRetry(index);
     const failed = new Set(failedSlides).add(index);
     const findFallback = () => {
       for (let offset = 1; offset < HERO_SLIDES.length; offset += 1) {
@@ -279,12 +313,22 @@ function Hero() {
   };
 
   useEffect(() => {
-    if (reducedMotion || isPaused || isInteracting || pendingSlide !== null) return;
+    if (reducedMotion || isInteracting || isPaused || pendingSlide !== null) return;
     const timer = window.setTimeout(() => requestSlide(activeSlide + 1), 6500);
     return () => window.clearTimeout(timer);
-  }, [activeSlide, isInteracting, isPaused, pendingSlide, reducedMotion]);
+  }, [activeSlide, failedSlides, isInteracting, isPaused, pendingSlide, reducedMotion]);
 
-  const showSlide = (next: number) => requestSlide(next, true);
+  useEffect(() => {
+    if (pendingSlide === null || failedSlides.has(pendingSlide)) return;
+    const isFailureFallback = failedSlides.has(activeSlide);
+    if (!isFailureFallback && (isPaused || isInteracting || reducedMotion)) return;
+    if (readySlides.has(pendingSlide)) {
+      setActiveSlide(pendingSlide);
+      setPendingSlide(null);
+      return;
+    }
+    requestSlide(pendingSlide);
+  }, [activeSlide, failedSlides, isInteracting, isPaused, pendingSlide, readySlides, reducedMotion]);
 
   return (
     <section
@@ -301,16 +345,16 @@ function Hero() {
       {HERO_SLIDES.map((slide, index) => mountedSlides.has(index) && (
         <picture
           key={slide.desktop}
-          aria-hidden={index !== activeSlide}
-          className={`absolute inset-0 transition-opacity duration-[1400ms] ease-out ${index === activeSlide ? 'opacity-100' : 'pointer-events-none opacity-0'}`}
+          aria-hidden={index !== activeSlide || failedSlides.has(index)}
+          className={`absolute inset-0 transition-opacity duration-[1400ms] ease-out ${index === activeSlide && !failedSlides.has(index) ? 'opacity-100' : 'pointer-events-none opacity-0'}`}
         >
           <source media="(max-width: 767px)" srcSet={slide.mobile} />
           <img
             src={slide.desktop}
             alt={slide.alt}
             className="h-full w-full object-cover"
-            loading={index === 0 || pendingSlide === index ? 'eager' : 'lazy'}
-            fetchPriority={index === 0 ? 'high' : pendingSlide === index ? 'auto' : 'low'}
+            loading={index === 0 || pendingSlide === index || retryingSlides.has(index) ? 'eager' : 'lazy'}
+            fetchPriority={index === 0 ? 'high' : pendingSlide === index || retryingSlides.has(index) ? 'auto' : 'low'}
             decoding="async"
             onLoad={() => handleSlideReady(index)}
             onError={() => handleSlideError(index)}
@@ -323,8 +367,17 @@ function Hero() {
         </div>
       )}
 
-      <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-[#17110eee] via-[#17110e38] to-transparent" />
-      <div className="relative z-10 flex w-full flex-col items-start gap-6 px-5 pb-7 sm:flex-row sm:items-end sm:justify-between sm:gap-5 sm:px-10 sm:pb-10 lg:px-16 lg:pb-14">
+      <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-[#105E53]/[0.82] via-[#105E53]/[0.30] to-transparent" />
+      <button
+        type="button"
+        aria-label={isPaused ? 'Resume automatic campaign slideshow' : 'Pause automatic campaign slideshow'}
+        aria-pressed={isPaused}
+        onClick={() => setIsPaused((paused) => !paused)}
+        className="pointer-events-auto absolute right-5 top-5 z-20 rounded-full border border-white/60 bg-black/20 px-3 py-2 text-[10px] font-ui uppercase tracking-[0.16em] text-white backdrop-blur-sm transition-colors hover:bg-black/35 focus:outline-none focus:ring-2 focus:ring-white focus:ring-offset-2 focus:ring-offset-transparent"
+      >
+        {isPaused ? 'Resume' : 'Pause'}
+      </button>
+      <div className="relative z-10 flex w-full flex-col items-start px-5 pb-7 sm:px-10 sm:pb-10 lg:px-16 lg:pb-14">
         <div className="max-w-xl text-white">
           <p className="mb-3 text-[10px] font-ui font-semibold uppercase tracking-[0.32em] text-white/75">ShopSoma presents</p>
           <h1 className="font-serif text-3xl font-normal leading-tight sm:text-4xl lg:text-5xl" style={{ fontFamily: 'var(--font-serif)', textShadow: '0 2px 12px rgba(0,0,0,0.35)' }}>
@@ -334,13 +387,6 @@ function Hero() {
             <Link to="/men" className="pointer-events-auto border-b border-white pb-1 text-xs font-ui uppercase tracking-[0.2em] text-white transition-opacity hover:opacity-75">Shop Men</Link>
             <Link to="/women" className="pointer-events-auto border-b border-white pb-1 text-xs font-ui uppercase tracking-[0.2em] text-white transition-opacity hover:opacity-75">Shop Women</Link>
           </div>
-        </div>
-
-        <div className="pointer-events-auto flex shrink-0 items-center gap-3 text-white">
-          <button type="button" aria-label="Show previous campaign image" onClick={() => showSlide(activeSlide - 1)} className="grid h-10 w-10 place-items-center rounded-full border border-white/45 bg-black/15 text-lg transition hover:bg-white hover:text-[#1b1715]" aria-controls="home-campaign-status">←</button>
-          <button type="button" aria-label={isPaused ? 'Resume automatic slideshow' : 'Pause automatic slideshow'} onClick={() => setIsPaused((paused) => !paused)} className="grid h-10 w-10 place-items-center rounded-full border border-white/45 bg-black/15 text-xs font-ui transition hover:bg-white hover:text-[#1b1715]">{isPaused ? '▶' : 'Ⅱ'}</button>
-          <span id="home-campaign-status" aria-live={isPaused ? 'polite' : 'off'} className="min-w-9 text-center text-[10px] font-ui tracking-[0.18em]">{activeSlide + 1} / {HERO_SLIDES.length}</span>
-          <button type="button" aria-label="Show next campaign image" onClick={() => showSlide(activeSlide + 1)} className="grid h-10 w-10 place-items-center rounded-full border border-white/45 bg-black/15 text-lg transition hover:bg-white hover:text-[#1b1715]">→</button>
         </div>
       </div>
     </section>
