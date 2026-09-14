@@ -88,7 +88,7 @@ export default function AdminSettings() {
     hash: `#${categoryFromHash()}`,
   });
   const restoringHistoryRef = useRef(false);
-  const lastNavigationSignatureRef = useRef<string | null>(null);
+  const lastNavigationSignatureRef = useRef<{ signature: string; eventType: string } | null>(null);
 
   useEffect(() => {
     if (typeof window.history.state?.settingsHistoryIndex !== 'number') {
@@ -104,8 +104,18 @@ export default function AdminSettings() {
   useEffect(() => {
     const syncCategory = (event: PopStateEvent | HashChangeEvent) => {
       const navigationSignature = `${window.location.href}|${window.history.state?.idx ?? ''}|${window.history.state?.settingsHistoryIndex ?? ''}`;
-      if (navigationSignature === lastNavigationSignatureRef.current) return;
-      lastNavigationSignatureRef.current = navigationSignature;
+      const previousNavigation = lastNavigationSignatureRef.current;
+      if (previousNavigation?.signature === navigationSignature && previousNavigation.eventType !== event.type) {
+        lastNavigationSignatureRef.current = null;
+        return;
+      }
+      const currentNavigation = { signature: navigationSignature, eventType: event.type };
+      lastNavigationSignatureRef.current = currentNavigation;
+      queueMicrotask(() => {
+        if (lastNavigationSignatureRef.current === currentNavigation) {
+          lastNavigationSignatureRef.current = null;
+        }
+      });
       if (restoringHistoryRef.current) {
         restoringHistoryRef.current = false;
         return;

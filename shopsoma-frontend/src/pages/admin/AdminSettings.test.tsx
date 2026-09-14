@@ -261,6 +261,27 @@ it('handles one browser traversal once when both history events are emitted', as
   expect(screen.getByRole('heading', { name: 'Exchange rate' })).toBeInTheDocument();
 });
 
+it('does not suppress a later direct fragment navigation with the same signature', async () => {
+  render(<AdminSettings />);
+  await screen.findByRole('heading', { name: 'Exchange rate' });
+  fireEvent.change(screen.getByRole('spinbutton'), { target: { value: '1700' } });
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+
+  window.history.pushState(null, '', '#shipping');
+  window.dispatchEvent(new HashChangeEvent('hashchange'));
+  await Promise.resolve();
+
+  window.history.pushState(null, '', '#currency');
+  window.dispatchEvent(new HashChangeEvent('hashchange'));
+  await Promise.resolve();
+
+  window.history.pushState(null, '', '#shipping');
+  window.dispatchEvent(new HashChangeEvent('hashchange'));
+
+  expect(confirm).toHaveBeenCalledTimes(2);
+  expect(screen.getByRole('heading', { name: 'Exchange rate' })).toBeInTheDocument();
+});
+
 it('blocks category transitions while any settings save is in flight', async () => {
   let resolveSave!: (value: any) => void;
   const save = new Promise<any>((resolve) => { resolveSave = resolve; });
