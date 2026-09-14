@@ -92,6 +92,22 @@ describe('Home', () => {
     vi.useRealTimers();
   });
 
+  it('retries a skipped slide after a short cooldown', () => {
+    vi.useFakeTimers();
+    render(
+      <MemoryRouter>
+        <Home />
+      </MemoryRouter>
+    );
+
+    act(() => vi.advanceTimersByTime(6500));
+    fireEvent.error(screen.getByAltText(/campaign look 2/i));
+    act(() => vi.advanceTimersByTime(15000));
+
+    expect(screen.getByAltText(/campaign look 2/i)).toHaveAttribute('loading', 'eager');
+    vi.useRealTimers();
+  });
+
   it('shows the updated shop by category labels', () => {
     render(
       <MemoryRouter>

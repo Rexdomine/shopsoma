@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import Layout from '../components/layout/Layout';
 import type { Product } from '../types';
@@ -196,6 +196,7 @@ function Hero() {
   const [readySlides, setReadySlides] = useState<Set<number>>(() => new Set([0]));
   const [pendingSlide, setPendingSlide] = useState<number | null>(null);
   const [failedSlides, setFailedSlides] = useState<Set<number>>(() => new Set());
+  const retryTimers = useRef<Map<number, number>>(new Map());
   const [isInteracting, setIsInteracting] = useState(false);
 
   useEffect(() => {
@@ -205,6 +206,13 @@ function Hero() {
     update();
     media.addEventListener('change', update);
     return () => media.removeEventListener('change', update);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      retryTimers.current.forEach((timer) => window.clearTimeout(timer));
+      retryTimers.current.clear();
+    };
   }, []);
 
   const requestSlide = (target: number) => {
@@ -243,7 +251,23 @@ function Hero() {
     }
   };
 
+  const scheduleRetry = (index: number) => {
+    if (retryTimers.current.has(index)) return;
+    const timer = window.setTimeout(() => {
+      retryTimers.current.delete(index);
+      setFailedSlides((failed) => {
+        const next = new Set(failed);
+        next.delete(index);
+        return next;
+      });
+      setMountedSlides((mounted) => new Set(mounted).add(index));
+      setPendingSlide(index);
+    }, 15000);
+    retryTimers.current.set(index, timer);
+  };
+
   const handleSlideError = (index: number) => {
+    scheduleRetry(index);
     const failed = new Set(failedSlides).add(index);
     const findFallback = () => {
       for (let offset = 1; offset < HERO_SLIDES.length; offset += 1) {
