@@ -45,7 +45,33 @@ describe('ManualShippingSettings', () => {
     fireEvent.change(screen.getByLabelText('Rate name'), { target: { value: 'Lagos delivery' } });
     fireEvent.click(screen.getByRole('button', { name: /save shipping rate/i }));
     await waitFor(() => expect(onBusyChange).toHaveBeenCalledWith(true));
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
     resolveSave({});
     await waitFor(() => expect(onBusyChange).toHaveBeenLastCalledWith(false));
+  });
+
+  it('reports save errors inside the open dialog', async () => {
+    const { saveManualShippingRate } = await import('../../../services/settingsService');
+    vi.mocked(saveManualShippingRate).mockRejectedValue(new Error('save failed'));
+    render(<ManualShippingSettings />);
+    await waitFor(() => expect(screen.getByRole('button', { name: /add shipping rate/i })).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /add shipping rate/i }));
+    fireEvent.change(screen.getByLabelText('Rate name'), { target: { value: 'Lagos delivery' } });
+    fireEvent.click(screen.getByRole('button', { name: /save shipping rate/i }));
+
+    await waitFor(() => expect(screen.getByRole('dialog').querySelector('[role="alert"]')).toHaveTextContent(/unable to save/i));
+  });
+
+  it('keeps rate ordering metadata visible in the saved-rate list', async () => {
+    vi.mocked(getManualShippingRates).mockResolvedValue([{
+      id: 'rate-1', name: 'Lagos delivery', description: '', country: 'Nigeria', state: 'Lagos',
+      base_rate: 1500, min_order_value: 0, max_order_value: null, min_delivery_days: 2, max_delivery_days: 5,
+      is_active: true, is_default: true, priority: 3,
+    }]);
+    render(<ManualShippingSettings />);
+
+    await waitFor(() => expect(screen.getByText(/Priority 3 · Default · Active/)).toBeInTheDocument());
   });
 });
