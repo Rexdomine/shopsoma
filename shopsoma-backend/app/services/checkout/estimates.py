@@ -948,9 +948,15 @@ async def create_estimate(
             if existing.request_fingerprint != fingerprint:
                 raise HTTPException(status_code=409, detail="idempotency conflict")
             return existing
-        dhl_offers = await _dhl_checkout_options(
-            db, order=order, planned_ship_date=planned_ship_date
+        dhl_offers = tuple(
+            offer
+            for offer in await _dhl_checkout_options(
+                db, order=order, planned_ship_date=planned_ship_date
+            )
+            if offer.provider_product_code == "N"
         )
+        if not dhl_offers:
+            raise HTTPException(status_code=503, detail="DHL has no eligible checkout service")
         fresh_order = await load_checkout_order(db, order.id, for_update=True)
         if fresh_order is None:
             raise HTTPException(status_code=404, detail="checkout order no longer exists")

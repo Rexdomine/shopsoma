@@ -868,6 +868,52 @@ async def test_no_synthetic_n_and_empty_products_is_typed_no_service() -> None:
 
 
 @pytest.mark.asyncio
+async def test_non_priceable_sibling_does_not_discard_valid_express_domestic_offer() -> None:
+    unusable = product(code="7", service_code="7", label="Informational")
+    unusable["totalPrice"] = [{"price": "0"}]
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"products": [unusable, product(code="N", label="EXPRESS DOMESTIC", amount="13555.09", transit_days=1, delivery_date="2026-07-29")]})
+
+    adapter = create_sandbox_domestic_rate_adapter(config=config(), transport=httpx.MockTransport(handler), identity_key=IDENTITY_KEY, identity_key_version="test-key-v1")
+    result = await adapter.rate(resolved_hub(), rate_request())
+
+    assert [(offer.provider_product_code, offer.service_label) for offer in result.offers] == [("N", "EXPRESS DOMESTIC")]
+    assert result.offers[0].rate.total_amount == Decimal("13555.09")
+    assert result.offers[0].rate.currency == "NGN"
+
+
+@pytest.mark.asyncio
+async def test_positive_price_missing_currency_sibling_is_not_silently_skipped() -> None:
+    invalid = product(code="7", service_code="7", label="Missing currency", amount="1")
+    invalid["totalPrice"] = [{"price": "1"}]
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"products": [invalid, product(code="N", amount="13555.09")]})
+
+    adapter = create_sandbox_domestic_rate_adapter(
+        config=config(),
+        transport=httpx.MockTransport(handler),
+        identity_key=IDENTITY_KEY,
+        identity_key_version="test-key-v1",
+    )
+    with pytest.raises(DHLRateAdapterError, match="invalid rate response"):
+        await adapter.rate(resolved_hub(), rate_request())
+
+
+@pytest.mark.asyncio
+async def test_malformed_positive_price_sibling_is_not_silently_skipped() -> None:
+    malformed = product(code="7", service_code="7", label="Malformed", amount="not-a-number")
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"products": [malformed, product(code="N", amount="13555.09")]})
+
+    adapter = create_sandbox_domestic_rate_adapter(config=config(), transport=httpx.MockTransport(handler), identity_key=IDENTITY_KEY, identity_key_version="test-key-v1")
+    with pytest.raises(DHLRateAdapterError, match="invalid rate response"):
+        await adapter.rate(resolved_hub(), rate_request())
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "payload", [[], {}, {"products": None}, {"products": {}}, {"products": ["bad"]}]
 )
