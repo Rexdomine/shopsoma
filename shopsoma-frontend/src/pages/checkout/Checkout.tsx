@@ -733,6 +733,9 @@ export default function Checkout() {
     try {
       const estimate = await refreshCheckoutEstimate();
       setCheckoutEstimate(estimate);
+      // A successful retry has restored server-owned delivery truth; expose
+      // the option selector and payment stage without creating another order.
+      setStep('payment');
     } catch (error: any) {
       if (error.response?.status === 404 || error.response?.status === 410) {
         discardExpiredCheckout();

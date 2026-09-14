@@ -544,6 +544,23 @@ describe('Checkout M5 sequencing and recovery', () => {
 
   });
 
+  it('returns a recovered domestic estimate to delivery options before payment', async () => {
+    mocks.getShippingProviderSettings.mockResolvedValue({ provider: 'manual', checkout_estimates_required: true });
+    mocks.createCheckoutEstimate.mockRejectedValueOnce({ response: { status: 503, data: { detail: 'temporarily unavailable' } } });
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to delivery options' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry delivery options' }));
+
+    expect(await screen.findByRole('button', { name: 'Select Standard delivery' })).toBeEnabled();
+    expect(screen.getByRole('radio', { name: /Stripe/ })).toBeInTheDocument();
+    expect(mocks.createOrder).toHaveBeenCalledTimes(1);
+    expect(mocks.createCheckoutEstimate).toHaveBeenCalledTimes(2);
+    expect(mocks.initializePayment).not.toHaveBeenCalled();
+  });
+
   it('cancels the saved order before restarting after estimate failure', async () => {
     mocks.createCheckoutEstimate.mockRejectedValueOnce({ response: { status: 503, data: { detail: 'temporarily unavailable' } } });
     await reachPaymentStep();
