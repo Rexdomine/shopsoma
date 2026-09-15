@@ -914,6 +914,18 @@ async def test_malformed_positive_price_sibling_is_not_silently_skipped() -> Non
 
 
 @pytest.mark.asyncio
+async def test_negative_price_sibling_is_not_silently_skipped() -> None:
+    malformed = product(code="7", service_code="7", label="Malformed", amount="-1")
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"products": [malformed, product(code="N", amount="13555.09")]})
+
+    adapter = create_sandbox_domestic_rate_adapter(config=config(), transport=httpx.MockTransport(handler), identity_key=IDENTITY_KEY, identity_key_version="test-key-v1")
+    with pytest.raises(DHLRateAdapterError, match="invalid rate response"):
+        await adapter.rate(resolved_hub(), rate_request())
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "payload", [[], {}, {"products": None}, {"products": {}}, {"products": ["bad"]}]
 )

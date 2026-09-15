@@ -446,7 +446,10 @@ class DHLDomesticRateAdapter:
                 amount = Decimal(str(raw_amount))
             except (InvalidOperation, ValueError):
                 return False
-            if not amount.is_finite() or amount > Decimal("0"):
+            # DHL may return an exactly-zero informational product beside a
+            # purchasable offer. Negative prices are malformed commercial data
+            # and must reach the strict parser so the response fails closed.
+            if not amount.is_finite() or amount != Decimal("0"):
                 return False
             currency = entry.get("priceCurrency")
             if currency is not None and (

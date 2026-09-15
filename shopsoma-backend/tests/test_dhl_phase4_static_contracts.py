@@ -1417,18 +1417,15 @@ def test_dhl_estimate_serializes_provider_boundary_and_rechecks_replay() -> None
     dhl_path = source.split("if dhl_provider_enabled:", 1)[1]
     assert "pg_advisory_xact_lock" in dhl_path
     assert "hashtextextended(:lock_key, 0)" in dhl_path
-    assert dhl_path.index("pg_advisory_xact_lock") < dhl_path.index(
-        "dhl_offers = await _dhl_checkout_options"
-    )
-    assert dhl_path.index("existing = await db.scalar") < dhl_path.index(
-        "dhl_offers = await _dhl_checkout_options"
-    )
+    provider_call = "for offer in await _dhl_checkout_options("
+    assert dhl_path.index("pg_advisory_xact_lock") < dhl_path.index(provider_call)
+    assert dhl_path.index("existing = await db.scalar") < dhl_path.index(provider_call)
 
 
 def test_dhl_estimate_conflict_recovery_caches_customer_before_rollback() -> None:
     source = (ROOT / "app" / "services" / "checkout" / "estimates.py").read_text()
     dhl_path = source.split("if dhl_provider_enabled:", 1)[1]
-    claim_path = dhl_path.split("dhl_offers = await _dhl_checkout_options", 1)[1]
+    claim_path = dhl_path.split("for offer in await _dhl_checkout_options(", 1)[1]
     recovery = claim_path.split("except IntegrityError:", 1)[1]
     assert "customer_id = order.customer_id" in dhl_path
     assert recovery.index("await db.rollback()") < recovery.index(
