@@ -428,7 +428,7 @@ describe('Checkout M5 sequencing and recovery', () => {
 
   it('keeps postal code optional while manual shipping is active', async () => {
     mocks.auth.isAuthenticated = false;
-    mocks.getShippingProviderSettings.mockResolvedValueOnce({ provider: 'manual', checkout_estimates_required: false });
+    mocks.getShippingProviderSettings.mockResolvedValueOnce({ provider: 'manual', checkout_estimates_required: true });
     render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
     fireEvent.change(await screen.findByPlaceholderText('you@example.com'), { target: { value: 'guest@example.com' } });
     fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));

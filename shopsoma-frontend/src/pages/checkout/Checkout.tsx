@@ -1,4 +1,4 @@
-import { getShippingProviderSettings } from '../../services/settingsService';
+import { getShippingProviderSettings, type ShippingProviderSettings } from '../../services/settingsService';
 import { useState, useEffect } from 'react';
 import { flushSync } from 'react-dom';
 import { buildPaystackWidgetConfig, type PaymentGateway, type InitializePaymentResponse } from '../../services/paymentService';
@@ -124,16 +124,22 @@ export default function Checkout() {
   });
 
   const [allDomesticEstimates, setAllDomesticEstimates] = useState(false);
+  const [shippingProvider, setShippingProvider] = useState<ShippingProviderSettings['provider'] | null>(null);
   const [shippingConfigLoaded, setShippingConfigLoaded] = useState(false);
   const [shippingConfigError, setShippingConfigError] = useState(false);
   const [shippingConfigRetry, setShippingConfigRetry] = useState(0);
   useEffect(() => {
     setShippingConfigLoaded(false);
     setShippingConfigError(false);
+    setShippingProvider(null);
     void getShippingProviderSettings()
-      .then(config => setAllDomesticEstimates(config.checkout_estimates_required))
+      .then(config => {
+        setAllDomesticEstimates(config.checkout_estimates_required);
+        setShippingProvider(config.provider);
+      })
       .catch(() => {
         setAllDomesticEstimates(false);
+        setShippingProvider(null);
         setShippingConfigError(true);
       })
       .finally(() => setShippingConfigLoaded(true));
@@ -143,12 +149,13 @@ export default function Checkout() {
   const destinationCountry = selectedAddress?.country.trim().toLowerCase();
   const secureShipping = allDomesticEstimates && (destinationCountry === 'nigeria' || destinationCountry === 'ng');
   const draftCountry = newAddress.country.trim().toLowerCase();
-  const postalCodeRequired = allDomesticEstimates && (draftCountry === 'nigeria' || draftCountry === 'ng');
+  const dhlDomesticShipping = shippingProvider === 'dhl' && secureShipping;
+  const postalCodeRequired = shippingProvider === 'dhl' && allDomesticEstimates && (draftCountry === 'nigeria' || draftCountry === 'ng');
   const isValidDhlPostalCode = (value?: string) => {
     const postalCode = value?.trim() || '';
     return postalCode.length > 0 && postalCode.length <= 12;
   };
-  const selectedAddressNeedsPostalCode = secureShipping && !isValidDhlPostalCode(selectedAddress?.postal_code);
+  const selectedAddressNeedsPostalCode = dhlDomesticShipping && !isValidDhlPostalCode(selectedAddress?.postal_code);
   const selectedAddressPostalCodeGuidance = selectedAddress?.postal_code?.trim()
     ? 'Update the selected delivery address with a postal code of 12 characters or fewer before continuing with DHL delivery.'
     : 'Add a postal code to the selected delivery address before continuing with DHL delivery.';
