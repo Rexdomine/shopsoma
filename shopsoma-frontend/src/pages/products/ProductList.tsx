@@ -6,7 +6,13 @@ import Loading from '../../components/common/Loading';
 import type { Category, Product } from '../../types';
 import { productService, type ProductListParams } from '../../services/productService';
 import { categoryService } from '../../services/categoryService';
-import { IMAGE_CONFIG, MEN_HERO_IMAGE_URL, ROUTES, WOMEN_HERO_IMAGE_URL } from '../../config/constants';
+import {
+  IMAGE_CONFIG,
+  MEN_HERO_IMAGE_URL,
+  MEN_HERO_MOBILE_IMAGE_URL,
+  ROUTES,
+  WOMEN_HERO_IMAGE_URL,
+} from '../../config/constants';
 import ProductCard from '../../components/products/ProductCard';
 import VendorShowcaseCard from '../../components/products/VendorShowcaseCard';
 import { useWishlistActions } from '../../hooks/useWishlistActions';
@@ -81,6 +87,8 @@ type HeroContent = {
   title: string;
   body: string;
   imageUrl: string;
+  mobileImageUrl?: string;
+  imagePositionClassName?: string;
   ctaLabel?: string;
 };
 
@@ -103,6 +111,8 @@ const MEN_HERO: HeroContent = {
   title: 'Menswear: Elevated Everyday Style',
   body: 'Discover tailored pieces, bold silhouettes and everyday staples, curated for the modern man.',
   imageUrl: MEN_HERO_IMAGE_URL,
+  mobileImageUrl: MEN_HERO_MOBILE_IMAGE_URL,
+  imagePositionClassName: 'object-[40%_25%] max-sm:object-[25%_40%]',
   ctaLabel: 'Shop all menswear',
 };
 
@@ -736,11 +746,18 @@ const handleFilterChange = (key: keyof FilterState, value: string) => {
     <Layout>
       {/* Store Hero Section */}
       <section
-        className="relative w-full min-h-[50vh] bg-cover bg-center flex items-end"
-        style={{
-          backgroundImage: `url('${heroContent.imageUrl}')`,
-        }}
+        className="relative w-full min-h-[50vh] overflow-hidden flex items-end"
       >
+        <picture className="absolute inset-0" aria-hidden="true">
+          {heroContent.mobileImageUrl && (
+            <source media="(max-width: 639px)" srcSet={heroContent.mobileImageUrl} />
+          )}
+          <img
+            src={heroContent.imageUrl}
+            alt=""
+            className={`h-full w-full object-cover ${heroContent.imagePositionClassName || 'object-center'}`}
+          />
+        </picture>
         {/* Dark overlay for text legibility */}
         <div className="absolute inset-0 bg-black/20" />
 
