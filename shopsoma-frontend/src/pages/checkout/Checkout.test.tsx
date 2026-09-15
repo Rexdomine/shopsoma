@@ -425,6 +425,26 @@ describe('Checkout M5 sequencing and recovery', () => {
     expect(mocks.createAddress).not.toHaveBeenCalled();
   });
 
+  it('requires a postal code on a selected saved address before DHL checkout can continue', async () => {
+    const addressWithoutPostalCode = { ...address, postal_code: '' };
+    mocks.getAddresses.mockResolvedValueOnce({ addresses: [addressWithoutPostalCode] });
+    mocks.getShippingProviderSettings.mockResolvedValueOnce({ provider: 'dhl', checkout_estimates_required: true });
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+
+    await screen.findByText(/Add a postal code to the selected delivery address/i);
+    expect(screen.getByRole('button', { name: 'Continue' })).toBeDisabled();
+    expect(mocks.createOrder).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit delivery address' }));
+    expect(screen.getByRole('textbox', { name: 'Postal code' })).toHaveValue('');
+    fireEvent.change(screen.getByRole('textbox', { name: 'Postal code' }), { target: { value: '100001' } });
+    mocks.updateAddress.mockResolvedValueOnce({ ...address, postal_code: '100001' });
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() => expect(mocks.updateAddress).toHaveBeenCalledWith('address-1', expect.objectContaining({ postal_code: '100001' })));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Continue' })).toBeEnabled());
+  });
+
   it('blocks checkout and offers retry when shipping configuration fails', async () => {
     mocks.getShippingProviderSettings
       .mockRejectedValueOnce(new Error('temporary settings outage'))

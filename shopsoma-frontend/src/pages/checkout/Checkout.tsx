@@ -139,8 +139,10 @@ export default function Checkout() {
       .finally(() => setShippingConfigLoaded(true));
   }, [shippingConfigRetry]);
 
-  const destinationCountry = addresses.find(address => address.id === selectedAddressId)?.country.trim().toLowerCase();
+  const selectedAddress = addresses.find(address => address.id === selectedAddressId);
+  const destinationCountry = selectedAddress?.country.trim().toLowerCase();
   const secureShipping = allDomesticEstimates && (destinationCountry === 'nigeria' || destinationCountry === 'ng');
+  const selectedAddressNeedsPostalCode = secureShipping && !selectedAddress?.postal_code?.trim();
 
   // Shipping state
   const [shippingRates, setShippingRates] = useState<ShippingRate[]>([]);
@@ -1025,7 +1027,7 @@ export default function Checkout() {
   };
 
   const handleAddressSave = async () => {
-    if (hasSelectedAddress) {
+    if (hasSelectedAddress && !selectedAddressNeedsPostalCode) {
       if (secureShipping) {
         // Domestic server-owned estimates require a durable order, but the
         // customer must see a delivery step before any payment controls.
@@ -1434,10 +1436,15 @@ export default function Checkout() {
                                 </button>
                               </div>
                             )}
+                            {selectedAddressNeedsPostalCode && (
+                              <p className="mb-3 text-sm text-amber-700" role="alert">
+                                Add a postal code to the selected delivery address before continuing with DHL delivery.
+                              </p>
+                            )}
                             <button
                               type="button"
                               onClick={handleAddressSave}
-                              disabled={!hasSelectedAddress || isCheckoutRequestPending || !shippingConfigLoaded || shippingConfigError || !!enforcedOrder}
+                              disabled={!hasSelectedAddress || selectedAddressNeedsPostalCode || isCheckoutRequestPending || !shippingConfigLoaded || shippingConfigError || !!enforcedOrder}
                               className="w-full py-3 rounded-sm bg-primary text-white text-sm font-semibold disabled:opacity-50"
                             >
                               {isLoadingShipping ? 'Calculating Shipping...' : 'Continue'}
