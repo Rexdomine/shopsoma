@@ -121,7 +121,8 @@ export const IMAGE_CONFIG = {
 } as const;
 
 // Storefront hero assets
-export const MEN_HERO_IMAGE_URL = '/images/hero/men-hero-placeholder.jpg';
+export const MEN_HERO_IMAGE_URL = '/images/hero/men/men-hero-dsc06941-desktop.webp';
+export const MEN_HERO_MOBILE_IMAGE_URL = '/images/hero/men/men-hero-dsc06941-mobile.webp';
 export const WOMEN_HERO_IMAGE_URL = '/images/hero/women-hero-placeholder.jpg';
 export const VENDOR_LOGIN_IMAGE_URL = '/images/profilebanner.jpg';
 

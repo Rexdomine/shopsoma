@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import Loading from '../../components/common/Loading';
-import { MEN_HERO_IMAGE_URL } from '../../config/constants';
+import { MEN_HERO_IMAGE_URL, MEN_HERO_MOBILE_IMAGE_URL } from '../../config/constants';
 import { categoryService } from '../../services/categoryService';
 import ProductList from './ProductList';
 import type { Category } from '../../types';
@@ -100,6 +100,8 @@ export default function MenStorefront() {
         title: 'Menswear: Elevated Everyday Style',
         body: 'Discover tailored pieces, bold silhouettes and everyday staples, curated for the modern man.',
         imageUrl: MEN_HERO_IMAGE_URL,
+        mobileImageUrl: MEN_HERO_MOBILE_IMAGE_URL,
+        imagePositionClassName: 'object-[40%_25%] max-sm:object-[25%_40%]',
         ctaLabel: 'Shop all menswear',
       }}
     />
