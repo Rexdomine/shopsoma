@@ -142,6 +142,8 @@ export default function Checkout() {
   const selectedAddress = addresses.find(address => address.id === selectedAddressId);
   const destinationCountry = selectedAddress?.country.trim().toLowerCase();
   const secureShipping = allDomesticEstimates && (destinationCountry === 'nigeria' || destinationCountry === 'ng');
+  const draftCountry = newAddress.country.trim().toLowerCase();
+  const postalCodeRequired = allDomesticEstimates && (draftCountry === 'nigeria' || draftCountry === 'ng');
   const selectedAddressNeedsPostalCode = secureShipping && !selectedAddress?.postal_code?.trim();
 
   // Shipping state
@@ -938,7 +940,7 @@ export default function Checkout() {
     newAddress.address_line1.trim() &&
     newAddress.city.trim() &&
     newAddress.state.trim() &&
-    newAddress.postal_code?.trim() &&
+    (!postalCodeRequired || newAddress.postal_code?.trim()) &&
     newAddress.country.trim()
   );
   const missingAddressFields = [
@@ -946,7 +948,7 @@ export default function Checkout() {
     !newAddress.address_line1.trim() ? 'street address' : '',
     !newAddress.city.trim() ? 'city' : '',
     !newAddress.state.trim() ? 'state' : '',
-    !newAddress.postal_code?.trim() ? 'postal code' : '',
+    postalCodeRequired && !newAddress.postal_code?.trim() ? 'postal code' : '',
     !newAddress.country.trim() ? 'country' : '',
   ].filter(Boolean);
   const phoneSaveGuidance = !newAddress.phone_number.trim()
@@ -1351,7 +1353,7 @@ export default function Checkout() {
                               </div>
                               <div>
                                 <label className="text-xs text-gray-500" htmlFor="checkout-postal-code">
-                                  Postal code <span className="text-red-500">*</span>
+                                  Postal code {postalCodeRequired && <span className="text-red-500">*</span>}
                                 </label>
                                 <input
                                   id="checkout-postal-code"
@@ -1364,9 +1366,9 @@ export default function Checkout() {
                                   onChange={(e) => setNewAddress({ ...newAddress, postal_code: e.target.value })}
                                   className="w-full border-b border-gray-300 focus:border-primary focus:outline-none py-2 text-sm"
                                   placeholder="100001"
-                                  required
+                                  required={postalCodeRequired}
                                 />
-                                <p className="mt-1 text-xs text-gray-500">Required for DHL delivery estimates.</p>
+                                {postalCodeRequired && <p className="mt-1 text-xs text-gray-500">Required for DHL delivery estimates.</p>}
                               </div>
                               <div className="pt-2">
                                 <label className="inline-flex items-center gap-2 text-sm text-gray-600 cursor-pointer">

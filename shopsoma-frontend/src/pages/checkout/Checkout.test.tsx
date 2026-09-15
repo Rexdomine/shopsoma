@@ -409,6 +409,7 @@ describe('Checkout M5 sequencing and recovery', () => {
 
   it('requires a postal code before a guest checkout address can be saved', async () => {
     mocks.auth.isAuthenticated = false;
+    mocks.getShippingProviderSettings.mockResolvedValueOnce({ provider: 'dhl', checkout_estimates_required: true });
     render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
     fireEvent.change(await screen.findByPlaceholderText('you@example.com'), { target: { value: 'guest@example.com' } });
     fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
@@ -423,6 +424,23 @@ describe('Checkout M5 sequencing and recovery', () => {
     expect(screen.getByRole('button', { name: 'Save Address' })).toBeDisabled();
     expect(screen.getByText(/Complete postal code to save this address/i)).toBeInTheDocument();
     expect(mocks.createAddress).not.toHaveBeenCalled();
+  });
+
+  it('keeps postal code optional while manual shipping is active', async () => {
+    mocks.auth.isAuthenticated = false;
+    mocks.getShippingProviderSettings.mockResolvedValueOnce({ provider: 'manual', checkout_estimates_required: false });
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    fireEvent.change(await screen.findByPlaceholderText('you@example.com'), { target: { value: 'guest@example.com' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    fireEvent.click(screen.getByRole('button', { name: '+ Add New Address' }));
+
+    for (const [label, value] of [['Full Name', 'Guest Buyer'], ['Street Address', '1 Test Street'], ['City', 'Lagos'], ['State', 'Lagos']]) {
+      fireEvent.change(screen.getByLabelText(label), { target: { value } });
+    }
+    fireEvent.change(screen.getByPlaceholderText('08012345678'), { target: { value: '08012345678' } });
+
+    expect(screen.getByRole('textbox', { name: 'Postal code' })).not.toHaveAttribute('required');
+    expect(screen.getByRole('button', { name: 'Save Address' })).toBeEnabled();
   });
 
   it('requires a postal code on a selected saved address before DHL checkout can continue', async () => {
