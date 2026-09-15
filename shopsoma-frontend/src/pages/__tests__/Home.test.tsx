@@ -108,21 +108,29 @@ describe('Home', () => {
     vi.useRealTimers();
   });
 
-  it('shows the updated shop by category labels', () => {
+  it('shows the Drive-supplied shop by category strip in the requested order', () => {
     render(
       <MemoryRouter>
         <Home />
       </MemoryRouter>
     );
 
-    expect(screen.getByText('Dresses')).toBeInTheDocument();
-    expect(screen.getByText('Occasion wear')).toBeInTheDocument();
-    expect(screen.getByText('Workwear')).toBeInTheDocument();
-    expect(screen.getByText('Casual')).toBeInTheDocument();
+    const categoryImages = screen.getAllByRole('img').filter((image) =>
+      ['Casual', 'Occasion', 'Party', 'Workwear'].includes(image.getAttribute('alt') || '')
+    );
+    expect(categoryImages.map((image) => image.getAttribute('alt'))).toEqual(['Casual', 'Occasion', 'Party', 'Workwear']);
+    expect(categoryImages.map((image) => image.getAttribute('src'))).toEqual([
+      '/images/category-strip/casual-1-900.webp',
+      '/images/category-strip/occasion-900.webp',
+      '/images/category-strip/party-900.webp',
+      '/images/category-strip/workwear-900.webp',
+    ]);
+    expect(categoryImages.every((image) => image.getAttribute('loading') === 'lazy')).toBe(true);
+    expect(categoryImages.every((image) => image.getAttribute('decoding') === 'async')).toBe(true);
+    expect(categoryImages.every((image) => image.getAttribute('sizes') === '(min-width: 768px) 25vw, 50vw')).toBe(true);
+    expect(categoryImages.every((image) => (image.getAttribute('srcset') || '').includes('480w') && (image.getAttribute('srcset') || '').includes('900w'))).toBe(true);
 
-    expect(screen.queryByText('Gowns')).not.toBeInTheDocument();
-    expect(screen.queryByText('Hand stitched')).not.toBeInTheDocument();
-    expect(screen.queryByText('Strong Construction')).not.toBeInTheDocument();
-    expect(screen.queryByText('Cotton')).not.toBeInTheDocument();
+    expect(screen.queryByText('Dresses')).not.toBeInTheDocument();
+    expect(screen.queryByText('Occasion wear')).not.toBeInTheDocument();
   });
 });
