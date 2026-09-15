@@ -133,4 +133,20 @@ describe('Home', () => {
     expect(screen.queryByText('Dresses')).not.toBeInTheDocument();
     expect(screen.queryByText('Occasion wear')).not.toBeInTheDocument();
   });
+
+  it('uses the approved responsive Kilentar editorial image', () => {
+    render(
+      <MemoryRouter>
+        <Home />
+      </MemoryRouter>
+    );
+
+    const editorialImage = screen.getByRole('img', { name: 'Kilentar: Avant Premier' });
+    expect(editorialImage).toHaveAttribute('src', '/images/editorial/kilentar-avant-premier-1440.webp');
+    expect(editorialImage).toHaveAttribute('srcset', expect.stringContaining('kilentar-avant-premier-720.webp 720w'));
+    expect(editorialImage).toHaveAttribute('srcset', expect.stringContaining('kilentar-avant-premier-1440.webp 1440w'));
+    expect(editorialImage).toHaveAttribute('sizes', '(min-width: 1024px) 896px, 100vw');
+    expect(editorialImage).toHaveAttribute('loading', 'lazy');
+    expect(editorialImage).toHaveAttribute('decoding', 'async');
+  });
 });
