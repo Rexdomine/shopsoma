@@ -17,8 +17,8 @@ const HERO_SLIDES = [
     alt: 'Orange Culture campaign look 1: three models outside a terracotta building',
   },
   {
-    desktop: '/images/hero/campaign/campaign-interior-desktop.webp',
-    mobile: '/images/hero/campaign/campaign-interior-mobile.webp',
+    desktop: '/images/hero/campaign/campaign-interior-2089-desktop.webp',
+    mobile: '/images/hero/campaign/campaign-interior-2089-mobile.webp',
     alt: 'Orange Culture campaign look 2: two models in an intimate editorial interior',
   },
   {

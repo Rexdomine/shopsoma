@@ -89,6 +89,14 @@ describe('Home', () => {
       'alt',
       'Orange Culture campaign look 2: two models in an intimate editorial interior'
     );
+    expect(failedSecondSlide).toHaveAttribute(
+      'src',
+      '/images/hero/campaign/campaign-interior-2089-desktop.webp'
+    );
+    expect(failedSecondSlide.parentElement?.querySelector('source')).toHaveAttribute(
+      'srcset',
+      '/images/hero/campaign/campaign-interior-2089-mobile.webp'
+    );
     fireEvent.error(failedSecondSlide);
 
     act(() => vi.advanceTimersByTime(6500));
