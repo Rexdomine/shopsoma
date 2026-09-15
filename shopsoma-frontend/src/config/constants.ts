@@ -123,7 +123,8 @@ export const IMAGE_CONFIG = {
 // Storefront hero assets
 export const MEN_HERO_IMAGE_URL = '/images/hero/men/men-hero-dsc06941-desktop.webp';
 export const MEN_HERO_MOBILE_IMAGE_URL = '/images/hero/men/men-hero-dsc06941-mobile.webp';
-export const WOMEN_HERO_IMAGE_URL = '/images/hero/women-hero-placeholder.jpg';
+export const WOMEN_HERO_IMAGE_URL = '/images/hero/women/women-hero-img-2101-desktop.webp';
+export const WOMEN_HERO_MOBILE_IMAGE_URL = '/images/hero/women/women-hero-img-2101-mobile.webp';
 export const VENDOR_LOGIN_IMAGE_URL = '/images/profilebanner.jpg';
 
 // Toast Configuration
