@@ -120,11 +120,15 @@ describe('Home', () => {
     );
     expect(categoryImages.map((image) => image.getAttribute('alt'))).toEqual(['Casual', 'Occasion', 'Party', 'Workwear']);
     expect(categoryImages.map((image) => image.getAttribute('src'))).toEqual([
-      '/images/category-strip/casual-1.jpg',
-      '/images/category-strip/occasion.jpg',
-      '/images/category-strip/party.jpg',
-      '/images/category-strip/workwear.jpg',
+      '/images/category-strip/casual-1-900.webp',
+      '/images/category-strip/occasion-900.webp',
+      '/images/category-strip/party-900.webp',
+      '/images/category-strip/workwear-900.webp',
     ]);
+    expect(categoryImages.every((image) => image.getAttribute('loading') === 'lazy')).toBe(true);
+    expect(categoryImages.every((image) => image.getAttribute('decoding') === 'async')).toBe(true);
+    expect(categoryImages.every((image) => image.getAttribute('sizes') === '(min-width: 768px) 25vw, 50vw')).toBe(true);
+    expect(categoryImages.every((image) => (image.getAttribute('srcset') || '').includes('480w') && (image.getAttribute('srcset') || '').includes('900w'))).toBe(true);
 
     expect(screen.queryByText('Dresses')).not.toBeInTheDocument();
     expect(screen.queryByText('Occasion wear')).not.toBeInTheDocument();
