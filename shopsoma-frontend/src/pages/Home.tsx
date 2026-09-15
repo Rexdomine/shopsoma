@@ -489,10 +489,10 @@ function FeaturedCollabSkeleton() {
 function CategoryStrip() {
   const categories = useMemo(
     () => [
-      { name: 'Dresses', image: '/images/gown-category-image.svg' },
-      { name: 'Occasion wear', image: '/images/demo-image-3.svg' },
-      { name: 'Workwear', image: '/images/strong-construction-category-image.svg' },
-      { name: 'Casual', image: '/images/cotton-category-image.svg' },
+      { name: 'Casual', image: '/images/category-strip/casual-1.jpg', objectPosition: 'center center' },
+      { name: 'Occasion', image: '/images/category-strip/occasion.jpg', objectPosition: '73% 47%' },
+      { name: 'Party', image: '/images/category-strip/party.jpg', objectPosition: '52% 35%' },
+      { name: 'Workwear', image: '/images/category-strip/workwear.jpg', objectPosition: 'center center' },
     ],
     []
   );
@@ -511,6 +511,7 @@ function CategoryStrip() {
                   src={cat.image}
                   alt={cat.name}
                   className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
+                  style={{ objectPosition: cat.objectPosition }}
                 />
               </div>
               <div className="absolute bottom-4 left-4">

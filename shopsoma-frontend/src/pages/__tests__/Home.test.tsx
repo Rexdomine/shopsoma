@@ -108,21 +108,25 @@ describe('Home', () => {
     vi.useRealTimers();
   });
 
-  it('shows the updated shop by category labels', () => {
+  it('shows the Drive-supplied shop by category strip in the requested order', () => {
     render(
       <MemoryRouter>
         <Home />
       </MemoryRouter>
     );
 
-    expect(screen.getByText('Dresses')).toBeInTheDocument();
-    expect(screen.getByText('Occasion wear')).toBeInTheDocument();
-    expect(screen.getByText('Workwear')).toBeInTheDocument();
-    expect(screen.getByText('Casual')).toBeInTheDocument();
+    const categoryImages = screen.getAllByRole('img').filter((image) =>
+      ['Casual', 'Occasion', 'Party', 'Workwear'].includes(image.getAttribute('alt') || '')
+    );
+    expect(categoryImages.map((image) => image.getAttribute('alt'))).toEqual(['Casual', 'Occasion', 'Party', 'Workwear']);
+    expect(categoryImages.map((image) => image.getAttribute('src'))).toEqual([
+      '/images/category-strip/casual-1.jpg',
+      '/images/category-strip/occasion.jpg',
+      '/images/category-strip/party.jpg',
+      '/images/category-strip/workwear.jpg',
+    ]);
 
-    expect(screen.queryByText('Gowns')).not.toBeInTheDocument();
-    expect(screen.queryByText('Hand stitched')).not.toBeInTheDocument();
-    expect(screen.queryByText('Strong Construction')).not.toBeInTheDocument();
-    expect(screen.queryByText('Cotton')).not.toBeInTheDocument();
+    expect(screen.queryByText('Dresses')).not.toBeInTheDocument();
+    expect(screen.queryByText('Occasion wear')).not.toBeInTheDocument();
   });
 });
