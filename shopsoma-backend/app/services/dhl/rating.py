@@ -395,7 +395,15 @@ class DHLDomesticRateAdapter:
 
         unique: dict[tuple[str, str], DHLDomesticRateOffer] = {}
         for product in products:
-            offer = self._parse_product(product, request, resolved_hub)
+            try:
+                offer = self._parse_product(product, request, resolved_hub)
+            except DHLRateAdapterError:
+                # DHL may include informational/non-priceable products alongside
+                # purchasable rates (for example, price=0 with no currency). They
+                # must not poison independent valid offers, nor become free offers.
+                if self._is_non_priceable_product(product):
+                    continue
+                raise
             identity = (offer.provider_product_code, offer.provider_service_code)
             existing = unique.get(identity)
             if existing is not None and existing != offer:
@@ -411,8 +419,46 @@ class DHLDomesticRateAdapter:
             )
         )
         if not offers:
-            return DHLDomesticRateResult("no_service", ())
+            raise DHLRateAdapterError("DHL returned an invalid rate response")
         return DHLDomesticRateResult("success", offers)
+
+    def _is_non_priceable_product(self, product: object) -> bool:
+        if not isinstance(product, dict):
+            return False
+        try:
+            self._code(product.get("productCode"), _PRODUCT_CODE)
+            self._code(product.get("localProductCode"), _LOCAL_PRODUCT_CODE)
+            self._label(product.get("productName"))
+        except (TypeError, ValueError):
+            return False
+        prices = product.get("totalPrice")
+        if not isinstance(prices, list) or not prices:
+            return False
+        for entry in prices:
+            if not isinstance(entry, dict):
+                return False
+            raw_amount = entry.get("price")
+            if isinstance(raw_amount, bool) or not isinstance(
+                raw_amount, (str, int, float)
+            ):
+                return False
+            try:
+                amount = Decimal(str(raw_amount))
+            except (InvalidOperation, ValueError):
+                return False
+            # DHL may return an exactly-zero informational product beside a
+            # purchasable offer. Negative prices are malformed commercial data
+            # and must reach the strict parser so the response fails closed.
+            if not amount.is_finite() or amount != Decimal("0"):
+                return False
+            currency = entry.get("priceCurrency")
+            if currency is not None and (
+                not isinstance(currency, str)
+                or _CURRENCY.fullmatch(currency) is None
+                or currency not in _SUPPORTED_CURRENCIES
+            ):
+                return False
+        return True
 
     def _parse_product(
         self,
