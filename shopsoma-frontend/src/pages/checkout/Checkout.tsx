@@ -1,4 +1,4 @@
-import { getShippingProviderSettings } from '../../services/settingsService';
+import { getShippingProviderSettings, type ShippingProviderSettings } from '../../services/settingsService';
 import { useState, useEffect } from 'react';
 import { flushSync } from 'react-dom';
 import { buildPaystackWidgetConfig, type PaymentGateway, type InitializePaymentResponse } from '../../services/paymentService';
@@ -124,23 +124,41 @@ export default function Checkout() {
   });
 
   const [allDomesticEstimates, setAllDomesticEstimates] = useState(false);
+  const [shippingProvider, setShippingProvider] = useState<ShippingProviderSettings['provider'] | null>(null);
   const [shippingConfigLoaded, setShippingConfigLoaded] = useState(false);
   const [shippingConfigError, setShippingConfigError] = useState(false);
   const [shippingConfigRetry, setShippingConfigRetry] = useState(0);
   useEffect(() => {
     setShippingConfigLoaded(false);
     setShippingConfigError(false);
+    setShippingProvider(null);
     void getShippingProviderSettings()
-      .then(config => setAllDomesticEstimates(config.checkout_estimates_required))
+      .then(config => {
+        setAllDomesticEstimates(config.checkout_estimates_required);
+        setShippingProvider(config.provider);
+      })
       .catch(() => {
         setAllDomesticEstimates(false);
+        setShippingProvider(null);
         setShippingConfigError(true);
       })
       .finally(() => setShippingConfigLoaded(true));
   }, [shippingConfigRetry]);
 
-  const destinationCountry = addresses.find(address => address.id === selectedAddressId)?.country.trim().toLowerCase();
+  const selectedAddress = addresses.find(address => address.id === selectedAddressId);
+  const destinationCountry = selectedAddress?.country.trim().toLowerCase();
   const secureShipping = allDomesticEstimates && (destinationCountry === 'nigeria' || destinationCountry === 'ng');
+  const draftCountry = newAddress.country.trim().toLowerCase();
+  const dhlDomesticShipping = shippingProvider === 'dhl' && secureShipping;
+  const postalCodeRequired = shippingProvider === 'dhl' && allDomesticEstimates && (draftCountry === 'nigeria' || draftCountry === 'ng');
+  const isValidDhlPostalCode = (value?: string) => {
+    const postalCode = value?.trim() || '';
+    return postalCode.length > 0 && postalCode.length <= 12;
+  };
+  const selectedAddressNeedsPostalCode = dhlDomesticShipping && !isValidDhlPostalCode(selectedAddress?.postal_code);
+  const selectedAddressPostalCodeGuidance = selectedAddress?.postal_code?.trim()
+    ? 'Update the selected delivery address with a postal code of 12 characters or fewer before continuing with DHL delivery.'
+    : 'Add a postal code to the selected delivery address before continuing with DHL delivery.';
 
   // Shipping state
   const [shippingRates, setShippingRates] = useState<ShippingRate[]>([]);
@@ -936,6 +954,7 @@ export default function Checkout() {
     newAddress.address_line1.trim() &&
     newAddress.city.trim() &&
     newAddress.state.trim() &&
+    (!postalCodeRequired || isValidDhlPostalCode(newAddress.postal_code)) &&
     newAddress.country.trim()
   );
   const missingAddressFields = [
@@ -943,6 +962,7 @@ export default function Checkout() {
     !newAddress.address_line1.trim() ? 'street address' : '',
     !newAddress.city.trim() ? 'city' : '',
     !newAddress.state.trim() ? 'state' : '',
+    postalCodeRequired && !newAddress.postal_code?.trim() ? 'postal code' : '',
     !newAddress.country.trim() ? 'country' : '',
   ].filter(Boolean);
   const phoneSaveGuidance = !newAddress.phone_number.trim()
@@ -950,7 +970,16 @@ export default function Checkout() {
     : !isValidNigerianPhone(newAddress.phone_number)
       ? 'Complete the phone number in Nigerian format, e.g. 08012345678.'
       : '';
-  const addressSaveGuidance = phoneSaveGuidance || (
+  const postalCodeSaveGuidance = postalCodeRequired && !isValidDhlPostalCode(newAddress.postal_code)
+    ? newAddress.postal_code?.trim()
+      ? 'Enter a postal code with 12 characters or fewer for DHL delivery estimates.'
+      : ''
+    : '';
+  const addressSaveGuidance = !shippingConfigLoaded
+    ? 'Loading delivery configuration before this address can be saved.'
+    : shippingConfigError
+      ? 'Delivery configuration could not be loaded. Retry before saving this address.'
+      : phoneSaveGuidance || postalCodeSaveGuidance || (
     missingAddressFields.length
       ? `Complete ${missingAddressFields.join(', ')} to save this address.`
       : ''
@@ -1023,7 +1052,7 @@ export default function Checkout() {
   };
 
   const handleAddressSave = async () => {
-    if (hasSelectedAddress) {
+    if (hasSelectedAddress && !selectedAddressNeedsPostalCode) {
       if (secureShipping) {
         // Domestic server-owned estimates require a durable order, but the
         // customer must see a delivery step before any payment controls.
@@ -1345,6 +1374,25 @@ export default function Checkout() {
                                   </select>
                                 </div>
                               </div>
+                              <div>
+                                <label className="text-xs text-gray-500" htmlFor="checkout-postal-code">
+                                  Postal code {postalCodeRequired && <span className="text-red-500">*</span>}
+                                </label>
+                                <input
+                                  id="checkout-postal-code"
+                                  type="text"
+                                  aria-label="Postal code"
+                                  autoComplete="postal-code"
+                                  inputMode="numeric"
+                                  maxLength={12}
+                                  value={newAddress.postal_code || ''}
+                                  onChange={(e) => setNewAddress({ ...newAddress, postal_code: e.target.value })}
+                                  className="w-full border-b border-gray-300 focus:border-primary focus:outline-none py-2 text-sm"
+                                  placeholder="100001"
+                                  required={postalCodeRequired}
+                                />
+                                {postalCodeRequired && <p className="mt-1 text-xs text-gray-500">Required for DHL delivery estimates.</p>}
+                              </div>
                               <div className="pt-2">
                                 <label className="inline-flex items-center gap-2 text-sm text-gray-600 cursor-pointer">
                                   <input
@@ -1360,7 +1408,7 @@ export default function Checkout() {
                                 <button
                                   type="button"
                                   onClick={handleCreateAddress}
-                                  disabled={!isAddressComplete || isCheckoutRequestPending}
+                                  disabled={!isAddressComplete || !shippingConfigLoaded || shippingConfigError || isCheckoutRequestPending}
                                   className="flex-1 py-2 rounded-sm bg-primary text-white text-sm font-semibold disabled:opacity-50"
                                 >
                                   {editingAddressId ? 'Save changes' : 'Save Address'}
@@ -1377,7 +1425,7 @@ export default function Checkout() {
                                   Cancel
                                 </button>
                               </div>
-                              {!isAddressComplete && addressSaveGuidance && (
+                              {(!isAddressComplete || !shippingConfigLoaded || shippingConfigError) && addressSaveGuidance && (
                                 <p className="text-xs text-amber-700">
                                   {addressSaveGuidance}
                                 </p>
@@ -1413,10 +1461,15 @@ export default function Checkout() {
                                 </button>
                               </div>
                             )}
+                            {selectedAddressNeedsPostalCode && (
+                              <p className="mb-3 text-sm text-amber-700" role="alert">
+                                {selectedAddressPostalCodeGuidance}
+                              </p>
+                            )}
                             <button
                               type="button"
                               onClick={handleAddressSave}
-                              disabled={!hasSelectedAddress || isCheckoutRequestPending || !shippingConfigLoaded || shippingConfigError || !!enforcedOrder}
+                              disabled={!hasSelectedAddress || selectedAddressNeedsPostalCode || isCheckoutRequestPending || !shippingConfigLoaded || shippingConfigError || !!enforcedOrder}
                               className="w-full py-3 rounded-sm bg-primary text-white text-sm font-semibold disabled:opacity-50"
                             >
                               {isLoadingShipping ? 'Calculating Shipping...' : 'Continue'}
