@@ -85,6 +85,10 @@ describe('Home', () => {
 
     act(() => vi.advanceTimersByTime(6500));
     const failedSecondSlide = screen.getByAltText(/campaign look 2/i);
+    expect(failedSecondSlide).toHaveAttribute(
+      'alt',
+      'Orange Culture campaign look 2: two models in an intimate editorial interior'
+    );
     fireEvent.error(failedSecondSlide);
 
     act(() => vi.advanceTimersByTime(6500));

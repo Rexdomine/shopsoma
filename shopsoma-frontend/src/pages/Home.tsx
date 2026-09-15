@@ -19,7 +19,7 @@ const HERO_SLIDES = [
   {
     desktop: '/images/hero/campaign/campaign-interior-desktop.webp',
     mobile: '/images/hero/campaign/campaign-interior-mobile.webp',
-    alt: 'Orange Culture campaign look 2: models gathered in an editorial interior',
+    alt: 'Orange Culture campaign look 2: two models in an intimate editorial interior',
   },
   {
     desktop: '/images/hero/campaign/campaign-lounge-desktop.webp',
