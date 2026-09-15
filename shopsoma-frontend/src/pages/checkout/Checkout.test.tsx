@@ -95,7 +95,7 @@ import Checkout from './Checkout';
 
 const address = {
   id: 'address-1', user_id: 'customer-1', full_name: 'Buyer', phone_number: '08012345678',
-  address_line1: '1 Test Street', city: 'Lagos', state: 'Lagos', country: 'Nigeria',
+  address_line1: '1 Test Street', city: 'Lagos', state: 'Lagos', postal_code: '100001', country: 'Nigeria',
   address_type: 'shipping', is_default: true, created_at: '2026-01-01', updated_at: '2026-01-01',
 };
 const rate = {
@@ -387,7 +387,7 @@ describe('Checkout M5 sequencing and recovery', () => {
     fireEvent.click(screen.getByRole('button', { name: '+ Add New Address' }));
     const stateSelect = screen.getByRole('combobox', { name: 'State' });
     expect(screen.getByRole('option', { name: 'Lagos' })).toBeInTheDocument();
-    for (const [label, value] of [['Full Name', 'Guest Buyer'], ['Street Address', '1 Test Street'], ['City', 'Lagos'], ['State', 'Lagos']]) {
+    for (const [label, value] of [['Full Name', 'Guest Buyer'], ['Street Address', '1 Test Street'], ['City', 'Lagos'], ['State', 'Lagos'], ['Postal code', '100001']]) {
       fireEvent.change(screen.getByLabelText(label), { target: { value } });
     }
     expect(stateSelect).toHaveValue('Lagos');
@@ -400,11 +400,29 @@ describe('Checkout M5 sequencing and recovery', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Continue to delivery options' }));
     await screen.findByRole('button', { name: 'Select Standard delivery' });
     expect(screen.getByRole('button', { name: 'Edit delivery address' })).toBeDisabled();
-    expect(mocks.createOrder).toHaveBeenCalledWith(expect.objectContaining({ customer_email: 'guest@example.com', guest_address: expect.objectContaining({ state: 'Lagos' }) }));
+    expect(mocks.createOrder).toHaveBeenCalledWith(expect.objectContaining({ customer_email: 'guest@example.com', guest_address: expect.objectContaining({ state: 'Lagos', postal_code: '100001' }) }));
     expect(mocks.createCheckoutEstimate).toHaveBeenCalledWith('order-1', expect.any(String), 'guest-manual-capability');
     expect(sessionStorage.getItem('shopsoma_checkout_capability:order-1')).toBe('guest-manual-capability');
     expect(mocks.calculateShipping).not.toHaveBeenCalled();
     expect(mocks.initializePayment).not.toHaveBeenCalled();
+  });
+
+  it('requires a postal code before a guest checkout address can be saved', async () => {
+    mocks.auth.isAuthenticated = false;
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    fireEvent.change(await screen.findByPlaceholderText('you@example.com'), { target: { value: 'guest@example.com' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    fireEvent.click(screen.getByRole('button', { name: '+ Add New Address' }));
+
+    for (const [label, value] of [['Full Name', 'Guest Buyer'], ['Street Address', '1 Test Street'], ['City', 'Lagos'], ['State', 'Lagos']]) {
+      fireEvent.change(screen.getByLabelText(label), { target: { value } });
+    }
+    fireEvent.change(screen.getByPlaceholderText('08012345678'), { target: { value: '08012345678' } });
+
+    expect(screen.getByRole('textbox', { name: 'Postal code' })).toHaveAttribute('required');
+    expect(screen.getByRole('button', { name: 'Save Address' })).toBeDisabled();
+    expect(screen.getByText(/Complete postal code to save this address/i)).toBeInTheDocument();
+    expect(mocks.createAddress).not.toHaveBeenCalled();
   });
 
   it('blocks checkout and offers retry when shipping configuration fails', async () => {
