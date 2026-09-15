@@ -594,9 +594,13 @@ function EditorialSection() {
 
           <div className="w-full overflow-hidden">
             <img
-              src="/images/demo-image-7.svg"
+              src="/images/editorial/kilentar-avant-premier-1440.webp"
+              srcSet="/images/editorial/kilentar-avant-premier-720.webp 720w, /images/editorial/kilentar-avant-premier-1440.webp 1440w"
+              sizes="(min-width: 1024px) 896px, 100vw"
               alt="Kilentar: Avant Premier"
-              className="w-full h-auto object-cover"
+              loading="lazy"
+              decoding="async"
+              className="block w-full aspect-[3/2] object-cover object-[52%_48%]"
             />
           </div>
         </div>
