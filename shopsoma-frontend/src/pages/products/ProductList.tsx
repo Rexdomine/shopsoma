@@ -12,6 +12,7 @@ import {
   MEN_HERO_MOBILE_IMAGE_URL,
   ROUTES,
   WOMEN_HERO_IMAGE_URL,
+  WOMEN_HERO_MOBILE_IMAGE_URL,
 } from '../../config/constants';
 import ProductCard from '../../components/products/ProductCard';
 import VendorShowcaseCard from '../../components/products/VendorShowcaseCard';
@@ -120,6 +121,8 @@ const WOMEN_HERO: HeroContent = {
   title: 'Womenswear: Effortless Elegance',
   body: 'Explore statement pieces, refined tailoring and everyday essentials crafted for modern women.',
   imageUrl: WOMEN_HERO_IMAGE_URL,
+  mobileImageUrl: WOMEN_HERO_MOBILE_IMAGE_URL,
+  imagePositionClassName: 'object-[40%_0%] max-sm:object-[36%_42%]',
   ctaLabel: 'Shop all womenswear',
 };
 
