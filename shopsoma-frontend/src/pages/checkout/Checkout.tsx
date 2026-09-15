@@ -144,7 +144,14 @@ export default function Checkout() {
   const secureShipping = allDomesticEstimates && (destinationCountry === 'nigeria' || destinationCountry === 'ng');
   const draftCountry = newAddress.country.trim().toLowerCase();
   const postalCodeRequired = allDomesticEstimates && (draftCountry === 'nigeria' || draftCountry === 'ng');
-  const selectedAddressNeedsPostalCode = secureShipping && !selectedAddress?.postal_code?.trim();
+  const isValidDhlPostalCode = (value?: string) => {
+    const postalCode = value?.trim() || '';
+    return postalCode.length > 0 && postalCode.length <= 12;
+  };
+  const selectedAddressNeedsPostalCode = secureShipping && !isValidDhlPostalCode(selectedAddress?.postal_code);
+  const selectedAddressPostalCodeGuidance = selectedAddress?.postal_code?.trim()
+    ? 'Update the selected delivery address with a postal code of 12 characters or fewer before continuing with DHL delivery.'
+    : 'Add a postal code to the selected delivery address before continuing with DHL delivery.';
 
   // Shipping state
   const [shippingRates, setShippingRates] = useState<ShippingRate[]>([]);
@@ -940,7 +947,7 @@ export default function Checkout() {
     newAddress.address_line1.trim() &&
     newAddress.city.trim() &&
     newAddress.state.trim() &&
-    (!postalCodeRequired || newAddress.postal_code?.trim()) &&
+    (!postalCodeRequired || isValidDhlPostalCode(newAddress.postal_code)) &&
     newAddress.country.trim()
   );
   const missingAddressFields = [
@@ -956,7 +963,16 @@ export default function Checkout() {
     : !isValidNigerianPhone(newAddress.phone_number)
       ? 'Complete the phone number in Nigerian format, e.g. 08012345678.'
       : '';
-  const addressSaveGuidance = phoneSaveGuidance || (
+  const postalCodeSaveGuidance = postalCodeRequired && !isValidDhlPostalCode(newAddress.postal_code)
+    ? newAddress.postal_code?.trim()
+      ? 'Enter a postal code with 12 characters or fewer for DHL delivery estimates.'
+      : ''
+    : '';
+  const addressSaveGuidance = !shippingConfigLoaded
+    ? 'Loading delivery configuration before this address can be saved.'
+    : shippingConfigError
+      ? 'Delivery configuration could not be loaded. Retry before saving this address.'
+      : phoneSaveGuidance || postalCodeSaveGuidance || (
     missingAddressFields.length
       ? `Complete ${missingAddressFields.join(', ')} to save this address.`
       : ''
@@ -1385,7 +1401,7 @@ export default function Checkout() {
                                 <button
                                   type="button"
                                   onClick={handleCreateAddress}
-                                  disabled={!isAddressComplete || isCheckoutRequestPending}
+                                  disabled={!isAddressComplete || !shippingConfigLoaded || shippingConfigError || isCheckoutRequestPending}
                                   className="flex-1 py-2 rounded-sm bg-primary text-white text-sm font-semibold disabled:opacity-50"
                                 >
                                   {editingAddressId ? 'Save changes' : 'Save Address'}
@@ -1402,7 +1418,7 @@ export default function Checkout() {
                                   Cancel
                                 </button>
                               </div>
-                              {!isAddressComplete && addressSaveGuidance && (
+                              {(!isAddressComplete || !shippingConfigLoaded || shippingConfigError) && addressSaveGuidance && (
                                 <p className="text-xs text-amber-700">
                                   {addressSaveGuidance}
                                 </p>
@@ -1440,7 +1456,7 @@ export default function Checkout() {
                             )}
                             {selectedAddressNeedsPostalCode && (
                               <p className="mb-3 text-sm text-amber-700" role="alert">
-                                Add a postal code to the selected delivery address before continuing with DHL delivery.
+                                {selectedAddressPostalCodeGuidance}
                               </p>
                             )}
                             <button

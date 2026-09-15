@@ -463,6 +463,37 @@ describe('Checkout M5 sequencing and recovery', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Continue' })).toBeEnabled());
   });
 
+  it('blocks a saved DHL address with a postal code longer than the provider allows', async () => {
+    mocks.getAddresses.mockResolvedValueOnce({ addresses: [{ ...address, postal_code: '1234567890123' }] });
+    mocks.getShippingProviderSettings.mockResolvedValueOnce({ provider: 'dhl', checkout_estimates_required: true });
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+
+    await screen.findByText(/postal code of 12 characters or fewer/i);
+    expect(screen.getByRole('button', { name: 'Continue' })).toBeDisabled();
+    expect(mocks.createOrder).not.toHaveBeenCalled();
+  });
+
+  it('waits for shipping configuration before allowing a checkout address to be saved', async () => {
+    mocks.auth.isAuthenticated = false;
+    let resolveSettings!: (value: { provider: string; checkout_estimates_required: boolean }) => void;
+    mocks.getShippingProviderSettings.mockReturnValueOnce(new Promise(resolve => { resolveSettings = resolve; }));
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    fireEvent.change(await screen.findByPlaceholderText('you@example.com'), { target: { value: 'guest@example.com' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    fireEvent.click(screen.getByRole('button', { name: '+ Add New Address' }));
+
+    for (const [label, value] of [['Full Name', 'Guest Buyer'], ['Street Address', '1 Test Street'], ['City', 'Lagos'], ['State', 'Lagos']]) {
+      fireEvent.change(screen.getByLabelText(label), { target: { value } });
+    }
+    fireEvent.change(screen.getByPlaceholderText('08012345678'), { target: { value: '08012345678' } });
+
+    expect(screen.getByRole('button', { name: 'Save Address' })).toBeDisabled();
+    expect(screen.getByText(/Loading delivery configuration before this address can be saved/i)).toBeInTheDocument();
+    resolveSettings({ provider: 'dhl', checkout_estimates_required: true });
+    await waitFor(() => expect(screen.getByText(/Complete postal code to save this address/i)).toBeInTheDocument());
+    expect(screen.getByRole('button', { name: 'Save Address' })).toBeDisabled();
+  });
+
   it('blocks checkout and offers retry when shipping configuration fails', async () => {
     mocks.getShippingProviderSettings
       .mockRejectedValueOnce(new Error('temporary settings outage'))
