@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 ROOT = Path(__file__).resolve().parents[1]
 HEAD = "m0n1o2p3q4r5"
-CURRENT_HEAD_PARENT = "k7l8m9n0p1q2"
+CURRENT_HEAD_PARENT = "l9m0n1o2p3q4"
 PREVIOUS_HEAD = "d5e6f7a8b9c0"
 HEAD_PARENT = "c4d5e6f7a8b9"
 HEAD_GRANDPARENT = "b3c4d5e6f7a8"
