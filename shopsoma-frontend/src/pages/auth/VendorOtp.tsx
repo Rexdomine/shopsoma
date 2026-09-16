@@ -32,6 +32,7 @@ export default function VendorOtp() {
   const [resendLoading, setResendLoading] = useState(false);
   const [initializing, setInitializing] = useState(!!emailFromUrl);
   const [initializationError, setInitializationError] = useState('');
+  const [initializationStatus, setInitializationStatus] = useState<number | null>(null);
   const [initializationAttempt, setInitializationAttempt] = useState(0);
   const [accountAlreadySetup, setAccountAlreadySetup] = useState(false);
   const [alreadySetupMessage, setAlreadySetupMessage] = useState('');
@@ -72,6 +73,7 @@ export default function VendorOtp() {
         }
         setInitializing(false);
       } catch (err: any) {
+        setInitializationStatus(err?.status ?? null);
         setInitializationError(err?.message || 'Failed to initialize activation. Please try again.');
         setInitializing(false);
       }
@@ -215,7 +217,9 @@ export default function VendorOtp() {
   }
 
   if (!activationToken && !initializing) {
-    const canRetryInitialization = Boolean(emailFromUrl && initializationError);
+    const canRetryInitialization = Boolean(
+      emailFromUrl && initializationError && initializationStatus === 503
+    );
     return (
       <div className="min-h-screen bg-[var(--color-page-bg)] flex items-center justify-center px-4">
         <div className="max-w-md text-center">
