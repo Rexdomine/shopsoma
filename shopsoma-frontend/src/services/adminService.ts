@@ -51,6 +51,8 @@ export interface VendorListItem {
   store_active?: boolean;
   store_paused_at?: string;
   store_deleted_at?: string;
+  is_featured_storefront?: boolean;
+  featured_storefront_image_url?: string | null;
 }
 
 export interface VendorListFilters {
@@ -193,6 +195,13 @@ export const adminService = {
   // Restore deleted vendor store
   async restoreVendorStore(vendorId: string): Promise<any> {
     const response = await api.post(`/admin/vendors/${vendorId}/restore`);
+    return response.data;
+  },
+
+  async updateVendorFeaturedStorefront(vendorId: string, isFeatured: boolean): Promise<{ is_featured_storefront: boolean }> {
+    const response = await api.put(`/admin/vendors/${vendorId}/featured-storefront`, {
+      is_featured_storefront: isFeatured,
+    });
     return response.data;
   },
 

@@ -11,6 +11,7 @@ from datetime import datetime
 from decimal import Decimal
 import asyncio
 import os
+from pydantic import BaseModel
 
 from app.core.database import get_db
 from app.api.dependencies import get_current_admin
@@ -34,6 +35,24 @@ from app.schemas.common import PaginatedResponse
 from app.schemas.product import ProductApprovalRequest, ProductRejectionRequest, ProductFeatureUpdate
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+
+
+class FeaturedStorefrontUpdate(BaseModel):
+    is_featured_storefront: bool
+
+
+def _featured_storefront_eligibility_error(vendor: Vendor, user: User) -> Optional[str]:
+    if not vendor.approved:
+        return "Only approved vendors can be featured"
+    if not user.is_active:
+        return "Inactive vendor accounts cannot be featured"
+    if vendor.is_onboarding:
+        return "Vendors must complete onboarding before they can be featured"
+    if not vendor.store_active or vendor.store_deleted_at is not None:
+        return "Only active vendor stores can be featured"
+    if not (vendor.featured_storefront_image_url or "").strip():
+        return "A vendor featured storefront image is required"
+    return None
 
 
 def _resolve_admin_order_currency(order, payments=None) -> str:
@@ -733,6 +752,8 @@ async def list_vendors(
                 "email": user.email,
                 "full_name": user.full_name,
                 "approved": vendor.approved,
+                "is_featured_storefront": vendor.is_featured_storefront,
+                "featured_storefront_image_url": vendor.featured_storefront_image_url,
                 "approved_at": vendor.approved_at.isoformat() if vendor.approved_at else None,
                 "kyc_status": vendor.kyc_status.value if vendor.kyc_status else None,
                 "kyc_submitted_at": vendor.kyc_submitted_at.isoformat() if vendor.kyc_submitted_at else None,
@@ -755,6 +776,39 @@ async def list_vendors(
         "page": page,
         "page_size": page_size,
         "total_pages": total_pages,
+    }
+
+
+@router.put("/vendors/{vendor_id}/featured-storefront")
+async def update_vendor_featured_storefront(
+    vendor_id: UUID,
+    payload: FeaturedStorefrontUpdate,
+    current_admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Admin-only feature nomination; public eligibility is rechecked at read time."""
+    result = await db.execute(
+        select(Vendor, User)
+        .join(User, Vendor.user_id == User.id)
+        .where(Vendor.id == vendor_id)
+    )
+    vendor_with_user = result.first()
+    if not vendor_with_user:
+        raise HTTPException(status_code=404, detail="Vendor not found")
+
+    vendor, vendor_user = vendor_with_user
+    if payload.is_featured_storefront:
+        detail = _featured_storefront_eligibility_error(vendor, vendor_user)
+        if detail:
+            raise HTTPException(status_code=409, detail=detail)
+
+    vendor.is_featured_storefront = payload.is_featured_storefront
+    await db.commit()
+    await db.refresh(vendor)
+    return {
+        "vendor_id": str(vendor.id),
+        "is_featured_storefront": vendor.is_featured_storefront,
+        "updated_by": str(current_admin.id),
     }
 
 
@@ -802,6 +856,8 @@ async def get_vendor_details(
         "business_address": vendor.business_address,
         "business_phone": vendor.business_phone,
         "approved": vendor.approved,
+        "is_featured_storefront": vendor.is_featured_storefront,
+        "featured_storefront_image_url": vendor.featured_storefront_image_url,
         "approved_at": vendor.approved_at.isoformat() if vendor.approved_at else None,
         "approved_by": str(vendor.approved_by) if vendor.approved_by else None,
         "kyc_status": vendor.kyc_status.value if vendor.kyc_status else None,
