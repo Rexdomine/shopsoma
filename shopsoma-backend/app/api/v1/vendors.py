@@ -1,5 +1,6 @@
 """Vendor API endpoints"""
 from typing import List, Optional
+import asyncio
 import logging
 from datetime import datetime, date, time, timedelta
 from fastapi import APIRouter, Depends, HTTPException, status, Query, BackgroundTasks
@@ -38,9 +39,55 @@ from app.schemas.product import ProductResponse, ProductListResponse
 from app.models.product import ProductStatus, Variation
 from app.services.email_service import email_service
 from app.services.commission import get_default_commission_rate
+from app.services.vendor_onboarding import reconcile_vendor_onboarding
+from app.services.image_service import image_service
 
 router = APIRouter(prefix="/vendor", tags=["Vendors"])
 logger = logging.getLogger(__name__)
+
+
+async def _require_vendor_owned_uploaded_image(
+    image_url: str, vendor: Vendor
+) -> None:
+    """Accept only an existing image returned by this vendor's upload namespace."""
+    expected_key_prefix = f"vendors/{vendor.user_id}/"
+
+    if image_service.use_local_storage:
+        local_prefix = "/uploads/"
+        if not image_url.startswith(local_prefix):
+            raise HTTPException(
+                status_code=400,
+                detail="Featured storefront image must be a vendor-uploaded image",
+            )
+        image_key = image_url.removeprefix(local_prefix)
+    else:
+        storage_prefix = image_service._get_public_url("")
+        if not image_url.startswith(storage_prefix):
+            raise HTTPException(
+                status_code=400,
+                detail="Featured storefront image must be a vendor-uploaded image",
+            )
+        image_key = image_url.removeprefix(storage_prefix)
+
+    image_parts = image_key.split("/")
+    if any(part in {"", ".", ".."} for part in image_parts):
+        raise HTTPException(
+            status_code=400,
+            detail="Featured storefront image must be a vendor-uploaded image",
+        )
+
+    if not image_key.startswith(expected_key_prefix):
+        raise HTTPException(
+            status_code=403,
+            detail="Featured storefront image does not belong to this vendor",
+        )
+
+    image_info = await asyncio.to_thread(image_service.get_image_info, image_key)
+    if not image_info:
+        raise HTTPException(
+            status_code=400,
+            detail="Featured storefront image was not found in vendor storage",
+        )
 
 VENDOR_PRODUCT_RELATIONSHIPS = (
     selectinload(Product.variants),
@@ -172,11 +219,18 @@ async def save_brand_info(
     """
     from datetime import datetime
 
+    if brand_info.featured_storefront_image_url is not None:
+        await _require_vendor_owned_uploaded_image(
+            brand_info.featured_storefront_image_url, vendor
+        )
+
     # Update vendor with brand info
     vendor.business_phone = brand_info.business_phone
     vendor.business_description = brand_info.business_description
     vendor.business_address = brand_info.shipping_address
     vendor.logo_url = brand_info.logo_url
+    if brand_info.featured_storefront_image_url is not None:
+        vendor.featured_storefront_image_url = brand_info.featured_storefront_image_url
     vendor.returning_address = brand_info.returning_address
     vendor.open_days = brand_info.open_days
     vendor.open_hour = brand_info.open_hour
@@ -185,10 +239,7 @@ async def save_brand_info(
     # Mark brand info as completed
     vendor.brand_info_completed = True
 
-    # Check if onboarding is complete (both brand and payout info)
-    if vendor.brand_info_completed and vendor.payout_info_completed:
-        vendor.is_onboarding = False
-        vendor.onboarding_completed_at = datetime.utcnow()
+    reconcile_vendor_onboarding(vendor)
 
     await db.commit()
     await db.refresh(vendor)
@@ -216,10 +267,7 @@ async def save_payout_info(
     # Mark payout info as completed
     vendor.payout_info_completed = True
 
-    # Check if onboarding is complete (both brand and payout info)
-    if vendor.brand_info_completed and vendor.payout_info_completed:
-        vendor.is_onboarding = False
-        vendor.onboarding_completed_at = datetime.utcnow()
+    reconcile_vendor_onboarding(vendor)
 
     await db.commit()
     await db.refresh(vendor)

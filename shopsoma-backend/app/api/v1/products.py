@@ -12,7 +12,7 @@ from sqlalchemy import select, func, or_, and_
 from sqlalchemy.orm import selectinload
 
 from app.core.database import get_db
-from app.api.dependencies import get_current_vendor, get_current_admin
+from app.api.dependencies import get_completed_vendor, get_current_admin
 from app.models.user import User
 from app.models.category import Category
 from app.models.collection import Collection
@@ -168,7 +168,7 @@ async def _get_collection_by_name(
 @router.post("", response_model=ProductResponse, status_code=status.HTTP_201_CREATED)
 async def create_product(
     product_data: ProductCreate,
-    current_user: User = Depends(get_current_vendor),
+    vendor: Vendor = Depends(get_completed_vendor),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -182,11 +182,6 @@ async def create_product(
     - **images**: Optional list of images (max 10)
     """
     # Get vendor record
-    result = await db.execute(
-        select(Vendor).where(Vendor.user_id == current_user.id)
-    )
-    vendor = result.scalar_one_or_none()
-
     if not vendor:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -301,15 +296,13 @@ async def create_product(
 @router.post("/bulk-upload/single", status_code=status.HTTP_201_CREATED)
 async def bulk_upload_single_products(
     file: UploadFile = File(..., description="CSV file for single products"),
-    current_user: User = Depends(get_current_vendor),
+    vendor: Vendor = Depends(get_completed_vendor),
     db: AsyncSession = Depends(get_db)
 ):
     """Bulk upload single products from CSV (vendors only)."""
     if not file.filename or not file.filename.lower().endswith(".csv"):
         raise HTTPException(status_code=400, detail="Please upload a CSV file.")
 
-    result = await db.execute(select(Vendor).where(Vendor.user_id == current_user.id))
-    vendor = result.scalar_one_or_none()
     if not vendor or not vendor.approved:
         raise HTTPException(status_code=403, detail="Vendor account not approved.")
 
@@ -406,15 +399,13 @@ async def bulk_upload_single_products(
 @router.post("/bulk-upload/variable", status_code=status.HTTP_201_CREATED)
 async def bulk_upload_variable_products(
     file: UploadFile = File(..., description="CSV file for variable products"),
-    current_user: User = Depends(get_current_vendor),
+    vendor: Vendor = Depends(get_completed_vendor),
     db: AsyncSession = Depends(get_db)
 ):
     """Bulk upload variable products (with variations) from CSV."""
     if not file.filename or not file.filename.lower().endswith(".csv"):
         raise HTTPException(status_code=400, detail="Please upload a CSV file.")
 
-    result = await db.execute(select(Vendor).where(Vendor.user_id == current_user.id))
-    vendor = result.scalar_one_or_none()
     if not vendor or not vendor.approved:
         raise HTTPException(status_code=403, detail="Vendor account not approved.")
 
@@ -736,20 +727,16 @@ async def get_product(
 async def update_product(
     product_id: UUID,
     product_data: ProductUpdate,
-    current_user: User = Depends(get_current_vendor),
+    vendor: Vendor = Depends(get_completed_vendor),
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Update a product (vendors only - own products)
+    Update a product (vendor only)
 
-    - Vendors can only update their own products
-    - Cannot update moderation status (admin only)
+    - **product_id**: Product UUID
+    - Only product owner can update
     """
-    # Get vendor
-    result = await db.execute(
-        select(Vendor.id).where(Vendor.user_id == current_user.id)
-    )
-    vendor_id = result.scalar_one_or_none()
+    vendor_id = vendor.id
 
     if not vendor_id:
         raise HTTPException(
@@ -849,7 +836,7 @@ async def update_product(
 @router.delete("/{product_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_product(
     product_id: UUID,
-    current_user: User = Depends(get_current_vendor),
+    vendor: Vendor = Depends(get_completed_vendor),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -860,7 +847,7 @@ async def delete_product(
     """
     # Get vendor
     result = await db.execute(
-        select(Vendor.id).where(Vendor.user_id == current_user.id)
+        select(Vendor.id).where(Vendor.id == vendor.id)
     )
     vendor_id = result.scalar_one_or_none()
 
@@ -904,13 +891,13 @@ async def delete_product(
 async def create_variant(
     product_id: UUID,
     variant_data: ProductVariantCreate,
-    current_user: User = Depends(get_current_vendor),
+    vendor: Vendor = Depends(get_completed_vendor),
     db: AsyncSession = Depends(get_db)
 ):
     """Create a product variant"""
     # Check product ownership
     result = await db.execute(
-        select(Vendor.id).where(Vendor.user_id == current_user.id)
+        select(Vendor.id).where(Vendor.id == vendor.id)
     )
     vendor_id = result.scalar_one_or_none()
 
@@ -942,13 +929,13 @@ async def update_variant(
     product_id: UUID,
     variant_id: UUID,
     variant_data: ProductVariantUpdate,
-    current_user: User = Depends(get_current_vendor),
+    vendor: Vendor = Depends(get_completed_vendor),
     db: AsyncSession = Depends(get_db)
 ):
     """Update a product variant"""
     # Check ownership
     result = await db.execute(
-        select(Vendor.id).where(Vendor.user_id == current_user.id)
+        select(Vendor.id).where(Vendor.id == vendor.id)
     )
     vendor_id = result.scalar_one_or_none()
 
@@ -992,13 +979,13 @@ async def update_variant(
 async def delete_variant(
     product_id: UUID,
     variant_id: UUID,
-    current_user: User = Depends(get_current_vendor),
+    vendor: Vendor = Depends(get_completed_vendor),
     db: AsyncSession = Depends(get_db)
 ):
     """Delete a product variant"""
     # Check ownership
     result = await db.execute(
-        select(Vendor.id).where(Vendor.user_id == current_user.id)
+        select(Vendor.id).where(Vendor.id == vendor.id)
     )
     vendor_id = result.scalar_one_or_none()
 
@@ -1039,13 +1026,13 @@ async def delete_variant(
 async def create_image(
     product_id: UUID,
     image_data: ProductImageCreate,
-    current_user: User = Depends(get_current_vendor),
+    vendor: Vendor = Depends(get_completed_vendor),
     db: AsyncSession = Depends(get_db)
 ):
     """Add a product image"""
     # Check ownership
     result = await db.execute(
-        select(Vendor.id).where(Vendor.user_id == current_user.id)
+        select(Vendor.id).where(Vendor.id == vendor.id)
     )
     vendor_id = result.scalar_one_or_none()
 
@@ -1076,13 +1063,13 @@ async def create_image(
 async def delete_image(
     product_id: UUID,
     image_id: UUID,
-    current_user: User = Depends(get_current_vendor),
+    vendor: Vendor = Depends(get_completed_vendor),
     db: AsyncSession = Depends(get_db)
 ):
     """Delete a product image"""
     # Check ownership
     result = await db.execute(
-        select(Vendor.id).where(Vendor.user_id == current_user.id)
+        select(Vendor.id).where(Vendor.id == vendor.id)
     )
     vendor_id = result.scalar_one_or_none()
 

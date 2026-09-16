@@ -338,6 +338,29 @@ async def get_approved_vendor(
     return vendor
 
 
+async def get_completed_vendor(
+    vendor: Vendor = Depends(get_approved_vendor),
+) -> Vendor:
+    """Require approved vendors to complete onboarding before operations."""
+    if vendor.is_onboarding:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "message": "Complete vendor onboarding before using dashboard operations.",
+                "error_code": "VENDOR_ONBOARDING_INCOMPLETE",
+                "remaining_requirements": [
+                    requirement
+                    for requirement, complete in (
+                        ("brand_info", vendor.brand_info_completed),
+                        ("featured_storefront_image", bool(vendor.featured_storefront_image_url)),
+                        ("payout_info", vendor.payout_info_completed),
+                    )
+                    if not complete
+                ],
+            },
+        )
+    return vendor
+
 async def get_kyc_submitted_vendor(
     vendor: Vendor = Depends(get_vendor_profile)
 ) -> Vendor:

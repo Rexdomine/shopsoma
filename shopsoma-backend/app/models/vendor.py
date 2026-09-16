@@ -30,6 +30,7 @@ class Vendor(Base):
     business_address = Column(Text, nullable=True)
     business_phone = Column(String(20), nullable=True)
     logo_url = Column(Text, nullable=True)
+    featured_storefront_image_url = Column(Text, nullable=True)
     returning_address = Column(Text, nullable=True)
     open_days = Column(ARRAY(String(3)), nullable=True)  # ["MON", "TUE", "WED", ...]
     open_hour = Column(String(5), nullable=True)  # "09:00"

@@ -355,6 +355,10 @@ async def vendor_user(client: AsyncClient, db_session: AsyncSession):
         business_name="Test Business",
         kyc_status=KYCStatus.APPROVED,
         approved=True,
+        is_onboarding=False,
+        brand_info_completed=True,
+        featured_storefront_image_url=f"/uploads/vendors/{user.id}/fixture.webp",
+        payout_info_completed=True,
     )
     db_session.add(vendor)
     await db_session.commit()
@@ -370,6 +374,18 @@ async def vendor_user(client: AsyncClient, db_session: AsyncSession):
         "token": token,
         "headers": {"Authorization": f"Bearer {token}"},
     }
+
+
+@pytest.fixture
+async def incomplete_vendor_user(vendor_user, db_session: AsyncSession):
+    """Approved vendor fixture intentionally left in onboarding for gate tests."""
+    vendor = vendor_user["vendor"]
+    vendor.is_onboarding = True
+    vendor.brand_info_completed = False
+    vendor.featured_storefront_image_url = None
+    vendor.payout_info_completed = False
+    await db_session.commit()
+    return vendor_user
 
 
 @pytest.fixture

@@ -17,12 +17,13 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 
 ROOT = Path(__file__).resolve().parents[1]
-HEAD = "l9m0n1o2p3q4"
-CURRENT_HEAD_PARENT = "k7l8m9n0p1q2"
+HEAD = "m0n1o2p3q4r5"
+CURRENT_HEAD_PARENT = "l9m0n1o2p3q4"
 PREVIOUS_HEAD = "d5e6f7a8b9c0"
 HEAD_PARENT = "c4d5e6f7a8b9"
 HEAD_GRANDPARENT = "b3c4d5e6f7a8"
 HEAD_MIGRATION = ROOT / "alembic" / "versions" / "l9m0n1o2p3q4_idempotency_key_scope.py"
+FEATURED_IMAGE_MIGRATION = ROOT / "alembic" / "versions" / "m0n1o2p3q4r5_add_vendor_featured_storefront_image.py"
 REPAIR_MIGRATION = ROOT / "alembic" / "versions" / "e6f7a8b9c0d1_repair_domestic_rate_custody_guards.py"
 
 EXPAND_REVISION = "a0b1c2d3e4f5"
@@ -157,9 +158,11 @@ def test_domestic_rate_migration_is_the_single_linear_static_head() -> None:
     assert graph.get_heads() == [HEAD]
     head_revision = graph.get_revision(HEAD)
     assert head_revision is not None
-    assert Path(head_revision.path) == HEAD_MIGRATION
-    assert head_revision.down_revision == CURRENT_HEAD_PARENT
-    assert graph.get_revision(CURRENT_HEAD_PARENT).down_revision == "1c2b3d4e"
+    assert Path(head_revision.path) == FEATURED_IMAGE_MIGRATION
+    assert head_revision.down_revision == "l9m0n1o2p3q4"
+    idempotency_revision = graph.get_revision(CURRENT_HEAD_PARENT)
+    assert Path(idempotency_revision.path) == HEAD_MIGRATION
+    assert graph.get_revision(CURRENT_HEAD_PARENT).down_revision == "k7l8m9n0p1q2"
     assert graph.get_revision(PREVIOUS_HEAD).down_revision == HEAD_PARENT
     assert graph.get_revision(HEAD_PARENT).down_revision == HEAD_GRANDPARENT
     assert graph.get_revision(HEAD_GRANDPARENT).down_revision == "a2b3c4d5e6f7"
@@ -170,7 +173,7 @@ def test_domestic_rate_migration_is_the_single_linear_static_head() -> None:
     assert graph.get_revision(QUOTE_REVISION).down_revision == REVISION
     assert graph.get_revision(REVISION).down_revision == PARENT
     assert graph.get_revision(PARENT).down_revision == FOUNDATION_PARENT
-    source = _source()
+    source = _source(CURRENT_HEAD_PARENT)
     assert "Base.metadata" not in source
     assert "app.models" not in source
     assert "op.create_table" not in source
