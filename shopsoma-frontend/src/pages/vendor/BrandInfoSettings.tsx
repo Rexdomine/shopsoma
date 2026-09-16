@@ -286,8 +286,8 @@ export default function BrandInfoSettings() {
 
   const requiredMet = useMemo(() => {
     const hasOpenDay = Object.values(openDays).some(Boolean);
-    return !!phone && !!shipping.address && hasOpenDay && !!openHour && !!closeHour && !!featuredStorefrontImagePreview;
-  }, [phone, shipping.address, openDays, openHour, closeHour, featuredStorefrontImagePreview]);
+    return !!phone && !!shipping.address && hasOpenDay && !!openHour && !!closeHour && (!isOnboarding || !!featuredStorefrontImagePreview);
+  }, [phone, shipping.address, openDays, openHour, closeHour, featuredStorefrontImagePreview, isOnboarding]);
 
   const toggleDay = (day: string) => {
     setOpenDays((prev) => ({ ...prev, [day]: !prev[day] }));

@@ -563,6 +563,18 @@ class ImageService:
         Returns:
             Dict with image info or None if not found
         """
+        if self.use_local_storage:
+            image_path = self._resolve_local_image_path(s3_key)
+            if not image_path.is_file():
+                return None
+            return {
+                "size": image_path.stat().st_size,
+                "content_type": None,
+                "last_modified": datetime.fromtimestamp(image_path.stat().st_mtime),
+                "etag": None,
+                "metadata": {},
+            }
+
         try:
             response = self.s3_client.head_object(Bucket=self.bucket_name, Key=s3_key)
 
