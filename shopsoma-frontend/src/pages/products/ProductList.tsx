@@ -21,7 +21,7 @@ import VendorShowcaseCard from '../../components/products/VendorShowcaseCard';
 import { useWishlistActions } from '../../hooks/useWishlistActions';
 import { usePreferenceStore } from '../../store/preferenceStore';
 import { hasSolidColorHex } from '../../utils/colorDisplay';
-import { getProductImageSource } from '../../utils/productImages';
+import { getProductImageSource, normalizeProductImageUrl } from '../../utils/productImages';
 
 const PAGE_SIZE = 12;
 
@@ -174,7 +174,7 @@ export default function ProductList({
   const SPOTLIGHT_VENDOR = {
     id: featuredVendor?.id ?? '',
     name: featuredVendor?.business_name ?? '',
-    imageUrl: featuredVendor?.featured_storefront_image_url ?? '',
+    imageUrl: normalizeProductImageUrl(featuredVendor?.featured_storefront_image_url),
     productCount: featuredVendor?.product_count ?? 0,
   };
 

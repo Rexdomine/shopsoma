@@ -41,7 +41,7 @@ vi.mock('../../../components/products/ProductCard', () => ({
   default: ({ product }: { product: { id: string } }) => <div data-testid={`product-${product.id}`}>Product</div>,
 }));
 vi.mock('../../../components/products/VendorShowcaseCard', () => ({
-  default: () => <div>Vendor</div>,
+  default: ({ imageUrl }: { imageUrl: string }) => <div data-testid="vendor-image">{imageUrl}</div>,
 }));
 
 describe('ProductList', () => {
@@ -72,5 +72,24 @@ describe('ProductList', () => {
     await waitFor(() => expect(screen.getAllByTestId('product-product-11')).toHaveLength(2));
     const desktopGrid = container.querySelector('.hidden.lg\\:block');
     expect(desktopGrid?.querySelectorAll('[data-testid^="product-"]')).toHaveLength(12);
+  });
+
+  it('normalizes relative featured vendor image URLs to the API origin', async () => {
+    getProductsMock.mockResolvedValue({
+      products: [{ id: 'product-1', category_name: 'Men' }],
+    });
+    getFeaturedStorefrontVendorsMock.mockResolvedValue([{
+      id: 'vendor-1',
+      business_name: 'Featured Vendor',
+      featured_storefront_image_url: '/uploads/featured.jpg',
+      product_count: 1,
+    }]);
+
+    render(<MemoryRouter><ProductList presetCategory="Men" /></MemoryRouter>);
+
+    await waitFor(() => expect(screen.getAllByTestId('vendor-image')).not.toHaveLength(0));
+    expect(screen.getAllByTestId('vendor-image')[0]).toHaveTextContent(
+      'http://localhost:8000/uploads/featured.jpg',
+    );
   });
 });
