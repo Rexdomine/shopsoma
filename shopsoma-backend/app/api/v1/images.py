@@ -6,6 +6,7 @@ from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, status,
 from typing import List
 from datetime import datetime, timedelta
 from pathlib import PurePosixPath
+from urllib.parse import urlparse
 
 from app.schemas.image import (
     ImageUploadResponse,
@@ -19,6 +20,10 @@ from app.schemas.image import (
 from app.services.image_service import image_service
 from app.api.dependencies import get_current_user, get_current_vendor
 from app.models.user import User
+from app.models.vendor import Vendor
+from app.core.database import get_db
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter(prefix="/images", tags=["Images"])
 
@@ -45,6 +50,30 @@ def _require_vendor_image_key(current_user: User, s3_key: str) -> None:
         return
 
     raise HTTPException(status_code=403, detail="Image does not belong to vendor")
+
+
+def _is_featured_storefront_image(featured_url: str | None, s3_key: str) -> bool:
+    """Match a persisted featured-image URL to its storage key."""
+    if not featured_url:
+        return False
+    path = urlparse(featured_url).path.lstrip("/")
+    if path.startswith("uploads/"):
+        path = path[len("uploads/"):]
+    return path == s3_key
+
+
+async def _reject_featured_storefront_image_delete(
+    current_user: User, s3_keys: List[str], db: AsyncSession
+) -> None:
+    vendor = await db.scalar(select(Vendor).where(Vendor.user_id == current_user.id))
+    if vendor and any(
+        _is_featured_storefront_image(vendor.featured_storefront_image_url, key)
+        for key in s3_keys
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Featured storefront image cannot be deleted while it is in use",
+        )
 
 
 @router.post(
@@ -189,7 +218,11 @@ async def generate_signed_url(
 
 
 @router.delete("/{s3_key:path}", response_model=ImageDeleteResponse)
-async def delete_image(s3_key: str, current_user: User = Depends(get_current_vendor)):
+async def delete_image(
+    s3_key: str,
+    current_user: User = Depends(get_current_vendor),
+    db: AsyncSession = Depends(get_db),
+):
     """
     Delete an image from storage
 
@@ -198,6 +231,7 @@ async def delete_image(s3_key: str, current_user: User = Depends(get_current_ven
     **Permissions:** Vendor only (own images)
     """
     _require_vendor_image_key(current_user, s3_key)
+    await _reject_featured_storefront_image_delete(current_user, [s3_key], db)
 
     success = await image_service.delete_image(s3_key)
 
@@ -211,7 +245,9 @@ async def delete_image(s3_key: str, current_user: User = Depends(get_current_ven
 
 @router.post("/delete/batch", response_model=ImageBatchDeleteResponse)
 async def delete_images_batch(
-    s3_keys: List[str], current_user: User = Depends(get_current_vendor)
+    s3_keys: List[str],
+    current_user: User = Depends(get_current_vendor),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Delete multiple images in a single request
@@ -229,6 +265,7 @@ async def delete_images_batch(
     for s3_key in s3_keys:
         _require_vendor_image_key(current_user, s3_key)
 
+    await _reject_featured_storefront_image_delete(current_user, s3_keys, db)
     result = await image_service.delete_images(s3_keys)
 
     return ImageBatchDeleteResponse(

@@ -8,6 +8,7 @@ import { productService } from '../../services/productService';
 import { vendorPaymentMethodsService, type PaymentMethod, type PaymentMethodCreate } from '../../services/vendorPaymentMethodsService';
 import { useVendor } from '../../context/VendorContext';
 import { useAuth } from '../../context/AuthContext';
+import { normalizeProductImageUrl } from '../../utils/productImages';
 
 type Contact = { phone: string; email: string };
 type Address = { country: string; address: string };
@@ -319,7 +320,7 @@ export default function BrandInfoSettings() {
 
   const handleSave = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (saving || !requiredMet) return;
+    if (saving || uploadingFeaturedImage || !requiredMet) return;
     setSaving(true);
     setMessage(null);
     try {
@@ -725,7 +726,7 @@ export default function BrandInfoSettings() {
                             </div>
                             <label className="border border-dashed border-[#105E53]/40 rounded-2xl p-4 flex flex-col items-center justify-center gap-3 text-sm text-gray-600 cursor-pointer hover:border-[#105E53] transition bg-[#f8fcfa]">
                               {featuredStorefrontImagePreview ? (
-                                <img src={featuredStorefrontImagePreview} alt="Featured storefront preview" className="h-44 w-full rounded-xl object-cover" />
+                                <img src={normalizeProductImageUrl(featuredStorefrontImagePreview)} alt="Featured storefront preview" className="h-44 w-full rounded-xl object-cover" />
                               ) : (
                                 <>
                                   <div className="h-12 w-12 rounded-lg border border-[#105E53]/30 flex items-center justify-center text-[#105E53]"><ImageIcon className="h-6 w-6" /></div>
@@ -868,10 +869,10 @@ export default function BrandInfoSettings() {
 
                           <button
                             type="submit"
-                            disabled={saving || !requiredMet}
+                            disabled={saving || uploadingFeaturedImage || !requiredMet}
                             className="w-full py-3 rounded-full bg-[#105E53] text-white font-ui text-sm tracking-[0.12em] hover:bg-[#0c4c45] transition disabled:opacity-60 disabled:cursor-not-allowed"
                           >
-                            {saving ? 'Saving…' : 'Save Changes'}
+                            {uploadingFeaturedImage ? 'Uploading…' : saving ? 'Saving…' : 'Save Changes'}
                           </button>
                         </form>
                       </>

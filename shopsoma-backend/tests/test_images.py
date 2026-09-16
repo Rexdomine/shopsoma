@@ -419,6 +419,41 @@ class TestImageEndpoints:
         assert owned_path.is_file()
 
     @pytest.mark.asyncio
+    async def test_delete_featured_storefront_image_is_rejected_for_single_and_batch(
+        self,
+        client: AsyncClient,
+        vendor_user,
+        db_session,
+        tmp_path,
+        monkeypatch,
+    ):
+        """The persisted featured image cannot be removed by either delete endpoint."""
+        monkeypatch.setattr(image_service, "upload_dir", tmp_path)
+        vendor = vendor_user["vendor"]
+        vendor_id = vendor_user["user"].id
+        featured_key = f"vendors/{vendor_id}/featured-storefront/featured.jpg"
+        vendor.featured_storefront_image_url = f"/uploads/{featured_key}"
+        await db_session.commit()
+
+        image_path = tmp_path / featured_key
+        image_path.parent.mkdir(parents=True, exist_ok=True)
+        image_path.write_bytes(b"featured-image")
+
+        single_response = await client.delete(
+            f"/api/v1/images/{featured_key}", headers=vendor_user["headers"]
+        )
+        assert single_response.status_code == 409
+        assert image_path.is_file()
+
+        batch_response = await client.post(
+            "/api/v1/images/delete/batch",
+            json=[featured_key],
+            headers=vendor_user["headers"],
+        )
+        assert batch_response.status_code == 409
+        assert image_path.is_file()
+
+    @pytest.mark.asyncio
     async def test_delete_image(
         self,
         client: AsyncClient,
