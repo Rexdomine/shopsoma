@@ -184,14 +184,17 @@ export default function ProductList({
       return;
     }
     let mounted = true;
-    Promise.all([getFeaturedStorefrontVendors(featuredCategory), getFeaturedRotationSettings()])
-      .then(([vendors, rotation]) => {
+    Promise.allSettled([getFeaturedStorefrontVendors(featuredCategory), getFeaturedRotationSettings()])
+      .then(([vendorsResult, rotationResult]) => {
         if (!mounted) return;
-        setFeaturedVendors(vendors);
-        setFeaturedRotationMinutes(rotation.rotation_minutes);
-      })
-      .catch(() => {
-        if (mounted) setFeaturedVendors([]);
+        if (vendorsResult.status === 'fulfilled') {
+          setFeaturedVendors(vendorsResult.value);
+        } else {
+          setFeaturedVendors([]);
+        }
+        if (rotationResult.status === 'fulfilled') {
+          setFeaturedRotationMinutes(rotationResult.value.rotation_minutes);
+        }
       });
     return () => { mounted = false; };
   }, [featuredCategory]);

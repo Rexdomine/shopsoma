@@ -74,6 +74,18 @@ describe('ProductList', () => {
     expect(desktopGrid?.querySelectorAll('[data-testid^="product-"]')).toHaveLength(12);
   });
 
+  it('keeps featured vendors visible when rotation settings fail to load', async () => {
+    getProductsMock.mockResolvedValue({ products: [{ id: 'product-1', category_name: 'Men' }] });
+    getFeaturedStorefrontVendorsMock.mockResolvedValue([{
+      id: 'vendor-1', business_name: 'Featured Vendor', featured_storefront_image_url: '/uploads/featured.jpg', product_count: 1,
+    }]);
+    getFeaturedRotationSettingsMock.mockRejectedValue(new Error('settings unavailable'));
+
+    render(<MemoryRouter><ProductList presetCategory="Men" /></MemoryRouter>);
+
+    await waitFor(() => expect(screen.getAllByTestId('vendor-image')).not.toHaveLength(0));
+  });
+
   it('normalizes relative featured vendor image URLs to the API origin', async () => {
     getProductsMock.mockResolvedValue({
       products: [{ id: 'product-1', category_name: 'Men' }],
