@@ -137,6 +137,7 @@ export default function ProductList({
   const [allProducts, setAllProducts] = useState<Product[]>([]);
   const [featuredVendors, setFeaturedVendors] = useState<FeaturedStorefrontVendor[]>([]);
   const [featuredRotationMinutes, setFeaturedRotationMinutes] = useState(10);
+  const [featuredRotationTick, setFeaturedRotationTick] = useState(0);
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -168,9 +169,8 @@ export default function ProductList({
   const featuredCategory = presetCategory === 'Men' ? 'men' : presetCategory === 'Women' ? 'women' : null;
   const featuredVendor = useMemo(() => {
     if (!featuredCategory || featuredVendors.length === 0) return null;
-    const intervalMs = featuredRotationMinutes * 60_000;
-    return featuredVendors[Math.floor(Date.now() / intervalMs) % featuredVendors.length];
-  }, [featuredCategory, featuredRotationMinutes, featuredVendors]);
+    return featuredVendors[featuredRotationTick % featuredVendors.length];
+  }, [featuredCategory, featuredRotationTick, featuredVendors]);
   const SPOTLIGHT_VENDOR = {
     id: featuredVendor?.id ?? '',
     name: featuredVendor?.business_name ?? '',
@@ -195,6 +195,15 @@ export default function ProductList({
       });
     return () => { mounted = false; };
   }, [featuredCategory]);
+
+  useEffect(() => {
+    if (!featuredCategory || featuredVendors.length < 2) return;
+    const interval = window.setInterval(
+      () => setFeaturedRotationTick((current) => current + 1),
+      featuredRotationMinutes * 60_000,
+    );
+    return () => window.clearInterval(interval);
+  }, [featuredCategory, featuredRotationMinutes, featuredVendors.length]);
 
   const normalize = (value: string) =>
     value.toLowerCase().replace(/’/g, "'").trim();
@@ -1228,6 +1237,7 @@ const handleFilterChange = (key: keyof FilterState, value: string) => {
 
                       {/* Desktop layout: curated vendor + product grid */}
                       <div className="hidden lg:block">
+                        {featuredVendor ? <>
                         {/* Row 1: Vendor Showcase (2 cols) + 1 Product - 3 column grid */}
                         {featuredVendor && paginatedProducts.length >= 1 && (
                           <div className="grid grid-cols-3 gap-x-6 gap-y-10 mb-10">
@@ -1310,6 +1320,21 @@ const handleFilterChange = (key: keyof FilterState, value: string) => {
                               />
                             </div>
                             {paginatedProducts.slice(10, 11).map((product) => {
+                              const isFavorite = favorites.has(product.id);
+                              return (
+                                <ProductCard
+                                  key={product.id}
+                                  product={product}
+                                  onToggleFavorite={toggleFavorite}
+                                  isFavorite={isFavorite}
+                                />
+                              );
+                            })}
+                          </div>
+                        )}
+                        </> : (
+                          <div className="grid grid-cols-4 gap-x-6 gap-y-10">
+                            {paginatedProducts.map((product) => {
                               const isFavorite = favorites.has(product.id);
                               return (
                                 <ProductCard
