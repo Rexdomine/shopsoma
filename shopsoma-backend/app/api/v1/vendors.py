@@ -38,6 +38,7 @@ from app.schemas.product import ProductResponse, ProductListResponse
 from app.models.product import ProductStatus, Variation
 from app.services.email_service import email_service
 from app.services.commission import get_default_commission_rate
+from app.services.vendor_onboarding import reconcile_vendor_onboarding
 
 router = APIRouter(prefix="/vendor", tags=["Vendors"])
 logger = logging.getLogger(__name__)
@@ -177,6 +178,8 @@ async def save_brand_info(
     vendor.business_description = brand_info.business_description
     vendor.business_address = brand_info.shipping_address
     vendor.logo_url = brand_info.logo_url
+    if brand_info.featured_storefront_image_url is not None:
+        vendor.featured_storefront_image_url = brand_info.featured_storefront_image_url
     vendor.returning_address = brand_info.returning_address
     vendor.open_days = brand_info.open_days
     vendor.open_hour = brand_info.open_hour
@@ -185,10 +188,7 @@ async def save_brand_info(
     # Mark brand info as completed
     vendor.brand_info_completed = True
 
-    # Check if onboarding is complete (both brand and payout info)
-    if vendor.brand_info_completed and vendor.payout_info_completed:
-        vendor.is_onboarding = False
-        vendor.onboarding_completed_at = datetime.utcnow()
+    reconcile_vendor_onboarding(vendor)
 
     await db.commit()
     await db.refresh(vendor)
@@ -216,10 +216,7 @@ async def save_payout_info(
     # Mark payout info as completed
     vendor.payout_info_completed = True
 
-    # Check if onboarding is complete (both brand and payout info)
-    if vendor.brand_info_completed and vendor.payout_info_completed:
-        vendor.is_onboarding = False
-        vendor.onboarding_completed_at = datetime.utcnow()
+    reconcile_vendor_onboarding(vendor)
 
     await db.commit()
     await db.refresh(vendor)

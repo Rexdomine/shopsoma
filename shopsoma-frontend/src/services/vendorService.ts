@@ -8,6 +8,7 @@ export interface VendorProfile {
   business_address: string | null;
   business_phone: string | null;
   logo_url: string | null;
+  featured_storefront_image_url: string | null;
   returning_address: string | null;
   open_days: string[] | null;
   open_hour: string | null;
@@ -40,6 +41,7 @@ export interface BrandInfoData {
   email?: string;
   business_description?: string;
   logo_url?: string;
+  featured_storefront_image_url?: string;
   shipping_country?: string;
   shipping_address: string;
   returning_country?: string;

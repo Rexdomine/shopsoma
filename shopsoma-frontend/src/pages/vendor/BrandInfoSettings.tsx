@@ -4,6 +4,7 @@ import { ROUTES } from '../../config/constants';
 import VendorSidebar from '../../components/vendor/VendorSidebar';
 import { Check, Image as ImageIcon, ChevronDown, PauseCircle, Trash2 } from 'lucide-react';
 import { vendorService, type BrandInfoData, type PayoutInfoData } from '../../services/vendorService';
+import { productService } from '../../services/productService';
 import { vendorPaymentMethodsService, type PaymentMethod, type PaymentMethodCreate } from '../../services/vendorPaymentMethodsService';
 import { useVendor } from '../../context/VendorContext';
 import { useAuth } from '../../context/AuthContext';
@@ -82,6 +83,7 @@ export default function BrandInfoSettings() {
   const [secondaryContacts, setSecondaryContacts] = useState<Contact[]>([]);
   const [description, setDescription] = useState('');
   const [logoPreview, setLogoPreview] = useState<string | null>(null);
+  const [featuredStorefrontImagePreview, setFeaturedStorefrontImagePreview] = useState<string | null>(null);
   const [shipping, setShipping] = useState<Address>({ country: '', address: '' });
   const [returning, setReturning] = useState<Address>({ country: '', address: '' });
   const [sameAsShipping, setSameAsShipping] = useState(false);
@@ -91,6 +93,7 @@ export default function BrandInfoSettings() {
   const [openHour, setOpenHour] = useState('');
   const [closeHour, setCloseHour] = useState('');
   const [saving, setSaving] = useState(false);
+  const [uploadingFeaturedImage, setUploadingFeaturedImage] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState('');
   const [toastVisible, setToastVisible] = useState(false);
@@ -219,6 +222,9 @@ export default function BrandInfoSettings() {
     if (vendorProfile.logo_url) {
       setLogoPreview(vendorProfile.logo_url);
     }
+    if (vendorProfile.featured_storefront_image_url) {
+      setFeaturedStorefrontImagePreview(vendorProfile.featured_storefront_image_url);
+    }
 
     // Populate shipping address
     setShipping({
@@ -280,8 +286,8 @@ export default function BrandInfoSettings() {
 
   const requiredMet = useMemo(() => {
     const hasOpenDay = Object.values(openDays).some(Boolean);
-    return !!phone && !!shipping.address && hasOpenDay && !!openHour && !!closeHour;
-  }, [phone, shipping.address, openDays, openHour, closeHour]);
+    return !!phone && !!shipping.address && hasOpenDay && !!openHour && !!closeHour && !!featuredStorefrontImagePreview;
+  }, [phone, shipping.address, openDays, openHour, closeHour, featuredStorefrontImagePreview]);
 
   const toggleDay = (day: string) => {
     setOpenDays((prev) => ({ ...prev, [day]: !prev[day] }));
@@ -293,6 +299,22 @@ export default function BrandInfoSettings() {
     const reader = new FileReader();
     reader.onload = () => setLogoPreview(reader.result as string);
     reader.readAsDataURL(file);
+  };
+
+  const handleFeaturedStorefrontImageUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setUploadingFeaturedImage(true);
+    setMessage(null);
+    try {
+      const uploaded = await productService.uploadImage(file, 'featured-storefront', false);
+      setFeaturedStorefrontImagePreview(uploaded.original);
+    } catch {
+      setMessage('Featured storefront image upload failed. Please try again.');
+    } finally {
+      setUploadingFeaturedImage(false);
+      event.target.value = '';
+    }
   };
 
   const handleSave = async (event: React.FormEvent) => {
@@ -310,6 +332,7 @@ export default function BrandInfoSettings() {
         email: email || undefined,
         business_description: description || undefined,
         logo_url: logoPreview || undefined,
+        featured_storefront_image_url: featuredStorefrontImagePreview || undefined,
         shipping_country: shipping.country || undefined,
         shipping_address: shipping.address,
         returning_country: returning.country || undefined,
@@ -693,6 +716,25 @@ export default function BrandInfoSettings() {
                               )}
                               <input type="file" accept="image/*" className="hidden" onChange={handleLogoUpload} />
                             </label>
+                          </div>
+
+                          <div className="space-y-2">
+                            <div className="flex items-baseline justify-between gap-3">
+                              <label className="text-sm font-ui text-gray-700">Featured Storefront Image <span className="text-red-600">*</span></label>
+                              <span className="text-xs font-ui text-[#105E53]">Required for onboarding</span>
+                            </div>
+                            <label className="border border-dashed border-[#105E53]/40 rounded-2xl p-4 flex flex-col items-center justify-center gap-3 text-sm text-gray-600 cursor-pointer hover:border-[#105E53] transition bg-[#f8fcfa]">
+                              {featuredStorefrontImagePreview ? (
+                                <img src={featuredStorefrontImagePreview} alt="Featured storefront preview" className="h-44 w-full rounded-xl object-cover" />
+                              ) : (
+                                <>
+                                  <div className="h-12 w-12 rounded-lg border border-[#105E53]/30 flex items-center justify-center text-[#105E53]"><ImageIcon className="h-6 w-6" /></div>
+                                  <div className="text-center leading-tight">Upload the editorial image customers will see if your store is featured.</div>
+                                </>
+                              )}
+                              <input type="file" accept="image/*" className="hidden" onChange={handleFeaturedStorefrontImageUpload} disabled={uploadingFeaturedImage} />
+                            </label>
+                            <p className="text-xs text-gray-500 font-ui">Use a clear landscape fashion or storefront image. You can replace it later.</p>
                           </div>
 
                           {/* Brand Description */}

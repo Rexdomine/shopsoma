@@ -12,7 +12,7 @@ from sqlalchemy import select, func, or_, and_
 from sqlalchemy.orm import selectinload
 
 from app.core.database import get_db
-from app.api.dependencies import get_current_vendor, get_current_admin
+from app.api.dependencies import get_completed_vendor, get_current_admin
 from app.models.user import User
 from app.models.category import Category
 from app.models.collection import Collection
@@ -168,7 +168,7 @@ async def _get_collection_by_name(
 @router.post("", response_model=ProductResponse, status_code=status.HTTP_201_CREATED)
 async def create_product(
     product_data: ProductCreate,
-    current_user: User = Depends(get_current_vendor),
+    current_user: User = Depends(get_completed_vendor),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -301,7 +301,7 @@ async def create_product(
 @router.post("/bulk-upload/single", status_code=status.HTTP_201_CREATED)
 async def bulk_upload_single_products(
     file: UploadFile = File(..., description="CSV file for single products"),
-    current_user: User = Depends(get_current_vendor),
+    current_user: User = Depends(get_completed_vendor),
     db: AsyncSession = Depends(get_db)
 ):
     """Bulk upload single products from CSV (vendors only)."""
@@ -406,7 +406,7 @@ async def bulk_upload_single_products(
 @router.post("/bulk-upload/variable", status_code=status.HTTP_201_CREATED)
 async def bulk_upload_variable_products(
     file: UploadFile = File(..., description="CSV file for variable products"),
-    current_user: User = Depends(get_current_vendor),
+    current_user: User = Depends(get_completed_vendor),
     db: AsyncSession = Depends(get_db)
 ):
     """Bulk upload variable products (with variations) from CSV."""
@@ -736,7 +736,7 @@ async def get_product(
 async def update_product(
     product_id: UUID,
     product_data: ProductUpdate,
-    current_user: User = Depends(get_current_vendor),
+    current_user: User = Depends(get_completed_vendor),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -849,7 +849,7 @@ async def update_product(
 @router.delete("/{product_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_product(
     product_id: UUID,
-    current_user: User = Depends(get_current_vendor),
+    current_user: User = Depends(get_completed_vendor),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -904,7 +904,7 @@ async def delete_product(
 async def create_variant(
     product_id: UUID,
     variant_data: ProductVariantCreate,
-    current_user: User = Depends(get_current_vendor),
+    current_user: User = Depends(get_completed_vendor),
     db: AsyncSession = Depends(get_db)
 ):
     """Create a product variant"""
@@ -942,7 +942,7 @@ async def update_variant(
     product_id: UUID,
     variant_id: UUID,
     variant_data: ProductVariantUpdate,
-    current_user: User = Depends(get_current_vendor),
+    current_user: User = Depends(get_completed_vendor),
     db: AsyncSession = Depends(get_db)
 ):
     """Update a product variant"""
@@ -992,7 +992,7 @@ async def update_variant(
 async def delete_variant(
     product_id: UUID,
     variant_id: UUID,
-    current_user: User = Depends(get_current_vendor),
+    current_user: User = Depends(get_completed_vendor),
     db: AsyncSession = Depends(get_db)
 ):
     """Delete a product variant"""
@@ -1039,7 +1039,7 @@ async def delete_variant(
 async def create_image(
     product_id: UUID,
     image_data: ProductImageCreate,
-    current_user: User = Depends(get_current_vendor),
+    current_user: User = Depends(get_completed_vendor),
     db: AsyncSession = Depends(get_db)
 ):
     """Add a product image"""
@@ -1076,7 +1076,7 @@ async def create_image(
 async def delete_image(
     product_id: UUID,
     image_id: UUID,
-    current_user: User = Depends(get_current_vendor),
+    current_user: User = Depends(get_completed_vendor),
     db: AsyncSession = Depends(get_db)
 ):
     """Delete a product image"""
