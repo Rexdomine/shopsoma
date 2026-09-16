@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, Eye, Check, X, AlertCircle, CheckCircle, Store, TrendingUp, Package, ShoppingBag, RotateCcw, Trash2 } from 'lucide-react';
+import { Search, Eye, Check, X, AlertCircle, CheckCircle, Store, TrendingUp, Package, ShoppingBag, RotateCcw, Trash2, Star } from 'lucide-react';
 import AdminSidebar from '../../components/admin/AdminSidebar';
 import { adminService, type VendorListItem } from '../../services/adminService';
 
@@ -77,6 +77,21 @@ export default function AdminVendors() {
     } catch (error: any) {
       console.error('Failed to restore store:', error);
       showMessage('error', error?.response?.data?.detail || 'Failed to restore store');
+    }
+  };
+
+  const handleFeaturedStorefront = async (vendor: VendorListItem) => {
+    try {
+      const updated = await adminService.updateVendorFeaturedStorefront(
+        vendor.id,
+        !vendor.is_featured_storefront,
+      );
+      setVendors((current) => current.map((item) => item.id === vendor.id
+        ? { ...item, is_featured_storefront: updated.is_featured_storefront }
+        : item));
+      showMessage('success', `${vendor.business_name} ${updated.is_featured_storefront ? 'will appear' : 'will no longer appear'} in eligible storefront rotations.`);
+    } catch (error: any) {
+      showMessage('error', error?.response?.data?.detail || 'Failed to update featured storefront status');
     }
   };
 
@@ -418,6 +433,14 @@ export default function AdminVendors() {
                               <RotateCcw className="w-4 h-4" />
                             </button>
                           )}
+                          <button
+                            type="button"
+                            onClick={() => handleFeaturedStorefront(vendor)}
+                            className={`p-2 rounded-lg transition ${vendor.is_featured_storefront ? 'bg-amber-100 text-amber-700 hover:bg-amber-200' : 'text-gray-500 hover:bg-gray-100 hover:text-amber-700'}`}
+                            title={vendor.is_featured_storefront ? 'Remove from featured storefront rotation' : 'Feature in storefront rotation'}
+                          >
+                            <Star className={`w-4 h-4 ${vendor.is_featured_storefront ? 'fill-current' : ''}`} />
+                          </button>
                           <button
                             onClick={() => navigate(`/admin/vendors/${vendor.id}`)}
                             className="p-2 text-gray-600 hover:text-[#105E53] hover:bg-gray-100 rounded-lg transition"

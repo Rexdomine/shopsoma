@@ -170,6 +170,14 @@ class DesignerResponse(BaseModel):
         from_attributes = True
 
 
+class FeaturedStorefrontVendorResponse(BaseModel):
+    """Safe public representation of an admin-curated storefront vendor."""
+    id: UUID4
+    business_name: str
+    featured_storefront_image_url: str
+    product_count: int
+
+
 # ==================== VENDOR PICKUP SCHEMAS ====================
 
 class VendorPickupBase(BaseModel):

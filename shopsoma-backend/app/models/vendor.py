@@ -56,6 +56,7 @@ class Vendor(Base):
     approved = Column(Boolean, default=False, nullable=False, index=True)
     approved_at = Column(DateTime(timezone=True), nullable=True)
     approved_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    is_featured_storefront = Column(Boolean, default=False, nullable=False, index=True)
 
     # Store Status
     store_active = Column(Boolean, default=True, nullable=False, index=True)

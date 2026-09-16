@@ -6,6 +6,8 @@ import Loading from '../../components/common/Loading';
 import type { Category, Product } from '../../types';
 import { productService, type ProductListParams } from '../../services/productService';
 import { categoryService } from '../../services/categoryService';
+import { getFeaturedStorefrontVendors, type FeaturedStorefrontVendor } from '../../services/featuredStorefrontService';
+import { getFeaturedRotationSettings } from '../../services/settingsService';
 import {
   IMAGE_CONFIG,
   MEN_HERO_IMAGE_URL,
@@ -19,17 +21,9 @@ import VendorShowcaseCard from '../../components/products/VendorShowcaseCard';
 import { useWishlistActions } from '../../hooks/useWishlistActions';
 import { usePreferenceStore } from '../../store/preferenceStore';
 import { hasSolidColorHex } from '../../utils/colorDisplay';
-import { getProductImageSource } from '../../utils/productImages';
+import { getProductImageSource, normalizeProductImageUrl } from '../../utils/productImages';
 
 const PAGE_SIZE = 12;
-
-// Spotlight vendor configuration
-const SPOTLIGHT_VENDOR = {
-  id: '1', // Replace with actual vendor ID
-  name: 'Shopsoma Fashion Store',
-  imageUrl: '/images/hero/demo-image-2.png', // Replace with actual vendor image
-  productCount: 24, // This can be dynamic if needed
-};
 
 type FilterState = {
   category: string;
@@ -141,6 +135,9 @@ export default function ProductList({
   const categoryParam = searchParams.get('category') || '';
 
   const [allProducts, setAllProducts] = useState<Product[]>([]);
+  const [featuredVendors, setFeaturedVendors] = useState<FeaturedStorefrontVendor[]>([]);
+  const [featuredRotationMinutes, setFeaturedRotationMinutes] = useState(10);
+  const [featuredRotationTick, setFeaturedRotationTick] = useState(0);
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -169,6 +166,47 @@ export default function ProductList({
     if (!initialParams) return undefined;
     return { ...initialParams };
   }, [initialParamsKey, initialParams]);
+  const featuredCategory = presetCategory === 'Men' ? 'men' : presetCategory === 'Women' ? 'women' : null;
+  const featuredVendor = useMemo(() => {
+    if (!featuredCategory || featuredVendors.length === 0) return null;
+    return featuredVendors[featuredRotationTick % featuredVendors.length];
+  }, [featuredCategory, featuredRotationTick, featuredVendors]);
+  const SPOTLIGHT_VENDOR = {
+    id: featuredVendor?.id ?? '',
+    name: featuredVendor?.business_name ?? '',
+    imageUrl: normalizeProductImageUrl(featuredVendor?.featured_storefront_image_url),
+    productCount: featuredVendor?.product_count ?? 0,
+  };
+
+  useEffect(() => {
+    if (!featuredCategory) {
+      setFeaturedVendors([]);
+      return;
+    }
+    let mounted = true;
+    Promise.allSettled([getFeaturedStorefrontVendors(featuredCategory), getFeaturedRotationSettings()])
+      .then(([vendorsResult, rotationResult]) => {
+        if (!mounted) return;
+        if (vendorsResult.status === 'fulfilled') {
+          setFeaturedVendors(vendorsResult.value);
+        } else {
+          setFeaturedVendors([]);
+        }
+        if (rotationResult.status === 'fulfilled') {
+          setFeaturedRotationMinutes(rotationResult.value.rotation_minutes);
+        }
+      });
+    return () => { mounted = false; };
+  }, [featuredCategory]);
+
+  useEffect(() => {
+    if (!featuredCategory || featuredVendors.length < 2) return;
+    const interval = window.setInterval(
+      () => setFeaturedRotationTick((current) => current + 1),
+      featuredRotationMinutes * 60_000,
+    );
+    return () => window.clearInterval(interval);
+  }, [featuredCategory, featuredRotationMinutes, featuredVendors.length]);
 
   const normalize = (value: string) =>
     value.toLowerCase().replace(/’/g, "'").trim();
@@ -1151,12 +1189,12 @@ const handleFilterChange = (key: keyof FilterState, value: string) => {
                     <>
                       {/* Mobile layout: 2-column grid with full-width featured vendors */}
                       <div className="lg:hidden space-y-10">
-                        <VendorShowcaseCard
+                        {featuredVendor && <VendorShowcaseCard
                           vendorId={SPOTLIGHT_VENDOR.id}
                           vendorName={SPOTLIGHT_VENDOR.name}
                           imageUrl={SPOTLIGHT_VENDOR.imageUrl}
                           productCount={SPOTLIGHT_VENDOR.productCount}
-                        />
+                        />}
                         <div className="grid grid-cols-2 gap-x-4 gap-y-8">
                           {(() => {
                             const mobileItems = paginatedProducts.slice(0, 12).reduce<
@@ -1166,7 +1204,7 @@ const handleFilterChange = (key: keyof FilterState, value: string) => {
                               >
                             >((acc, product, index) => {
                               acc.push({ type: 'product', product });
-                              if (index === 5) {
+                              if (featuredVendor && index === 5) {
                                 acc.push({ type: 'vendor', key: 'featured-vendor' });
                               }
                               return acc;
@@ -1176,12 +1214,12 @@ const handleFilterChange = (key: keyof FilterState, value: string) => {
                               if (item.type === 'vendor') {
                                 return (
                                   <div key={item.key} className="col-span-2">
-                                    <VendorShowcaseCard
+                                    {featuredVendor && <VendorShowcaseCard
                                       vendorId={SPOTLIGHT_VENDOR.id}
-                                      vendorName="Featured Designer"
+                                      vendorName={SPOTLIGHT_VENDOR.name}
                                       imageUrl={SPOTLIGHT_VENDOR.imageUrl}
                                       productCount={SPOTLIGHT_VENDOR.productCount}
-                                    />
+                                    />}
                                   </div>
                                 );
                               }
@@ -1202,8 +1240,9 @@ const handleFilterChange = (key: keyof FilterState, value: string) => {
 
                       {/* Desktop layout: curated vendor + product grid */}
                       <div className="hidden lg:block">
+                        {featuredVendor ? <>
                         {/* Row 1: Vendor Showcase (2 cols) + 1 Product - 3 column grid */}
-                        {paginatedProducts.length >= 1 && (
+                        {featuredVendor && paginatedProducts.length >= 1 && (
                           <div className="grid grid-cols-3 gap-x-6 gap-y-10 mb-10">
                             <div className="col-span-2">
                               <VendorShowcaseCard
@@ -1262,7 +1301,7 @@ const handleFilterChange = (key: keyof FilterState, value: string) => {
                         )}
 
                         {/* Row 4: 1 Product + Vendor Showcase (2 cols) + 1 Product - 4 column grid */}
-                        {paginatedProducts.length >= 10 && (
+                        {featuredVendor && paginatedProducts.length >= 10 && (
                           <div className="grid grid-cols-4 gap-x-6 gap-y-10">
                             {paginatedProducts.slice(9, 10).map((product) => {
                               const isFavorite = favorites.has(product.id);
@@ -1284,6 +1323,21 @@ const handleFilterChange = (key: keyof FilterState, value: string) => {
                               />
                             </div>
                             {paginatedProducts.slice(10, 11).map((product) => {
+                              const isFavorite = favorites.has(product.id);
+                              return (
+                                <ProductCard
+                                  key={product.id}
+                                  product={product}
+                                  onToggleFavorite={toggleFavorite}
+                                  isFavorite={isFavorite}
+                                />
+                              );
+                            })}
+                          </div>
+                        )}
+                        </> : (
+                          <div className="grid grid-cols-4 gap-x-6 gap-y-10">
+                            {paginatedProducts.map((product) => {
                               const isFavorite = favorites.has(product.id);
                               return (
                                 <ProductCard

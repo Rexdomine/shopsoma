@@ -1,82 +1,107 @@
 import type { ReactNode } from 'react';
-import { render, waitFor } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import { describe, expect, it, beforeEach, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import ProductList from '../ProductList';
 
 const { getProductsMock, getSubcategoriesMock } = vi.hoisted(() => ({
   getProductsMock: vi.fn(),
   getSubcategoriesMock: vi.fn(),
 }));
+const { getFeaturedStorefrontVendorsMock, getFeaturedRotationSettingsMock } = vi.hoisted(() => ({
+  getFeaturedStorefrontVendorsMock: vi.fn(),
+  getFeaturedRotationSettingsMock: vi.fn(),
+}));
 
 vi.mock('../../../services/productService', () => ({
-  productService: {
-    getProducts: getProductsMock,
-  },
+  productService: { getProducts: getProductsMock },
 }));
-
 vi.mock('../../../services/categoryService', () => ({
-  categoryService: {
-    getSubcategories: getSubcategoriesMock,
-  },
+  categoryService: { getSubcategories: getSubcategoriesMock },
 }));
-
+vi.mock('../../../services/featuredStorefrontService', () => ({
+  getFeaturedStorefrontVendors: getFeaturedStorefrontVendorsMock,
+}));
+vi.mock('../../../services/settingsService', () => ({
+  getFeaturedRotationSettings: getFeaturedRotationSettingsMock,
+}));
 vi.mock('../../../hooks/useWishlistActions', () => ({
-  useWishlistActions: () => ({
-    favorites: new Set(),
-    toggleFavorite: vi.fn(),
-    loadingIds: new Set(),
-  }),
+  useWishlistActions: () => ({ favorites: new Set(), toggleFavorite: vi.fn(), loadingIds: new Set() }),
 }));
-
 vi.mock('../../../store/preferenceStore', () => ({
-  usePreferenceStore: (selector: (state: { interest: null }) => unknown) =>
-    selector({ interest: null }),
+  usePreferenceStore: (selector: (state: { interest: null }) => unknown) => selector({ interest: null }),
 }));
-
 vi.mock('../../../components/layout/Layout', () => ({
   default: ({ children }: { children: ReactNode }) => <div>{children}</div>,
 }));
-
 vi.mock('../../../components/common/Loading', () => ({
   default: ({ message }: { message?: string }) => <div>{message}</div>,
 }));
-
 vi.mock('../../../components/products/ProductCard', () => ({
-  default: () => <div>Product</div>,
+  default: ({ product }: { product: { id: string } }) => <div data-testid={`product-${product.id}`}>Product</div>,
 }));
-
 vi.mock('../../../components/products/VendorShowcaseCard', () => ({
-  default: () => <div>Vendor</div>,
+  default: ({ imageUrl }: { imageUrl: string }) => <div data-testid="vendor-image">{imageUrl}</div>,
 }));
 
 describe('ProductList', () => {
   beforeEach(() => {
     getProductsMock.mockReset();
     getSubcategoriesMock.mockReset();
+    getFeaturedStorefrontVendorsMock.mockReset();
+    getFeaturedRotationSettingsMock.mockReset();
     getProductsMock.mockResolvedValue({ products: [] });
     getSubcategoriesMock.mockResolvedValue([]);
+    getFeaturedStorefrontVendorsMock.mockResolvedValue([]);
+    getFeaturedRotationSettingsMock.mockResolvedValue({ rotation_minutes: 10 });
   });
 
   it('refetches when initialParams change', async () => {
-    const { rerender } = render(
-      <MemoryRouter>
-        <ProductList />
-      </MemoryRouter>
-    );
-
+    const { rerender } = render(<MemoryRouter><ProductList /></MemoryRouter>);
     await waitFor(() => expect(getProductsMock).toHaveBeenCalledTimes(1));
-
-    rerender(
-      <MemoryRouter>
-        <ProductList initialParams={{ category_id: 'men-id' }} />
-      </MemoryRouter>
-    );
-
+    rerender(<MemoryRouter><ProductList initialParams={{ category_id: 'men-id' }} /></MemoryRouter>);
     await waitFor(() => expect(getProductsMock).toHaveBeenCalledTimes(2));
+    expect(getProductsMock.mock.calls[1][0]).toEqual(expect.objectContaining({ category_id: 'men-id' }));
+  });
 
-    expect(getProductsMock.mock.calls[1][0]).toEqual(
-      expect.objectContaining({ category_id: 'men-id' })
+  it('keeps every desktop product visible when no featured vendor is available', async () => {
+    getProductsMock.mockResolvedValue({
+      products: Array.from({ length: 12 }, (_, index) => ({ id: `product-${index}`, category_name: 'Men' })),
+    });
+    const { container } = render(<MemoryRouter><ProductList presetCategory="Men" /></MemoryRouter>);
+    await waitFor(() => expect(screen.getAllByTestId('product-product-11')).toHaveLength(2));
+    const desktopGrid = container.querySelector('.hidden.lg\\:block');
+    expect(desktopGrid?.querySelectorAll('[data-testid^="product-"]')).toHaveLength(12);
+  });
+
+  it('keeps featured vendors visible when rotation settings fail to load', async () => {
+    getProductsMock.mockResolvedValue({ products: [{ id: 'product-1', category_name: 'Men' }] });
+    getFeaturedStorefrontVendorsMock.mockResolvedValue([{
+      id: 'vendor-1', business_name: 'Featured Vendor', featured_storefront_image_url: '/uploads/featured.jpg', product_count: 1,
+    }]);
+    getFeaturedRotationSettingsMock.mockRejectedValue(new Error('settings unavailable'));
+
+    render(<MemoryRouter><ProductList presetCategory="Men" /></MemoryRouter>);
+
+    await waitFor(() => expect(screen.getAllByTestId('vendor-image')).not.toHaveLength(0));
+  });
+
+  it('normalizes relative featured vendor image URLs to the API origin', async () => {
+    getProductsMock.mockResolvedValue({
+      products: [{ id: 'product-1', category_name: 'Men' }],
+    });
+    getFeaturedStorefrontVendorsMock.mockResolvedValue([{
+      id: 'vendor-1',
+      business_name: 'Featured Vendor',
+      featured_storefront_image_url: '/uploads/featured.jpg',
+      product_count: 1,
+    }]);
+
+    render(<MemoryRouter><ProductList presetCategory="Men" /></MemoryRouter>);
+
+    await waitFor(() => expect(screen.getAllByTestId('vendor-image')).not.toHaveLength(0));
+    expect(screen.getAllByTestId('vendor-image')[0]).toHaveTextContent(
+      'http://localhost:8000/uploads/featured.jpg',
     );
   });
 });
