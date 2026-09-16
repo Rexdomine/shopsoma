@@ -56,6 +56,11 @@ def _is_featured_storefront_image(featured_url: str | None, s3_key: str) -> bool
     """Match a persisted featured-image URL to its storage key."""
     if not featured_url:
         return False
+
+    storage_prefix = image_service._get_public_url("").rstrip("/") + "/"
+    if featured_url.startswith(storage_prefix):
+        return featured_url.removeprefix(storage_prefix) == s3_key
+
     path = urlparse(featured_url).path.lstrip("/")
     if path.startswith("uploads/"):
         path = path[len("uploads/"):]

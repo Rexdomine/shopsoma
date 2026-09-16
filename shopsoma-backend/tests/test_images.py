@@ -10,13 +10,29 @@ from httpx import AsyncClient
 from unittest.mock import Mock, patch
 from fastapi import HTTPException, UploadFile
 
-from app.api.v1.images import _require_vendor_image_key
+from app.api.v1.images import _is_featured_storefront_image, _require_vendor_image_key
 from app.models.product import ProductImage
 from app.services.image_service import image_service
 
 
 class TestImageValidation:
     """Test image validation"""
+
+    def test_featured_image_matches_custom_endpoint_storage_prefix(self, monkeypatch):
+        """Custom endpoint URLs must remove the configured bucket prefix."""
+        key = "vendors/vendor-id/featured-storefront/featured.jpg"
+        monkeypatch.setattr(
+            image_service,
+            "_get_public_url",
+            lambda s3_key: f"https://minio.example.test/shop-soma/{s3_key}",
+        )
+
+        assert _is_featured_storefront_image(
+            f"https://minio.example.test/shop-soma/{key}", key
+        )
+        assert not _is_featured_storefront_image(
+            f"https://minio.example.test/shop-soma/vendors/other/featured.jpg", key
+        )
 
     @pytest.mark.asyncio
     async def test_valid_image_types(self):
