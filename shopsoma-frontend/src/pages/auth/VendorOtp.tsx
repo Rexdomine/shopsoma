@@ -31,6 +31,8 @@ export default function VendorOtp() {
   const [success, setSuccess] = useState(false);
   const [resendLoading, setResendLoading] = useState(false);
   const [initializing, setInitializing] = useState(!!emailFromUrl);
+  const [initializationError, setInitializationError] = useState('');
+  const [initializationAttempt, setInitializationAttempt] = useState(0);
   const [accountAlreadySetup, setAccountAlreadySetup] = useState(false);
   const [alreadySetupMessage, setAlreadySetupMessage] = useState('');
   const [resetPasswordUrl, setResetPasswordUrl] = useState<string>(ROUTES.FORGOT_PASSWORD);
@@ -48,6 +50,7 @@ export default function VendorOtp() {
       }
 
       try {
+        setInitializationError('');
         const response = await vendorActivationService.initiateActivation(emailFromUrl);
         if (response.account_already_setup) {
           setAccountAlreadySetup(true);
@@ -69,13 +72,18 @@ export default function VendorOtp() {
         }
         setInitializing(false);
       } catch (err: any) {
-        setError(err?.message || 'Failed to initialize activation. Please try again.');
+        setInitializationError(err?.message || 'Failed to initialize activation. Please try again.');
         setInitializing(false);
       }
     };
 
     initializeActivation();
-  }, [emailFromUrl, activationToken]);
+  }, [emailFromUrl, activationToken, initializationAttempt]);
+
+  const retryInitialization = () => {
+    setInitializing(true);
+    setInitializationAttempt((attempt) => attempt + 1);
+  };
 
   useEffect(() => {
     if (!initializing) {
@@ -207,6 +215,7 @@ export default function VendorOtp() {
   }
 
   if (!activationToken && !initializing) {
+    const canRetryInitialization = Boolean(emailFromUrl && initializationError);
     return (
       <div className="min-h-screen bg-[var(--color-page-bg)] flex items-center justify-center px-4">
         <div className="max-w-md text-center">
@@ -214,16 +223,29 @@ export default function VendorOtp() {
             <div className="w-12 h-12 mx-auto mb-4 rounded-full bg-red-100 flex items-center justify-center">
               <span className="text-red-600 text-2xl">✕</span>
             </div>
-            <h2 className="text-xl font-display text-[#105E53] mb-2">Invalid Activation Link</h2>
+            <h2 className="text-xl font-display text-[#105E53] mb-2">
+              {canRetryInitialization ? 'Activation Email Unavailable' : 'Invalid Activation Link'}
+            </h2>
             <p className="text-gray-600 mb-6">
-              This activation link is invalid or has expired. Please contact support or check your email for a new activation link.
+              {canRetryInitialization
+                ? initializationError
+                : 'This activation link is invalid or has expired. Please contact support or check your email for a new activation link.'}
             </p>
-            <button
-              onClick={() => navigate(ROUTES.VENDOR_LOGIN)}
-              className="px-6 py-3 bg-[#105E53] text-white rounded-xl hover:bg-[#0c4c45] transition"
-            >
-              Go to Login
-            </button>
+            {canRetryInitialization ? (
+              <button
+                onClick={retryInitialization}
+                className="px-6 py-3 bg-[#105E53] text-white rounded-xl hover:bg-[#0c4c45] transition"
+              >
+                Try Again
+              </button>
+            ) : (
+              <button
+                onClick={() => navigate(ROUTES.VENDOR_LOGIN)}
+                className="px-6 py-3 bg-[#105E53] text-white rounded-xl hover:bg-[#0c4c45] transition"
+              >
+                Go to Login
+              </button>
+            )}
           </div>
         </div>
       </div>
