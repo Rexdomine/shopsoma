@@ -8,8 +8,8 @@ from uuid import UUID
 
 from app.core.database import get_db
 from app.core.security import create_access_token
-from app.models import Vendor, User, VendorOTP
-from app.services.vendor_otp_service import VendorOTPService
+from app.models import Vendor, User
+from app.services.vendor_otp_service import OTPDeliveryError, VendorOTPService
 from app.core.config import settings
 
 
@@ -123,10 +123,10 @@ async def initiate_vendor_activation(
                 vendor_id=str(vendor.id),
                 email=user.email
             )
-        except Exception as e:
+        except OTPDeliveryError:
             raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to send verification code: {str(e)}"
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Unable to send verification code. Please try again."
             )
 
     # Create a temporary token for this activation session
@@ -289,10 +289,10 @@ async def resend_vendor_otp(
             vendor_id=str(vendor.id),
             email=user.email
         )
-    except Exception as e:
+    except OTPDeliveryError:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to send verification code: {str(e)}"
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Unable to send verification code. Please try again."
         )
 
     return {

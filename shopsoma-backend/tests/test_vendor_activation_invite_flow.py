@@ -1,6 +1,127 @@
 import uuid
 
 import pytest
+from sqlalchemy import select
+
+
+@pytest.mark.asyncio
+async def test_vendor_activation_resend_rejects_undelivered_otp_and_invalidates_it(
+    client, db_session, monkeypatch
+):
+    """Resend must expose provider failure without leaving a usable OTP."""
+    from datetime import timedelta
+
+    from app.core.security import create_access_token
+    from app.models.user import User, UserRole
+    from app.models.vendor import Vendor, KYCStatus
+    from app.models.vendor_otp import VendorOTP
+
+    user = User(
+        id=uuid.uuid4(),
+        email="resend-delivery-failed-vendor@test.com",
+        hashed_password="hashed-password",
+        full_name="Resend Delivery Failed Vendor",
+        role=UserRole.VENDOR,
+        email_verified=False,
+        is_active=False,
+    )
+    db_session.add(user)
+    await db_session.flush()
+    vendor = Vendor(
+        id=uuid.uuid4(),
+        user_id=user.id,
+        business_name="Resend Delivery Failed Vendor Shop",
+        approved=True,
+        kyc_status=KYCStatus.PENDING,
+        is_onboarding=True,
+    )
+    db_session.add(vendor)
+    await db_session.commit()
+
+    async def delivery_rejected(*_args, **_kwargs):
+        return False
+
+    monkeypatch.setattr(
+        "app.services.vendor_otp_service.email_service.send_vendor_otp_email",
+        delivery_rejected,
+    )
+    activation_token = create_access_token(
+        data={"sub": str(user.id), "email": user.email, "purpose": "vendor_activation"},
+        expires_delta=timedelta(minutes=30),
+    )
+
+    response = await client.post(
+        "/api/v1/vendor/activation/resend-otp",
+        json={"token": activation_token},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Unable to send verification code. Please try again."
+    otp = (
+        await db_session.execute(
+            select(VendorOTP).where(VendorOTP.email == user.email)
+        )
+    ).scalar_one()
+    assert otp.is_used is True
+
+
+@pytest.mark.asyncio
+async def test_vendor_activation_initiate_rejects_undelivered_otp_and_invalidates_it(
+    client, db_session, monkeypatch
+):
+    """A provider rejection must not leave a usable OTP behind or claim delivery."""
+    from app.models.user import User, UserRole
+    from app.models.vendor import Vendor, KYCStatus
+    from app.models.vendor_otp import VendorOTP
+
+    user = User(
+        id=uuid.uuid4(),
+        email="delivery-failed-vendor@test.com",
+        hashed_password="hashed-password",
+        full_name="Delivery Failed Vendor",
+        role=UserRole.VENDOR,
+        email_verified=False,
+        is_active=False,
+    )
+    db_session.add(user)
+    await db_session.flush()
+
+    vendor = Vendor(
+        id=uuid.uuid4(),
+        user_id=user.id,
+        business_name="Delivery Failed Vendor Shop",
+        approved=True,
+        kyc_status=KYCStatus.PENDING,
+        is_onboarding=True,
+    )
+    db_session.add(vendor)
+    await db_session.commit()
+
+    async def delivery_rejected(*_args, **_kwargs):
+        return False
+
+    monkeypatch.setattr(
+        "app.services.vendor_otp_service.email_service.send_vendor_otp_email",
+        delivery_rejected,
+    )
+
+    response = await client.post(
+        "/api/v1/vendor/activation/initiate",
+        json={"email": user.email},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Unable to send verification code. Please try again."
+
+    otp = (
+        await db_session.execute(
+            select(VendorOTP).where(VendorOTP.email == user.email)
+        )
+    ).scalar_one()
+    assert otp.is_used is True
+    assert otp.can_verify() is False
+
+
 
 
 @pytest.mark.asyncio
@@ -117,3 +238,17 @@ async def test_admin_can_resend_vendor_activation_for_already_active_vendor(
     assert payload["account_already_setup"] is True
     assert captured["vendor_id"] == str(vendor.id)
     assert captured["email"] == user.email
+
+    from app.services.vendor_otp_service import OTPDeliveryError
+
+    async def delivery_failed(*_args, **_kwargs):
+        raise OTPDeliveryError("provider rejected handoff")
+
+    monkeypatch.setattr(VendorOTPService, "create_and_send_otp", delivery_failed)
+    failed_response = await client.post(
+        f"/api/v1/admin/vendor-applications/{application.id}/resend-activation",
+        headers=admin_user["headers"],
+    )
+
+    assert failed_response.status_code == 503
+    assert failed_response.json()["detail"] == "Unable to send activation email. Please try again."

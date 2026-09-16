@@ -88,6 +88,7 @@ export interface VendorApplication {
   vendor_is_onboarding?: boolean;
   vendor_brand_info_completed?: boolean;
   vendor_payout_info_completed?: boolean;
+  activation_email_sent?: boolean;
   created_at: string;
   reviewed_at?: string;
 }
@@ -239,11 +240,12 @@ export const adminService = {
   },
 
   // Approve vendor application (uses the existing endpoint from vendor_applications.py)
-  async approveVendorApplication(applicationId: string, adminNotes?: string): Promise<void> {
-    await api.post(`/vendor-applications/${applicationId}/approve`, {
+  async approveVendorApplication(applicationId: string, adminNotes?: string): Promise<VendorApplication> {
+    const response = await api.post(`/vendor-applications/${applicationId}/approve`, {
       status: 'approved',
-      admin_notes: adminNotes || '',
+      admin_notes: adminNotes
     });
+    return response.data;
   },
 
   // Reject vendor application
