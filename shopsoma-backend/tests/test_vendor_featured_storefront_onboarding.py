@@ -119,6 +119,19 @@ async def test_brand_info_rejects_arbitrary_or_foreign_featured_storefront_image
     )
     assert response.status_code == 403
 
+    response = await client.put(
+        "/api/v1/vendor/onboarding/brand-info",
+        json={
+            **BRAND_INFO,
+            "featured_storefront_image_url": (
+                f"/uploads/vendors/{incomplete_vendor_user['user'].id}/"
+                "../foreign-vendor/storefront.webp"
+            ),
+        },
+        headers=incomplete_vendor_user["headers"],
+    )
+    assert response.status_code == 400
+
 
 @pytest.mark.asyncio
 async def test_brand_info_rejects_missing_vendor_storage_object(

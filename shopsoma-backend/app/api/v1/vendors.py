@@ -69,6 +69,13 @@ async def _require_vendor_owned_uploaded_image(
             )
         image_key = image_url.removeprefix(storage_prefix)
 
+    image_parts = image_key.split("/")
+    if any(part in {"", ".", ".."} for part in image_parts):
+        raise HTTPException(
+            status_code=400,
+            detail="Featured storefront image must be a vendor-uploaded image",
+        )
+
     if not image_key.startswith(expected_key_prefix):
         raise HTTPException(
             status_code=403,
