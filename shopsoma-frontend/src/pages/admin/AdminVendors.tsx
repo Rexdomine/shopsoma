@@ -24,7 +24,7 @@ export default function AdminVendors() {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
 
   const pageSize = 20;
-  const canTagTestAccounts = import.meta.env.VITE_APP_ENV === 'staging';
+  const canTagTestAccounts = import.meta.env.VITE_ENVIRONMENT === 'staging';
 
   useEffect(() => {
     loadVendors();

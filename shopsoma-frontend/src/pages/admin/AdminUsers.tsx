@@ -23,7 +23,7 @@ export default function AdminUsers() {
   const { user } = useAuth();
 
   const pageSize = 20;
-  const canTagTestAccounts = import.meta.env.VITE_APP_ENV === 'staging';
+  const canTagTestAccounts = import.meta.env.VITE_ENVIRONMENT === 'staging';
 
   useEffect(() => {
     loadUsers();

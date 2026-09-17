@@ -100,6 +100,12 @@ async def test_individual_test_account_tag_is_idempotent_and_audited(
     listed_customer = next(item for item in listed.json()["items"] if item["id"] == user_id)
     assert listed_customer["is_test_account"] is True
 
+    customer_profile = await client.get("/api/v1/users/me", headers=customer_user["headers"])
+    assert customer_profile.status_code == 200
+    assert "test_account_tagged_at" not in customer_profile.json()
+    assert "test_account_tagged_by" not in customer_profile.json()
+    assert "test_account_tag_reason" not in customer_profile.json()
+
     audit_rows = await db_session.scalars(
         select(AuditLog).where(
             AuditLog.entity_id == customer_user["user"].id,

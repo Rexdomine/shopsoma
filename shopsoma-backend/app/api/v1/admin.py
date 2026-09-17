@@ -301,7 +301,14 @@ async def reset_products(db: AsyncSession = Depends(get_db)):
 # ===========================
 
 # Response schemas for user management
-class UserListItem(UserResponse):
+class AdminUserResponse(UserResponse):
+    """Admin-only user response including test-account audit metadata."""
+    test_account_tagged_at: Optional[datetime] = None
+    test_account_tagged_by: Optional[UUID] = None
+    test_account_tag_reason: Optional[str] = None
+
+
+class UserListItem(AdminUserResponse):
     """User list item with additional fields"""
     created_at: Optional[str] = None
     last_login: Optional[str] = None
@@ -426,7 +433,7 @@ async def list_users(
     }
 
 
-@router.get("/users/{user_id}", response_model=UserResponse)
+@router.get("/users/{user_id}", response_model=AdminUserResponse)
 async def get_user(
     user_id: UUID,
     current_admin: User = Depends(get_current_admin),
@@ -448,7 +455,7 @@ async def get_user(
     return user
 
 
-@router.put("/users/{user_id}", response_model=UserResponse)
+@router.put("/users/{user_id}", response_model=AdminUserResponse)
 async def update_user(
     user_id: UUID,
     user_data: UserUpdate,
