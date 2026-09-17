@@ -1,7 +1,7 @@
 """Add explicit test-account classification metadata.
 
 Revision ID: 3d4e5f6a7b8c
-Revises: 1c2b3d4e
+Revises: n1o2p3q4r5s6
 """
 from typing import Sequence, Union
 
@@ -34,7 +34,7 @@ def upgrade() -> None:
         ["id"],
         ondelete="SET NULL",
     )
-    op.alter_column("users", "is_test_account", server_default=None)
+    # Keep the database default: direct SQL/bootstrap writers may omit this column.
 
 
 def downgrade() -> None:

@@ -50,17 +50,22 @@ async def classify_existing_staging_accounts(
         }
 
     tagged_at = datetime.now(timezone.utc)
-    if pending_ids:
-        await db.execute(
-            update(User)
-            .where(User.id.in_(pending_ids))
-            .values(
-                is_test_account=True,
-                test_account_tagged_at=tagged_at,
-                test_account_tagged_by=actor_id,
-                test_account_tag_reason=_TAG_REASON,
-            )
+    tagged_result = await db.execute(
+        update(User)
+        .where(
+            User.role.in_(_ALLOWED_ROLES),
+            User.is_test_account.is_(False),
         )
+        .values(
+            is_test_account=True,
+            test_account_tagged_at=tagged_at,
+            test_account_tagged_by=actor_id,
+            test_account_tag_reason=_TAG_REASON,
+        )
+        .returning(User.id)
+    )
+    tagged_ids = list(tagged_result.scalars().all())
+    if tagged_ids:
         db.add_all(
             AuditLog(
                 user_id=actor_id,
@@ -70,12 +75,12 @@ async def classify_existing_staging_accounts(
                 old_values={"is_test_account": False},
                 new_values={"is_test_account": True, "reason": _TAG_REASON},
             )
-            for user_id in pending_ids
+            for user_id in tagged_ids
         )
     await db.commit()
     return {
         "applied": True,
         "eligible_count": sum(eligible.values()),
         "pending_count": len(pending_ids),
-        "tagged_count": len(pending_ids),
+        "tagged_count": len(tagged_ids),
     }
