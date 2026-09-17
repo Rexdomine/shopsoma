@@ -252,3 +252,59 @@ async def test_admin_can_resend_vendor_activation_for_already_active_vendor(
 
     assert failed_response.status_code == 503
     assert failed_response.json()["detail"] == "Unable to send activation email. Please try again."
+
+
+@pytest.mark.asyncio
+async def test_vendor_activation_password_persists_for_fresh_login(client, db_session):
+    """The activation password must be stored in the field used by login."""
+    from datetime import timedelta
+
+    from app.core.security import create_access_token, verify_password
+    from app.models.user import User, UserRole
+    from app.models.vendor import KYCStatus, Vendor
+
+    user = User(
+        id=uuid.uuid4(),
+        email="activation-login-vendor@test.com",
+        hashed_password=None,
+        full_name="Activation Login Vendor",
+        role=UserRole.VENDOR,
+        email_verified=False,
+        is_active=False,
+    )
+    db_session.add(user)
+    await db_session.flush()
+    db_session.add(
+        Vendor(
+            id=uuid.uuid4(),
+            user_id=user.id,
+            business_name="Activation Login Vendor Shop",
+            approved=True,
+            kyc_status=KYCStatus.PENDING,
+            is_onboarding=True,
+        )
+    )
+    await db_session.commit()
+
+    activation_token = create_access_token(
+        data={"sub": str(user.id), "email": user.email, "purpose": "vendor_activation"},
+        expires_delta=timedelta(minutes=30),
+    )
+    password = "Persisted!Pass2026"
+
+    set_password_response = await client.post(
+        "/api/v1/vendor/activation/set-password",
+        json={"activation_token": activation_token, "password": password},
+    )
+
+    assert set_password_response.status_code == 200
+    await db_session.refresh(user)
+    assert user.hashed_password
+    assert verify_password(password, user.hashed_password)
+
+    login_response = await client.post(
+        "/api/v1/auth/login",
+        json={"email": user.email, "password": password},
+    )
+    assert login_response.status_code == 200
+    assert login_response.json()["access_token"]

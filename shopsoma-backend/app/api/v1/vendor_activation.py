@@ -349,8 +349,8 @@ async def set_vendor_password(
             detail="User not found"
         )
 
-    # Update password
-    user.password_hash = get_password_hash(request.password)
+    # Update the canonical persisted password field used by login/authentication.
+    user.hashed_password = get_password_hash(request.password)
 
     # Fully activate the account now that password is set
     if not user.is_active:
