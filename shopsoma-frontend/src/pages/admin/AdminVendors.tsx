@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, Eye, Check, X, AlertCircle, CheckCircle, Store, TrendingUp, Package, ShoppingBag, RotateCcw, Trash2, Star, Power, PowerOff } from 'lucide-react';
+import { Search, Eye, Check, X, AlertCircle, CheckCircle, Store, TrendingUp, Package, ShoppingBag, RotateCcw, Trash2, Star, Power, PowerOff, Tag } from 'lucide-react';
 import AdminSidebar from '../../components/admin/AdminSidebar';
 import { adminService, type VendorListItem } from '../../services/adminService';
 import { useAuth } from '../../context/AuthContext';
@@ -24,6 +24,7 @@ export default function AdminVendors() {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
 
   const pageSize = 20;
+  const canTagTestAccounts = import.meta.env.VITE_ENVIRONMENT === 'staging';
 
   useEffect(() => {
     loadVendors();
@@ -128,6 +129,21 @@ export default function AdminVendors() {
       await loadVendors();
     } catch (error: any) {
       showMessage('error', error?.response?.data?.detail || error?.message || 'Failed to update vendor account status');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleMarkAsTestAccount = async (vendor: VendorListItem) => {
+    if (vendor.is_test_account) return;
+    if (!window.confirm(`Mark ${vendor.business_name} as a test account? This makes it eligible for staging purge workflows.`)) return;
+    try {
+      setActionLoading(vendor.user_id);
+      await adminService.markUserAsTestAccount(vendor.user_id);
+      showMessage('success', `${vendor.business_name} marked as a test account`);
+      await loadVendors();
+    } catch (error: any) {
+      showMessage('error', error?.response?.data?.detail || error?.message || 'Failed to mark test account');
     } finally {
       setActionLoading(null);
     }
@@ -441,6 +457,11 @@ export default function AdminVendors() {
                         <div>
                           <p className="text-sm font-semibold text-gray-900">{vendor.business_name}</p>
                           <p className="text-xs text-gray-500">{vendor.email}</p>
+                          {vendor.is_test_account && (
+                            <span className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded text-xs font-bold bg-amber-100 text-amber-800 border border-amber-200">
+                              <Tag className="w-3 h-3" /> TEST ACCOUNT
+                            </span>
+                          )}
                           <p className="text-xs text-gray-400 mt-0.5">{vendor.full_name}</p>
                         </div>
                       </td>
@@ -539,6 +560,18 @@ export default function AdminVendors() {
                           >
                             <Star className={`w-4 h-4 ${vendor.is_featured_storefront ? 'fill-current' : ''}`} />
                           </button>
+                          {canTagTestAccounts && vendor.role !== 'admin' && !vendor.is_test_account && (
+                            <button
+                              type="button"
+                              onClick={() => handleMarkAsTestAccount(vendor)}
+                              disabled={actionLoading === vendor.user_id}
+                              aria-label="Mark vendor as test account"
+                              className="p-2 text-amber-600 hover:bg-amber-50 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
+                              title="Mark as test account"
+                            >
+                              <Tag className="w-4 h-4" />
+                            </button>
+                          )}
                           <button
                             type="button"
                             onClick={() => handleToggleVendorAccount(vendor)}

@@ -34,7 +34,10 @@ from app.models.vendor_application import VendorApplication
 from app.schemas.auth import UserResponse, UserUpdate
 from app.schemas.common import PaginatedResponse
 from app.schemas.product import ProductApprovalRequest, ProductRejectionRequest, ProductFeatureUpdate
-from app.services.test_account_classification import classify_existing_staging_accounts
+from app.services.test_account_classification import (
+    classify_existing_staging_accounts,
+    tag_staging_account,
+)
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -298,7 +301,14 @@ async def reset_products(db: AsyncSession = Depends(get_db)):
 # ===========================
 
 # Response schemas for user management
-class UserListItem(UserResponse):
+class AdminUserResponse(UserResponse):
+    """Admin-only user response including test-account audit metadata."""
+    test_account_tagged_at: Optional[datetime] = None
+    test_account_tagged_by: Optional[UUID] = None
+    test_account_tag_reason: Optional[str] = None
+
+
+class UserListItem(AdminUserResponse):
     """User list item with additional fields"""
     created_at: Optional[str] = None
     last_login: Optional[str] = None
@@ -322,6 +332,23 @@ async def classify_test_accounts(
             actor_id=current_admin.id,
             apply=request.apply,
         )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/users/{user_id}/test-account")
+async def mark_user_as_test_account(
+    user_id: UUID,
+    current_admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Idempotently mark one staging customer/vendor as a test account."""
+    try:
+        return await tag_staging_account(db, account_id=user_id, actor_id=current_admin.id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -393,6 +420,7 @@ async def list_users(
                 "role": user.role.value,
                 "is_active": user.is_active,
                 "email_verified": user.email_verified,
+                "is_test_account": user.is_test_account,
                 "created_at": user.created_at.isoformat() if user.created_at else None,
                 "last_login": None,  # User model doesn't have last_login field yet
             }
@@ -405,7 +433,7 @@ async def list_users(
     }
 
 
-@router.get("/users/{user_id}", response_model=UserResponse)
+@router.get("/users/{user_id}", response_model=AdminUserResponse)
 async def get_user(
     user_id: UUID,
     current_admin: User = Depends(get_current_admin),
@@ -427,7 +455,7 @@ async def get_user(
     return user
 
 
-@router.put("/users/{user_id}", response_model=UserResponse)
+@router.put("/users/{user_id}", response_model=AdminUserResponse)
 async def update_user(
     user_id: UUID,
     user_data: UserUpdate,
@@ -841,6 +869,7 @@ async def list_vendors(
                 "business_phone": vendor.business_phone,
                 "email": user.email,
                 "full_name": user.full_name,
+                "role": user.role.value,
                 "approved": vendor.approved,
                 "is_featured_storefront": vendor.is_featured_storefront,
                 "featured_storefront_image_url": vendor.featured_storefront_image_url,
@@ -849,6 +878,7 @@ async def list_vendors(
                 "kyc_submitted_at": vendor.kyc_submitted_at.isoformat() if vendor.kyc_submitted_at else None,
                 "commission_rate": float(vendor.commission_rate) if vendor.commission_rate else 0.0,
                 "is_active": user.is_active,
+                "is_test_account": user.is_test_account,
                 "is_onboarding": vendor.is_onboarding,
                 "brand_info_completed": vendor.brand_info_completed,
                 "payout_info_completed": vendor.payout_info_completed,

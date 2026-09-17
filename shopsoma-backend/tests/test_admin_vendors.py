@@ -20,6 +20,7 @@ async def test_admin_list_vendors_uses_total_orders(
     vendor_item = payload["items"][0]
     assert vendor_item["id"] == str(vendor.id)
     assert vendor_item["total_orders"] == 7
+    assert vendor_item["role"] == "vendor"
 
 
 async def test_admin_vendor_detail_includes_user_and_bank_fields(

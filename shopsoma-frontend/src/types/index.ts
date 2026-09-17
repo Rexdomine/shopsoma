@@ -15,6 +15,10 @@ export interface User {
   is_active: boolean;
   profile_image_url?: string;
   is_guest_created?: boolean;
+  is_test_account: boolean;
+  test_account_tagged_at?: string;
+  test_account_tagged_by?: string;
+  test_account_tag_reason?: string;
   last_login_at?: string;
   created_at: string;
 }

@@ -4,6 +4,7 @@ import type { User, PaginatedResponse } from '../types';
 export interface UserListItem extends User {
   created_at: string;
   last_login?: string;
+  is_test_account: boolean;
 }
 
 export interface UserListFilters {
@@ -35,12 +36,14 @@ export interface VendorListItem {
   business_phone?: string;
   email: string;
   full_name: string;
+  role: 'customer' | 'vendor' | 'admin';
   approved: boolean;
   approved_at?: string;
   kyc_status?: string;
   kyc_submitted_at?: string;
   commission_rate: number;
   is_active: boolean;
+  is_test_account: boolean;
   is_onboarding: boolean;
   brand_info_completed: boolean;
   payout_info_completed: boolean;
@@ -146,6 +149,11 @@ export const adminService = {
     await api.post(`/admin/users/${userId}/reset-password`, {
       new_password: newPassword
     });
+  },
+
+  async markUserAsTestAccount(userId: string): Promise<{ tagged: boolean; is_test_account: boolean; user_id: string }> {
+    const response = await api.post(`/admin/users/${userId}/test-account`);
+    return response.data;
   },
 
   // Get admin dashboard statistics
