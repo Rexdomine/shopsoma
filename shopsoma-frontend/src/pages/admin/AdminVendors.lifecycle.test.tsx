@@ -23,6 +23,7 @@ const vendor = {
   business_name: 'Vendor One',
   email: 'vendor@example.com',
   full_name: 'Vendor One',
+  role: 'vendor',
   approved: true,
   commission_rate: 10,
   is_active: true,
@@ -36,7 +37,7 @@ const vendor = {
   store_active: true,
 };
 
-const actingAdminVendor = { ...vendor, id: 'vendor-admin', user_id: 'admin-user', email: 'admin@example.com' };
+const actingAdminVendor = { ...vendor, id: 'vendor-admin', user_id: 'admin-user', email: 'admin@example.com', role: 'admin' };
 
 beforeEach(() => {
   vi.clearAllMocks();

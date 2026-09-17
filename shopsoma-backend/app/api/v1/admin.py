@@ -869,6 +869,7 @@ async def list_vendors(
                 "business_phone": vendor.business_phone,
                 "email": user.email,
                 "full_name": user.full_name,
+                "role": user.role.value,
                 "approved": vendor.approved,
                 "is_featured_storefront": vendor.is_featured_storefront,
                 "featured_storefront_image_url": vendor.featured_storefront_image_url,

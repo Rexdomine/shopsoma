@@ -36,6 +36,7 @@ export interface VendorListItem {
   business_phone?: string;
   email: string;
   full_name: string;
+  role: 'customer' | 'vendor' | 'admin';
   approved: boolean;
   approved_at?: string;
   kyc_status?: string;

@@ -560,7 +560,7 @@ export default function AdminVendors() {
                           >
                             <Star className={`w-4 h-4 ${vendor.is_featured_storefront ? 'fill-current' : ''}`} />
                           </button>
-                          {canTagTestAccounts && !vendor.is_test_account && (
+                          {canTagTestAccounts && vendor.role !== 'admin' && !vendor.is_test_account && (
                             <button
                               type="button"
                               onClick={() => handleMarkAsTestAccount(vendor)}
