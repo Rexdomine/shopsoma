@@ -56,7 +56,8 @@ def _literal_assignment(name: str):
 
 def test_lane_3d_has_linear_phase_2b_child() -> None:
     graph = scripts()
-    assert graph.get_heads() == ["n1o2p3q4r5s6"]
+    assert graph.get_heads() == ["3d4e5f6a7b8c"]
+    assert graph.get_revision("3d4e5f6a7b8c").down_revision == "n1o2p3q4r5s6"
     assert graph.get_revision("n1o2p3q4r5s6").down_revision == "m0n1o2p3q4r5"
     assert graph.get_revision("1c2b3d4e").down_revision == "e6f7a8b9c0d1"
     assert graph.get_revision("e6f7a8b9c0d1").down_revision == "d5e6f7a8b9c0"
