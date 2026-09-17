@@ -15,9 +15,17 @@ depends_on = None
 
 
 def _find_id(conn, slug: str, name: str | None = None):
+    # Prefer the canonical slug, then fall back to a same-name legacy row.
+    # This makes slug repair deterministic when both predicates could match.
+    existing_id = conn.execute(
+        sa.text("SELECT id FROM categories WHERE slug = :slug"),
+        {"slug": slug},
+    ).scalar()
+    if existing_id or name is None:
+        return existing_id
     return conn.execute(
-        sa.text("SELECT id FROM categories WHERE slug = :slug OR (:name IS NOT NULL AND name = :name)"),
-        {"slug": slug, "name": name},
+        sa.text("SELECT id FROM categories WHERE name = :name"),
+        {"name": name},
     ).scalar()
 
 
@@ -28,14 +36,16 @@ def _ensure_category(conn, *, name: str, slug: str, parent_id, description: str,
             sa.text(
                 """
                 UPDATE categories
-                SET name = :name, parent_id = :parent_id, description = :description,
-                    display_order = :display_order, is_active = TRUE, updated_at = now()
+                SET name = :name, slug = :slug, parent_id = :parent_id,
+                    description = :description, display_order = :display_order,
+                    is_active = TRUE, updated_at = now()
                 WHERE id = :id
                 """
             ),
             {
                 "id": existing_id,
                 "name": name,
+                "slug": slug,
                 "parent_id": parent_id,
                 "description": description,
                 "display_order": display_order,

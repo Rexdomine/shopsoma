@@ -37,3 +37,10 @@ def test_homepage_category_downgrade_is_non_destructive() -> None:
     downgrade = source.split("def downgrade():", 1)[1]
     assert "DELETE FROM categories" not in downgrade
     assert "pass" in downgrade
+
+
+def test_name_reuse_repairs_the_requested_slug_deterministically() -> None:
+    source = MIGRATION.read_text()
+    assert 'SELECT id FROM categories WHERE slug = :slug' in source
+    assert 'SELECT id FROM categories WHERE name = :name' in source
+    assert "SET name = :name, slug = :slug" in source

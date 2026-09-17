@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 
 ROOT = Path(__file__).resolve().parents[1]
-HEAD = "3d4e5f6a7b8c"
+HEAD = "p2q3r4s5t6u7"
 CURRENT_HEAD_PARENT = "l9m0n1o2p3q4"
 FEATURED_VENDOR_MIGRATION = ROOT / "alembic" / "versions" / "n1o2p3q4r5s6_add_admin_featured_storefront_vendor.py"
 PREVIOUS_HEAD = "d5e6f7a8b9c0"
@@ -159,8 +159,8 @@ def test_domestic_rate_migration_is_the_single_linear_static_head() -> None:
     assert graph.get_heads() == [HEAD]
     head_revision = graph.get_revision(HEAD)
     assert head_revision is not None
-    assert head_revision.revision == "3d4e5f6a7b8c"
-    assert head_revision.down_revision == "n1o2p3q4r5s6"
+    assert head_revision.revision == "p2q3r4s5t6u7"
+    assert head_revision.down_revision == "3d4e5f6a7b8c"
     featured_vendor_revision = graph.get_revision("n1o2p3q4r5s6")
     assert Path(featured_vendor_revision.path) == FEATURED_VENDOR_MIGRATION
     assert featured_vendor_revision.down_revision == "m0n1o2p3q4r5"
