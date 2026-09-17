@@ -1,7 +1,7 @@
 """Vendor Activation API endpoints"""
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, update
 from pydantic import BaseModel, EmailStr
 from typing import Optional
 from uuid import UUID
@@ -222,11 +222,21 @@ async def verify_vendor_otp(
 
     await db.commit()
 
-    # Return activation token for password setting (NOT auth tokens yet)
-    # The activation token will be used in the set-password endpoint
+    # Mint a distinct capability only after OTP verification. The initiation
+    # token must never authorize password persistence by itself.
+    from datetime import timedelta
+    password_setup_token = create_access_token(
+        data={
+            "sub": str(user.id),
+            "email": user.email,
+            "purpose": "vendor_activation_password",
+        },
+        expires_delta=timedelta(minutes=15),
+    )
+
     return VerifyOTPResponse(
         message="Email verified successfully! Please create your password.",
-        activation_token=request.token,  # Reuse the same activation token
+        activation_token=password_setup_token,
         email=user.email
     )
 
@@ -314,7 +324,7 @@ async def set_vendor_password(
     from app.core.security import decode_token, get_password_hash
     payload = decode_token(request.activation_token)
 
-    if not payload or payload.get("purpose") != "vendor_activation":
+    if not payload or payload.get("purpose") != "vendor_activation_password":
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired activation token"
@@ -349,13 +359,31 @@ async def set_vendor_password(
             detail="User not found"
         )
 
-    # Update password
-    user.password_hash = get_password_hash(request.password)
+    if user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Vendor account is already active"
+        )
 
-    # Fully activate the account now that password is set
-    if not user.is_active:
-        user.is_active = True
-        user.email_verified = True
+    # Claim activation atomically. A conditional update prevents two workers
+    # carrying the same capability from both changing the password before
+    # either request observes the other's commit.
+    password_hash = get_password_hash(request.password)
+    activation_result = await db.execute(
+        update(User)
+        .where(User.id == user_uuid, User.is_active.is_(False))
+        .values(
+            hashed_password=password_hash,
+            is_active=True,
+            email_verified=True,
+        )
+    )
+    if activation_result.rowcount != 1:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Vendor account is already active"
+        )
 
     await db.commit()
 
