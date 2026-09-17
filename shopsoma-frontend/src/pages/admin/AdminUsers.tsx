@@ -28,6 +28,11 @@ export default function AdminUsers() {
     loadUsers();
   }, [page, roleFilter, statusFilter, search]);
 
+  useEffect(() => {
+    // Bulk actions are intentionally limited to the current result set.
+    setSelectedIds([]);
+  }, [page, roleFilter, statusFilter, search]);
+
   const loadUsers = async () => {
     try {
       setLoading(true);
@@ -327,7 +332,9 @@ export default function AdminUsers() {
                         aria-label="Select all visible users"
                         type="checkbox"
                         checked={selectableUsers.length > 0 && selectableUsers.every((candidate) => selectedIds.includes(candidate.id))}
-                        onChange={(event) => setSelectedIds(event.target.checked ? selectableUsers.map((candidate) => candidate.id) : [])}
+                        onChange={(event) => setSelectedIds((current) => event.target.checked
+                          ? Array.from(new Set([...current, ...selectableUsers.map((candidate) => candidate.id)]))
+                          : current.filter((id) => !selectableUsers.some((candidate) => candidate.id === id)))}
                       />
                     </th>
                     <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">

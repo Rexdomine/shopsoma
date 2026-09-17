@@ -21,11 +21,17 @@ export default function AdminVendors() {
   const [totalPages, setTotalPages] = useState(1);
   const [total, setTotal] = useState(0);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
 
   const pageSize = 20;
 
   useEffect(() => {
     loadVendors();
+  }, [page, approvedFilter, kycFilter, onboardingFilter, storeStatusFilter, search]);
+
+  useEffect(() => {
+    // Never retain hidden selections after the result set changes.
+    setSelectedIds([]);
   }, [page, approvedFilter, kycFilter, onboardingFilter, storeStatusFilter, search]);
 
   const loadVendors = async () => {
@@ -106,6 +112,24 @@ export default function AdminVendors() {
     } catch (error: any) {
       console.error('Failed to restore store:', error);
       showMessage('error', error?.response?.data?.detail || 'Failed to restore store');
+    }
+  };
+
+  const handleToggleVendorAccount = async (vendor: VendorListItem) => {
+    const action = vendor.is_active ? 'Deactivate' : 'Activate';
+    if (!window.confirm(`${action} this vendor account? This is reversible and does not delete its store, products, orders, or history.`)) {
+      return;
+    }
+
+    try {
+      setActionLoading(vendor.user_id);
+      await adminService.toggleUserStatus(vendor.user_id, !vendor.is_active);
+      showMessage('success', `${vendor.business_name} account ${vendor.is_active ? 'deactivated' : 'activated'} successfully`);
+      await loadVendors();
+    } catch (error: any) {
+      showMessage('error', error?.response?.data?.detail || error?.message || 'Failed to update vendor account status');
+    } finally {
+      setActionLoading(null);
     }
   };
 
@@ -370,14 +394,19 @@ export default function AdminVendors() {
                         aria-label="Select all visible vendors"
                         type="checkbox"
                         checked={selectableVendors.length > 0 && selectableVendors.every((vendor) => selectedIds.includes(vendor.user_id))}
-                        onChange={(event) => setSelectedIds(event.target.checked ? selectableVendors.map((vendor) => vendor.user_id) : [])}
+                        onChange={(event) => setSelectedIds((current) => event.target.checked
+                          ? Array.from(new Set([...current, ...selectableVendors.map((vendor) => vendor.user_id)]))
+                          : current.filter((id) => !selectableVendors.some((vendor) => vendor.user_id === id)))}
                       />
                     </th>
                     <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
                       Business
                     </th>
                     <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                      Status
+                      Approval
+                    </th>
+                    <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                      Account
                     </th>
                     <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
                       Store
@@ -426,6 +455,12 @@ export default function AdminVendors() {
                             Pending
                           </span>
                         )}
+                      </td>
+                      <td className="px-6 py-4">
+                        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium ${vendor.is_active ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                          {vendor.is_active ? <CheckCircle className="w-3 h-3" /> : <AlertCircle className="w-3 h-3" />}
+                          Account {vendor.is_active ? 'Active' : 'Inactive'}
+                        </span>
                       </td>
                       <td className="px-6 py-4">
                         {vendor.store_deleted_at ? (
@@ -504,7 +539,17 @@ export default function AdminVendors() {
                           >
                             <Star className={`w-4 h-4 ${vendor.is_featured_storefront ? 'fill-current' : ''}`} />
                           </button>
-                          <button type="button" onClick={async () => { if (!window.confirm(`${vendor.is_active ? 'Deactivate' : 'Activate'} this vendor account? This is reversible.`)) return; try { await adminService.toggleUserStatus(vendor.user_id, !vendor.is_active); await loadVendors(); } catch (err: any) { showMessage('error', err.message || 'Failed to update vendor status'); } }} className="p-2 text-[#105E53] hover:bg-green-50 rounded-lg" title={`${vendor.is_active ? 'Deactivate' : 'Activate'} vendor account`}>{vendor.is_active ? <PowerOff className="w-4 h-4" /> : <Power className="w-4 h-4" />}</button>
+                          <button
+                            type="button"
+                            onClick={() => handleToggleVendorAccount(vendor)}
+                            disabled={vendor.user_id === user?.id || actionLoading === vendor.user_id}
+                            aria-label={`${vendor.is_active ? 'Deactivate' : 'Activate'} vendor account`}
+                            aria-busy={actionLoading === vendor.user_id}
+                            className="p-2 text-[#105E53] hover:bg-green-50 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
+                            title={vendor.user_id === user?.id ? 'Cannot modify your own account status' : `${vendor.is_active ? 'Deactivate' : 'Activate'} vendor account`}
+                          >
+                            {vendor.is_active ? <PowerOff className="w-4 h-4" /> : <Power className="w-4 h-4" />}
+                          </button>
                           <button
                             onClick={() => navigate(`/admin/vendors/${vendor.id}`)}
                             className="p-2 text-gray-600 hover:text-[#105E53] hover:bg-gray-100 rounded-lg transition"
