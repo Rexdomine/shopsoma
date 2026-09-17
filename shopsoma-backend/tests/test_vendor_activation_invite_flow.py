@@ -255,6 +255,87 @@ async def test_admin_can_resend_vendor_activation_for_already_active_vendor(
 
 
 @pytest.mark.asyncio
+async def test_vendor_activation_requires_verified_one_time_password_setup_token(
+    client, db_session, monkeypatch
+):
+    """Only a post-OTP capability may set the password, and it cannot replay."""
+    from datetime import timedelta
+
+    from app.core.security import create_access_token, decode_token, verify_password
+    from app.models.user import User, UserRole
+    from app.models.vendor import KYCStatus, Vendor
+
+    user = User(
+        id=uuid.uuid4(),
+        email="verified-token-vendor@test.com",
+        hashed_password=None,
+        full_name="Verified Token Vendor",
+        role=UserRole.VENDOR,
+        email_verified=False,
+        is_active=False,
+    )
+    db_session.add(user)
+    await db_session.flush()
+    db_session.add(
+        Vendor(
+            id=uuid.uuid4(),
+            user_id=user.id,
+            business_name="Verified Token Vendor Shop",
+            approved=True,
+            kyc_status=KYCStatus.PENDING,
+            is_onboarding=True,
+        )
+    )
+    await db_session.commit()
+
+    initiation_token = create_access_token(
+        data={"sub": str(user.id), "email": user.email, "purpose": "vendor_activation"},
+        expires_delta=timedelta(minutes=30),
+    )
+    rejected = await client.post(
+        "/api/v1/vendor/activation/set-password",
+        json={"activation_token": initiation_token, "password": "Persisted!Pass2026"},
+    )
+    assert rejected.status_code == 401
+
+    async def otp_verified(*_args, **_kwargs):
+        return True, "Verification successful!", None
+
+    monkeypatch.setattr("app.api.v1.vendor_activation.VendorOTPService.verify_otp", otp_verified)
+    verified = await client.post(
+        "/api/v1/vendor/activation/verify-otp",
+        json={"token": initiation_token, "otp_code": "123456"},
+    )
+    assert verified.status_code == 200
+    password_setup_token = verified.json()["activation_token"]
+    decoded_password_setup_token = decode_token(password_setup_token)
+    assert decoded_password_setup_token is not None
+    assert decoded_password_setup_token["purpose"] == "vendor_activation_password"
+    assert password_setup_token != initiation_token
+
+    password = "Persisted!Pass2026"
+    accepted = await client.post(
+        "/api/v1/vendor/activation/set-password",
+        json={"activation_token": password_setup_token, "password": password},
+    )
+    assert accepted.status_code == 200
+    await db_session.refresh(user)
+    assert user.hashed_password and verify_password(password, user.hashed_password)
+
+    replay = await client.post(
+        "/api/v1/vendor/activation/set-password",
+        json={"activation_token": password_setup_token, "password": "Another!Pass2026"},
+    )
+    assert replay.status_code == 409
+
+    login = await client.post(
+        "/api/v1/auth/login",
+        json={"email": user.email, "password": password},
+    )
+    assert login.status_code == 200
+
+
+@pytest.mark.asyncio
 async def test_vendor_activation_password_persists_for_fresh_login(client, db_session):
     """The activation password must be stored in the field used by login."""
     from datetime import timedelta
