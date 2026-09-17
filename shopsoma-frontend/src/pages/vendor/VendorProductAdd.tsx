@@ -1602,7 +1602,7 @@ export default function VendorProductAdd() {
                 </div>
 
                 <div className="p-6 sm:p-8">
-                  <div className="grid items-stretch gap-6 lg:grid-cols-[minmax(220px,0.68fr)_minmax(0,1.32fr)]">
+                  <div className="grid min-w-0 items-stretch gap-6 2xl:grid-cols-[minmax(220px,0.68fr)_minmax(0,1.32fr)]">
                     <div className="flex flex-col rounded-[1.75rem] border border-[#105E53]/10 bg-[linear-gradient(145deg,#f8fbf9_0%,#eef5f2_100%)] p-6 sm:p-7">
                       <div>
                         <div className="flex items-center gap-2 text-[#105E53]">
