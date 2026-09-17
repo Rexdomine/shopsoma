@@ -34,12 +34,17 @@ from app.models.vendor_application import VendorApplication
 from app.schemas.auth import UserResponse, UserUpdate
 from app.schemas.common import PaginatedResponse
 from app.schemas.product import ProductApprovalRequest, ProductRejectionRequest, ProductFeatureUpdate
+from app.services.test_account_classification import classify_existing_staging_accounts
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
 
 class FeaturedStorefrontUpdate(BaseModel):
     is_featured_storefront: bool
+
+
+class TestAccountClassificationRequest(BaseModel):
+    apply: bool = False
 
 
 class BulkUserStatusUpdate(BaseModel):
@@ -302,6 +307,23 @@ class UserListItem(UserResponse):
 class UserListResponse(PaginatedResponse):
     """Paginated user list response"""
     items: List[UserListItem]
+
+
+@router.post("/test-accounts/classify")
+async def classify_test_accounts(
+    request: TestAccountClassificationRequest,
+    current_admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Preview or classify all current staging customer/vendor accounts."""
+    try:
+        return await classify_existing_staging_accounts(
+            db,
+            actor_id=current_admin.id,
+            apply=request.apply,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.get("/users", response_model=UserListResponse)

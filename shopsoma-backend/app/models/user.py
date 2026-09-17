@@ -1,5 +1,5 @@
 """User model"""
-from sqlalchemy import Column, String, Boolean, DateTime, Date, Enum as SQLEnum
+from sqlalchemy import Column, String, Boolean, DateTime, Date, Enum as SQLEnum, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -32,6 +32,11 @@ class User(Base):
     email_verified = Column(Boolean, default=False)
     is_active = Column(Boolean, default=True)
     is_guest_created = Column(Boolean, default=False, nullable=False)
+    # Explicit staging/test-data classification; never inferred from email patterns.
+    is_test_account = Column(Boolean, default=False, nullable=False, index=True)
+    test_account_tagged_at = Column(DateTime(timezone=True), nullable=True)
+    test_account_tagged_by = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    test_account_tag_reason = Column(String(255), nullable=True)
     profile_image_url = Column(String, nullable=True)
 
     # Payment gateway customer IDs
