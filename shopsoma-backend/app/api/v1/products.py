@@ -13,6 +13,7 @@ from sqlalchemy.orm import selectinload
 
 from app.core.database import get_db
 from app.api.dependencies import get_completed_vendor, get_current_admin
+from app.services.vendor_visibility import customer_visible_vendor_product_filter
 from app.models.user import User
 from app.models.category import Category
 from app.models.collection import Collection
@@ -602,6 +603,7 @@ async def list_products(
     filters = [
         Product.status == ProductStatus.ACTIVE,
         Product.moderation_status == ModerationStatus.APPROVED,
+        customer_visible_vendor_product_filter(),
     ]
 
     # Search
@@ -691,7 +693,16 @@ async def get_product(
     - Public storefront endpoint
     - Returns only customer-visible products
     """
-    query = select(Product).options(*PRODUCT_RELATIONSHIPS).where(Product.id == product_id)
+    query = (
+        select(Product)
+        .options(*PRODUCT_RELATIONSHIPS)
+        .where(
+            Product.id == product_id,
+            Product.status == ProductStatus.ACTIVE,
+            Product.moderation_status == ModerationStatus.APPROVED,
+            customer_visible_vendor_product_filter(),
+        )
+    )
 
     result = await db.execute(query)
     product = result.scalar_one_or_none()

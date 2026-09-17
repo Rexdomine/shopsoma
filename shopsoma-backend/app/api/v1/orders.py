@@ -14,6 +14,7 @@ import secrets
 import logging
 
 from app.core.database import get_db
+from app.services.vendor_visibility import customer_visible_vendor_product_filter
 from app.models.user import User, UserRole
 from app.models.order import Order, OrderItem, PaymentStatus, FulfillmentStatus
 from app.models.product import (
@@ -498,7 +499,10 @@ async def review_order(
         product_query = (
             select(Product)
             .options(selectinload(Product.variants), selectinload(Product.vendor))
-            .where(Product.id == item.product_id)
+            .where(
+                Product.id == item.product_id,
+                customer_visible_vendor_product_filter(),
+            )
         )
 
         product_result = await db.execute(product_query)
@@ -794,7 +798,10 @@ async def create_order(
                 selectinload(Product.images),
                 selectinload(Product.variations),
             )
-            .where(Product.id == item_data.product_id)
+            .where(
+                Product.id == item_data.product_id,
+                customer_visible_vendor_product_filter(),
+            )
         )
 
         product_result = await db.execute(product_query)

@@ -8,7 +8,7 @@ import uuid
 
 from app.core.database import get_db
 from app.models.cart import CartItem, Coupon
-from app.models.product import Product, Variation, SizeStock
+from app.models.product import Product, Variation
 from app.schemas.cart import (
     CartItemCreate,
     CartItemUpdate,
@@ -21,6 +21,7 @@ from app.schemas.cart import (
 from app.schemas.product import ProductResponse, ProductVariantResponse
 from app.api.dependencies import get_optional_user
 from app.models.user import User
+from app.services.vendor_visibility import customer_visible_vendor_product_filter
 
 router = APIRouter(prefix="/cart", tags=["cart"])
 
@@ -234,7 +235,9 @@ async def get_cart(
     user_uuid = cast_uuid(user_id)
 
     # Query cart items
-    query = select(CartItem).options(*CART_ITEM_LOAD_OPTIONS)
+    query = select(CartItem).options(*CART_ITEM_LOAD_OPTIONS).where(
+        CartItem.product.has(customer_visible_vendor_product_filter())
+    )
     if user_uuid:
         query = query.where(CartItem.user_id == user_uuid)
     else:
@@ -273,7 +276,10 @@ async def add_to_cart(
                 selectinload(Product.variants),
                 selectinload(Product.variations).selectinload(Variation.size_stocks),
             )
-            .where(Product.id == item_data.product_id)
+            .where(
+                Product.id == item_data.product_id,
+                customer_visible_vendor_product_filter(),
+            )
         )
         product = product_result.scalar_one_or_none()
 
@@ -389,6 +395,15 @@ async def update_cart_item(
 
         if not cart_item:
             raise HTTPException(status_code=404, detail="Cart item not found")
+
+        sellable_product = await db.scalar(
+            select(Product.id).where(
+                Product.id == cart_item.product_id,
+                customer_visible_vendor_product_filter(),
+            )
+        )
+        if not sellable_product:
+            raise HTTPException(status_code=404, detail="Product not found")
 
         purchase_option = resolve_cart_purchase_option(
             cart_item.product,
@@ -538,7 +553,7 @@ async def merge_guest_cart(
 
     if not session_id:
         # No guest session to merge, just return user's cart
-        print(f"[Cart API] merge_guest_cart: No session_id provided, returning user cart")
+        print("[Cart API] merge_guest_cart: No session_id provided, returning user cart")
         return await get_cart(current_user, session_id, db)
 
     # Fetch guest cart items (by session_id, user_id must be NULL)
@@ -553,7 +568,7 @@ async def merge_guest_cart(
 
     if not guest_items:
         # No guest cart to merge, return user's existing cart
-        print(f"[Cart API] merge_guest_cart: No guest items found, fetching user's existing cart")
+        print("[Cart API] merge_guest_cart: No guest items found, fetching user's existing cart")
         user_cart = await get_cart(current_user, session_id, db)
         print(f"[Cart API] merge_guest_cart: Returning user cart with {len(user_cart.items)} items")
         return user_cart

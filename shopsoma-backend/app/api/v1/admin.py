@@ -15,6 +15,7 @@ from pydantic import BaseModel
 
 from app.core.database import get_db
 from app.api.dependencies import get_current_admin
+from app.models.audit_log import AuditLog
 from app.models.product import (
     ModerationStatus,
     Product,
@@ -39,6 +40,11 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 
 class FeaturedStorefrontUpdate(BaseModel):
     is_featured_storefront: bool
+
+
+class BulkUserStatusUpdate(BaseModel):
+    user_ids: List[UUID]
+    is_active: bool
 
 
 def _featured_storefront_eligibility_error(vendor: Vendor, user: User) -> Optional[str]:
@@ -447,6 +453,58 @@ async def update_user(
     return user
 
 
+@router.put("/users/status/bulk")
+async def bulk_update_user_status(
+    payload: BulkUserStatusUpdate,
+    current_admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Apply one reversible account-status transition to a preflighted batch."""
+    if not payload.user_ids:
+        raise HTTPException(status_code=422, detail="At least one user ID is required")
+    if len(set(payload.user_ids)) != len(payload.user_ids):
+        raise HTTPException(status_code=422, detail="Duplicate user IDs are not allowed")
+    if current_admin.id in payload.user_ids:
+        raise HTTPException(status_code=400, detail="Cannot change your own status")
+
+    users = (await db.execute(select(User).where(User.id.in_(payload.user_ids)))).scalars().all()
+    users_by_id = {user.id: user for user in users}
+    missing_ids = [str(user_id) for user_id in payload.user_ids if user_id not in users_by_id]
+    if missing_ids:
+        raise HTTPException(
+            status_code=404,
+            detail={"message": "One or more users were not found", "missing_user_ids": missing_ids},
+        )
+
+    results = []
+    for user_id in payload.user_ids:
+        user = users_by_id[user_id]
+        previous_is_active = user.is_active
+        if previous_is_active == payload.is_active:
+            results.append({"user_id": str(user.id), "status": "unchanged", "is_active": user.is_active})
+            continue
+
+        user.is_active = payload.is_active
+        db.add(
+            AuditLog(
+                user_id=current_admin.id,
+                action="user_activated" if payload.is_active else "user_deactivated",
+                entity_type="user",
+                entity_id=user.id,
+                old_values={"is_active": previous_is_active},
+                new_values={"is_active": payload.is_active},
+            )
+        )
+        results.append({"user_id": str(user.id), "status": "updated", "is_active": user.is_active})
+
+    await db.commit()
+    return {
+        "requested_count": len(payload.user_ids),
+        "updated_count": sum(result["status"] == "updated" for result in results),
+        "results": results,
+    }
+
+
 @router.put("/users/{user_id}/status")
 async def toggle_user_status(
     user_id: UUID,
@@ -475,8 +533,18 @@ async def toggle_user_status(
             detail="Cannot change your own status"
         )
 
-    # Update status
+    previous_is_active = user.is_active
     user.is_active = is_active
+    db.add(
+        AuditLog(
+            user_id=current_admin.id,
+            action="user_activated" if is_active else "user_deactivated",
+            entity_type="user",
+            entity_id=user.id,
+            old_values={"is_active": previous_is_active},
+            new_values={"is_active": is_active},
+        )
+    )
 
     await db.commit()
     await db.refresh(user)

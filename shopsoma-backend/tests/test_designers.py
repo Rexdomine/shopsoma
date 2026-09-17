@@ -41,6 +41,7 @@ async def test_public_designers_list_only_returns_approved(
         business_name="Approved Brand",
         kyc_status=KYCStatus.APPROVED,
         approved=True,
+        is_onboarding=False,
         total_products=3,
         total_orders=2,
     )

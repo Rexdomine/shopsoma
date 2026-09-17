@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Search, Trash2, Power, PowerOff, AlertCircle, CheckCircle, Users, Mail, CheckCircle as VerifiedIcon, Key } from 'lucide-react';
+import { Search, Power, PowerOff, AlertCircle, CheckCircle, Users, Mail, CheckCircle as VerifiedIcon, Key } from 'lucide-react';
 import AdminSidebar from '../../components/admin/AdminSidebar';
 import { adminService, type UserListItem } from '../../services/adminService';
 import { useAuth } from '../../context/AuthContext';
@@ -7,6 +7,8 @@ import { useAuth } from '../../context/AuthContext';
 export default function AdminUsers() {
   const [users, setUsers] = useState<UserListItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [bulkLoading, setBulkLoading] = useState(false);
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
@@ -14,7 +16,6 @@ export default function AdminUsers() {
   const [roleFilter, setRoleFilter] = useState<string>('all');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
-  const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [resetPasswordUser, setResetPasswordUser] = useState<UserListItem | null>(null);
   const [newPassword, setNewPassword] = useState('');
@@ -25,6 +26,11 @@ export default function AdminUsers() {
 
   useEffect(() => {
     loadUsers();
+  }, [page, roleFilter, statusFilter, search]);
+
+  useEffect(() => {
+    // Bulk actions are intentionally limited to the current result set.
+    setSelectedIds([]);
   }, [page, roleFilter, statusFilter, search]);
 
   const loadUsers = async () => {
@@ -64,17 +70,28 @@ export default function AdminUsers() {
     }
   };
 
-  const handleDeleteUser = async (userId: string) => {
+  const handleBulkStatus = async (isActive: boolean) => {
+    const targetIds = selectedIds.filter((id) => id !== user?.id);
+    if (targetIds.length === 0) {
+      showMessage('error', 'Select at least one other account to change its status');
+      return;
+    }
+
+    const action = isActive ? 'activate' : 'deactivate';
+    if (!window.confirm(`${action === 'activate' ? 'Activate' : 'Deactivate'} ${targetIds.length} selected account${targetIds.length === 1 ? '' : 's'}? This is reversible.`)) {
+      return;
+    }
+
     try {
-      setActionLoading(userId);
-      await adminService.deleteUser(userId);
-      showMessage('success', 'User deleted successfully');
-      setDeleteConfirm(null);
-      loadUsers();
+      setBulkLoading(true);
+      const result = await adminService.bulkUpdateUserStatus(targetIds, isActive);
+      setSelectedIds([]);
+      showMessage('success', `${result.updated_count} account${result.updated_count === 1 ? '' : 's'} ${action}d successfully`);
+      await loadUsers();
     } catch (err: any) {
-      showMessage('error', err.message || 'Failed to delete user');
+      showMessage('error', err?.response?.data?.detail || err.message || `Failed to ${action} selected accounts`);
     } finally {
-      setActionLoading(null);
+      setBulkLoading(false);
     }
   };
 
@@ -103,6 +120,8 @@ export default function AdminUsers() {
     setMessage({ type, text });
     setTimeout(() => setMessage(null), 5000);
   };
+
+  const selectableUsers = users.filter((candidate) => candidate.id !== user?.id);
 
   const formatDate = (dateString?: string) => {
     if (!dateString) return 'Never';
@@ -150,6 +169,7 @@ export default function AdminUsers() {
         {/* Message */}
         {message && (
           <div
+            role="alert"
             className={`rounded-xl p-4 flex items-center gap-3 ${
               message.type === 'success'
                 ? 'bg-green-50 border border-green-200 text-green-800'
@@ -276,6 +296,20 @@ export default function AdminUsers() {
           </div>
         </div>
 
+        {selectedIds.length > 0 && (
+          <div role="region" aria-label="Bulk account status actions" className="bg-blue-50 border border-blue-200 rounded-xl p-4 flex items-center justify-between">
+            <p>{selectedIds.length} selected. Status changes are reversible; no permanent deletion.</p>
+            <div className="flex gap-2">
+              <button disabled={bulkLoading} onClick={() => handleBulkStatus(true)}>
+                Activate selected
+              </button>
+              <button disabled={bulkLoading} onClick={() => handleBulkStatus(false)}>
+                Deactivate selected
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Users table */}
         <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
           {loading ? (
@@ -293,6 +327,16 @@ export default function AdminUsers() {
               <table className="w-full">
                 <thead className="bg-gray-50 border-b border-gray-200">
                   <tr>
+                    <th>
+                      <input
+                        aria-label="Select all visible users"
+                        type="checkbox"
+                        checked={selectableUsers.length > 0 && selectableUsers.every((candidate) => selectedIds.includes(candidate.id))}
+                        onChange={(event) => setSelectedIds((current) => event.target.checked
+                          ? Array.from(new Set([...current, ...selectableUsers.map((candidate) => candidate.id)]))
+                          : current.filter((id) => !selectableUsers.some((candidate) => candidate.id === id)))}
+                      />
+                    </th>
                     <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
                       User
                     </th>
@@ -319,6 +363,15 @@ export default function AdminUsers() {
                 <tbody className="divide-y divide-gray-200">
                   {users.map((u) => (
                     <tr key={u.id} className="hover:bg-gray-50 transition">
+                      <td>
+                        <input
+                          aria-label={`Select ${u.email}`}
+                          type="checkbox"
+                          disabled={u.id === user?.id}
+                          checked={selectedIds.includes(u.id)}
+                          onChange={(event) => setSelectedIds(event.target.checked ? [...selectedIds, u.id] : selectedIds.filter((id) => id !== u.id))}
+                        />
+                      </td>
                       <td className="px-6 py-4">
                         <div>
                           <p className="text-sm font-semibold text-gray-900">{u.full_name}</p>
@@ -381,33 +434,6 @@ export default function AdminUsers() {
                             {u.is_active ? <PowerOff className="w-4 h-4" /> : <Power className="w-4 h-4" />}
                           </button>
 
-                          {/* Delete Button */}
-                          {deleteConfirm === u.id ? (
-                            <div className="flex items-center gap-2">
-                              <button
-                                onClick={() => handleDeleteUser(u.id)}
-                                disabled={actionLoading === u.id}
-                                className="px-3 py-1.5 text-xs font-semibold bg-red-600 text-white rounded-lg hover:bg-red-700 transition disabled:opacity-50"
-                              >
-                                Confirm
-                              </button>
-                              <button
-                                onClick={() => setDeleteConfirm(null)}
-                                className="px-3 py-1.5 text-xs font-semibold border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition"
-                              >
-                                Cancel
-                              </button>
-                            </div>
-                          ) : (
-                            <button
-                              onClick={() => setDeleteConfirm(u.id)}
-                              disabled={u.id === user?.id}
-                              className="p-2 text-red-600 hover:text-red-700 hover:bg-red-50 rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed"
-                              title={u.id === user?.id ? 'Cannot delete your own account' : 'Delete user'}
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          )}
                         </div>
                       </td>
                     </tr>

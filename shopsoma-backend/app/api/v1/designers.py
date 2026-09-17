@@ -20,7 +20,14 @@ async def list_designers(db: AsyncSession = Depends(get_db)):
     """List approved designers for public storefront browsing."""
     result = await db.execute(
         select(Vendor)
-        .where(Vendor.approved.is_(True))
+        .join(User, Vendor.user_id == User.id)
+        .where(
+            Vendor.approved.is_(True),
+            Vendor.is_onboarding.is_(False),
+            Vendor.store_active.is_(True),
+            Vendor.store_deleted_at.is_(None),
+            User.is_active.is_(True),
+        )
         .order_by(Vendor.created_at.desc())
     )
     return result.scalars().all()

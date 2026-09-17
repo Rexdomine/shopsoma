@@ -10,7 +10,10 @@ from sqlalchemy.exc import DBAPIError
 from app.api.dependencies import get_optional_user
 from app.core.database import get_db
 from app.models.checkout_shipping_estimate import CheckoutShippingEstimate
+from app.models.order import OrderItem
+from app.models.product import Product
 from app.models.user import User
+from app.services.vendor_visibility import customer_visible_vendor_product_filter
 from app.schemas.checkout_shipping_estimate import CheckoutEstimateResponse
 from app.services.checkout.capabilities import authorize_checkout_actor
 from app.services.checkout.estimates import (
@@ -44,6 +47,25 @@ async def _checkout_actor(db, order, current_user, capability):
     )
 
 
+async def _require_sellable_checkout_order_products(db, order) -> None:
+    """Block new pre-payment checkout work for a seller no longer eligible to sell."""
+    product_ids = set(
+        (await db.scalars(
+            select(OrderItem.product_id).where(OrderItem.order_id == order.id)
+        )).all()
+    )
+    eligible_product_ids = set(
+        (await db.scalars(
+            select(Product.id).where(
+                Product.id.in_(product_ids),
+                customer_visible_vendor_product_filter(),
+            )
+        )).all()
+    )
+    if product_ids != eligible_product_ids:
+        raise HTTPException(status_code=404, detail="checkout not available")
+
+
 @router.post(
     "", response_model=CheckoutEstimateResponse, status_code=status.HTTP_201_CREATED
 )
@@ -59,11 +81,13 @@ async def create_checkout_estimate(
     order = await load_checkout_order(db, order_id)
     if not order:
         raise HTTPException(status_code=404, detail="checkout not available")
+    await _require_sellable_checkout_order_products(db, order)
     actor_type, actor_id = await _checkout_actor(db, order, current_user, capability)
     await db.commit()
     order = await load_checkout_order(db, order_id)
     if not order:
         raise HTTPException(status_code=404, detail="checkout not available")
+    await _require_sellable_checkout_order_products(db, order)
     estimate = await create_estimate(
         db,
         order=order,
