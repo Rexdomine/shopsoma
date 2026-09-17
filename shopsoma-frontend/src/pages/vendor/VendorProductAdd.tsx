@@ -64,7 +64,9 @@ function ProductImageFramePreview({
   compact = false,
 }: ProductImageFramePreviewProps) {
   return (
-    <div className="rounded-3xl border border-[#105E53]/10 bg-white/90 p-4 shadow-sm shadow-[#105E53]/5">
+    <div className={`flex h-full rounded-[1.75rem] border border-[#105E53]/10 bg-white shadow-sm shadow-[#105E53]/5 ${
+      compact ? 'flex-col p-4' : 'flex-col p-6 sm:p-7'
+    }`}>
       <div className="flex items-center justify-between gap-3">
         <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#105E53]">
           PDP frame
@@ -74,8 +76,8 @@ function ProductImageFramePreview({
         </span>
       </div>
       <div
-        className={`mt-4 mx-auto aspect-[4/5] w-full overflow-hidden rounded-2xl border border-[#105E53]/15 bg-[linear-gradient(135deg,#f8faf9_0%,#eef4f2_100%)] shadow-inner ${
-          compact ? 'max-w-[132px]' : 'max-w-[190px]'
+        className={`mt-7 mx-auto aspect-[4/5] w-full overflow-hidden rounded-[1.4rem] border border-[#105E53]/15 bg-[linear-gradient(135deg,#f8faf9_0%,#eef4f2_100%)] shadow-inner ${
+          compact ? 'max-w-[132px]' : 'max-w-[272px]'
         }`}
       >
         {imageSrc ? (
@@ -92,7 +94,7 @@ function ProductImageFramePreview({
           </div>
         )}
       </div>
-      <p className="mt-3 text-center text-[11px] leading-relaxed text-gray-500">
+      <p className="mt-5 text-center font-serif text-sm leading-relaxed text-gray-500">
         Check product centering before publishing.
       </p>
     </div>
@@ -1602,39 +1604,39 @@ export default function VendorProductAdd() {
                 </div>
 
                 <div className="p-6 sm:p-8">
-                  <div className="grid items-stretch gap-6 lg:grid-cols-[minmax(0,1fr)_250px]">
+                  <div className="grid min-w-0 items-stretch gap-6 2xl:grid-cols-[minmax(220px,0.68fr)_minmax(0,1.32fr)]">
                     <div className="flex flex-col rounded-[1.75rem] border border-[#105E53]/10 bg-[linear-gradient(145deg,#f8fbf9_0%,#eef5f2_100%)] p-6 sm:p-7">
                       <div>
                         <div className="flex items-center gap-2 text-[#105E53]">
                           <span className="h-2 w-2 rounded-full bg-[#C99A3D]" aria-hidden="true" />
-                          <p className="text-[11px] font-semibold uppercase tracking-[0.2em]">Image standard</p>
+                          <p className="font-serif text-[13px] font-semibold uppercase tracking-[0.2em]">Image standard</p>
                         </div>
-                        <h3 className="mt-3 max-w-md font-serif text-2xl leading-tight text-gray-950">
+                        <h3 className="mt-7 max-w-[15rem] font-serif text-3xl font-medium leading-[1.12] tracking-[-0.015em] text-gray-950">
                           Give every product a clean, confident frame.
                         </h3>
-                        <p className="mt-3 max-w-xl text-sm leading-6 text-gray-600">
+                        <p className="mt-6 max-w-[24rem] font-serif text-base leading-7 text-gray-600">
                           Use a portrait 4:5 image and keep the product centered in frame so the gallery feels balanced across the storefront.
                         </p>
                       </div>
 
-                      <div className="mt-7 grid gap-3 sm:grid-cols-3">
+                      <div className="mt-8 grid gap-3">
                         <div className="rounded-2xl border border-white/80 bg-white/75 p-4 shadow-sm shadow-[#105E53]/5">
-                          <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-500">Ratio</p>
-                          <p className="mt-2 text-lg font-semibold text-[#105E53]">4:5</p>
+                          <p className="font-serif text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-500">Ratio</p>
+                          <p className="mt-2 font-serif text-xl font-semibold text-[#105E53]">4:5</p>
                         </div>
                         <div className="rounded-2xl border border-white/80 bg-white/75 p-4 shadow-sm shadow-[#105E53]/5">
-                          <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-500">Recommended</p>
-                          <p className="mt-2 text-sm font-semibold text-[#105E53]">1600 × 2000 px</p>
+                          <p className="font-serif text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-500">Recommended</p>
+                          <p className="mt-2 font-serif text-sm font-semibold text-[#105E53]">1600 × 2000 px</p>
                         </div>
                         <div className="rounded-2xl border border-white/80 bg-white/75 p-4 shadow-sm shadow-[#105E53]/5">
-                          <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-500">Minimum</p>
-                          <p className="mt-2 text-sm font-semibold text-[#105E53]">1280 × 1600 px</p>
+                          <p className="font-serif text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-500">Minimum</p>
+                          <p className="mt-2 font-serif text-sm font-semibold text-[#105E53]">1280 × 1600 px</p>
                         </div>
                       </div>
 
                       <div className="mt-6 flex gap-3 border-t border-[#105E53]/10 pt-5">
                         <span className="mt-1 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[#105E53] text-[11px] font-bold text-white" aria-hidden="true">i</span>
-                        <p className="text-xs leading-5 text-gray-600">
+                        <p className="font-serif text-sm leading-6 text-gray-600">
                           Correct dimensions alone do not guarantee a perfect display. Keep the product away from the top, bottom, left, and right edges.
                         </p>
                       </div>
