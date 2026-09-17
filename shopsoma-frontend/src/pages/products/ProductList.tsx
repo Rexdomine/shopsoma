@@ -244,7 +244,7 @@ export default function ProductList({
 
   useEffect(() => {
     const loadProducts = async () => {
-      const cacheKey = `shopsoma_products_${initialParamsKey || 'all'}`;
+      const cacheKey = `shopsoma_products_${initialParamsKey || 'all'}${stableInitialParams?.category_id ? ':all-pages-v2' : ''}`;
       const cacheRaw = sessionStorage.getItem(cacheKey);
       let hasCachedData = false;
 
@@ -274,10 +274,25 @@ export default function ProductList({
           sort_order: 'desc',
           ...stableInitialParams,
         });
-        setAllProducts(response.products || []);
+        let products = response.products || [];
+        if (stableInitialParams?.category_id && response.total_pages > 1) {
+          const remainingPages = await Promise.all(
+            Array.from({ length: response.total_pages - 1 }, (_, index) =>
+              productService.getProducts({
+                page: index + 2,
+                page_size: 60,
+                sort_by: 'created_at',
+                sort_order: 'desc',
+                ...stableInitialParams,
+              }),
+            ),
+          );
+          products = products.concat(...remainingPages.map((pageResponse) => pageResponse.products || []));
+        }
+        setAllProducts(products);
         sessionStorage.setItem(
           cacheKey,
-          JSON.stringify({ products: response.products || [], timestamp: Date.now() })
+          JSON.stringify({ products, timestamp: Date.now() })
         );
         setError(null);
       } catch (err) {
