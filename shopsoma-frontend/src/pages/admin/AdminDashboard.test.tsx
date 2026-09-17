@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import AdminDashboard from './AdminDashboard';
 
 vi.mock('../../components/admin/AdminSidebar', () => ({
-  default: () => <aside aria-label="Admin navigation" />,
+  default: () => <aside aria-label="Admin navigation" className="w-full md:min-h-screen md:sticky" />,
 }));
 
 describe('AdminDashboard', () => {
@@ -23,5 +23,18 @@ describe('AdminDashboard', () => {
     expect(screen.getByRole('link', { name: /^Products/ })).toHaveAttribute('href', '/admin/products');
     expect(screen.getByRole('link', { name: /^Payouts/ })).toHaveAttribute('href', '/admin/payouts');
     expect(screen.getByRole('link', { name: /^Settings/ })).toHaveAttribute('href', '/admin/settings');
+    expect(screen.queryByRole('link', { name: /^Analytics/ })).not.toBeInTheDocument();
+  });
+
+  it('stacks the sidebar and overview content on small screens', () => {
+    render(
+      <MemoryRouter>
+        <AdminDashboard />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByRole('main')).toHaveClass('flex-1');
+    expect(screen.getByRole('main').parentElement).toHaveClass('flex', 'flex-col', 'md:flex-row');
+    expect(screen.getByRole('main').previousElementSibling).toHaveClass('w-full', 'md:sticky', 'md:min-h-screen');
   });
 });

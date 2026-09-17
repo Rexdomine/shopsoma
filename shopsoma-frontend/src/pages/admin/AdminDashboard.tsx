@@ -1,5 +1,4 @@
 import {
-  BarChart3,
   FileText,
   Package,
   Settings,
@@ -55,12 +54,7 @@ const overviewLinks = [
     route: ROUTES.ADMIN_PAYOUTS,
     icon: Wallet,
   },
-  {
-    label: 'Analytics',
-    description: 'View marketplace performance insights.',
-    route: '/admin/analytics',
-    icon: BarChart3,
-  },
+
   {
     label: 'Settings',
     description: 'Configure platform-wide operational settings.',
@@ -71,7 +65,7 @@ const overviewLinks = [
 
 export default function AdminDashboard() {
   return (
-    <div className="min-h-screen bg-[var(--color-page-bg)] md:flex">
+    <div className="min-h-screen bg-[var(--color-page-bg)] flex flex-col md:flex-row">
       <AdminSidebar activePrimary="dashboard" />
       <main className="min-w-0 flex-1 p-5 sm:p-8">
         <div className="mx-auto max-w-6xl space-y-8">
