@@ -96,15 +96,15 @@ type ProductListProps = {
 };
 
 const DEFAULT_HERO: HeroContent = {
-  title: 'Lisa Folawiyo',
-  body: 'Kooky Recipes Bad Raw Viral. Mukbang Pitchfork Party Church-key Viral Bicycle Rights Photo Chicharrones Cray. Heirloom Cray Blue Bottle Shaman Health Art Party Tumeric Salvia',
+  title: 'The ShopSoma Edit',
+  body: 'A considered selection of contemporary fashion, chosen for the way you live, work and go out.',
   imageUrl: '/images/hero/demo-image-2.png',
-  ctaLabel: 'Learn More',
+  ctaLabel: 'Shop the edit',
 };
 
 const MEN_HERO: HeroContent = {
-  title: 'Menswear: Elevated Everyday Style',
-  body: 'Discover tailored pieces, bold silhouettes and everyday staples, curated for the modern man.',
+  title: 'Menswear for the modern man',
+  body: 'Easy tailoring, confident silhouettes and everyday staples, selected for the modern man.',
   imageUrl: MEN_HERO_IMAGE_URL,
   mobileImageUrl: MEN_HERO_MOBILE_IMAGE_URL,
   imagePositionClassName: 'object-[40%_25%] max-sm:object-[25%_40%]',
@@ -112,8 +112,8 @@ const MEN_HERO: HeroContent = {
 };
 
 const WOMEN_HERO: HeroContent = {
-  title: 'Womenswear: Effortless Elegance',
-  body: 'Explore statement pieces, refined tailoring and everyday essentials crafted for modern women.',
+  title: 'Womenswear for every style',
+  body: 'Explore ShopSoma’s hand-picked selection, from quiet essentials to pieces that make an entrance.',
   imageUrl: WOMEN_HERO_IMAGE_URL,
   mobileImageUrl: WOMEN_HERO_MOBILE_IMAGE_URL,
   imagePositionClassName: 'object-[40%_0%] max-sm:object-[36%_42%]',
