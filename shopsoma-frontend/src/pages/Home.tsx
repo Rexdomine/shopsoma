@@ -575,7 +575,7 @@ function EditorialSection() {
             lineHeight: '1.8'
           }}
         >
-          Shopsoma Is A Fund Fashion Bird Meh Dollar. +1 +1 Semiotics Direct Lyft Hexagon Beer Pug Locavore. Squid It Of Crucifix Cardigan Bushwick Organic You Cleanse. Bushwick Shabby Tumblr Ennui Big Photo Humblebrag Hoodie. Neutra Heirloom Thundercats Booth Irony Hoodie.
+          Kilentar’s Autumn/Winter 2026 collection brings pattern, movement and a confident ease to the season. Discover expressive pieces for late dinners, open doors and the moments worth dressing for.
         </p>
 
         {/* Editorial Image Section */}
