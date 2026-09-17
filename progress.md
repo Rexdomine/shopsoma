@@ -33,4 +33,5 @@
 - Backend safety suite now includes wishlist, stale cart mutation/read, and checkout-estimate seller revalidation; all focused checks are green.
 - Surrounding backend Admin/vendor/onboarding regression set: 9 passed.
 - Full frontend suite: 140 passed, 1 failed in untouched `src/pages/checkout/Checkout.test.tsx` guest Paystack capability session-storage assertion; implementation-specific frontend tests and production build pass. Treat this as a baseline gate pending independent diagnosis, not as lifecycle evidence.
-- Browser QA, commit/PR/review remain pending.
+- Published commit `857e6f119fd8a3833a2be980999e35e108877afa` on `feat/admin-account-lifecycle-controls` and opened PR #152 against `develop`: https://github.com/Rexdomine/shopsoma/pull/152.
+- Requested exact-head Codex review with `@codex review`. Hosted checks were queued/in progress at publication; no merge, deployment, or production/staging data mutation occurred.
