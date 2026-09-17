@@ -54,6 +54,38 @@ describe('ProductList', () => {
     getSubcategoriesMock.mockResolvedValue([]);
     getFeaturedStorefrontVendorsMock.mockResolvedValue([]);
     getFeaturedRotationSettingsMock.mockResolvedValue({ rotation_minutes: 10 });
+    window.sessionStorage.clear();
+  });
+
+  it('renders the first category page before background pages finish loading', async () => {
+    let resolveSecondPage: ((value: { products: never[] }) => void) | undefined;
+    const secondPage = new Promise<{ products: never[] }>((resolve) => {
+      resolveSecondPage = resolve;
+    });
+    getProductsMock
+      .mockResolvedValueOnce({ products: [{ id: 'first-page-product', category_name: 'Men' }], total_pages: 2 })
+      .mockReturnValueOnce(secondPage);
+
+    render(<MemoryRouter><ProductList initialParams={{ category_id: 'men-id' }} /></MemoryRouter>);
+
+    await waitFor(() => expect(screen.getAllByTestId('product-first-page-product')).not.toHaveLength(0));
+    expect(screen.queryByText('Preparing the catalog...')).not.toBeInTheDocument();
+    resolveSecondPage?.({ products: [] });
+  });
+
+  it('keeps API products visible when session storage caching fails', async () => {
+    getProductsMock.mockResolvedValue({
+      products: [{ id: 'uncached-product', category_name: 'Men' }],
+    });
+    const setItemSpy = vi.spyOn(window.sessionStorage, 'setItem').mockImplementation(() => {
+      throw new DOMException('quota exceeded', 'QuotaExceededError');
+    });
+
+    render(<MemoryRouter><ProductList /></MemoryRouter>);
+
+    await waitFor(() => expect(screen.getAllByTestId('product-uncached-product')).not.toHaveLength(0));
+    expect(screen.queryByText('We could not load the current collection. Please refresh.')).not.toBeInTheDocument();
+    setItemSpy.mockRestore();
   });
 
   it('refetches when initialParams change', async () => {

@@ -276,6 +276,9 @@ export default function ProductList({
         });
         let products = response.products || [];
         setAllProducts(products);
+        setError(null);
+        // The first page is usable immediately; additional category pages are background enrichment.
+        setLoading(false);
         if (stableInitialParams?.category_id && response.total_pages > 1) {
           for (let nextPage = 2; nextPage <= response.total_pages; nextPage += 1) {
             try {
@@ -293,10 +296,15 @@ export default function ProductList({
             }
           }
         }
-        sessionStorage.setItem(
-          cacheKey,
-          JSON.stringify({ products, timestamp: Date.now() })
-        );
+        try {
+          sessionStorage.setItem(
+            cacheKey,
+            JSON.stringify({ products, timestamp: Date.now() })
+          );
+        } catch (cacheError) {
+          // Storage quota/private-mode failures must not hide products already loaded from the API.
+          console.warn('Unable to cache products for this session', cacheError);
+        }
         setError(null);
       } catch (err) {
         if (!hasCachedData) {
