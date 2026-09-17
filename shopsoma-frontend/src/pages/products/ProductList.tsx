@@ -247,21 +247,16 @@ export default function ProductList({
     const loadProducts = async () => {
       const cacheKey = `shopsoma_products_${initialParamsKey || 'all'}${stableInitialParams?.category_id ? ':all-pages-v2' : ''}`;
       const cacheRaw = sessionStorage.getItem(cacheKey);
-      let cachedProducts: Product[] | null = null;
-
       if (cacheRaw) {
         try {
           const cached = JSON.parse(cacheRaw) as { products: Product[]; timestamp: number };
-          if (cached?.products?.length) {
-            // Cached data is only a fallback. Revalidate it before rendering so
-            // removed or moderation-hidden products cannot reappear from storage.
-            cachedProducts = cached.products;
-          }
+          // Parse cached data only to discard malformed storage below. Cached
+          // products are never rendered without current API confirmation.
+          void cached;
         } catch {
           sessionStorage.removeItem(cacheKey);
         }
       }
-      const hasCachedData = Boolean(cachedProducts?.length);
 
       try {
         if (cancelled) return;
@@ -313,13 +308,11 @@ export default function ProductList({
         setError(null);
       } catch (err) {
         if (cancelled) return;
-        if (hasCachedData && cachedProducts) {
-          setAllProducts(cachedProducts);
-          setError(null);
-        } else {
-          console.error('Failed to load products', err);
-          setError('We could not load the current collection. Please refresh.');
-        }
+        console.error('Failed to load products', err);
+        // Fail closed: stale session data may contain products that are now
+        // unapproved, deactivated, or no longer visible to customers.
+        setAllProducts([]);
+        setError('We could not load the current collection. Please refresh.');
       } finally {
         if (!cancelled) {
           setLoading(false);

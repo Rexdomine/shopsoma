@@ -109,8 +109,24 @@ describe('ProductList', () => {
 
     expect(screen.queryByTestId('product-stale-product')).not.toBeInTheDocument();
     resolveProducts?.({ products: [{ id: 'fresh-product', category_name: 'Men' }] });
-    await waitFor(() => expect(screen.getByTestId('product-fresh-product')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getAllByTestId('product-fresh-product')).not.toHaveLength(0));
   });
+
+  it('fails closed when cached products cannot be revalidated', async () => {
+    window.sessionStorage.setItem(
+      'shopsoma_products_all',
+      JSON.stringify({ products: [{ id: 'unverified-product', category_name: 'Men' }], timestamp: Date.now() }),
+    );
+    getProductsMock.mockRejectedValueOnce(new Error('temporary API failure'));
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    render(<MemoryRouter><ProductList /></MemoryRouter>);
+
+    await waitFor(() => expect(screen.getByText('We could not load the current collection. Please refresh.')).toBeInTheDocument());
+    expect(screen.queryByTestId('product-unverified-product')).not.toBeInTheDocument();
+    errorSpy.mockRestore();
+  });
+
   it('keeps API products visible when session storage caching fails', async () => {
     getProductsMock.mockResolvedValue({
       products: [{ id: 'uncached-product', category_name: 'Men' }],
