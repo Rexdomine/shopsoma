@@ -249,8 +249,10 @@ async def get_app_setting_value(db: AsyncSession, key: str, default: str = "") -
     return setting.value if setting else default
 
 
-async def update_app_setting_value(db: AsyncSession, key: str, value: str) -> None:
-    """Helper to update app setting value by key"""
+async def update_app_setting_value(
+    db: AsyncSession, key: str, value: str, *, commit: bool = True
+) -> None:
+    """Update an app setting, optionally leaving commit ownership to the caller."""
     query = select(AppSetting).where(AppSetting.key == key)
     result = await db.execute(query)
     setting = result.scalar_one_or_none()
@@ -266,7 +268,8 @@ async def update_app_setting_value(db: AsyncSession, key: str, value: str) -> No
         )
         db.add(new_setting)
 
-    await db.commit()
+    if commit:
+        await db.commit()
 
 
 @router.get("/shipping-provider", response_model=ShippingProviderSettings)
@@ -504,13 +507,15 @@ async def update_commission_settings(
     Historical order items and payouts are not mutated.
     """
     commission_rate = normalize_commission_rate(payload.commission_rate)
-    await update_app_setting_value(db, COMMISSION_SETTING_KEY, str(commission_rate))
+    await update_app_setting_value(
+        db, COMMISSION_SETTING_KEY, str(commission_rate), commit=False
+    )
 
     if payload.apply_to_existing_vendors:
         await db.execute(
             sqlalchemy_update(Vendor).values(commission_rate=commission_rate)
         )
-        await db.commit()
+    await db.commit()
 
     result = await db.execute(
         select(AppSetting).where(AppSetting.key == COMMISSION_SETTING_KEY)
