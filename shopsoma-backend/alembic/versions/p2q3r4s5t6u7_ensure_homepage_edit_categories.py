@@ -1,7 +1,7 @@
 """ensure homepage edit categories exist
 
 Revision ID: p2q3r4s5t6u7
-Revises: f6a7b8c9d0e1
+Revises: 3d4e5f6a7b8c
 Create Date: 2026-09-17 12:00:00.000000
 """
 from alembic import op
@@ -9,7 +9,7 @@ import sqlalchemy as sa
 import uuid
 
 revision = "p2q3r4s5t6u7"
-down_revision = "f6a7b8c9d0e1"
+down_revision = "3d4e5f6a7b8c"
 branch_labels = None
 depends_on = None
 
@@ -78,6 +78,17 @@ def upgrade():
             display_order=4,
         )
 
+    occasion_wear_id = _find_id(conn, "shop-edits-occasion-wear")
+    if not occasion_wear_id:
+        occasion_wear_id = _ensure_category(
+            conn,
+            name="Occasion Wear",
+            slug="shop-edits-occasion-wear",
+            parent_id=shop_edits_id,
+            description="Occasion wear edits",
+            display_order=2,
+        )
+
     for name, slug, order in (
         ("Casual", "shop-edits-occasion-wear-casual", 1),
         ("Evening", "shop-edits-occasion-wear-evening", 2),
@@ -88,17 +99,13 @@ def upgrade():
             conn,
             name=name,
             slug=slug,
-            parent_id=shop_edits_id,
+            parent_id=occasion_wear_id,
             description=f"{name} edits",
             display_order=order,
         )
 
 
 def downgrade():
-    conn = op.get_bind()
-    conn.execute(
-        sa.text(
-            "DELETE FROM categories WHERE slug = :slug"
-        ),
-        {"slug": "shop-edits-occasion-wear-evening"},
-    )
+    # This migration may reuse categories that predate it or already contain
+    # products. Leave all rows in place so rollback cannot uncategorize data.
+    pass
