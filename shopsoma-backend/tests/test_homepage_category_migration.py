@@ -44,3 +44,5 @@ def test_name_reuse_repairs_the_requested_slug_deterministically() -> None:
     assert 'SELECT id FROM categories WHERE slug = :slug' in source
     assert 'SELECT id FROM categories WHERE name = :name' in source
     assert "SET name = :name, slug = :slug" in source
+    assert "UPDATE products SET category_id = :slug_id" in source
+    assert "DELETE FROM categories WHERE id = :name_id" in source

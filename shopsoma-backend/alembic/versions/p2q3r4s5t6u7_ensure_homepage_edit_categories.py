@@ -16,17 +16,48 @@ depends_on = None
 
 def _find_id(conn, slug: str, name: str | None = None):
     # Prefer the canonical slug, then fall back to a same-name legacy row.
-    # This makes slug repair deterministic when both predicates could match.
-    existing_id = conn.execute(
+    # If both identities exist on different rows, merge references into the
+    # slug owner before applying canonical values to avoid unique-key failure.
+    slug_id = conn.execute(
         sa.text("SELECT id FROM categories WHERE slug = :slug"),
         {"slug": slug},
     ).scalar()
-    if existing_id or name is None:
-        return existing_id
-    return conn.execute(
+    if name is None:
+        return slug_id
+    name_id = conn.execute(
         sa.text("SELECT id FROM categories WHERE name = :name"),
         {"name": name},
     ).scalar()
+    if not slug_id or slug_id == name_id:
+        return slug_id or name_id
+
+    conn.execute(
+        sa.text(
+            "UPDATE products SET category_id = :slug_id "
+            "WHERE category_id = :name_id"
+        ),
+        {"slug_id": slug_id, "name_id": name_id},
+    )
+    conn.execute(
+        sa.text(
+            "UPDATE categories SET parent_id = "
+            "(SELECT parent_id FROM categories WHERE id = :name_id) "
+            "WHERE id = :slug_id AND parent_id = :name_id"
+        ),
+        {"slug_id": slug_id, "name_id": name_id},
+    )
+    conn.execute(
+        sa.text(
+            "UPDATE categories SET parent_id = :slug_id "
+            "WHERE parent_id = :name_id AND id <> :slug_id"
+        ),
+        {"slug_id": slug_id, "name_id": name_id},
+    )
+    conn.execute(
+        sa.text("DELETE FROM categories WHERE id = :name_id"),
+        {"name_id": name_id},
+    )
+    return slug_id
 
 
 def _ensure_category(conn, *, name: str, slug: str, parent_id, description: str, display_order: int):
