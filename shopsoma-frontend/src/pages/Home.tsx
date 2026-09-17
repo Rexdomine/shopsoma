@@ -491,24 +491,28 @@ function CategoryStrip() {
     () => [
       {
         name: 'Casual',
+        slug: 'shop-edits-occasion-wear-casual',
         image: '/images/category-strip/casual-1-900.webp',
         srcSet: '/images/category-strip/casual-1-480.webp 480w, /images/category-strip/casual-1-900.webp 900w',
         objectPosition: 'center center',
       },
       {
         name: 'Evening',
+        slug: 'shop-edits-occasion-wear-evening',
         image: '/images/category-strip/occasion-900.webp',
         srcSet: '/images/category-strip/occasion-480.webp 480w, /images/category-strip/occasion-900.webp 900w',
         objectPosition: '73% 47%',
       },
       {
         name: 'Party',
+        slug: 'shop-edits-occasion-wear-party',
         image: '/images/category-strip/party-900.webp',
         srcSet: '/images/category-strip/party-480.webp 480w, /images/category-strip/party-900.webp 900w',
         objectPosition: '52% 35%',
       },
       {
         name: 'Workwear',
+        slug: 'shop-edits-occasion-wear-workwear',
         image: '/images/category-strip/workwear-900.webp',
         srcSet: '/images/category-strip/workwear-480.webp 480w, /images/category-strip/workwear-900.webp 900w',
         objectPosition: 'center center',
@@ -525,7 +529,12 @@ function CategoryStrip() {
         </h3>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           {categories.map((cat) => (
-            <div key={cat.name} className="relative group cursor-pointer">
+            <Link
+              key={cat.name}
+              to={`/category/${cat.slug}`}
+              aria-label={`Shop ${cat.name}`}
+              className="relative group block cursor-pointer"
+            >
               <div className="aspect-[3/4] overflow-hidden bg-gray-100">
                 <img
                   src={cat.image}
@@ -546,7 +555,7 @@ function CategoryStrip() {
                   {cat.name}
                 </p>
               </div>
-            </div>
+            </Link>
           ))}
         </div>
       </div>

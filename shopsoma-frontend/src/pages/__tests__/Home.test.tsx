@@ -142,6 +142,15 @@ describe('Home', () => {
     expect(categoryImages.every((image) => image.getAttribute('sizes') === '(min-width: 768px) 25vw, 50vw')).toBe(true);
     expect(categoryImages.every((image) => (image.getAttribute('srcset') || '').includes('480w') && (image.getAttribute('srcset') || '').includes('900w'))).toBe(true);
 
+    const categoryLinks = categoryImages.map((image) => image.closest('a'));
+    expect(categoryLinks.map((link) => link?.getAttribute('href'))).toEqual([
+      '/category/shop-edits-occasion-wear-casual',
+      '/category/shop-edits-occasion-wear-evening',
+      '/category/shop-edits-occasion-wear-party',
+      '/category/shop-edits-occasion-wear-workwear',
+    ]);
+    expect(categoryLinks.every((link) => link?.getAttribute('aria-label')?.startsWith('Shop '))).toBe(true);
+
     expect(screen.queryByText('Dresses')).not.toBeInTheDocument();
     expect(screen.queryByText('Occasion wear')).not.toBeInTheDocument();
   });

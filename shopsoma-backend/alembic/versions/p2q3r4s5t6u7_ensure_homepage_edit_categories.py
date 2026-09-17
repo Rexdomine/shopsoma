@@ -1,0 +1,104 @@
+"""ensure homepage edit categories exist
+
+Revision ID: p2q3r4s5t6u7
+Revises: f6a7b8c9d0e1
+Create Date: 2026-09-17 12:00:00.000000
+"""
+from alembic import op
+import sqlalchemy as sa
+import uuid
+
+revision = "p2q3r4s5t6u7"
+down_revision = "f6a7b8c9d0e1"
+branch_labels = None
+depends_on = None
+
+
+def _find_id(conn, slug: str, name: str | None = None):
+    return conn.execute(
+        sa.text("SELECT id FROM categories WHERE slug = :slug OR (:name IS NOT NULL AND name = :name)"),
+        {"slug": slug, "name": name},
+    ).scalar()
+
+
+def _ensure_category(conn, *, name: str, slug: str, parent_id, description: str, display_order: int):
+    existing_id = _find_id(conn, slug, name)
+    if existing_id:
+        conn.execute(
+            sa.text(
+                """
+                UPDATE categories
+                SET name = :name, parent_id = :parent_id, description = :description,
+                    display_order = :display_order, is_active = TRUE, updated_at = now()
+                WHERE id = :id
+                """
+            ),
+            {
+                "id": existing_id,
+                "name": name,
+                "parent_id": parent_id,
+                "description": description,
+                "display_order": display_order,
+            },
+        )
+        return existing_id
+
+    category_id = uuid.uuid4()
+    conn.execute(
+        sa.text(
+            """
+            INSERT INTO categories
+              (id, name, slug, description, parent_id, display_order, is_active, created_at, updated_at)
+            VALUES
+              (:id, :name, :slug, :description, :parent_id, :display_order, TRUE, now(), now())
+            """
+        ),
+        {
+            "id": category_id,
+            "name": name,
+            "slug": slug,
+            "description": description,
+            "parent_id": parent_id,
+            "display_order": display_order,
+        },
+    )
+    return category_id
+
+
+def upgrade():
+    conn = op.get_bind()
+    shop_edits_id = _find_id(conn, "shop-edits")
+    if not shop_edits_id:
+        shop_edits_id = _ensure_category(
+            conn,
+            name="Shop Edits",
+            slug="shop-edits",
+            parent_id=None,
+            description="Curated edits and seasonal picks",
+            display_order=4,
+        )
+
+    for name, slug, order in (
+        ("Casual", "shop-edits-occasion-wear-casual", 1),
+        ("Evening", "shop-edits-occasion-wear-evening", 2),
+        ("Party", "shop-edits-occasion-wear-party", 3),
+        ("Workwear", "shop-edits-occasion-wear-workwear", 4),
+    ):
+        _ensure_category(
+            conn,
+            name=name,
+            slug=slug,
+            parent_id=shop_edits_id,
+            description=f"{name} edits",
+            display_order=order,
+        )
+
+
+def downgrade():
+    conn = op.get_bind()
+    conn.execute(
+        sa.text(
+            "DELETE FROM categories WHERE slug = :slug"
+        ),
+        {"slug": "shop-edits-occasion-wear-evening"},
+    )
