@@ -496,7 +496,7 @@ function CategoryStrip() {
         objectPosition: 'center center',
       },
       {
-        name: 'Occasion',
+        name: 'Evening',
         image: '/images/category-strip/occasion-900.webp',
         srcSet: '/images/category-strip/occasion-480.webp 480w, /images/category-strip/occasion-900.webp 900w',
         objectPosition: '73% 47%',
