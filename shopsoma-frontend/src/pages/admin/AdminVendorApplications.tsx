@@ -50,8 +50,13 @@ export default function AdminVendorApplications() {
 
     try {
       setActionLoading(applicationId);
-      await adminService.approveVendorApplication(applicationId, 'Application approved by admin');
-      showMessage('success', 'Application approved successfully! Vendor will receive activation email.');
+      const approvedApplication = await adminService.approveVendorApplication(applicationId, 'Application approved by admin');
+      showMessage(
+        approvedApplication.activation_email_sent === false ? 'error' : 'success',
+        approvedApplication.activation_email_sent === false
+          ? 'Application approved, but the activation email could not be sent. Use Resend activation email after resolving the delivery issue.'
+          : 'Application approved successfully. Activation email sent.'
+      );
       loadApplications();
     } catch (error: any) {
       console.error('Failed to approve application:', error);

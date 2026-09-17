@@ -3,7 +3,7 @@ Admin API endpoints for database initialization and management
 """
 from typing import Optional, List
 from uuid import UUID
-from fastapi import APIRouter, HTTPException, Depends, Query
+from fastapi import APIRouter, HTTPException, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, or_, delete, update
 from sqlalchemy.orm import selectinload
@@ -1288,7 +1288,7 @@ async def resend_vendor_activation(
 
     Requires admin role
     """
-    from app.services.vendor_otp_service import VendorOTPService
+    from app.services.vendor_otp_service import OTPDeliveryError, VendorOTPService
 
     application_result = await db.execute(
         select(VendorApplication).where(VendorApplication.id == application_id)
@@ -1316,11 +1316,17 @@ async def resend_vendor_activation(
 
     vendor, vendor_user = vendor_row
 
-    await VendorOTPService.create_and_send_otp(
-        db=db,
-        vendor_id=vendor.id,
-        email=vendor_user.email
-    )
+    try:
+        await VendorOTPService.create_and_send_otp(
+            db=db,
+            vendor_id=vendor.id,
+            email=vendor_user.email
+        )
+    except OTPDeliveryError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Unable to send activation email. Please try again."
+        )
 
     return {
         "message": "Activation email resent successfully",

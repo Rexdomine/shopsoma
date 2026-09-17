@@ -60,6 +60,7 @@ class VendorApplicationResponse(BaseModel):
     reviewed_by: Optional[UUID]
     reviewed_at: Optional[datetime]
     vendor_id: Optional[UUID]
+    activation_email_sent: Optional[bool] = None
     created_at: datetime
     updated_at: datetime
 
