@@ -14,8 +14,8 @@ from app.models.user import User, UserRole
 from app.models.vendor import Vendor
 from app.schemas.auth import TokenData
 
-# HTTP Bearer token security
-security = HTTPBearer()
+# Keep the application's established 403 response for missing credentials.
+security = HTTPBearer(auto_error=False)
 
 
 async def get_current_user_from_token(
@@ -74,7 +74,7 @@ async def get_current_user_from_token(
 
 
 async def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(security),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
     db: AsyncSession = Depends(get_db)
 ) -> User:
     """
@@ -95,6 +95,12 @@ async def get_current_user(
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
+
+    if credentials is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authenticated",
+        )
 
     token = credentials.credentials
     payload = decode_token(token)
