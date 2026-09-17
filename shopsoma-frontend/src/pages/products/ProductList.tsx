@@ -275,21 +275,24 @@ export default function ProductList({
           ...stableInitialParams,
         });
         let products = response.products || [];
+        setAllProducts(products);
         if (stableInitialParams?.category_id && response.total_pages > 1) {
-          const remainingPages = await Promise.all(
-            Array.from({ length: response.total_pages - 1 }, (_, index) =>
-              productService.getProducts({
-                page: index + 2,
+          for (let nextPage = 2; nextPage <= response.total_pages; nextPage += 1) {
+            try {
+              const pageResponse = await productService.getProducts({
+                page: nextPage,
                 page_size: 60,
                 sort_by: 'created_at',
                 sort_order: 'desc',
                 ...stableInitialParams,
-              }),
-            ),
-          );
-          products = products.concat(...remainingPages.map((pageResponse) => pageResponse.products || []));
+              });
+              products = products.concat(pageResponse.products || []);
+              setAllProducts(products);
+            } catch {
+              break;
+            }
+          }
         }
-        setAllProducts(products);
         sessionStorage.setItem(
           cacheKey,
           JSON.stringify({ products, timestamp: Date.now() })
