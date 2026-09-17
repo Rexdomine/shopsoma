@@ -14,9 +14,9 @@ def test_migration_graph_has_exactly_one_head() -> None:
 
     heads = script.get_heads()
 
-    assert heads == ["n1o2p3q4r5s6"]
+    assert heads == ["3d4e5f6a7b8c"]
 
-    parcel_revision = script.get_revision(heads[0])
+    parcel_revision = script.get_revision("n1o2p3q4r5s6")
     assert parcel_revision is not None
     assert parcel_revision.down_revision == "m0n1o2p3q4r5"
 
