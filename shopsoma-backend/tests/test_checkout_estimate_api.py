@@ -163,6 +163,60 @@ async def _create_authenticated_estimate(
     return order_id, estimate_response.json()
 
 
+@pytest.mark.asyncio
+async def test_checkout_estimate_rejects_order_after_vendor_deactivation(
+    client, db_session, admin_user, customer_user, vendor_user, monkeypatch
+):
+    monkeypatch.setattr(settings, "DOMESTIC_CHECKOUT_PREREQUISITES_ENABLED", True)
+    monkeypatch.setattr(
+        settings,
+        "DOMESTIC_CHECKOUT_COHORT_ALLOWLIST",
+        str(customer_user["user"].id),
+    )
+
+    async def no_external_call(*_args, **_kwargs):
+        raise AssertionError("test checkout should not send external notifications")
+
+    monkeypatch.setattr(
+        "app.services.email_service.email_service.send_order_confirmation_email",
+        no_external_call,
+    )
+    monkeypatch.setattr(
+        "app.services.email_service.email_service.send_admin_order_notification",
+        no_external_call,
+    )
+    monkeypatch.setattr(
+        "app.services.vendor_notification_service.VendorNotificationService.send_order_notification",
+        no_external_call,
+    )
+
+    address, product = await _domestic_catalogue(
+        db_session, vendor_user, customer_user
+    )
+    created = await client.post(
+        "/api/v1/orders",
+        headers=customer_user["headers"],
+        json={
+            "items": [{"product_id": str(product.id), "quantity": 1}],
+            "shipping_address_id": str(address.id),
+            "currency": "NGN",
+        },
+    )
+    assert created.status_code == 201, created.text
+
+    deactivate = await client.put(
+        f"/api/v1/admin/users/{vendor_user['user'].id}/status?is_active=false",
+        headers=admin_user["headers"],
+    )
+    assert deactivate.status_code == 200
+
+    estimate = await client.post(
+        f"/api/v1/orders/{created.json()['id']}/checkout-estimates",
+        headers={**customer_user["headers"], "X-Idempotency-Key": "deactivated-vendor"},
+    )
+    assert estimate.status_code == 404
+
+
 async def _assert_no_prerequisite_writes(db_session, order_id):
     db_session.expire_all()
     order = await db_session.get(Order, uuid.UUID(order_id))

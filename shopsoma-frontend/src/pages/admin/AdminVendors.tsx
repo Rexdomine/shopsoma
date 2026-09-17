@@ -1,13 +1,17 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, Eye, Check, X, AlertCircle, CheckCircle, Store, TrendingUp, Package, ShoppingBag, RotateCcw, Trash2, Star } from 'lucide-react';
+import { Search, Eye, Check, X, AlertCircle, CheckCircle, Store, TrendingUp, Package, ShoppingBag, RotateCcw, Trash2, Star, Power, PowerOff } from 'lucide-react';
 import AdminSidebar from '../../components/admin/AdminSidebar';
 import { adminService, type VendorListItem } from '../../services/adminService';
+import { useAuth } from '../../context/AuthContext';
 
 export default function AdminVendors() {
   const navigate = useNavigate();
+  const { user } = useAuth();
   const [vendors, setVendors] = useState<VendorListItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [bulkLoading, setBulkLoading] = useState(false);
   const [search, setSearch] = useState('');
   const [approvedFilter, setApprovedFilter] = useState<string>('all');
   const [kycFilter] = useState<string>('all');
@@ -65,6 +69,31 @@ export default function AdminVendors() {
     setTimeout(() => setMessage(null), 5000);
   };
 
+  const handleBulkStatus = async (isActive: boolean) => {
+    const targetIds = selectedIds.filter((id) => id !== user?.id);
+    if (targetIds.length === 0) {
+      showMessage('error', 'Select at least one other vendor account to change its status');
+      return;
+    }
+
+    const action = isActive ? 'activate' : 'deactivate';
+    if (!window.confirm(`${action === 'activate' ? 'Activate' : 'Deactivate'} ${targetIds.length} selected vendor account${targetIds.length === 1 ? '' : 's'}? This is reversible.`)) {
+      return;
+    }
+
+    try {
+      setBulkLoading(true);
+      const result = await adminService.bulkUpdateUserStatus(targetIds, isActive);
+      setSelectedIds([]);
+      showMessage('success', `${result.updated_count} vendor account${result.updated_count === 1 ? '' : 's'} ${action}d successfully`);
+      await loadVendors();
+    } catch (error: any) {
+      showMessage('error', error?.response?.data?.detail || error.message || `Failed to ${action} selected vendor accounts`);
+    } finally {
+      setBulkLoading(false);
+    }
+  };
+
   const handleRestoreStore = async (vendorId: string, businessName: string) => {
     if (!window.confirm(`Are you sure you want to restore ${businessName}'s store?`)) {
       return;
@@ -105,6 +134,8 @@ export default function AdminVendors() {
     }
     return true;
   });
+
+  const selectableVendors = filteredVendors.filter((vendor) => vendor.user_id !== user?.id);
 
   const getKYCBadge = (kycStatus?: string) => {
     switch (kycStatus) {
@@ -162,6 +193,7 @@ export default function AdminVendors() {
         {/* Message */}
         {message && (
           <div
+            role="alert"
             className={`rounded-xl p-4 flex items-center gap-3 ${
               message.type === 'success'
                 ? 'bg-green-50 border border-green-200 text-green-800'
@@ -302,6 +334,20 @@ export default function AdminVendors() {
           </div>
         </div>
 
+        {selectedIds.length > 0 && (
+          <div role="region" aria-label="Bulk account status actions" className="bg-blue-50 border border-blue-200 rounded-xl p-4 flex items-center justify-between">
+            <p>{selectedIds.length} selected. Status changes are reversible; no permanent deletion.</p>
+            <div className="flex gap-2">
+              <button disabled={bulkLoading} onClick={() => handleBulkStatus(true)}>
+                Activate selected
+              </button>
+              <button disabled={bulkLoading} onClick={() => handleBulkStatus(false)}>
+                Deactivate selected
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Vendors table */}
         <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
           {loading ? (
@@ -319,6 +365,14 @@ export default function AdminVendors() {
               <table className="w-full">
                 <thead className="bg-gray-50 border-b border-gray-200">
                   <tr>
+                    <th>
+                      <input
+                        aria-label="Select all visible vendors"
+                        type="checkbox"
+                        checked={selectableVendors.length > 0 && selectableVendors.every((vendor) => selectedIds.includes(vendor.user_id))}
+                        onChange={(event) => setSelectedIds(event.target.checked ? selectableVendors.map((vendor) => vendor.user_id) : [])}
+                      />
+                    </th>
                     <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
                       Business
                     </th>
@@ -345,6 +399,15 @@ export default function AdminVendors() {
                 <tbody className="divide-y divide-gray-200">
                   {filteredVendors.map((vendor) => (
                     <tr key={vendor.id} className="hover:bg-gray-50 transition">
+                      <td>
+                        <input
+                          aria-label={`Select ${vendor.email}`}
+                          type="checkbox"
+                          disabled={vendor.user_id === user?.id}
+                          checked={selectedIds.includes(vendor.user_id)}
+                          onChange={(event) => setSelectedIds(event.target.checked ? [...selectedIds, vendor.user_id] : selectedIds.filter((id) => id !== vendor.user_id))}
+                        />
+                      </td>
                       <td className="px-6 py-4">
                         <div>
                           <p className="text-sm font-semibold text-gray-900">{vendor.business_name}</p>
@@ -441,6 +504,7 @@ export default function AdminVendors() {
                           >
                             <Star className={`w-4 h-4 ${vendor.is_featured_storefront ? 'fill-current' : ''}`} />
                           </button>
+                          <button type="button" onClick={async () => { if (!window.confirm(`${vendor.is_active ? 'Deactivate' : 'Activate'} this vendor account? This is reversible.`)) return; try { await adminService.toggleUserStatus(vendor.user_id, !vendor.is_active); await loadVendors(); } catch (err: any) { showMessage('error', err.message || 'Failed to update vendor status'); } }} className="p-2 text-[#105E53] hover:bg-green-50 rounded-lg" title={`${vendor.is_active ? 'Deactivate' : 'Activate'} vendor account`}>{vendor.is_active ? <PowerOff className="w-4 h-4" /> : <Power className="w-4 h-4" />}</button>
                           <button
                             onClick={() => navigate(`/admin/vendors/${vendor.id}`)}
                             className="p-2 text-gray-600 hover:text-[#105E53] hover:bg-gray-100 rounded-lg transition"

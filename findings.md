@@ -1,20 +1,23 @@
-# Findings — Vendor Activation Email Delivery Reporting
+# Findings — Admin Account Lifecycle Controls
 
-## Root cause
-- Staging Brevo `401 Unauthorized` failures occurred when `BREVO_API_KEY` and sender configuration were absent.
-- `VendorOTPService.create_and_send_otp` persisted an OTP and suppressed both provider exceptions and `False` return values.
-- The activation UI consequently showed success despite no provider acceptance, and the undelivered OTP could remain usable until expiry.
+## User-approved direction
+- Deliver PR 1 now: reversible user/vendor lifecycle controls and bulk reversible actions.
+- After review and Rex-authorized merge, proceed to PR 2 (test-data classification/complete purge), then PR 3 (guarded real-account erasure/anonymization).
+- Vendor deactivation must remove products from public visibility and prevent new sales while preserving historical business records.
 
-## Implemented contract
-- `False` from Brevo or a send exception invalidates the newly created OTP and raises `OTPDeliveryError`.
-- Vendor activation initiation and resend return HTTP `503` with: `Unable to send verification code. Please try again.`
-- Admin activation resend returns HTTP `503` with a generic retry-safe message.
-- Application approval remains durable. Its response has `activation_email_sent: false` when the handoff fails, and the Admin UI explicitly reports the delivery problem rather than claiming the email was sent.
-- A follow-up retry creates a fresh OTP because failed OTPs are invalidated.
+## Baseline discovered before implementation
+- `User.is_active` already exists and authentication dependencies reject inactive users.
+- `Vendor` has `store_active`, `store_paused_at`, and `store_deleted_at`; these must not be conflated with account deactivation.
+- `app/api/v1/admin.py` already contains a single-user status endpoint and an unsafe generic hard-delete endpoint.
+- `AdminUsers.tsx` currently exposes single-user status/delete affordances; Admin Vendors has no equivalent complete lifecycle/bulk workflow.
+- The current hard-delete path removes customer order/payment/return rows and cascades a vendor’s catalog; it is unsuitable as normal production lifecycle behavior.
+- Some vendor-owned rows have `RESTRICT` relations (notably payment/pickup-related paths), confirming deletion cannot be assumed complete or safe without a dedicated purge design.
+- Public discovery originally applied seller/store filters inconsistently. This PR now centralizes product/customer sellability (product active + moderation-approved; vendor approved, completed onboarding, active/non-deleted store; linked vendor user active) and applies it to product list/detail, designers, cart add, checkout review/creation, and wishlist read/add. Stale cart quantity/read/guest-merge and checkout-estimate boundaries remain to be assessed before PR closure.
+- `Vendor` already supports vendor-initiated pause/activate and soft store deletion. Admin account deactivation must remain distinct from those states: it changes `User.is_active` and must not mutate store fields, while all public/new-sale eligibility must require both account and store eligibility.
+- `AuditLog` supports actor user ID, action, target entity ID/type, old/new JSON values, timestamp, IP and user agent. It is currently not written by lifecycle endpoints and can be used without a new schema migration for PR 1.
+- Existing backend tests use async API fixtures and an isolated PostgreSQL database; `test_admin_delete_user.py` documents the unsafe current hard-delete behavior and must be superseded for PR 1 scope rather than expanded.
 
-## Verification
-- RED: initiate returned HTTP 200 on an email-provider `False`; resend returned HTTP 500.
-- GREEN: `tests/test_vendor_activation_invite_flow.py` — 4 passed.
-- Scoped Ruff — all checks passed.
-- Modified backend modules compiled successfully.
-- Frontend production build completed successfully.
+## Safety boundaries
+- This PR performs no destructive account or product deletion.
+- No test/seed data, Render configuration, external provider data, or real user data will be modified.
+- Any bulk mutation must have a full request preflight and explicit per-target result.

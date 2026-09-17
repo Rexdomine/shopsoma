@@ -127,14 +127,18 @@ export const adminService = {
     return response.data;
   },
 
-  // Toggle user active status
+  // Toggle user active status (reversible)
   async toggleUserStatus(userId: string, isActive: boolean): Promise<void> {
     await api.put(`/admin/users/${userId}/status?is_active=${isActive}`);
   },
 
-  // Delete user (hard delete - for testing only)
-  async deleteUser(userId: string): Promise<void> {
-    await api.delete(`/admin/users/${userId}`);
+  async bulkUpdateUserStatus(userIds: string[], isActive: boolean): Promise<{
+    requested_count: number;
+    updated_count: number;
+    results: Array<{ user_id: string; status: string; is_active: boolean }>;
+  }> {
+    const response = await api.put('/admin/users/status/bulk', { user_ids: userIds, is_active: isActive });
+    return response.data;
   },
 
   // Reset user password (admin only)

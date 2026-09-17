@@ -7,6 +7,69 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 
 @pytest.mark.asyncio
+async def test_add_to_cart_rejects_product_from_deactivated_vendor(
+    client: AsyncClient,
+    admin_user,
+    sample_product,
+    vendor_user,
+):
+    deactivate = await client.put(
+        f"/api/v1/admin/users/{vendor_user['user'].id}/status?is_active=false",
+        headers=admin_user["headers"],
+    )
+    assert deactivate.status_code == 200
+
+    response = await client.post(
+        "/api/v1/cart/items",
+        json={
+            "product_id": str(sample_product.id),
+            "variant_id": f"default-{sample_product.id}",
+            "quantity": 1,
+        },
+        headers={"X-Session-ID": "deactivated-vendor-session"},
+    )
+
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_quantity_update_rejects_cart_item_after_vendor_deactivation(
+    client: AsyncClient,
+    admin_user,
+    sample_product,
+    vendor_user,
+):
+    session_headers = {"X-Session-ID": "stale-deactivated-vendor-cart"}
+    added = await client.post(
+        "/api/v1/cart/items",
+        json={
+            "product_id": str(sample_product.id),
+            "variant_id": f"default-{sample_product.id}",
+            "quantity": 1,
+        },
+        headers=session_headers,
+    )
+    assert added.status_code == 200
+
+    deactivate = await client.put(
+        f"/api/v1/admin/users/{vendor_user['user'].id}/status?is_active=false",
+        headers=admin_user["headers"],
+    )
+    assert deactivate.status_code == 200
+
+    stale_cart = await client.get("/api/v1/cart", headers=session_headers)
+    assert stale_cart.status_code == 200
+    assert stale_cart.json()["items"] == []
+
+    update = await client.patch(
+        f"/api/v1/cart/items/{added.json()['id']}",
+        json={"quantity": 2},
+        headers=session_headers,
+    )
+    assert update.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_add_to_cart_with_collection_eager_load(
     client: AsyncClient,
     db_session: AsyncSession,

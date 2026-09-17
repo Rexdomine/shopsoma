@@ -1,8 +1,36 @@
-# Progress — Vendor Activation Email Delivery Reporting
+# Progress — Admin Account Lifecycle Controls
 
-## 2026-09-16
-- Created fresh worktree `vendor-activation-email-delivery` from `origin/develop` at `5d7c707375e95487869ed9559da3c16a905d5422` on `fix/vendor-activation-email-delivery`.
-- Established RED regressions: a failed provider handoff initially produced `200` for activation initiation and `500` for resend.
-- Implemented delivery-specific failure propagation, OTP invalidation, safe retry responses, durable approval status, and explicit Admin delivery messaging.
-- Verification passed: focused backend suite 4/4, scoped Ruff, backend compilation, and frontend `npm run build`.
-- Next: commit/push focused PR to `develop`, request review, and keep deployment gated on merge authorization.
+## 2026-09-17 — Setup
+- User approved the phased lifecycle plan and authorized implementation of PR 1 only.
+- Fetched `origin`; confirmed PR #151 is merged and `origin/develop` is `ab1ac34c5d563139171fa123a43ab8ad8d5b6d38`.
+- Created isolated worktree:
+  - Path: `/opt/data/projects/shopsoma-worktrees/admin-account-lifecycle-controls`
+  - Branch: `feat/admin-account-lifecycle-controls`
+  - Base: `origin/develop`
+- Inspected existing account status/delete endpoints, `User`/`Vendor` models, vendor list response, and relationship constraints.
+- Attempted `hermes-plan-bootstrap --title "Build Admin Account Lifecycle Controls"`; it failed because the command is not installed. Created `task_plan.md`, `findings.md`, and `progress.md` directly instead.
+
+- Added RED regression `test_deactivating_vendor_hides_products_from_public_catalog`; it failed as expected because a deactivated vendor's product was still returned by `/api/v1/products`.
+- Implemented the first public-sellability enforcement in `app/api/v1/products.py`: public list/detail now require approved, completed-onboarding, active/non-deleted store and active vendor account.
+- Re-ran the regression GREEN: passed.
+- Added RED regression `test_deactivating_user_writes_lifecycle_audit_event`; it failed as expected because no audit event was persisted.
+- Implemented transactionally coupled `AuditLog` creation in `PUT /admin/users/{user_id}/status` with actor, target, activation action, and old/new active state.
+- Re-ran `tests/test_vendor_account_lifecycle.py -q`: 2 passed.
+
+- Added RED regression for bulk deactivation; initial route design conflicted with the existing dynamic user-update route and returned `422`. Moved the endpoint to unambiguous `PUT /admin/users/status/bulk`, then verified GREEN.
+- Added a distinct RED regression proving duplicate IDs must be rejected before mutation; it failed (`200`) before the duplicate preflight was added, then passed after the minimal guard.
+
+- Added RED/GREEN preflight regressions for a batch containing a missing ID (initially raised `KeyError`) and a batch containing the acting admin (initially returned `200`). Both now fail closed without mutations.
+
+- Added RED/GREEN public-designer discovery regression; `/api/v1/designers` now applies the same account/store/onboarding eligibility rule instead of exposing merely approved vendors.
+
+- Added reusable `app/services/vendor_visibility.py` customer-sellability predicate and applied it to public products, cart add, order review, and order creation.
+- RED/GREEN regressions now prove a deactivated vendor’s product is rejected by direct cart submission, checkout review, and final order creation; focused safety suite currently has 10 passing regressions across lifecycle/public/cart/checkout paths.
+
+- Added RED/GREEN seller-eligibility regressions for wishlist read/add, stale-cart read and quantity update, plus pre-payment checkout-estimate creation after a vendor account deactivation.
+- Applied the shared customer-sellability predicate to wishlist read/add and cart read; cart quantity updates now revalidate the stored product before mutation. Checkout-estimate creation revalidates seller eligibility before authorization and again after its commit/reload boundary, before estimate work.
+- UI TDD: added Admin Users regression proving a failed bulk deactivation retains selection, emits accessible error feedback, and prevents selection of the acting admin. Fixed the observed unhandled-rejection/self-selection defects; applied the same guarded error/selection flow to Admin Vendors.
+- Backend safety suite now includes wishlist, stale cart mutation/read, and checkout-estimate seller revalidation; all focused checks are green.
+- Surrounding backend Admin/vendor/onboarding regression set: 9 passed.
+- Full frontend suite: 140 passed, 1 failed in untouched `src/pages/checkout/Checkout.test.tsx` guest Paystack capability session-storage assertion; implementation-specific frontend tests and production build pass. Treat this as a baseline gate pending independent diagnosis, not as lifecycle evidence.
+- Browser QA, commit/PR/review remain pending.
