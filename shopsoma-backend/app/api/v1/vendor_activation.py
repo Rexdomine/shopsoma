@@ -1,7 +1,7 @@
 """Vendor Activation API endpoints"""
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, update
 from pydantic import BaseModel, EmailStr
 from typing import Optional
 from uuid import UUID
@@ -365,13 +365,25 @@ async def set_vendor_password(
             detail="Vendor account is already active"
         )
 
-    # Update the canonical persisted password field used by login/authentication.
-    user.hashed_password = get_password_hash(request.password)
-
-    # Fully activate the account now that password is set
-    if not user.is_active:
-        user.is_active = True
-        user.email_verified = True
+    # Claim activation atomically. A conditional update prevents two workers
+    # carrying the same capability from both changing the password before
+    # either request observes the other's commit.
+    password_hash = get_password_hash(request.password)
+    activation_result = await db.execute(
+        update(User)
+        .where(User.id == user_uuid, User.is_active.is_(False))
+        .values(
+            hashed_password=password_hash,
+            is_active=True,
+            email_verified=True,
+        )
+    )
+    if activation_result.rowcount != 1:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Vendor account is already active"
+        )
 
     await db.commit()
 

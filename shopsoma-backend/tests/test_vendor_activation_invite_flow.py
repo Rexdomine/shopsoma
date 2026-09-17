@@ -368,8 +368,12 @@ async def test_vendor_activation_password_persists_for_fresh_login(client, db_se
     await db_session.commit()
 
     activation_token = create_access_token(
-        data={"sub": str(user.id), "email": user.email, "purpose": "vendor_activation"},
-        expires_delta=timedelta(minutes=30),
+        data={
+            "sub": str(user.id),
+            "email": user.email,
+            "purpose": "vendor_activation_password",
+        },
+        expires_delta=timedelta(minutes=15),
     )
     password = "Persisted!Pass2026"
 
