@@ -1601,40 +1601,52 @@ export default function VendorProductAdd() {
                   </div>
                 </div>
 
-                <div className="p-6">
-                  <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_230px]">
-                    <div className="rounded-3xl border border-[#105E53]/10 bg-[#105E53]/5 p-5">
-                      <p className="text-sm font-semibold text-[#105E53]">
-                        Image standard
-                      </p>
-                      <p className="mt-2 text-sm leading-6 text-gray-600">
-                        Use a portrait 4:5 image and keep the product centered in frame.
-                      </p>
-                      <div className="mt-4 grid gap-2 text-xs text-gray-600 sm:grid-cols-3">
-                        <div className="rounded-2xl bg-white/80 p-3">
-                          <p className="font-semibold text-gray-900">Ratio</p>
-                          <p className="mt-1">4:5</p>
+                <div className="p-6 sm:p-8">
+                  <div className="grid items-stretch gap-6 lg:grid-cols-[minmax(0,1fr)_250px]">
+                    <div className="flex flex-col rounded-[1.75rem] border border-[#105E53]/10 bg-[linear-gradient(145deg,#f8fbf9_0%,#eef5f2_100%)] p-6 sm:p-7">
+                      <div>
+                        <div className="flex items-center gap-2 text-[#105E53]">
+                          <span className="h-2 w-2 rounded-full bg-[#C99A3D]" aria-hidden="true" />
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.2em]">Image standard</p>
                         </div>
-                        <div className="rounded-2xl bg-white/80 p-3">
-                          <p className="font-semibold text-gray-900">Recommended</p>
-                          <p className="mt-1">1600 × 2000 px</p>
+                        <h3 className="mt-3 max-w-md font-serif text-2xl leading-tight text-gray-950">
+                          Give every product a clean, confident frame.
+                        </h3>
+                        <p className="mt-3 max-w-xl text-sm leading-6 text-gray-600">
+                          Use a portrait 4:5 image and keep the product centered in frame so the gallery feels balanced across the storefront.
+                        </p>
+                      </div>
+
+                      <div className="mt-7 grid gap-3 sm:grid-cols-3">
+                        <div className="rounded-2xl border border-white/80 bg-white/75 p-4 shadow-sm shadow-[#105E53]/5">
+                          <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-500">Ratio</p>
+                          <p className="mt-2 text-lg font-semibold text-[#105E53]">4:5</p>
                         </div>
-                        <div className="rounded-2xl bg-white/80 p-3">
-                          <p className="font-semibold text-gray-900">Minimum</p>
-                          <p className="mt-1">1280 × 1600 px</p>
+                        <div className="rounded-2xl border border-white/80 bg-white/75 p-4 shadow-sm shadow-[#105E53]/5">
+                          <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-500">Recommended</p>
+                          <p className="mt-2 text-sm font-semibold text-[#105E53]">1600 × 2000 px</p>
+                        </div>
+                        <div className="rounded-2xl border border-white/80 bg-white/75 p-4 shadow-sm shadow-[#105E53]/5">
+                          <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-500">Minimum</p>
+                          <p className="mt-2 text-sm font-semibold text-[#105E53]">1280 × 1600 px</p>
                         </div>
                       </div>
-                      <p className="mt-4 border-t border-[#105E53]/10 pt-4 text-xs leading-5 text-gray-500">
-                        Correct dimensions alone do not guarantee a perfect display. Check that the product is not pushed too far left, right, top, or bottom.
-                      </p>
+
+                      <div className="mt-6 flex gap-3 border-t border-[#105E53]/10 pt-5">
+                        <span className="mt-1 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[#105E53] text-[11px] font-bold text-white" aria-hidden="true">i</span>
+                        <p className="text-xs leading-5 text-gray-600">
+                          Correct dimensions alone do not guarantee a perfect display. Keep the product away from the top, bottom, left, and right edges.
+                        </p>
+                      </div>
                     </div>
+
                     <ProductImageFramePreview
                       imageSrc={productType === 'single' ? currentVarImages[0]?.preview : undefined}
                       alt="Product page image preview"
                     />
                   </div>
 
-                  <div className="mt-6 space-y-4">
+                  <div className="mt-7 space-y-4">
                     {/* Hidden file input */}
                     <input
                       ref={fileInputRef}
