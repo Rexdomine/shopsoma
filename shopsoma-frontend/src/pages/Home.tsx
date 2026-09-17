@@ -331,7 +331,7 @@ function Hero() {
 
   return (
     <section
-      aria-label="Orange Culture campaign"
+      aria-label="ShopSoma campaign"
       aria-roledescription="carousel"
       className="hero relative isolate flex min-h-[520px] w-full items-end overflow-hidden bg-[#1b1715] sm:min-h-[600px] lg:min-h-[700px]"
       onMouseEnter={() => setIsInteracting(true)}
@@ -371,7 +371,7 @@ function Hero() {
         <div className="max-w-xl text-white">
           <p className="mb-3 text-[10px] font-ui font-semibold uppercase tracking-[0.32em] text-white/75">ShopSoma presents</p>
           <h1 className="font-serif text-3xl font-normal leading-tight sm:text-4xl lg:text-5xl" style={{ fontFamily: 'var(--font-serif)', textShadow: '0 2px 12px rgba(0,0,0,0.35)' }}>
-            Orange Culture: A night Beyond
+            A considered edit of contemporary fashion for every moment
           </h1>
           <div className="mt-5 flex flex-wrap items-center gap-x-7 gap-y-3">
             <Link to="/men" className="pointer-events-auto border-b border-white pb-1 text-xs font-ui uppercase tracking-[0.2em] text-white transition-opacity hover:opacity-75">Shop Men</Link>

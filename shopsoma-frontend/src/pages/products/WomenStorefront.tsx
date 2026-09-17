@@ -97,8 +97,8 @@ export default function WomenStorefront() {
       initialParams={initialParams}
       categoryNav={subcategories}
       heroOverride={{
-        title: 'Womenswear: Effortless Elegance',
-        body: 'Explore statement pieces, refined tailoring and everyday essentials crafted for modern women.',
+        title: 'Womenswear for every style',
+        body: 'Explore ShopSoma’s hand-picked selection, from quiet essentials to pieces that make an entrance.',
         imageUrl: WOMEN_HERO_IMAGE_URL,
         mobileImageUrl: WOMEN_HERO_MOBILE_IMAGE_URL,
         imagePositionClassName: 'object-[40%_0%] max-sm:object-[36%_42%]',
