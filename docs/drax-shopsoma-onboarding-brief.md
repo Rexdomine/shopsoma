@@ -78,7 +78,7 @@ Stack:
 - SQLAlchemy 2 async engine + PostgreSQL
 - Alembic migrations
 - Pydantic v2 settings/schemas
-- JWT auth with `python-jose`
+- JWT auth with PyJWT
 - Stripe SDK and Paystack HTTP integration
 - Redis/Celery dependencies exist, but current critical checkout/payment/webhook flows are documented as synchronous/not Celery-dependent
 
