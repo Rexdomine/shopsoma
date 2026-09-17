@@ -64,7 +64,9 @@ function ProductImageFramePreview({
   compact = false,
 }: ProductImageFramePreviewProps) {
   return (
-    <div className="flex h-full flex-col rounded-[1.75rem] border border-[#105E53]/10 bg-white p-6 shadow-sm shadow-[#105E53]/5 sm:p-7">
+    <div className={`flex h-full rounded-[1.75rem] border border-[#105E53]/10 bg-white shadow-sm shadow-[#105E53]/5 ${
+      compact ? 'flex-col p-4' : 'flex-col p-6 sm:p-7'
+    }`}>
       <div className="flex items-center justify-between gap-3">
         <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#105E53]">
           PDP frame
