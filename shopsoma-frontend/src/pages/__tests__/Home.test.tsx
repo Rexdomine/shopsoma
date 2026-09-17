@@ -128,9 +128,9 @@ describe('Home', () => {
     );
 
     const categoryImages = screen.getAllByRole('img').filter((image) =>
-      ['Casual', 'Occasion', 'Party', 'Workwear'].includes(image.getAttribute('alt') || '')
+      ['Casual', 'Evening', 'Party', 'Workwear'].includes(image.getAttribute('alt') || '')
     );
-    expect(categoryImages.map((image) => image.getAttribute('alt'))).toEqual(['Casual', 'Occasion', 'Party', 'Workwear']);
+    expect(categoryImages.map((image) => image.getAttribute('alt'))).toEqual(['Casual', 'Evening', 'Party', 'Workwear']);
     expect(categoryImages.map((image) => image.getAttribute('src'))).toEqual([
       '/images/category-strip/casual-1-900.webp',
       '/images/category-strip/occasion-900.webp',
