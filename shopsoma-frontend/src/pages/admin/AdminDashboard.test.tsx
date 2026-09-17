@@ -4,7 +4,13 @@ import { describe, expect, it, vi } from 'vitest';
 import AdminDashboard from './AdminDashboard';
 
 vi.mock('../../components/admin/AdminSidebar', () => ({
-  default: () => <aside aria-label="Admin navigation" className="w-full md:min-h-screen md:sticky" />,
+  default: ({ mobileStacked }: { mobileStacked?: boolean }) => (
+    <aside
+      aria-label="Admin navigation"
+      className="w-full md:min-h-screen md:sticky"
+      data-mobile-stacked={mobileStacked ? 'true' : 'false'}
+    />
+  ),
 }));
 
 describe('AdminDashboard', () => {
@@ -36,5 +42,6 @@ describe('AdminDashboard', () => {
     expect(screen.getByRole('main')).toHaveClass('flex-1');
     expect(screen.getByRole('main').parentElement).toHaveClass('flex', 'flex-col', 'md:flex-row');
     expect(screen.getByRole('main').previousElementSibling).toHaveClass('w-full', 'md:sticky', 'md:min-h-screen');
+    expect(screen.getByRole('main').previousElementSibling).toHaveAttribute('data-mobile-stacked', 'true');
   });
 });

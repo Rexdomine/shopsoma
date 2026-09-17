@@ -66,7 +66,7 @@ const overviewLinks = [
 export default function AdminDashboard() {
   return (
     <div className="min-h-screen bg-[var(--color-page-bg)] flex flex-col md:flex-row">
-      <AdminSidebar activePrimary="dashboard" />
+      <AdminSidebar activePrimary="dashboard" mobileStacked />
       <main className="min-w-0 flex-1 p-5 sm:p-8">
         <div className="mx-auto max-w-6xl space-y-8">
           <header className="border-b border-gray-200 pb-6">
