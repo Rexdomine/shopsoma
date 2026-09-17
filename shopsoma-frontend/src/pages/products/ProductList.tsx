@@ -243,29 +243,24 @@ export default function ProductList({
   };
 
   useEffect(() => {
+    let cancelled = false;
     const loadProducts = async () => {
-      const cacheKey = `shopsoma_products_${initialParamsKey || 'all'}`;
+      const cacheKey = `shopsoma_products_${initialParamsKey || 'all'}${stableInitialParams?.category_id ? ':all-pages-v2' : ''}`;
       const cacheRaw = sessionStorage.getItem(cacheKey);
-      let hasCachedData = false;
-
       if (cacheRaw) {
         try {
           const cached = JSON.parse(cacheRaw) as { products: Product[]; timestamp: number };
-          if (cached?.products?.length) {
-            setAllProducts(cached.products);
-            setLoading(false);
-            setError(null);
-            hasCachedData = true;
-          }
+          // Parse cached data only to discard malformed storage below. Cached
+          // products are never rendered without current API confirmation.
+          void cached;
         } catch {
           sessionStorage.removeItem(cacheKey);
         }
       }
 
       try {
-        if (!hasCachedData) {
-          setLoading(true);
-        }
+        if (cancelled) return;
+        setLoading(true);
         setPage(1);
         const response = await productService.getProducts({
           page: 1,
@@ -274,27 +269,61 @@ export default function ProductList({
           sort_order: 'desc',
           ...stableInitialParams,
         });
-        setAllProducts(response.products || []);
-        sessionStorage.setItem(
-          cacheKey,
-          JSON.stringify({ products: response.products || [], timestamp: Date.now() })
-        );
+        if (cancelled) return;
+        let products = response.products || [];
+        setAllProducts(products);
+        setError(null);
+        // The first page is usable immediately; additional category pages are background enrichment.
+        setLoading(false);
+        if (stableInitialParams?.category_id && response.total_pages > 1) {
+          for (let nextPage = 2; nextPage <= response.total_pages; nextPage += 1) {
+            if (cancelled) return;
+            try {
+              const pageResponse = await productService.getProducts({
+                page: nextPage,
+                page_size: 60,
+                sort_by: 'created_at',
+                sort_order: 'desc',
+                ...stableInitialParams,
+              });
+              if (cancelled) return;
+              products = products.concat(pageResponse.products || []);
+              setAllProducts(products);
+            } catch {
+              if (cancelled) return;
+              break;
+            }
+          }
+        }
+        if (cancelled) return;
+        try {
+          sessionStorage.setItem(
+            cacheKey,
+            JSON.stringify({ products, timestamp: Date.now() })
+          );
+        } catch (cacheError) {
+          // Storage quota/private-mode failures must not hide products already loaded from the API.
+          console.warn('Unable to cache products for this session', cacheError);
+        }
         setError(null);
       } catch (err) {
-        if (!hasCachedData) {
-          console.error('Failed to load products', err);
-        }
-        if (!hasCachedData) {
-          setError('We could not load the current collection. Please refresh.');
-        }
+        if (cancelled) return;
+        console.error('Failed to load products', err);
+        // Fail closed: stale session data may contain products that are now
+        // unapproved, deactivated, or no longer visible to customers.
+        setAllProducts([]);
+        setError('We could not load the current collection. Please refresh.');
       } finally {
-        if (!hasCachedData) {
+        if (!cancelled) {
           setLoading(false);
         }
       }
     };
 
     loadProducts();
+    return () => {
+      cancelled = true;
+    };
   }, [initialParamsKey, stableInitialParams]);
 
   // Derive interest category from preference

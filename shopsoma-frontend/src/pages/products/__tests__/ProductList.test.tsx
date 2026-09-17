@@ -54,6 +54,92 @@ describe('ProductList', () => {
     getSubcategoriesMock.mockResolvedValue([]);
     getFeaturedStorefrontVendorsMock.mockResolvedValue([]);
     getFeaturedRotationSettingsMock.mockResolvedValue({ rotation_minutes: 10 });
+    window.sessionStorage.clear();
+  });
+
+  it('renders the first category page before background pages finish loading', async () => {
+    let resolveSecondPage: ((value: { products: never[] }) => void) | undefined;
+    const secondPage = new Promise<{ products: never[] }>((resolve) => {
+      resolveSecondPage = resolve;
+    });
+    getProductsMock
+      .mockResolvedValueOnce({ products: [{ id: 'first-page-product', category_name: 'Men' }], total_pages: 2 })
+      .mockReturnValueOnce(secondPage);
+
+    render(<MemoryRouter><ProductList initialParams={{ category_id: 'men-id' }} /></MemoryRouter>);
+
+    await waitFor(() => expect(screen.getAllByTestId('product-first-page-product')).not.toHaveLength(0));
+    expect(screen.queryByText('Preparing the catalog...')).not.toBeInTheDocument();
+    resolveSecondPage?.({ products: [] });
+  });
+
+  it('ignores stale category enrichment after initialParams change', async () => {
+    let resolveOldSecondPage: ((value: { products: never[] }) => void) | undefined;
+    const oldSecondPage = new Promise<{ products: never[] }>((resolve) => {
+      resolveOldSecondPage = resolve;
+    });
+    getProductsMock
+      .mockResolvedValueOnce({ products: [{ id: 'old-category-first-page', category_name: 'Men' }], total_pages: 2 })
+      .mockReturnValueOnce(oldSecondPage)
+      .mockResolvedValueOnce({ products: [{ id: 'new-category-product', category_name: 'Women' }], total_pages: 1 });
+
+    const { rerender } = render(
+      <MemoryRouter><ProductList initialParams={{ category_id: 'old-category-id' }} /></MemoryRouter>,
+    );
+    await waitFor(() => expect(screen.getAllByTestId('product-old-category-first-page')).not.toHaveLength(0));
+
+    rerender(<MemoryRouter><ProductList initialParams={{ category_id: 'new-category-id' }} /></MemoryRouter>);
+    await waitFor(() => expect(screen.getAllByTestId('product-new-category-product')).not.toHaveLength(0));
+    resolveOldSecondPage?.({ products: [] });
+    await waitFor(() => expect(screen.queryByTestId('product-old-category-first-page')).not.toBeInTheDocument());
+  });
+
+  it('does not render cached products until the API revalidates them', async () => {
+    let resolveProducts: ((value: { products: { id: string; category_name: string }[] }) => void) | undefined;
+    const revalidation = new Promise<{ products: { id: string; category_name: string }[] }>((resolve) => {
+      resolveProducts = resolve;
+    });
+    window.sessionStorage.setItem(
+      'shopsoma_products_all',
+      JSON.stringify({ products: [{ id: 'stale-product', category_name: 'Men' }], timestamp: Date.now() }),
+    );
+    getProductsMock.mockReturnValueOnce(revalidation);
+
+    render(<MemoryRouter><ProductList /></MemoryRouter>);
+
+    expect(screen.queryByTestId('product-stale-product')).not.toBeInTheDocument();
+    resolveProducts?.({ products: [{ id: 'fresh-product', category_name: 'Men' }] });
+    await waitFor(() => expect(screen.getAllByTestId('product-fresh-product')).not.toHaveLength(0));
+  });
+
+  it('fails closed when cached products cannot be revalidated', async () => {
+    window.sessionStorage.setItem(
+      'shopsoma_products_all',
+      JSON.stringify({ products: [{ id: 'unverified-product', category_name: 'Men' }], timestamp: Date.now() }),
+    );
+    getProductsMock.mockRejectedValueOnce(new Error('temporary API failure'));
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    render(<MemoryRouter><ProductList /></MemoryRouter>);
+
+    await waitFor(() => expect(screen.getByText('We could not load the current collection. Please refresh.')).toBeInTheDocument());
+    expect(screen.queryByTestId('product-unverified-product')).not.toBeInTheDocument();
+    errorSpy.mockRestore();
+  });
+
+  it('keeps API products visible when session storage caching fails', async () => {
+    getProductsMock.mockResolvedValue({
+      products: [{ id: 'uncached-product', category_name: 'Men' }],
+    });
+    const setItemSpy = vi.spyOn(window.sessionStorage, 'setItem').mockImplementation(() => {
+      throw new DOMException('quota exceeded', 'QuotaExceededError');
+    });
+
+    render(<MemoryRouter><ProductList /></MemoryRouter>);
+
+    await waitFor(() => expect(screen.getAllByTestId('product-uncached-product')).not.toHaveLength(0));
+    expect(screen.queryByText('We could not load the current collection. Please refresh.')).not.toBeInTheDocument();
+    setItemSpy.mockRestore();
   });
 
   it('refetches when initialParams change', async () => {

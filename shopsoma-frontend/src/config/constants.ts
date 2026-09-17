@@ -70,6 +70,7 @@ export const ROUTES = {
   VERIFY_EMAIL: '/verify-email',
   CLAIM_ACCOUNT: '/claim-account',
   PRODUCTS: '/products',
+  CATEGORY: '/category/:slug',
   PRODUCT_DETAIL: '/products/:id',
   CART: '/cart',
   CHECKOUT: '/checkout',

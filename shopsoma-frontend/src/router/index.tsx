@@ -14,6 +14,7 @@ import VendorLayout from '../components/vendor/VendorLayout';
 const Home = lazy(() => import('../pages/Home'));
 const ProductDetail = lazy(() => import('../pages/products/ProductDetail'));
 const ProductList = lazy(() => import('../pages/products/ProductList'));
+const CategoryStorefront = lazy(() => import('../pages/products/CategoryStorefront'));
 const MenStorefront = lazy(() => import('../pages/products/MenStorefront'));
 const WomenStorefront = lazy(() => import('../pages/products/WomenStorefront'));
 const ShopEditsStorefront = lazy(() => import('../pages/products/ShopEditsStorefront'));
@@ -182,6 +183,16 @@ const router = createBrowserRouter([
       <ErrorBoundary>
         <Suspense fallback={<Loading fullScreen message="Loading products..." />}>
           <ProductList />
+        </Suspense>
+      </ErrorBoundary>
+    ),
+  },
+  {
+    path: ROUTES.CATEGORY,
+    element: (
+      <ErrorBoundary>
+        <Suspense fallback={<Loading fullScreen message="Loading category..." />}>
+          <CategoryStorefront />
         </Suspense>
       </ErrorBoundary>
     ),
