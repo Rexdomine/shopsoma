@@ -894,19 +894,16 @@ export default function VendorProductAdd() {
               : variation.hasDifferentPricing && variationRegularPrice > 0
                 ? variationRegularPrice
                 : basePrice;
-          const variationCompareAtPrice =
-            variation.hasDifferentPricing && variationSales && variationSales > 0 && variationSales < variationRegularPrice
-              ? variationRegularPrice
-              : undefined;
-
           if (variation.type === 'Color') {
             const colorStock = shouldTrackStock ? parseInt(variation.colorStock || '0', 10) || 0 : 0;
             variationPayload.push({
               title: variation.colorLabel,
               type: variation.colorMode,
               color_hex: variation.colorMode === 'solid' ? variation.colorHex || undefined : undefined,
-              price: variationBasePrice,
-              sale_price: variationCompareAtPrice,
+              price: variationRegularPrice,
+              sale_price: variationSales && variationSales > 0 && variationSales < variationRegularPrice
+                ? variationSales
+                : undefined,
               images: variation.images
                 .filter((image) => image.uploaded && image.imageUrl)
                 .map((image) => image.imageUrl!),
