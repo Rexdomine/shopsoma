@@ -28,6 +28,32 @@ async def test_add_to_cart_rejects_product_from_deactivated_vendor(
         },
         headers={"X-Session-ID": "deactivated-vendor-session"},
     )
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("moderation_status", ["pending", "rejected"])
+async def test_add_to_cart_rejects_unapproved_product(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    sample_product,
+    moderation_status: str,
+):
+    """Customer cart access must require product moderation approval."""
+    from app.models.product import ModerationStatus
+
+    sample_product.moderation_status = ModerationStatus(moderation_status)
+    await db_session.commit()
+
+    response = await client.post(
+        "/api/v1/cart/items",
+        json={
+            "product_id": str(sample_product.id),
+            "variant_id": f"default-{sample_product.id}",
+            "quantity": 1,
+        },
+        headers={"X-Session-ID": f"unapproved-{moderation_status}-session"},
+    )
 
     assert response.status_code == 404
 
