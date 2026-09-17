@@ -247,27 +247,25 @@ export default function ProductList({
     const loadProducts = async () => {
       const cacheKey = `shopsoma_products_${initialParamsKey || 'all'}${stableInitialParams?.category_id ? ':all-pages-v2' : ''}`;
       const cacheRaw = sessionStorage.getItem(cacheKey);
-      let hasCachedData = false;
+      let cachedProducts: Product[] | null = null;
 
       if (cacheRaw) {
         try {
           const cached = JSON.parse(cacheRaw) as { products: Product[]; timestamp: number };
-          if (cached?.products?.length && !cancelled) {
-            setAllProducts(cached.products);
-            setLoading(false);
-            setError(null);
-            hasCachedData = true;
+          if (cached?.products?.length) {
+            // Cached data is only a fallback. Revalidate it before rendering so
+            // removed or moderation-hidden products cannot reappear from storage.
+            cachedProducts = cached.products;
           }
         } catch {
           sessionStorage.removeItem(cacheKey);
         }
       }
+      const hasCachedData = Boolean(cachedProducts?.length);
 
       try {
         if (cancelled) return;
-        if (!hasCachedData) {
-          setLoading(true);
-        }
+        setLoading(true);
         setPage(1);
         const response = await productService.getProducts({
           page: 1,
@@ -315,14 +313,15 @@ export default function ProductList({
         setError(null);
       } catch (err) {
         if (cancelled) return;
-        if (!hasCachedData) {
+        if (hasCachedData && cachedProducts) {
+          setAllProducts(cachedProducts);
+          setError(null);
+        } else {
           console.error('Failed to load products', err);
-        }
-        if (!hasCachedData) {
           setError('We could not load the current collection. Please refresh.');
         }
       } finally {
-        if (!cancelled && !hasCachedData) {
+        if (!cancelled) {
           setLoading(false);
         }
       }

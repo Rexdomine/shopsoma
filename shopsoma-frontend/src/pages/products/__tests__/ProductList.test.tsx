@@ -94,6 +94,23 @@ describe('ProductList', () => {
     await waitFor(() => expect(screen.queryByTestId('product-old-category-first-page')).not.toBeInTheDocument());
   });
 
+  it('does not render cached products until the API revalidates them', async () => {
+    let resolveProducts: ((value: { products: { id: string; category_name: string }[] }) => void) | undefined;
+    const revalidation = new Promise<{ products: { id: string; category_name: string }[] }>((resolve) => {
+      resolveProducts = resolve;
+    });
+    window.sessionStorage.setItem(
+      'shopsoma_products_all',
+      JSON.stringify({ products: [{ id: 'stale-product', category_name: 'Men' }], timestamp: Date.now() }),
+    );
+    getProductsMock.mockReturnValueOnce(revalidation);
+
+    render(<MemoryRouter><ProductList /></MemoryRouter>);
+
+    expect(screen.queryByTestId('product-stale-product')).not.toBeInTheDocument();
+    resolveProducts?.({ products: [{ id: 'fresh-product', category_name: 'Men' }] });
+    await waitFor(() => expect(screen.getByTestId('product-fresh-product')).toBeInTheDocument());
+  });
   it('keeps API products visible when session storage caching fails', async () => {
     getProductsMock.mockResolvedValue({
       products: [{ id: 'uncached-product', category_name: 'Men' }],
