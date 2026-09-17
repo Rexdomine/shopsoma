@@ -1619,7 +1619,7 @@ export default function VendorProductAdd() {
                         </p>
                       </div>
 
-                      <div className="mt-8 grid gap-3 sm:grid-cols-3">
+                      <div className="mt-8 grid gap-3">
                         <div className="rounded-2xl border border-white/80 bg-white/75 p-4 shadow-sm shadow-[#105E53]/5">
                           <p className="font-serif text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-500">Ratio</p>
                           <p className="mt-2 font-serif text-xl font-semibold text-[#105E53]">4:5</p>
