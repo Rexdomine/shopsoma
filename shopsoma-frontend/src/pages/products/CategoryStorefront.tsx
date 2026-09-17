@@ -14,6 +14,9 @@ export default function CategoryStorefront() {
 
   useEffect(() => {
     let mounted = true;
+    setCategory(null);
+    setError(false);
+    setLoading(true);
 
     const loadCategory = async () => {
       if (!slug) {
