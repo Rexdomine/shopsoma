@@ -34,7 +34,10 @@ from app.models.vendor_application import VendorApplication
 from app.schemas.auth import UserResponse, UserUpdate
 from app.schemas.common import PaginatedResponse
 from app.schemas.product import ProductApprovalRequest, ProductRejectionRequest, ProductFeatureUpdate
-from app.services.test_account_classification import classify_existing_staging_accounts
+from app.services.test_account_classification import (
+    classify_existing_staging_accounts,
+    tag_staging_account,
+)
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -322,6 +325,23 @@ async def classify_test_accounts(
             actor_id=current_admin.id,
             apply=request.apply,
         )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/users/{user_id}/test-account")
+async def mark_user_as_test_account(
+    user_id: UUID,
+    current_admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Idempotently mark one staging customer/vendor as a test account."""
+    try:
+        return await tag_staging_account(db, account_id=user_id, actor_id=current_admin.id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -849,6 +869,7 @@ async def list_vendors(
                 "kyc_submitted_at": vendor.kyc_submitted_at.isoformat() if vendor.kyc_submitted_at else None,
                 "commission_rate": float(vendor.commission_rate) if vendor.commission_rate else 0.0,
                 "is_active": user.is_active,
+                "is_test_account": user.is_test_account,
                 "is_onboarding": vendor.is_onboarding,
                 "brand_info_completed": vendor.brand_info_completed,
                 "payout_info_completed": vendor.payout_info_completed,

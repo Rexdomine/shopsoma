@@ -95,6 +95,10 @@ class UserResponse(BaseModel):
     is_active: bool
     profile_image_url: Optional[str] = None
     is_guest_created: bool = False
+    is_test_account: bool = False
+    test_account_tagged_at: Optional[datetime] = None
+    test_account_tagged_by: Optional[UUID] = None
+    test_account_tag_reason: Optional[str] = None
     created_at: datetime
     last_login_at: Optional[datetime] = None
 

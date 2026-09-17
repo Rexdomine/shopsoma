@@ -84,3 +84,55 @@ async def classify_existing_staging_accounts(
         "pending_count": len(pending_ids),
         "tagged_count": len(tagged_ids),
     }
+
+
+async def tag_staging_account(
+    db: AsyncSession,
+    *,
+    account_id: Any,
+    actor_id: Any,
+) -> dict[str, Any]:
+    """Idempotently tag one customer/vendor account in staging."""
+    _assert_staging()
+    result = await db.execute(select(User).where(User.id == account_id))
+    account = result.scalar_one_or_none()
+    if account is None:
+        raise LookupError("Account not found")
+    if account.role not in _ALLOWED_ROLES:
+        raise PermissionError("Admin accounts cannot be tagged as test accounts")
+    if account.is_test_account:
+        return {"tagged": False, "is_test_account": True, "user_id": str(account.id)}
+
+    tagged_at = datetime.now(timezone.utc)
+    tagged_result = await db.execute(
+        update(User)
+        .where(
+            User.id == account_id,
+            User.role.in_(_ALLOWED_ROLES),
+            User.is_test_account.is_(False),
+        )
+        .values(
+            is_test_account=True,
+            test_account_tagged_at=tagged_at,
+            test_account_tagged_by=actor_id,
+            test_account_tag_reason="admin-marked test account",
+        )
+        .returning(User.id)
+    )
+    tagged_id = tagged_result.scalar_one_or_none()
+    if tagged_id is None:
+        await db.rollback()
+        return {"tagged": False, "is_test_account": True, "user_id": str(account.id)}
+
+    db.add(
+        AuditLog(
+            user_id=actor_id,
+            action="user_test_account_tagged",
+            entity_type="user",
+            entity_id=account.id,
+            old_values={"is_test_account": False},
+            new_values={"is_test_account": True, "reason": "admin-marked test account"},
+        )
+    )
+    await db.commit()
+    return {"tagged": True, "is_test_account": True, "user_id": str(account.id)}

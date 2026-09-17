@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Search, Power, PowerOff, AlertCircle, CheckCircle, Users, Mail, CheckCircle as VerifiedIcon, Key } from 'lucide-react';
+import { Search, Power, PowerOff, AlertCircle, CheckCircle, Users, Mail, CheckCircle as VerifiedIcon, Key, Tag } from 'lucide-react';
 import AdminSidebar from '../../components/admin/AdminSidebar';
 import { adminService, type UserListItem } from '../../services/adminService';
 import { useAuth } from '../../context/AuthContext';
@@ -92,6 +92,21 @@ export default function AdminUsers() {
       showMessage('error', err?.response?.data?.detail || err.message || `Failed to ${action} selected accounts`);
     } finally {
       setBulkLoading(false);
+    }
+  };
+
+  const handleMarkAsTestAccount = async (account: UserListItem) => {
+    if (account.role === 'admin' || account.is_test_account) return;
+    if (!window.confirm(`Mark ${account.email} as a test account? This makes it eligible for staging purge workflows.`)) return;
+    try {
+      setActionLoading(account.id);
+      await adminService.markUserAsTestAccount(account.id);
+      showMessage('success', `${account.email} marked as a test account`);
+      await loadUsers();
+    } catch (err: any) {
+      showMessage('error', err?.response?.data?.detail || err.message || 'Failed to mark test account');
+    } finally {
+      setActionLoading(null);
     }
   };
 
@@ -376,6 +391,11 @@ export default function AdminUsers() {
                         <div>
                           <p className="text-sm font-semibold text-gray-900">{u.full_name}</p>
                           <p className="text-xs text-gray-500">{u.email}</p>
+                          {u.is_test_account && (
+                            <span className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded text-xs font-bold bg-amber-100 text-amber-800 border border-amber-200">
+                              <Tag className="w-3 h-3" /> TEST ACCOUNT
+                            </span>
+                          )}
                         </div>
                       </td>
                       <td className="px-6 py-4">{getRoleBadge(u.role)}</td>
@@ -414,7 +434,18 @@ export default function AdminUsers() {
                             <Key className="w-4 h-4" />
                           </button>
 
-                          {/* Toggle Status Button */}
+                          {/* Mark as test account; admins are intentionally excluded. */}
+                          {u.role !== 'admin' && !u.is_test_account && (
+                            <button
+                              onClick={() => handleMarkAsTestAccount(u)}
+                              disabled={actionLoading === u.id}
+                              className="p-2 rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed text-amber-600 hover:text-amber-700 hover:bg-amber-50"
+                              title="Mark as test account"
+                            >
+                              <Tag className="w-4 h-4" />
+                            </button>
+                          )}
+
                           <button
                             onClick={() => handleToggleStatus(u.id, u.is_active)}
                             disabled={u.id === user?.id || actionLoading === u.id}
