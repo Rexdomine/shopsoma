@@ -48,6 +48,7 @@ it('prevents selecting the acting admin vendor account and exposes account statu
   render(<AdminVendors />);
 
   expect(await screen.findByRole('checkbox', { name: 'Select admin@example.com' })).toBeDisabled();
+  expect(screen.queryByTitle('Mark as test account')).not.toBeInTheDocument();
   expect(screen.getAllByText('Account Active')).toHaveLength(2);
   const deactivateButtons = screen.getAllByRole('button', { name: 'Deactivate vendor account' });
   expect(deactivateButtons[0]).toBeEnabled();

@@ -413,6 +413,7 @@ async def list_users(
                 "role": user.role.value,
                 "is_active": user.is_active,
                 "email_verified": user.email_verified,
+                "is_test_account": user.is_test_account,
                 "created_at": user.created_at.isoformat() if user.created_at else None,
                 "last_login": None,  # User model doesn't have last_login field yet
             }

@@ -23,6 +23,7 @@ export default function AdminUsers() {
   const { user } = useAuth();
 
   const pageSize = 20;
+  const canTagTestAccounts = import.meta.env.VITE_APP_ENV === 'staging';
 
   useEffect(() => {
     loadUsers();
@@ -435,7 +436,7 @@ export default function AdminUsers() {
                           </button>
 
                           {/* Mark as test account; admins are intentionally excluded. */}
-                          {u.role !== 'admin' && !u.is_test_account && (
+                          {canTagTestAccounts && u.role !== 'admin' && !u.is_test_account && (
                             <button
                               onClick={() => handleMarkAsTestAccount(u)}
                               disabled={actionLoading === u.id}

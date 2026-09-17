@@ -47,6 +47,8 @@ it('keeps the selection and shows an accessible error when bulk deactivation fai
   mocks.bulkUpdateUserStatus.mockRejectedValue(new Error('Network unavailable'));
   render(<AdminUsers />);
 
+  expect(await screen.findByText('Customer One')).toBeInTheDocument();
+  expect(screen.queryByTitle('Mark as test account')).not.toBeInTheDocument();
   fireEvent.click(await screen.findByRole('checkbox', { name: 'Select customer@example.com' }));
   expect(screen.getByRole('checkbox', { name: 'Select admin@example.com' })).toBeDisabled();
   fireEvent.click(screen.getByRole('button', { name: 'Deactivate selected' }));
