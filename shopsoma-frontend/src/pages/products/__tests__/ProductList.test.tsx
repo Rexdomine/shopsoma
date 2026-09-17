@@ -73,6 +73,27 @@ describe('ProductList', () => {
     resolveSecondPage?.({ products: [] });
   });
 
+  it('ignores stale category enrichment after initialParams change', async () => {
+    let resolveOldSecondPage: ((value: { products: never[] }) => void) | undefined;
+    const oldSecondPage = new Promise<{ products: never[] }>((resolve) => {
+      resolveOldSecondPage = resolve;
+    });
+    getProductsMock
+      .mockResolvedValueOnce({ products: [{ id: 'old-category-first-page', category_name: 'Men' }], total_pages: 2 })
+      .mockReturnValueOnce(oldSecondPage)
+      .mockResolvedValueOnce({ products: [{ id: 'new-category-product', category_name: 'Women' }], total_pages: 1 });
+
+    const { rerender } = render(
+      <MemoryRouter><ProductList initialParams={{ category_id: 'old-category-id' }} /></MemoryRouter>,
+    );
+    await waitFor(() => expect(screen.getAllByTestId('product-old-category-first-page')).not.toHaveLength(0));
+
+    rerender(<MemoryRouter><ProductList initialParams={{ category_id: 'new-category-id' }} /></MemoryRouter>);
+    await waitFor(() => expect(screen.getAllByTestId('product-new-category-product')).not.toHaveLength(0));
+    resolveOldSecondPage?.({ products: [] });
+    await waitFor(() => expect(screen.queryByTestId('product-old-category-first-page')).not.toBeInTheDocument());
+  });
+
   it('keeps API products visible when session storage caching fails', async () => {
     getProductsMock.mockResolvedValue({
       products: [{ id: 'uncached-product', category_name: 'Men' }],

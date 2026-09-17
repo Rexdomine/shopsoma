@@ -243,6 +243,7 @@ export default function ProductList({
   };
 
   useEffect(() => {
+    let cancelled = false;
     const loadProducts = async () => {
       const cacheKey = `shopsoma_products_${initialParamsKey || 'all'}${stableInitialParams?.category_id ? ':all-pages-v2' : ''}`;
       const cacheRaw = sessionStorage.getItem(cacheKey);
@@ -251,7 +252,7 @@ export default function ProductList({
       if (cacheRaw) {
         try {
           const cached = JSON.parse(cacheRaw) as { products: Product[]; timestamp: number };
-          if (cached?.products?.length) {
+          if (cached?.products?.length && !cancelled) {
             setAllProducts(cached.products);
             setLoading(false);
             setError(null);
@@ -263,6 +264,7 @@ export default function ProductList({
       }
 
       try {
+        if (cancelled) return;
         if (!hasCachedData) {
           setLoading(true);
         }
@@ -274,6 +276,7 @@ export default function ProductList({
           sort_order: 'desc',
           ...stableInitialParams,
         });
+        if (cancelled) return;
         let products = response.products || [];
         setAllProducts(products);
         setError(null);
@@ -281,6 +284,7 @@ export default function ProductList({
         setLoading(false);
         if (stableInitialParams?.category_id && response.total_pages > 1) {
           for (let nextPage = 2; nextPage <= response.total_pages; nextPage += 1) {
+            if (cancelled) return;
             try {
               const pageResponse = await productService.getProducts({
                 page: nextPage,
@@ -289,13 +293,16 @@ export default function ProductList({
                 sort_order: 'desc',
                 ...stableInitialParams,
               });
+              if (cancelled) return;
               products = products.concat(pageResponse.products || []);
               setAllProducts(products);
             } catch {
+              if (cancelled) return;
               break;
             }
           }
         }
+        if (cancelled) return;
         try {
           sessionStorage.setItem(
             cacheKey,
@@ -307,6 +314,7 @@ export default function ProductList({
         }
         setError(null);
       } catch (err) {
+        if (cancelled) return;
         if (!hasCachedData) {
           console.error('Failed to load products', err);
         }
@@ -314,13 +322,16 @@ export default function ProductList({
           setError('We could not load the current collection. Please refresh.');
         }
       } finally {
-        if (!hasCachedData) {
+        if (!cancelled && !hasCachedData) {
           setLoading(false);
         }
       }
     };
 
     loadProducts();
+    return () => {
+      cancelled = true;
+    };
   }, [initialParamsKey, stableInitialParams]);
 
   // Derive interest category from preference
