@@ -64,6 +64,7 @@ const ProfileWishlist = lazy(() => import('../pages/profile/ProfileWishlist'));
 const ProfileNewsletter = lazy(() => import('../pages/profile/ProfileNewsletter'));
 const ProfileManagePreference = lazy(() => import('../pages/profile/ProfileManagePreference'));
 const ProfilePayments = lazy(() => import('../pages/profile/ProfilePayments'));
+const AdminDashboard = lazy(() => import('../pages/admin/AdminDashboard'));
 const AdminUsers = lazy(() => import('../pages/admin/AdminUsers'));
 const AdminProducts = lazy(() => import('../pages/admin/AdminProducts'));
 const AdminProductDetail = lazy(() => import('../pages/admin/AdminProductDetail'));
@@ -687,6 +688,18 @@ const router = createBrowserRouter([
       <ErrorBoundary>
         <Suspense fallback={<Loading fullScreen message="Loading..." />}>
           <ProfilePayments />
+        </Suspense>
+      </ErrorBoundary>
+    ),
+  },
+  {
+    path: ROUTES.ADMIN_DASHBOARD,
+    element: (
+      <ErrorBoundary>
+        <Suspense fallback={<Loading fullScreen message="Loading admin overview..." />}>
+          <ProtectedRoute roles={['admin']}>
+            <AdminDashboard />
+          </ProtectedRoute>
         </Suspense>
       </ErrorBoundary>
     ),
