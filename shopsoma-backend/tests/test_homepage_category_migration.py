@@ -46,3 +46,5 @@ def test_name_reuse_repairs_the_requested_slug_deterministically() -> None:
     assert "SET name = :name, slug = :slug" in source
     assert "UPDATE products SET category_id = :slug_id" in source
     assert "DELETE FROM categories WHERE id = :name_id" in source
+    assert '_find_id(conn, "shop-edits", "Shop Edits")' in source
+    assert '"shop-edits-occasion-wear", "Occasion Wear"' in source
