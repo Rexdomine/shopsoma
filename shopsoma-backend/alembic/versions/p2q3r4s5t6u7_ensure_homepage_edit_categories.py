@@ -108,29 +108,22 @@ def _ensure_category(conn, *, name: str, slug: str, parent_id, description: str,
 
 def upgrade():
     conn = op.get_bind()
-    shop_edits_id = _find_id(conn, "shop-edits", "Shop Edits")
-    if not shop_edits_id:
-        shop_edits_id = _ensure_category(
-            conn,
-            name="Shop Edits",
-            slug="shop-edits",
-            parent_id=None,
-            description="Curated edits and seasonal picks",
-            display_order=4,
-        )
-
-    occasion_wear_id = _find_id(
-        conn, "shop-edits-occasion-wear", "Occasion Wear"
+    shop_edits_id = _ensure_category(
+        conn,
+        name="Shop Edits",
+        slug="shop-edits",
+        parent_id=None,
+        description="Curated edits and seasonal picks",
+        display_order=4,
     )
-    if not occasion_wear_id:
-        occasion_wear_id = _ensure_category(
-            conn,
-            name="Occasion Wear",
-            slug="shop-edits-occasion-wear",
-            parent_id=shop_edits_id,
-            description="Occasion wear edits",
-            display_order=2,
-        )
+    occasion_wear_id = _ensure_category(
+        conn,
+        name="Occasion Wear",
+        slug="shop-edits-occasion-wear",
+        parent_id=shop_edits_id,
+        description="Occasion wear edits",
+        display_order=2,
+    )
 
     for name, slug, order in (
         ("Casual", "shop-edits-occasion-wear-casual", 1),

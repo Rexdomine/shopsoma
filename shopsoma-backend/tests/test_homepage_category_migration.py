@@ -23,10 +23,10 @@ def test_homepage_category_migration_extends_canonical_head() -> None:
 def test_homepage_edit_categories_remain_under_occasion_wear() -> None:
     source = MIGRATION.read_text()
     assert '"shop-edits-occasion-wear"' in source
-    assert "occasion_wear_id = _find_id" in source
+    assert "occasion_wear_id = _ensure_category" in source
     assert "parent_id=occasion_wear_id" in source
     assert "parent_id=shop_edits_id" in source
-    assert source.index("occasion_wear_id = _find_id") < source.index(
+    assert source.index("occasion_wear_id = _ensure_category") < source.index(
         "parent_id=occasion_wear_id"
     )
 
@@ -46,5 +46,5 @@ def test_name_reuse_repairs_the_requested_slug_deterministically() -> None:
     assert "SET name = :name, slug = :slug" in source
     assert "UPDATE products SET category_id = :slug_id" in source
     assert "DELETE FROM categories WHERE id = :name_id" in source
-    assert '_find_id(conn, "shop-edits", "Shop Edits")' in source
-    assert '"shop-edits-occasion-wear", "Occasion Wear"' in source
+    assert source.count("shop_edits_id = _ensure_category(") == 1
+    assert source.count("occasion_wear_id = _ensure_category(") == 1
