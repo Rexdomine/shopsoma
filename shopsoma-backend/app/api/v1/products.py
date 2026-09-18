@@ -33,6 +33,9 @@ from app.schemas.product import (
     ProductModerationUpdate,
     validate_variation_inventory_shape,
     variation_inventory_axis_signature,
+    normalize_color_value,
+    unique_variations_by_color,
+    unique_variations_by_size,
 )
 
 router = APIRouter(prefix="/products", tags=["products"])
@@ -897,14 +900,21 @@ async def update_product(
 
             if inherits_regular_price or inherits_sale_price:
                 variation_type = str(getattr(variation, "type", "color")).casefold()
-                variation_title = str(variation.title).strip().casefold()
+                variation_title = normalize_color_value(variation.title)
+                variation_index = (
+                    unique_variations_by_size(product.variations or [])
+                    if variation_type == "size"
+                    else unique_variations_by_color(product.variations or [])
+                )
+                if variation_index.get(variation_title) is not variation:
+                    continue
                 for legacy_variant in product.variants or []:
                     legacy_value = (
                         legacy_variant.size
                         if variation_type == "size"
                         else legacy_variant.color
                     )
-                    if str(legacy_value or "").strip().casefold() == variation_title:
+                    if normalize_color_value(legacy_value) == variation_title:
                         # Legacy variants store the effective purchase price,
                         # so they must retain the parent base price when an
                         # inherited compare-at price is removed.
