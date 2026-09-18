@@ -39,6 +39,15 @@ def test_variation_inheritance_markers_preserve_equal_explicit_overrides():
     assert explicit.inherits_sale_price is False
 
 
+def test_variation_inheritance_marker_descriptions_match_price_dimensions():
+    assert VariationCreate.model_fields["inherits_price"].description == (
+        "Whether price follows the product compare-at price"
+    )
+    assert VariationCreate.model_fields["inherits_sale_price"].description == (
+        "Whether sale price follows the product base price"
+    )
+
+
 
 
 def test_inheritance_marker_wins_over_equal_legacy_price_values():

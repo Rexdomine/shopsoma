@@ -907,6 +907,10 @@ async def update_product(
                 old_base_price,
                 null_value_inherits=inherits_regular_price,
             )
+            if getattr(variation, "inherits_price", None) is None:
+                variation.inherits_price = inherits_regular_price
+            if getattr(variation, "inherits_sale_price", None) is None:
+                variation.inherits_sale_price = inherits_sale_price
             if inherits_regular_price:
                 variation.price = new_compare_at_price
             if inherits_sale_price:
