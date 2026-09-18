@@ -45,20 +45,31 @@ def validate_variation_inventory_shape(
         if variation.type.casefold() == "size"
     ]
 
-    if color_variations and size_variations:
+    legacy_variants = list(variants or [])
+    legacy_color_variants = [
+        variant for variant in legacy_variants if getattr(variant, "color", None) is not None
+    ]
+    if (color_variations or legacy_color_variants) and size_variations:
         raise ValueError(
             "Color and size variations cannot be combined until a "
             "color-size inventory matrix is supported"
         )
 
     size_stock_labels = {
-        normalize_color_value(size.size)
+        normalize_color_value(getattr(size, "size", None))
         for variation in size_variations
-        for size in variation.sizes
+        for size in (
+            (
+                getattr(variation, "sizes", None)
+                if getattr(variation, "sizes", None) is not None
+                else getattr(variation, "size_stocks", [])
+            )
+            or []
+        )
     }
     if any(
         normalize_color_value(variant.size) in size_stock_labels
-        for variant in variants or []
+        for variant in legacy_variants
         if variant.size is not None
     ):
         raise ValueError(

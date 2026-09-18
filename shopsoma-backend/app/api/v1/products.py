@@ -932,7 +932,12 @@ async def create_variant(
     vendor_id = result.scalar_one_or_none()
 
     result = await db.execute(
-        select(Product).where(Product.id == product_id)
+        select(Product)
+        .options(
+            selectinload(Product.variants),
+            selectinload(Product.variations).selectinload(Variation.size_stocks),
+        )
+        .where(Product.id == product_id)
     )
     product = result.scalar_one_or_none()
 
@@ -942,7 +947,14 @@ async def create_variant(
             detail="Product not found"
         )
 
-    # Create variant
+    try:
+        validate_variation_inventory_shape(product.variations, [*product.variants, variant_data])
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=[{"loc": ["body"], "msg": str(exc), "type": "value_error"}],
+        ) from exc
+
     variant = ProductVariant(
         product_id=product_id,
         **variant_data.model_dump()
@@ -970,7 +982,12 @@ async def update_variant(
     vendor_id = result.scalar_one_or_none()
 
     result = await db.execute(
-        select(Product).where(Product.id == product_id)
+        select(Product)
+        .options(
+            selectinload(Product.variants),
+            selectinload(Product.variations).selectinload(Variation.size_stocks),
+        )
+        .where(Product.id == product_id)
     )
     product = result.scalar_one_or_none()
 
@@ -980,7 +997,6 @@ async def update_variant(
             detail="Product not found"
         )
 
-    # Get variant
     result = await db.execute(
         select(ProductVariant).where(
             and_(ProductVariant.id == variant_id, ProductVariant.product_id == product_id)
@@ -998,6 +1014,14 @@ async def update_variant(
     update_data = variant_data.model_dump(exclude_unset=True)
     for field, value in update_data.items():
         setattr(variant, field, value)
+
+    try:
+        validate_variation_inventory_shape(product.variations, product.variants)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=[{"loc": ["body"], "msg": str(exc), "type": "value_error"}],
+        ) from exc
 
     await db.commit()
     await db.refresh(variant)
