@@ -291,3 +291,30 @@ def test_generated_size_stock_variant_does_not_populate_color_selector():
 
     assert product.variants[0].size == "M"
     assert product.variants[0].color is None
+
+
+def test_inactive_size_variation_is_not_merged_into_legacy_variants():
+    now = datetime.now(timezone.utc)
+    product_id = uuid4()
+    variation = VariationResponse.model_construct(
+        id=uuid4(), product_id=product_id, title="M", type="size", color_hex=None,
+        price=Decimal("100.00"), sale_price=None, images=[], is_active=False,
+        created_at=now, updated_at=now,
+        size_stocks=[SizeStockResponse.model_construct(
+            id=uuid4(), variation_id=uuid4(), size="M", stock=5,
+            created_at=now, updated_at=now,
+        )],
+    )
+    legacy_variant = ProductVariantResponse.model_construct(
+        id=uuid4(), product_id=product_id, size="4", color=None, color_hex=None,
+        price=Decimal("100.00"), compare_at_price=None, stock=2, sku=None,
+        is_available=True, created_at=now, updated_at=now,
+    )
+    product = ProductResponse.model_construct(
+        id=product_id, base_price=Decimal("100.00"), variants=[legacy_variant],
+        variations=[variation],
+    )
+
+    product.generate_variants_from_variations()  # pyright: ignore[reportCallIssue]
+
+    assert [variant.size for variant in product.variants] == ["4"]

@@ -28,7 +28,10 @@ def normalize_color_value(value: Optional[str]) -> str:
 COLOR_VARIATION_TYPES = {"color", "solid", "multi", "none"}
 
 
-def validate_variation_inventory_shape(variations: Optional[List["VariationCreate"]]) -> None:
+def validate_variation_inventory_shape(
+    variations: Optional[List["VariationCreate"]],
+    variants: Optional[List["ProductVariantCreate"]] = None,
+) -> None:
     """Reject variation combinations without one canonical inventory source."""
     active_variations = [variation for variation in variations or [] if variation.is_active]
     color_variations = [
@@ -46,6 +49,21 @@ def validate_variation_inventory_shape(variations: Optional[List["VariationCreat
         raise ValueError(
             "Color and size variations cannot be combined until a "
             "color-size inventory matrix is supported"
+        )
+
+    size_stock_labels = {
+        normalize_color_value(size.size)
+        for variation in size_variations
+        for size in variation.sizes
+    }
+    if any(
+        normalize_color_value(variant.size) in size_stock_labels
+        for variant in variants or []
+        if variant.size is not None
+    ):
+        raise ValueError(
+            "Legacy variants cannot duplicate size variation inventory; "
+            "use one canonical stock source per size"
         )
 
 def unique_variations_by_color(variations: List["VariationResponse"]) -> dict[str, "VariationResponse"]:
@@ -409,7 +427,7 @@ class ProductCreate(ProductBase):
     @model_validator(mode="after")
     def validate_variation_inventory_shape(self) -> "ProductCreate":
         """Reject combinations that cannot represent one canonical stock source."""
-        validate_variation_inventory_shape(self.variations)
+        validate_variation_inventory_shape(self.variations, self.variants)
         return self
 
 
@@ -534,7 +552,7 @@ class ProductResponse(ProductBase):
                     if variant.size is not None
                 }
                 for variation in self.variations:
-                    if variation.type.casefold() != "size":
+                    if variation.type.casefold() != "size" or not variation.is_active:
                         continue
                     variant_price = effective_variation_price(
                         variation.price, variation.sale_price, self.base_price
@@ -577,6 +595,8 @@ class ProductResponse(ProductBase):
             generated_variants = []
 
             for variation in self.variations:
+                if not variation.is_active:
+                    continue
                 # Normalize variation pricing to the legacy variant contract:
                 # `price` is the effective purchase price and `compare_at_price`
                 # retains the regular price when a valid sale is configured.

@@ -151,6 +151,31 @@ class TestProductCreate:
         assert data["variations"][0]["size_stocks"][0]["size"] == "M"
 
     @pytest.mark.asyncio
+    async def test_create_product_rejects_duplicate_legacy_and_size_stock(
+        self, client: AsyncClient, vendor_user
+    ):
+        """A legacy size row cannot duplicate a canonical size-stock row."""
+        response = await client.post(
+            "/api/v1/products",
+            json={
+                "title": "Duplicate Size Inventory",
+                "base_price": 85.00,
+                "variants": [{"size": " m ", "price": 85.00, "stock": 10}],
+                "variations": [
+                    {
+                        "title": "M",
+                        "type": "size",
+                        "sizes": [{"size": "M", "stock": 10}],
+                    }
+                ],
+            },
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 422
+        assert "duplicate size variation inventory" in response.json()["detail"][0]["msg"]
+
+    @pytest.mark.asyncio
     async def test_create_product_rejects_color_and_size_variations(
         self, client: AsyncClient, vendor_user
     ):
