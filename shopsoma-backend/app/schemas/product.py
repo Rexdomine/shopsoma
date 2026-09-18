@@ -324,6 +324,8 @@ class VariationBase(BaseModel):
     color_hex: Optional[str] = Field(None, pattern=r"^#[0-9A-Fa-f]{6}$", description="Color hex code")
     price: Optional[Decimal] = Field(None, gt=0, decimal_places=2, description="Price override (if null, uses product base_price)")
     sale_price: Optional[Decimal] = Field(None, gt=0, decimal_places=2, description="Sale price override")
+    inherits_price: Optional[bool] = Field(None, description="Whether price follows the product base price")
+    inherits_sale_price: Optional[bool] = Field(None, description="Whether sale price follows the product compare-at price")
     images: List[str] = Field(default_factory=list, description="Image URLs for this variation")
     is_active: bool = Field(default=True, description="Variation active status")
 
@@ -352,6 +354,8 @@ class VariationUpdate(BaseModel):
     color_hex: Optional[str] = Field(None, pattern=r"^#[0-9A-Fa-f]{6}$")
     price: Optional[Decimal] = Field(None, gt=0, decimal_places=2)
     sale_price: Optional[Decimal] = Field(None, gt=0, decimal_places=2)
+    inherits_price: Optional[bool] = None
+    inherits_sale_price: Optional[bool] = None
     images: Optional[List[str]] = None
     is_active: Optional[bool] = None
     sizes: Optional[List[SizeStockCreate]] = None  # For sync operations

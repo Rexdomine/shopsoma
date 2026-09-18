@@ -25,6 +25,8 @@ export interface CreateProductVariationPayload {
   color_hex?: string;
   price?: number;
   sale_price?: number;
+  inherits_price?: boolean;
+  inherits_sale_price?: boolean;
   images?: string[];
   is_active?: boolean;
   sizes: Array<{
@@ -205,6 +207,8 @@ export const productService = {
         color_hex: v.color_hex,
         price: v.price,
         sale_price: v.sale_price,
+        inherits_price: v.inherits_price,
+        inherits_sale_price: v.inherits_sale_price,
         images: v.images,
         is_active: v.is_active,
         size_stocks: v.size_stocks.map(ss => ({

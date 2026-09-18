@@ -37,6 +37,16 @@ from app.schemas.product import (
 
 router = APIRouter(prefix="/products", tags=["products"])
 
+def _variation_inherits_parent_price(
+    variation: Variation,
+    marker_name: str,
+    persisted_value: Any,
+    legacy_parent_value: Any,
+) -> bool:
+    marker = getattr(variation, marker_name, None)
+    return marker if marker is not None else persisted_value == legacy_parent_value
+
+
 PRODUCT_RELATIONSHIPS = (
     selectinload(Product.variants),
     selectinload(Product.variations).selectinload(Variation.size_stocks),
@@ -239,6 +249,8 @@ async def create_product(
                 color_hex=variation_data.color_hex,
                 price=variation_data.price,
                 sale_price=variation_data.sale_price,
+                inherits_price=variation_data.inherits_price,
+                inherits_sale_price=variation_data.inherits_sale_price,
                 images=variation_data.images,
                 is_active=variation_data.is_active,
             )
@@ -836,6 +848,8 @@ async def update_product(
                 color_hex=variation_data.get("color_hex"),
                 price=variation_data.get("price"),
                 sale_price=variation_data.get("sale_price"),
+                inherits_price=variation_data.get("inherits_price"),
+                inherits_sale_price=variation_data.get("inherits_sale_price"),
                 images=variation_data.get("images", []),
                 is_active=variation_data.get("is_active", True),
             )
@@ -863,10 +877,21 @@ async def update_product(
         new_base_price = product.base_price
         new_compare_at_price = product.compare_at_price
         for variation in product.variations:
-            if variation.price == old_base_price:
-                variation.price = new_base_price
-            if variation.sale_price == old_compare_at_price:
-                variation.sale_price = new_compare_at_price
+            legacy_regular_price = old_compare_at_price or old_base_price
+            if _variation_inherits_parent_price(
+                variation,
+                "inherits_price",
+                variation.price,
+                legacy_regular_price,
+            ):
+                variation.price = new_compare_at_price
+            if _variation_inherits_parent_price(
+                variation,
+                "inherits_sale_price",
+                variation.sale_price,
+                old_base_price,
+            ):
+                variation.sale_price = new_base_price if new_compare_at_price is not None else None
 
     await db.commit()
 
