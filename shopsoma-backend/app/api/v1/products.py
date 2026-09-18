@@ -1010,8 +1010,37 @@ async def update_variant(
             detail="Variant not found"
         )
 
-    # Update
+    # Validate changes to inventory axes against the canonical variation inventory.
+    # Price/stock/availability edits do not alter the inventory shape and can be
+    # applied without re-running this cross-record validation.
     update_data = variant_data.model_dump(exclude_unset=True)
+    if set(update_data).intersection({"size", "color"}):
+        candidate_variants = []
+        for existing_variant in product.variants:
+            candidate_data = {
+                field: getattr(existing_variant, field)
+                for field in (
+                    "size",
+                    "color",
+                    "color_hex",
+                    "price",
+                    "stock",
+                    "sku",
+                    "is_available",
+                )
+            }
+            if existing_variant.id == variant.id:
+                candidate_data.update(update_data)
+            candidate_variants.append(ProductVariantCreate.model_construct(**candidate_data))
+
+        try:
+            validate_variation_inventory_shape(product.variations, candidate_variants)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=[{"loc": ["body"], "msg": str(exc), "type": "value_error"}],
+            ) from exc
+
     for field, value in update_data.items():
         setattr(variant, field, value)
 
