@@ -43,6 +43,24 @@ def unique_variations_by_color(variations: List["VariationResponse"]) -> dict[st
     return indexed
 
 
+def unique_variations_by_size(variations: List["VariationResponse"]) -> dict[str, "VariationResponse"]:
+    """Index only unambiguous size variation labels."""
+    indexed: dict[str, VariationResponse] = {}
+    collisions: set[str] = set()
+    for variation in variations:
+        if not variation.is_active or variation.type.casefold() != "size":
+            continue
+        key = normalize_color_value(variation.title)
+        if not key or key in collisions:
+            continue
+        if key in indexed:
+            del indexed[key]
+            collisions.add(key)
+            continue
+        indexed[key] = variation
+    return indexed
+
+
 # ============================================================================
 # Product Image Schemas
 # ============================================================================
@@ -451,10 +469,13 @@ class ProductResponse(ProductBase):
         if self.variants:
             if self.variations:
                 variations_by_title = unique_variations_by_color(self.variations)
+                variations_by_size = unique_variations_by_size(self.variations)
                 for variant in self.variants:
-                    if variant.color is None:
-                        continue
-                    variation = variations_by_title.get(normalize_color_value(variant.color))
+                    variation = None
+                    if variant.color is not None:
+                        variation = variations_by_title.get(normalize_color_value(variant.color))
+                    if variation is None and variant.size is not None:
+                        variation = variations_by_size.get(normalize_color_value(variant.size))
                     if variation is None:
                         continue
 

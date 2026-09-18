@@ -24,6 +24,7 @@ from app.schemas.product import (
     effective_variation_price,
     normalize_color_value,
     unique_variations_by_color,
+    unique_variations_by_size,
 )
 from app.api.dependencies import get_optional_user
 from app.models.user import User
@@ -66,6 +67,10 @@ def resolve_variant_response(
             variation = unique_variations_by_color(product.variations or []).get(
                 normalize_color_value(variant.color)
             )
+            if variation is None:
+                variation = unique_variations_by_size(product.variations or []).get(
+                    normalize_color_value(variant.size)
+                )
             if variation is not None:
                 response.price = effective_variation_price(
                     variation.price, variation.sale_price, product.base_price

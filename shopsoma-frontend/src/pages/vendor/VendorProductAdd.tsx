@@ -926,6 +926,19 @@ export default function VendorProductAdd() {
 
           variation.selectedSizes.forEach((size) => {
             const sizeStock = shouldTrackStock ? parseInt(variation.sizeStock[size] || '0', 10) || 0 : 0;
+            if (variation.type === 'Size') {
+              variationPayload.push({
+                title: size,
+                type: 'size',
+                price: variationRegularPrice,
+                sale_price: variationSalePrice,
+                images: variation.images
+                  .filter((image) => image.uploaded && image.imageUrl)
+                  .map((image) => image.imageUrl!),
+                is_active: true,
+                sizes: [{ size, stock: sizeStock }],
+              });
+            }
             variantPayload.push({
               size,
               price: variationBasePrice,

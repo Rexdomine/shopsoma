@@ -174,6 +174,49 @@ def test_inactive_variation_does_not_override_legacy_variant_price():
     assert product.variants[0].compare_at_price is None
 
 
+def test_existing_size_variant_merges_matching_size_variation_price():
+    now = datetime.now(timezone.utc)
+    variation = VariationResponse.model_construct(
+        id=uuid4(),
+        product_id=uuid4(),
+        title="M",
+        type="size",
+        color_hex=None,
+        price=Decimal("100.00"),
+        sale_price=Decimal("80.00"),
+        images=[],
+        is_active=True,
+        created_at=now,
+        updated_at=now,
+        size_stocks=[],
+    )
+    variant = ProductVariantResponse.model_construct(
+        id=uuid4(),
+        product_id=variation.product_id,
+        size="M",
+        color=None,
+        color_hex=None,
+        price=Decimal("80.00"),
+        compare_at_price=None,
+        stock=1,
+        sku=None,
+        is_available=True,
+        created_at=now,
+        updated_at=now,
+    )
+    product = ProductResponse.model_construct(
+        id=variation.product_id,
+        base_price=Decimal("200.00"),
+        variants=[variant],
+        variations=[variation],
+    )
+
+    product.generate_variants_from_variations()  # pyright: ignore[reportCallIssue]
+
+    assert product.variants[0].price == Decimal("80.00")
+    assert product.variants[0].compare_at_price == Decimal("100.00")
+
+
 def test_null_or_invalid_variation_sale_does_not_override_regular_price():
     for sale_price in (None, Decimal("0.00"), Decimal("120.00")):
         product = _product_with_variation(

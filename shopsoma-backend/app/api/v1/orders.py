@@ -63,6 +63,7 @@ from app.schemas.product import (
     effective_variation_price,
     normalize_color_value,
     unique_variations_by_color,
+    unique_variations_by_size,
 )
 from app.services.email_service import email_service
 from app.services.vendor_notification_service import VendorNotificationService
@@ -295,6 +296,10 @@ async def resolve_order_variant(
         matching_variation = unique_variations_by_color(product.variations or []).get(
             normalize_color_value(variant.color)
         )
+        if matching_variation is None:
+            matching_variation = unique_variations_by_size(product.variations or []).get(
+                normalize_color_value(variant.size)
+            )
         unit_price = variant.price
         if matching_variation is not None:
             unit_price = effective_variation_price(
