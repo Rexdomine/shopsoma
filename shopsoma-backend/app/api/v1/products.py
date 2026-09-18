@@ -878,6 +878,13 @@ async def update_product(
             )
             db.add(variation)
             await db.flush()  # Get variation ID
+            if inherited_price_update:
+                if variation.inherits_price is True:
+                    variation.price = product.compare_at_price
+                if variation.inherits_sale_price is True:
+                    variation.sale_price = (
+                        product.base_price if product.compare_at_price is not None else None
+                    )
             variations_to_sync.append(variation)
 
             # Add size stocks for this variation
