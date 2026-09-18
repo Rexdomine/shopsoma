@@ -5,6 +5,47 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from types import SimpleNamespace
+from datetime import datetime, timezone
+
+from app.api.v1.orders import resolve_order_variant
+
+
+@pytest.mark.asyncio
+async def test_bare_size_variation_order_snapshot_uses_size_axis():
+    now = datetime.now(timezone.utc)
+    variation = SimpleNamespace(
+        id="variation-id", product_id="product-id", title="M", type="size",
+        color_hex=None, price=None, sale_price=None, is_active=True,
+        size_stocks=[], created_at=now, updated_at=now,
+    )
+    product = SimpleNamespace(
+        id="product-id", base_price=100, total_stock=10, made_to_order=True,
+        variants=[], variations=[variation],
+    )
+
+    class Result:
+        def __init__(self, value=None, row=None):
+            self.value = value
+            self.row = row
+
+        def scalar_one_or_none(self):
+            return self.value
+
+        def first(self):
+            return self.row
+
+    class FakeDB:
+        def __init__(self):
+            self.results = [Result(), Result(), Result(variation)]
+
+        async def execute(self, _query):
+            return self.results.pop(0)
+
+    resolved = await resolve_order_variant(FakeDB(), product, "variation-id")
+
+    assert resolved["variant_details"]["size"] == "M"
+    assert resolved["variant_details"]["color"] is None
 
 
 @pytest.mark.asyncio
@@ -92,6 +133,56 @@ async def test_review_order_with_size_stock_variant(
     data = response.json()
     assert data["items"][0]["variant_details"]["size"] == "M"
     assert data["items"][0]["variant_details"]["color"] == "Green"
+
+
+@pytest.mark.asyncio
+async def test_review_order_rejects_parent_variation_when_its_size_stock_is_zero(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    vendor_user,
+):
+    """A parent variation must not bypass its enrolled size-stock inventory."""
+    from app.models.product import Product, ProductStatus, ModerationStatus, Variation, SizeStock, SizeEnum
+    from app.models.shipping_rate import ShippingRate
+    import uuid
+
+    product = Product(
+        id=uuid.uuid4(), vendor_id=vendor_user["vendor"].id,
+        title="Zero Stock Variation Product", description="Parent-id rejection",
+        base_price=80000.00, total_stock=50, status=ProductStatus.ACTIVE,
+        moderation_status=ModerationStatus.APPROVED,
+    )
+    db_session.add(product)
+    await db_session.flush()
+    variation = Variation(
+        id=uuid.uuid4(), product_id=product.id, title="Green", type="color",
+        color_hex="#00FF00", price=80000.00, is_active=True,
+    )
+    db_session.add(variation)
+    await db_session.flush()
+    db_session.add(SizeStock(id=uuid.uuid4(), variation_id=variation.id, size=SizeEnum.M, stock=0))
+    db_session.add(ShippingRate(
+        id=uuid.uuid4(), name="Standard", description="Standard shipping",
+        base_rate=1500.00, country="Nigeria", state="Lagos", is_active=True,
+        is_default=True, priority=0,
+    ))
+    await db_session.commit()
+
+    response = await client.post(
+        "/api/v1/orders/review",
+        json={
+            "items": [{"product_id": str(product.id), "variant_id": str(variation.id), "quantity": 1}],
+            "guest_address": {
+                "full_name": "Guest User", "phone_number": "08000000000",
+                "address_line1": "123 Test Street", "address_line2": "",
+                "city": "Lagos", "state": "Lagos", "postal_code": "100001",
+                "country": "Nigeria",
+            },
+        },
+    )
+
+    assert response.status_code == 400
+    assert "purchasable variant" in response.json()["detail"]
 
 
 @pytest.mark.asyncio
@@ -400,3 +491,79 @@ async def test_create_order_uses_vendor_commission_rate_snapshot(
     assert float(persisted_item.commission_rate) == 12.5
     assert float(persisted_item.commission_amount) == 12500
     assert float(persisted_item.vendor_payout) == 87500
+
+
+@pytest.mark.asyncio
+async def test_review_order_with_bare_made_to_order_variation(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    vendor_user,
+):
+    """Review should resolve a bare variation without lazy-loading size stocks."""
+    from app.models.product import Product, ProductStatus, ModerationStatus, Variation
+    from app.models.shipping_rate import ShippingRate
+    import uuid
+
+    product = Product(
+        id=uuid.uuid4(),
+        vendor_id=vendor_user["vendor"].id,
+        title="Made-to-order variation product",
+        description="Bare variation product for review",
+        base_price=80000.00,
+        currency="NGN",
+        total_stock=0,
+        made_to_order=True,
+        status=ProductStatus.ACTIVE,
+        moderation_status=ModerationStatus.APPROVED,
+    )
+    variation = Variation(
+        id=uuid.uuid4(),
+        product_id=product.id,
+        title="Black",
+        type="color",
+        color_hex="#000000",
+        price=80000.00,
+        is_active=True,
+    )
+    shipping_rate = ShippingRate(
+        id=uuid.uuid4(),
+        name="Standard",
+        description="Standard shipping",
+        base_rate=1500.00,
+        country="Nigeria",
+        state="Lagos",
+        is_active=True,
+        is_default=True,
+        priority=0,
+    )
+    db_session.add_all([product, variation, shipping_rate])
+    await db_session.commit()
+
+    response = await client.post(
+        "/api/v1/orders/review",
+        json={
+            "currency": "NGN",
+            "items": [
+                {
+                    "product_id": str(product.id),
+                    "variant_id": str(variation.id),
+                    "quantity": 1,
+                }
+            ],
+            "guest_address": {
+                "full_name": "Guest User",
+                "phone_number": "08000000000",
+                "address_line1": "123 Test Street",
+                "address_line2": "",
+                "city": "Lagos",
+                "state": "Lagos",
+                "postal_code": "100001",
+                "country": "Nigeria",
+            },
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["items"][0]["variant_details"]["variation_id"] == str(
+        variation.id
+    )

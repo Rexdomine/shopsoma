@@ -95,6 +95,317 @@ class TestProductCreate:
         assert data["variants"][1]["size"] == "L"
 
     @pytest.mark.asyncio
+    async def test_create_product_with_numeric_size_variation(self, client: AsyncClient, vendor_user):
+        """Numeric UK/EU sizes remain creatable without invalid size-stock enum rows."""
+        response = await client.post(
+            "/api/v1/products",
+            json={
+                "title": "Numeric Size Dress",
+                "base_price": 85.00,
+                "variants": [{"size": "4", "price": 85.00, "stock": 10}],
+                "variations": [
+                    {
+                        "title": "4",
+                        "type": "size",
+                        "price": 85.00,
+                        "sizes": [],
+                    }
+                ],
+            },
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 201
+        data = response.json()
+        assert data["variants"][0]["size"] == "4"
+        assert data["variations"][0]["title"] == "4"
+        assert data["variations"][0]["size_stocks"] == []
+
+    @pytest.mark.asyncio
+    async def test_create_product_with_letter_size_uses_size_stock_as_inventory_source(
+        self, client: AsyncClient, vendor_user
+    ):
+        """Letter sizes use one canonical size-stock inventory row."""
+        response = await client.post(
+            "/api/v1/products",
+            json={
+                "title": "Letter Size Dress",
+                "base_price": 85.00,
+                "variations": [
+                    {
+                        "title": "M",
+                        "type": "size",
+                        "price": 85.00,
+                        "sizes": [{"size": "M", "stock": 10}],
+                    }
+                ],
+            },
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 201
+        data = response.json()
+        assert len(data["variants"]) == 1
+        assert data["variants"][0]["size"] == "M"
+        assert data["variants"][0]["stock"] == 10
+        assert data["variations"][0]["size_stocks"][0]["size"] == "M"
+
+    @pytest.mark.asyncio
+    async def test_create_product_rejects_duplicate_legacy_and_size_stock(
+        self, client: AsyncClient, vendor_user
+    ):
+        """A legacy size row cannot duplicate a canonical size-stock row."""
+        response = await client.post(
+            "/api/v1/products",
+            json={
+                "title": "Duplicate Size Inventory",
+                "base_price": 85.00,
+                "variants": [{"size": " m ", "price": 85.00, "stock": 10}],
+                "variations": [
+                    {
+                        "title": "M",
+                        "type": "size",
+                        "sizes": [{"size": "M", "stock": 10}],
+                    }
+                ],
+            },
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 422
+        assert "duplicate size variation inventory" in response.json()["detail"][0]["msg"]
+
+    @pytest.mark.asyncio
+    async def test_update_product_rejects_legacy_variant_overlap(
+        self, client: AsyncClient, vendor_user
+    ):
+        """Updates cannot retain a legacy size row beside a new size stock row."""
+        create_response = await client.post(
+            "/api/v1/products",
+            json={
+                "title": "Legacy Inventory Product",
+                "base_price": 85.00,
+                "variants": [{"size": "M", "price": 85.00, "stock": 10}],
+            },
+            headers=vendor_user["headers"],
+        )
+        assert create_response.status_code == 201
+
+        update_response = await client.put(
+            f"/api/v1/products/{create_response.json()['id']}",
+            json={
+                "variations": [
+                    {"title": "M", "type": "size", "sizes": [{"size": "M", "stock": 10}]}
+                ]
+            },
+            headers=vendor_user["headers"],
+        )
+
+        assert update_response.status_code == 422
+        assert "duplicate size variation inventory" in update_response.json()["detail"][0]["msg"]
+
+    @pytest.mark.asyncio
+    async def test_create_product_rejects_legacy_color_and_size_variations(
+        self, client: AsyncClient, vendor_user
+    ):
+        """Legacy color rows cannot be split from canonical size-stock inventory."""
+        response = await client.post(
+            "/api/v1/products",
+            json={
+                "title": "Legacy Color Size Split",
+                "base_price": 85.00,
+                "variants": [{"color": "Red", "price": 85.00, "stock": 10}],
+                "variations": [
+                    {"title": "M", "type": "size", "sizes": [{"size": "M", "stock": 10}]}
+                ],
+            },
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 422
+        assert "Color and size variations" in response.json()["detail"][0]["msg"]
+
+    @pytest.mark.asyncio
+    async def test_create_variant_rejects_size_stock_overlap(
+        self, client: AsyncClient, vendor_user
+    ):
+        """Standalone legacy variant writes cannot duplicate SizeStock inventory."""
+        create_response = await client.post(
+            "/api/v1/products",
+            json={
+                "title": "Canonical Size Inventory",
+                "base_price": 85.00,
+                "variations": [
+                    {"title": "M", "type": "size", "sizes": [{"size": "M", "stock": 10}]}
+                ],
+            },
+            headers=vendor_user["headers"],
+        )
+        assert create_response.status_code == 201
+
+        response = await client.post(
+            f"/api/v1/products/{create_response.json()['id']}/variants",
+            json={"size": "M", "price": 85.00, "stock": 10},
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 422
+        assert "duplicate size variation inventory" in response.json()["detail"][0]["msg"]
+
+    @pytest.mark.asyncio
+    async def test_create_variant_rejects_color_variation_size_stock_overlap(
+        self, client: AsyncClient, vendor_user
+    ):
+        """Color variations with sizes also own canonical size-stock inventory."""
+        create_response = await client.post(
+            "/api/v1/products",
+            json={
+                "title": "Color Size Stock Inventory",
+                "base_price": 85.00,
+                "variations": [
+                    {
+                        "title": "Red",
+                        "type": "color",
+                        "sizes": [{"size": "M", "stock": 10}],
+                    }
+                ],
+            },
+            headers=vendor_user["headers"],
+        )
+        assert create_response.status_code == 201
+
+        response = await client.post(
+            f"/api/v1/products/{create_response.json()['id']}/variants",
+            json={"size": "M", "price": 85.00, "stock": 10},
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 422
+        assert "duplicate size variation inventory" in response.json()["detail"][0]["msg"]
+
+    @pytest.mark.asyncio
+    async def test_update_variant_rejects_size_stock_overlap(
+        self, client: AsyncClient, vendor_user
+    ):
+        """Standalone legacy variant updates cannot duplicate SizeStock inventory."""
+        create_response = await client.post(
+            "/api/v1/products",
+            json={
+                "title": "Canonical Size Update",
+                "base_price": 85.00,
+                "variations": [
+                    {"title": "M", "type": "size", "sizes": [{"size": "M", "stock": 10}]}
+                ],
+            },
+            headers=vendor_user["headers"],
+        )
+        assert create_response.status_code == 201
+        product_id = create_response.json()["id"]
+
+        variant_response = await client.post(
+            f"/api/v1/products/{product_id}/variants",
+            json={"size": "L", "price": 85.00, "stock": 10},
+            headers=vendor_user["headers"],
+        )
+        assert variant_response.status_code == 201
+
+        response = await client.put(
+            f"/api/v1/products/{product_id}/variants/{variant_response.json()['id']}",
+            json={"size": "M"},
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 422
+        assert "duplicate size variation inventory" in response.json()["detail"][0]["msg"]
+
+    @pytest.mark.asyncio
+    async def test_create_product_rejects_color_and_size_variations(
+        self, client: AsyncClient, vendor_user
+    ):
+        """Do not expose independent color-only and size-only stock sources."""
+        response = await client.post(
+            "/api/v1/products",
+            json={
+                "title": "Ambiguous Color Size Dress",
+                "base_price": 85.00,
+                "variations": [
+                    {"title": "Red", "type": "solid", "sizes": []},
+                    {"title": "Blue", "type": "solid", "sizes": []},
+                    {"title": "M", "type": "size", "sizes": [{"size": "M", "stock": 10}]},
+                ],
+            },
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 422
+        assert "Color and size variations" in response.json()["detail"][0]["msg"]
+
+    @pytest.mark.asyncio
+    async def test_create_product_rejects_color_with_numeric_size(
+        self, client: AsyncClient, vendor_user
+    ):
+        """Numeric sizes remain valid, but not as an unpurchasable color-size split."""
+        response = await client.post(
+            "/api/v1/products",
+            json={
+                "title": "Ambiguous Numeric Color Dress",
+                "base_price": 85.00,
+                "variations": [
+                    {"title": "Red", "type": "solid", "sizes": []},
+                    {"title": "4", "type": "size", "sizes": []},
+                ],
+            },
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 422
+        assert "Color and size variations" in response.json()["detail"][0]["msg"]
+
+    @pytest.mark.asyncio
+    async def test_update_product_rejects_color_and_size_variations(
+        self, client: AsyncClient, vendor_user, sample_product
+    ):
+        """Updates must enforce the same inventory-shape invariant as creates."""
+        response = await client.put(
+            f"/api/v1/products/{sample_product.id}",
+            json={
+                "variations": [
+                    {"title": "Red", "type": "solid", "sizes": []},
+                    {"title": "M", "type": "size", "sizes": [{"size": "M", "stock": 10}]},
+                ]
+            },
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 422
+        assert "Color and size variations" in response.json()["detail"][0]["msg"]
+
+    @pytest.mark.asyncio
+    async def test_create_product_rejects_attribute_less_legacy_variant_with_size_stock(
+        self, client: AsyncClient, vendor_user
+    ):
+        """Size stock must be the only inventory source, including for bare legacy rows."""
+        response = await client.post(
+            "/api/v1/products",
+            json={
+                "title": "Bare Legacy Size Conflict",
+                "base_price": 85.00,
+                "variants": [{"price": 85.00, "stock": 10}],
+                "variations": [
+                    {
+                        "title": "M",
+                        "type": "size",
+                        "sizes": [{"size": "M", "stock": 10}],
+                    }
+                ],
+            },
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 422
+        assert "variation size stock" in response.json()["detail"][0]["msg"]
+
+    @pytest.mark.asyncio
     async def test_create_product_with_images(self, client: AsyncClient, vendor_user):
         """Test product creation with images"""
         product_data = {

@@ -25,12 +25,190 @@ def normalize_color_value(value: Optional[str]) -> str:
     return (value or "").strip().casefold()
 
 
+COLOR_VARIATION_TYPES = {"color", "solid", "multi", "none"}
+
+
+def is_color_variation_type(value: str) -> bool:
+    """Treat every non-size variation type as a color axis."""
+    return value.casefold() != "size"
+
+
+def variation_inventory_axis_signature(variations) -> tuple:
+    """Return a normalized signature for comparing persisted and submitted axes."""
+    signature = []
+    for variation in variations or []:
+        sizes = (
+            getattr(variation, "sizes", None)
+            if hasattr(variation, "sizes")
+            else getattr(variation, "size_stocks", None)
+        ) or []
+        signature.append(
+            (
+                normalize_color_value(getattr(variation, "title", None)),
+                normalize_color_value(getattr(variation, "type", None)),
+                bool(getattr(variation, "is_active", True)),
+                tuple(sorted(normalize_color_value(getattr(size, "size", None)) for size in sizes)),
+            )
+        )
+    return tuple(sorted(signature))
+
+
+def validate_variation_inventory_shape(
+    variations: Optional[List["VariationCreate"]],
+    variants: Optional[List["ProductVariantCreate"]] = None,
+) -> None:
+    """Reject variation combinations without one canonical inventory source."""
+    all_variations = list(variations or [])
+    size_variation_labels = [
+        normalize_color_value(getattr(variation, "title", None))
+        for variation in all_variations
+        if variation.type.casefold() == "size"
+    ]
+    if len(size_variation_labels) != len(set(size_variation_labels)):
+        raise ValueError("Size variation labels must be unique after normalization")
+
+    nested_size_owners: dict[str, set[int]] = {}
+    for variation_index, variation in enumerate(all_variations):
+        if not variation.is_active or variation.type.casefold() != "size":
+            continue
+        nested_sizes = (
+            getattr(variation, "sizes", None)
+            if getattr(variation, "sizes", None) is not None
+            else getattr(variation, "size_stocks", [])
+        ) or []
+        for size in nested_sizes:
+            label = normalize_color_value(getattr(size, "size", None))
+            if label:
+                nested_size_owners.setdefault(label, set()).add(variation_index)
+        if not nested_sizes:
+            label = normalize_color_value(getattr(variation, "title", None))
+            if label:
+                nested_size_owners.setdefault(label, set()).add(variation_index)
+    if any(len(owners) > 1 for owners in nested_size_owners.values()):
+        raise ValueError("Nested size-stock labels must be unique across size variations")
+
+    active_variations = [variation for variation in all_variations if variation.is_active]
+    color_variations = [
+        variation
+        for variation in active_variations
+        if is_color_variation_type(variation.type)
+    ]
+    size_variations = [
+        variation
+        for variation in active_variations
+        if variation.type.casefold() == "size"
+    ]
+
+    legacy_variants = list(variants or [])
+    legacy_size_labels = {
+        normalize_color_value(variant.size)
+        for variant in legacy_variants
+        if getattr(variant, "size", None) is not None
+    }
+    bare_size_labels = {
+        normalize_color_value(getattr(variation, "title", None))
+        for variation in active_variations
+        if variation.type.casefold() == "size"
+        and not (
+            (
+                getattr(variation, "sizes", None)
+                if getattr(variation, "sizes", None) is not None
+                else getattr(variation, "size_stocks", [])
+            )
+            or []
+        )
+    }
+    if legacy_size_labels and bare_size_labels and legacy_size_labels != bare_size_labels:
+        raise ValueError(
+            "Bare size variations must match legacy size inventory labels exactly"
+        )
+    legacy_color_variants = [
+        variant for variant in legacy_variants if getattr(variant, "color", None) is not None
+    ]
+    if (color_variations or legacy_color_variants) and size_variations:
+        raise ValueError(
+            "Color and size variations cannot be combined until a "
+            "color-size inventory matrix is supported"
+        )
+
+    size_stock_labels = {
+        normalize_color_value(getattr(size, "size", None))
+        for variation in active_variations
+        for size in (
+            (
+                getattr(variation, "sizes", None)
+                if getattr(variation, "sizes", None) is not None
+                else getattr(variation, "size_stocks", [])
+            )
+            or []
+        )
+    }
+    if any(
+        normalize_color_value(variant.size) in size_stock_labels
+        for variant in legacy_variants
+        if variant.size is not None
+    ):
+        raise ValueError(
+            "Legacy variants cannot duplicate size variation inventory; "
+            "use one canonical stock source per size"
+        )
+
+    has_size_stocks = any(
+        bool(
+            (
+                getattr(variation, "sizes", None)
+                if getattr(variation, "sizes", None) is not None
+                else getattr(variation, "size_stocks", [])
+            )
+            or []
+        )
+        for variation in active_variations
+    )
+    if has_size_stocks and any(
+        getattr(variant, "size", None) is None for variant in legacy_variants
+    ):
+        inventory_axis = "color variation" if color_variations else "variation"
+        raise ValueError(
+            f"Legacy variants cannot coexist with {inventory_axis} size stock; "
+            "use variation-backed inventory as the sole stock source"
+        )
+    if has_size_stocks and color_variations and legacy_variants:
+        raise ValueError(
+            "Legacy variants cannot coexist with color variation size stock; "
+            "use variation-backed inventory as the sole stock source"
+        )
+    if bare_size_labels and any(
+        getattr(variant, "size", None) is None for variant in legacy_variants
+    ):
+        raise ValueError(
+            "Generic legacy variants cannot coexist with bare size variations; "
+            "provide a matching size for each legacy row"
+        )
+
 def unique_variations_by_color(variations: List["VariationResponse"]) -> dict[str, "VariationResponse"]:
     """Index only unambiguous variation colors, avoiding collision-dependent pricing."""
     indexed: dict[str, VariationResponse] = {}
     collisions: set[str] = set()
     for variation in variations:
-        if not variation.is_active:
+        if not variation.is_active or not is_color_variation_type(variation.type):
+            continue
+        key = normalize_color_value(variation.title)
+        if not key or key in collisions:
+            continue
+        if key in indexed:
+            del indexed[key]
+            collisions.add(key)
+            continue
+        indexed[key] = variation
+    return indexed
+
+
+def unique_variations_by_size(variations: List["VariationResponse"]) -> dict[str, "VariationResponse"]:
+    """Index only unambiguous size variation labels."""
+    indexed: dict[str, VariationResponse] = {}
+    collisions: set[str] = set()
+    for variation in variations:
+        if not variation.is_active or variation.type.casefold() != "size":
             continue
         key = normalize_color_value(variation.title)
         if not key or key in collisions:
@@ -365,6 +543,12 @@ class ProductCreate(ProductBase):
             self.total_stock = 0
         return self
 
+    @model_validator(mode="after")
+    def validate_variation_inventory_shape(self) -> "ProductCreate":
+        """Reject combinations that cannot represent one canonical stock source."""
+        validate_variation_inventory_shape(self.variations, self.variants)
+        return self
+
 
 class ProductUpdate(BaseModel):
     """Schema for updating product"""
@@ -451,11 +635,27 @@ class ProductResponse(ProductBase):
         if self.variants:
             if self.variations:
                 variations_by_title = unique_variations_by_color(self.variations)
+                variations_by_size = unique_variations_by_size(self.variations)
+                color_variations = [
+                    variation
+                    for variation in self.variations
+                    if is_color_variation_type(variation.type) and variation.is_active
+                ]
+                size_variant_color = (
+                    color_variations[0].title if len(color_variations) == 1 else None
+                )
+                size_variant_color_hex = (
+                    color_variations[0].color_hex if len(color_variations) == 1 else None
+                )
                 for variant in self.variants:
-                    if variant.color is None:
-                        continue
-                    variation = variations_by_title.get(normalize_color_value(variant.color))
+                    variation = None
+                    if variant.color is not None:
+                        variation = variations_by_title.get(normalize_color_value(variant.color))
+                    if variation is None and variant.size is not None:
+                        variation = variations_by_size.get(normalize_color_value(variant.size))
                     if variation is None:
+                        continue
+                    if variation.price is None and variation.sale_price is None:
                         continue
 
                     variant_price = effective_variation_price(
@@ -468,6 +668,64 @@ class ProductResponse(ProductBase):
                     variant.compare_at_price = (
                         regular_price if variant_price < regular_price else None
                     )
+
+                existing_inventory = {
+                    (
+                        normalize_color_value(variant.size),
+                        normalize_color_value(variant.color),
+                    )
+                    for variant in self.variants
+                    if variant.size is not None
+                }
+                for variation in self.variations:
+                    if not variation.is_active or not variation.size_stocks:
+                        continue
+                    variant_price = effective_variation_price(
+                        variation.price, variation.sale_price, self.base_price
+                    )
+                    regular_price = (
+                        variation.price if variation.price is not None else self.base_price
+                    )
+                    compare_at_price = (
+                        regular_price if variant_price < regular_price else None
+                    )
+                    variation_color = (
+                        size_variant_color
+                        if not is_color_variation_type(variation.type)
+                        else variation.title
+                    )
+                    for size_stock in variation.size_stocks:
+                        size = getattr(size_stock.size, "value", str(size_stock.size))
+                        inventory_key = (
+                            normalize_color_value(size),
+                            normalize_color_value(variation_color),
+                        )
+                        if inventory_key in existing_inventory:
+                            continue
+                        self.variants.append(
+                            ProductVariantResponse.model_validate(
+                                {
+                                    "id": size_stock.id,
+                                    "product_id": self.id,
+                                    "size": size,
+                                    "color": variation_color,
+                                    "color_hex": (
+                                        size_variant_color_hex
+                                        if not is_color_variation_type(variation.type)
+                                        else variation.color_hex
+                                    ),
+                                    "price": variant_price,
+                                    "compare_at_price": compare_at_price,
+                                    "stock": size_stock.stock,
+                                    "sku": None,
+                                    "is_available": bool(variation.is_active)
+                                    and size_stock.stock > 0,
+                                    "created_at": variation.created_at,
+                                    "updated_at": variation.updated_at,
+                                }
+                            )
+                        )
+                        existing_inventory.add(inventory_key)
             return self
 
         # If product has variations (vendor-created), generate variants
@@ -475,6 +733,8 @@ class ProductResponse(ProductBase):
             generated_variants = []
 
             for variation in self.variations:
+                if not variation.is_active:
+                    continue
                 # Normalize variation pricing to the legacy variant contract:
                 # `price` is the effective purchase price and `compare_at_price`
                 # retains the regular price when a valid sale is configured.
@@ -493,8 +753,8 @@ class ProductResponse(ProductBase):
                     variant_dict = {
                         "id": variation.id,
                         "product_id": self.id,
-                        "size": None,
-                        "color": variation.title,  # Use 'title' field which contains the color name
+                        "size": variation.title if variation.type.casefold() == "size" else None,
+                        "color": None if variation.type.casefold() == "size" else variation.title,
                         "color_hex": variation.color_hex,
                         "price": variant_price,
                         "compare_at_price": compare_at_price,
@@ -512,7 +772,7 @@ class ProductResponse(ProductBase):
                             "id": size_stock.id,
                             "product_id": self.id,
                             "size": size_stock.size,
-                            "color": variation.title,  # Use 'title' field which contains the color name
+                            "color": None if variation.type.casefold() == "size" else variation.title,
                             "color_hex": variation.color_hex,
                             "price": variant_price,
                             "compare_at_price": compare_at_price,

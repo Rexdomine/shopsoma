@@ -31,6 +31,8 @@ from app.schemas.product import (
     ProductImageUpdate,
     ProductImageResponse,
     ProductModerationUpdate,
+    validate_variation_inventory_shape,
+    variation_inventory_axis_signature,
 )
 
 router = APIRouter(prefix="/products", tags=["products"])
@@ -782,6 +784,28 @@ async def update_product(
     # Handle variations separately for sync logic
     variations_data = update_data.pop("variations", None)
 
+    # ProductUpdate validates only the incoming variation payload. When an
+    # existing product retains legacy variants, include those persisted rows in
+    # the same invariant before replacing any variations.
+    if (
+        variations_data is not None
+        and variation_inventory_axis_signature(product_data.variations)
+        != variation_inventory_axis_signature(product.variations)
+    ):
+        try:
+            validate_variation_inventory_shape(product_data.variations, product.variants)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=[
+                    {
+                        "loc": ["body", "variations"],
+                        "msg": str(exc),
+                        "type": "value_error",
+                    }
+                ],
+            ) from exc
+
     for field, value in update_data.items():
         if field == "status":
             setattr(product, field, ProductStatus(value))
@@ -913,7 +937,12 @@ async def create_variant(
     vendor_id = result.scalar_one_or_none()
 
     result = await db.execute(
-        select(Product).where(Product.id == product_id)
+        select(Product)
+        .options(
+            selectinload(Product.variants),
+            selectinload(Product.variations).selectinload(Variation.size_stocks),
+        )
+        .where(Product.id == product_id)
     )
     product = result.scalar_one_or_none()
 
@@ -923,7 +952,14 @@ async def create_variant(
             detail="Product not found"
         )
 
-    # Create variant
+    try:
+        validate_variation_inventory_shape(product.variations, [*product.variants, variant_data])
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=[{"loc": ["body"], "msg": str(exc), "type": "value_error"}],
+        ) from exc
+
     variant = ProductVariant(
         product_id=product_id,
         **variant_data.model_dump()
@@ -951,7 +987,12 @@ async def update_variant(
     vendor_id = result.scalar_one_or_none()
 
     result = await db.execute(
-        select(Product).where(Product.id == product_id)
+        select(Product)
+        .options(
+            selectinload(Product.variants),
+            selectinload(Product.variations).selectinload(Variation.size_stocks),
+        )
+        .where(Product.id == product_id)
     )
     product = result.scalar_one_or_none()
 
@@ -961,7 +1002,6 @@ async def update_variant(
             detail="Product not found"
         )
 
-    # Get variant
     result = await db.execute(
         select(ProductVariant).where(
             and_(ProductVariant.id == variant_id, ProductVariant.product_id == product_id)
@@ -975,8 +1015,41 @@ async def update_variant(
             detail="Variant not found"
         )
 
-    # Update
+    # Validate changes to inventory axes against the canonical variation inventory.
+    # Price/stock/availability edits do not alter the inventory shape and can be
+    # applied without re-running this cross-record validation.
     update_data = variant_data.model_dump(exclude_unset=True)
+    inventory_axis_changed = any(
+        field in update_data and update_data[field] != getattr(variant, field)
+        for field in ("size", "color")
+    )
+    if inventory_axis_changed:
+        candidate_variants = []
+        for existing_variant in product.variants:
+            candidate_data = {
+                field: getattr(existing_variant, field)
+                for field in (
+                    "size",
+                    "color",
+                    "color_hex",
+                    "price",
+                    "stock",
+                    "sku",
+                    "is_available",
+                )
+            }
+            if existing_variant.id == variant.id:
+                candidate_data.update(update_data)
+            candidate_variants.append(ProductVariantCreate.model_construct(**candidate_data))
+
+        try:
+            validate_variation_inventory_shape(product.variations, candidate_variants)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=[{"loc": ["body"], "msg": str(exc), "type": "value_error"}],
+            ) from exc
+
     for field, value in update_data.items():
         setattr(variant, field, value)
 

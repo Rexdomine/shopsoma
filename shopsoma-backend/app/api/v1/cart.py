@@ -19,11 +19,13 @@ from app.schemas.cart import (
     ApplyCouponResponse,
 )
 from app.schemas.product import (
+    is_color_variation_type,
     ProductResponse,
     ProductVariantResponse,
     effective_variation_price,
     normalize_color_value,
     unique_variations_by_color,
+    unique_variations_by_size,
 )
 from app.api.dependencies import get_optional_user
 from app.models.user import User
@@ -66,7 +68,13 @@ def resolve_variant_response(
             variation = unique_variations_by_color(product.variations or []).get(
                 normalize_color_value(variant.color)
             )
-            if variation is not None:
+            if variation is None:
+                variation = unique_variations_by_size(product.variations or []).get(
+                    normalize_color_value(variant.size)
+                )
+            if variation is not None and (
+                variation.price is not None or variation.sale_price is not None
+            ):
                 response.price = effective_variation_price(
                     variation.price, variation.sale_price, product.base_price
                 )
@@ -83,11 +91,13 @@ def resolve_variant_response(
         )
 
         if str(variation.id) == str(variant_id):
+            if product.variants or (variation.is_active and bool(variation.size_stocks)):
+                return None
             return ProductVariantResponse.model_validate({
                 "id": variation.id,
                 "product_id": product.id,
-                "size": None,
-                "color": variation.title,
+                "size": variation.title if str(getattr(variation, "type", "color")).casefold() == "size" else None,
+                "color": None if str(getattr(variation, "type", "color")).casefold() == "size" else variation.title,
                 "color_hex": variation.color_hex,
                 "price": base_price,
                 "stock": 0,
@@ -99,12 +109,30 @@ def resolve_variant_response(
 
         for size_stock in variation.size_stocks or []:
             if str(size_stock.id) == str(variant_id):
+                size_color_variations = [
+                    candidate
+                    for candidate in product.variations or []
+                    if is_color_variation_type(getattr(candidate, "type", "color")) and candidate.is_active
+                ]
+                size_color = (
+                    size_color_variations[0].title
+                    if not is_color_variation_type(getattr(variation, "type", "color")) and len(size_color_variations) == 1
+                    else None if not is_color_variation_type(getattr(variation, "type", "color")) else variation.title
+                )
+                size_color_hex = (
+                    size_color_variations[0].color_hex
+                    if not is_color_variation_type(getattr(variation, "type", "color"))
+                    and len(size_color_variations) == 1
+                    else None
+                    if not is_color_variation_type(getattr(variation, "type", "color"))
+                    else variation.color_hex
+                )
                 return ProductVariantResponse.model_validate({
                     "id": size_stock.id,
                     "product_id": product.id,
                     "size": getattr(size_stock.size, "value", str(size_stock.size)),
-                    "color": variation.title,
-                    "color_hex": variation.color_hex,
+                    "color": size_color,
+                    "color_hex": size_color_hex,
                     "price": base_price,
                     "stock": size_stock.stock,
                     "sku": None,
@@ -126,7 +154,7 @@ def resolve_cart_purchase_option(
 
     variant_id_str = str(variant_id or "")
     if variant_id_str.startswith("default-"):
-        if product.variants:
+        if product.variants or product.variations:
             return None
         return {
             "normalized_variant_id": None,
@@ -136,7 +164,7 @@ def resolve_cart_purchase_option(
         }
 
     if not variant_id:
-        if product.variants:
+        if product.variants or product.variations:
             return None
         return {
             "normalized_variant_id": None,

@@ -6,13 +6,98 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 from types import SimpleNamespace
 from datetime import datetime, timezone
+from uuid import uuid4
 
 from app.api.v1.cart import (
     calculate_cart_subtotal,
     calculate_cart_summary,
     reprice_cart_item,
+    resolve_cart_purchase_option,
     resolve_cart_item_price,
+    resolve_variant_response,
 )
+
+
+def test_default_cart_option_is_rejected_when_variation_records_exist():
+    product = SimpleNamespace(
+        base_price=100,
+        total_stock=10,
+        made_to_order=False,
+        variants=[],
+        variations=[SimpleNamespace(is_active=False)],
+    )
+
+    assert resolve_cart_purchase_option(product, "default-product") is None
+
+
+def test_parent_variation_with_size_stocks_is_not_purchasable():
+    size_stock = SimpleNamespace(id="size-stock-id", size="M", stock=1)
+    variation = SimpleNamespace(
+        id="variation-id", title="M", type="size", color_hex=None,
+        price=None, sale_price=None, is_active=True, size_stocks=[size_stock],
+    )
+    product = SimpleNamespace(
+        base_price=100, total_stock=10, made_to_order=True, variants=[],
+        variations=[variation],
+    )
+
+    assert resolve_cart_purchase_option(product, "variation-id") is None
+
+
+def test_unrelated_bare_size_variation_remains_purchasable():
+    bare_id = uuid4()
+    product_id = uuid4()
+    bare_size = SimpleNamespace(
+        id=bare_id, title="4", type="size", color_hex=None,
+        price=None, sale_price=None, is_active=True, size_stocks=[],
+        created_at=datetime.now(timezone.utc), updated_at=datetime.now(timezone.utc),
+    )
+    stocked_size = SimpleNamespace(
+        id="stocked-size-id", title="M", type="size", color_hex=None,
+        price=None, sale_price=None, is_active=True,
+        size_stocks=[SimpleNamespace(id="m-stock-id", size="M", stock=1)],
+    )
+    product = SimpleNamespace(
+        id=product_id,
+        base_price=100, total_stock=10, made_to_order=True, variants=[],
+        variations=[bare_size, stocked_size],
+    )
+
+    option = resolve_cart_purchase_option(product, str(bare_id))
+
+    assert option is not None
+    assert option["normalized_variant_id"] == str(bare_id)
+
+
+def test_parent_variation_is_not_purchasable_when_legacy_variants_exist():
+    variation = SimpleNamespace(
+        id="00000000-0000-4000-8000-000000000021", title="Red", type="color", color_hex="#f00",
+        price=None, sale_price=None, is_active=True, size_stocks=[],
+    )
+    legacy_variant = SimpleNamespace(id="legacy-id")
+    product = SimpleNamespace(
+        base_price=100, total_stock=10, made_to_order=True,
+        variants=[legacy_variant], variations=[variation],
+    )
+
+    assert resolve_cart_purchase_option(product, "00000000-0000-4000-8000-000000000021") is None
+
+
+def test_bare_size_variation_cart_response_uses_size_axis():
+    now = datetime.now(timezone.utc)
+    variation = SimpleNamespace(
+        id="00000000-0000-4000-8000-000000000022", title="M", type="size", color_hex=None,
+        price=None, sale_price=None, is_active=True, size_stocks=[],
+        created_at=now, updated_at=now,
+    )
+    product = SimpleNamespace(
+        id="00000000-0000-4000-8000-000000000023", base_price=100, variants=[], variations=[variation],
+    )
+
+    response = resolve_variant_response(product, "00000000-0000-4000-8000-000000000022")
+
+    assert response.size == "M"
+    assert response.color is None
 
 
 def test_existing_variation_cart_row_uses_and_persists_current_sale_price():
@@ -41,6 +126,59 @@ def test_existing_variation_cart_row_uses_and_persists_current_sale_price():
     assert reprice_cart_item(cart_item) is True
     assert cart_item.price == 80
     assert calculate_cart_summary([cart_item]).subtotal == 160
+
+
+def test_legacy_size_cart_row_keeps_legacy_price_when_size_variation_has_no_override():
+    variation = SimpleNamespace(
+        id="00000000-0000-4000-8000-000000000002",
+        title="M", type="size", color_hex=None, price=None, sale_price=None,
+        is_active=True, size_stocks=[], created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    product = SimpleNamespace(
+        id="00000000-0000-4000-8000-000000000001", base_price=100,
+        total_stock=10, made_to_order=False, variations=[variation],
+        variants=[SimpleNamespace(
+            id="00000000-0000-4000-8000-000000000003",
+            product_id="00000000-0000-4000-8000-000000000001",
+            size="M", color=None, color_hex=None, price=75,
+            compare_at_price=None, stock=2, sku=None, is_available=True,
+            created_at=datetime.now(timezone.utc), updated_at=datetime.now(timezone.utc),
+        )],
+    )
+    cart_item = SimpleNamespace(
+        product=product,
+        variant_id="00000000-0000-4000-8000-000000000003",
+        price=75, quantity=1,
+    )
+
+    assert resolve_cart_item_price(cart_item) == 75
+
+
+def test_size_stock_cart_variant_inherits_sole_color_hex():
+    now = datetime.now(timezone.utc)
+    color = SimpleNamespace(
+        id="00000000-0000-4000-8000-000000000010",
+        title="Black", type="color", color_hex="#000000", price=None,
+        sale_price=None, is_active=True, size_stocks=[], created_at=now, updated_at=now,
+    )
+    size_stock = SimpleNamespace(
+        id="00000000-0000-4000-8000-000000000012", size="M", stock=1,
+    )
+    size = SimpleNamespace(
+        id="00000000-0000-4000-8000-000000000011",
+        title="M", type="size", color_hex=None, price=None, sale_price=None,
+        is_active=True, size_stocks=[size_stock], created_at=now, updated_at=now,
+    )
+    product = SimpleNamespace(
+        id="00000000-0000-4000-8000-000000000001", base_price=100,
+        variants=[], variations=[color, size],
+    )
+
+    response = resolve_variant_response(product, size_stock.id)
+
+    assert response.color == "Black"
+    assert response.color_hex == "#000000"
 
 
 def test_coupon_subtotal_uses_current_variation_price():

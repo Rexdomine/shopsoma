@@ -63,6 +63,7 @@ from app.schemas.product import (
     effective_variation_price,
     normalize_color_value,
     unique_variations_by_color,
+    unique_variations_by_size,
 )
 from app.services.email_service import email_service
 from app.services.vendor_notification_service import VendorNotificationService
@@ -295,8 +296,18 @@ async def resolve_order_variant(
         matching_variation = unique_variations_by_color(product.variations or []).get(
             normalize_color_value(variant.color)
         )
+        if matching_variation is None:
+            matching_variation = unique_variations_by_size(product.variations or []).get(
+                normalize_color_value(variant.size)
+            )
         unit_price = variant.price
-        if matching_variation is not None:
+        if (
+            matching_variation is not None
+            and (
+                matching_variation.price is not None
+                or matching_variation.sale_price is not None
+            )
+        ):
             unit_price = effective_variation_price(
                 matching_variation.price,
                 matching_variation.sale_price,
@@ -333,14 +344,32 @@ async def resolve_order_variant(
         available_stock = size_stock.stock
         if product.made_to_order:
             available_stock = max(available_stock, 999999)
+        color_variations = unique_variations_by_color(product.variations or [])
+        sole_color = (
+            next(iter(color_variations.values()))
+            if len(color_variations) == 1
+            else None
+        )
         return {
             "variant_id": None,
             "unit_price": unit_price,
             "stock": available_stock,
             "variant_details": {
                 "size": getattr(size_stock.size, "value", str(size_stock.size)),
-                "color": variation.title,
-                "color_hex": variation.color_hex,
+                "color": (
+                    sole_color.title
+                    if str(getattr(variation, "type", "color")).casefold() == "size" and sole_color is not None
+                    else None
+                    if str(getattr(variation, "type", "color")).casefold() == "size"
+                    else variation.title
+                ),
+                "color_hex": (
+                    sole_color.color_hex
+                    if str(getattr(variation, "type", "color")).casefold() == "size" and sole_color is not None
+                    else None
+                    if str(getattr(variation, "type", "color")).casefold() == "size"
+                    else variation.color_hex
+                ),
                 "size_stock_id": str(size_stock.id),
                 "variation_id": str(variation.id),
             },
@@ -356,6 +385,11 @@ async def resolve_order_variant(
     variation = variation_result.scalar_one_or_none()
 
     if variation:
+        if product.variants or (variation.is_active and bool(variation.size_stocks)):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Select a purchasable variant or size stock for this product",
+            )
         unit_price = effective_variation_price(
             variation.price, variation.sale_price, product.base_price
         )
@@ -367,8 +401,8 @@ async def resolve_order_variant(
             "unit_price": unit_price,
             "stock": available_stock,
             "variant_details": {
-                "size": None,
-                "color": variation.title,
+                "size": variation.title if str(getattr(variation, "type", "color")).casefold() == "size" else None,
+                "color": None if str(getattr(variation, "type", "color")).casefold() == "size" else variation.title,
                 "color_hex": variation.color_hex,
                 "variation_id": str(variation.id),
             },
@@ -515,7 +549,7 @@ async def review_order(
             select(Product)
             .options(
                 selectinload(Product.variants),
-                selectinload(Product.variations),
+                selectinload(Product.variations).selectinload(Variation.size_stocks),
                 selectinload(Product.vendor),
             )
             .where(
@@ -537,6 +571,12 @@ async def review_order(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Product '{product.title}' is not available",
+            )
+
+        if product.variations and not item.variant_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"A variation must be selected for '{product.title}'",
             )
 
         # Get variant if specified
@@ -815,7 +855,8 @@ async def create_order(
             .options(
                 selectinload(Product.vendor),
                 selectinload(Product.images),
-                selectinload(Product.variations),
+                selectinload(Product.variants),
+                selectinload(Product.variations).selectinload(Variation.size_stocks),
             )
             .where(
                 Product.id == item_data.product_id,
@@ -830,6 +871,12 @@ async def create_order(
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Product {item_data.product_id} not available",
+            )
+
+        if product.variations and not item_data.variant_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"A variation must be selected for '{product.title}'",
             )
 
         # Get variant if specified

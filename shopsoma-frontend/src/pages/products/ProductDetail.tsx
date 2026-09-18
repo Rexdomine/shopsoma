@@ -267,7 +267,7 @@ export default function ProductDetail() {
       size: normalizeColorValue(selectedSize),
     };
 
-    if (!product?.variants?.length) {
+    if (!product?.variants?.length && !product?.variations?.length) {
       // For products without variants, create a default variant
       if (!product) return null;
 
@@ -281,7 +281,7 @@ export default function ProductDetail() {
       } as ProductVariant;
     }
 
-    const variants = product.variants;
+    const variants = product?.variants ?? [];
 
     const hasColorSelection = Boolean(normalizeSelection.color);
     const hasSizeSelection = Boolean(normalizeSelection.size);

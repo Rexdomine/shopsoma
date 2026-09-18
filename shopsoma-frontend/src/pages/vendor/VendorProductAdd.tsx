@@ -19,6 +19,8 @@ import type { Currency } from '../../store/currencyStore';
 type SizeOption = 'XXXL' | 'XXL' | 'XL' | 'L' | 'M' | 'S' | 'XS' | 'XXS' | '4' | '6' | '8' | '10' | '12' | '14' | '16' | '18' | '20' | '22' | '32' | '34' | '36' | '38' | '40' | '42' | '44' | '46' | '48' | '50';
 type SizingSystem = 'US Sizing' | 'UK Sizing' | 'EU Sizing';
 type VariationMode = 'Size' | 'Color';
+
+const SIZE_STOCK_OPTIONS = new Set<SizeOption>(['XXXL', 'XXL', 'XL', 'L', 'M', 'S', 'XS', 'XXS']);
 type ColorMode = 'solid' | 'multi' | 'none';
 
 interface ProductImage {
@@ -758,6 +760,23 @@ export default function VendorProductAdd() {
       return;
     }
 
+    const activeColorVariations = detailedVariations.filter(
+      (variation) => variation.type === 'Color'
+    );
+    const activeSizeVariations = detailedVariations.filter(
+      (variation) => variation.type === 'Size'
+    );
+    if (
+      productType === 'variable' &&
+      activeColorVariations.length > 0 &&
+      activeSizeVariations.length > 0
+    ) {
+      warning(
+        'Color and size variations cannot be combined yet. Create explicit variants instead.',
+        'Unsupported variation combination'
+      );
+      return;
+    }
     if (!primaryCategoryId) {
       warning('Primary category is required', 'Missing info');
       return;
@@ -926,12 +945,27 @@ export default function VendorProductAdd() {
 
           variation.selectedSizes.forEach((size) => {
             const sizeStock = shouldTrackStock ? parseInt(variation.sizeStock[size] || '0', 10) || 0 : 0;
-            variantPayload.push({
-              size,
-              price: variationBasePrice,
-              stock: sizeStock,
-              is_available: shouldTrackStock ? sizeStock > 0 : true,
-            });
+            if (variation.type === 'Size') {
+              variationPayload.push({
+                title: size,
+                type: 'size',
+                price: variationRegularPrice,
+                sale_price: variationSalePrice,
+                images: variation.images
+                  .filter((image) => image.uploaded && image.imageUrl)
+                  .map((image) => image.imageUrl!),
+                is_active: true,
+                sizes: SIZE_STOCK_OPTIONS.has(size) ? [{ size, stock: sizeStock }] : [],
+              });
+            }
+            if (!SIZE_STOCK_OPTIONS.has(size)) {
+              variantPayload.push({
+                size,
+                price: variationBasePrice,
+                stock: sizeStock,
+                is_available: shouldTrackStock ? sizeStock > 0 : true,
+              });
+            }
           });
         });
 
