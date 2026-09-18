@@ -105,7 +105,7 @@ def unique_variations_by_color(variations: List["VariationResponse"]) -> dict[st
     indexed: dict[str, VariationResponse] = {}
     collisions: set[str] = set()
     for variation in variations:
-        if not variation.is_active:
+        if not variation.is_active or not is_color_variation_type(variation.type):
             continue
         key = normalize_color_value(variation.title)
         if not key or key in collisions:
@@ -560,6 +560,9 @@ class ProductResponse(ProductBase):
                 size_variant_color = (
                     color_variations[0].title if len(color_variations) == 1 else None
                 )
+                size_variant_color_hex = (
+                    color_variations[0].color_hex if len(color_variations) == 1 else None
+                )
                 for variant in self.variants:
                     variation = None
                     if variant.color is not None:
@@ -622,7 +625,11 @@ class ProductResponse(ProductBase):
                                     "product_id": self.id,
                                     "size": size,
                                     "color": variation_color,
-                                    "color_hex": variation.color_hex,
+                                    "color_hex": (
+                                        size_variant_color_hex
+                                        if not is_color_variation_type(variation.type)
+                                        else variation.color_hex
+                                    ),
                                     "price": variant_price,
                                     "compare_at_price": compare_at_price,
                                     "stock": size_stock.stock,

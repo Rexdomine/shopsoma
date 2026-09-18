@@ -61,7 +61,6 @@ from app.schemas.order import (
 from app.api.dependencies import get_current_active_user, get_optional_user
 from app.schemas.product import (
     effective_variation_price,
-    is_color_variation_type,
     normalize_color_value,
     unique_variations_by_color,
     unique_variations_by_size,
@@ -345,6 +344,12 @@ async def resolve_order_variant(
         available_stock = size_stock.stock
         if product.made_to_order:
             available_stock = max(available_stock, 999999)
+        color_variations = unique_variations_by_color(product.variations or [])
+        sole_color = (
+            next(iter(color_variations.values()))
+            if len(color_variations) == 1
+            else None
+        )
         return {
             "variant_id": None,
             "unit_price": unit_price,
@@ -352,18 +357,19 @@ async def resolve_order_variant(
             "variant_details": {
                 "size": getattr(size_stock.size, "value", str(size_stock.size)),
                 "color": (
-                    next(
-                        (
-                            candidate.title
-                            for candidate in product.variations or []
-                            if is_color_variation_type(candidate.type) and candidate.is_active
-                        ),
-                        None,
-                    )
+                    sole_color.title
+                    if variation.type.casefold() == "size" and sole_color is not None
+                    else None
                     if variation.type.casefold() == "size"
                     else variation.title
                 ),
-                "color_hex": variation.color_hex,
+                "color_hex": (
+                    sole_color.color_hex
+                    if variation.type.casefold() == "size" and sole_color is not None
+                    else None
+                    if variation.type.casefold() == "size"
+                    else variation.color_hex
+                ),
                 "size_stock_id": str(size_stock.id),
                 "variation_id": str(variation.id),
             },

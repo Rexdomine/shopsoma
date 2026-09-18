@@ -107,6 +107,39 @@ def test_existing_variant_merges_matching_variation_compare_at_price():
     assert product.variants[0].compare_at_price == Decimal("100.00")
 
 
+def test_existing_size_variant_inherits_sole_color_hex():
+    now = datetime.now(timezone.utc)
+    product_id = uuid4()
+    color = VariationResponse.model_construct(
+        id=uuid4(), product_id=product_id, title="Black", type="color",
+        color_hex="#000000", price=None, sale_price=None, images=[], is_active=True,
+        created_at=now, updated_at=now, size_stocks=[],
+    )
+    size = VariationResponse.model_construct(
+        id=uuid4(), product_id=product_id, title="M", type="size",
+        color_hex=None, price=None, sale_price=None, images=[], is_active=True,
+        created_at=now, updated_at=now,
+        size_stocks=[SizeStockResponse.model_construct(
+            id=uuid4(), variation_id=uuid4(), size="M", stock=1,
+            created_at=now, updated_at=now,
+        )],
+    )
+    legacy_size = ProductVariantResponse.model_construct(
+        id=uuid4(), product_id=product_id, size="M", color=None, color_hex=None,
+        price=Decimal("100.00"), compare_at_price=None, stock=1, sku=None,
+        is_available=True, created_at=now, updated_at=now,
+    )
+    product = ProductResponse.model_construct(
+        id=product_id, base_price=Decimal("100.00"), variants=[legacy_size],
+        variations=[color, size],
+    )
+
+    product.generate_variants_from_variations()  # pyright: ignore[reportCallIssue]
+
+    assert product.variants[-1].color == "Black"
+    assert product.variants[-1].color_hex == "#000000"
+
+
 def test_existing_variant_matching_is_case_and_whitespace_insensitive():
     now = datetime.now(timezone.utc)
     variation = VariationResponse.model_construct(

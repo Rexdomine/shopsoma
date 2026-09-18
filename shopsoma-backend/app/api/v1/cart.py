@@ -72,7 +72,9 @@ def resolve_variant_response(
                 variation = unique_variations_by_size(product.variations or []).get(
                     normalize_color_value(variant.size)
                 )
-            if variation is not None:
+            if variation is not None and (
+                variation.price is not None or variation.sale_price is not None
+            ):
                 response.price = effective_variation_price(
                     variation.price, variation.sale_price, product.base_price
                 )
