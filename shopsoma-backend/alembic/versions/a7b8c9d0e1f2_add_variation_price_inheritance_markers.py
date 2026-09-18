@@ -1,7 +1,7 @@
 """add durable variation price inheritance markers
 
 Revision ID: a7b8c9d0e1f2
-Revises: 75427e964440
+Revises: p2q3r4s5t6u7
 Create Date: 2026-09-18 17:15:00.000000
 
 """
