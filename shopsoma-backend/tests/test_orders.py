@@ -95,6 +95,56 @@ async def test_review_order_with_size_stock_variant(
 
 
 @pytest.mark.asyncio
+async def test_review_order_rejects_parent_variation_when_its_size_stock_is_zero(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    vendor_user,
+):
+    """A parent variation must not bypass its enrolled size-stock inventory."""
+    from app.models.product import Product, ProductStatus, ModerationStatus, Variation, SizeStock, SizeEnum
+    from app.models.shipping_rate import ShippingRate
+    import uuid
+
+    product = Product(
+        id=uuid.uuid4(), vendor_id=vendor_user["vendor"].id,
+        title="Zero Stock Variation Product", description="Parent-id rejection",
+        base_price=80000.00, total_stock=50, status=ProductStatus.ACTIVE,
+        moderation_status=ModerationStatus.APPROVED,
+    )
+    db_session.add(product)
+    await db_session.flush()
+    variation = Variation(
+        id=uuid.uuid4(), product_id=product.id, title="Green", type="color",
+        color_hex="#00FF00", price=80000.00, is_active=True,
+    )
+    db_session.add(variation)
+    await db_session.flush()
+    db_session.add(SizeStock(id=uuid.uuid4(), variation_id=variation.id, size=SizeEnum.M, stock=0))
+    db_session.add(ShippingRate(
+        id=uuid.uuid4(), name="Standard", description="Standard shipping",
+        base_rate=1500.00, country="Nigeria", state="Lagos", is_active=True,
+        is_default=True, priority=0,
+    ))
+    await db_session.commit()
+
+    response = await client.post(
+        "/api/v1/orders/review",
+        json={
+            "items": [{"product_id": str(product.id), "variant_id": str(variation.id), "quantity": 1}],
+            "guest_address": {
+                "full_name": "Guest User", "phone_number": "08000000000",
+                "address_line1": "123 Test Street", "address_line2": "",
+                "city": "Lagos", "state": "Lagos", "postal_code": "100001",
+                "country": "Nigeria",
+            },
+        },
+    )
+
+    assert response.status_code == 400
+    assert "purchasable variant" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
 async def test_create_order_with_size_stock_variant_updates_stock(
     client: AsyncClient,
     db_session: AsyncSession,

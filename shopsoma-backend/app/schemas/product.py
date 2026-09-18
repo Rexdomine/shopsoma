@@ -539,7 +539,6 @@ class ProductUpdate(BaseModel):
             if not self.made_to_order_timeline or not self.made_to_order_timeline.strip():
                 raise ValueError("Made-to-order products require a production timeline")
             self.total_stock = 0
-        validate_variation_inventory_shape(self.variations)
         return self
 
 

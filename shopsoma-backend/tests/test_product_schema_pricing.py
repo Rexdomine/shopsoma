@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 from app.schemas.product import (
     ProductResponse,
+    ProductUpdate,
     ProductVariantResponse,
     ProductVariantCreate,
     SizeStockResponse,
@@ -486,4 +487,16 @@ def test_variation_inventory_axis_signature_normalizes_persisted_and_submitted_s
 
     assert variation_inventory_axis_signature(submitted) == variation_inventory_axis_signature(
         persisted
+    )
+
+
+def test_product_update_accepts_unchanged_grandfathered_variation_axes():
+    """Compatibility-aware endpoint validation must see unchanged legacy axes."""
+    ProductUpdate.model_validate(
+        {
+            "variations": [
+                {"title": "Black", "type": "color"},
+                {"title": "M", "type": "size"},
+            ]
+        }
     )

@@ -387,7 +387,7 @@ async def resolve_order_variant(
     if variation:
         if product.variants or any(
             candidate.is_active
-            and any(stock.stock > 0 for stock in (candidate.size_stocks or []))
+            and bool(candidate.size_stocks)
             for candidate in product.variations or []
         ):
             raise HTTPException(
