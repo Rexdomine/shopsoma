@@ -572,7 +572,10 @@ async def bulk_upload_variable_products(
                 price=variation_data["price"],
                 sale_price=variation_data["sale_price"],
                 inherits_price=variation_data["price"] is None,
-                inherits_sale_price=variation_data["sale_price"] is None,
+                inherits_sale_price=(
+                    variation_data["sale_price"] is None
+                    and variation_data["price"] is None
+                ),
                 images=[],
                 is_active=True,
             )
