@@ -91,7 +91,7 @@ def resolve_variant_response(
         )
 
         if str(variation.id) == str(variant_id):
-            if any(
+            if product.variants or any(
                 candidate.is_active and bool(candidate.size_stocks)
                 for candidate in product.variations or []
             ):
@@ -99,8 +99,8 @@ def resolve_variant_response(
             return ProductVariantResponse.model_validate({
                 "id": variation.id,
                 "product_id": product.id,
-                "size": None,
-                "color": variation.title,
+                "size": variation.title if variation.type.casefold() == "size" else None,
+                "color": None if variation.type.casefold() == "size" else variation.title,
                 "color_hex": variation.color_hex,
                 "price": base_price,
                 "stock": 0,

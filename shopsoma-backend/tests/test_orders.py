@@ -5,6 +5,47 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from types import SimpleNamespace
+from datetime import datetime, timezone
+
+from app.api.v1.orders import resolve_order_variant
+
+
+@pytest.mark.asyncio
+async def test_bare_size_variation_order_snapshot_uses_size_axis():
+    now = datetime.now(timezone.utc)
+    variation = SimpleNamespace(
+        id="variation-id", product_id="product-id", title="M", type="size",
+        color_hex=None, price=None, sale_price=None, is_active=True,
+        size_stocks=[], created_at=now, updated_at=now,
+    )
+    product = SimpleNamespace(
+        id="product-id", base_price=100, total_stock=10, made_to_order=True,
+        variants=[], variations=[variation],
+    )
+
+    class Result:
+        def __init__(self, value=None, row=None):
+            self.value = value
+            self.row = row
+
+        def scalar_one_or_none(self):
+            return self.value
+
+        def first(self):
+            return self.row
+
+    class FakeDB:
+        def __init__(self):
+            self.results = [Result(), Result(), Result(variation)]
+
+        async def execute(self, _query):
+            return self.results.pop(0)
+
+    resolved = await resolve_order_variant(FakeDB(), product, "variation-id")
+
+    assert resolved["variant_details"]["size"] == "M"
+    assert resolved["variant_details"]["color"] is None
 
 
 @pytest.mark.asyncio

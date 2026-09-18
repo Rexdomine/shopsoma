@@ -43,6 +43,37 @@ def test_parent_variation_with_size_stocks_is_not_purchasable():
     assert resolve_cart_purchase_option(product, "variation-id") is None
 
 
+def test_parent_variation_is_not_purchasable_when_legacy_variants_exist():
+    variation = SimpleNamespace(
+        id="00000000-0000-4000-8000-000000000021", title="Red", type="color", color_hex="#f00",
+        price=None, sale_price=None, is_active=True, size_stocks=[],
+    )
+    legacy_variant = SimpleNamespace(id="legacy-id")
+    product = SimpleNamespace(
+        base_price=100, total_stock=10, made_to_order=True,
+        variants=[legacy_variant], variations=[variation],
+    )
+
+    assert resolve_cart_purchase_option(product, "00000000-0000-4000-8000-000000000021") is None
+
+
+def test_bare_size_variation_cart_response_uses_size_axis():
+    now = datetime.now(timezone.utc)
+    variation = SimpleNamespace(
+        id="00000000-0000-4000-8000-000000000022", title="M", type="size", color_hex=None,
+        price=None, sale_price=None, is_active=True, size_stocks=[],
+        created_at=now, updated_at=now,
+    )
+    product = SimpleNamespace(
+        id="00000000-0000-4000-8000-000000000023", base_price=100, variants=[], variations=[variation],
+    )
+
+    response = resolve_variant_response(product, "00000000-0000-4000-8000-000000000022")
+
+    assert response.size == "M"
+    assert response.color is None
+
+
 def test_existing_variation_cart_row_uses_and_persists_current_sale_price():
     variation = SimpleNamespace(
         id="00000000-0000-4000-8000-000000000002",

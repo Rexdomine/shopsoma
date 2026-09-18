@@ -405,8 +405,8 @@ async def resolve_order_variant(
             "unit_price": unit_price,
             "stock": available_stock,
             "variant_details": {
-                "size": None,
-                "color": variation.title,
+                "size": variation.title if variation.type.casefold() == "size" else None,
+                "color": None if variation.type.casefold() == "size" else variation.title,
                 "color_hex": variation.color_hex,
                 "variation_id": str(variation.id),
             },
