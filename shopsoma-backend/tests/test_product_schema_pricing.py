@@ -59,6 +59,14 @@ def test_inheritance_marker_wins_over_equal_legacy_price_values():
     ) is False
 
 
+def test_legacy_null_price_is_treated_as_inherited_without_a_marker():
+    legacy = SimpleNamespace(price=None, inherits_price=None)
+
+    assert _variation_inherits_parent_price(
+        legacy, "inherits_price", legacy.price, Decimal("100.00")
+    ) is True
+
+
 def _product_with_variation(*, price: Decimal | None, sale_price: Decimal | None):
     now = datetime.now(timezone.utc)
     variation = VariationResponse.model_construct(

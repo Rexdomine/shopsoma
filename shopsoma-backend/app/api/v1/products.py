@@ -47,7 +47,11 @@ def _variation_inherits_parent_price(
     legacy_parent_value: Any,
 ) -> bool:
     marker = getattr(variation, marker_name, None)
-    return marker if marker is not None else persisted_value == legacy_parent_value
+    return (
+        marker
+        if marker is not None
+        else persisted_value is None or persisted_value == legacy_parent_value
+    )
 
 
 PRODUCT_RELATIONSHIPS = (
