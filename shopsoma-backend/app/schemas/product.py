@@ -534,6 +534,9 @@ class ProductResponse(ProductBase):
                     for variation in self.variations
                     if variation.type.casefold() in COLOR_VARIATION_TYPES and variation.is_active
                 ]
+                size_variant_color = (
+                    color_variations[0].title if len(color_variations) == 1 else None
+                )
                 for variant in self.variants:
                     variation = None
                     if variant.color is not None:
@@ -575,7 +578,7 @@ class ProductResponse(ProductBase):
                         regular_price if variant_price < regular_price else None
                     )
                     variation_color = (
-                        None
+                        size_variant_color
                         if variation.type.casefold() == "size"
                         else variation.title
                     )
