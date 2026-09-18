@@ -19,6 +19,7 @@ def test_existing_variation_cart_row_uses_and_persists_current_sale_price():
         id="variation-id", price=None, sale_price=80, is_active=True, size_stocks=[]
     )
     product = SimpleNamespace(
+        id="product-id",
         base_price=100,
         total_stock=10,
         made_to_order=False,
@@ -38,6 +39,7 @@ def test_coupon_subtotal_uses_current_variation_price():
         id="variation-id", price=100, sale_price=80, is_active=True, size_stocks=[]
     )
     product = SimpleNamespace(
+        id="product-id",
         base_price=100,
         total_stock=10,
         made_to_order=False,
