@@ -66,6 +66,24 @@ def test_variation_sale_uses_product_fallback_as_regular_price():
     assert variant.compare_at_price == Decimal("100.00")
 
 
+def test_bare_size_variation_exposes_its_title_as_size():
+    now = datetime.now(timezone.utc)
+    variation = VariationResponse.model_construct(
+        id=uuid4(), product_id=uuid4(), title="M", type="size", color_hex=None,
+        price=None, sale_price=None, images=[], is_active=True,
+        created_at=now, updated_at=now, size_stocks=[],
+    )
+    product = ProductResponse.model_construct(
+        id=variation.product_id, base_price=Decimal("100.00"), variants=[],
+        variations=[variation],
+    )
+
+    product.generate_variants_from_variations()  # pyright: ignore[reportCallIssue]
+
+    assert product.variants[0].size == "M"
+    assert product.variants[0].color is None
+
+
 def test_existing_variant_merges_matching_variation_compare_at_price():
     now = datetime.now(timezone.utc)
     variation = VariationResponse.model_construct(

@@ -29,6 +29,20 @@ def test_default_cart_option_is_rejected_when_variation_records_exist():
     assert resolve_cart_purchase_option(product, "default-product") is None
 
 
+def test_parent_variation_with_size_stocks_is_not_purchasable():
+    size_stock = SimpleNamespace(id="size-stock-id", size="M", stock=1)
+    variation = SimpleNamespace(
+        id="variation-id", title="M", type="size", color_hex=None,
+        price=None, sale_price=None, is_active=True, size_stocks=[size_stock],
+    )
+    product = SimpleNamespace(
+        base_price=100, total_stock=10, made_to_order=True, variants=[],
+        variations=[variation],
+    )
+
+    assert resolve_cart_purchase_option(product, "variation-id") is None
+
+
 def test_existing_variation_cart_row_uses_and_persists_current_sale_price():
     variation = SimpleNamespace(
         id="00000000-0000-4000-8000-000000000002",

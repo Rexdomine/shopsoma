@@ -697,7 +697,7 @@ class ProductResponse(ProductBase):
                     variant_dict = {
                         "id": variation.id,
                         "product_id": self.id,
-                        "size": None,
+                        "size": variation.title if variation.type.casefold() == "size" else None,
                         "color": None if variation.type.casefold() == "size" else variation.title,
                         "color_hex": variation.color_hex,
                         "price": variant_price,
