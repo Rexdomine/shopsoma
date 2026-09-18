@@ -254,7 +254,7 @@ def test_mixed_legacy_and_size_stock_variants_expose_each_inventory_source_once(
         is_available=True, created_at=now, updated_at=now,
     )
     color_variation = VariationResponse.model_construct(
-        id=uuid4(), product_id=product_id, title="Black", type="color", color_hex="#000000",
+        id=uuid4(), product_id=product_id, title="Black", type="solid", color_hex="#000000",
         price=Decimal("100.00"), sale_price=Decimal("80.00"), images=[], is_active=True,
         created_at=now, updated_at=now, size_stocks=[],
     )

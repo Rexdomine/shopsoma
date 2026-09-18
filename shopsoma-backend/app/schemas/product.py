@@ -25,6 +25,9 @@ def normalize_color_value(value: Optional[str]) -> str:
     return (value or "").strip().casefold()
 
 
+COLOR_VARIATION_TYPES = {"color", "solid", "multi", "none"}
+
+
 def unique_variations_by_color(variations: List["VariationResponse"]) -> dict[str, "VariationResponse"]:
     """Index only unambiguous variation colors, avoiding collision-dependent pricing."""
     indexed: dict[str, VariationResponse] = {}
@@ -473,7 +476,7 @@ class ProductResponse(ProductBase):
                 color_variations = [
                     variation
                     for variation in self.variations
-                    if variation.type.casefold() == "color" and variation.is_active
+                    if variation.type.casefold() in COLOR_VARIATION_TYPES and variation.is_active
                 ]
                 size_variant_color = (
                     color_variations[0].title if len(color_variations) == 1 else None
