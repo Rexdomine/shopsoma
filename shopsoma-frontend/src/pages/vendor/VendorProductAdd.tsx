@@ -894,10 +894,11 @@ export default function VendorProductAdd() {
             variation.hasDifferentPricing && customRegularPrice && customRegularPrice > 0
               ? customRegularPrice
               : inheritedRegularPrice;
-          const variationSalePrice =
-            variation.hasDifferentPricing && customSalePrice && customSalePrice > 0 && customSalePrice < variationRegularPrice
+          const variationSalePrice = variation.hasDifferentPricing
+            ? customSalePrice && customSalePrice > 0 && customSalePrice < variationRegularPrice
               ? customSalePrice
-              : inheritedSalePrice;
+              : undefined
+            : inheritedSalePrice;
           const variationBasePrice = variationSalePrice ?? variationRegularPrice;
           if (variation.type === 'Color') {
             const colorStock = shouldTrackStock ? parseInt(variation.colorStock || '0', 10) || 0 : 0;
