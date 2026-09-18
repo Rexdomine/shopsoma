@@ -144,9 +144,12 @@ def validate_variation_inventory_shape(
         )
         for variation in active_variations
     )
-    if has_size_stocks and legacy_variants:
+    if has_size_stocks and any(
+        getattr(variant, "size", None) is None for variant in legacy_variants
+    ):
+        inventory_axis = "color variation" if color_variations else "variation"
         raise ValueError(
-            "Legacy variants cannot coexist with variation size stock; "
+            f"Legacy variants cannot coexist with {inventory_axis} size stock; "
             "use variation-backed inventory as the sole stock source"
         )
 
