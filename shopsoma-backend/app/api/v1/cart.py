@@ -91,10 +91,7 @@ def resolve_variant_response(
         )
 
         if str(variation.id) == str(variant_id):
-            if product.variants or any(
-                candidate.is_active and bool(candidate.size_stocks)
-                for candidate in product.variations or []
-            ):
+            if product.variants or (variation.is_active and bool(variation.size_stocks)):
                 return None
             return ProductVariantResponse.model_validate({
                 "id": variation.id,

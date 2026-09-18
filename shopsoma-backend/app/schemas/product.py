@@ -60,12 +60,28 @@ def validate_variation_inventory_shape(
     """Reject variation combinations without one canonical inventory source."""
     all_variations = list(variations or [])
     size_variation_labels = [
-        normalize_color_value(variation.title)
+        normalize_color_value(getattr(variation, "title", None))
         for variation in all_variations
         if variation.type.casefold() == "size"
     ]
     if len(size_variation_labels) != len(set(size_variation_labels)):
         raise ValueError("Size variation labels must be unique after normalization")
+
+    nested_size_owners: dict[str, set[int]] = {}
+    for variation_index, variation in enumerate(all_variations):
+        if not variation.is_active or variation.type.casefold() != "size":
+            continue
+        nested_sizes = (
+            getattr(variation, "sizes", None)
+            if getattr(variation, "sizes", None) is not None
+            else getattr(variation, "size_stocks", [])
+        ) or []
+        for size in nested_sizes:
+            label = normalize_color_value(getattr(size, "size", None))
+            if label:
+                nested_size_owners.setdefault(label, set()).add(variation_index)
+    if any(len(owners) > 1 for owners in nested_size_owners.values()):
+        raise ValueError("Nested size-stock labels must be unique across size variations")
 
     active_variations = [variation for variation in all_variations if variation.is_active]
     color_variations = [
@@ -86,7 +102,7 @@ def validate_variation_inventory_shape(
         if getattr(variant, "size", None) is not None
     }
     bare_size_labels = {
-        normalize_color_value(variation.title)
+        normalize_color_value(getattr(variation, "title", None))
         for variation in active_variations
         if variation.type.casefold() == "size"
         and not (

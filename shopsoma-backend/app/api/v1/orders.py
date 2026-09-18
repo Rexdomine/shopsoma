@@ -385,11 +385,7 @@ async def resolve_order_variant(
     variation = variation_result.scalar_one_or_none()
 
     if variation:
-        if product.variants or any(
-            candidate.is_active
-            and bool(candidate.size_stocks)
-            for candidate in product.variations or []
-        ):
+        if product.variants or (variation.is_active and bool(variation.size_stocks)):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Select a purchasable variant or size stock for this product",

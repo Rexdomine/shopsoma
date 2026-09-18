@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from uuid import uuid4
 from types import SimpleNamespace
+import pytest
 
 from app.schemas.product import (
     ProductResponse,
@@ -532,3 +533,17 @@ def test_product_update_accepts_unchanged_grandfathered_variation_axes():
             ]
         }
     )
+
+
+def test_nested_size_stock_labels_must_be_unique_across_size_variations():
+    first = VariationCreate.model_construct(
+        title="Regular", type="size", is_active=True,
+        sizes=[SimpleNamespace(size="M")],
+    )
+    second = VariationCreate.model_construct(
+        title="Petite", type="size", is_active=True,
+        sizes=[SimpleNamespace(size=" m ")],
+    )
+
+    with pytest.raises(ValueError, match="Nested size-stock labels"):
+        validate_variation_inventory_shape([first, second])

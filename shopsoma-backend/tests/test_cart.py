@@ -6,6 +6,7 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 from types import SimpleNamespace
 from datetime import datetime, timezone
+from uuid import uuid4
 
 from app.api.v1.cart import (
     calculate_cart_subtotal,
@@ -41,6 +42,31 @@ def test_parent_variation_with_size_stocks_is_not_purchasable():
     )
 
     assert resolve_cart_purchase_option(product, "variation-id") is None
+
+
+def test_unrelated_bare_size_variation_remains_purchasable():
+    bare_id = uuid4()
+    product_id = uuid4()
+    bare_size = SimpleNamespace(
+        id=bare_id, title="4", type="size", color_hex=None,
+        price=None, sale_price=None, is_active=True, size_stocks=[],
+        created_at=datetime.now(timezone.utc), updated_at=datetime.now(timezone.utc),
+    )
+    stocked_size = SimpleNamespace(
+        id="stocked-size-id", title="M", type="size", color_hex=None,
+        price=None, sale_price=None, is_active=True,
+        size_stocks=[SimpleNamespace(id="m-stock-id", size="M", stock=1)],
+    )
+    product = SimpleNamespace(
+        id=product_id,
+        base_price=100, total_stock=10, made_to_order=True, variants=[],
+        variations=[bare_size, stocked_size],
+    )
+
+    option = resolve_cart_purchase_option(product, str(bare_id))
+
+    assert option is not None
+    assert option["normalized_variant_id"] == str(bare_id)
 
 
 def test_parent_variation_is_not_purchasable_when_legacy_variants_exist():
