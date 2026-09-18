@@ -957,11 +957,13 @@ async def update_product(
 
     await db.commit()
 
-    # Reload with relationships to avoid lazy loading issues
+    # Reload with relationships to avoid lazy loading issues and stale
+    # relationship collections after delete/recreate synchronization.
     result = await db.execute(
         select(Product)
         .options(*PRODUCT_RELATIONSHIPS)
         .where(Product.id == product_id)
+        .execution_options(populate_existing=True)
     )
     product = result.scalar_one()
 
