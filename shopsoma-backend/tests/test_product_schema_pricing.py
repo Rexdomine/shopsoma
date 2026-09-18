@@ -439,3 +439,31 @@ def test_color_backed_size_stock_rejects_all_legacy_inventory_rows():
         assert "color variation size stock" in str(exc)
     else:
         raise AssertionError("legacy inventory must not coexist with color-backed size stock")
+
+
+def test_size_variation_labels_must_be_unique_after_normalization():
+    variations = [
+        VariationCreate.model_construct(title=" M ", type="size", is_active=True, sizes=[]),
+        VariationCreate.model_construct(title="m", type="size", is_active=True, sizes=[]),
+    ]
+
+    try:
+        validate_variation_inventory_shape(variations, [])
+    except ValueError as exc:
+        assert "Size variation labels must be unique" in str(exc)
+    else:
+        raise AssertionError("duplicate normalized size labels must be rejected")
+
+
+def test_inactive_duplicate_size_variation_labels_are_rejected_too():
+    variations = [
+        VariationCreate.model_construct(title="M", type="size", is_active=False, sizes=[]),
+        VariationCreate.model_construct(title=" m ", type="size", is_active=True, sizes=[]),
+    ]
+
+    try:
+        validate_variation_inventory_shape(variations, [])
+    except ValueError as exc:
+        assert "Size variation labels must be unique" in str(exc)
+    else:
+        raise AssertionError("inactive duplicate size labels must not persist")

@@ -152,7 +152,7 @@ def resolve_cart_purchase_option(
 
     variant_id_str = str(variant_id or "")
     if variant_id_str.startswith("default-"):
-        if product.variants:
+        if product.variants or product.variations:
             return None
         return {
             "normalized_variant_id": None,
@@ -162,7 +162,7 @@ def resolve_cart_purchase_option(
         }
 
     if not variant_id:
-        if product.variants:
+        if product.variants or product.variations:
             return None
         return {
             "normalized_variant_id": None,

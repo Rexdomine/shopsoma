@@ -11,9 +11,22 @@ from app.api.v1.cart import (
     calculate_cart_subtotal,
     calculate_cart_summary,
     reprice_cart_item,
+    resolve_cart_purchase_option,
     resolve_cart_item_price,
     resolve_variant_response,
 )
+
+
+def test_default_cart_option_is_rejected_when_variation_records_exist():
+    product = SimpleNamespace(
+        base_price=100,
+        total_stock=10,
+        made_to_order=False,
+        variants=[],
+        variations=[SimpleNamespace(is_active=False)],
+    )
+
+    assert resolve_cart_purchase_option(product, "default-product") is None
 
 
 def test_existing_variation_cart_row_uses_and_persists_current_sale_price():

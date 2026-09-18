@@ -38,7 +38,16 @@ def validate_variation_inventory_shape(
     variants: Optional[List["ProductVariantCreate"]] = None,
 ) -> None:
     """Reject variation combinations without one canonical inventory source."""
-    active_variations = [variation for variation in variations or [] if variation.is_active]
+    all_variations = list(variations or [])
+    size_variation_labels = [
+        normalize_color_value(variation.title)
+        for variation in all_variations
+        if variation.type.casefold() == "size"
+    ]
+    if len(size_variation_labels) != len(set(size_variation_labels)):
+        raise ValueError("Size variation labels must be unique after normalization")
+
+    active_variations = [variation for variation in all_variations if variation.is_active]
     color_variations = [
         variation
         for variation in active_variations
