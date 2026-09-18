@@ -253,6 +253,37 @@ class TestProductCreate:
         assert "duplicate size variation inventory" in response.json()["detail"][0]["msg"]
 
     @pytest.mark.asyncio
+    async def test_create_variant_rejects_color_variation_size_stock_overlap(
+        self, client: AsyncClient, vendor_user
+    ):
+        """Color variations with sizes also own canonical size-stock inventory."""
+        create_response = await client.post(
+            "/api/v1/products",
+            json={
+                "title": "Color Size Stock Inventory",
+                "base_price": 85.00,
+                "variations": [
+                    {
+                        "title": "Red",
+                        "type": "color",
+                        "sizes": [{"size": "M", "stock": 10}],
+                    }
+                ],
+            },
+            headers=vendor_user["headers"],
+        )
+        assert create_response.status_code == 201
+
+        response = await client.post(
+            f"/api/v1/products/{create_response.json()['id']}/variants",
+            json={"size": "M", "price": 85.00, "stock": 10},
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 422
+        assert "duplicate size variation inventory" in response.json()["detail"][0]["msg"]
+
+    @pytest.mark.asyncio
     async def test_update_variant_rejects_size_stock_overlap(
         self, client: AsyncClient, vendor_user
     ):

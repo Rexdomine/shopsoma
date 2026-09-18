@@ -57,7 +57,7 @@ def validate_variation_inventory_shape(
 
     size_stock_labels = {
         normalize_color_value(getattr(size, "size", None))
-        for variation in size_variations
+        for variation in active_variations
         for size in (
             (
                 getattr(variation, "sizes", None)
