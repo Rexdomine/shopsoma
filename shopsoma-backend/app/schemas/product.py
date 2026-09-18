@@ -422,8 +422,31 @@ class ProductResponse(ProductBase):
         This allows frontend to use a single data structure (variants) regardless of
         whether product was created via admin (variants) or vendor (variations).
         """
-        # If product already has variants (admin-created), don't override
+        # If product already has variants, preserve them but merge matching
+        # variation pricing so persisted legacy variants expose the same
+        # effective and compare-at prices as vendor variation responses.
         if self.variants:
+            if self.variations:
+                variations_by_title = {
+                    variation.title: variation for variation in self.variations
+                }
+                for variant in self.variants:
+                    if variant.color is None:
+                        continue
+                    variation = variations_by_title.get(variant.color)
+                    if variation is None:
+                        continue
+
+                    variant_price = effective_variation_price(
+                        variation.price, variation.sale_price, self.base_price
+                    )
+                    regular_price = (
+                        variation.price if variation.price is not None else self.base_price
+                    )
+                    variant.price = variant_price
+                    variant.compare_at_price = (
+                        regular_price if variant_price < regular_price else None
+                    )
             return self
 
         # If product has variations (vendor-created), generate variants
