@@ -5,6 +5,7 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 from types import SimpleNamespace
+from datetime import datetime, timezone
 
 from app.api.v1.cart import (
     calculate_cart_subtotal,
@@ -16,7 +17,15 @@ from app.api.v1.cart import (
 
 def test_existing_variation_cart_row_uses_and_persists_current_sale_price():
     variation = SimpleNamespace(
-        id="variation-id", price=None, sale_price=80, is_active=True, size_stocks=[]
+        id="variation-id",
+        title="Red",
+        color_hex="#ff0000",
+        price=None,
+        sale_price=80,
+        is_active=True,
+        size_stocks=[],
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
     )
     product = SimpleNamespace(
         id="product-id",
@@ -36,7 +45,15 @@ def test_existing_variation_cart_row_uses_and_persists_current_sale_price():
 
 def test_coupon_subtotal_uses_current_variation_price():
     variation = SimpleNamespace(
-        id="variation-id", price=100, sale_price=80, is_active=True, size_stocks=[]
+        id="variation-id",
+        title="Red",
+        color_hex="#ff0000",
+        price=100,
+        sale_price=80,
+        is_active=True,
+        size_stocks=[],
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
     )
     product = SimpleNamespace(
         id="product-id",
