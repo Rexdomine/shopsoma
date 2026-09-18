@@ -173,6 +173,11 @@ def reprice_cart_item(cart_item: CartItem) -> bool:
     return True
 
 
+def calculate_cart_subtotal(items: list[CartItem]) -> float:
+    """Calculate the subtotal from each item's current purchasable price."""
+    return sum(resolve_cart_item_price(item) * item.quantity for item in items)
+
+
 def serialize_cart_item(cart_item: CartItem) -> CartItemResponse:
     product = cart_item.product
     variant_id = str(cart_item.variant_id) if cart_item.variant_id else None
@@ -198,7 +203,7 @@ def serialize_cart_item(cart_item: CartItem) -> CartItemResponse:
 
 def calculate_cart_summary(items: list[CartItem], discount: float = 0) -> CartSummary:
     """Calculate cart summary with tax and shipping"""
-    subtotal = sum(resolve_cart_item_price(item) * item.quantity for item in items)
+    subtotal = calculate_cart_subtotal(items)
 
     # Calculate shipping
     shipping = 0 if subtotal >= FREE_SHIPPING_THRESHOLD else SHIPPING_FEE
@@ -726,7 +731,7 @@ async def apply_coupon(
         )
 
     # Calculate subtotal
-    subtotal = sum(item.price * item.quantity for item in items)
+    subtotal = calculate_cart_subtotal(items)
 
     # Check minimum purchase
     if coupon.min_purchase and subtotal < coupon.min_purchase:

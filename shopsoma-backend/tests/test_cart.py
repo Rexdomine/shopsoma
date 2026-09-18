@@ -6,11 +6,18 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 from types import SimpleNamespace
 
-from app.api.v1.cart import calculate_cart_summary, reprice_cart_item, resolve_cart_item_price
+from app.api.v1.cart import (
+    calculate_cart_subtotal,
+    calculate_cart_summary,
+    reprice_cart_item,
+    resolve_cart_item_price,
+)
 
 
 def test_existing_variation_cart_row_uses_and_persists_current_sale_price():
-    variation = SimpleNamespace(price=None, sale_price=80, is_active=True, size_stocks=[])
+    variation = SimpleNamespace(
+        id="variation-id", price=None, sale_price=80, is_active=True, size_stocks=[]
+    )
     product = SimpleNamespace(
         base_price=100,
         total_stock=10,
@@ -24,6 +31,22 @@ def test_existing_variation_cart_row_uses_and_persists_current_sale_price():
     assert reprice_cart_item(cart_item) is True
     assert cart_item.price == 80
     assert calculate_cart_summary([cart_item]).subtotal == 160
+
+
+def test_coupon_subtotal_uses_current_variation_price():
+    variation = SimpleNamespace(
+        id="variation-id", price=100, sale_price=80, is_active=True, size_stocks=[]
+    )
+    product = SimpleNamespace(
+        base_price=100,
+        total_stock=10,
+        made_to_order=False,
+        variants=[],
+        variations=[variation],
+    )
+    cart_item = SimpleNamespace(product=product, variant_id="variation-id", price=100, quantity=1)
+
+    assert calculate_cart_subtotal([cart_item]) == 80
 
 
 @pytest.mark.asyncio
