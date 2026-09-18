@@ -12,6 +12,7 @@ from app.api.v1.cart import (
     calculate_cart_summary,
     reprice_cart_item,
     resolve_cart_item_price,
+    resolve_variant_response,
 )
 
 
@@ -68,6 +69,32 @@ def test_legacy_size_cart_row_keeps_legacy_price_when_size_variation_has_no_over
     )
 
     assert resolve_cart_item_price(cart_item) == 75
+
+
+def test_size_stock_cart_variant_inherits_sole_color_hex():
+    now = datetime.now(timezone.utc)
+    color = SimpleNamespace(
+        id="00000000-0000-4000-8000-000000000010",
+        title="Black", type="color", color_hex="#000000", price=None,
+        sale_price=None, is_active=True, size_stocks=[], created_at=now, updated_at=now,
+    )
+    size_stock = SimpleNamespace(
+        id="00000000-0000-4000-8000-000000000012", size="M", stock=1,
+    )
+    size = SimpleNamespace(
+        id="00000000-0000-4000-8000-000000000011",
+        title="M", type="size", color_hex=None, price=None, sale_price=None,
+        is_active=True, size_stocks=[size_stock], created_at=now, updated_at=now,
+    )
+    product = SimpleNamespace(
+        id="00000000-0000-4000-8000-000000000001", base_price=100,
+        variants=[], variations=[color, size],
+    )
+
+    response = resolve_variant_response(product, size_stock.id)
+
+    assert response.color == "Black"
+    assert response.color_hex == "#000000"
 
 
 def test_coupon_subtotal_uses_current_variation_price():

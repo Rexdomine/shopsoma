@@ -117,12 +117,20 @@ def resolve_variant_response(
                     if not is_color_variation_type(variation.type) and len(size_color_variations) == 1
                     else None if not is_color_variation_type(variation.type) else variation.title
                 )
+                size_color_hex = (
+                    size_color_variations[0].color_hex
+                    if not is_color_variation_type(variation.type)
+                    and len(size_color_variations) == 1
+                    else None
+                    if not is_color_variation_type(variation.type)
+                    else variation.color_hex
+                )
                 return ProductVariantResponse.model_validate({
                     "id": size_stock.id,
                     "product_id": product.id,
                     "size": getattr(size_stock.size, "value", str(size_stock.size)),
                     "color": size_color,
-                    "color_hex": variation.color_hex,
+                    "color_hex": size_color_hex,
                     "price": base_price,
                     "stock": size_stock.stock,
                     "sku": None,
