@@ -96,8 +96,8 @@ def resolve_variant_response(
             return ProductVariantResponse.model_validate({
                 "id": variation.id,
                 "product_id": product.id,
-                "size": variation.title if variation.type.casefold() == "size" else None,
-                "color": None if variation.type.casefold() == "size" else variation.title,
+                "size": variation.title if str(getattr(variation, "type", "color")).casefold() == "size" else None,
+                "color": None if str(getattr(variation, "type", "color")).casefold() == "size" else variation.title,
                 "color_hex": variation.color_hex,
                 "price": base_price,
                 "stock": 0,
@@ -112,19 +112,19 @@ def resolve_variant_response(
                 size_color_variations = [
                     candidate
                     for candidate in product.variations or []
-                    if is_color_variation_type(candidate.type) and candidate.is_active
+                    if is_color_variation_type(getattr(candidate, "type", "color")) and candidate.is_active
                 ]
                 size_color = (
                     size_color_variations[0].title
-                    if not is_color_variation_type(variation.type) and len(size_color_variations) == 1
-                    else None if not is_color_variation_type(variation.type) else variation.title
+                    if not is_color_variation_type(getattr(variation, "type", "color")) and len(size_color_variations) == 1
+                    else None if not is_color_variation_type(getattr(variation, "type", "color")) else variation.title
                 )
                 size_color_hex = (
                     size_color_variations[0].color_hex
-                    if not is_color_variation_type(variation.type)
+                    if not is_color_variation_type(getattr(variation, "type", "color"))
                     and len(size_color_variations) == 1
                     else None
-                    if not is_color_variation_type(variation.type)
+                    if not is_color_variation_type(getattr(variation, "type", "color"))
                     else variation.color_hex
                 )
                 return ProductVariantResponse.model_validate({

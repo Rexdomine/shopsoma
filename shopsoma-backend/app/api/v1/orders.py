@@ -358,16 +358,16 @@ async def resolve_order_variant(
                 "size": getattr(size_stock.size, "value", str(size_stock.size)),
                 "color": (
                     sole_color.title
-                    if variation.type.casefold() == "size" and sole_color is not None
+                    if str(getattr(variation, "type", "color")).casefold() == "size" and sole_color is not None
                     else None
-                    if variation.type.casefold() == "size"
+                    if str(getattr(variation, "type", "color")).casefold() == "size"
                     else variation.title
                 ),
                 "color_hex": (
                     sole_color.color_hex
-                    if variation.type.casefold() == "size" and sole_color is not None
+                    if str(getattr(variation, "type", "color")).casefold() == "size" and sole_color is not None
                     else None
-                    if variation.type.casefold() == "size"
+                    if str(getattr(variation, "type", "color")).casefold() == "size"
                     else variation.color_hex
                 ),
                 "size_stock_id": str(size_stock.id),
@@ -401,8 +401,8 @@ async def resolve_order_variant(
             "unit_price": unit_price,
             "stock": available_stock,
             "variant_details": {
-                "size": variation.title if variation.type.casefold() == "size" else None,
-                "color": None if variation.type.casefold() == "size" else variation.title,
+                "size": variation.title if str(getattr(variation, "type", "color")).casefold() == "size" else None,
+                "color": None if str(getattr(variation, "type", "color")).casefold() == "size" else variation.title,
                 "color_hex": variation.color_hex,
                 "variation_id": str(variation.id),
             },
