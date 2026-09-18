@@ -30,6 +30,8 @@ def unique_variations_by_color(variations: List["VariationResponse"]) -> dict[st
     indexed: dict[str, VariationResponse] = {}
     collisions: set[str] = set()
     for variation in variations:
+        if not variation.is_active:
+            continue
         key = normalize_color_value(variation.title)
         if not key or key in collisions:
             continue
