@@ -33,6 +33,26 @@ def is_color_variation_type(value: str) -> bool:
     return value.casefold() != "size"
 
 
+def variation_inventory_axis_signature(variations) -> tuple:
+    """Return a normalized signature for comparing persisted and submitted axes."""
+    signature = []
+    for variation in variations or []:
+        sizes = (
+            getattr(variation, "sizes", None)
+            if hasattr(variation, "sizes")
+            else getattr(variation, "size_stocks", None)
+        ) or []
+        signature.append(
+            (
+                normalize_color_value(getattr(variation, "title", None)),
+                normalize_color_value(getattr(variation, "type", None)),
+                bool(getattr(variation, "is_active", True)),
+                tuple(sorted(normalize_color_value(getattr(size, "size", None)) for size in sizes)),
+            )
+        )
+    return tuple(sorted(signature))
+
+
 def validate_variation_inventory_shape(
     variations: Optional[List["VariationCreate"]],
     variants: Optional[List["ProductVariantCreate"]] = None,

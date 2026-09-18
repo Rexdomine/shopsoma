@@ -386,7 +386,8 @@ async def resolve_order_variant(
 
     if variation:
         if product.variants or any(
-            getattr(candidate, "size_stocks", None)
+            candidate.is_active
+            and any(stock.stock > 0 for stock in (candidate.size_stocks or []))
             for candidate in product.variations or []
         ):
             raise HTTPException(

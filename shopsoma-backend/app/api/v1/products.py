@@ -32,6 +32,7 @@ from app.schemas.product import (
     ProductImageResponse,
     ProductModerationUpdate,
     validate_variation_inventory_shape,
+    variation_inventory_axis_signature,
 )
 
 router = APIRouter(prefix="/products", tags=["products"])
@@ -786,7 +787,11 @@ async def update_product(
     # ProductUpdate validates only the incoming variation payload. When an
     # existing product retains legacy variants, include those persisted rows in
     # the same invariant before replacing any variations.
-    if variations_data is not None:
+    if (
+        variations_data is not None
+        and variation_inventory_axis_signature(product_data.variations)
+        != variation_inventory_axis_signature(product.variations)
+    ):
         try:
             validate_variation_inventory_shape(product_data.variations, product.variants)
         except ValueError as exc:

@@ -11,6 +11,7 @@ from app.schemas.product import (
     VariationResponse,
     VariationCreate,
     validate_variation_inventory_shape,
+    variation_inventory_axis_signature,
 )
 
 
@@ -467,3 +468,22 @@ def test_inactive_duplicate_size_variation_labels_are_rejected_too():
         assert "Size variation labels must be unique" in str(exc)
     else:
         raise AssertionError("inactive duplicate size labels must not persist")
+
+
+def test_variation_inventory_axis_signature_normalizes_persisted_and_submitted_shapes():
+    submitted = [
+        VariationCreate.model_construct(
+            title=" Black ", type="COLOR", is_active=True,
+            sizes=[SimpleNamespace(size=" M ")],
+        )
+    ]
+    persisted = [
+        SimpleNamespace(
+            title="black", type="color", is_active=True,
+            size_stocks=[SimpleNamespace(size="m")],
+        )
+    ]
+
+    assert variation_inventory_axis_signature(submitted) == variation_inventory_axis_signature(
+        persisted
+    )
