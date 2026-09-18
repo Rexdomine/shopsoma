@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     APP_NAME: str = "Shopsoma"
     ENVIRONMENT: str = "development"
     DEBUG: bool = True
+    LOG_LEVEL: str = "INFO"
     API_V1_STR: str = "/api/v1"
 
     # Security Settings

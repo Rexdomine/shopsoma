@@ -886,27 +886,28 @@ export default function VendorProductAdd() {
         const variationPayload: NonNullable<CreateProductPayload['variations']> = [];
 
         detailedVariations.forEach((variation) => {
-          const variationRegularPrice = variation.price ? parseFloat(variation.price) : parsedProductPrice;
-          const variationSales = variation.salesPrice ? parseFloat(variation.salesPrice) : undefined;
-          const variationBasePrice =
-            variation.hasDifferentPricing && variationSales && variationSales > 0 && variationSales < variationRegularPrice
-              ? variationSales
-              : variation.hasDifferentPricing && variationRegularPrice > 0
-                ? variationRegularPrice
-                : basePrice;
-          const variationCompareAtPrice =
-            variation.hasDifferentPricing && variationSales && variationSales > 0 && variationSales < variationRegularPrice
-              ? variationRegularPrice
-              : undefined;
-
+          const customRegularPrice = variation.price ? parseFloat(variation.price) : undefined;
+          const customSalePrice = variation.salesPrice ? parseFloat(variation.salesPrice) : undefined;
+          const inheritedRegularPrice = compareAtPrice ?? parsedProductPrice;
+          const inheritedSalePrice = compareAtPrice ? basePrice : undefined;
+          const variationRegularPrice =
+            variation.hasDifferentPricing && customRegularPrice && customRegularPrice > 0
+              ? customRegularPrice
+              : inheritedRegularPrice;
+          const variationSalePrice = variation.hasDifferentPricing
+            ? customSalePrice && customSalePrice > 0 && customSalePrice < variationRegularPrice
+              ? customSalePrice
+              : undefined
+            : inheritedSalePrice;
+          const variationBasePrice = variationSalePrice ?? variationRegularPrice;
           if (variation.type === 'Color') {
             const colorStock = shouldTrackStock ? parseInt(variation.colorStock || '0', 10) || 0 : 0;
             variationPayload.push({
               title: variation.colorLabel,
               type: variation.colorMode,
               color_hex: variation.colorMode === 'solid' ? variation.colorHex || undefined : undefined,
-              price: variationBasePrice,
-              sale_price: variationCompareAtPrice,
+              price: variationRegularPrice,
+              sale_price: variationSalePrice,
               images: variation.images
                 .filter((image) => image.uploaded && image.imageUrl)
                 .map((image) => image.imageUrl!),

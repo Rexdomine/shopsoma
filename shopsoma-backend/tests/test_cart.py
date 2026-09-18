@@ -4,6 +4,68 @@ Unit tests for Cart API endpoints.
 import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
+from types import SimpleNamespace
+from datetime import datetime, timezone
+
+from app.api.v1.cart import (
+    calculate_cart_subtotal,
+    calculate_cart_summary,
+    reprice_cart_item,
+    resolve_cart_item_price,
+)
+
+
+def test_existing_variation_cart_row_uses_and_persists_current_sale_price():
+    variation = SimpleNamespace(
+        id="00000000-0000-4000-8000-000000000002",
+        title="Red",
+        color_hex="#ff0000",
+        price=None,
+        sale_price=80,
+        is_active=True,
+        size_stocks=[],
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    product = SimpleNamespace(
+        id="00000000-0000-4000-8000-000000000001",
+        base_price=100,
+        total_stock=10,
+        made_to_order=False,
+        variants=[],
+        variations=[variation],
+    )
+    cart_item = SimpleNamespace(product=product, variant_id="00000000-0000-4000-8000-000000000002", price=100, quantity=2)
+
+    assert resolve_cart_item_price(cart_item) == 80
+    assert reprice_cart_item(cart_item) is True
+    assert cart_item.price == 80
+    assert calculate_cart_summary([cart_item]).subtotal == 160
+
+
+def test_coupon_subtotal_uses_current_variation_price():
+    variation = SimpleNamespace(
+        id="00000000-0000-4000-8000-000000000002",
+        title="Red",
+        color_hex="#ff0000",
+        price=100,
+        sale_price=80,
+        is_active=True,
+        size_stocks=[],
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    product = SimpleNamespace(
+        id="00000000-0000-4000-8000-000000000001",
+        base_price=100,
+        total_stock=10,
+        made_to_order=False,
+        variants=[],
+        variations=[variation],
+    )
+    cart_item = SimpleNamespace(product=product, variant_id="00000000-0000-4000-8000-000000000002", price=100, quantity=1)
+
+    assert calculate_cart_subtotal([cart_item]) == 80
 
 
 @pytest.mark.asyncio
