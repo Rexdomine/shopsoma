@@ -42,6 +42,19 @@ def test_variation_sale_is_normalized_to_effective_variant_price():
     assert variant.compare_at_price == Decimal("100.00")
 
 
+def test_variation_sale_uses_product_fallback_as_regular_price():
+    product = _product_with_variation(
+        price=None,
+        sale_price=Decimal("80.00"),
+    )
+
+    product.generate_variants_from_variations()  # pyright: ignore[reportCallIssue]
+
+    variant = product.variants[0]
+    assert variant.price == Decimal("80.00")
+    assert variant.compare_at_price == Decimal("100.00")
+
+
 def test_null_or_invalid_variation_sale_does_not_override_regular_price():
     for sale_price in (None, Decimal("0.00"), Decimal("120.00")):
         product = _product_with_variation(

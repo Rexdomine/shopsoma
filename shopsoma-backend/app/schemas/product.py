@@ -15,12 +15,7 @@ def effective_variation_price(
 ) -> Decimal:
     """Return the effective purchasable price for a variation."""
     regular_price = price if price is not None else fallback
-    if (
-        price is not None
-        and sale_price is not None
-        and sale_price > 0
-        and sale_price < regular_price
-    ):
+    if sale_price is not None and sale_price > 0 and sale_price < regular_price:
         return sale_price
     return regular_price
 
@@ -442,11 +437,11 @@ class ProductResponse(ProductBase):
                 variant_price = effective_variation_price(
                     variation.price, variation.sale_price, self.base_price
                 )
-                has_valid_sale = (
-                    variation.price is not None
-                    and variant_price != variation.price
+                regular_price = (
+                    variation.price if variation.price is not None else self.base_price
                 )
-                compare_at_price = variation.price if has_valid_sale else None
+                has_valid_sale = variant_price < regular_price
+                compare_at_price = regular_price if has_valid_sale else None
 
                 # If variation has no size_stocks, create one variant with no size
                 if not variation.size_stocks:
