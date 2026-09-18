@@ -19,6 +19,8 @@ import type { Currency } from '../../store/currencyStore';
 type SizeOption = 'XXXL' | 'XXL' | 'XL' | 'L' | 'M' | 'S' | 'XS' | 'XXS' | '4' | '6' | '8' | '10' | '12' | '14' | '16' | '18' | '20' | '22' | '32' | '34' | '36' | '38' | '40' | '42' | '44' | '46' | '48' | '50';
 type SizingSystem = 'US Sizing' | 'UK Sizing' | 'EU Sizing';
 type VariationMode = 'Size' | 'Color';
+
+const SIZE_STOCK_OPTIONS = new Set<SizeOption>(['XXXL', 'XXL', 'XL', 'L', 'M', 'S', 'XS', 'XXS']);
 type ColorMode = 'solid' | 'multi' | 'none';
 
 interface ProductImage {
@@ -936,7 +938,7 @@ export default function VendorProductAdd() {
                   .filter((image) => image.uploaded && image.imageUrl)
                   .map((image) => image.imageUrl!),
                 is_active: true,
-                sizes: [{ size, stock: sizeStock }],
+                sizes: SIZE_STOCK_OPTIONS.has(size) ? [{ size, stock: sizeStock }] : [],
               });
             }
             variantPayload.push({

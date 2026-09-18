@@ -95,6 +95,33 @@ class TestProductCreate:
         assert data["variants"][1]["size"] == "L"
 
     @pytest.mark.asyncio
+    async def test_create_product_with_numeric_size_variation(self, client: AsyncClient, vendor_user):
+        """Numeric UK/EU sizes remain creatable without invalid size-stock enum rows."""
+        response = await client.post(
+            "/api/v1/products",
+            json={
+                "title": "Numeric Size Dress",
+                "base_price": 85.00,
+                "variants": [{"size": "4", "price": 85.00, "stock": 10}],
+                "variations": [
+                    {
+                        "title": "4",
+                        "type": "size",
+                        "price": 85.00,
+                        "sizes": [],
+                    }
+                ],
+            },
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 201
+        data = response.json()
+        assert data["variants"][0]["size"] == "4"
+        assert data["variations"][0]["title"] == "4"
+        assert data["variations"][0]["size_stocks"] == []
+
+    @pytest.mark.asyncio
     async def test_create_product_with_images(self, client: AsyncClient, vendor_user):
         """Test product creation with images"""
         product_data = {
