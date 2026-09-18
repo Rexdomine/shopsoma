@@ -324,6 +324,7 @@ async def resolve_order_variant(
                 "size": variant.size,
                 "color": variant.color,
                 "color_hex": variant.color_hex,
+                "variation_id": str(matching_variation.id) if matching_variation else None,
             },
             "stock_source": "product_variant",
             "stock_id": variant.id,

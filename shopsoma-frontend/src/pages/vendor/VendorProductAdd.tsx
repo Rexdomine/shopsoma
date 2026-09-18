@@ -927,6 +927,8 @@ export default function VendorProductAdd() {
               color_hex: variation.colorMode === 'solid' ? variation.colorHex || undefined : undefined,
               price: variationRegularPrice,
               sale_price: variationSalePrice,
+              inherits_price: !variation.hasDifferentPricing,
+              inherits_sale_price: !variation.hasDifferentPricing,
               images: variation.images
                 .filter((image) => image.uploaded && image.imageUrl)
                 .map((image) => image.imageUrl!),
@@ -951,6 +953,8 @@ export default function VendorProductAdd() {
                 type: 'size',
                 price: variationRegularPrice,
                 sale_price: variationSalePrice,
+                inherits_price: !variation.hasDifferentPricing,
+                inherits_sale_price: !variation.hasDifferentPricing,
                 images: variation.images
                   .filter((image) => image.uploaded && image.imageUrl)
                   .map((image) => image.imageUrl!),

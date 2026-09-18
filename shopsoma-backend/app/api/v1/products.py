@@ -33,9 +33,27 @@ from app.schemas.product import (
     ProductModerationUpdate,
     validate_variation_inventory_shape,
     variation_inventory_axis_signature,
+    normalize_color_value,
+    unique_variations_by_color,
+    unique_variations_by_size,
 )
 
 router = APIRouter(prefix="/products", tags=["products"])
+
+def _variation_inherits_parent_price(
+    variation: Variation,
+    marker_name: str,
+    persisted_value: Any,
+    legacy_parent_value: Any,
+    null_value_inherits: bool = True,
+) -> bool:
+    marker = getattr(variation, marker_name, None)
+    if marker is not None:
+        return marker
+    if persisted_value is None:
+        return null_value_inherits
+    return persisted_value == legacy_parent_value
+
 
 PRODUCT_RELATIONSHIPS = (
     selectinload(Product.variants),
@@ -239,6 +257,8 @@ async def create_product(
                 color_hex=variation_data.color_hex,
                 price=variation_data.price,
                 sale_price=variation_data.sale_price,
+                inherits_price=variation_data.inherits_price,
+                inherits_sale_price=variation_data.inherits_sale_price,
                 images=variation_data.images,
                 is_active=variation_data.is_active,
             )
@@ -556,6 +576,11 @@ async def bulk_upload_variable_products(
                 color_hex=variation_data["color_hex"],
                 price=variation_data["price"],
                 sale_price=variation_data["sale_price"],
+                inherits_price=variation_data["price"] is None,
+                inherits_sale_price=(
+                    variation_data["sale_price"] is None
+                    and variation_data["price"] is None
+                ),
                 images=[],
                 is_active=True,
             )
@@ -781,8 +806,13 @@ async def update_product(
     # Update fields
     update_data = product_data.model_dump(exclude_unset=True)
 
+    old_base_price = product.base_price
+    old_compare_at_price = product.compare_at_price
+    inherited_price_update = "base_price" in update_data or "compare_at_price" in update_data
+
     # Handle variations separately for sync logic
     variations_data = update_data.pop("variations", None)
+    variations_to_sync = product.variations
 
     # ProductUpdate validates only the incoming variation payload. When an
     # existing product retains legacy variants, include those persisted rows in
@@ -816,6 +846,7 @@ async def update_product(
 
     # Sync variations if provided
     if variations_data is not None:
+        variations_to_sync = []
         # Delete all existing variations (cascade will delete size_stocks)
         await db.execute(
             select(Variation).where(Variation.product_id == product_id)
@@ -825,18 +856,36 @@ async def update_product(
 
         # Create new variations
         for variation_data in variations_data:
+            inherits_price = variation_data.get("inherits_price")
+            inherits_sale_price = variation_data.get("inherits_sale_price")
+            variation_price = variation_data.get("price")
+            variation_sale_price = variation_data.get("sale_price")
+            if inherited_price_update and inherits_price is True:
+                variation_price = product.compare_at_price
+            if inherited_price_update and inherits_sale_price is True:
+                variation_sale_price = product.base_price if product.compare_at_price is not None else None
             variation = Variation(
                 product_id=product.id,
                 title=variation_data["title"],
                 type=variation_data.get("type", "color"),
                 color_hex=variation_data.get("color_hex"),
-                price=variation_data.get("price"),
-                sale_price=variation_data.get("sale_price"),
+                price=variation_price,
+                sale_price=variation_sale_price,
+                inherits_price=inherits_price,
+                inherits_sale_price=inherits_sale_price,
                 images=variation_data.get("images", []),
                 is_active=variation_data.get("is_active", True),
             )
             db.add(variation)
             await db.flush()  # Get variation ID
+            if inherited_price_update:
+                if variation.inherits_price is True:
+                    variation.price = product.compare_at_price
+                if variation.inherits_sale_price is True:
+                    variation.sale_price = (
+                        product.base_price if product.compare_at_price is not None else None
+                    )
+            variations_to_sync.append(variation)
 
             # Add size stocks for this variation
             if "sizes" in variation_data:
@@ -855,13 +904,66 @@ async def update_product(
     if any(field in update_data for field in ["total_stock", "made_to_order"]):
         _sync_single_product_variant_inventory(product)
 
+    if inherited_price_update:
+        new_base_price = product.base_price
+        new_compare_at_price = product.compare_at_price
+        for variation in variations_to_sync:
+            legacy_regular_price = old_compare_at_price or old_base_price
+            inherits_regular_price = _variation_inherits_parent_price(
+                variation,
+                "inherits_price",
+                variation.price,
+                legacy_regular_price,
+            )
+            inherits_sale_price = _variation_inherits_parent_price(
+                variation,
+                "inherits_sale_price",
+                variation.sale_price,
+                old_base_price,
+                null_value_inherits=inherits_regular_price,
+            )
+            if getattr(variation, "inherits_sale_price", None) is None:
+                inherits_sale_price = inherits_regular_price and inherits_sale_price
+            if getattr(variation, "inherits_price", None) is None:
+                variation.inherits_price = inherits_regular_price
+            if getattr(variation, "inherits_sale_price", None) is None:
+                variation.inherits_sale_price = inherits_sale_price
+            if inherits_regular_price:
+                variation.price = new_compare_at_price
+            if inherits_sale_price:
+                variation.sale_price = new_base_price if new_compare_at_price is not None else None
+
+            if inherits_regular_price or inherits_sale_price:
+                variation_type = str(getattr(variation, "type", "color")).casefold()
+                variation_title = normalize_color_value(variation.title)
+                variation_index = (
+                    unique_variations_by_size(variations_to_sync or [])
+                    if variation_type == "size"
+                    else unique_variations_by_color(variations_to_sync or [])
+                )
+                if variation_index.get(variation_title) is not variation:
+                    continue
+                for legacy_variant in product.variants or []:
+                    legacy_value = (
+                        legacy_variant.size
+                        if variation_type == "size"
+                        else legacy_variant.color
+                    )
+                    if normalize_color_value(legacy_value) == variation_title:
+                        # Legacy variants store the effective purchase price,
+                        # so they must retain the parent base price when an
+                        # inherited compare-at price is removed.
+                        legacy_variant.price = new_base_price
+
     await db.commit()
 
-    # Reload with relationships to avoid lazy loading issues
+    # Reload with relationships to avoid lazy loading issues and stale
+    # relationship collections after delete/recreate synchronization.
     result = await db.execute(
         select(Product)
         .options(*PRODUCT_RELATIONSHIPS)
         .where(Product.id == product_id)
+        .execution_options(populate_existing=True)
     )
     product = result.scalar_one()
 

@@ -4,6 +4,7 @@ from uuid import uuid4
 from types import SimpleNamespace
 import pytest
 
+from app.api.v1.products import _variation_inherits_parent_price
 from app.schemas.product import (
     ProductResponse,
     ProductUpdate,
@@ -16,6 +17,76 @@ from app.schemas.product import (
     variation_inventory_axis_signature,
 )
 
+def test_variation_inheritance_markers_preserve_equal_explicit_overrides():
+    inherited = VariationCreate(
+        title="Inherited",
+        price=Decimal("100.00"),
+        sale_price=Decimal("80.00"),
+        inherits_price=True,
+        inherits_sale_price=True,
+    )
+    explicit = VariationCreate(
+        title="Explicit",
+        price=Decimal("100.00"),
+        sale_price=Decimal("80.00"),
+        inherits_price=False,
+        inherits_sale_price=False,
+    )
+
+    assert inherited.inherits_price is True
+    assert inherited.inherits_sale_price is True
+    assert explicit.inherits_price is False
+    assert explicit.inherits_sale_price is False
+
+
+def test_variation_inheritance_marker_descriptions_match_price_dimensions():
+    assert VariationCreate.model_fields["inherits_price"].description == (
+        "Whether price follows the product compare-at price"
+    )
+    assert VariationCreate.model_fields["inherits_sale_price"].description == (
+        "Whether sale price follows the product base price"
+    )
+
+
+
+
+def test_inheritance_marker_wins_over_equal_legacy_price_values():
+    inherited = SimpleNamespace(
+        price=Decimal("100.00"),
+        inherits_price=True,
+    )
+    explicit = SimpleNamespace(
+        price=Decimal("100.00"),
+        inherits_price=False,
+    )
+
+    assert _variation_inherits_parent_price(
+        inherited, "inherits_price", inherited.price, Decimal("100.00")
+    ) is True
+    assert _variation_inherits_parent_price(
+        explicit, "inherits_price", explicit.price, Decimal("100.00")
+    ) is False
+
+
+def test_legacy_null_price_is_treated_as_inherited_without_a_marker():
+    legacy = SimpleNamespace(price=None, inherits_price=None)
+
+    assert _variation_inherits_parent_price(
+        legacy, "inherits_price", legacy.price, Decimal("100.00")
+    ) is True
+
+
+def test_legacy_null_sale_is_custom_when_regular_price_is_custom():
+    legacy = SimpleNamespace(sale_price=None, inherits_sale_price=None)
+
+    assert _variation_inherits_parent_price(
+        legacy,
+        "inherits_sale_price",
+        legacy.sale_price,
+        Decimal("100.00"),
+        null_value_inherits=False,
+    ) is False
+
 
 def _product_with_variation(*, price: Decimal | None, sale_price: Decimal | None):
     now = datetime.now(timezone.utc)
@@ -27,6 +98,8 @@ def _product_with_variation(*, price: Decimal | None, sale_price: Decimal | None
         color_hex=None,
         price=price,
         sale_price=sale_price,
+        inherits_price=None,
+        inherits_sale_price=None,
         images=[],
         is_active=True,
         created_at=now,

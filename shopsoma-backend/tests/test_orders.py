@@ -12,6 +12,37 @@ from app.api.v1.orders import resolve_order_variant
 
 
 @pytest.mark.asyncio
+async def test_legacy_numeric_variant_order_metadata_includes_matching_size_variation():
+    """Legacy numeric size rows retain variation identity for image resolution."""
+    from types import SimpleNamespace
+
+    variant = SimpleNamespace(
+        id="variant-id", product_id="product-id", size="4", color=None,
+        color_hex=None, price=80, stock=1,
+    )
+    variation = SimpleNamespace(
+        id="variation-id", title="4", type="size", price=100,
+        sale_price=80, is_active=True,
+    )
+    product = SimpleNamespace(
+        id="product-id", base_price=200, total_stock=1, made_to_order=False,
+        variants=[variant], variations=[variation],
+    )
+
+    class Result:
+        def scalar_one_or_none(self):
+            return variant
+
+    class FakeDB:
+        async def execute(self, _query):
+            return Result()
+
+    resolved = await resolve_order_variant(FakeDB(), product, "variant-id")
+
+    assert resolved["variant_details"]["variation_id"] == "variation-id"
+
+
+@pytest.mark.asyncio
 async def test_bare_size_variation_order_snapshot_uses_size_axis():
     now = datetime.now(timezone.utc)
     variation = SimpleNamespace(

@@ -819,6 +819,122 @@ class TestProductUpdate:
         assert float(data["base_price"]) == update_data["base_price"]
 
     @pytest.mark.asyncio
+    async def test_update_parent_price_syncs_replacement_inherited_variations(
+        self,
+        client: AsyncClient,
+        vendor_user,
+    ):
+        """Combined parent/variation updates must sync the replacement rows."""
+        create_response = await client.post(
+            "/api/v1/products",
+            json={
+                "title": "Replacement Variation Pricing",
+                "base_price": 100.00,
+                "compare_at_price": 120.00,
+                "product_type": "variable",
+                "variations": [
+                    {
+                        "title": "Red",
+                        "type": "color",
+                        "price": 120.00,
+                        "sale_price": 100.00,
+                        "inherits_price": True,
+                        "inherits_sale_price": True,
+                    }
+                ],
+            },
+            headers=vendor_user["headers"],
+        )
+        assert create_response.status_code == 201
+        product_id = create_response.json()["id"]
+
+        update_response = await client.put(
+            f"/api/v1/products/{product_id}",
+            json={
+                "base_price": 150.00,
+                "compare_at_price": 180.00,
+                "variations": [
+                    {
+                        "title": "Red",
+                        "type": "color",
+                        "price": 120.00,
+                        "sale_price": 100.00,
+                        "inherits_price": True,
+                        "inherits_sale_price": True,
+                    }
+                ],
+            },
+            headers=vendor_user["headers"],
+        )
+
+        assert update_response.status_code == 200
+        updated_variation = update_response.json()["variations"][0]
+        assert float(updated_variation["price"]) == 180.00
+        assert float(updated_variation["sale_price"]) == 150.00
+
+    @pytest.mark.asyncio
+    async def test_update_parent_price_persists_legacy_custom_inheritance_decision(
+        self,
+        client: AsyncClient,
+        vendor_user,
+    ):
+        """Legacy custom pricing must not be reclassified on a later parent edit."""
+        create_response = await client.post(
+            "/api/v1/products",
+            json={
+                "title": "Legacy Custom Pricing",
+                "base_price": 100.00,
+                "compare_at_price": 120.00,
+                "product_type": "variable",
+                "variations": [
+                    {
+                        "title": "Red",
+                        "type": "color",
+                        "price": 150.00,
+                        "sale_price": None,
+                    },
+                    {
+                        "title": "Blue",
+                        "type": "color",
+                        "price": 150.00,
+                        "sale_price": 100.00,
+                    },
+                ],
+            },
+            headers=vendor_user["headers"],
+        )
+        assert create_response.status_code == 201
+        product_id = create_response.json()["id"]
+
+        first_update = await client.put(
+            f"/api/v1/products/{product_id}",
+            json={"base_price": 150.00, "compare_at_price": 180.00},
+            headers=vendor_user["headers"],
+        )
+        assert first_update.status_code == 200
+        first_variations = {item["title"]: item for item in first_update.json()["variations"]}
+        assert float(first_variations["Red"]["price"]) == 150.00
+        assert first_variations["Red"]["sale_price"] is None
+        assert first_variations["Red"]["inherits_price"] is False
+        assert first_variations["Red"]["inherits_sale_price"] is False
+        assert float(first_variations["Blue"]["price"]) == 150.00
+        assert float(first_variations["Blue"]["sale_price"]) == 100.00
+        assert first_variations["Blue"]["inherits_price"] is False
+        assert first_variations["Blue"]["inherits_sale_price"] is False
+
+        second_update = await client.put(
+            f"/api/v1/products/{product_id}",
+            json={"base_price": 160.00, "compare_at_price": 190.00},
+            headers=vendor_user["headers"],
+        )
+        assert second_update.status_code == 200
+        second_variations = {item["title"]: item for item in second_update.json()["variations"]}
+        assert float(second_variations["Red"]["price"]) == 150.00
+        assert second_variations["Red"]["sale_price"] is None
+        assert float(second_variations["Blue"]["price"]) == 150.00
+        assert float(second_variations["Blue"]["sale_price"]) == 100.00
+
+    @pytest.mark.asyncio
     async def test_update_single_product_stock_syncs_legacy_variant_stock(
         self,
         client: AsyncClient,

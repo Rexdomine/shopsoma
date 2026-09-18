@@ -313,7 +313,9 @@ class Variation(Base):
     price = Column(Numeric(10, 2), nullable=True)  # if null → use product.base_price
     sale_price = Column(
         Numeric(10, 2), nullable=True
-    )  # if null → use product.base_sale_price
+    )  # if null → use product.compare_at_price
+    inherits_price = Column(Boolean, nullable=True)
+    inherits_sale_price = Column(Boolean, nullable=True)
 
     # Images for this variation (stored as JSON array)
     images = Column(JSONB, nullable=True, default=list)  # ["url1", "url2", ...]

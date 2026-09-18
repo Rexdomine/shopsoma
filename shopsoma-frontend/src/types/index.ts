@@ -143,6 +143,8 @@ export interface Variation {
   color_hex?: string;
   price?: number;
   sale_price?: number;
+  inherits_price?: boolean;
+  inherits_sale_price?: boolean;
   images: string[];
   is_active?: boolean;
   size_stocks: SizeStock[];
