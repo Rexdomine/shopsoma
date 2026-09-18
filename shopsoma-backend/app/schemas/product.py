@@ -80,6 +80,28 @@ def validate_variation_inventory_shape(
     ]
 
     legacy_variants = list(variants or [])
+    legacy_size_labels = {
+        normalize_color_value(variant.size)
+        for variant in legacy_variants
+        if getattr(variant, "size", None) is not None
+    }
+    bare_size_labels = {
+        normalize_color_value(variation.title)
+        for variation in active_variations
+        if variation.type.casefold() == "size"
+        and not (
+            (
+                getattr(variation, "sizes", None)
+                if getattr(variation, "sizes", None) is not None
+                else getattr(variation, "size_stocks", [])
+            )
+            or []
+        )
+    }
+    if legacy_size_labels and bare_size_labels and legacy_size_labels != bare_size_labels:
+        raise ValueError(
+            "Bare size variations must match legacy size inventory labels exactly"
+        )
     legacy_color_variants = [
         variant for variant in legacy_variants if getattr(variant, "color", None) is not None
     ]

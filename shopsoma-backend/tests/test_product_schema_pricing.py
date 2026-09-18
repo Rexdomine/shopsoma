@@ -475,6 +475,20 @@ def test_size_variation_labels_must_be_unique_after_normalization():
         raise AssertionError("duplicate normalized size labels must be rejected")
 
 
+def test_unmatched_bare_size_and_legacy_inventory_is_rejected():
+    variations = [
+        VariationCreate.model_construct(title="M", type="size", is_active=True, sizes=[]),
+    ]
+    legacy_variant = ProductVariantCreate.model_construct(size="L", color=None)
+
+    try:
+        validate_variation_inventory_shape(variations, [legacy_variant])
+    except ValueError as exc:
+        assert "match legacy size inventory labels" in str(exc)
+    else:
+        raise AssertionError("unmatched mixed size inventory must be rejected")
+
+
 def test_inactive_duplicate_size_variation_labels_are_rejected_too():
     variations = [
         VariationCreate.model_construct(title="M", type="size", is_active=False, sizes=[]),
