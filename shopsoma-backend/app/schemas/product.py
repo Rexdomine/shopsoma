@@ -489,6 +489,49 @@ class ProductResponse(ProductBase):
                     variant.compare_at_price = (
                         regular_price if variant_price < regular_price else None
                     )
+
+                existing_sizes = {
+                    normalize_color_value(variant.size)
+                    for variant in self.variants
+                    if variant.size is not None
+                }
+                for variation in self.variations:
+                    if variation.type.casefold() != "size":
+                        continue
+                    variant_price = effective_variation_price(
+                        variation.price, variation.sale_price, self.base_price
+                    )
+                    regular_price = (
+                        variation.price if variation.price is not None else self.base_price
+                    )
+                    compare_at_price = (
+                        regular_price if variant_price < regular_price else None
+                    )
+                    for size_stock in variation.size_stocks or []:
+                        size = getattr(size_stock.size, "value", str(size_stock.size))
+                        normalized_size = normalize_color_value(size)
+                        if normalized_size in existing_sizes:
+                            continue
+                        self.variants.append(
+                            ProductVariantResponse.model_validate(
+                                {
+                                    "id": size_stock.id,
+                                    "product_id": self.id,
+                                    "size": size,
+                                    "color": None,
+                                    "color_hex": None,
+                                    "price": variant_price,
+                                    "compare_at_price": compare_at_price,
+                                    "stock": size_stock.stock,
+                                    "sku": None,
+                                    "is_available": bool(variation.is_active)
+                                    and size_stock.stock > 0,
+                                    "created_at": variation.created_at,
+                                    "updated_at": variation.updated_at,
+                                }
+                            )
+                        )
+                        existing_sizes.add(normalized_size)
             return self
 
         # If product has variations (vendor-created), generate variants
@@ -515,7 +558,7 @@ class ProductResponse(ProductBase):
                         "id": variation.id,
                         "product_id": self.id,
                         "size": None,
-                        "color": variation.title,  # Use 'title' field which contains the color name
+                        "color": None if variation.type.casefold() == "size" else variation.title,
                         "color_hex": variation.color_hex,
                         "price": variant_price,
                         "compare_at_price": compare_at_price,
@@ -533,7 +576,7 @@ class ProductResponse(ProductBase):
                             "id": size_stock.id,
                             "product_id": self.id,
                             "size": size_stock.size,
-                            "color": variation.title,  # Use 'title' field which contains the color name
+                            "color": None if variation.type.casefold() == "size" else variation.title,
                             "color_hex": variation.color_hex,
                             "price": variant_price,
                             "compare_at_price": compare_at_price,

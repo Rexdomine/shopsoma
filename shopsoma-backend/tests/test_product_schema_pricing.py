@@ -2,7 +2,12 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from uuid import uuid4
 
-from app.schemas.product import ProductResponse, ProductVariantResponse, VariationResponse
+from app.schemas.product import (
+    ProductResponse,
+    ProductVariantResponse,
+    SizeStockResponse,
+    VariationResponse,
+)
 
 
 def _product_with_variation(*, price: Decimal | None, sale_price: Decimal | None):
@@ -229,3 +234,55 @@ def test_null_or_invalid_variation_sale_does_not_override_regular_price():
         variant = product.variants[0]
         assert variant.price == Decimal("100.00")
         assert variant.compare_at_price is None
+
+
+def test_mixed_legacy_and_size_stock_variants_expose_each_inventory_source_once():
+    now = datetime.now(timezone.utc)
+    product_id = uuid4()
+    variation = VariationResponse.model_construct(
+        id=uuid4(), product_id=product_id, title="M", type="size", color_hex=None,
+        price=Decimal("100.00"), sale_price=Decimal("80.00"), images=[], is_active=True,
+        created_at=now, updated_at=now,
+        size_stocks=[SizeStockResponse.model_construct(
+            id=uuid4(), variation_id=uuid4(), size="M", stock=3,
+            created_at=now, updated_at=now,
+        )],
+    )
+    color_variant = ProductVariantResponse.model_construct(
+        id=uuid4(), product_id=product_id, size=None, color="Black", color_hex="#000000",
+        price=Decimal("80.00"), compare_at_price=None, stock=2, sku=None,
+        is_available=True, created_at=now, updated_at=now,
+    )
+    product = ProductResponse.model_construct(
+        id=product_id, base_price=Decimal("200.00"), variants=[color_variant],
+        variations=[variation],
+    )
+
+    product.generate_variants_from_variations()  # pyright: ignore[reportCallIssue]
+
+    assert [(variant.size, variant.color, variant.stock) for variant in product.variants] == [
+        (None, "Black", 2),
+        ("M", None, 3),
+    ]
+
+
+def test_generated_size_stock_variant_does_not_populate_color_selector():
+    now = datetime.now(timezone.utc)
+    variation = VariationResponse.model_construct(
+        id=uuid4(), product_id=uuid4(), title="M", type="size", color_hex=None,
+        price=Decimal("100.00"), sale_price=None, images=[], is_active=True,
+        created_at=now, updated_at=now,
+        size_stocks=[SizeStockResponse.model_construct(
+            id=uuid4(), variation_id=uuid4(), size="M", stock=3,
+            created_at=now, updated_at=now,
+        )],
+    )
+    product = ProductResponse.model_construct(
+        id=variation.product_id, base_price=Decimal("200.00"), variants=[],
+        variations=[variation],
+    )
+
+    product.generate_variants_from_variations()  # pyright: ignore[reportCallIssue]
+
+    assert product.variants[0].size == "M"
+    assert product.variants[0].color is None
