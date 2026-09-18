@@ -151,6 +151,49 @@ class TestProductCreate:
         assert data["variations"][0]["size_stocks"][0]["size"] == "M"
 
     @pytest.mark.asyncio
+    async def test_create_product_rejects_multiple_colors_with_sizes(
+        self, client: AsyncClient, vendor_user
+    ):
+        """Do not expose independent color-only and size-only stock sources."""
+        response = await client.post(
+            "/api/v1/products",
+            json={
+                "title": "Ambiguous Color Size Dress",
+                "base_price": 85.00,
+                "variations": [
+                    {"title": "Red", "type": "solid", "sizes": []},
+                    {"title": "Blue", "type": "solid", "sizes": []},
+                    {"title": "M", "type": "size", "sizes": [{"size": "M", "stock": 10}]},
+                ],
+            },
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 422
+        assert "Multiple colors" in response.json()["detail"][0]["msg"]
+
+    @pytest.mark.asyncio
+    async def test_create_product_rejects_color_with_numeric_size(
+        self, client: AsyncClient, vendor_user
+    ):
+        """Numeric sizes remain valid, but not as an unpurchasable color-size split."""
+        response = await client.post(
+            "/api/v1/products",
+            json={
+                "title": "Ambiguous Numeric Color Dress",
+                "base_price": 85.00,
+                "variations": [
+                    {"title": "Red", "type": "solid", "sizes": []},
+                    {"title": "4", "type": "size", "sizes": []},
+                ],
+            },
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 422
+        assert "Numeric UK/EU sizes" in response.json()["detail"][0]["msg"]
+
+    @pytest.mark.asyncio
     async def test_create_product_with_images(self, client: AsyncClient, vendor_user):
         """Test product creation with images"""
         product_data = {

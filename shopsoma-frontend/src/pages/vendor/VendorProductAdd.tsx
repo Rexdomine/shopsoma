@@ -760,6 +760,32 @@ export default function VendorProductAdd() {
       return;
     }
 
+    const activeColorVariations = detailedVariations.filter(
+      (variation) => variation.type === 'Color'
+    );
+    const activeSizeVariations = detailedVariations.filter(
+      (variation) => variation.type === 'Size'
+    );
+    if (activeColorVariations.length > 1 && activeSizeVariations.length > 0) {
+      warning(
+        'Multiple colors cannot be combined with sizes yet. Use one color or create explicit variants.',
+        'Unsupported variation combination'
+      );
+      return;
+    }
+    if (
+      activeColorVariations.length > 0 &&
+      activeSizeVariations.some((variation) =>
+        variation.selectedSizes.some((size) => !SIZE_STOCK_OPTIONS.has(size))
+      )
+    ) {
+      warning(
+        'Numeric UK/EU sizes cannot be combined with a color. Create numeric sizes without a color.',
+        'Unsupported variation combination'
+      );
+      return;
+    }
+
     if (!primaryCategoryId) {
       warning('Primary category is required', 'Missing info');
       return;
