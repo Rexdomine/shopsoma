@@ -781,6 +781,10 @@ async def update_product(
     # Update fields
     update_data = product_data.model_dump(exclude_unset=True)
 
+    old_base_price = product.base_price
+    old_compare_at_price = product.compare_at_price
+    inherited_price_update = "base_price" in update_data or "compare_at_price" in update_data
+
     # Handle variations separately for sync logic
     variations_data = update_data.pop("variations", None)
 
@@ -854,6 +858,15 @@ async def update_product(
 
     if any(field in update_data for field in ["total_stock", "made_to_order"]):
         _sync_single_product_variant_inventory(product)
+
+    if inherited_price_update:
+        new_base_price = product.base_price
+        new_compare_at_price = product.compare_at_price
+        for variation in product.variations:
+            if variation.price == old_base_price:
+                variation.price = new_base_price
+            if variation.sale_price == old_compare_at_price:
+                variation.sale_price = new_compare_at_price
 
     await db.commit()
 
