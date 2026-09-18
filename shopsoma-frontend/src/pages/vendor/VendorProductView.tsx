@@ -326,24 +326,29 @@ export default function VendorProductView() {
                                 <p className="text-sm text-gray-600 mt-1">Type: {variation.type}</p>
                               )}
                             </div>
-                            {variation.price && (
-                              <div className="text-right">
-                                {variation.sale_price != null && variation.sale_price > 0 && variation.sale_price < variation.price ? (
-                                  <>
+                            {(() => {
+                              const regularPrice = variation.price ?? product.base_price;
+                              if (!regularPrice) return null;
+
+                              return (
+                                <div className="text-right">
+                                  {variation.sale_price != null && variation.sale_price > 0 && variation.sale_price < regularPrice ? (
+                                    <>
+                                      <div className="text-lg font-semibold text-gray-900">
+                                        {formatDisplayPrice(variation.sale_price)}
+                                      </div>
+                                      <div className="text-sm text-gray-500 line-through">
+                                        {formatDisplayPrice(regularPrice)}
+                                      </div>
+                                    </>
+                                  ) : (
                                     <div className="text-lg font-semibold text-gray-900">
-                                      {formatDisplayPrice(variation.sale_price)}
+                                      {formatDisplayPrice(regularPrice)}
                                     </div>
-                                    <div className="text-sm text-gray-500 line-through">
-                                      {formatDisplayPrice(variation.price)}
-                                    </div>
-                                  </>
-                                ) : (
-                                  <div className="text-lg font-semibold text-gray-900">
-                                    {formatDisplayPrice(variation.price)}
-                                  </div>
-                                )}
-                              </div>
-                            )}
+                                  )}
+                                </div>
+                              );
+                            })()}
                           </div>
 
                           {/* Size Stocks */}

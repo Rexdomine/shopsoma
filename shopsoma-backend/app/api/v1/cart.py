@@ -152,11 +152,33 @@ def cast_uuid(value: Optional[str]) -> Optional[uuid.UUID]:
         return None
 
 
+def resolve_cart_item_price(cart_item: CartItem) -> float:
+    """Return the current purchasable price, falling back to the stored price."""
+    product = cart_item.product
+    purchase_option = resolve_cart_purchase_option(
+        product,
+        str(cart_item.variant_id) if cart_item.variant_id else None,
+    )
+    if purchase_option:
+        return float(purchase_option["price"])
+    return float(cart_item.price)
+
+
+def reprice_cart_item(cart_item: CartItem) -> bool:
+    """Refresh a persisted cart row when its product price has changed."""
+    current_price = resolve_cart_item_price(cart_item)
+    if float(cart_item.price) == current_price:
+        return False
+    cart_item.price = current_price
+    return True
+
+
 def serialize_cart_item(cart_item: CartItem) -> CartItemResponse:
     product = cart_item.product
     variant_id = str(cart_item.variant_id) if cart_item.variant_id else None
     variant_response = resolve_variant_response(product, variant_id) if variant_id else None
     product_response = ProductResponse.model_validate(product) if product else None
+    price = resolve_cart_item_price(cart_item)
 
     return CartItemResponse(
         id=str(cart_item.id),
@@ -165,8 +187,8 @@ def serialize_cart_item(cart_item: CartItem) -> CartItemResponse:
         quantity=cart_item.quantity,
         user_id=str(cart_item.user_id) if cart_item.user_id else None,
         session_id=cart_item.session_id,
-        price=cart_item.price,
-        subtotal=cart_item.price * cart_item.quantity,
+        price=price,
+        subtotal=price * cart_item.quantity,
         created_at=cart_item.created_at,
         updated_at=cart_item.updated_at,
         product=product_response,
@@ -176,7 +198,7 @@ def serialize_cart_item(cart_item: CartItem) -> CartItemResponse:
 
 def calculate_cart_summary(items: list[CartItem], discount: float = 0) -> CartSummary:
     """Calculate cart summary with tax and shipping"""
-    subtotal = sum(item.price * item.quantity for item in items)
+    subtotal = sum(resolve_cart_item_price(item) * item.quantity for item in items)
 
     # Calculate shipping
     shipping = 0 if subtotal >= FREE_SHIPPING_THRESHOLD else SHIPPING_FEE
@@ -252,6 +274,12 @@ async def get_cart(
     result = await db.execute(query)
     items = result.scalars().all()
     print(f"[Cart API] get_cart user={user_uuid} session={sess_id} items={len(items)}")
+
+    changed = False
+    for item in items:
+        changed = reprice_cart_item(item) or changed
+    if changed:
+        await db.commit()
 
     summary = calculate_cart_summary(items)
 
@@ -331,6 +359,7 @@ async def add_to_cart(
         if existing_item:
             # Update quantity
             existing_item.quantity = requested_quantity
+            existing_item.price = price
             existing_item.updated_at = datetime.utcnow()
             await db.commit()
             refreshed_item = await fetch_cart_item_with_relations(db, str(existing_item.id))
@@ -428,6 +457,7 @@ async def update_cart_item(
                 )
 
         cart_item.quantity = update_data.quantity
+        cart_item.price = purchase_option["price"]
         cart_item.updated_at = datetime.utcnow()
 
         await db.commit()
