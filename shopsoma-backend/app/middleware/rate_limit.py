@@ -49,6 +49,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         """Process each request"""
 
+        # CORS preflights must not consume the protected endpoint quota.
+        if request.method.upper() == "OPTIONS":
+            return await call_next(request)
+
         # Only rate limit specific endpoints
         if not any(request.url.path.startswith(endpoint) for endpoint in self.protected_endpoints):
             return await call_next(request)

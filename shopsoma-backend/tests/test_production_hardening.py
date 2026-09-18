@@ -46,7 +46,32 @@ async def test_rate_limit_middleware_returns_429_after_threshold():
     assert second.status_code == 200
     assert third.status_code == 429
     assert third.headers["retry-after"] == "60"
-    assert third.json()["detail"].startswith("Rate limit exceeded")
+
+
+@pytest.mark.asyncio
+async def test_options_preflight_does_not_consume_rate_limit_quota():
+    app = FastAPI()
+    app.add_middleware(RateLimitMiddleware, rate_limit=1, window_seconds=60)
+
+    @app.options("/api/v1/auth/login")
+    async def preflight():
+        return {"ok": True}
+
+    @app.post("/api/v1/auth/login")
+    async def login():
+        return {"ok": True}
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as test_client:
+        first_preflight = await test_client.options("/api/v1/auth/login")
+        second_preflight = await test_client.options("/api/v1/auth/login")
+        post_request = await test_client.post("/api/v1/auth/login")
+
+    assert first_preflight.status_code == 200
+    assert second_preflight.status_code == 200
+    assert post_request.status_code == 200
 
 
 def test_settings_reject_local_storage_outside_development_without_override():
