@@ -67,6 +67,18 @@ def test_legacy_null_price_is_treated_as_inherited_without_a_marker():
     ) is True
 
 
+def test_legacy_null_sale_is_custom_when_regular_price_is_custom():
+    legacy = SimpleNamespace(sale_price=None, inherits_sale_price=None)
+
+    assert _variation_inherits_parent_price(
+        legacy,
+        "inherits_sale_price",
+        legacy.sale_price,
+        Decimal("100.00"),
+        null_value_inherits=False,
+    ) is False
+
+
 def _product_with_variation(*, price: Decimal | None, sale_price: Decimal | None):
     now = datetime.now(timezone.utc)
     variation = VariationResponse.model_construct(

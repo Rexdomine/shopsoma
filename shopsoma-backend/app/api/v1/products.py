@@ -45,13 +45,14 @@ def _variation_inherits_parent_price(
     marker_name: str,
     persisted_value: Any,
     legacy_parent_value: Any,
+    null_value_inherits: bool = True,
 ) -> bool:
     marker = getattr(variation, marker_name, None)
-    return (
-        marker
-        if marker is not None
-        else persisted_value is None or persisted_value == legacy_parent_value
-    )
+    if marker is not None:
+        return marker
+    if persisted_value is None:
+        return null_value_inherits
+    return persisted_value == legacy_parent_value
 
 
 PRODUCT_RELATIONSHIPS = (
@@ -904,6 +905,7 @@ async def update_product(
                 "inherits_sale_price",
                 variation.sale_price,
                 old_base_price,
+                null_value_inherits=inherits_regular_price,
             )
             if inherits_regular_price:
                 variation.price = new_compare_at_price
