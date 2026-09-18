@@ -552,7 +552,7 @@ async def review_order(
             select(Product)
             .options(
                 selectinload(Product.variants),
-                selectinload(Product.variations),
+                selectinload(Product.variations).selectinload(Variation.size_stocks),
                 selectinload(Product.vendor),
             )
             .where(

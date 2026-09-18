@@ -400,3 +400,79 @@ async def test_create_order_uses_vendor_commission_rate_snapshot(
     assert float(persisted_item.commission_rate) == 12.5
     assert float(persisted_item.commission_amount) == 12500
     assert float(persisted_item.vendor_payout) == 87500
+
+
+@pytest.mark.asyncio
+async def test_review_order_with_bare_made_to_order_variation(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    vendor_user,
+):
+    """Review should resolve a bare variation without lazy-loading size stocks."""
+    from app.models.product import Product, ProductStatus, ModerationStatus, Variation
+    from app.models.shipping_rate import ShippingRate
+    import uuid
+
+    product = Product(
+        id=uuid.uuid4(),
+        vendor_id=vendor_user["vendor"].id,
+        title="Made-to-order variation product",
+        description="Bare variation product for review",
+        base_price=80000.00,
+        currency="NGN",
+        total_stock=0,
+        made_to_order=True,
+        status=ProductStatus.ACTIVE,
+        moderation_status=ModerationStatus.APPROVED,
+    )
+    variation = Variation(
+        id=uuid.uuid4(),
+        product_id=product.id,
+        title="Black",
+        type="color",
+        color_hex="#000000",
+        price=80000.00,
+        is_active=True,
+    )
+    shipping_rate = ShippingRate(
+        id=uuid.uuid4(),
+        name="Standard",
+        description="Standard shipping",
+        base_rate=1500.00,
+        country="Nigeria",
+        state="Lagos",
+        is_active=True,
+        is_default=True,
+        priority=0,
+    )
+    db_session.add_all([product, variation, shipping_rate])
+    await db_session.commit()
+
+    response = await client.post(
+        "/api/v1/orders/review",
+        json={
+            "currency": "NGN",
+            "items": [
+                {
+                    "product_id": str(product.id),
+                    "variant_id": str(variation.id),
+                    "quantity": 1,
+                }
+            ],
+            "guest_address": {
+                "full_name": "Guest User",
+                "phone_number": "08000000000",
+                "address_line1": "123 Test Street",
+                "address_line2": "",
+                "city": "Lagos",
+                "state": "Lagos",
+                "postal_code": "100001",
+                "country": "Nigeria",
+            },
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["items"][0]["variant_details"]["variation_id"] == str(
+        variation.id
+    )
