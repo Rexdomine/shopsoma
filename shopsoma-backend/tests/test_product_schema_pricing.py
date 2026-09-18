@@ -1,12 +1,16 @@
 from datetime import datetime, timezone
 from decimal import Decimal
 from uuid import uuid4
+from types import SimpleNamespace
 
 from app.schemas.product import (
     ProductResponse,
     ProductVariantResponse,
+    ProductVariantCreate,
     SizeStockResponse,
     VariationResponse,
+    VariationCreate,
+    validate_variation_inventory_shape,
 )
 
 
@@ -350,3 +354,55 @@ def test_inactive_size_variation_is_not_merged_into_legacy_variants():
     product.generate_variants_from_variations()  # pyright: ignore[reportCallIssue]
 
     assert [variant.size for variant in product.variants] == ["4"]
+
+
+def test_existing_size_variant_keeps_persisted_price_without_variation_override():
+    now = datetime.now(timezone.utc)
+    variation = VariationResponse.model_construct(
+        id=uuid4(), product_id=uuid4(), title="M", type="size", color_hex=None,
+        price=None, sale_price=None, images=[], is_active=True,
+        created_at=now, updated_at=now, size_stocks=[],
+    )
+    variant = ProductVariantResponse.model_construct(
+        id=uuid4(), product_id=variation.product_id, size="M", color=None,
+        color_hex=None, price=Decimal("175.00"), compare_at_price=None, stock=1,
+        sku=None, is_available=True, created_at=now, updated_at=now,
+    )
+    product = ProductResponse.model_construct(
+        id=variation.product_id, base_price=Decimal("200.00"), variants=[variant],
+        variations=[variation],
+    )
+
+    product.generate_variants_from_variations()  # pyright: ignore[reportCallIssue]
+
+    assert product.variants[0].price == Decimal("175.00")
+    assert product.variants[0].compare_at_price is None
+
+
+def test_non_size_variation_type_is_treated_as_color_axis():
+    variations = [
+        VariationCreate.model_construct(type="pattern", is_active=True, sizes=[]),
+        VariationCreate.model_construct(type="size", is_active=True, sizes=[]),
+    ]
+
+    try:
+        validate_variation_inventory_shape(variations, [])
+    except ValueError as exc:
+        assert "Color and size variations" in str(exc)
+    else:
+        raise AssertionError("non-size variation types must be treated as color axes")
+
+
+def test_color_backed_size_stock_rejects_all_legacy_inventory_rows():
+    color_variation = VariationCreate.model_construct(
+        type="color", is_active=True,
+        sizes=[SimpleNamespace(size="M")],
+    )
+    legacy_variant = ProductVariantCreate.model_construct(color=None, size=None)
+
+    try:
+        validate_variation_inventory_shape([color_variation], [legacy_variant])
+    except ValueError as exc:
+        assert "color variation size stock" in str(exc)
+    else:
+        raise AssertionError("legacy inventory must not coexist with color-backed size stock")

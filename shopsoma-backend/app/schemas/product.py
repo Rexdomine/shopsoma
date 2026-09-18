@@ -28,6 +28,11 @@ def normalize_color_value(value: Optional[str]) -> str:
 COLOR_VARIATION_TYPES = {"color", "solid", "multi", "none"}
 
 
+def is_color_variation_type(value: str) -> bool:
+    """Treat every non-size variation type as a color axis."""
+    return value.casefold() != "size"
+
+
 def validate_variation_inventory_shape(
     variations: Optional[List["VariationCreate"]],
     variants: Optional[List["ProductVariantCreate"]] = None,
@@ -37,7 +42,7 @@ def validate_variation_inventory_shape(
     color_variations = [
         variation
         for variation in active_variations
-        if variation.type.casefold() in COLOR_VARIATION_TYPES
+        if is_color_variation_type(variation.type)
     ]
     size_variations = [
         variation
@@ -75,6 +80,24 @@ def validate_variation_inventory_shape(
         raise ValueError(
             "Legacy variants cannot duplicate size variation inventory; "
             "use one canonical stock source per size"
+        )
+
+    has_color_backed_size_stocks = any(
+        is_color_variation_type(variation.type)
+        and bool(
+            (
+                getattr(variation, "sizes", None)
+                if getattr(variation, "sizes", None) is not None
+                else getattr(variation, "size_stocks", [])
+            )
+            or []
+        )
+        for variation in active_variations
+    )
+    if has_color_backed_size_stocks and legacy_variants:
+        raise ValueError(
+            "Legacy variants cannot coexist with color variation size stock; "
+            "use variation-backed inventory as the sole stock source"
         )
 
 def unique_variations_by_color(variations: List["VariationResponse"]) -> dict[str, "VariationResponse"]:
@@ -532,7 +555,7 @@ class ProductResponse(ProductBase):
                 color_variations = [
                     variation
                     for variation in self.variations
-                    if variation.type.casefold() in COLOR_VARIATION_TYPES and variation.is_active
+                    if is_color_variation_type(variation.type) and variation.is_active
                 ]
                 size_variant_color = (
                     color_variations[0].title if len(color_variations) == 1 else None
@@ -544,6 +567,8 @@ class ProductResponse(ProductBase):
                     if variation is None and variant.size is not None:
                         variation = variations_by_size.get(normalize_color_value(variant.size))
                     if variation is None:
+                        continue
+                    if variation.price is None and variation.sale_price is None:
                         continue
 
                     variant_price = effective_variation_price(
@@ -579,7 +604,7 @@ class ProductResponse(ProductBase):
                     )
                     variation_color = (
                         size_variant_color
-                        if variation.type.casefold() == "size"
+                        if not is_color_variation_type(variation.type)
                         else variation.title
                     )
                     for size_stock in variation.size_stocks:

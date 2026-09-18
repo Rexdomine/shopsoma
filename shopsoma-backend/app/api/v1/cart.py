@@ -19,7 +19,7 @@ from app.schemas.cart import (
     ApplyCouponResponse,
 )
 from app.schemas.product import (
-    COLOR_VARIATION_TYPES,
+    is_color_variation_type,
     ProductResponse,
     ProductVariantResponse,
     effective_variation_price,
@@ -108,12 +108,12 @@ def resolve_variant_response(
                 size_color_variations = [
                     candidate
                     for candidate in product.variations or []
-                    if candidate.type.casefold() in COLOR_VARIATION_TYPES and candidate.is_active
+                    if is_color_variation_type(candidate.type) and candidate.is_active
                 ]
                 size_color = (
                     size_color_variations[0].title
-                    if variation.type.casefold() == "size" and len(size_color_variations) == 1
-                    else None if variation.type.casefold() == "size" else variation.title
+                    if not is_color_variation_type(variation.type) and len(size_color_variations) == 1
+                    else None if not is_color_variation_type(variation.type) else variation.title
                 )
                 return ProductVariantResponse.model_validate({
                     "id": size_stock.id,
