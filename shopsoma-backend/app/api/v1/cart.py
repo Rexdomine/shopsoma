@@ -18,7 +18,11 @@ from app.schemas.cart import (
     ApplyCouponRequest,
     ApplyCouponResponse,
 )
-from app.schemas.product import ProductResponse, ProductVariantResponse
+from app.schemas.product import (
+    ProductResponse,
+    ProductVariantResponse,
+    effective_variation_price,
+)
 from app.api.dependencies import get_optional_user
 from app.models.user import User
 from app.services.vendor_visibility import customer_visible_vendor_product_filter
@@ -60,7 +64,9 @@ def resolve_variant_response(
 
     # Fallback to vendor variations/size stocks
     for variation in product.variations or []:
-        base_price = variation.price if variation.price is not None else product.base_price
+        base_price = effective_variation_price(
+            variation.price, variation.sale_price, product.base_price
+        )
 
         if str(variation.id) == str(variant_id):
             return ProductVariantResponse.model_validate({

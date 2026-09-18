@@ -59,6 +59,7 @@ from app.schemas.order import (
     OrderSummary,
 )
 from app.api.dependencies import get_current_active_user, get_optional_user
+from app.schemas.product import effective_variation_price
 from app.services.email_service import email_service
 from app.services.vendor_notification_service import VendorNotificationService
 from app.services.commission import get_vendor_commission_rate
@@ -312,8 +313,8 @@ async def resolve_order_variant(
 
     if size_stock_row:
         size_stock, variation = size_stock_row
-        unit_price = (
-            variation.price if variation.price is not None else product.base_price
+        unit_price = effective_variation_price(
+            variation.price, variation.sale_price, product.base_price
         )
         available_stock = size_stock.stock
         if product.made_to_order:
@@ -341,8 +342,8 @@ async def resolve_order_variant(
     variation = variation_result.scalar_one_or_none()
 
     if variation:
-        unit_price = (
-            variation.price if variation.price is not None else product.base_price
+        unit_price = effective_variation_price(
+            variation.price, variation.sale_price, product.base_price
         )
         available_stock = product.total_stock
         if product.made_to_order:

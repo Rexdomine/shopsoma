@@ -8,6 +8,23 @@ from uuid import UUID
 from pydantic import BaseModel, Field, field_validator, model_validator, ConfigDict
 
 
+def effective_variation_price(
+    price: Optional[Decimal],
+    sale_price: Optional[Decimal],
+    fallback: Decimal,
+) -> Decimal:
+    """Return the effective purchasable price for a variation."""
+    regular_price = price if price is not None else fallback
+    if (
+        price is not None
+        and sale_price is not None
+        and sale_price > 0
+        and sale_price < regular_price
+    ):
+        return sale_price
+    return regular_price
+
+
 # ============================================================================
 # Product Image Schemas
 # ============================================================================
@@ -422,16 +439,12 @@ class ProductResponse(ProductBase):
                 # Normalize variation pricing to the legacy variant contract:
                 # `price` is the effective purchase price and `compare_at_price`
                 # retains the regular price when a valid sale is configured.
-                has_valid_sale = (
-                    variation.sale_price is not None
-                    and variation.sale_price > 0
-                    and variation.price is not None
-                    and variation.sale_price < variation.price
+                variant_price = effective_variation_price(
+                    variation.price, variation.sale_price, self.base_price
                 )
-                variant_price = (
-                    variation.sale_price
-                    if has_valid_sale
-                    else variation.price if variation.price else self.base_price
+                has_valid_sale = (
+                    variation.price is not None
+                    and variant_price != variation.price
                 )
                 compare_at_price = variation.price if has_valid_sale else None
 
