@@ -1014,7 +1014,11 @@ async def update_variant(
     # Price/stock/availability edits do not alter the inventory shape and can be
     # applied without re-running this cross-record validation.
     update_data = variant_data.model_dump(exclude_unset=True)
-    if set(update_data).intersection({"size", "color"}):
+    inventory_axis_changed = any(
+        field in update_data and update_data[field] != getattr(variant, field)
+        for field in ("size", "color")
+    )
+    if inventory_axis_changed:
         candidate_variants = []
         for existing_variant in product.variants:
             candidate_data = {

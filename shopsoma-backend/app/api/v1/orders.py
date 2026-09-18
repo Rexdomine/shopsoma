@@ -385,6 +385,14 @@ async def resolve_order_variant(
     variation = variation_result.scalar_one_or_none()
 
     if variation:
+        if product.variants or any(
+            getattr(candidate, "size_stocks", None)
+            for candidate in product.variations or []
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Select a purchasable variant or size stock for this product",
+            )
         unit_price = effective_variation_price(
             variation.price, variation.sale_price, product.base_price
         )
@@ -850,7 +858,8 @@ async def create_order(
             .options(
                 selectinload(Product.vendor),
                 selectinload(Product.images),
-                selectinload(Product.variations),
+                selectinload(Product.variants),
+                selectinload(Product.variations).selectinload(Variation.size_stocks),
             )
             .where(
                 Product.id == item_data.product_id,
