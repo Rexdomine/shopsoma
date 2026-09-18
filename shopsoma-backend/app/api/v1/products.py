@@ -1015,14 +1015,6 @@ async def update_variant(
     for field, value in update_data.items():
         setattr(variant, field, value)
 
-    try:
-        validate_variation_inventory_shape(product.variations, product.variants)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=[{"loc": ["body"], "msg": str(exc), "type": "value_error"}],
-        ) from exc
-
     await db.commit()
     await db.refresh(variant)
 

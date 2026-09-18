@@ -568,6 +568,12 @@ async def review_order(
                 detail=f"Product '{product.title}' is not available",
             )
 
+        if product.variations and not item.variant_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"A variation must be selected for '{product.title}'",
+            )
+
         # Get variant if specified
         variant_id_for_response = None
         unit_price = product.base_price
@@ -859,6 +865,12 @@ async def create_order(
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Product {item_data.product_id} not available",
+            )
+
+        if product.variations and not item_data.variant_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"A variation must be selected for '{product.title}'",
             )
 
         # Get variant if specified
