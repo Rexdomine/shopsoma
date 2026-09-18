@@ -534,9 +534,6 @@ class ProductResponse(ProductBase):
                     for variation in self.variations
                     if variation.type.casefold() in COLOR_VARIATION_TYPES and variation.is_active
                 ]
-                size_variant_color = (
-                    color_variations[0].title if len(color_variations) == 1 else None
-                )
                 for variant in self.variants:
                     variation = None
                     if variant.color is not None:
@@ -557,13 +554,16 @@ class ProductResponse(ProductBase):
                         regular_price if variant_price < regular_price else None
                     )
 
-                existing_sizes = {
-                    normalize_color_value(variant.size)
+                existing_inventory = {
+                    (
+                        normalize_color_value(variant.size),
+                        normalize_color_value(variant.color),
+                    )
                     for variant in self.variants
                     if variant.size is not None
                 }
                 for variation in self.variations:
-                    if variation.type.casefold() != "size" or not variation.is_active:
+                    if not variation.is_active or not variation.size_stocks:
                         continue
                     variant_price = effective_variation_price(
                         variation.price, variation.sale_price, self.base_price
@@ -574,10 +574,18 @@ class ProductResponse(ProductBase):
                     compare_at_price = (
                         regular_price if variant_price < regular_price else None
                     )
-                    for size_stock in variation.size_stocks or []:
+                    variation_color = (
+                        None
+                        if variation.type.casefold() == "size"
+                        else variation.title
+                    )
+                    for size_stock in variation.size_stocks:
                         size = getattr(size_stock.size, "value", str(size_stock.size))
-                        normalized_size = normalize_color_value(size)
-                        if normalized_size in existing_sizes:
+                        inventory_key = (
+                            normalize_color_value(size),
+                            normalize_color_value(variation_color),
+                        )
+                        if inventory_key in existing_inventory:
                             continue
                         self.variants.append(
                             ProductVariantResponse.model_validate(
@@ -585,8 +593,8 @@ class ProductResponse(ProductBase):
                                     "id": size_stock.id,
                                     "product_id": self.id,
                                     "size": size,
-                                    "color": size_variant_color,
-                                    "color_hex": None,
+                                    "color": variation_color,
+                                    "color_hex": variation.color_hex,
                                     "price": variant_price,
                                     "compare_at_price": compare_at_price,
                                     "stock": size_stock.stock,
@@ -598,7 +606,7 @@ class ProductResponse(ProductBase):
                                 }
                             )
                         )
-                        existing_sizes.add(normalized_size)
+                        existing_inventory.add(inventory_key)
             return self
 
         # If product has variations (vendor-created), generate variants

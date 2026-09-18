@@ -271,6 +271,38 @@ def test_mixed_legacy_and_size_stock_variants_expose_each_inventory_source_once(
     ]
 
 
+def test_color_size_stocks_are_merged_with_legacy_color_variants():
+    now = datetime.now(timezone.utc)
+    product_id = uuid4()
+    color_variation = VariationResponse.model_construct(
+        id=uuid4(), product_id=product_id, title="Blue", type="color", color_hex="#0000FF",
+        price=Decimal("100.00"), sale_price=Decimal("80.00"), images=[], is_active=True,
+        created_at=now, updated_at=now,
+        size_stocks=[SizeStockResponse.model_construct(
+            id=uuid4(), variation_id=uuid4(), size="10", stock=4,
+            created_at=now, updated_at=now,
+        )],
+    )
+    legacy_variant = ProductVariantResponse.model_construct(
+        id=uuid4(), product_id=product_id, size=None, color="Blue", color_hex="#0000FF",
+        price=Decimal("80.00"), compare_at_price=None, stock=2, sku=None,
+        is_available=True, created_at=now, updated_at=now,
+    )
+    product = ProductResponse.model_construct(
+        id=product_id, base_price=Decimal("200.00"), variants=[legacy_variant],
+        variations=[color_variation],
+    )
+
+    product.generate_variants_from_variations()  # pyright: ignore[reportCallIssue]
+
+    assert [(variant.size, variant.color, variant.stock) for variant in product.variants] == [
+        (None, "Blue", 2),
+        ("10", "Blue", 4),
+    ]
+    assert product.variants[1].price == Decimal("80.00")
+    assert product.variants[1].compare_at_price == Decimal("100.00")
+
+
 def test_generated_size_stock_variant_does_not_populate_color_selector():
     now = datetime.now(timezone.utc)
     variation = VariationResponse.model_construct(
