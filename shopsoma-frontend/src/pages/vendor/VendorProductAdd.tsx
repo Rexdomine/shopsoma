@@ -766,26 +766,17 @@ export default function VendorProductAdd() {
     const activeSizeVariations = detailedVariations.filter(
       (variation) => variation.type === 'Size'
     );
-    if (activeColorVariations.length > 1 && activeSizeVariations.length > 0) {
-      warning(
-        'Multiple colors cannot be combined with sizes yet. Use one color or create explicit variants.',
-        'Unsupported variation combination'
-      );
-      return;
-    }
     if (
+      productType === 'variable' &&
       activeColorVariations.length > 0 &&
-      activeSizeVariations.some((variation) =>
-        variation.selectedSizes.some((size) => !SIZE_STOCK_OPTIONS.has(size))
-      )
+      activeSizeVariations.length > 0
     ) {
       warning(
-        'Numeric UK/EU sizes cannot be combined with a color. Create numeric sizes without a color.',
+        'Color and size variations cannot be combined yet. Create explicit variants instead.',
         'Unsupported variation combination'
       );
       return;
     }
-
     if (!primaryCategoryId) {
       warning('Primary category is required', 'Missing info');
       return;

@@ -26,8 +26,27 @@ def normalize_color_value(value: Optional[str]) -> str:
 
 
 COLOR_VARIATION_TYPES = {"color", "solid", "multi", "none"}
-LETTER_SIZE_VALUES = {"XXS", "XS", "S", "M", "L", "XL", "XXL", "XXXL"}
 
+
+def validate_variation_inventory_shape(variations: Optional[List["VariationCreate"]]) -> None:
+    """Reject variation combinations without one canonical inventory source."""
+    active_variations = [variation for variation in variations or [] if variation.is_active]
+    color_variations = [
+        variation
+        for variation in active_variations
+        if variation.type.casefold() in COLOR_VARIATION_TYPES
+    ]
+    size_variations = [
+        variation
+        for variation in active_variations
+        if variation.type.casefold() == "size"
+    ]
+
+    if color_variations and size_variations:
+        raise ValueError(
+            "Color and size variations cannot be combined until a "
+            "color-size inventory matrix is supported"
+        )
 
 def unique_variations_by_color(variations: List["VariationResponse"]) -> dict[str, "VariationResponse"]:
     """Index only unambiguous variation colors, avoiding collision-dependent pricing."""
@@ -390,36 +409,7 @@ class ProductCreate(ProductBase):
     @model_validator(mode="after")
     def validate_variation_inventory_shape(self) -> "ProductCreate":
         """Reject combinations that cannot represent one canonical stock source."""
-        active_variations = [
-            variation for variation in self.variations or [] if variation.is_active
-        ]
-        color_variations = [
-            variation
-            for variation in active_variations
-            if variation.type.casefold() in COLOR_VARIATION_TYPES
-        ]
-        size_variations = [
-            variation
-            for variation in active_variations
-            if variation.type.casefold() == "size"
-        ]
-
-        if len(color_variations) > 1 and size_variations:
-            raise ValueError(
-                "Multiple colors cannot be combined with size variations until a "
-                "color-size inventory matrix is supported"
-            )
-
-        if color_variations and any(
-            not variation.sizes
-            or any(size.size not in LETTER_SIZE_VALUES for size in variation.sizes)
-            for variation in size_variations
-        ):
-            raise ValueError(
-                "Numeric UK/EU sizes cannot be combined with color variations; "
-                "create numeric sizes without a color"
-            )
-
+        validate_variation_inventory_shape(self.variations)
         return self
 
 
@@ -468,6 +458,7 @@ class ProductUpdate(BaseModel):
             if not self.made_to_order_timeline or not self.made_to_order_timeline.strip():
                 raise ValueError("Made-to-order products require a production timeline")
             self.total_stock = 0
+        validate_variation_inventory_shape(self.variations)
         return self
 
 

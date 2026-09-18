@@ -151,7 +151,7 @@ class TestProductCreate:
         assert data["variations"][0]["size_stocks"][0]["size"] == "M"
 
     @pytest.mark.asyncio
-    async def test_create_product_rejects_multiple_colors_with_sizes(
+    async def test_create_product_rejects_color_and_size_variations(
         self, client: AsyncClient, vendor_user
     ):
         """Do not expose independent color-only and size-only stock sources."""
@@ -170,7 +170,7 @@ class TestProductCreate:
         )
 
         assert response.status_code == 422
-        assert "Multiple colors" in response.json()["detail"][0]["msg"]
+        assert "Color and size variations" in response.json()["detail"][0]["msg"]
 
     @pytest.mark.asyncio
     async def test_create_product_rejects_color_with_numeric_size(
@@ -191,7 +191,26 @@ class TestProductCreate:
         )
 
         assert response.status_code == 422
-        assert "Numeric UK/EU sizes" in response.json()["detail"][0]["msg"]
+        assert "Color and size variations" in response.json()["detail"][0]["msg"]
+
+    @pytest.mark.asyncio
+    async def test_update_product_rejects_color_and_size_variations(
+        self, client: AsyncClient, vendor_user, sample_product
+    ):
+        """Updates must enforce the same inventory-shape invariant as creates."""
+        response = await client.put(
+            f"/api/v1/products/{sample_product.id}",
+            json={
+                "variations": [
+                    {"title": "Red", "type": "solid", "sizes": []},
+                    {"title": "M", "type": "size", "sizes": [{"size": "M", "stock": 10}]},
+                ]
+            },
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 422
+        assert "Color and size variations" in response.json()["detail"][0]["msg"]
 
     @pytest.mark.asyncio
     async def test_create_product_with_images(self, client: AsyncClient, vendor_user):
