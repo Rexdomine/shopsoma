@@ -20,6 +20,29 @@ def effective_variation_price(
     return regular_price
 
 
+def normalize_color_value(value: Optional[str]) -> str:
+    """Normalize color labels for matching legacy variants to variations."""
+    return (value or "").strip().casefold()
+
+
+def unique_variations_by_color(variations: List["VariationResponse"]) -> dict[str, "VariationResponse"]:
+    """Index only unambiguous variation colors, avoiding collision-dependent pricing."""
+    indexed: dict[str, VariationResponse] = {}
+    collisions: set[str] = set()
+    for variation in variations:
+        if not variation.is_active:
+            continue
+        key = normalize_color_value(variation.title)
+        if not key or key in collisions:
+            continue
+        if key in indexed:
+            del indexed[key]
+            collisions.add(key)
+            continue
+        indexed[key] = variation
+    return indexed
+
+
 # ============================================================================
 # Product Image Schemas
 # ============================================================================
@@ -422,8 +445,29 @@ class ProductResponse(ProductBase):
         This allows frontend to use a single data structure (variants) regardless of
         whether product was created via admin (variants) or vendor (variations).
         """
-        # If product already has variants (admin-created), don't override
+        # If product already has variants, preserve them but merge matching
+        # variation pricing so persisted legacy variants expose the same
+        # effective and compare-at prices as vendor variation responses.
         if self.variants:
+            if self.variations:
+                variations_by_title = unique_variations_by_color(self.variations)
+                for variant in self.variants:
+                    if variant.color is None:
+                        continue
+                    variation = variations_by_title.get(normalize_color_value(variant.color))
+                    if variation is None:
+                        continue
+
+                    variant_price = effective_variation_price(
+                        variation.price, variation.sale_price, self.base_price
+                    )
+                    regular_price = (
+                        variation.price if variation.price is not None else self.base_price
+                    )
+                    variant.price = variant_price
+                    variant.compare_at_price = (
+                        regular_price if variant_price < regular_price else None
+                    )
             return self
 
         # If product has variations (vendor-created), generate variants

@@ -59,7 +59,11 @@ from app.schemas.order import (
     OrderSummary,
 )
 from app.api.dependencies import get_current_active_user, get_optional_user
-from app.schemas.product import effective_variation_price
+from app.schemas.product import (
+    effective_variation_price,
+    normalize_color_value,
+    unique_variations_by_color,
+)
 from app.services.email_service import email_service
 from app.services.vendor_notification_service import VendorNotificationService
 from app.services.commission import get_vendor_commission_rate
@@ -288,12 +292,22 @@ async def resolve_order_variant(
     variant = variant_result.scalar_one_or_none()
 
     if variant and variant.product_id == product.id:
+        matching_variation = unique_variations_by_color(product.variations or []).get(
+            normalize_color_value(variant.color)
+        )
+        unit_price = variant.price
+        if matching_variation is not None:
+            unit_price = effective_variation_price(
+                matching_variation.price,
+                matching_variation.sale_price,
+                product.base_price,
+            )
         variant_stock = variant.stock
         if product.made_to_order:
             variant_stock = max(variant_stock, 999999)
         return {
             "variant_id": variant.id,
-            "unit_price": variant.price,
+            "unit_price": unit_price,
             "stock": variant_stock,
             "variant_details": {
                 "size": variant.size,
@@ -499,7 +513,11 @@ async def review_order(
         # Get product
         product_query = (
             select(Product)
-            .options(selectinload(Product.variants), selectinload(Product.vendor))
+            .options(
+                selectinload(Product.variants),
+                selectinload(Product.variations),
+                selectinload(Product.vendor),
+            )
             .where(
                 Product.id == item.product_id,
                 customer_visible_vendor_product_filter(),

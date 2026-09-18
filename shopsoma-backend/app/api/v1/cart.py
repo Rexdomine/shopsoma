@@ -22,6 +22,8 @@ from app.schemas.product import (
     ProductResponse,
     ProductVariantResponse,
     effective_variation_price,
+    normalize_color_value,
+    unique_variations_by_color,
 )
 from app.api.dependencies import get_optional_user
 from app.models.user import User
@@ -60,7 +62,19 @@ def resolve_variant_response(
     # First, look for a legacy variant match
     for variant in product.variants or []:
         if str(variant.id) == str(variant_id):
-            return ProductVariantResponse.model_validate(variant)
+            response = ProductVariantResponse.model_validate(variant)
+            variation = unique_variations_by_color(product.variations or []).get(
+                normalize_color_value(variant.color)
+            )
+            if variation is not None:
+                response.price = effective_variation_price(
+                    variation.price, variation.sale_price, product.base_price
+                )
+                regular_price = variation.price if variation.price is not None else product.base_price
+                response.compare_at_price = (
+                    regular_price if response.price < regular_price else None
+                )
+            return response
 
     # Fallback to vendor variations/size stocks
     for variation in product.variations or []:
