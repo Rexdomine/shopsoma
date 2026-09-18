@@ -46,6 +46,7 @@ async def test_rate_limit_middleware_returns_429_after_threshold():
     assert second.status_code == 200
     assert third.status_code == 429
     assert third.headers["retry-after"] == "60"
+    assert third.json()["detail"].startswith("Rate limit exceeded")
 
 
 @pytest.mark.asyncio
