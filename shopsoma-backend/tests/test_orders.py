@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from types import SimpleNamespace
 from datetime import datetime, timezone
 
-from app.api.v1.orders import resolve_order_variant
+from app.api.v1.orders import _resolve_product_image_url, resolve_order_variant
 
 
 @pytest.mark.asyncio
@@ -22,7 +22,7 @@ async def test_legacy_numeric_variant_order_metadata_includes_matching_size_vari
     )
     variation = SimpleNamespace(
         id="variation-id", title="4", type="size", price=100,
-        sale_price=80, is_active=True,
+        sale_price=80, is_active=True, images=["size-four.jpg"],
     )
     product = SimpleNamespace(
         id="product-id", base_price=200, total_stock=1, made_to_order=False,
@@ -40,6 +40,7 @@ async def test_legacy_numeric_variant_order_metadata_includes_matching_size_vari
     resolved = await resolve_order_variant(FakeDB(), product, "variant-id")
 
     assert resolved["variant_details"]["variation_id"] == "variation-id"
+    assert _resolve_product_image_url(product, resolved["variant_details"]) == "size-four.jpg"
 
 
 @pytest.mark.asyncio
