@@ -80,6 +80,10 @@ def validate_variation_inventory_shape(
             label = normalize_color_value(getattr(size, "size", None))
             if label:
                 nested_size_owners.setdefault(label, set()).add(variation_index)
+        if not nested_sizes:
+            label = normalize_color_value(getattr(variation, "title", None))
+            if label:
+                nested_size_owners.setdefault(label, set()).add(variation_index)
     if any(len(owners) > 1 for owners in nested_size_owners.values()):
         raise ValueError("Nested size-stock labels must be unique across size variations")
 
@@ -167,6 +171,18 @@ def validate_variation_inventory_shape(
         raise ValueError(
             f"Legacy variants cannot coexist with {inventory_axis} size stock; "
             "use variation-backed inventory as the sole stock source"
+        )
+    if has_size_stocks and color_variations and legacy_variants:
+        raise ValueError(
+            "Legacy variants cannot coexist with color variation size stock; "
+            "use variation-backed inventory as the sole stock source"
+        )
+    if bare_size_labels and any(
+        getattr(variant, "size", None) is None for variant in legacy_variants
+    ):
+        raise ValueError(
+            "Generic legacy variants cannot coexist with bare size variations; "
+            "provide a matching size for each legacy row"
         )
 
 def unique_variations_by_color(variations: List["VariationResponse"]) -> dict[str, "VariationResponse"]:

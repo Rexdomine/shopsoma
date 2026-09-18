@@ -462,6 +462,27 @@ def test_color_backed_size_stock_rejects_all_legacy_inventory_rows():
         raise AssertionError("legacy inventory must not coexist with color-backed size stock")
 
 
+def test_color_backed_size_stock_rejects_distinct_legacy_size_rows():
+    color_variation = VariationCreate.model_construct(
+        type="color", is_active=True,
+        sizes=[SimpleNamespace(size="M")],
+    )
+    legacy_variant = ProductVariantCreate.model_construct(color=None, size="L")
+
+    with pytest.raises(ValueError, match="color variation size stock"):
+        validate_variation_inventory_shape([color_variation], [legacy_variant])
+
+
+def test_size_axis_stock_allows_distinct_legacy_size_rows():
+    size_variation = VariationCreate.model_construct(
+        type="size", is_active=True,
+        sizes=[SimpleNamespace(size="M")],
+    )
+    legacy_variant = ProductVariantCreate.model_construct(color=None, size="L")
+
+    validate_variation_inventory_shape([size_variation], [legacy_variant])
+
+
 def test_size_variation_labels_must_be_unique_after_normalization():
     variations = [
         VariationCreate.model_construct(title=" M ", type="size", is_active=True, sizes=[]),
@@ -488,6 +509,29 @@ def test_unmatched_bare_size_and_legacy_inventory_is_rejected():
         assert "match legacy size inventory labels" in str(exc)
     else:
         raise AssertionError("unmatched mixed size inventory must be rejected")
+
+
+def test_bare_size_variation_rejects_generic_legacy_inventory_row():
+    variation = VariationCreate.model_construct(
+        title="M", type="size", is_active=True, sizes=[]
+    )
+    legacy_variant = ProductVariantCreate.model_construct(size=None, color=None)
+
+    with pytest.raises(ValueError, match="Generic legacy variants"):
+        validate_variation_inventory_shape([variation], [legacy_variant])
+
+
+def test_bare_size_label_cannot_duplicate_nested_size_stock_label():
+    bare = VariationCreate.model_construct(
+        title="M", type="size", is_active=True, sizes=[]
+    )
+    nested = VariationCreate.model_construct(
+        title="Regular", type="size", is_active=True,
+        sizes=[SimpleNamespace(size="m")],
+    )
+
+    with pytest.raises(ValueError, match="Nested size-stock labels"):
+        validate_variation_inventory_shape([bare, nested])
 
 
 def test_inactive_duplicate_size_variation_labels_are_rejected_too():
