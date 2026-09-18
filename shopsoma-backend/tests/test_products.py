@@ -176,6 +176,35 @@ class TestProductCreate:
         assert "duplicate size variation inventory" in response.json()["detail"][0]["msg"]
 
     @pytest.mark.asyncio
+    async def test_update_product_rejects_legacy_variant_overlap(
+        self, client: AsyncClient, vendor_user
+    ):
+        """Updates cannot retain a legacy size row beside a new size stock row."""
+        create_response = await client.post(
+            "/api/v1/products",
+            json={
+                "title": "Legacy Inventory Product",
+                "base_price": 85.00,
+                "variants": [{"size": "M", "price": 85.00, "stock": 10}],
+            },
+            headers=vendor_user["headers"],
+        )
+        assert create_response.status_code == 201
+
+        update_response = await client.put(
+            f"/api/v1/products/{create_response.json()['id']}",
+            json={
+                "variations": [
+                    {"title": "M", "type": "size", "sizes": [{"size": "M", "stock": 10}]}
+                ]
+            },
+            headers=vendor_user["headers"],
+        )
+
+        assert update_response.status_code == 422
+        assert "duplicate size variation inventory" in update_response.json()["detail"][0]["msg"]
+
+    @pytest.mark.asyncio
     async def test_create_product_rejects_color_and_size_variations(
         self, client: AsyncClient, vendor_user
     ):

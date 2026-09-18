@@ -31,6 +31,7 @@ from app.schemas.product import (
     ProductImageUpdate,
     ProductImageResponse,
     ProductModerationUpdate,
+    validate_variation_inventory_shape,
 )
 
 router = APIRouter(prefix="/products", tags=["products"])
@@ -781,6 +782,24 @@ async def update_product(
 
     # Handle variations separately for sync logic
     variations_data = update_data.pop("variations", None)
+
+    # ProductUpdate validates only the incoming variation payload. When an
+    # existing product retains legacy variants, include those persisted rows in
+    # the same invariant before replacing any variations.
+    if variations_data is not None:
+        try:
+            validate_variation_inventory_shape(product_data.variations, product.variants)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=[
+                    {
+                        "loc": ["body", "variations"],
+                        "msg": str(exc),
+                        "type": "value_error",
+                    }
+                ],
+            ) from exc
 
     for field, value in update_data.items():
         if field == "status":
