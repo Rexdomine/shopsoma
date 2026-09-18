@@ -878,20 +878,37 @@ async def update_product(
         new_compare_at_price = product.compare_at_price
         for variation in product.variations:
             legacy_regular_price = old_compare_at_price or old_base_price
-            if _variation_inherits_parent_price(
+            inherits_regular_price = _variation_inherits_parent_price(
                 variation,
                 "inherits_price",
                 variation.price,
                 legacy_regular_price,
-            ):
-                variation.price = new_compare_at_price
-            if _variation_inherits_parent_price(
+            )
+            inherits_sale_price = _variation_inherits_parent_price(
                 variation,
                 "inherits_sale_price",
                 variation.sale_price,
                 old_base_price,
-            ):
+            )
+            if inherits_regular_price:
+                variation.price = new_compare_at_price
+            if inherits_sale_price:
                 variation.sale_price = new_base_price if new_compare_at_price is not None else None
+
+            if inherits_regular_price or inherits_sale_price:
+                variation_type = str(getattr(variation, "type", "color")).casefold()
+                variation_title = str(variation.title).strip().casefold()
+                for legacy_variant in product.variants or []:
+                    legacy_value = (
+                        legacy_variant.size
+                        if variation_type == "size"
+                        else legacy_variant.color
+                    )
+                    if str(legacy_value or "").strip().casefold() == variation_title:
+                        # Legacy variants store the effective purchase price,
+                        # so they must retain the parent base price when an
+                        # inherited compare-at price is removed.
+                        legacy_variant.price = new_base_price
 
     await db.commit()
 
