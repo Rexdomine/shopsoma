@@ -328,7 +328,7 @@ export default function VendorProductView() {
                             </div>
                             {variation.price && (
                               <div className="text-right">
-                                {variation.sale_price !== undefined && variation.sale_price < variation.price ? (
+                                {variation.sale_price != null && variation.sale_price > 0 && variation.sale_price < variation.price ? (
                                   <>
                                     <div className="text-lg font-semibold text-gray-900">
                                       {formatDisplayPrice(variation.sale_price)}

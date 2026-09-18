@@ -232,6 +232,7 @@ class ProductVariantResponse(ProductVariantBase):
     """Schema for product variant response"""
     id: UUID
     product_id: UUID
+    compare_at_price: Optional[Decimal] = None
     created_at: datetime
     updated_at: datetime
 
@@ -418,8 +419,21 @@ class ProductResponse(ProductBase):
             generated_variants = []
 
             for variation in self.variations:
-                # Determine price: use variation price if set, otherwise base price
-                variant_price = variation.price if variation.price else self.base_price
+                # Normalize variation pricing to the legacy variant contract:
+                # `price` is the effective purchase price and `compare_at_price`
+                # retains the regular price when a valid sale is configured.
+                has_valid_sale = (
+                    variation.sale_price is not None
+                    and variation.sale_price > 0
+                    and variation.price is not None
+                    and variation.sale_price < variation.price
+                )
+                variant_price = (
+                    variation.sale_price
+                    if has_valid_sale
+                    else variation.price if variation.price else self.base_price
+                )
+                compare_at_price = variation.price if has_valid_sale else None
 
                 # If variation has no size_stocks, create one variant with no size
                 if not variation.size_stocks:
@@ -431,6 +445,7 @@ class ProductResponse(ProductBase):
                         "color": variation.title,  # Use 'title' field which contains the color name
                         "color_hex": variation.color_hex,
                         "price": variant_price,
+                        "compare_at_price": compare_at_price,
                         "stock": 0,
                         "sku": None,
                         "is_available": bool(variation.is_active),
@@ -448,6 +463,7 @@ class ProductResponse(ProductBase):
                             "color": variation.title,  # Use 'title' field which contains the color name
                             "color_hex": variation.color_hex,
                             "price": variant_price,
+                            "compare_at_price": compare_at_price,
                             "stock": size_stock.stock,
                             "sku": None,
                             "is_available": bool(variation.is_active) and size_stock.stock > 0,
