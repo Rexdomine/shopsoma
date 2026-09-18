@@ -122,6 +122,35 @@ class TestProductCreate:
         assert data["variations"][0]["size_stocks"] == []
 
     @pytest.mark.asyncio
+    async def test_create_product_with_letter_size_uses_size_stock_as_inventory_source(
+        self, client: AsyncClient, vendor_user
+    ):
+        """Letter sizes use one canonical size-stock inventory row."""
+        response = await client.post(
+            "/api/v1/products",
+            json={
+                "title": "Letter Size Dress",
+                "base_price": 85.00,
+                "variations": [
+                    {
+                        "title": "M",
+                        "type": "size",
+                        "price": 85.00,
+                        "sizes": [{"size": "M", "stock": 10}],
+                    }
+                ],
+            },
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 201
+        data = response.json()
+        assert len(data["variants"]) == 1
+        assert data["variants"][0]["size"] == "M"
+        assert data["variants"][0]["stock"] == 10
+        assert data["variations"][0]["size_stocks"][0]["size"] == "M"
+
+    @pytest.mark.asyncio
     async def test_create_product_with_images(self, client: AsyncClient, vendor_user):
         """Test product creation with images"""
         product_data = {

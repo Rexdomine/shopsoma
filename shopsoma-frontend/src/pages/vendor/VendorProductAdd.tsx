@@ -941,12 +941,14 @@ export default function VendorProductAdd() {
                 sizes: SIZE_STOCK_OPTIONS.has(size) ? [{ size, stock: sizeStock }] : [],
               });
             }
-            variantPayload.push({
-              size,
-              price: variationBasePrice,
-              stock: sizeStock,
-              is_available: shouldTrackStock ? sizeStock > 0 : true,
-            });
+            if (!SIZE_STOCK_OPTIONS.has(size)) {
+              variantPayload.push({
+                size,
+                price: variationBasePrice,
+                stock: sizeStock,
+                is_available: shouldTrackStock ? sizeStock > 0 : true,
+              });
+            }
           });
         });
 
