@@ -19,6 +19,7 @@ from app.schemas.cart import (
     ApplyCouponResponse,
 )
 from app.schemas.product import (
+    COLOR_VARIATION_TYPES,
     ProductResponse,
     ProductVariantResponse,
     effective_variation_price,
@@ -107,7 +108,7 @@ def resolve_variant_response(
                 size_color_variations = [
                     candidate
                     for candidate in product.variations or []
-                    if candidate.type.casefold() == "color" and candidate.is_active
+                    if candidate.type.casefold() in COLOR_VARIATION_TYPES and candidate.is_active
                 ]
                 size_color = (
                     size_color_variations[0].title

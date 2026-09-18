@@ -60,6 +60,7 @@ from app.schemas.order import (
 )
 from app.api.dependencies import get_current_active_user, get_optional_user
 from app.schemas.product import (
+    COLOR_VARIATION_TYPES,
     effective_variation_price,
     normalize_color_value,
     unique_variations_by_color,
@@ -349,7 +350,7 @@ async def resolve_order_variant(
                         (
                             candidate.title
                             for candidate in product.variations or []
-                            if candidate.type.casefold() == "color" and candidate.is_active
+                            if candidate.type.casefold() in COLOR_VARIATION_TYPES and candidate.is_active
                         ),
                         None,
                     )
