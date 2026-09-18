@@ -892,7 +892,13 @@ class TestProductUpdate:
                         "type": "color",
                         "price": 150.00,
                         "sale_price": None,
-                    }
+                    },
+                    {
+                        "title": "Blue",
+                        "type": "color",
+                        "price": 150.00,
+                        "sale_price": 100.00,
+                    },
                 ],
             },
             headers=vendor_user["headers"],
@@ -906,11 +912,15 @@ class TestProductUpdate:
             headers=vendor_user["headers"],
         )
         assert first_update.status_code == 200
-        first_variation = first_update.json()["variations"][0]
-        assert float(first_variation["price"]) == 150.00
-        assert first_variation["sale_price"] is None
-        assert first_variation["inherits_price"] is False
-        assert first_variation["inherits_sale_price"] is False
+        first_variations = {item["title"]: item for item in first_update.json()["variations"]}
+        assert float(first_variations["Red"]["price"]) == 150.00
+        assert first_variations["Red"]["sale_price"] is None
+        assert first_variations["Red"]["inherits_price"] is False
+        assert first_variations["Red"]["inherits_sale_price"] is False
+        assert float(first_variations["Blue"]["price"]) == 150.00
+        assert float(first_variations["Blue"]["sale_price"]) == 100.00
+        assert first_variations["Blue"]["inherits_price"] is False
+        assert first_variations["Blue"]["inherits_sale_price"] is False
 
         second_update = await client.put(
             f"/api/v1/products/{product_id}",
@@ -918,9 +928,11 @@ class TestProductUpdate:
             headers=vendor_user["headers"],
         )
         assert second_update.status_code == 200
-        second_variation = second_update.json()["variations"][0]
-        assert float(second_variation["price"]) == 150.00
-        assert second_variation["sale_price"] is None
+        second_variations = {item["title"]: item for item in second_update.json()["variations"]}
+        assert float(second_variations["Red"]["price"]) == 150.00
+        assert second_variations["Red"]["sale_price"] is None
+        assert float(second_variations["Blue"]["price"]) == 150.00
+        assert float(second_variations["Blue"]["sale_price"]) == 100.00
 
     @pytest.mark.asyncio
     async def test_update_single_product_stock_syncs_legacy_variant_stock(
