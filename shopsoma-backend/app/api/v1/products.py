@@ -856,15 +856,23 @@ async def update_product(
 
         # Create new variations
         for variation_data in variations_data:
+            inherits_price = variation_data.get("inherits_price")
+            inherits_sale_price = variation_data.get("inherits_sale_price")
+            variation_price = variation_data.get("price")
+            variation_sale_price = variation_data.get("sale_price")
+            if inherited_price_update and inherits_price is True:
+                variation_price = product.compare_at_price
+            if inherited_price_update and inherits_sale_price is True:
+                variation_sale_price = product.base_price if product.compare_at_price is not None else None
             variation = Variation(
                 product_id=product.id,
                 title=variation_data["title"],
                 type=variation_data.get("type", "color"),
                 color_hex=variation_data.get("color_hex"),
-                price=variation_data.get("price"),
-                sale_price=variation_data.get("sale_price"),
-                inherits_price=variation_data.get("inherits_price"),
-                inherits_sale_price=variation_data.get("inherits_sale_price"),
+                price=variation_price,
+                sale_price=variation_sale_price,
+                inherits_price=inherits_price,
+                inherits_sale_price=inherits_sale_price,
                 images=variation_data.get("images", []),
                 is_active=variation_data.get("is_active", True),
             )
