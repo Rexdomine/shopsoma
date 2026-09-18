@@ -381,6 +381,31 @@ class TestProductCreate:
         assert "Color and size variations" in response.json()["detail"][0]["msg"]
 
     @pytest.mark.asyncio
+    async def test_create_product_rejects_attribute_less_legacy_variant_with_size_stock(
+        self, client: AsyncClient, vendor_user
+    ):
+        """Size stock must be the only inventory source, including for bare legacy rows."""
+        response = await client.post(
+            "/api/v1/products",
+            json={
+                "title": "Bare Legacy Size Conflict",
+                "base_price": 85.00,
+                "variants": [{"price": 85.00, "stock": 10}],
+                "variations": [
+                    {
+                        "title": "M",
+                        "type": "size",
+                        "sizes": [{"size": "M", "stock": 10}],
+                    }
+                ],
+            },
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 422
+        assert "variation size stock" in response.json()["detail"][0]["msg"]
+
+    @pytest.mark.asyncio
     async def test_create_product_with_images(self, client: AsyncClient, vendor_user):
         """Test product creation with images"""
         product_data = {

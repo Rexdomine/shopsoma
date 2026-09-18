@@ -133,9 +133,8 @@ def validate_variation_inventory_shape(
             "use one canonical stock source per size"
         )
 
-    has_color_backed_size_stocks = any(
-        is_color_variation_type(variation.type)
-        and bool(
+    has_size_stocks = any(
+        bool(
             (
                 getattr(variation, "sizes", None)
                 if getattr(variation, "sizes", None) is not None
@@ -145,9 +144,9 @@ def validate_variation_inventory_shape(
         )
         for variation in active_variations
     )
-    if has_color_backed_size_stocks and legacy_variants:
+    if has_size_stocks and legacy_variants:
         raise ValueError(
-            "Legacy variants cannot coexist with color variation size stock; "
+            "Legacy variants cannot coexist with variation size stock; "
             "use variation-backed inventory as the sole stock source"
         )
 
