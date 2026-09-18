@@ -17,7 +17,7 @@ from app.api.v1.cart import (
 
 def test_existing_variation_cart_row_uses_and_persists_current_sale_price():
     variation = SimpleNamespace(
-        id="variation-id",
+        id="00000000-0000-4000-8000-000000000002",
         title="Red",
         color_hex="#ff0000",
         price=None,
@@ -28,14 +28,14 @@ def test_existing_variation_cart_row_uses_and_persists_current_sale_price():
         updated_at=datetime.now(timezone.utc),
     )
     product = SimpleNamespace(
-        id="product-id",
+        id="00000000-0000-4000-8000-000000000001",
         base_price=100,
         total_stock=10,
         made_to_order=False,
         variants=[],
         variations=[variation],
     )
-    cart_item = SimpleNamespace(product=product, variant_id="variation-id", price=100, quantity=2)
+    cart_item = SimpleNamespace(product=product, variant_id="00000000-0000-4000-8000-000000000002", price=100, quantity=2)
 
     assert resolve_cart_item_price(cart_item) == 80
     assert reprice_cart_item(cart_item) is True
@@ -45,7 +45,7 @@ def test_existing_variation_cart_row_uses_and_persists_current_sale_price():
 
 def test_coupon_subtotal_uses_current_variation_price():
     variation = SimpleNamespace(
-        id="variation-id",
+        id="00000000-0000-4000-8000-000000000002",
         title="Red",
         color_hex="#ff0000",
         price=100,
@@ -56,14 +56,14 @@ def test_coupon_subtotal_uses_current_variation_price():
         updated_at=datetime.now(timezone.utc),
     )
     product = SimpleNamespace(
-        id="product-id",
+        id="00000000-0000-4000-8000-000000000001",
         base_price=100,
         total_stock=10,
         made_to_order=False,
         variants=[],
         variations=[variation],
     )
-    cart_item = SimpleNamespace(product=product, variant_id="variation-id", price=100, quantity=1)
+    cart_item = SimpleNamespace(product=product, variant_id="00000000-0000-4000-8000-000000000002", price=100, quantity=1)
 
     assert calculate_cart_subtotal([cart_item]) == 80
 
