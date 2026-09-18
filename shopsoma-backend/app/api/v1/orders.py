@@ -513,7 +513,11 @@ async def review_order(
         # Get product
         product_query = (
             select(Product)
-            .options(selectinload(Product.variants), selectinload(Product.vendor))
+            .options(
+                selectinload(Product.variants),
+                selectinload(Product.variations),
+                selectinload(Product.vendor),
+            )
             .where(
                 Product.id == item.product_id,
                 customer_visible_vendor_product_filter(),
