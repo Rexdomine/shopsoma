@@ -104,11 +104,21 @@ def resolve_variant_response(
 
         for size_stock in variation.size_stocks or []:
             if str(size_stock.id) == str(variant_id):
+                size_color_variations = [
+                    candidate
+                    for candidate in product.variations or []
+                    if candidate.type.casefold() == "color" and candidate.is_active
+                ]
+                size_color = (
+                    size_color_variations[0].title
+                    if variation.type.casefold() == "size" and len(size_color_variations) == 1
+                    else None if variation.type.casefold() == "size" else variation.title
+                )
                 return ProductVariantResponse.model_validate({
                     "id": size_stock.id,
                     "product_id": product.id,
                     "size": getattr(size_stock.size, "value", str(size_stock.size)),
-                    "color": variation.title,
+                    "color": size_color,
                     "color_hex": variation.color_hex,
                     "price": base_price,
                     "stock": size_stock.stock,

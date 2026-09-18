@@ -344,7 +344,18 @@ async def resolve_order_variant(
             "stock": available_stock,
             "variant_details": {
                 "size": getattr(size_stock.size, "value", str(size_stock.size)),
-                "color": variation.title,
+                "color": (
+                    next(
+                        (
+                            candidate.title
+                            for candidate in product.variations or []
+                            if candidate.type.casefold() == "color" and candidate.is_active
+                        ),
+                        None,
+                    )
+                    if variation.type.casefold() == "size"
+                    else variation.title
+                ),
                 "color_hex": variation.color_hex,
                 "size_stock_id": str(size_stock.id),
                 "variation_id": str(variation.id),

@@ -470,6 +470,14 @@ class ProductResponse(ProductBase):
             if self.variations:
                 variations_by_title = unique_variations_by_color(self.variations)
                 variations_by_size = unique_variations_by_size(self.variations)
+                color_variations = [
+                    variation
+                    for variation in self.variations
+                    if variation.type.casefold() == "color" and variation.is_active
+                ]
+                size_variant_color = (
+                    color_variations[0].title if len(color_variations) == 1 else None
+                )
                 for variant in self.variants:
                     variation = None
                     if variant.color is not None:
@@ -518,7 +526,7 @@ class ProductResponse(ProductBase):
                                     "id": size_stock.id,
                                     "product_id": self.id,
                                     "size": size,
-                                    "color": None,
+                                    "color": size_variant_color,
                                     "color_hex": None,
                                     "price": variant_price,
                                     "compare_at_price": compare_at_price,
