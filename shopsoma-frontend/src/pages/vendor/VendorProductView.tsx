@@ -328,12 +328,18 @@ export default function VendorProductView() {
                             </div>
                             {variation.price && (
                               <div className="text-right">
-                                <div className="text-lg font-semibold text-gray-900">
-                                  {formatDisplayPrice(variation.price)}
-                                </div>
-                                {variation.sale_price && variation.sale_price < variation.price && (
-                                  <div className="text-sm text-gray-500 line-through">
-                                    {formatDisplayPrice(variation.sale_price)}
+                                {variation.sale_price !== undefined && variation.sale_price < variation.price ? (
+                                  <>
+                                    <div className="text-lg font-semibold text-gray-900">
+                                      {formatDisplayPrice(variation.sale_price)}
+                                    </div>
+                                    <div className="text-sm text-gray-500 line-through">
+                                      {formatDisplayPrice(variation.price)}
+                                    </div>
+                                  </>
+                                ) : (
+                                  <div className="text-lg font-semibold text-gray-900">
+                                    {formatDisplayPrice(variation.price)}
                                   </div>
                                 )}
                               </div>
