@@ -819,6 +819,60 @@ class TestProductUpdate:
         assert float(data["base_price"]) == update_data["base_price"]
 
     @pytest.mark.asyncio
+    async def test_update_parent_price_syncs_replacement_inherited_variations(
+        self,
+        client: AsyncClient,
+        vendor_user,
+    ):
+        """Combined parent/variation updates must sync the replacement rows."""
+        create_response = await client.post(
+            "/api/v1/products",
+            json={
+                "title": "Replacement Variation Pricing",
+                "base_price": 100.00,
+                "compare_at_price": 120.00,
+                "product_type": "variable",
+                "variations": [
+                    {
+                        "title": "Red",
+                        "type": "color",
+                        "price": 120.00,
+                        "sale_price": 100.00,
+                        "inherits_price": True,
+                        "inherits_sale_price": True,
+                    }
+                ],
+            },
+            headers=vendor_user["headers"],
+        )
+        assert create_response.status_code == 201
+        product_id = create_response.json()["id"]
+
+        update_response = await client.put(
+            f"/api/v1/products/{product_id}",
+            json={
+                "base_price": 150.00,
+                "compare_at_price": 180.00,
+                "variations": [
+                    {
+                        "title": "Red",
+                        "type": "color",
+                        "price": 120.00,
+                        "sale_price": 100.00,
+                        "inherits_price": True,
+                        "inherits_sale_price": True,
+                    }
+                ],
+            },
+            headers=vendor_user["headers"],
+        )
+
+        assert update_response.status_code == 200
+        updated_variation = update_response.json()["variations"][0]
+        assert float(updated_variation["price"]) == 180.00
+        assert float(updated_variation["sale_price"]) == 150.00
+
+    @pytest.mark.asyncio
     async def test_update_single_product_stock_syncs_legacy_variant_stock(
         self,
         client: AsyncClient,

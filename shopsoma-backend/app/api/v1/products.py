@@ -804,6 +804,7 @@ async def update_product(
 
     # Handle variations separately for sync logic
     variations_data = update_data.pop("variations", None)
+    variations_to_sync = product.variations
 
     # ProductUpdate validates only the incoming variation payload. When an
     # existing product retains legacy variants, include those persisted rows in
@@ -837,6 +838,7 @@ async def update_product(
 
     # Sync variations if provided
     if variations_data is not None:
+        variations_to_sync = []
         # Delete all existing variations (cascade will delete size_stocks)
         await db.execute(
             select(Variation).where(Variation.product_id == product_id)
@@ -860,6 +862,7 @@ async def update_product(
             )
             db.add(variation)
             await db.flush()  # Get variation ID
+            variations_to_sync.append(variation)
 
             # Add size stocks for this variation
             if "sizes" in variation_data:
@@ -881,7 +884,7 @@ async def update_product(
     if inherited_price_update:
         new_base_price = product.base_price
         new_compare_at_price = product.compare_at_price
-        for variation in product.variations:
+        for variation in variations_to_sync:
             legacy_regular_price = old_compare_at_price or old_base_price
             inherits_regular_price = _variation_inherits_parent_price(
                 variation,
@@ -904,9 +907,9 @@ async def update_product(
                 variation_type = str(getattr(variation, "type", "color")).casefold()
                 variation_title = normalize_color_value(variation.title)
                 variation_index = (
-                    unique_variations_by_size(product.variations or [])
+                    unique_variations_by_size(variations_to_sync or [])
                     if variation_type == "size"
-                    else unique_variations_by_color(product.variations or [])
+                    else unique_variations_by_color(variations_to_sync or [])
                 )
                 if variation_index.get(variation_title) is not variation:
                     continue
