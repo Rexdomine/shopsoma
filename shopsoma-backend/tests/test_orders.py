@@ -22,11 +22,12 @@ async def test_legacy_numeric_variant_order_metadata_includes_matching_size_vari
     )
     variation = SimpleNamespace(
         id="variation-id", title="4", type="size", price=100,
-        sale_price=80, is_active=True, images=["size-four.jpg"],
+        sale_price=80, inherits_price=None, inherits_sale_price=None,
+        is_active=True, images=["size-four.jpg"],
     )
     product = SimpleNamespace(
         id="product-id", base_price=200, total_stock=1, made_to_order=False,
-        variants=[variant], variations=[variation],
+        compare_at_price=None, variants=[variant], variations=[variation],
     )
 
     class Result:
@@ -48,12 +49,13 @@ async def test_bare_size_variation_order_snapshot_uses_size_axis():
     now = datetime.now(timezone.utc)
     variation = SimpleNamespace(
         id="variation-id", product_id="product-id", title="M", type="size",
-        color_hex=None, price=None, sale_price=None, is_active=True,
+        color_hex=None, price=None, sale_price=None,
+        inherits_price=None, inherits_sale_price=None, is_active=True,
         size_stocks=[], created_at=now, updated_at=now,
     )
     product = SimpleNamespace(
         id="product-id", base_price=100, total_stock=10, made_to_order=True,
-        variants=[], variations=[variation],
+        compare_at_price=None, variants=[], variations=[variation],
     )
 
     class Result:

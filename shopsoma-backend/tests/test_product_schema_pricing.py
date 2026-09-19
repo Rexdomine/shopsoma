@@ -18,6 +18,7 @@ from app.schemas.product import (
     VariationCreate,
     validate_variation_inventory_shape,
     variation_inventory_axis_signature,
+    variation_sale_price,
 )
 
 def test_variation_inheritance_markers_preserve_equal_explicit_overrides():
@@ -77,6 +78,34 @@ def test_legacy_null_price_is_treated_as_inherited_without_a_marker():
     assert _variation_inherits_parent_price(
         legacy, "inherits_price", legacy.price, Decimal("100.00")
     ) is True
+
+
+def test_inherited_sale_marker_wins_over_persisted_sale_price():
+    variation = SimpleNamespace(
+        sale_price=Decimal("80.00"),
+        inherits_sale_price=True,
+        price=Decimal("100.00"),
+    )
+
+    assert variation_sale_price(
+        variation,
+        Decimal("90.00"),
+        parent_has_sale=True,
+    ) == Decimal("90.00")
+
+
+def test_inherited_sale_marker_does_not_invent_parent_sale():
+    variation = SimpleNamespace(
+        sale_price=None,
+        inherits_sale_price=True,
+        price=Decimal("100.00"),
+    )
+
+    assert variation_sale_price(
+        variation,
+        Decimal("80.00"),
+        parent_has_sale=False,
+    ) is None
 
 
 def test_legacy_null_sale_is_custom_when_regular_price_is_custom():
@@ -276,6 +305,52 @@ def test_variation_sale_uses_product_fallback_as_regular_price():
     assert variant.compare_at_price == Decimal("100.00")
 
 
+def test_inherited_blank_sale_uses_parent_base_price_not_compare_at_price():
+    now = datetime.now(timezone.utc)
+    variation = VariationResponse.model_construct(
+        id=uuid4(),
+        product_id=uuid4(),
+        title="Red",
+        type="color",
+        color_hex=None,
+        price=None,
+        sale_price=None,
+        inherits_price=True,
+        inherits_sale_price=True,
+        images=[],
+        is_active=True,
+        created_at=now,
+        updated_at=now,
+        size_stocks=[],
+    )
+    product = ProductResponse.model_construct(
+        id=variation.product_id,
+        base_price=Decimal("120.00"),
+        compare_at_price=Decimal("150.00"),
+        variants=[],
+        variations=[variation],
+    )
+
+    product.generate_variants_from_variations()  # pyright: ignore[reportCallIssue]
+
+    variant = product.variants[0]
+    assert variation_sale_price(variation, product.base_price) == Decimal("120.00")
+    assert variant.price == Decimal("120.00")
+    assert variant.compare_at_price == Decimal("150.00")
+
+
+def test_legacy_blank_sale_and_markers_use_parent_base_price():
+    product = _product_with_variation(price=None, sale_price=None)
+    product.base_price = Decimal("120.00")
+    product.compare_at_price = Decimal("150.00")
+
+    product.generate_variants_from_variations()  # pyright: ignore[reportCallIssue]
+
+    variant = product.variants[0]
+    assert variant.price == Decimal("120.00")
+    assert variant.compare_at_price == Decimal("150.00")
+
+
 def test_bare_size_variation_exposes_its_title_as_size():
     now = datetime.now(timezone.utc)
     variation = VariationResponse.model_construct(
@@ -335,6 +410,31 @@ def test_existing_variant_merges_matching_variation_compare_at_price():
 
     assert product.variants[0].price == Decimal("80.00")
     assert product.variants[0].compare_at_price == Decimal("100.00")
+
+
+def test_existing_variant_keeps_explicit_price_for_null_marker_variation():
+    now = datetime.now(timezone.utc)
+    product_id = uuid4()
+    variation = VariationResponse.model_construct(
+        id=uuid4(), product_id=product_id, title="M", type="size",
+        color_hex=None, price=None, sale_price=None,
+        inherits_price=None, inherits_sale_price=None, images=[], is_active=True,
+        created_at=now, updated_at=now, size_stocks=[],
+    )
+    variant = ProductVariantResponse.model_construct(
+        id=uuid4(), product_id=product_id, size="M", color=None, color_hex=None,
+        price=Decimal("75.00"), compare_at_price=None, stock=1, sku=None,
+        is_available=True, created_at=now, updated_at=now,
+    )
+    product = ProductResponse.model_construct(
+        id=product_id, base_price=Decimal("100.00"),
+        compare_at_price=Decimal("120.00"), variants=[variant], variations=[variation],
+    )
+
+    product.generate_variants_from_variations()  # pyright: ignore[reportCallIssue]
+
+    assert product.variants[0].price == Decimal("75.00")
+    assert product.variants[0].compare_at_price is None
 
 
 def test_existing_size_variant_inherits_sole_color_hex():
@@ -489,7 +589,28 @@ def test_existing_size_variant_merges_matching_size_variation_price():
     assert product.variants[0].compare_at_price == Decimal("100.00")
 
 
-def test_null_or_invalid_variation_sale_does_not_override_regular_price():
+def test_inherited_regular_price_uses_compare_at_for_explicit_sale():
+    now = datetime.now(timezone.utc)
+    variation = VariationResponse.model_construct(
+        id=uuid4(), product_id=uuid4(), title="Red", type="color", color_hex=None,
+        price=None, sale_price=Decimal("90.00"), inherits_price=True,
+        inherits_sale_price=False, images=[], is_active=True,
+        created_at=now, updated_at=now, size_stocks=[],
+    )
+    product = ProductResponse.model_construct(
+        id=variation.product_id,
+        base_price=Decimal("80.00"),
+        compare_at_price=Decimal("100.00"),
+        variants=[],
+        variations=[variation],
+    )
+
+    product.generate_variants_from_variations()  # pyright: ignore[reportCallIssue]
+
+    assert product.variants[0].price == Decimal("90.00")
+    assert product.variants[0].compare_at_price == Decimal("100.00")
+
+
     for sale_price in (None, Decimal("0.00"), Decimal("120.00")):
         product = _product_with_variation(
             price=Decimal("100.00"),

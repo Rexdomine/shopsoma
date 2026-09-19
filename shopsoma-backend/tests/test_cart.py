@@ -37,7 +37,7 @@ def test_parent_variation_with_size_stocks_is_not_purchasable():
         price=None, sale_price=None, is_active=True, size_stocks=[size_stock],
     )
     product = SimpleNamespace(
-        base_price=100, total_stock=10, made_to_order=True, variants=[],
+        base_price=100, compare_at_price=None, total_stock=10, made_to_order=True, variants=[],
         variations=[variation],
     )
 
@@ -59,7 +59,7 @@ def test_unrelated_bare_size_variation_remains_purchasable():
     )
     product = SimpleNamespace(
         id=product_id,
-        base_price=100, total_stock=10, made_to_order=True, variants=[],
+        base_price=100, compare_at_price=None, total_stock=10, made_to_order=True, variants=[],
         variations=[bare_size, stocked_size],
     )
 
@@ -76,7 +76,7 @@ def test_parent_variation_is_not_purchasable_when_legacy_variants_exist():
     )
     legacy_variant = SimpleNamespace(id="legacy-id")
     product = SimpleNamespace(
-        base_price=100, total_stock=10, made_to_order=True,
+        base_price=100, compare_at_price=None, total_stock=10, made_to_order=True,
         variants=[legacy_variant], variations=[variation],
     )
 
@@ -91,7 +91,7 @@ def test_bare_size_variation_cart_response_uses_size_axis():
         created_at=now, updated_at=now,
     )
     product = SimpleNamespace(
-        id="00000000-0000-4000-8000-000000000023", base_price=100, variants=[], variations=[variation],
+        id="00000000-0000-4000-8000-000000000023", base_price=100, compare_at_price=None, variants=[], variations=[variation],
     )
 
     response = resolve_variant_response(product, "00000000-0000-4000-8000-000000000022")
@@ -115,6 +115,7 @@ def test_existing_variation_cart_row_uses_and_persists_current_sale_price():
     product = SimpleNamespace(
         id="00000000-0000-4000-8000-000000000001",
         base_price=100,
+        compare_at_price=None,
         total_stock=10,
         made_to_order=False,
         variants=[],
@@ -128,12 +129,31 @@ def test_existing_variation_cart_row_uses_and_persists_current_sale_price():
     assert calculate_cart_summary([cart_item]).subtotal == 160
 
 
-def test_legacy_size_cart_row_keeps_legacy_price_when_size_variation_has_no_override():
+def test_inherited_variation_sale_uses_product_compare_at_in_cart_pricing():
+    variation = SimpleNamespace(
+        id="00000000-0000-4000-8000-000000000004",
+        title="Red", color_hex="#ff0000", price=None, sale_price=90,
+        inherits_price=True, inherits_sale_price=False, is_active=True, size_stocks=[],
+        created_at=datetime.now(timezone.utc), updated_at=datetime.now(timezone.utc),
+    )
+    product = SimpleNamespace(
+        id="00000000-0000-4000-8000-000000000005", base_price=80,
+        compare_at_price=100, total_stock=10, made_to_order=False,
+        variants=[], variations=[variation],
+    )
+    cart_item = SimpleNamespace(product=product, variant_id=variation.id, price=80, quantity=1)
+
+    assert resolve_cart_item_price(cart_item) == 90
+    assert reprice_cart_item(cart_item) is True
+    assert cart_item.price == 90
+
+
+def test_legacy_variant_price_is_preserved_for_null_marker_variation():
     variation = SimpleNamespace(
         id="00000000-0000-4000-8000-000000000002",
         title="M", type="size", color_hex=None, price=None, sale_price=None,
-        is_active=True, size_stocks=[], created_at=datetime.now(timezone.utc),
-        updated_at=datetime.now(timezone.utc),
+        inherits_price=None, inherits_sale_price=None, is_active=True, size_stocks=[],
+        created_at=datetime.now(timezone.utc), updated_at=datetime.now(timezone.utc),
     )
     product = SimpleNamespace(
         id="00000000-0000-4000-8000-000000000001", base_price=100,
@@ -171,7 +191,7 @@ def test_size_stock_cart_variant_inherits_sole_color_hex():
         is_active=True, size_stocks=[size_stock], created_at=now, updated_at=now,
     )
     product = SimpleNamespace(
-        id="00000000-0000-4000-8000-000000000001", base_price=100,
+        id="00000000-0000-4000-8000-000000000001", base_price=100, compare_at_price=None,
         variants=[], variations=[color, size],
     )
 
@@ -196,6 +216,7 @@ def test_coupon_subtotal_uses_current_variation_price():
     product = SimpleNamespace(
         id="00000000-0000-4000-8000-000000000001",
         base_price=100,
+        compare_at_price=None,
         total_stock=10,
         made_to_order=False,
         variants=[],

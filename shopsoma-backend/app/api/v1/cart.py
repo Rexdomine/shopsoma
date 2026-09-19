@@ -26,6 +26,8 @@ from app.schemas.product import (
     normalize_color_value,
     unique_variations_by_color,
     unique_variations_by_size,
+    variation_regular_price,
+    variation_sale_price,
 )
 from app.api.dependencies import get_optional_user
 from app.models.user import User
@@ -73,12 +75,24 @@ def resolve_variant_response(
                     normalize_color_value(variant.size)
                 )
             if variation is not None and (
-                variation.price is not None or variation.sale_price is not None
+                variation.price is not None
+                or variation.sale_price is not None
+                or variation.inherits_price is True
+                or variation.inherits_sale_price is True
             ):
-                response.price = effective_variation_price(
-                    variation.price, variation.sale_price, product.base_price
+                regular_price = variation_regular_price(
+                    variation, product.base_price, getattr(product, "compare_at_price", None)
                 )
-                regular_price = variation.price if variation.price is not None else product.base_price
+                response.price = effective_variation_price(
+                    variation.price,
+                    variation_sale_price(
+                    variation,
+                    product.base_price,
+                    parent_has_sale=product.compare_at_price is not None,
+                ),
+                    product.base_price,
+                    regular_price=regular_price,
+                )
                 response.compare_at_price = (
                     regular_price if response.price < regular_price else None
                 )
@@ -86,8 +100,18 @@ def resolve_variant_response(
 
     # Fallback to vendor variations/size stocks
     for variation in product.variations or []:
+        regular_price = variation_regular_price(
+            variation, product.base_price, getattr(product, "compare_at_price", None)
+        )
         base_price = effective_variation_price(
-            variation.price, variation.sale_price, product.base_price
+            variation.price,
+            variation_sale_price(
+                    variation,
+                    product.base_price,
+                    parent_has_sale=product.compare_at_price is not None,
+                ),
+            product.base_price,
+            regular_price=regular_price,
         )
 
         if str(variation.id) == str(variant_id):

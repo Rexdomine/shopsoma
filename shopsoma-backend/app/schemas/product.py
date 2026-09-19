@@ -8,16 +8,55 @@ from uuid import UUID
 from pydantic import BaseModel, Field, field_validator, model_validator, ConfigDict
 
 
+def variation_regular_price(
+    variation,
+    fallback: Decimal,
+    compare_at_fallback: Optional[Decimal] = None,
+) -> Decimal:
+    """Resolve a variation's regular price, including inherited compare-at pricing."""
+    price = getattr(variation, "price", None)
+    inherits_price = getattr(variation, "inherits_price", None)
+    if inherits_price is True or (inherits_price is None and price is None):
+        return compare_at_fallback if compare_at_fallback is not None else fallback
+    return price if price is not None else fallback
+
+
+def variation_sale_price(
+    variation,
+    fallback: Decimal,
+    *,
+    parent_has_sale: Optional[bool] = None,
+) -> Optional[Decimal]:
+    """Resolve an inherited variation sale price from the product base price."""
+    if getattr(variation, "inherits_sale_price", None) is True:
+        if parent_has_sale is False:
+            return None
+        return fallback
+    sale_price = getattr(variation, "sale_price", None)
+    if sale_price is not None:
+        return sale_price
+    if (
+        getattr(variation, "inherits_sale_price", None) is None
+        and getattr(variation, "price", None) is None
+    ):
+        return fallback
+    return None
+
+
 def effective_variation_price(
     price: Optional[Decimal],
     sale_price: Optional[Decimal],
     fallback: Decimal,
+    *,
+    regular_price: Optional[Decimal] = None,
 ) -> Decimal:
     """Return the effective purchasable price for a variation."""
-    regular_price = price if price is not None else fallback
-    if sale_price is not None and sale_price > 0 and sale_price < regular_price:
+    resolved_regular_price = regular_price if regular_price is not None else (
+        price if price is not None else fallback
+    )
+    if sale_price is not None and sale_price > 0 and sale_price < resolved_regular_price:
         return sale_price
-    return regular_price
+    return resolved_regular_price
 
 
 def normalize_color_value(value: Optional[str]) -> str:
@@ -659,14 +698,43 @@ class ProductResponse(ProductBase):
                         variation = variations_by_size.get(normalize_color_value(variant.size))
                     if variation is None:
                         continue
-                    if variation.price is None and variation.sale_price is None:
+                    if (
+                        variant.price is not None
+                        and variation.price is None
+                        and variation.sale_price is None
+                        and variation.inherits_price is None
+                        and variation.inherits_sale_price is None
+                    ):
+                        # A persisted legacy variant with an explicit price is
+                        # authoritative when its companion variation is only a
+                        # null-marker placeholder.
+                        continue
+                    if (
+                        variation.price is None
+                        and variation_sale_price(
+                            variation,
+                            self.base_price,
+                            parent_has_sale=self.compare_at_price is not None,
+                        ) is None
+                        and not (
+                            variation.inherits_price is True
+                            or variation.inherits_sale_price is True
+                        )
+                    ):
                         continue
 
-                    variant_price = effective_variation_price(
-                        variation.price, variation.sale_price, self.base_price
+                    regular_price = variation_regular_price(
+                        variation, self.base_price, self.compare_at_price
                     )
-                    regular_price = (
-                        variation.price if variation.price is not None else self.base_price
+                    variant_price = effective_variation_price(
+                        variation.price,
+                        variation_sale_price(
+                            variation,
+                            self.base_price,
+                            parent_has_sale=self.compare_at_price is not None,
+                        ),
+                        self.base_price,
+                        regular_price=regular_price,
                     )
                     variant.price = variant_price
                     variant.compare_at_price = (
@@ -684,11 +752,18 @@ class ProductResponse(ProductBase):
                 for variation in self.variations:
                     if not variation.is_active or not variation.size_stocks:
                         continue
-                    variant_price = effective_variation_price(
-                        variation.price, variation.sale_price, self.base_price
+                    regular_price = variation_regular_price(
+                        variation, self.base_price, self.compare_at_price
                     )
-                    regular_price = (
-                        variation.price if variation.price is not None else self.base_price
+                    variant_price = effective_variation_price(
+                        variation.price,
+                        variation_sale_price(
+                            variation,
+                            self.base_price,
+                            parent_has_sale=self.compare_at_price is not None,
+                        ),
+                        self.base_price,
+                        regular_price=regular_price,
                     )
                     compare_at_price = (
                         regular_price if variant_price < regular_price else None
@@ -742,11 +817,18 @@ class ProductResponse(ProductBase):
                 # Normalize variation pricing to the legacy variant contract:
                 # `price` is the effective purchase price and `compare_at_price`
                 # retains the regular price when a valid sale is configured.
-                variant_price = effective_variation_price(
-                    variation.price, variation.sale_price, self.base_price
+                regular_price = variation_regular_price(
+                    variation, self.base_price, self.compare_at_price
                 )
-                regular_price = (
-                    variation.price if variation.price is not None else self.base_price
+                variant_price = effective_variation_price(
+                    variation.price,
+                    variation_sale_price(
+                            variation,
+                            self.base_price,
+                            parent_has_sale=self.compare_at_price is not None,
+                        ),
+                    self.base_price,
+                    regular_price=regular_price,
                 )
                 has_valid_sale = variant_price < regular_price
                 compare_at_price = regular_price if has_valid_sale else None
