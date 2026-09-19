@@ -54,6 +54,16 @@ export function isGateCacheFresh(
     && now - resolvedAt < COMING_SOON_CACHE_MS;
 }
 
+export function shouldShowGateLoading(
+  authLoading: boolean,
+  bypassComingSoon: boolean,
+  gateState: GateState,
+  resolvedScope: 'public' | 'bypass' | null,
+  gateScope: 'public' | 'bypass',
+): boolean {
+  return authLoading || (!bypassComingSoon && (gateState === 'loading' || resolvedScope !== gateScope));
+}
+
 /**
  * Root Layout Component
  * Wraps all routes and handles scroll restoration
@@ -83,7 +93,8 @@ export default function RootLayout() {
     }
 
     let mounted = true;
-    setGateState('loading');
+    const isBackgroundRevalidation = resolvedScope === gateScope;
+    if (!isBackgroundRevalidation) setGateState('loading');
     getComingSoonSettings().then((settings) => {
       if (mounted) {
         setGateState(settings.enabled ? 'closed' : 'open');
@@ -106,7 +117,7 @@ export default function RootLayout() {
     return () => window.clearTimeout(timeout);
   }, [resolvedAt]);
 
-  if (authLoading || (!bypassComingSoon && (gateState === 'loading' || resolvedScope !== 'public'))) {
+  if (shouldShowGateLoading(authLoading, bypassComingSoon, gateState, resolvedScope, gateScope)) {
     return <Loading fullScreen message="Preparing ShopSoma..." />;
   }
 

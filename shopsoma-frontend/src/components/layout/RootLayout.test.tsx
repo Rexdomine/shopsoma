@@ -4,6 +4,7 @@ import {
   gateLocationKey,
   isGateCacheFresh,
   shouldBypassComingSoon,
+  shouldShowGateLoading,
 } from './RootLayout';
 
 describe('gateLocationKey', () => {
@@ -22,6 +23,18 @@ describe('isGateCacheFresh', () => {
 
   it('does not reuse a cache from a different route scope', () => {
     expect(isGateCacheFresh('bypass', 'public', 1_000, 1_001)).toBe(false);
+  });
+});
+
+describe('shouldShowGateLoading', () => {
+  it('keeps public content mounted during same-scope cache revalidation', () => {
+    expect(shouldShowGateLoading(false, false, 'open', 'public', 'public')).toBe(false);
+    expect(shouldShowGateLoading(false, false, 'closed', 'public', 'public')).toBe(false);
+  });
+
+  it('blocks the initial public resolution and scope changes', () => {
+    expect(shouldShowGateLoading(false, false, 'loading', null, 'public')).toBe(true);
+    expect(shouldShowGateLoading(false, false, 'open', 'bypass', 'public')).toBe(true);
   });
 });
 
