@@ -31,6 +31,21 @@ describe('ComingSoon', () => {
     await waitFor(() => expect(onReleased).toHaveBeenCalledTimes(1));
   });
 
+  it('revalidates an expired launch time only once while the server keeps the gate enabled', async () => {
+    vi.useFakeTimers();
+    const launchAt = new Date(Date.now() - 1_000).toISOString();
+    getComingSoonSettings
+      .mockResolvedValueOnce({ enabled: true, launch_at: launchAt, image_url: '/campaign.webp' })
+      .mockResolvedValue({ enabled: true, launch_at: launchAt, image_url: '/campaign.webp' });
+
+    render(<ComingSoon />);
+    await act(async () => { await Promise.resolve(); });
+    await act(async () => { vi.advanceTimersByTime(5_000); await Promise.resolve(); });
+
+    expect(getComingSoonSettings).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
+  });
+
   it('revalidates a scheduled gate before releasing after the local countdown', async () => {
     vi.useFakeTimers();
     const launchAt = new Date(Date.now() + 1_000).toISOString();

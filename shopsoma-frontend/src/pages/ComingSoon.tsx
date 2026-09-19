@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowRight, Instagram, Mail } from 'lucide-react';
 import { getComingSoonSettings, type ComingSoonSettings } from '../services/settingsService';
 
@@ -28,6 +28,7 @@ interface ComingSoonProps {
 export default function ComingSoon({ onReleased }: ComingSoonProps) {
   const [settings, setSettings] = useState<ComingSoonSettings | null>(null);
   const [countdown, setCountdown] = useState<Countdown>(() => getCountdown(null));
+  const expiryRefreshLaunchAt = useRef<string | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -49,8 +50,11 @@ export default function ComingSoon({ onReleased }: ComingSoonProps) {
     if (!settings?.enabled) return undefined;
     let mounted = true;
     let released = false;
+    let refreshInFlight = false;
 
     const refresh = () => {
+      if (refreshInFlight) return;
+      refreshInFlight = true;
       getComingSoonSettings().then((value) => {
         if (!mounted) return;
         setSettings(value);
@@ -61,6 +65,8 @@ export default function ComingSoon({ onReleased }: ComingSoonProps) {
         }
       }).catch(() => {
         // Keep the current coming-soon view if a background refresh fails.
+      }).finally(() => {
+        refreshInFlight = false;
       });
     };
 
@@ -76,8 +82,11 @@ export default function ComingSoon({ onReleased }: ComingSoonProps) {
     const countdownTimer = window.setInterval(() => {
       const next = getCountdown(launchAt);
       setCountdown(next);
-      // The client clock only triggers a server revalidation; it never opens the gate itself.
-      if (new Date(launchAt).getTime() <= Date.now()) refresh();
+      // The client clock only triggers one server revalidation per observed launch time.
+      if (new Date(launchAt).getTime() <= Date.now() && expiryRefreshLaunchAt.current !== launchAt) {
+        expiryRefreshLaunchAt.current = launchAt;
+        refresh();
+      }
     }, 1000);
 
     return () => {
