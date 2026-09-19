@@ -87,7 +87,25 @@ def test_inherited_sale_marker_wins_over_persisted_sale_price():
         price=Decimal("100.00"),
     )
 
-    assert variation_sale_price(variation, Decimal("90.00")) == Decimal("90.00")
+    assert variation_sale_price(
+        variation,
+        Decimal("90.00"),
+        parent_has_sale=True,
+    ) == Decimal("90.00")
+
+
+def test_inherited_sale_marker_does_not_invent_parent_sale():
+    variation = SimpleNamespace(
+        sale_price=None,
+        inherits_sale_price=True,
+        price=Decimal("100.00"),
+    )
+
+    assert variation_sale_price(
+        variation,
+        Decimal("80.00"),
+        parent_has_sale=False,
+    ) is None
 
 
 def test_legacy_null_sale_is_custom_when_regular_price_is_custom():

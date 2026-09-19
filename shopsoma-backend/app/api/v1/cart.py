@@ -85,7 +85,11 @@ def resolve_variant_response(
                 )
                 response.price = effective_variation_price(
                     variation.price,
-                    variation_sale_price(variation, product.base_price),
+                    variation_sale_price(
+                    variation,
+                    product.base_price,
+                    parent_has_sale=product.compare_at_price is not None,
+                ),
                     product.base_price,
                     regular_price=regular_price,
                 )
@@ -101,7 +105,11 @@ def resolve_variant_response(
         )
         base_price = effective_variation_price(
             variation.price,
-            variation_sale_price(variation, product.base_price),
+            variation_sale_price(
+                    variation,
+                    product.base_price,
+                    parent_has_sale=product.compare_at_price is not None,
+                ),
             product.base_price,
             regular_price=regular_price,
         )

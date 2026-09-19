@@ -21,9 +21,16 @@ def variation_regular_price(
     return price if price is not None else fallback
 
 
-def variation_sale_price(variation, fallback: Decimal) -> Optional[Decimal]:
+def variation_sale_price(
+    variation,
+    fallback: Decimal,
+    *,
+    parent_has_sale: Optional[bool] = None,
+) -> Optional[Decimal]:
     """Resolve an inherited variation sale price from the product base price."""
     if getattr(variation, "inherits_sale_price", None) is True:
+        if parent_has_sale is False:
+            return None
         return fallback
     sale_price = getattr(variation, "sale_price", None)
     if sale_price is not None:
@@ -704,7 +711,11 @@ class ProductResponse(ProductBase):
                         continue
                     if (
                         variation.price is None
-                        and variation_sale_price(variation, self.base_price) is None
+                        and variation_sale_price(
+                            variation,
+                            self.base_price,
+                            parent_has_sale=self.compare_at_price is not None,
+                        ) is None
                         and not (
                             variation.inherits_price is True
                             or variation.inherits_sale_price is True
@@ -717,7 +728,11 @@ class ProductResponse(ProductBase):
                     )
                     variant_price = effective_variation_price(
                         variation.price,
-                        variation_sale_price(variation, self.base_price),
+                        variation_sale_price(
+                            variation,
+                            self.base_price,
+                            parent_has_sale=self.compare_at_price is not None,
+                        ),
                         self.base_price,
                         regular_price=regular_price,
                     )
@@ -742,7 +757,11 @@ class ProductResponse(ProductBase):
                     )
                     variant_price = effective_variation_price(
                         variation.price,
-                        variation_sale_price(variation, self.base_price),
+                        variation_sale_price(
+                            variation,
+                            self.base_price,
+                            parent_has_sale=self.compare_at_price is not None,
+                        ),
                         self.base_price,
                         regular_price=regular_price,
                     )
@@ -803,7 +822,11 @@ class ProductResponse(ProductBase):
                 )
                 variant_price = effective_variation_price(
                     variation.price,
-                    variation_sale_price(variation, self.base_price),
+                    variation_sale_price(
+                            variation,
+                            self.base_price,
+                            parent_has_sale=self.compare_at_price is not None,
+                        ),
                     self.base_price,
                     regular_price=regular_price,
                 )

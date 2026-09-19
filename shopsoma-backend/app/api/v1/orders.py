@@ -314,7 +314,11 @@ async def resolve_order_variant(
         ):
             unit_price = effective_variation_price(
                 matching_variation.price,
-                variation_sale_price(matching_variation, product.base_price),
+                variation_sale_price(
+                matching_variation,
+                product.base_price,
+                parent_has_sale=product.compare_at_price is not None,
+            ),
                 product.base_price,
                 regular_price=variation_regular_price(
                     matching_variation,
@@ -350,7 +354,11 @@ async def resolve_order_variant(
         size_stock, variation = size_stock_row
         unit_price = effective_variation_price(
             variation.price,
-            variation_sale_price(variation, product.base_price),
+            variation_sale_price(
+                variation,
+                product.base_price,
+                parent_has_sale=product.compare_at_price is not None,
+            ),
             product.base_price,
             regular_price=variation_regular_price(
                 variation, product.base_price, product.compare_at_price
@@ -407,7 +415,11 @@ async def resolve_order_variant(
             )
         unit_price = effective_variation_price(
             variation.price,
-            variation_sale_price(variation, product.base_price),
+            variation_sale_price(
+                variation,
+                product.base_price,
+                parent_has_sale=product.compare_at_price is not None,
+            ),
             product.base_price,
             regular_price=variation_regular_price(
                 variation, product.base_price, product.compare_at_price
