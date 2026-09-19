@@ -830,6 +830,25 @@ export default function VendorProductAdd() {
     const productImageUploads = variations.flatMap((variation) => variation.images);
     const variationImageUploads = detailedVariations.flatMap((variation) => variation.images);
 
+    if (productType === 'variable') {
+      for (const variation of detailedVariations) {
+        if (!variation.hasDifferentPricing || !variation.salesPrice?.trim()) {
+          continue;
+        }
+        const customRegularPrice = parseFloat(variation.price);
+        const customSalePrice = parseFloat(variation.salesPrice);
+        if (
+          !Number.isFinite(customRegularPrice) ||
+          !Number.isFinite(customSalePrice) ||
+          customSalePrice <= 0 ||
+          customSalePrice >= customRegularPrice
+        ) {
+          warning('Sales price must be lower than the variation price');
+          return;
+        }
+      }
+    }
+
     if (productType === 'single' && !productImageUploads.some((image) => image.uploaded && image.imageUrl)) {
       warning('At least one product image is required', 'Missing info');
       return;
