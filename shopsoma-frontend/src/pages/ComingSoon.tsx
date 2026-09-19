@@ -37,6 +37,7 @@ export default function ComingSoon({ onReleased }: ComingSoonProps) {
       setCountdown(getCountdown(value.launch_at));
       if (!value.enabled) onReleased?.();
     }).catch(() => {
+      if (!mounted) return;
       // Fail open: an unavailable settings endpoint must not take down the storefront.
       setSettings({ enabled: false, launch_at: null, image_url: DEFAULT_IMAGE });
       onReleased?.();
@@ -45,16 +46,37 @@ export default function ComingSoon({ onReleased }: ComingSoonProps) {
   }, [onReleased]);
 
   useEffect(() => {
-    if (!settings?.enabled || !settings.launch_at) return undefined;
+    if (!settings?.enabled) return undefined;
+    if (!settings.launch_at) {
+      let mounted = true;
+      const refresh = window.setInterval(() => {
+        getComingSoonSettings().then((value) => {
+          if (mounted && !value.enabled) {
+            setSettings(value);
+            onReleased?.();
+          }
+        }).catch(() => {
+          // Keep the current coming-soon view if a background refresh fails.
+        });
+      }, 10_000);
+      return () => {
+        mounted = false;
+        window.clearInterval(refresh);
+      };
+    }
+    let mounted = true;
     const timer = window.setInterval(() => {
       const next = getCountdown(settings.launch_at);
       setCountdown(next);
-      if (new Date(settings.launch_at as string).getTime() <= Date.now()) {
+      if (mounted && new Date(settings.launch_at as string).getTime() <= Date.now()) {
         setSettings((current: ComingSoonSettings | null) => current ? { ...current, enabled: false } : current);
         onReleased?.();
       }
     }, 1000);
-    return () => window.clearInterval(timer);
+    return () => {
+      mounted = false;
+      window.clearInterval(timer);
+    };
   }, [settings, onReleased]);
 
   const launchLabel = useMemo(() => {

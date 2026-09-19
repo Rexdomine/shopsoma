@@ -32,6 +32,7 @@ export default function RootLayout() {
   const { pathname } = useLocation();
   const { user, isLoading: authLoading } = useAuth();
   const [gateState, setGateState] = useState<GateState>('loading');
+  const [resolvedPathname, setResolvedPathname] = useState<string | null>(null);
 
   useEffect(() => {
     window.scrollTo(0, 0);
@@ -42,19 +43,27 @@ export default function RootLayout() {
   useEffect(() => {
     if (bypassComingSoon) {
       setGateState('open');
+      setResolvedPathname(pathname);
       return undefined;
     }
     let mounted = true;
     setGateState('loading');
+    setResolvedPathname(null);
     getComingSoonSettings().then((settings) => {
-      if (mounted) setGateState(settings.enabled ? 'closed' : 'open');
+      if (mounted) {
+        setGateState(settings.enabled ? 'closed' : 'open');
+        setResolvedPathname(pathname);
+      }
     }).catch(() => {
-      if (mounted) setGateState('open');
+      if (mounted) {
+        setGateState('open');
+        setResolvedPathname(pathname);
+      }
     });
     return () => { mounted = false; };
   }, [bypassComingSoon, pathname]);
 
-  if (authLoading || (!bypassComingSoon && gateState === 'loading')) {
+  if (authLoading || (!bypassComingSoon && (gateState === 'loading' || resolvedPathname !== pathname))) {
     return <Loading fullScreen message="Preparing ShopSoma..." />;
   }
 

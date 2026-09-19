@@ -64,7 +64,7 @@ export default function ComingSoonSettings({ onDirtyChange, onBusyChange }: Comi
   }, [dirty, saving, onBusyChange, onDirtyChange]);
 
   const save = async () => {
-    if (launchAt && new Date(launchAt).getTime() <= Date.now()) {
+    if (enabled && launchAt && new Date(launchAt).getTime() <= Date.now()) {
       error('Choose a launch time in the future or clear the countdown.', 'Invalid launch time');
       return;
     }
