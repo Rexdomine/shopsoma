@@ -132,7 +132,7 @@ def test_inherited_variation_sale_uses_product_compare_at_in_cart_pricing():
     variation = SimpleNamespace(
         id="00000000-0000-4000-8000-000000000004",
         title="Red", color_hex="#ff0000", price=None, sale_price=90,
-        inherits_price=True, is_active=True, size_stocks=[],
+        inherits_price=True, inherits_sale_price=False, is_active=True, size_stocks=[],
         created_at=datetime.now(timezone.utc), updated_at=datetime.now(timezone.utc),
     )
     product = SimpleNamespace(
