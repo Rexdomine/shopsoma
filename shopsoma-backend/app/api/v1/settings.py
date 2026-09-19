@@ -6,6 +6,7 @@ import subprocess
 import tempfile
 import time
 from typing import List
+from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 import anyio
@@ -36,8 +37,10 @@ from app.schemas.app_setting import (
     FeaturedRotationSettings,
     FeaturedRotationSettingsUpdate,
     DatabaseSyncResponse,
+    ComingSoonSettings,
+    ComingSoonSettingsUpdate,
 )
-from app.api.dependencies import get_current_user, require_admin
+from app.api.dependencies import require_admin
 from app.services.commission import COMMISSION_SETTING_KEY, DEFAULT_COMMISSION_RATE, normalize_commission_rate
 
 from app.services.shipping.provider_settings import shipping_provider_settings
@@ -532,6 +535,81 @@ async def update_commission_settings(
     return CommissionSettings(
         commission_rate=float(commission_rate),
         updated_at=setting.updated_at if setting else None,
+    )
+
+
+@router.get("/public/coming-soon", response_model=ComingSoonSettings)
+async def get_public_coming_soon_settings(
+    db: AsyncSession = Depends(get_db),
+):
+    """Return the effective public coming-soon gate configuration."""
+    default_image = "/images/hero/campaign/campaign-exterior-desktop.webp"
+    values = {
+        key: await get_app_setting_value(db, key, default)
+        for key, default in (
+            ("coming_soon_enabled", "false"),
+            ("coming_soon_launch_at", ""),
+            ("coming_soon_image_url", default_image),
+        )
+    }
+    launch_at = None
+    if values["coming_soon_launch_at"]:
+        try:
+            launch_at = datetime.fromisoformat(values["coming_soon_launch_at"])
+            if launch_at.tzinfo is None:
+                launch_at = launch_at.replace(tzinfo=timezone.utc)
+        except ValueError:
+            launch_at = None
+    enabled = values["coming_soon_enabled"].lower() == "true"
+    if launch_at and launch_at <= datetime.now(timezone.utc):
+        enabled = False
+    return ComingSoonSettings(
+        enabled=enabled,
+        launch_at=launch_at,
+        image_url=values["coming_soon_image_url"] or default_image,
+    )
+
+
+@router.get("/admin/coming-soon", response_model=ComingSoonSettings)
+async def get_admin_coming_soon_settings(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """Return the saved coming-soon gate configuration (admin only)."""
+    _ = current_user
+    public = await get_public_coming_soon_settings(db)
+    enabled = (await get_app_setting_value(db, "coming_soon_enabled", "false")).lower() == "true"
+    return public.model_copy(update={"enabled": enabled})
+
+
+@router.put("/admin/coming-soon", response_model=ComingSoonSettings)
+async def update_admin_coming_soon_settings(
+    payload: ComingSoonSettingsUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """Update the coming-soon gate and launch countdown (admin only)."""
+    default_image = "/images/hero/campaign/campaign-exterior-desktop.webp"
+    launch_at = payload.launch_at
+    if launch_at and launch_at.tzinfo is None:
+        launch_at = launch_at.replace(tzinfo=timezone.utc)
+    if launch_at:
+        launch_at = launch_at.astimezone(timezone.utc)
+    image_url = (payload.image_url or default_image).strip() or default_image
+    await update_app_setting_value(db, "coming_soon_enabled", str(payload.enabled).lower(), commit=False)
+    await update_app_setting_value(
+        db,
+        "coming_soon_launch_at",
+        launch_at.isoformat() if launch_at else "",
+        commit=False,
+    )
+    await update_app_setting_value(db, "coming_soon_image_url", image_url, commit=False)
+    await db.commit()
+    logger.info("[Settings] Admin %s updated coming-soon gate enabled=%s launch_at=%s", current_user.email, payload.enabled, launch_at)
+    return ComingSoonSettings(
+        enabled=payload.enabled,
+        launch_at=launch_at,
+        image_url=image_url,
     )
 
 
