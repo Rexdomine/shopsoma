@@ -35,10 +35,11 @@ function pad(value: number) {
 
 interface ComingSoonProps {
   onReleased?: () => void;
+  initialSettings?: ComingSoonSettings;
 }
 
-export default function ComingSoon({ onReleased }: ComingSoonProps) {
-  const [settings, setSettings] = useState<ComingSoonSettings | null>(null);
+export default function ComingSoon({ onReleased, initialSettings }: ComingSoonProps) {
+  const [settings, setSettings] = useState<ComingSoonSettings | null>(initialSettings ?? null);
   const [countdown, setCountdown] = useState<Countdown>(() => getCountdown(null));
   const expiryRefreshLaunchAt = useRef<string | null>(null);
 
@@ -51,12 +52,13 @@ export default function ComingSoon({ onReleased }: ComingSoonProps) {
       if (!value.enabled) onReleased?.();
     }).catch(() => {
       if (!mounted) return;
+      if (initialSettings) return;
       // Fail open: an unavailable settings endpoint must not take down the storefront.
       setSettings({ enabled: false, launch_at: null, image_url: DEFAULT_IMAGE });
       onReleased?.();
     });
     return () => { mounted = false; };
-  }, [onReleased]);
+  }, [initialSettings, onReleased]);
 
   useEffect(() => {
     if (!settings?.enabled) return undefined;
