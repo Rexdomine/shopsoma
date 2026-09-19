@@ -22,6 +22,9 @@ describe('shouldBypassComingSoon', () => {
   it('preserves login and protected route entry points', () => {
     expect(shouldBypassComingSoon('/login', null)).toBe(true);
     expect(shouldBypassComingSoon('/vendor/login', null)).toBe(true);
+    expect(shouldBypassComingSoon('/vendor/signup', null)).toBe(true);
+    expect(shouldBypassComingSoon('/vendor/signup/business-info', null)).toBe(true);
+    expect(shouldBypassComingSoon('/vendor/signup/thank-you', null)).toBe(true);
     expect(shouldBypassComingSoon('/admin/dashboard', null)).toBe(true);
     expect(shouldBypassComingSoon('/vendor/analytics', null)).toBe(true);
   });
