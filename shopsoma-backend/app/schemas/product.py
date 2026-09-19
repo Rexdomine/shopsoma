@@ -23,11 +23,11 @@ def variation_regular_price(
 
 def variation_sale_price(variation, fallback: Decimal) -> Optional[Decimal]:
     """Resolve an inherited variation sale price from the product base price."""
+    if getattr(variation, "inherits_sale_price", None) is True:
+        return fallback
     sale_price = getattr(variation, "sale_price", None)
     if sale_price is not None:
         return sale_price
-    if getattr(variation, "inherits_sale_price", None) is True:
-        return fallback
     if (
         getattr(variation, "inherits_sale_price", None) is None
         and getattr(variation, "price", None) is None
