@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { shouldBypassComingSoon } from './RootLayout';
+import { gateLocationKey, shouldBypassComingSoon } from './RootLayout';
+
+describe('gateLocationKey', () => {
+  it('changes when only the query string changes', () => {
+    expect(gateLocationKey('/products', '?category=dresses'))
+      .not.toBe(gateLocationKey('/products', '?category=shoes'));
+  });
+});
 
 describe('shouldBypassComingSoon', () => {
   it('allows admins to use the full platform', () => {

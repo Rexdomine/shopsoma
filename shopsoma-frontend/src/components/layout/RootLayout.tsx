@@ -24,15 +24,20 @@ export function shouldBypassComingSoon(pathname: string, role?: User['role'] | n
     || AUTH_ENTRY_PATHS.has(pathname);
 }
 
+export function gateLocationKey(pathname: string, search: string): string {
+  return `${pathname}${search}`;
+}
+
 /**
  * Root Layout Component
  * Wraps all routes and handles scroll restoration
  */
 export default function RootLayout() {
-  const { pathname } = useLocation();
+  const { pathname, search } = useLocation();
   const { user, isLoading: authLoading } = useAuth();
   const [gateState, setGateState] = useState<GateState>('loading');
-  const [resolvedPathname, setResolvedPathname] = useState<string | null>(null);
+  const [resolvedLocation, setResolvedLocation] = useState<string | null>(null);
+  const locationKey = gateLocationKey(pathname, search);
 
   useEffect(() => {
     window.scrollTo(0, 0);
@@ -43,27 +48,27 @@ export default function RootLayout() {
   useEffect(() => {
     if (bypassComingSoon) {
       setGateState('open');
-      setResolvedPathname(pathname);
+      setResolvedLocation(locationKey);
       return undefined;
     }
     let mounted = true;
     setGateState('loading');
-    setResolvedPathname(null);
+    setResolvedLocation(null);
     getComingSoonSettings().then((settings) => {
       if (mounted) {
         setGateState(settings.enabled ? 'closed' : 'open');
-        setResolvedPathname(pathname);
+        setResolvedLocation(locationKey);
       }
     }).catch(() => {
       if (mounted) {
         setGateState('open');
-        setResolvedPathname(pathname);
+        setResolvedLocation(locationKey);
       }
     });
     return () => { mounted = false; };
-  }, [bypassComingSoon, pathname]);
+  }, [bypassComingSoon, locationKey]);
 
-  if (authLoading || (!bypassComingSoon && (gateState === 'loading' || resolvedPathname !== pathname))) {
+  if (authLoading || (!bypassComingSoon && (gateState === 'loading' || resolvedLocation !== locationKey))) {
     return <Loading fullScreen message="Preparing ShopSoma..." />;
   }
 
