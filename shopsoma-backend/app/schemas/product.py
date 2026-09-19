@@ -28,6 +28,11 @@ def variation_sale_price(variation, fallback: Decimal) -> Optional[Decimal]:
         return sale_price
     if getattr(variation, "inherits_sale_price", None) is True:
         return fallback
+    if (
+        getattr(variation, "inherits_sale_price", None) is None
+        and getattr(variation, "price", None) is None
+    ):
+        return fallback
     return None
 
 

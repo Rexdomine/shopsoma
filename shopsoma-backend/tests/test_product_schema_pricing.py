@@ -311,6 +311,18 @@ def test_inherited_blank_sale_uses_parent_base_price_not_compare_at_price():
     assert variant.compare_at_price == Decimal("150.00")
 
 
+def test_legacy_blank_sale_and_markers_use_parent_base_price():
+    product = _product_with_variation(price=None, sale_price=None)
+    product.base_price = Decimal("120.00")
+    product.compare_at_price = Decimal("150.00")
+
+    product.generate_variants_from_variations()  # pyright: ignore[reportCallIssue]
+
+    variant = product.variants[0]
+    assert variant.price == Decimal("120.00")
+    assert variant.compare_at_price == Decimal("150.00")
+
+
 def test_bare_size_variation_exposes_its_title_as_size():
     now = datetime.now(timezone.utc)
     variation = VariationResponse.model_construct(
