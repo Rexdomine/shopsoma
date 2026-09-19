@@ -544,13 +544,20 @@ async def get_public_coming_soon_settings(
 ):
     """Return the effective public coming-soon gate configuration."""
     default_image = "/images/hero/campaign/campaign-exterior-desktop.webp"
-    values = {
-        key: await get_app_setting_value(db, key, default)
-        for key, default in (
-            ("coming_soon_enabled", "false"),
-            ("coming_soon_launch_at", ""),
-            ("coming_soon_image_url", default_image),
+    defaults = {
+        "coming_soon_enabled": "false",
+        "coming_soon_launch_at": "",
+        "coming_soon_image_url": default_image,
+    }
+    result = await db.execute(
+        select(AppSetting.key, AppSetting.value).where(
+            AppSetting.key.in_(defaults)
         )
+    )
+    stored_values = dict(result.all())
+    values = {
+        key: stored_values.get(key) or default
+        for key, default in defaults.items()
     }
     launch_at = None
     if values["coming_soon_launch_at"]:
