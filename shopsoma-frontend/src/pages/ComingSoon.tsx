@@ -47,35 +47,43 @@ export default function ComingSoon({ onReleased }: ComingSoonProps) {
 
   useEffect(() => {
     if (!settings?.enabled) return undefined;
+    let mounted = true;
+    let released = false;
+
+    const refresh = () => {
+      getComingSoonSettings().then((value) => {
+        if (!mounted) return;
+        setSettings(value);
+        setCountdown(getCountdown(value.launch_at));
+        if (!value.enabled && !released) {
+          released = true;
+          onReleased?.();
+        }
+      }).catch(() => {
+        // Keep the current coming-soon view if a background refresh fails.
+      });
+    };
+
+    const refreshTimer = window.setInterval(refresh, 10_000);
     if (!settings.launch_at) {
-      let mounted = true;
-      const refresh = window.setInterval(() => {
-        getComingSoonSettings().then((value) => {
-          if (mounted && !value.enabled) {
-            setSettings(value);
-            onReleased?.();
-          }
-        }).catch(() => {
-          // Keep the current coming-soon view if a background refresh fails.
-        });
-      }, 10_000);
       return () => {
         mounted = false;
-        window.clearInterval(refresh);
+        window.clearInterval(refreshTimer);
       };
     }
-    let mounted = true;
-    const timer = window.setInterval(() => {
-      const next = getCountdown(settings.launch_at);
+
+    const launchAt = settings.launch_at;
+    const countdownTimer = window.setInterval(() => {
+      const next = getCountdown(launchAt);
       setCountdown(next);
-      if (mounted && new Date(settings.launch_at as string).getTime() <= Date.now()) {
-        setSettings((current: ComingSoonSettings | null) => current ? { ...current, enabled: false } : current);
-        onReleased?.();
-      }
+      // The client clock only triggers a server revalidation; it never opens the gate itself.
+      if (new Date(launchAt).getTime() <= Date.now()) refresh();
     }, 1000);
+
     return () => {
       mounted = false;
-      window.clearInterval(timer);
+      window.clearInterval(refreshTimer);
+      window.clearInterval(countdownTimer);
     };
   }, [settings, onReleased]);
 
