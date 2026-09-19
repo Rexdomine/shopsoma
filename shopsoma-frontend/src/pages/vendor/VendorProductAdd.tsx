@@ -711,13 +711,21 @@ export default function VendorProductAdd() {
         warning('Variation price is required when different pricing is enabled');
         return;
       }
-      if (isNaN(parseFloat(variationPrice)) || parseFloat(variationPrice) <= 0) {
+      const parsedVariationPrice = parseFloat(variationPrice);
+      if (isNaN(parsedVariationPrice) || parsedVariationPrice <= 0) {
         warning('Invalid variation price');
         return;
       }
-      if (variationSalesPrice && (isNaN(parseFloat(variationSalesPrice)) || parseFloat(variationSalesPrice) <= 0)) {
-        warning('Invalid sales price');
-        return;
+      if (variationSalesPrice) {
+        const parsedSalesPrice = parseFloat(variationSalesPrice);
+        if (isNaN(parsedSalesPrice) || parsedSalesPrice <= 0) {
+          warning('Invalid sales price');
+          return;
+        }
+        if (parsedSalesPrice >= parsedVariationPrice) {
+          warning('Sales price must be lower than the variation price');
+          return;
+        }
       }
     }
 
