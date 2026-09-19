@@ -55,6 +55,23 @@ describe('ComingSoon', () => {
     expect(document.querySelector('main')).toBeInTheDocument();
   });
 
+  it('does not poll settings while an enabled gate has no launch time', async () => {
+    vi.useFakeTimers();
+    getComingSoonSettings.mockRejectedValue(new Error('temporary outage'));
+
+    render(
+      <ComingSoon
+        initialSettings={{ enabled: true, launch_at: null, image_url: '/campaign.webp' }}
+      />,
+    );
+
+    await act(async () => { await Promise.resolve(); });
+    expect(getComingSoonSettings).toHaveBeenCalledTimes(1);
+
+    await act(async () => { vi.advanceTimersByTime(60_000); });
+    expect(getComingSoonSettings).toHaveBeenCalledTimes(1);
+  });
+
   it('refreshes displayed settings when the parent provides a newer snapshot', async () => {
     getComingSoonSettings.mockRejectedValue(new Error('temporary outage'));
     const view = render(

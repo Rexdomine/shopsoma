@@ -70,11 +70,8 @@ export default function ComingSoon({ onReleased, initialSettings }: ComingSoonPr
     if (!settings?.enabled) return undefined;
     let mounted = true;
     let released = false;
-    let refreshInFlight = false;
 
     const refresh = () => {
-      if (refreshInFlight) return;
-      refreshInFlight = true;
       getComingSoonSettings().then((value) => {
         if (!mounted) return;
         setSettings(value);
@@ -85,17 +82,11 @@ export default function ComingSoon({ onReleased, initialSettings }: ComingSoonPr
         }
       }).catch(() => {
         // Keep the current coming-soon view if a background refresh fails.
-      }).finally(() => {
-        refreshInFlight = false;
       });
     };
 
-    const refreshTimer = window.setInterval(refresh, 10_000);
     if (!settings.launch_at) {
-      return () => {
-        mounted = false;
-        window.clearInterval(refreshTimer);
-      };
+      return () => { mounted = false; };
     }
 
     const launchAt = settings.launch_at;
@@ -111,7 +102,6 @@ export default function ComingSoon({ onReleased, initialSettings }: ComingSoonPr
 
     return () => {
       mounted = false;
-      window.clearInterval(refreshTimer);
       window.clearInterval(countdownTimer);
     };
   }, [settings, onReleased]);
