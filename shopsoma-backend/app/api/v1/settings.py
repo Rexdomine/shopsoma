@@ -578,7 +578,7 @@ def _parse_coming_soon_launch_at(value: str) -> datetime | None:
 @router.get("/public/coming-soon", response_model=ComingSoonSettings)
 async def get_public_coming_soon_settings(
     db: AsyncSession = Depends(get_db),
-):
+) -> ComingSoonSettings:
     """Return the effective public coming-soon gate configuration."""
     values = await _get_coming_soon_values(db)
     launch_at = _parse_coming_soon_launch_at(values["coming_soon_launch_at"])
@@ -596,7 +596,7 @@ async def get_public_coming_soon_settings(
 async def get_admin_coming_soon_settings(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_admin),
-):
+) -> ComingSoonSettings:
     """Return the saved coming-soon gate configuration (admin only)."""
     _ = current_user
     values = await _get_coming_soon_values(db)
@@ -612,7 +612,7 @@ async def update_admin_coming_soon_settings(
     payload: ComingSoonSettingsUpdate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_admin),
-):
+) -> ComingSoonSettings:
     """Update the coming-soon gate and launch countdown (admin only)."""
     default_image = "/images/hero/campaign/campaign-exterior-desktop.webp"
     launch_at = payload.launch_at
