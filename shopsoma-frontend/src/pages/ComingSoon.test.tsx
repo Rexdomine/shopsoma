@@ -18,6 +18,14 @@ afterEach(() => {
 });
 
 describe('ComingSoon', () => {
+  it('shows an explicit loading state while the launch settings request is pending', () => {
+    getComingSoonSettings.mockReturnValue(new Promise(() => {}));
+
+    const { getByRole } = render(<ComingSoon />);
+
+    expect(getByRole('status')).toHaveTextContent('Loading launch settings…');
+  });
+
   it('releases the parent when a follow-up settings read reports the gate is open', async () => {
     getComingSoonSettings.mockResolvedValue({
       enabled: false,

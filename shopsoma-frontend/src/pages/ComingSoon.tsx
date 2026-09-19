@@ -101,7 +101,15 @@ export default function ComingSoon({ onReleased }: ComingSoonProps) {
     return new Date(settings.launch_at).toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' });
   }, [settings?.launch_at]);
 
-  if (!settings?.enabled) return null;
+  if (!settings) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-[#0e302d] text-sm text-white/70" role="status">
+        Loading launch settings…
+      </div>
+    );
+  }
+
+  if (!settings.enabled) return null;
 
   const units = [
     ['Days', countdown.days],
