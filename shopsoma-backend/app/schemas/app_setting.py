@@ -98,3 +98,18 @@ class DatabaseSyncResponse(BaseModel):
     status: str = Field(..., pattern="^(success|error)$")
     message: str
     duration_seconds: Optional[float] = None
+
+
+class ComingSoonSettings(BaseModel):
+    """Public and admin coming-soon gate configuration."""
+    enabled: bool = False
+    launch_at: Optional[datetime] = None
+    image_url: str = "/images/hero/campaign/campaign-exterior-desktop.webp"
+    updated_at: Optional[datetime] = None
+
+
+class ComingSoonSettingsUpdate(BaseModel):
+    """Admin update for the coming-soon gate."""
+    enabled: bool
+    launch_at: Optional[datetime] = None
+    image_url: Optional[str] = Field(default=None, max_length=500)

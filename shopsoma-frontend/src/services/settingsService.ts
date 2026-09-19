@@ -68,6 +68,30 @@ export interface DatabaseSyncResponse {
   duration_seconds?: number;
 }
 
+export interface ComingSoonSettings {
+  enabled: boolean;
+  launch_at: string | null;
+  image_url: string;
+  updated_at?: string | null;
+}
+
+export interface ComingSoonSettingsUpdate {
+  enabled: boolean;
+  launch_at: string | null;
+  image_url?: string;
+}
+
+export const getComingSoonSettings = async (): Promise<ComingSoonSettings> =>
+  (await api.get<ComingSoonSettings>('/settings/public/coming-soon')).data;
+
+export const getAdminComingSoonSettings = async (): Promise<ComingSoonSettings> =>
+  (await api.get<ComingSoonSettings>('/settings/admin/coming-soon')).data;
+
+export const updateComingSoonSettings = async (
+  settings: ComingSoonSettingsUpdate,
+): Promise<ComingSoonSettings> =>
+  (await api.put<ComingSoonSettings>('/settings/admin/coming-soon', settings)).data;
+
 /**
  * Get current exchange rate (public endpoint)
  */
