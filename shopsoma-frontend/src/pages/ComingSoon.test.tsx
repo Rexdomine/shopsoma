@@ -55,6 +55,24 @@ describe('ComingSoon', () => {
     expect(document.querySelector('main')).toBeInTheDocument();
   });
 
+  it('refreshes displayed settings when the parent provides a newer snapshot', async () => {
+    getComingSoonSettings.mockRejectedValue(new Error('temporary outage'));
+    const view = render(
+      <ComingSoon
+        initialSettings={{ enabled: true, launch_at: null, image_url: '/campaign-old.webp' }}
+      />,
+    );
+
+    await waitFor(() => expect(getComingSoonSettings).toHaveBeenCalledTimes(1));
+    view.rerender(
+      <ComingSoon
+        initialSettings={{ enabled: true, launch_at: null, image_url: '/campaign-new.webp' }}
+      />,
+    );
+
+    await waitFor(() => expect(view.getByAltText('ShopSoma campaign storefront')).toHaveAttribute('src', '/campaign-new.webp'));
+  });
+
   it('revalidates an expired launch time only once while the server keeps the gate enabled', async () => {
     vi.useFakeTimers();
     const launchAt = new Date(Date.now() - 1_000).toISOString();

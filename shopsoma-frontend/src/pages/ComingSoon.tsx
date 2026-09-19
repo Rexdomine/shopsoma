@@ -40,8 +40,14 @@ interface ComingSoonProps {
 
 export default function ComingSoon({ onReleased, initialSettings }: ComingSoonProps) {
   const [settings, setSettings] = useState<ComingSoonSettings | null>(initialSettings ?? null);
-  const [countdown, setCountdown] = useState<Countdown>(() => getCountdown(null));
+  const [countdown, setCountdown] = useState<Countdown>(() => getCountdown(initialSettings?.launch_at ?? null));
   const expiryRefreshLaunchAt = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!initialSettings) return;
+    setSettings(initialSettings);
+    setCountdown(getCountdown(initialSettings.launch_at));
+  }, [initialSettings]);
 
   useEffect(() => {
     let mounted = true;
