@@ -711,13 +711,21 @@ export default function VendorProductAdd() {
         warning('Variation price is required when different pricing is enabled');
         return;
       }
-      if (isNaN(parseFloat(variationPrice)) || parseFloat(variationPrice) <= 0) {
+      const parsedVariationPrice = parseFloat(variationPrice);
+      if (isNaN(parsedVariationPrice) || parsedVariationPrice <= 0) {
         warning('Invalid variation price');
         return;
       }
-      if (variationSalesPrice && (isNaN(parseFloat(variationSalesPrice)) || parseFloat(variationSalesPrice) <= 0)) {
-        warning('Invalid sales price');
-        return;
+      if (variationSalesPrice) {
+        const parsedSalesPrice = parseFloat(variationSalesPrice);
+        if (isNaN(parsedSalesPrice) || parsedSalesPrice <= 0) {
+          warning('Invalid sales price');
+          return;
+        }
+        if (parsedSalesPrice >= parsedVariationPrice) {
+          warning('Sales price must be lower than the variation price');
+          return;
+        }
       }
     }
 
@@ -822,6 +830,25 @@ export default function VendorProductAdd() {
     const productImageUploads = variations.flatMap((variation) => variation.images);
     const variationImageUploads = detailedVariations.flatMap((variation) => variation.images);
 
+    if (productType === 'variable') {
+      for (const variation of detailedVariations) {
+        if (!variation.hasDifferentPricing || !variation.salesPrice?.trim()) {
+          continue;
+        }
+        const customRegularPrice = parseFloat(variation.price);
+        const customSalePrice = parseFloat(variation.salesPrice);
+        if (
+          !Number.isFinite(customRegularPrice) ||
+          !Number.isFinite(customSalePrice) ||
+          customSalePrice <= 0 ||
+          customSalePrice >= customRegularPrice
+        ) {
+          warning('Sales price must be lower than the variation price');
+          return;
+        }
+      }
+    }
+
     if (productType === 'single' && !productImageUploads.some((image) => image.uploaded && image.imageUrl)) {
       warning('At least one product image is required', 'Missing info');
       return;
@@ -913,15 +940,29 @@ export default function VendorProductAdd() {
           const customSalePrice = variation.salesPrice ? parseFloat(variation.salesPrice) : undefined;
           const inheritedRegularPrice = compareAtPrice ?? parsedProductPrice;
           const inheritedSalePrice = compareAtPrice ? basePrice : undefined;
-          const variationRegularPrice =
-            variation.hasDifferentPricing && customRegularPrice && customRegularPrice > 0
-              ? customRegularPrice
-              : inheritedRegularPrice;
+          const hasCustomRegularPrice =
+            variation.hasDifferentPricing &&
+            customRegularPrice !== undefined &&
+            customRegularPrice > 0;
+          const variationRegularPrice = hasCustomRegularPrice
+            ? customRegularPrice
+            : inheritedRegularPrice;
+          const hasCustomSalePrice =
+            variation.hasDifferentPricing &&
+            customSalePrice !== undefined &&
+            customSalePrice > 0 &&
+            customSalePrice < variationRegularPrice;
+          const validInheritedSalePrice =
+            inheritedSalePrice !== undefined && inheritedSalePrice < variationRegularPrice
+              ? inheritedSalePrice
+              : undefined;
           const variationSalePrice = variation.hasDifferentPricing
-            ? customSalePrice && customSalePrice > 0 && customSalePrice < variationRegularPrice
+            ? hasCustomSalePrice
               ? customSalePrice
-              : undefined
-            : inheritedSalePrice;
+              : validInheritedSalePrice
+            : validInheritedSalePrice;
+          const inheritsRegularPrice = !hasCustomRegularPrice;
+          const inheritsSalePrice = !hasCustomSalePrice;
           const variationBasePrice = variationSalePrice ?? variationRegularPrice;
           if (variation.type === 'Color') {
             const colorStock = shouldTrackStock ? parseInt(variation.colorStock || '0', 10) || 0 : 0;
@@ -931,8 +972,8 @@ export default function VendorProductAdd() {
               color_hex: variation.colorMode === 'solid' ? variation.colorHex || undefined : undefined,
               price: variationRegularPrice,
               sale_price: variationSalePrice,
-              inherits_price: !variation.hasDifferentPricing,
-              inherits_sale_price: !variation.hasDifferentPricing,
+              inherits_price: inheritsRegularPrice,
+              inherits_sale_price: inheritsSalePrice,
               images: variation.images
                 .filter((image) => image.uploaded && image.imageUrl)
                 .map((image) => image.imageUrl!),
@@ -957,8 +998,8 @@ export default function VendorProductAdd() {
                 type: 'size',
                 price: variationRegularPrice,
                 sale_price: variationSalePrice,
-                inherits_price: !variation.hasDifferentPricing,
-                inherits_sale_price: !variation.hasDifferentPricing,
+                inherits_price: inheritsRegularPrice,
+                inherits_sale_price: inheritsSalePrice,
                 images: variation.images
                   .filter((image) => image.uploaded && image.imageUrl)
                   .map((image) => image.imageUrl!),

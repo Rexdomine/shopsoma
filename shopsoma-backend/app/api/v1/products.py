@@ -36,6 +36,7 @@ from app.schemas.product import (
     normalize_color_value,
     unique_variations_by_color,
     unique_variations_by_size,
+    effective_variation_price,
 )
 
 router = APIRouter(prefix="/products", tags=["products"])
@@ -86,7 +87,17 @@ def _sync_inherited_variation_prices(
         if inherits_regular_price:
             variation.price = new_compare_at_price
         if inherits_sale_price:
-            variation.sale_price = new_base_price if new_compare_at_price is not None else None
+            effective_regular_price = (
+                variation.price
+                if variation.price is not None
+                else (new_compare_at_price or new_base_price)
+            )
+            variation.sale_price = (
+                new_base_price
+                if new_compare_at_price is not None
+                and new_base_price < effective_regular_price
+                else None
+            )
 
         if not (inherits_regular_price or inherits_sale_price):
             continue
@@ -104,8 +115,14 @@ def _sync_inherited_variation_prices(
                 legacy_variant.size if variation_type == "size" else legacy_variant.color
             )
             if normalize_color_value(legacy_value) == variation_title:
-                # Legacy variants store the effective purchase price.
-                legacy_variant.price = new_base_price
+                # Legacy variants store the effective purchase price. Preserve
+                # an explicit variation sale when only the regular price is
+                # inherited from the product.
+                legacy_variant.price = effective_variation_price(
+                    variation.price,
+                    variation.sale_price,
+                    new_base_price,
+                )
 
 
 PRODUCT_RELATIONSHIPS = (
