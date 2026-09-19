@@ -4,7 +4,10 @@ from uuid import uuid4
 from types import SimpleNamespace
 import pytest
 
-from app.api.v1.products import _variation_inherits_parent_price
+from app.api.v1.products import (
+    _sync_inherited_variation_prices,
+    _variation_inherits_parent_price,
+)
 from app.schemas.product import (
     ProductResponse,
     ProductUpdate,
@@ -86,6 +89,35 @@ def test_legacy_null_sale_is_custom_when_regular_price_is_custom():
         Decimal("100.00"),
         null_value_inherits=False,
     ) is False
+
+
+def test_parent_price_update_only_moves_inherited_variations_and_legacy_variants():
+    inherited = SimpleNamespace(
+        id="inherited", title="4", type="size", price=Decimal("100"),
+        sale_price=Decimal("80"), inherits_price=True, inherits_sale_price=True,
+        is_active=True,
+    )
+    explicit = SimpleNamespace(
+        id="explicit", title="6", type="size", price=Decimal("150"),
+        sale_price=Decimal("120"), inherits_price=False, inherits_sale_price=False,
+        is_active=True,
+    )
+    inherited_legacy = SimpleNamespace(size="4", color=None, price=Decimal("80"))
+    explicit_legacy = SimpleNamespace(size="6", color=None, price=Decimal("150"))
+
+    _sync_inherited_variation_prices(
+        [inherited, explicit],
+        [inherited_legacy, explicit_legacy],
+        old_base_price=Decimal("80"),
+        old_compare_at_price=Decimal("100"),
+        new_base_price=Decimal("90"),
+        new_compare_at_price=Decimal("110"),
+    )
+
+    assert (inherited.price, inherited.sale_price) == (Decimal("110"), Decimal("90"))
+    assert inherited_legacy.price == Decimal("90")
+    assert (explicit.price, explicit.sale_price) == (Decimal("150"), Decimal("120"))
+    assert explicit_legacy.price == Decimal("150")
 
 
 def _product_with_variation(*, price: Decimal | None, sale_price: Decimal | None):

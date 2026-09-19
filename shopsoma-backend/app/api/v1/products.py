@@ -55,6 +55,59 @@ def _variation_inherits_parent_price(
     return persisted_value == legacy_parent_value
 
 
+def _sync_inherited_variation_prices(
+    variations: list[Any],
+    legacy_variants: list[Any],
+    *,
+    old_base_price: Any,
+    old_compare_at_price: Any,
+    new_base_price: Any,
+    new_compare_at_price: Any,
+) -> None:
+    """Propagate parent price edits without overwriting explicit variation prices."""
+    legacy_regular_price = old_compare_at_price or old_base_price
+    for variation in variations:
+        inherits_regular_price = _variation_inherits_parent_price(
+            variation, "inherits_price", variation.price, legacy_regular_price
+        )
+        inherits_sale_price = _variation_inherits_parent_price(
+            variation,
+            "inherits_sale_price",
+            variation.sale_price,
+            old_base_price,
+            null_value_inherits=inherits_regular_price,
+        )
+        if getattr(variation, "inherits_sale_price", None) is None:
+            inherits_sale_price = inherits_regular_price and inherits_sale_price
+        if getattr(variation, "inherits_price", None) is None:
+            variation.inherits_price = inherits_regular_price
+        if getattr(variation, "inherits_sale_price", None) is None:
+            variation.inherits_sale_price = inherits_sale_price
+        if inherits_regular_price:
+            variation.price = new_compare_at_price
+        if inherits_sale_price:
+            variation.sale_price = new_base_price if new_compare_at_price is not None else None
+
+        if not (inherits_regular_price or inherits_sale_price):
+            continue
+        variation_type = str(getattr(variation, "type", "color")).casefold()
+        variation_title = normalize_color_value(variation.title)
+        variation_index = (
+            unique_variations_by_size(variations)
+            if variation_type == "size"
+            else unique_variations_by_color(variations)
+        )
+        if variation_index.get(variation_title) is not variation:
+            continue
+        for legacy_variant in legacy_variants:
+            legacy_value = (
+                legacy_variant.size if variation_type == "size" else legacy_variant.color
+            )
+            if normalize_color_value(legacy_value) == variation_title:
+                # Legacy variants store the effective purchase price.
+                legacy_variant.price = new_base_price
+
+
 PRODUCT_RELATIONSHIPS = (
     selectinload(Product.variants),
     selectinload(Product.variations).selectinload(Variation.size_stocks),
@@ -905,55 +958,14 @@ async def update_product(
         _sync_single_product_variant_inventory(product)
 
     if inherited_price_update:
-        new_base_price = product.base_price
-        new_compare_at_price = product.compare_at_price
-        for variation in variations_to_sync:
-            legacy_regular_price = old_compare_at_price or old_base_price
-            inherits_regular_price = _variation_inherits_parent_price(
-                variation,
-                "inherits_price",
-                variation.price,
-                legacy_regular_price,
-            )
-            inherits_sale_price = _variation_inherits_parent_price(
-                variation,
-                "inherits_sale_price",
-                variation.sale_price,
-                old_base_price,
-                null_value_inherits=inherits_regular_price,
-            )
-            if getattr(variation, "inherits_sale_price", None) is None:
-                inherits_sale_price = inherits_regular_price and inherits_sale_price
-            if getattr(variation, "inherits_price", None) is None:
-                variation.inherits_price = inherits_regular_price
-            if getattr(variation, "inherits_sale_price", None) is None:
-                variation.inherits_sale_price = inherits_sale_price
-            if inherits_regular_price:
-                variation.price = new_compare_at_price
-            if inherits_sale_price:
-                variation.sale_price = new_base_price if new_compare_at_price is not None else None
-
-            if inherits_regular_price or inherits_sale_price:
-                variation_type = str(getattr(variation, "type", "color")).casefold()
-                variation_title = normalize_color_value(variation.title)
-                variation_index = (
-                    unique_variations_by_size(variations_to_sync or [])
-                    if variation_type == "size"
-                    else unique_variations_by_color(variations_to_sync or [])
-                )
-                if variation_index.get(variation_title) is not variation:
-                    continue
-                for legacy_variant in product.variants or []:
-                    legacy_value = (
-                        legacy_variant.size
-                        if variation_type == "size"
-                        else legacy_variant.color
-                    )
-                    if normalize_color_value(legacy_value) == variation_title:
-                        # Legacy variants store the effective purchase price,
-                        # so they must retain the parent base price when an
-                        # inherited compare-at price is removed.
-                        legacy_variant.price = new_base_price
+        _sync_inherited_variation_prices(
+            variations_to_sync,
+            product.variants or [],
+            old_base_price=old_base_price,
+            old_compare_at_price=old_compare_at_price,
+            new_base_price=product.base_price,
+            new_compare_at_price=product.compare_at_price,
+        )
 
     await db.commit()
 
