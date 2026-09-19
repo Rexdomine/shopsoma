@@ -8,6 +8,7 @@ import Loading from '../common/Loading';
 
 const AUTH_ENTRY_PATHS = new Set([
   '/login',
+  '/register',
   '/vendor/login',
   '/forgot-password',
   '/reset-password',
