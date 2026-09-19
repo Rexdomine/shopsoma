@@ -913,15 +913,25 @@ export default function VendorProductAdd() {
           const customSalePrice = variation.salesPrice ? parseFloat(variation.salesPrice) : undefined;
           const inheritedRegularPrice = compareAtPrice ?? parsedProductPrice;
           const inheritedSalePrice = compareAtPrice ? basePrice : undefined;
-          const variationRegularPrice =
-            variation.hasDifferentPricing && customRegularPrice && customRegularPrice > 0
-              ? customRegularPrice
-              : inheritedRegularPrice;
+          const hasCustomRegularPrice =
+            variation.hasDifferentPricing &&
+            customRegularPrice !== undefined &&
+            customRegularPrice > 0;
+          const variationRegularPrice = hasCustomRegularPrice
+            ? customRegularPrice
+            : inheritedRegularPrice;
+          const hasCustomSalePrice =
+            variation.hasDifferentPricing &&
+            customSalePrice !== undefined &&
+            customSalePrice > 0 &&
+            customSalePrice < variationRegularPrice;
           const variationSalePrice = variation.hasDifferentPricing
-            ? customSalePrice && customSalePrice > 0 && customSalePrice < variationRegularPrice
+            ? hasCustomSalePrice
               ? customSalePrice
               : undefined
             : inheritedSalePrice;
+          const inheritsRegularPrice = !hasCustomRegularPrice;
+          const inheritsSalePrice = !hasCustomSalePrice;
           const variationBasePrice = variationSalePrice ?? variationRegularPrice;
           if (variation.type === 'Color') {
             const colorStock = shouldTrackStock ? parseInt(variation.colorStock || '0', 10) || 0 : 0;
@@ -931,8 +941,8 @@ export default function VendorProductAdd() {
               color_hex: variation.colorMode === 'solid' ? variation.colorHex || undefined : undefined,
               price: variationRegularPrice,
               sale_price: variationSalePrice,
-              inherits_price: !variation.hasDifferentPricing,
-              inherits_sale_price: !variation.hasDifferentPricing,
+              inherits_price: inheritsRegularPrice,
+              inherits_sale_price: inheritsSalePrice,
               images: variation.images
                 .filter((image) => image.uploaded && image.imageUrl)
                 .map((image) => image.imageUrl!),
@@ -957,8 +967,8 @@ export default function VendorProductAdd() {
                 type: 'size',
                 price: variationRegularPrice,
                 sale_price: variationSalePrice,
-                inherits_price: !variation.hasDifferentPricing,
-                inherits_sale_price: !variation.hasDifferentPricing,
+                inherits_price: inheritsRegularPrice,
+                inherits_sale_price: inheritsSalePrice,
                 images: variation.images
                   .filter((image) => image.uploaded && image.imageUrl)
                   .map((image) => image.imageUrl!),

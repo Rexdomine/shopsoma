@@ -104,8 +104,14 @@ def _sync_inherited_variation_prices(
                 legacy_variant.size if variation_type == "size" else legacy_variant.color
             )
             if normalize_color_value(legacy_value) == variation_title:
-                # Legacy variants store the effective purchase price.
-                legacy_variant.price = new_base_price
+                # Legacy variants store the effective purchase price. Preserve
+                # an explicit variation sale when only the regular price is
+                # inherited from the product.
+                legacy_variant.price = (
+                    variation.sale_price
+                    if variation.sale_price is not None
+                    else variation.price
+                )
 
 
 PRODUCT_RELATIONSHIPS = (

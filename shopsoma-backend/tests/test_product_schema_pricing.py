@@ -120,6 +120,27 @@ def test_parent_price_update_only_moves_inherited_variations_and_legacy_variants
     assert explicit_legacy.price == Decimal("150")
 
 
+def test_parent_price_update_preserves_explicit_sale_in_legacy_variant():
+    variation = SimpleNamespace(
+        id="mixed", title="4", type="size", price=Decimal("100"),
+        sale_price=Decimal("70"), inherits_price=True, inherits_sale_price=False,
+        is_active=True,
+    )
+    legacy_variant = SimpleNamespace(size="4", color=None, price=Decimal("70"))
+
+    _sync_inherited_variation_prices(
+        [variation],
+        [legacy_variant],
+        old_base_price=Decimal("80"),
+        old_compare_at_price=Decimal("100"),
+        new_base_price=Decimal("90"),
+        new_compare_at_price=Decimal("110"),
+    )
+
+    assert (variation.price, variation.sale_price) == (Decimal("110"), Decimal("70"))
+    assert legacy_variant.price == Decimal("70")
+
+
 def _product_with_variation(*, price: Decimal | None, sale_price: Decimal | None):
     now = datetime.now(timezone.utc)
     variation = VariationResponse.model_construct(
