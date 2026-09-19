@@ -1,10 +1,27 @@
 import { describe, expect, it } from 'vitest';
-import { gateLocationKey, shouldBypassComingSoon } from './RootLayout';
+import {
+  COMING_SOON_CACHE_MS,
+  gateLocationKey,
+  isGateCacheFresh,
+  shouldBypassComingSoon,
+} from './RootLayout';
 
 describe('gateLocationKey', () => {
   it('changes when only the query string changes', () => {
     expect(gateLocationKey('/products', '?category=dresses'))
       .not.toBe(gateLocationKey('/products', '?category=shoes'));
+  });
+});
+
+describe('isGateCacheFresh', () => {
+  it('expires the public gate cache so admin changes are observed', () => {
+    const resolvedAt = 1_000;
+    expect(isGateCacheFresh('public', 'public', resolvedAt, resolvedAt + COMING_SOON_CACHE_MS - 1)).toBe(true);
+    expect(isGateCacheFresh('public', 'public', resolvedAt, resolvedAt + COMING_SOON_CACHE_MS)).toBe(false);
+  });
+
+  it('does not reuse a cache from a different route scope', () => {
+    expect(isGateCacheFresh('bypass', 'public', 1_000, 1_001)).toBe(false);
   });
 });
 

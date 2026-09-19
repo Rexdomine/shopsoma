@@ -154,7 +154,7 @@ export default function ComingSoonSettings({ onDirtyChange, onBusyChange }: Comi
           </div>
 
           <div className="overflow-hidden rounded-2xl border border-[#105E53]/20 bg-[#123B38] shadow-inner">
-            <img src={imageUrl || DEFAULT_IMAGE} alt="ShopSoma launch campaign preview" className="h-44 w-full object-cover opacity-90" onError={handleImageFallback} />
+            <img key={imageUrl || DEFAULT_IMAGE} src={imageUrl || DEFAULT_IMAGE} alt="ShopSoma launch campaign preview" className="h-44 w-full object-cover opacity-90" onError={handleImageFallback} />
             <div className="p-4 text-white"><p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#E7C97A]">Preview</p><p className="mt-2 font-serif text-xl">A new way to shop is arriving.</p><p className="mt-2 text-xs leading-5 text-white/70">Visitors will see the countdown and this campaign image while launch mode is enabled.</p></div>
           </div>
         </div>

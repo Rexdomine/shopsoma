@@ -155,7 +155,7 @@ export default function ComingSoon({ onReleased }: ComingSoonProps) {
         </section>
 
         <section className="relative min-h-[420px] lg:min-h-screen" aria-label="ShopSoma campaign image">
-          <img src={settings.image_url || DEFAULT_IMAGE} alt="ShopSoma campaign storefront" className="absolute inset-0 h-full w-full object-cover" onError={handleImageFallback} />
+          <img key={settings.image_url || DEFAULT_IMAGE} src={settings.image_url || DEFAULT_IMAGE} alt="ShopSoma campaign storefront" className="absolute inset-0 h-full w-full object-cover" onError={handleImageFallback} />
           <div className="absolute inset-0 bg-gradient-to-t from-[#0e302d]/45 via-transparent to-transparent" aria-hidden="true" />
           <div className="absolute bottom-6 left-6 max-w-xs text-sm leading-6 text-white/80 sm:bottom-10 sm:left-10">Curated style, independent voices, and pieces worth keeping.</div>
         </section>

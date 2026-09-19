@@ -25,6 +25,8 @@ const TRANSACTIONAL_RETURN_PATHS = [
 
 type GateState = 'loading' | 'open' | 'closed';
 
+export const COMING_SOON_CACHE_MS = 30_000;
+
 function startsAtPath(pathname: string, path: string): boolean {
   return pathname === path || pathname.startsWith(`${path}/`);
 }
@@ -41,15 +43,27 @@ export function gateLocationKey(pathname: string, search: string): string {
   return `${pathname}${search}`;
 }
 
+export function isGateCacheFresh(
+  resolvedScope: 'public' | 'bypass' | null,
+  gateScope: 'public' | 'bypass',
+  resolvedAt: number | null,
+  now = Date.now(),
+): boolean {
+  return resolvedScope === gateScope
+    && resolvedAt !== null
+    && now - resolvedAt < COMING_SOON_CACHE_MS;
+}
+
 /**
  * Root Layout Component
  * Wraps all routes and handles scroll restoration
  */
 export default function RootLayout() {
-  const { pathname } = useLocation();
+  const { pathname, search } = useLocation();
   const { user, isLoading: authLoading } = useAuth();
   const [gateState, setGateState] = useState<GateState>('loading');
   const [resolvedScope, setResolvedScope] = useState<'public' | 'bypass' | null>(null);
+  const [resolvedAt, setResolvedAt] = useState<number | null>(null);
 
   useEffect(() => {
     window.scrollTo(0, 0);
@@ -57,12 +71,14 @@ export default function RootLayout() {
 
   const bypassComingSoon = shouldBypassComingSoon(pathname, user?.role);
   const gateScope = bypassComingSoon ? 'bypass' : 'public';
+  const locationKey = gateLocationKey(pathname, search);
 
   useEffect(() => {
-    if (resolvedScope === gateScope) return undefined;
+    if (isGateCacheFresh(resolvedScope, gateScope, resolvedAt)) return undefined;
     if (bypassComingSoon) {
       setGateState('open');
       setResolvedScope('bypass');
+      setResolvedAt(Date.now());
       return undefined;
     }
 
@@ -72,15 +88,23 @@ export default function RootLayout() {
       if (mounted) {
         setGateState(settings.enabled ? 'closed' : 'open');
         setResolvedScope('public');
+        setResolvedAt(Date.now());
       }
     }).catch(() => {
       if (mounted) {
         setGateState('open');
         setResolvedScope('public');
+        setResolvedAt(Date.now());
       }
     });
     return () => { mounted = false; };
-  }, [bypassComingSoon, gateScope, resolvedScope]);
+  }, [bypassComingSoon, gateScope, locationKey, resolvedAt, resolvedScope]);
+
+  useEffect(() => {
+    if (resolvedAt === null) return undefined;
+    const timeout = window.setTimeout(() => setResolvedAt(null), COMING_SOON_CACHE_MS);
+    return () => window.clearTimeout(timeout);
+  }, [resolvedAt]);
 
   if (authLoading || (!bypassComingSoon && (gateState === 'loading' || resolvedScope !== 'public'))) {
     return <Loading fullScreen message="Preparing ShopSoma..." />;
