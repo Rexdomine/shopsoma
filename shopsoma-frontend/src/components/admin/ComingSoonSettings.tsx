@@ -6,6 +6,7 @@ import {
   type ComingSoonSettings as ComingSoonSettingsValue,
 } from '../../services/settingsService';
 import { useToast } from '../../hooks/useToast';
+import ToastContainer from '../ui/ToastContainer';
 
 const DEFAULT_IMAGE = '/images/hero/campaign/campaign-exterior-desktop.webp';
 
@@ -27,7 +28,7 @@ interface ComingSoonSettingsProps {
 }
 
 export default function ComingSoonSettings({ onDirtyChange, onBusyChange }: ComingSoonSettingsProps) {
-  const { success, error } = useToast();
+  const { toasts, hideToast, success, error } = useToast();
   const [settings, setSettings] = useState<ComingSoonSettingsValue | null>(null);
   const [enabled, setEnabled] = useState(false);
   const [launchAt, setLaunchAt] = useState('');
@@ -86,11 +87,15 @@ export default function ComingSoonSettings({ onDirtyChange, onBusyChange }: Comi
   };
 
   if (loading) {
-    return <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white p-7 text-sm text-slate-600"><Loader2 className="h-5 w-5 animate-spin" />Loading launch settings…</div>;
+    return <>
+      <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white p-7 text-sm text-slate-600"><Loader2 className="h-5 w-5 animate-spin" />Loading launch settings…</div>
+      <ToastContainer toasts={toasts} onClose={hideToast} />
+    </>;
   }
 
   return (
-    <div className="space-y-5">
+    <>
+      <div className="space-y-5">
       <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-7">
         <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
           <div className="max-w-2xl">
@@ -134,6 +139,8 @@ export default function ComingSoonSettings({ onDirtyChange, onBusyChange }: Comi
           </div>
         </div>
       </div>
-    </div>
+      </div>
+      <ToastContainer toasts={toasts} onClose={hideToast} />
+    </>
   );
 }

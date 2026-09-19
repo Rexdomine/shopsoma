@@ -35,6 +35,7 @@ export default function ComingSoon({ onReleased }: ComingSoonProps) {
       if (!mounted) return;
       setSettings(value);
       setCountdown(getCountdown(value.launch_at));
+      if (!value.enabled) onReleased?.();
     }).catch(() => {
       // Fail open: an unavailable settings endpoint must not take down the storefront.
       setSettings({ enabled: false, launch_at: null, image_url: DEFAULT_IMAGE });

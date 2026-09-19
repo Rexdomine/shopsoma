@@ -52,7 +52,7 @@ export default function RootLayout() {
       if (mounted) setGateState('open');
     });
     return () => { mounted = false; };
-  }, [bypassComingSoon]);
+  }, [bypassComingSoon, pathname]);
 
   if (authLoading || (!bypassComingSoon && gateState === 'loading')) {
     return <Loading fullScreen message="Preparing ShopSoma..." />;
