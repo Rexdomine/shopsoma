@@ -13,6 +13,7 @@ const AUTH_ENTRY_PATHS = new Set([
   '/reset-password',
   '/verify-email',
   '/claim-account',
+  '/register',
 ]);
 
 const TRANSACTIONAL_RETURN_PATHS = [
