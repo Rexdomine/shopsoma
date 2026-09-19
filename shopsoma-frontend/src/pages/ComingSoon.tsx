@@ -71,12 +71,15 @@ export default function ComingSoon({ onReleased, initialSettings }: ComingSoonPr
     let mounted = true;
     let released = false;
     let refreshInFlight = false;
+    let expiryRetryTimer: number | undefined;
+    let expiryRetryAttempt = 0;
 
-    const refresh = () => {
+    const refresh = (retryOnFailure = false) => {
       if (refreshInFlight) return;
       refreshInFlight = true;
       getComingSoonSettings().then((value) => {
         if (!mounted) return;
+        expiryRetryAttempt = 0;
         setSettings(value);
         setCountdown(getCountdown(value.launch_at));
         if (!value.enabled && !released) {
@@ -85,34 +88,37 @@ export default function ComingSoon({ onReleased, initialSettings }: ComingSoonPr
         }
       }).catch(() => {
         // Keep the current coming-soon view if a background refresh fails.
+        if (!mounted || !retryOnFailure) return;
+        const delay = Math.min(30_000, 5_000 * 2 ** expiryRetryAttempt);
+        expiryRetryAttempt += 1;
+        expiryRetryTimer = window.setTimeout(() => {
+          expiryRetryTimer = undefined;
+          refresh(true);
+        }, delay);
       }).finally(() => {
         refreshInFlight = false;
       });
     };
 
-    const refreshTimer = window.setInterval(refresh, 10_000);
     if (!settings.launch_at) {
-      return () => {
-        mounted = false;
-        window.clearInterval(refreshTimer);
-      };
+      return () => { mounted = false; };
     }
 
     const launchAt = settings.launch_at;
     const countdownTimer = window.setInterval(() => {
       const next = getCountdown(launchAt);
       setCountdown(next);
-      // The client clock only triggers one server revalidation per observed launch time.
+      // The client clock triggers one server revalidation per observed launch time.
       if (new Date(launchAt).getTime() <= Date.now() && expiryRefreshLaunchAt.current !== launchAt) {
         expiryRefreshLaunchAt.current = launchAt;
-        refresh();
+        refresh(true);
       }
     }, 1000);
 
     return () => {
       mounted = false;
-      window.clearInterval(refreshTimer);
       window.clearInterval(countdownTimer);
+      if (expiryRetryTimer !== undefined) window.clearTimeout(expiryRetryTimer);
     };
   }, [settings, onReleased]);
 

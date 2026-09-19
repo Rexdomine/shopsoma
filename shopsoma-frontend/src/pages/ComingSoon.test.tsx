@@ -55,6 +55,23 @@ describe('ComingSoon', () => {
     expect(document.querySelector('main')).toBeInTheDocument();
   });
 
+  it('does not poll settings while an enabled gate has no launch time', async () => {
+    vi.useFakeTimers();
+    getComingSoonSettings.mockRejectedValue(new Error('temporary outage'));
+
+    render(
+      <ComingSoon
+        initialSettings={{ enabled: true, launch_at: null, image_url: '/campaign.webp' }}
+      />,
+    );
+
+    await act(async () => { await Promise.resolve(); });
+    expect(getComingSoonSettings).toHaveBeenCalledTimes(1);
+
+    await act(async () => { vi.advanceTimersByTime(60_000); });
+    expect(getComingSoonSettings).toHaveBeenCalledTimes(1);
+  });
+
   it('refreshes displayed settings when the parent provides a newer snapshot', async () => {
     getComingSoonSettings.mockRejectedValue(new Error('temporary outage'));
     const view = render(
@@ -86,6 +103,25 @@ describe('ComingSoon', () => {
 
     expect(getComingSoonSettings).toHaveBeenCalledTimes(2);
     vi.useRealTimers();
+  });
+
+  it('retries a failed launch revalidation with bounded backoff', async () => {
+    vi.useFakeTimers();
+    const launchAt = new Date(Date.now() - 1_000).toISOString();
+    getComingSoonSettings
+      .mockResolvedValueOnce({ enabled: true, launch_at: launchAt, image_url: '/campaign.webp' })
+      .mockRejectedValueOnce(new Error('temporary outage'))
+      .mockResolvedValueOnce({ enabled: false, launch_at: null, image_url: '/campaign.webp' });
+    const onReleased = vi.fn();
+
+    render(<ComingSoon onReleased={onReleased} />);
+    await act(async () => { await Promise.resolve(); });
+    await act(async () => { vi.advanceTimersByTime(1_000); await Promise.resolve(); });
+    expect(getComingSoonSettings).toHaveBeenCalledTimes(2);
+
+    await act(async () => { vi.advanceTimersByTime(5_000); await Promise.resolve(); });
+    expect(getComingSoonSettings).toHaveBeenCalledTimes(3);
+    expect(onReleased).toHaveBeenCalledTimes(1);
   });
 
   it('revalidates a scheduled gate before releasing after the local countdown', async () => {
