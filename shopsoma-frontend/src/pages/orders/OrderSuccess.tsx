@@ -5,6 +5,7 @@ import { checkoutService } from '../../services/checkoutService';
 import { useCartStore } from '../../store/cartStore';
 import { useCurrencyStore } from '../../store/currencyStore';
 import { formatPriceWithConversion, type Currency } from '../../utils/pricing';
+import { loadCheckoutCapability } from '../../utils/checkoutCapability';
 
 interface Order {
   id: string;
@@ -81,7 +82,7 @@ export default function OrderSuccess() {
 
   const loadOrder = async () => {
     try {
-      const orderData = await checkoutService.getOrder(orderId!);
+      const orderData = await checkoutService.getOrder(orderId!, loadCheckoutCapability(orderId));
       setOrder(orderData);
     } catch (err: any) {
       console.error('Error loading order:', err);

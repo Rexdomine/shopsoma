@@ -8,7 +8,7 @@ import uuid
 
 from app.core.database import get_db
 from app.models.cart import CartItem, Coupon
-from app.models.product import Product, Variation, SizeStock
+from app.models.product import Product, Variation
 from app.schemas.cart import (
     CartItemCreate,
     CartItemUpdate,
@@ -18,9 +18,20 @@ from app.schemas.cart import (
     ApplyCouponRequest,
     ApplyCouponResponse,
 )
-from app.schemas.product import ProductResponse, ProductVariantResponse
+from app.schemas.product import (
+    is_color_variation_type,
+    ProductResponse,
+    ProductVariantResponse,
+    effective_variation_price,
+    normalize_color_value,
+    unique_variations_by_color,
+    unique_variations_by_size,
+    variation_regular_price,
+    variation_sale_price,
+)
 from app.api.dependencies import get_optional_user
 from app.models.user import User
+from app.services.vendor_visibility import customer_visible_vendor_product_filter
 
 router = APIRouter(prefix="/cart", tags=["cart"])
 
@@ -55,18 +66,62 @@ def resolve_variant_response(
     # First, look for a legacy variant match
     for variant in product.variants or []:
         if str(variant.id) == str(variant_id):
-            return ProductVariantResponse.model_validate(variant)
+            response = ProductVariantResponse.model_validate(variant)
+            variation = unique_variations_by_color(product.variations or []).get(
+                normalize_color_value(variant.color)
+            )
+            if variation is None:
+                variation = unique_variations_by_size(product.variations or []).get(
+                    normalize_color_value(variant.size)
+                )
+            if variation is not None and (
+                variation.price is not None
+                or variation.sale_price is not None
+                or variation.inherits_price is True
+                or variation.inherits_sale_price is True
+            ):
+                regular_price = variation_regular_price(
+                    variation, product.base_price, getattr(product, "compare_at_price", None)
+                )
+                response.price = effective_variation_price(
+                    variation.price,
+                    variation_sale_price(
+                    variation,
+                    product.base_price,
+                    parent_has_sale=product.compare_at_price is not None,
+                ),
+                    product.base_price,
+                    regular_price=regular_price,
+                )
+                response.compare_at_price = (
+                    regular_price if response.price < regular_price else None
+                )
+            return response
 
     # Fallback to vendor variations/size stocks
     for variation in product.variations or []:
-        base_price = variation.price if variation.price is not None else product.base_price
+        regular_price = variation_regular_price(
+            variation, product.base_price, getattr(product, "compare_at_price", None)
+        )
+        base_price = effective_variation_price(
+            variation.price,
+            variation_sale_price(
+                    variation,
+                    product.base_price,
+                    parent_has_sale=product.compare_at_price is not None,
+                ),
+            product.base_price,
+            regular_price=regular_price,
+        )
 
         if str(variation.id) == str(variant_id):
+            if product.variants or (variation.is_active and bool(variation.size_stocks)):
+                return None
             return ProductVariantResponse.model_validate({
                 "id": variation.id,
                 "product_id": product.id,
-                "size": None,
-                "color": variation.title,
+                "size": variation.title if str(getattr(variation, "type", "color")).casefold() == "size" else None,
+                "color": None if str(getattr(variation, "type", "color")).casefold() == "size" else variation.title,
                 "color_hex": variation.color_hex,
                 "price": base_price,
                 "stock": 0,
@@ -78,12 +133,30 @@ def resolve_variant_response(
 
         for size_stock in variation.size_stocks or []:
             if str(size_stock.id) == str(variant_id):
+                size_color_variations = [
+                    candidate
+                    for candidate in product.variations or []
+                    if is_color_variation_type(getattr(candidate, "type", "color")) and candidate.is_active
+                ]
+                size_color = (
+                    size_color_variations[0].title
+                    if not is_color_variation_type(getattr(variation, "type", "color")) and len(size_color_variations) == 1
+                    else None if not is_color_variation_type(getattr(variation, "type", "color")) else variation.title
+                )
+                size_color_hex = (
+                    size_color_variations[0].color_hex
+                    if not is_color_variation_type(getattr(variation, "type", "color"))
+                    and len(size_color_variations) == 1
+                    else None
+                    if not is_color_variation_type(getattr(variation, "type", "color"))
+                    else variation.color_hex
+                )
                 return ProductVariantResponse.model_validate({
                     "id": size_stock.id,
                     "product_id": product.id,
                     "size": getattr(size_stock.size, "value", str(size_stock.size)),
-                    "color": variation.title,
-                    "color_hex": variation.color_hex,
+                    "color": size_color,
+                    "color_hex": size_color_hex,
                     "price": base_price,
                     "stock": size_stock.stock,
                     "sku": None,
@@ -95,6 +168,47 @@ def resolve_variant_response(
     return None
 
 
+def resolve_cart_purchase_option(
+    product: Optional[Product],
+    variant_id: Optional[str],
+) -> Optional[dict]:
+    """Resolve the purchasable stock/price source for a cart item."""
+    if not product:
+        return None
+
+    variant_id_str = str(variant_id or "")
+    if variant_id_str.startswith("default-"):
+        if product.variants or product.variations:
+            return None
+        return {
+            "normalized_variant_id": None,
+            "price": float(product.base_price),
+            "stock": int(product.total_stock or 0),
+            "is_available": True if product.made_to_order else int(product.total_stock or 0) > 0,
+        }
+
+    if not variant_id:
+        if product.variants or product.variations:
+            return None
+        return {
+            "normalized_variant_id": None,
+            "price": float(product.base_price),
+            "stock": int(product.total_stock or 0),
+            "is_available": True if product.made_to_order else int(product.total_stock or 0) > 0,
+        }
+
+    variant_response = resolve_variant_response(product, variant_id)
+    if not variant_response:
+        return None
+
+    return {
+        "normalized_variant_id": variant_id,
+        "price": float(getattr(variant_response, "price", product.base_price)),
+        "stock": int(getattr(variant_response, "stock", 0) or 0),
+        "is_available": bool(getattr(variant_response, "is_available", False)),
+    }
+
+
 def cast_uuid(value: Optional[str]) -> Optional[uuid.UUID]:
     if not value:
         return None
@@ -104,11 +218,38 @@ def cast_uuid(value: Optional[str]) -> Optional[uuid.UUID]:
         return None
 
 
+def resolve_cart_item_price(cart_item: CartItem) -> float:
+    """Return the current purchasable price, falling back to the stored price."""
+    product = cart_item.product
+    purchase_option = resolve_cart_purchase_option(
+        product,
+        str(cart_item.variant_id) if cart_item.variant_id else None,
+    )
+    if purchase_option:
+        return float(purchase_option["price"])
+    return float(cart_item.price)
+
+
+def reprice_cart_item(cart_item: CartItem) -> bool:
+    """Refresh a persisted cart row when its product price has changed."""
+    current_price = resolve_cart_item_price(cart_item)
+    if float(cart_item.price) == current_price:
+        return False
+    cart_item.price = current_price
+    return True
+
+
+def calculate_cart_subtotal(items: list[CartItem]) -> float:
+    """Calculate the subtotal from each item's current purchasable price."""
+    return sum(resolve_cart_item_price(item) * item.quantity for item in items)
+
+
 def serialize_cart_item(cart_item: CartItem) -> CartItemResponse:
     product = cart_item.product
     variant_id = str(cart_item.variant_id) if cart_item.variant_id else None
     variant_response = resolve_variant_response(product, variant_id) if variant_id else None
     product_response = ProductResponse.model_validate(product) if product else None
+    price = resolve_cart_item_price(cart_item)
 
     return CartItemResponse(
         id=str(cart_item.id),
@@ -117,8 +258,8 @@ def serialize_cart_item(cart_item: CartItem) -> CartItemResponse:
         quantity=cart_item.quantity,
         user_id=str(cart_item.user_id) if cart_item.user_id else None,
         session_id=cart_item.session_id,
-        price=cart_item.price,
-        subtotal=cart_item.price * cart_item.quantity,
+        price=price,
+        subtotal=price * cart_item.quantity,
         created_at=cart_item.created_at,
         updated_at=cart_item.updated_at,
         product=product_response,
@@ -128,7 +269,7 @@ def serialize_cart_item(cart_item: CartItem) -> CartItemResponse:
 
 def calculate_cart_summary(items: list[CartItem], discount: float = 0) -> CartSummary:
     """Calculate cart summary with tax and shipping"""
-    subtotal = sum(item.price * item.quantity for item in items)
+    subtotal = calculate_cart_subtotal(items)
 
     # Calculate shipping
     shipping = 0 if subtotal >= FREE_SHIPPING_THRESHOLD else SHIPPING_FEE
@@ -193,7 +334,9 @@ async def get_cart(
     user_uuid = cast_uuid(user_id)
 
     # Query cart items
-    query = select(CartItem).options(*CART_ITEM_LOAD_OPTIONS)
+    query = select(CartItem).options(*CART_ITEM_LOAD_OPTIONS).where(
+        CartItem.product.has(customer_visible_vendor_product_filter())
+    )
     if user_uuid:
         query = query.where(CartItem.user_id == user_uuid)
     else:
@@ -202,6 +345,12 @@ async def get_cart(
     result = await db.execute(query)
     items = result.scalars().all()
     print(f"[Cart API] get_cart user={user_uuid} session={sess_id} items={len(items)}")
+
+    changed = False
+    for item in items:
+        changed = reprice_cart_item(item) or changed
+    if changed:
+        await db.commit()
 
     summary = calculate_cart_summary(items)
 
@@ -232,38 +381,27 @@ async def add_to_cart(
                 selectinload(Product.variants),
                 selectinload(Product.variations).selectinload(Variation.size_stocks),
             )
-            .where(Product.id == item_data.product_id)
+            .where(
+                Product.id == item_data.product_id,
+                customer_visible_vendor_product_filter(),
+            )
         )
         product = product_result.scalar_one_or_none()
 
         if not product:
             raise HTTPException(status_code=404, detail="Product not found")
 
-        # Get variant price
-        # Handle products without variants (variant_id format: "default-{product_id}")
-        variant_id_str = str(item_data.variant_id or "")
+        purchase_option = resolve_cart_purchase_option(product, item_data.variant_id)
         print(
-            f"[Cart API] add_to_cart: variant_id_str={variant_id_str}, product.variants count={len(product.variants) if product.variants else 0}, "
+            f"[Cart API] add_to_cart: variant_id={item_data.variant_id}, product.variants count={len(product.variants) if product.variants else 0}, "
             f"variations count={len(product.variations) if product.variations else 0}"
         )
 
-        if variant_id_str.startswith("default-"):
-            # Product has no variants, use base price
-            if not product.variants or len(product.variants) == 0:
-                variant = None
-                price = float(product.base_price)
-                # For products without variants, set variant_id to None in DB
-                item_data.variant_id = None
-                print(f"[Cart API] add_to_cart: Using default variant, price={price}")
-            else:
-                raise HTTPException(status_code=404, detail="Product variant not found")
-        else:
-            variant_response = resolve_variant_response(product, item_data.variant_id)
+        if not purchase_option:
+            raise HTTPException(status_code=404, detail="Product variant not found")
 
-            if not variant_response:
-                raise HTTPException(status_code=404, detail="Product variant not found")
-
-            price = float(getattr(variant_response, "price", product.base_price))
+        item_data.variant_id = purchase_option["normalized_variant_id"]
+        price = purchase_option["price"]
 
         # Check if item already exists (by product_id + variant_id + user/session)
         existing_query = select(CartItem).where(
@@ -279,9 +417,20 @@ async def add_to_cart(
         result = await db.execute(existing_query)
         existing_item = result.scalar_one_or_none()
 
+        requested_quantity = item_data.quantity + (existing_item.quantity if existing_item else 0)
+        if not product.made_to_order:
+            if not purchase_option["is_available"] or purchase_option["stock"] <= 0:
+                raise HTTPException(status_code=400, detail="Product is out of stock")
+            if requested_quantity > purchase_option["stock"]:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Insufficient stock. Available: {purchase_option['stock']}"
+                )
+
         if existing_item:
             # Update quantity
-            existing_item.quantity += item_data.quantity
+            existing_item.quantity = requested_quantity
+            existing_item.price = price
             existing_item.updated_at = datetime.utcnow()
             await db.commit()
             refreshed_item = await fetch_cart_item_with_relations(db, str(existing_item.id))
@@ -341,7 +490,7 @@ async def update_cart_item(
             raise HTTPException(status_code=400, detail="Invalid cart item ID")
 
         # Find cart item
-        query = select(CartItem).where(CartItem.id == item_uuid)
+        query = select(CartItem).options(*CART_ITEM_LOAD_OPTIONS).where(CartItem.id == item_uuid)
         if user_uuid:
             query = query.where(CartItem.user_id == user_uuid)
         else:
@@ -353,7 +502,33 @@ async def update_cart_item(
         if not cart_item:
             raise HTTPException(status_code=404, detail="Cart item not found")
 
+        sellable_product = await db.scalar(
+            select(Product.id).where(
+                Product.id == cart_item.product_id,
+                customer_visible_vendor_product_filter(),
+            )
+        )
+        if not sellable_product:
+            raise HTTPException(status_code=404, detail="Product not found")
+
+        purchase_option = resolve_cart_purchase_option(
+            cart_item.product,
+            str(cart_item.variant_id) if cart_item.variant_id else None,
+        )
+        if not purchase_option:
+            raise HTTPException(status_code=404, detail="Product variant not found")
+
+        if not cart_item.product.made_to_order:
+            if not purchase_option["is_available"] or purchase_option["stock"] <= 0:
+                raise HTTPException(status_code=400, detail="Product is out of stock")
+            if update_data.quantity > purchase_option["stock"]:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Insufficient stock. Available: {purchase_option['stock']}"
+                )
+
         cart_item.quantity = update_data.quantity
+        cart_item.price = purchase_option["price"]
         cart_item.updated_at = datetime.utcnow()
 
         await db.commit()
@@ -485,7 +660,7 @@ async def merge_guest_cart(
 
     if not session_id:
         # No guest session to merge, just return user's cart
-        print(f"[Cart API] merge_guest_cart: No session_id provided, returning user cart")
+        print("[Cart API] merge_guest_cart: No session_id provided, returning user cart")
         return await get_cart(current_user, session_id, db)
 
     # Fetch guest cart items (by session_id, user_id must be NULL)
@@ -500,7 +675,7 @@ async def merge_guest_cart(
 
     if not guest_items:
         # No guest cart to merge, return user's existing cart
-        print(f"[Cart API] merge_guest_cart: No guest items found, fetching user's existing cart")
+        print("[Cart API] merge_guest_cart: No guest items found, fetching user's existing cart")
         user_cart = await get_cart(current_user, session_id, db)
         print(f"[Cart API] merge_guest_cart: Returning user cart with {len(user_cart.items)} items")
         return user_cart
@@ -573,7 +748,12 @@ async def apply_coupon(
     user_id, sess_id = await get_user_or_session_id(current_user, session_id)
     user_uuid = cast_uuid(user_id)
 
-    query = select(CartItem).options(*CART_ITEM_LOAD_OPTIONS)
+    query = (
+        select(CartItem)
+        .join(CartItem.product)
+        .options(*CART_ITEM_LOAD_OPTIONS)
+        .where(customer_visible_vendor_product_filter())
+    )
     if user_uuid:
         query = query.where(CartItem.user_id == user_uuid)
     else:
@@ -622,7 +802,7 @@ async def apply_coupon(
         )
 
     # Calculate subtotal
-    subtotal = sum(item.price * item.quantity for item in items)
+    subtotal = calculate_cart_subtotal(items)
 
     # Check minimum purchase
     if coupon.min_purchase and subtotal < coupon.min_purchase:

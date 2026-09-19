@@ -19,6 +19,7 @@ from app.schemas.vendor import (
     VendorAssetCreate, VendorPickupCreate, VendorDashboardMetrics,
     VendorPayoutSummary
 )
+from app.services.commission import DEFAULT_COMMISSION_RATE
 
 
 class VendorService:
@@ -44,7 +45,7 @@ class VendorService:
             bank_account_name=vendor_data.bank_account_name,
             kyc_status=KYCStatus.PENDING,
             approved=False,
-            commission_rate=Decimal("12.5")  # Default 12.5%
+            commission_rate=DEFAULT_COMMISSION_RATE
         )
 
         db.add(vendor)

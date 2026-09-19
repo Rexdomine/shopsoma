@@ -14,10 +14,12 @@ import {
   updateShippingInfo,
   cancelOrder,
   processRefund,
+  runShadowQuote,
 } from '../../services/adminOrderService';
 import type {
   OrderDetail,
   FulfillmentStatus,
+  ShadowQuoteResult,
 } from '../../services/adminOrderService';
 import { getStatusBadgeConfig } from '../../utils/orderStatusMessages';
 import { formatPriceWithConversion } from '../../utils/pricing';
@@ -53,6 +55,9 @@ export default function AdminOrderDetail() {
 
   // Pickup scheduling modal
   const [showPickupScheduleModal, setShowPickupScheduleModal] = useState(false);
+  const [shadowQuoteResult, setShadowQuoteResult] = useState<ShadowQuoteResult | null>(null);
+  const [runningShadowQuote, setRunningShadowQuote] = useState(false);
+  const [selectedShadowPackageId, setSelectedShadowPackageId] = useState('');
   const [pickupWindowData, setPickupWindowData] = useState({
     pickup_window_start: '',
     pickup_window_end: '',
@@ -60,8 +65,8 @@ export default function AdminOrderDetail() {
     rider_id: '',
   });
 
-  const formatDisplayPrice = (amount: number) => {
-    return formatPriceWithConversion(amount, 'NGN', currentCurrency, exchangeRates);
+  const formatDisplayPrice = (amount: number, sourceCurrency?: 'NGN' | 'USD') => {
+    return formatPriceWithConversion(amount, sourceCurrency || order?.currency || 'NGN', currentCurrency, exchangeRates);
   };
 
   // Load order details
@@ -78,6 +83,9 @@ export default function AdminOrderDetail() {
         tracking_number: data.tracking_number || '',
         estimated_delivery_date: data.estimated_delivery_date || '',
       });
+      setSelectedShadowPackageId(
+        data.ready_packages.length === 1 ? data.ready_packages[0].id : ''
+      );
     } catch (err) {
       console.error('Failed to load order:', err);
       error('Failed to load order details');
@@ -255,6 +263,30 @@ export default function AdminOrderDetail() {
     }
   };
 
+  const handleRunShadowQuote = async () => {
+    if (!order) return;
+    if (order.ready_packages.length > 1 && !selectedShadowPackageId) {
+      warning('Select a ready package before running the DHL sandbox shadow quote');
+      return;
+    }
+
+    try {
+      setRunningShadowQuote(true);
+      const result = await runShadowQuote(order.id, selectedShadowPackageId || undefined);
+      setShadowQuoteResult(result);
+      if (result.result_kind === 'failed') {
+        error(`DHL sandbox shadow quote failed: ${result.note}`);
+      } else {
+        success(`DHL sandbox shadow quote recorded (${result.result_kind})`);
+      }
+    } catch (err) {
+      console.error('Failed to run shadow quote:', err);
+      error('Failed to run DHL sandbox shadow quote');
+    } finally {
+      setRunningShadowQuote(false);
+    }
+  };
+
 
   if (loading) {
     return (
@@ -329,6 +361,21 @@ export default function AdminOrderDetail() {
             <CurrencySwitcher value={currentCurrency} onChange={setCurrency} />
             {order.fulfillment_status !== 'cancelled' && (
               <>
+                {order.ready_packages.length > 1 && (
+                  <select
+                    value={selectedShadowPackageId}
+                    onChange={(e) => setSelectedShadowPackageId(e.target.value)}
+                    disabled={runningShadowQuote || updating}
+                    className="px-3 py-2 border border-gray-300 rounded-lg bg-white text-sm disabled:opacity-50"
+                  >
+                    <option value="">Select ready package</option>
+                    {order.ready_packages.map((pkg) => (
+                      <option key={pkg.id} value={pkg.id}>
+                        {`Package ${pkg.id.slice(0, 8)} · ready ${new Date(pkg.ready_at).toLocaleString()}`}
+                      </option>
+                    ))}
+                  </select>
+                )}
                 <button
                   onClick={() => setShowCancelModal(true)}
                   disabled={updating}
@@ -345,6 +392,13 @@ export default function AdminOrderDetail() {
                     Process Refund
                   </button>
                 )}
+                <button
+                  onClick={handleRunShadowQuote}
+                  disabled={runningShadowQuote || updating || order.ready_packages.length === 0}
+                  className="px-4 py-2 border border-[#105E53] text-[#105E53] rounded-lg hover:bg-[#f1f8f6] disabled:opacity-50"
+                >
+                  {runningShadowQuote ? 'Running Shadow Quote...' : 'Run DHL Sandbox Shadow Quote'}
+                </button>
               </>
             )}
           </div>
@@ -360,28 +414,28 @@ export default function AdminOrderDetail() {
               <div className="space-y-3">
                 <div className="flex justify-between">
                   <span className="text-gray-600">Subtotal:</span>
-                  <span className="font-medium">{formatDisplayPrice(order.subtotal)}</span>
+                  <span className="font-medium">{formatDisplayPrice(order.subtotal, order.currency)}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-gray-600">Shipping:</span>
-                  <span className="font-medium">{formatDisplayPrice(order.shipping_cost)}</span>
+                  <span className="font-medium">{formatDisplayPrice(order.shipping_cost, order.currency)}</span>
                 </div>
                 {order.tax_amount > 0 && (
                   <div className="flex justify-between">
                     <span className="text-gray-600">Tax:</span>
-                    <span className="font-medium">{formatDisplayPrice(order.tax_amount)}</span>
+                    <span className="font-medium">{formatDisplayPrice(order.tax_amount, order.currency)}</span>
                   </div>
                 )}
                 {order.discount_amount > 0 && (
                   <div className="flex justify-between text-green-600">
                     <span>Discount:</span>
-                    <span className="font-medium">-{formatDisplayPrice(order.discount_amount)}</span>
+                    <span className="font-medium">-{formatDisplayPrice(order.discount_amount, order.currency)}</span>
                   </div>
                 )}
                 <div className="border-t pt-3 flex justify-between">
                   <span className="text-lg font-semibold">Total:</span>
                   <span className="text-lg font-bold text-[#105E53]">
-                    {formatDisplayPrice(order.total_amount)}
+                    {formatDisplayPrice(order.total_amount, order.currency)}
                   </span>
                 </div>
               </div>
@@ -429,9 +483,9 @@ export default function AdminOrderDetail() {
 
                     {/* Pricing */}
                     <div className="text-right">
-                      <div className="font-medium">{formatDisplayPrice(item.unit_price)}</div>
+                      <div className="font-medium">{formatDisplayPrice(item.unit_price, item.currency)}</div>
                       <div className="text-sm text-gray-500">Qty: {item.quantity}</div>
-                      <div className="text-sm font-medium mt-1">{formatDisplayPrice(item.subtotal)}</div>
+                      <div className="text-sm font-medium mt-1">{formatDisplayPrice(item.subtotal, item.currency)}</div>
                     </div>
                   </div>
                 ))}
@@ -627,6 +681,94 @@ export default function AdminOrderDetail() {
 
             {/* Customer Information */}
             <div className="bg-white rounded-lg shadow p-6">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-lg font-semibold text-gray-900">Delivery Details</h2>
+                <button
+                  onClick={() => setEditingShipping(true)}
+                  className="text-[#105E53] hover:text-[#0d4a41] text-sm"
+                >
+                  Edit
+                </button>
+              </div>
+              <div className="space-y-3 text-sm">
+                {shadowQuoteResult && (() => {
+                  const failed = shadowQuoteResult.result_kind === 'failed';
+                  const containerClass = failed
+                    ? 'rounded-lg border border-red-200 bg-red-50 p-3'
+                    : 'rounded-lg border border-emerald-200 bg-emerald-50 p-3';
+                  const labelClass = failed
+                    ? 'text-xs font-semibold uppercase tracking-wide text-red-700'
+                    : 'text-xs font-semibold uppercase tracking-wide text-emerald-700';
+                  const bodyClass = failed ? 'text-sm text-red-900' : 'text-sm text-emerald-900';
+                  const timeClass = failed ? 'text-xs text-red-700' : 'text-xs text-emerald-700';
+
+                  return (
+                    <div className={containerClass}>
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <div className={labelClass}>
+                            DHL Sandbox Shadow Quote
+                          </div>
+                          <div className={bodyClass}>
+                            {shadowQuoteResult.result_kind} · {shadowQuoteResult.offers_count} offer(s)
+                          </div>
+                        </div>
+                        <div className={timeClass}>
+                          {new Date(shadowQuoteResult.quoted_at).toLocaleString()}
+                        </div>
+                      </div>
+                      <div className={`mt-2 ${bodyClass}`}>{shadowQuoteResult.note}</div>
+                    </div>
+                  );
+                })()}
+                {order.shipping_address && (
+                  <div>
+                    <div className="text-gray-500">Recipient</div>
+                    <div className="font-medium text-gray-900">
+                      {order.shipping_address.full_name}
+                    </div>
+                    <div className="text-gray-600">
+                      {order.shipping_address.phone}
+                    </div>
+                  </div>
+                )}
+                <div>
+                  <div className="text-gray-500">Delivery Provider</div>
+                  <div className="font-medium text-gray-900">
+                    {order.delivery_provider || 'Not assigned'}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-gray-500">Tracking Number</div>
+                  <div className="font-medium text-gray-900">
+                    {order.tracking_number || 'Not available'}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-gray-500">Estimated Delivery</div>
+                  <div className="font-medium text-gray-900">
+                    {order.estimated_delivery_date
+                      ? new Date(order.estimated_delivery_date).toLocaleDateString()
+                      : 'Not scheduled'}
+                  </div>
+                </div>
+                {order.shipping_address && (
+                  <div>
+                    <div className="text-gray-500">Delivery Address</div>
+                    <div className="font-medium text-gray-900">
+                      {order.shipping_address.street_address}
+                    </div>
+                    <div className="text-gray-600">
+                      {order.shipping_address.city}, {order.shipping_address.state} {order.shipping_address.postal_code}
+                    </div>
+                    <div className="text-gray-600">{order.shipping_address.country}</div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Customer Information */}
+            <div className="bg-white rounded-lg shadow p-6">
               <h2 className="text-lg font-semibold text-gray-900 mb-4">Customer</h2>
               <div className="space-y-2 text-sm">
                 <div className="font-medium">
@@ -639,21 +781,6 @@ export default function AdminOrderDetail() {
               </div>
             </div>
 
-            {/* Shipping Address */}
-            {order.shipping_address && (
-              <div className="bg-white rounded-lg shadow p-6">
-                <h2 className="text-lg font-semibold text-gray-900 mb-4">Shipping Address</h2>
-                <div className="text-sm space-y-1">
-                  <div className="font-medium">{order.shipping_address.full_name}</div>
-                  <div>{order.shipping_address.street_address}</div>
-                  <div>
-                    {order.shipping_address.city}, {order.shipping_address.state} {order.shipping_address.postal_code}
-                  </div>
-                  <div>{order.shipping_address.country}</div>
-                  <div className="text-gray-600 mt-2">{order.shipping_address.phone}</div>
-                </div>
-              </div>
-            )}
           </div>
         </div>
 

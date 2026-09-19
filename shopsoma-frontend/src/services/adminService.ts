@@ -4,6 +4,7 @@ import type { User, PaginatedResponse } from '../types';
 export interface UserListItem extends User {
   created_at: string;
   last_login?: string;
+  is_test_account: boolean;
 }
 
 export interface UserListFilters {
@@ -35,12 +36,14 @@ export interface VendorListItem {
   business_phone?: string;
   email: string;
   full_name: string;
+  role: 'customer' | 'vendor' | 'admin';
   approved: boolean;
   approved_at?: string;
   kyc_status?: string;
   kyc_submitted_at?: string;
   commission_rate: number;
   is_active: boolean;
+  is_test_account: boolean;
   is_onboarding: boolean;
   brand_info_completed: boolean;
   payout_info_completed: boolean;
@@ -51,6 +54,8 @@ export interface VendorListItem {
   store_active?: boolean;
   store_paused_at?: string;
   store_deleted_at?: string;
+  is_featured_storefront?: boolean;
+  featured_storefront_image_url?: string | null;
 }
 
 export interface VendorListFilters {
@@ -86,6 +91,7 @@ export interface VendorApplication {
   vendor_is_onboarding?: boolean;
   vendor_brand_info_completed?: boolean;
   vendor_payout_info_completed?: boolean;
+  activation_email_sent?: boolean;
   created_at: string;
   reviewed_at?: string;
 }
@@ -124,14 +130,18 @@ export const adminService = {
     return response.data;
   },
 
-  // Toggle user active status
+  // Toggle user active status (reversible)
   async toggleUserStatus(userId: string, isActive: boolean): Promise<void> {
     await api.put(`/admin/users/${userId}/status?is_active=${isActive}`);
   },
 
-  // Delete user (hard delete - for testing only)
-  async deleteUser(userId: string): Promise<void> {
-    await api.delete(`/admin/users/${userId}`);
+  async bulkUpdateUserStatus(userIds: string[], isActive: boolean): Promise<{
+    requested_count: number;
+    updated_count: number;
+    results: Array<{ user_id: string; status: string; is_active: boolean }>;
+  }> {
+    const response = await api.put('/admin/users/status/bulk', { user_ids: userIds, is_active: isActive });
+    return response.data;
   },
 
   // Reset user password (admin only)
@@ -139,6 +149,11 @@ export const adminService = {
     await api.post(`/admin/users/${userId}/reset-password`, {
       new_password: newPassword
     });
+  },
+
+  async markUserAsTestAccount(userId: string): Promise<{ tagged: boolean; is_test_account: boolean; user_id: string }> {
+    const response = await api.post(`/admin/users/${userId}/test-account`);
+    return response.data;
   },
 
   // Get admin dashboard statistics
@@ -196,6 +211,13 @@ export const adminService = {
     return response.data;
   },
 
+  async updateVendorFeaturedStorefront(vendorId: string, isFeatured: boolean): Promise<{ is_featured_storefront: boolean }> {
+    const response = await api.put(`/admin/vendors/${vendorId}/featured-storefront`, {
+      is_featured_storefront: isFeatured,
+    });
+    return response.data;
+  },
+
   // ==================== VENDOR APPLICATIONS ====================
 
   // List vendor applications
@@ -230,11 +252,12 @@ export const adminService = {
   },
 
   // Approve vendor application (uses the existing endpoint from vendor_applications.py)
-  async approveVendorApplication(applicationId: string, adminNotes?: string): Promise<void> {
-    await api.post(`/vendor-applications/${applicationId}/approve`, {
+  async approveVendorApplication(applicationId: string, adminNotes?: string): Promise<VendorApplication> {
+    const response = await api.post(`/vendor-applications/${applicationId}/approve`, {
       status: 'approved',
-      admin_notes: adminNotes || '',
+      admin_notes: adminNotes
     });
+    return response.data;
   },
 
   // Reject vendor application

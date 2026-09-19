@@ -15,6 +15,10 @@ export interface User {
   is_active: boolean;
   profile_image_url?: string;
   is_guest_created?: boolean;
+  is_test_account: boolean;
+  test_account_tagged_at?: string;
+  test_account_tagged_by?: string;
+  test_account_tag_reason?: string;
   last_login_at?: string;
   created_at: string;
 }
@@ -65,6 +69,10 @@ export interface Product {
   made_to_order_timeline?: string;
   care_instructions?: string;
   fabric_composition?: string;
+  weight_kg?: number | null;
+  length_cm?: number | null;
+  width_cm?: number | null;
+  height_cm?: number | null;
   moderation_status: 'pending' | 'approved' | 'rejected';
   moderation_notes?: string;
   views_count: number;
@@ -135,6 +143,8 @@ export interface Variation {
   color_hex?: string;
   price?: number;
   sale_price?: number;
+  inherits_price?: boolean;
+  inherits_sale_price?: boolean;
   images: string[];
   is_active?: boolean;
   size_stocks: SizeStock[];
@@ -231,6 +241,8 @@ export interface CollectionProductSummary {
   status: string;
   base_price: number;
   total_stock: number;
+  made_to_order: boolean;
+  made_to_order_timeline?: string;
   created_at: string;
   image_url?: string | null;
   collection_name?: string | null;

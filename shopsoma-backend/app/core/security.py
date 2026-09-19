@@ -3,7 +3,8 @@ Security utilities for authentication and authorization
 """
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
-from jose import JWTError, jwt
+import jwt
+from jwt.exceptions import PyJWTError
 from passlib.context import CryptContext
 from app.core.config import settings
 
@@ -106,7 +107,7 @@ def decode_token(token: str) -> Optional[Dict[str, Any]]:
     try:
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
         return payload
-    except JWTError:
+    except PyJWTError:
         return None
 
 
@@ -146,7 +147,7 @@ def verify_magic_link_token(token: str) -> Optional[str]:
 
         email: str = payload.get("email")
         return email
-    except JWTError:
+    except PyJWTError:
         return None
 
 
@@ -186,7 +187,7 @@ def verify_email_verification_token(token: str) -> Optional[str]:
 
         email: str = payload.get("email")
         return email
-    except JWTError:
+    except PyJWTError:
         return None
 
 
@@ -215,7 +216,7 @@ def verify_account_claim_token(token: str) -> Optional[str]:
         if payload.get("type") != "account_claim":
             return None
         return payload.get("email")
-    except JWTError:
+    except PyJWTError:
         return None
 
 
@@ -240,5 +241,5 @@ def verify_password_reset_token(token: str) -> Optional[str]:
         if payload.get("type") != "password_reset":
             return None
         return payload.get("email")
-    except JWTError:
+    except PyJWTError:
         return None

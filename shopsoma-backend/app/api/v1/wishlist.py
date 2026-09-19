@@ -11,8 +11,9 @@ from app.core.database import get_db
 from app.api.dependencies import get_current_active_user
 from app.models.user import User
 from app.models.wishlist import Wishlist
-from app.models.product import Product
+from app.models.product import Product, ProductStatus, ModerationStatus
 from app.models.vendor import Vendor
+from app.services.vendor_visibility import customer_visible_vendor_product_filter
 from app.schemas.wishlist import (
     WishlistItemCreate,
     WishlistItemResponse,
@@ -42,7 +43,12 @@ async def get_wishlist(
         )
         .join(Product, Wishlist.product_id == Product.id)
         .join(Vendor, Product.vendor_id == Vendor.id)
-        .where(Wishlist.user_id == current_user.id)
+        .where(
+            Wishlist.user_id == current_user.id,
+            Product.status == ProductStatus.ACTIVE,
+            Product.moderation_status == ModerationStatus.APPROVED,
+            customer_visible_vendor_product_filter(),
+        )
         .order_by(Wishlist.created_at.desc())
     )
 
@@ -93,7 +99,16 @@ async def add_to_wishlist(
 ):
     """Add a product to wishlist"""
     # Check if product exists
-    product_query = select(Product).options(selectinload(Product.images)).where(Product.id == data.product_id)
+    product_query = (
+        select(Product)
+        .options(selectinload(Product.images))
+        .where(
+            Product.id == data.product_id,
+            Product.status == ProductStatus.ACTIVE,
+            Product.moderation_status == ModerationStatus.APPROVED,
+            customer_visible_vendor_product_filter(),
+        )
+    )
     product_result = await db.execute(product_query)
     product = product_result.scalar_one_or_none()
 

@@ -3,6 +3,27 @@ import csv
 import pytest
 from httpx import AsyncClient
 
+from app.api.v1.products import _parse_positive_decimal
+
+
+def test_bulk_measurement_parser_rejects_below_storage_precision_and_non_finite() -> None:
+    for value in ("0.0004", "NaN", "inf", "-inf"):
+        errors = []
+        assert _parse_positive_decimal(value, "weight_kg", 2, errors) is None
+        assert errors[0]["field"] == "weight_kg"
+
+    errors = []
+    assert _parse_positive_decimal("0.001", "weight_kg", 2, errors) == 0.001
+    assert errors == []
+
+    errors = []
+    assert _parse_positive_decimal("9999999.999", "weight_kg", 2, errors) == 9999999.999
+    assert errors == []
+
+    errors = []
+    assert _parse_positive_decimal("10000000", "weight_kg", 2, errors) is None
+    assert errors[0]["field"] == "weight_kg"
+
 
 @pytest.mark.asyncio
 async def test_bulk_upload_single_products_success(client: AsyncClient, vendor_user, db_session):
@@ -112,7 +133,7 @@ async def test_bulk_upload_single_products_invalid_category(client: AsyncClient,
 @pytest.mark.asyncio
 async def test_bulk_upload_variable_products_success(client: AsyncClient, vendor_user, db_session):
     from app.models.category import Category
-    from app.models.product import Product
+    from app.models.product import Product, Variation
 
     category = Category(name="Womens Dresses", slug="womens-dresses")
     db_session.add(category)
@@ -175,12 +196,12 @@ async def test_bulk_upload_variable_products_success(client: AsyncClient, vendor
         "made_to_order_timeline": "",
         "care_instructions": "",
         "fabric_composition": "",
-        "color_name": "Red",
-        "color_hex": "#FF0000",
-        "size": "L",
-        "stock": "2",
-        "variant_sku": "DRESS-A-RED-L",
-        "variation_price": "",
+        "color_name": "Blue",
+        "color_hex": "#0000FF",
+        "size": "M",
+        "stock": "1",
+        "variant_sku": "DRESS-A-BLUE-M",
+        "variation_price": "120",
         "variation_sale_price": "",
     })
 
@@ -197,3 +218,13 @@ async def test_bulk_upload_variable_products_success(client: AsyncClient, vendor
     )
     row = result.first()
     assert row is not None
+
+    variation_result = await db_session.execute(
+        Variation.__table__.select().where(Variation.product_id == row.id)
+    )
+    variations = variation_result.fetchall()
+    by_title = {variation.title: variation for variation in variations}
+    assert by_title["Red"].inherits_price is True
+    assert by_title["Red"].inherits_sale_price is True
+    assert by_title["Blue"].inherits_price is False
+    assert by_title["Blue"].inherits_sale_price is False

@@ -3,17 +3,21 @@ Service layer for Vendor Applications
 """
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
 from typing import Optional, List
 from uuid import UUID
 from datetime import datetime
+import logging
 
 from app.models.vendor_application import VendorApplication
 from app.models.vendor import Vendor, KYCStatus
 from app.models.user import User, UserRole
-from app.schemas.vendor_application import VendorApplicationCreate, VendorApplicationApproval
+from app.schemas.vendor_application import VendorApplicationCreate
 from app.services.vendor_otp_service import VendorOTPService
 from app.services.email_service import EmailService
+from app.services.commission import get_default_commission_rate
+
+
+logger = logging.getLogger(__name__)
 
 
 class VendorApplicationService:
@@ -157,6 +161,8 @@ class VendorApplicationService:
             db.add(new_user)
             await db.flush()
 
+        default_commission_rate = await get_default_commission_rate(db)
+
         # Create Vendor profile
         vendor = Vendor(
             user_id=new_user.id,
@@ -168,7 +174,8 @@ class VendorApplicationService:
             approved=True,  # Approved by admin, vendor can now activate their account
             is_onboarding=True,
             brand_info_completed=False,
-            payout_info_completed=False
+            payout_info_completed=False,
+            commission_rate=default_commission_rate
         )
         db.add(vendor)
         await db.flush()
@@ -183,16 +190,21 @@ class VendorApplicationService:
         await db.commit()
         await db.refresh(application)
 
-        # Generate OTP and send activation email
+        # Approval is durable even if the external mail provider is unavailable.
+        # Expose the handoff outcome to the admin response so the UI never
+        # claims an activation message was sent when it was not accepted.
+        activation_email_sent = False
         try:
             await VendorOTPService.create_and_send_otp(
                 db=db,
                 vendor_id=vendor.id,
                 email=application.email
             )
-        except Exception as e:
-            # Log error but don't fail the approval
-            print(f"Failed to send activation email: {e}")
+            activation_email_sent = True
+        except Exception:
+            logger.exception("Activation email handoff failed for application_id=%s", application.id)
+
+        application.activation_email_sent = activation_email_sent
 
         return application
 

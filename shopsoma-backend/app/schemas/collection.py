@@ -54,6 +54,8 @@ class CollectionProductSummary(BaseModel):
     status: str
     base_price: float
     total_stock: int
+    made_to_order: bool = False
+    made_to_order_timeline: Optional[str] = None
     created_at: datetime
     image_url: Optional[str] = None
     collection_name: Optional[str] = None

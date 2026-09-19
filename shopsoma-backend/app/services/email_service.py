@@ -8,6 +8,7 @@ from datetime import datetime
 from urllib.parse import urljoin
 from pathlib import Path
 import base64
+from decimal import Decimal
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -47,6 +48,11 @@ PRODUCT_PLACEHOLDER = _load_data_uri(
     "product-placeholder.png",
     "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
 )
+
+CURRENCY_SYMBOLS = {
+    "NGN": "₦",
+    "USD": "$",
+}
 
 
 class EmailService:
@@ -97,8 +103,78 @@ class EmailService:
         self.product_placeholder = PRODUCT_PLACEHOLDER
 
     @staticmethod
-    def _format_amount(amount: float) -> str:
-        return f"₦{amount:,.2f}"
+    def _normalize_currency(currency: Optional[str]) -> str:
+        normalized = (currency or "NGN").upper()
+        return normalized if normalized in CURRENCY_SYMBOLS else "NGN"
+
+    @staticmethod
+    def _as_decimal(value: Any) -> Decimal:
+        if isinstance(value, Decimal):
+            return value
+        if value is None:
+            return Decimal("0.00")
+        return Decimal(str(value))
+
+    @classmethod
+    def _format_amount(cls, amount: float, currency: Optional[str] = "NGN") -> str:
+        normalized = cls._normalize_currency(currency)
+        symbol = CURRENCY_SYMBOLS.get(normalized, f"{normalized} ")
+        formatted = f"{cls._as_decimal(amount):,.2f}"
+        if symbol.endswith(" "):
+            return f"{symbol}{formatted}"
+        return f"{symbol}{formatted}"
+
+    def _build_pricing_summary(self, items: List[dict], subtotal: float, shipping: float, tax: float, total: float) -> str:
+        currencies = sorted(
+            {
+                self._normalize_currency(item.get("currency"))
+                for item in items
+            }
+        ) or ["NGN"]
+
+        if len(currencies) == 1:
+            currency = currencies[0]
+            return f"""
+            <div style="border:1px solid {BRAND_BORDER};border-radius:10px;padding:20px;margin-bottom:24px;">
+                <table style="width:100%;font-size:14px;">
+                    <tr><td>Subtotal</td><td style="text-align:right;">{self._format_amount(subtotal, currency)}</td></tr>
+                    <tr><td>Shipping</td><td style="text-align:right;">{self._format_amount(shipping, currency)}</td></tr>
+                    <tr><td>Tax (7.5%)</td><td style="text-align:right;">{self._format_amount(tax, currency)}</td></tr>
+                    <tr style="font-size:16px;font-weight:600;border-top:1px solid {BRAND_BORDER};">
+                        <td style="padding-top:8px;">Total</td>
+                        <td style="text-align:right;padding-top:8px;">{self._format_amount(total, currency)}</td>
+                    </tr>
+                </table>
+            </div>
+            """
+
+        subtotals_by_currency: Dict[str, Decimal] = {}
+        for item in items:
+            currency = self._normalize_currency(item.get("currency"))
+            subtotals_by_currency.setdefault(currency, Decimal("0.00"))
+            subtotals_by_currency[currency] += self._as_decimal(item.get("subtotal"))
+
+        rows = "".join(
+            f"""
+            <tr>
+                <td>{currency} Items Total</td>
+                <td style="text-align:right;">{self._format_amount(amount, currency)}</td>
+            </tr>
+            """
+            for currency, amount in sorted(subtotals_by_currency.items())
+        )
+
+        return f"""
+        <div style="border:1px solid {BRAND_BORDER};border-radius:10px;padding:20px;margin-bottom:24px;">
+            <p style="margin:0 0 12px;font-weight:600;">Currency Totals</p>
+            <table style="width:100%;font-size:14px;">
+                {rows}
+            </table>
+            <p style="margin:12px 0 0;color:#6B7280;font-size:12px;">
+                Shipping, tax, and final total are not combined because this order contains multiple currencies.
+            </p>
+        </div>
+        """
 
     def _resolve_image_url(self, source: Optional[str], fallback: str) -> str:
         """Resolve image URL with proper fallback handling for email clients"""
@@ -250,6 +326,7 @@ class EmailService:
             image = self._resolve_image_url(image_url, self.product_placeholder)
 
             name = item.get('product_name') or item.get('product_title') or 'Product'
+            currency = self._normalize_currency(item.get("currency"))
             variant_details = item.get('variant') or ''
             if not variant_details:
                 details_dict = item.get('variant_details')
@@ -274,18 +351,19 @@ class EmailService:
                     {"<span style='color:#6B7280;font-size:12px;'>" + variant_details + "</span>" if variant_details else ""}
                 </td>
                 <td style="padding:12px;border-bottom:1px solid {BRAND_BORDER};text-align:center;">{item.get('quantity',1)}</td>
-                <td style="padding:12px;border-bottom:1px solid {BRAND_BORDER};text-align:right;">{self._format_amount(item.get('price',0))}</td>
-                <td style="padding:12px;border-bottom:1px solid {BRAND_BORDER};text-align:right;">{self._format_amount(item.get('subtotal',0))}</td>
+                <td style="padding:12px;border-bottom:1px solid {BRAND_BORDER};text-align:right;">{self._format_amount(item.get('price',0), currency)}</td>
+                <td style="padding:12px;border-bottom:1px solid {BRAND_BORDER};text-align:right;">{self._format_amount(item.get('subtotal',0), currency)}</td>
             </tr>
             """
         return rows
 
-    def _build_vendor_items_table(self, items: List[dict]) -> str:
+    def _build_vendor_items_table(self, items: List[dict], fallback_currency: Optional[str] = "NGN") -> str:
         rows = ""
         for item in items:
             name = item.get("product_title") or item.get("product_name") or "Product"
             quantity = item.get("quantity", 1)
-            payout = self._format_amount(item.get("vendor_payout", 0))
+            currency = self._normalize_currency(item.get("currency") or fallback_currency)
+            payout = self._format_amount(item.get("vendor_payout", 0), currency)
             variant_details = ""
             details_dict = item.get("variant_details")
             if isinstance(details_dict, dict):
@@ -344,10 +422,39 @@ class EmailService:
         shipping: float,
         tax: float,
         total: float,
-        shipping_address: Dict[str, str]
+        shipping_address: Dict[str, str],
+        payment_status: Optional[str] = None,
     ) -> bool:
-        subject = f"Order Confirmation · {order_number}"
+        normalized_payment_status = (payment_status or "PAID").upper()
+        if normalized_payment_status == "FAILED":
+            subject = f"Payment Failed · {order_number}"
+            heading = "Payment Not Completed"
+            preheader = "Your Shopsoma payment did not go through."
+            intro = (
+                "We received your order details, but your payment did not go through. "
+                "Your order is not confirmed until payment is completed."
+            )
+            status_label = "Payment failed"
+            closing = "Please retry checkout or contact support if you were charged."
+        elif normalized_payment_status == "PENDING":
+            subject = f"Payment Pending · {order_number}"
+            heading = "Payment Pending"
+            preheader = "Your Shopsoma order is waiting for payment."
+            intro = (
+                "We received your order details, but payment is not complete yet. "
+                "Your order will be confirmed after payment succeeds."
+            )
+            status_label = "Payment pending"
+            closing = "If you already attempted payment, please complete verification or retry checkout."
+        else:
+            subject = f"Order Confirmation · {order_number}"
+            heading = "Order Confirmation"
+            preheader = "Your Shopsoma order has been received."
+            intro = "Thank you for placing your order with Shopsoma. Our artisans and logistics partners are preparing your pieces."
+            status_label = "Payment confirmed"
+            closing = "You can track your order anytime from your Shopsoma profile. Thank you for choosing African luxury."
         items_table = self._build_items_table(items)
+        pricing_summary = self._build_pricing_summary(items, subtotal, shipping, tax, total)
         def _addr(key: str):
             return shipping_address.get(key) or shipping_address.get(key.replace('_', ''))
 
@@ -367,10 +474,11 @@ class EmailService:
 
         body_html = f"""
         <p style="font-size:16px;">Hi {name or 'there'},</p>
-        <p>Thank you for placing your order with Shopsoma. Our artisans and logistics partners are preparing your pieces.</p>
+        <p>{intro}</p>
         <div style="margin:24px 0;padding:20px;border:1px solid {BRAND_BORDER};border-radius:10px;background:{BRAND_LIGHT};">
             <p style="margin:0;"><strong>Order Number:</strong> {order_number}</p>
             <p style="margin:4px 0;"><strong>Order Date:</strong> {order_date.strftime('%d %B %Y · %I:%M %p')}</p>
+            <p style="margin:4px 0 0;"><strong>Payment Status:</strong> {status_label}</p>
         </div>
         <table style="width:100%;border-collapse:collapse;margin-bottom:24px;">
             <thead>
@@ -385,25 +493,15 @@ class EmailService:
                 {items_table}
             </tbody>
         </table>
-        <div style="border:1px solid {BRAND_BORDER};border-radius:10px;padding:20px;margin-bottom:24px;">
-            <table style="width:100%;font-size:14px;">
-                <tr><td>Subtotal</td><td style="text-align:right;">{self._format_amount(subtotal)}</td></tr>
-                <tr><td>Shipping</td><td style="text-align:right;">{self._format_amount(shipping)}</td></tr>
-                <tr><td>Tax (7.5%)</td><td style="text-align:right;">{self._format_amount(tax)}</td></tr>
-                <tr style="font-size:16px;font-weight:600;border-top:1px solid {BRAND_BORDER};">
-                    <td style="padding-top:8px;">Total</td>
-                    <td style="text-align:right;padding-top:8px;">{self._format_amount(total)}</td>
-                </tr>
-            </table>
-        </div>
+        {pricing_summary}
         <div style="border:1px solid {BRAND_BORDER};border-radius:10px;padding:20px;">
             <p style="margin:0 0 8px;font-weight:600;">Shipping to</p>
             <p style="margin:0;color:#6B7280;">{address_lines}</p>
         </div>
-        <p style="margin-top:32px;">You can track your order anytime from your Shopsoma profile. Thank you for choosing African luxury.</p>
+        <p style="margin-top:32px;">{closing}</p>
         """
 
-        html_content = self._wrap_email("Order Confirmation", body_html, "Your Shopsoma order has been received.")
+        html_content = self._wrap_email(heading, body_html, preheader)
         return await self.send_email(email, name, subject, html_content)
 
     async def send_vendor_new_order_email(
@@ -414,10 +512,12 @@ class EmailService:
         order_date: datetime,
         items: List[dict],
         total_payout: float,
-        pickup_date: datetime
+        pickup_date: datetime,
+        currency: Optional[str] = "NGN",
     ) -> bool:
         subject = f"New Order Received · {order_number}"
-        items_table = self._build_vendor_items_table(items)
+        normalized_currency = self._normalize_currency(currency)
+        items_table = self._build_vendor_items_table(items, normalized_currency)
         pickup_date_str = pickup_date.strftime("%d %B %Y · %I:%M %p")
 
         body_html = f"""
@@ -444,7 +544,7 @@ class EmailService:
             <table style="width:100%;font-size:14px;">
                 <tr style="font-size:16px;font-weight:600;">
                     <td>Total Payout</td>
-                    <td style="text-align:right;">{self._format_amount(total_payout)}</td>
+                    <td style="text-align:right;">{self._format_amount(total_payout, normalized_currency)}</td>
                 </tr>
             </table>
         </div>
@@ -633,6 +733,7 @@ class EmailService:
 
         subject = f"New Order Alert · {order_number}"
         items_table = self._build_items_table(items)
+        pricing_summary = self._build_pricing_summary(items, subtotal, shipping, tax, total)
 
         def _addr(key: str):
             return shipping_address.get(key) or shipping_address.get(key.replace('_', ''))
@@ -684,17 +785,7 @@ class EmailService:
                 {items_table}
             </tbody>
         </table>
-        <div style="border:1px solid {BRAND_BORDER};border-radius:10px;padding:20px;margin-bottom:24px;">
-            <table style="width:100%;font-size:14px;">
-                <tr><td>Subtotal</td><td style="text-align:right;">{self._format_amount(subtotal)}</td></tr>
-                <tr><td>Shipping</td><td style="text-align:right;">{self._format_amount(shipping)}</td></tr>
-                <tr><td>Tax (7.5%)</td><td style="text-align:right;">{self._format_amount(tax)}</td></tr>
-                <tr style="font-size:16px;font-weight:600;border-top:1px solid {BRAND_BORDER};">
-                    <td style="padding-top:8px;">Total</td>
-                    <td style="text-align:right;padding-top:8px;">{self._format_amount(total)}</td>
-                </tr>
-            </table>
-        </div>
+        {pricing_summary}
         <div style="border:1px solid {BRAND_BORDER};border-radius:10px;padding:20px;">
             <p style="margin:0 0 8px;font-weight:600;">Shipping Address</p>
             <p style="margin:0;color:#6B7280;">{address_lines}</p>
@@ -761,7 +852,8 @@ class EmailService:
         order_number: str,
         amount: float,
         payment_method: str,
-        reference: str
+        reference: str,
+        currency: str = "NGN",
     ) -> bool:
         subject = f"Payment Receipt · {order_number}"
         body_html = f"""
@@ -770,7 +862,7 @@ class EmailService:
         <div style="border:1px solid {BRAND_BORDER};border-radius:10px;padding:20px;margin:24px 0;background:{BRAND_LIGHT};">
             <table style="width:100%;font-size:14px;">
                 <tr><td>Order number</td><td style="text-align:right;">{order_number}</td></tr>
-                <tr><td>Amount paid</td><td style="text-align:right;">{self._format_amount(amount)}</td></tr>
+                <tr><td>Amount paid</td><td style="text-align:right;">{self._format_amount(amount, currency)}</td></tr>
                 <tr><td>Payment method</td><td style="text-align:right;">{payment_method}</td></tr>
                 <tr><td>Reference</td><td style="text-align:right;">{reference}</td></tr>
                 <tr><td>Date</td><td style="text-align:right;">{datetime.now().strftime('%d %B %Y')}</td></tr>

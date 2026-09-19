@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import Layout from '../components/layout/Layout';
 import type { Product } from '../types';
@@ -8,8 +8,25 @@ import { IMAGE_CONFIG } from '../config/constants';
 import { useWishlistActions } from '../hooks/useWishlistActions';
 import { useCurrency } from '../hooks/useCurrency';
 import { formatPriceWithConversion } from '../utils/pricing';
+import { getProductImageSource, getProductImageSources } from '../utils/productImages';
 
-const HERO_IMAGE = '/images/hero/demo-image-2.png';
+const HERO_SLIDES = [
+  {
+    desktop: '/images/hero/campaign/campaign-exterior-desktop.webp',
+    mobile: '/images/hero/campaign/campaign-exterior-mobile.webp',
+    alt: 'Orange Culture campaign look 1: three models outside a terracotta building',
+  },
+  {
+    desktop: '/images/hero/campaign/campaign-interior-2089-desktop.webp',
+    mobile: '/images/hero/campaign/campaign-interior-2089-mobile.webp',
+    alt: 'Orange Culture campaign look 2: two models in an intimate editorial interior',
+  },
+  {
+    desktop: '/images/hero/campaign/campaign-lounge-desktop.webp',
+    mobile: '/images/hero/campaign/campaign-lounge-mobile.webp',
+    alt: 'Orange Culture campaign look 3: a model relaxing in an editorial lounge',
+  },
+] as const;
 
 type HomeProductCardProps = {
   product: Product;
@@ -24,8 +41,9 @@ function HomeProductCard({
 }: HomeProductCardProps) {
   const [isHovered, setIsHovered] = useState(false);
   const { currentCurrency, exchangeRates } = useCurrency();
-  const primaryImage = product.images?.[0]?.image_url || IMAGE_CONFIG.PLACEHOLDER;
-  const secondaryImage = product.images?.[1]?.image_url || primaryImage;
+  const productImages = getProductImageSources(product);
+  const primaryImage = productImages[0] ?? { src: IMAGE_CONFIG.PLACEHOLDER };
+  const secondaryImage = productImages[1] ?? primaryImage;
   const vendor = product.vendor_name || 'Shopsoma';
   const price = product.variants?.[0]?.price ?? product.base_price ?? 0;
 
@@ -50,6 +68,20 @@ function HomeProductCard({
     return Array.from(colorMap.values());
   })();
 
+  const handleImageError = (
+    event: React.SyntheticEvent<HTMLImageElement>,
+    fallbackSrc?: string
+  ) => {
+    const image = event.currentTarget;
+    if (fallbackSrc && image.dataset.fallbackApplied !== 'true') {
+      image.dataset.fallbackApplied = 'true';
+      image.src = fallbackSrc;
+      return;
+    }
+    image.src = IMAGE_CONFIG.PLACEHOLDER;
+    image.onerror = null;
+  };
+
   return (
     <div
       className="group relative"
@@ -59,9 +91,13 @@ function HomeProductCard({
       <div className="relative">
         <Link to={`/products/${product.id}`} className="relative aspect-[3/4] overflow-hidden bg-white block">
           <img
-            src={isHovered ? secondaryImage : primaryImage}
+            src={isHovered ? secondaryImage.src : primaryImage.src}
             alt={product.title}
             className="w-full h-full object-cover transition-all duration-500"
+            onError={(event) => handleImageError(
+              event,
+              isHovered ? secondaryImage.fallbackSrc : primaryImage.fallbackSrc
+            )}
           />
           <button
             type="button"
@@ -154,35 +190,193 @@ function HomeProductCard({
 }
 
 function Hero() {
+  const [activeSlide, setActiveSlide] = useState(0);
+  const [reducedMotion, setReducedMotion] = useState(false);
+  const [mountedSlides, setMountedSlides] = useState<Set<number>>(() => new Set([0]));
+  const [readySlides, setReadySlides] = useState<Set<number>>(() => new Set([0]));
+  const [pendingSlide, setPendingSlide] = useState<number | null>(null);
+  const [failedSlides, setFailedSlides] = useState<Set<number>>(() => new Set());
+  const [retryingSlides, setRetryingSlides] = useState<Set<number>>(() => new Set());
+  const retryTimers = useRef<Map<number, number>>(new Map());
+  const [isInteracting, setIsInteracting] = useState(false);
+
+  useEffect(() => {
+    if (!window.matchMedia) return;
+    const media = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const update = () => setReducedMotion(media.matches);
+    update();
+    media.addEventListener('change', update);
+    return () => media.removeEventListener('change', update);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      retryTimers.current.forEach((timer) => window.clearTimeout(timer));
+      retryTimers.current.clear();
+    };
+  }, []);
+
+  const requestSlide = (target: number) => {
+    let next: number | null = null;
+    for (let offset = 0; offset < HERO_SLIDES.length; offset += 1) {
+      const candidate = (target + offset + HERO_SLIDES.length) % HERO_SLIDES.length;
+      if (!failedSlides.has(candidate)) {
+        next = candidate;
+        break;
+      }
+    }
+    if (next === null) return;
+    if (
+      (next === activeSlide && mountedSlides.has(next) && readySlides.has(next) && !failedSlides.has(next))
+      || (pendingSlide === next && mountedSlides.has(next) && !failedSlides.has(next))
+    ) return;
+    if (readySlides.has(next)) {
+      setPendingSlide(null);
+      setActiveSlide(next);
+      return;
+    }
+    setMountedSlides((mounted) => new Set(mounted).add(next));
+    setPendingSlide(next);
+  };
+
+  const handleSlideReady = (index: number) => {
+    setFailedSlides((failed) => {
+      const next = new Set(failed);
+      next.delete(index);
+      return next;
+    });
+    setReadySlides((ready) => new Set(ready).add(index));
+    setRetryingSlides((retrying) => {
+      const next = new Set(retrying);
+      next.delete(index);
+      return next;
+    });
+    const isFailureFallback = failedSlides.has(activeSlide);
+    if (isFailureFallback || (pendingSlide === index && (!isInteracting && !reducedMotion))) {
+      setActiveSlide(index);
+      setPendingSlide(null);
+    }
+  };
+
+  const scheduleRetry = (index: number) => {
+    if (retryTimers.current.has(index)) return;
+    const timer = window.setTimeout(() => {
+      retryTimers.current.delete(index);
+      setMountedSlides((mounted) => new Set(mounted).add(index));
+      setRetryingSlides((retrying) => new Set(retrying).add(index));
+      setPendingSlide((pending) => pending ?? index);
+    }, 15000);
+    retryTimers.current.set(index, timer);
+  };
+
+  const handleSlideError = (index: number) => {
+    scheduleRetry(index);
+    const failed = new Set(failedSlides).add(index);
+    const findFallback = () => {
+      for (let offset = 1; offset < HERO_SLIDES.length; offset += 1) {
+        const candidate = (index + offset) % HERO_SLIDES.length;
+        if (!failed.has(candidate)) return candidate;
+      }
+      return null;
+    };
+
+    setFailedSlides(failed);
+    setReadySlides((ready) => {
+      const next = new Set(ready);
+      next.delete(index);
+      return next;
+    });
+    setMountedSlides((mounted) => {
+      const next = new Set(mounted);
+      next.delete(index);
+      return next;
+    });
+
+    if (index === activeSlide || (pendingSlide === index && failed.has(activeSlide))) {
+      const fallback = findFallback();
+      if (fallback === null) {
+        setPendingSlide(null);
+        return;
+      }
+      setMountedSlides((mounted) => new Set(mounted).add(fallback));
+      if (readySlides.has(fallback)) {
+        setActiveSlide(fallback);
+        setPendingSlide(null);
+      } else {
+        setPendingSlide(fallback);
+      }
+      return;
+    }
+
+    if (pendingSlide === index) setPendingSlide(null);
+  };
+
+  useEffect(() => {
+    if (reducedMotion || isInteracting || pendingSlide !== null) return;
+    const timer = window.setTimeout(() => requestSlide(activeSlide + 1), 6500);
+    return () => window.clearTimeout(timer);
+  }, [activeSlide, failedSlides, isInteracting, pendingSlide, reducedMotion]);
+
+  useEffect(() => {
+    if (pendingSlide === null || failedSlides.has(pendingSlide)) return;
+    const isFailureFallback = failedSlides.has(activeSlide);
+    if (!isFailureFallback && (isInteracting || reducedMotion)) return;
+    if (readySlides.has(pendingSlide)) {
+      setActiveSlide(pendingSlide);
+      setPendingSlide(null);
+      return;
+    }
+    requestSlide(pendingSlide);
+  }, [activeSlide, failedSlides, isInteracting, pendingSlide, readySlides, reducedMotion]);
+
   return (
     <section
-      className="hero relative w-full min-h-[45vh] sm:min-h-[60vh] lg:min-h-[70vh] bg-cover bg-center flex items-end justify-center"
-      style={{ backgroundImage: `url(${HERO_IMAGE})` }}
+      aria-label="ShopSoma campaign"
+      aria-roledescription="carousel"
+      className="hero relative isolate flex min-h-[520px] w-full items-end overflow-hidden bg-[#1b1715] sm:min-h-[600px] lg:min-h-[700px]"
+      onMouseEnter={() => setIsInteracting(true)}
+      onMouseLeave={() => setIsInteracting(false)}
+      onFocusCapture={() => setIsInteracting(true)}
+      onBlurCapture={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setIsInteracting(false);
+      }}
     >
-      <div className="text-center pb-10 sm:pb-14 lg:pb-16 px-4">
-        <h1
-          className="text-xl sm:text-2xl lg:text-4xl font-serif font-normal text-white mb-4 sm:mb-6"
-          style={{
-            fontFamily: 'var(--font-serif)',
-            fontWeight: 400,
-            textShadow: '0 2px 8px rgba(0,0,0,0.3)'
-          }}
+      {HERO_SLIDES.map((slide, index) => mountedSlides.has(index) && (
+        <picture
+          key={slide.desktop}
+          aria-hidden={index !== activeSlide || failedSlides.has(index)}
+          className={`absolute inset-0 transition-opacity duration-[1400ms] ease-out ${index === activeSlide && !failedSlides.has(index) ? 'opacity-100' : 'pointer-events-none opacity-0'}`}
         >
-          Orange Culture: A night Beyond
-        </h1>
-        <div className="flex items-center justify-center gap-10">
-          <Link
-            to="/men"
-            className="text-white font-ui uppercase tracking-[0.2em] text-sm border-b border-white pb-1 hover:opacity-80 transition-opacity"
-          >
-            Shop Men
-          </Link>
-          <Link
-            to="/women"
-            className="text-white font-ui uppercase tracking-[0.2em] text-sm border-b border-white pb-1 hover:opacity-80 transition-opacity"
-          >
-            Shop Women
-          </Link>
+          <source media="(max-width: 767px)" srcSet={slide.mobile} />
+          <img
+            src={slide.desktop}
+            alt={slide.alt}
+            className="h-full w-full object-cover"
+            loading={index === 0 || pendingSlide === index || retryingSlides.has(index) ? 'eager' : 'lazy'}
+            fetchPriority={index === 0 ? 'high' : pendingSlide === index || retryingSlides.has(index) ? 'auto' : 'low'}
+            decoding="async"
+            onLoad={() => handleSlideReady(index)}
+            onError={() => handleSlideError(index)}
+          />
+        </picture>
+      ))}
+      {failedSlides.size === HERO_SLIDES.length && (
+        <div className="absolute inset-0 grid place-items-center px-6 text-center text-sm text-white/80" role="status">
+          Campaign imagery is temporarily unavailable.
+        </div>
+      )}
+
+      <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-[#105E53]/[0.82] via-[#105E53]/[0.30] to-transparent" />
+      <div className="relative z-10 flex w-full flex-col items-start px-5 pb-7 sm:px-10 sm:pb-10 lg:px-16 lg:pb-14">
+        <div className="max-w-xl text-white">
+          <p className="mb-3 text-[10px] font-ui font-semibold uppercase tracking-[0.32em] text-white/75">ShopSoma presents</p>
+          <h1 className="font-serif text-3xl font-normal leading-tight sm:text-4xl lg:text-5xl" style={{ fontFamily: 'var(--font-serif)', textShadow: '0 2px 12px rgba(0,0,0,0.35)' }}>
+            A considered edit of contemporary fashion for every moment
+          </h1>
+          <div className="mt-5 flex flex-wrap items-center gap-x-7 gap-y-3">
+            <Link to="/men" className="pointer-events-auto border-b border-white pb-1 text-xs font-ui uppercase tracking-[0.2em] text-white transition-opacity hover:opacity-75">Shop Men</Link>
+            <Link to="/women" className="pointer-events-auto border-b border-white pb-1 text-xs font-ui uppercase tracking-[0.2em] text-white transition-opacity hover:opacity-75">Shop Women</Link>
+          </div>
         </div>
       </div>
     </section>
@@ -194,10 +388,22 @@ type FeaturedCollabProps = {
 };
 
 function FeaturedCollab({ product }: FeaturedCollabProps) {
-  const imageUrl = product.images?.[0]?.image_url || '';
+  const image = getProductImageSource(product);
+  const imageUrl = image?.src || IMAGE_CONFIG.PLACEHOLDER;
   const title = product.title;
   const description = product.description || '';
   const productLink = `/products/${product.id}`;
+
+  const handleImageError = (event: React.SyntheticEvent<HTMLImageElement>) => {
+    const img = event.currentTarget;
+    if (image?.fallbackSrc && img.dataset.fallbackApplied !== 'true') {
+      img.dataset.fallbackApplied = 'true';
+      img.src = image.fallbackSrc;
+      return;
+    }
+    img.src = IMAGE_CONFIG.PLACEHOLDER;
+    img.onerror = null;
+  };
 
   return (
     <section className="w-full bg-[var(--color-page-bg)]">
@@ -239,6 +445,7 @@ function FeaturedCollab({ product }: FeaturedCollabProps) {
               src={imageUrl}
               alt={title}
               className="w-full h-full object-cover"
+              onError={handleImageError}
             />
           </div>
         </div>
@@ -282,10 +489,34 @@ function FeaturedCollabSkeleton() {
 function CategoryStrip() {
   const categories = useMemo(
     () => [
-      { name: 'Gowns', image: '/images/gown-category-image.svg' },
-      { name: 'Hand stitched', image: '/images/demo-image-3.svg' },
-      { name: 'Strong Construction', image: '/images/strong-construction-category-image.svg' },
-      { name: 'Cotton', image: '/images/cotton-category-image.svg' },
+      {
+        name: 'Casual',
+        slug: 'shop-edits-occasion-wear-casual',
+        image: '/images/category-strip/casual-1-900.webp',
+        srcSet: '/images/category-strip/casual-1-480.webp 480w, /images/category-strip/casual-1-900.webp 900w',
+        objectPosition: 'center center',
+      },
+      {
+        name: 'Evening',
+        slug: 'shop-edits-occasion-wear-evening',
+        image: '/images/category-strip/occasion-900.webp',
+        srcSet: '/images/category-strip/occasion-480.webp 480w, /images/category-strip/occasion-900.webp 900w',
+        objectPosition: '73% 47%',
+      },
+      {
+        name: 'Party',
+        slug: 'shop-edits-occasion-wear-party',
+        image: '/images/category-strip/party-900.webp',
+        srcSet: '/images/category-strip/party-480.webp 480w, /images/category-strip/party-900.webp 900w',
+        objectPosition: '52% 35%',
+      },
+      {
+        name: 'Workwear',
+        slug: 'shop-edits-occasion-wear-workwear',
+        image: '/images/category-strip/workwear-900.webp',
+        srcSet: '/images/category-strip/workwear-480.webp 480w, /images/category-strip/workwear-900.webp 900w',
+        objectPosition: 'center center',
+      },
     ],
     []
   );
@@ -298,12 +529,22 @@ function CategoryStrip() {
         </h3>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           {categories.map((cat) => (
-            <div key={cat.name} className="relative group cursor-pointer">
+            <Link
+              key={cat.name}
+              to={`/category/${cat.slug}`}
+              aria-label={`Shop ${cat.name}`}
+              className="relative group block cursor-pointer"
+            >
               <div className="aspect-[3/4] overflow-hidden bg-gray-100">
                 <img
                   src={cat.image}
+                  srcSet={cat.srcSet}
+                  sizes="(min-width: 768px) 25vw, 50vw"
+                  loading="lazy"
+                  decoding="async"
                   alt={cat.name}
                   className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
+                  style={{ objectPosition: cat.objectPosition }}
                 />
               </div>
               <div className="absolute bottom-4 left-4">
@@ -314,7 +555,7 @@ function CategoryStrip() {
                   {cat.name}
                 </p>
               </div>
-            </div>
+            </Link>
           ))}
         </div>
       </div>
@@ -334,7 +575,7 @@ function EditorialSection() {
             lineHeight: '1.8'
           }}
         >
-          Shopsoma Is A Fund Fashion Bird Meh Dollar. +1 +1 Semiotics Direct Lyft Hexagon Beer Pug Locavore. Squid It Of Crucifix Cardigan Bushwick Organic You Cleanse. Bushwick Shabby Tumblr Ennui Big Photo Humblebrag Hoodie. Neutra Heirloom Thundercats Booth Irony Hoodie.
+          Kilentar’s Autumn/Winter 2026 collection brings pattern, movement and a confident ease to the season. Discover expressive pieces for late dinners, open doors and the moments worth dressing for.
         </p>
 
         {/* Editorial Image Section */}
@@ -362,9 +603,13 @@ function EditorialSection() {
 
           <div className="w-full overflow-hidden">
             <img
-              src="/images/demo-image-7.svg"
+              src="/images/editorial/kilentar-avant-premier-1440.webp"
+              srcSet="/images/editorial/kilentar-avant-premier-720.webp 720w, /images/editorial/kilentar-avant-premier-1440.webp 1440w"
+              sizes="(min-width: 1024px) 896px, 100vw"
               alt="Kilentar: Avant Premier"
-              className="w-full h-auto object-cover"
+              loading="lazy"
+              decoding="async"
+              className="block w-full aspect-[3/2] object-cover object-[52%_48%]"
             />
           </div>
         </div>
@@ -446,12 +691,12 @@ export default function Home() {
   }, [featuredProducts, rotationMinutes]);
 
   const featuredProduct = featuredProducts[featuredIndex];
-  const featuredImageUrl = featuredProduct?.images?.[0]?.image_url || '';
+  const featuredImage = featuredProduct ? getProductImageSource(featuredProduct) : null;
+  const featuredImageUrl = featuredImage?.src || '';
   const showFeaturedSkeleton =
     featuredLoading ||
     !featuredProduct ||
-    !featuredProduct.images?.length ||
-    !featuredProduct.images?.[0]?.image_url ||
+    !featuredImageUrl ||
     !featuredReady;
 
   useEffect(() => {

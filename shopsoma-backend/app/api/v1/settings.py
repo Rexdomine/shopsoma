@@ -10,13 +10,15 @@ from urllib.parse import urlparse
 
 import anyio
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import select, text
+from sqlalchemy import update as sqlalchemy_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.models.setting import Setting
 from app.models.app_setting import AppSetting
 from app.models.user import User
+from app.models.vendor import Vendor
 from app.schemas.setting import (
     SettingResponse,
     SettingUpdate,
@@ -29,11 +31,16 @@ from app.schemas.app_setting import (
     AppSettingResponse,
     PayoutHoldSettings,
     PayoutHoldSettingsUpdate,
+    CommissionSettings,
+    CommissionSettingsUpdate,
     FeaturedRotationSettings,
     FeaturedRotationSettingsUpdate,
     DatabaseSyncResponse,
 )
 from app.api.dependencies import get_current_user, require_admin
+from app.services.commission import COMMISSION_SETTING_KEY, DEFAULT_COMMISSION_RATE, normalize_commission_rate
+
+from app.services.shipping.provider_settings import shipping_provider_settings
 
 logger = logging.getLogger(__name__)
 
@@ -242,8 +249,10 @@ async def get_app_setting_value(db: AsyncSession, key: str, default: str = "") -
     return setting.value if setting else default
 
 
-async def update_app_setting_value(db: AsyncSession, key: str, value: str) -> None:
-    """Helper to update app setting value by key"""
+async def update_app_setting_value(
+    db: AsyncSession, key: str, value: str, *, commit: bool = True
+) -> None:
+    """Update an app setting, optionally leaving commit ownership to the caller."""
     query = select(AppSetting).where(AppSetting.key == key)
     result = await db.execute(query)
     setting = result.scalar_one_or_none()
@@ -259,7 +268,8 @@ async def update_app_setting_value(db: AsyncSession, key: str, value: str) -> No
         )
         db.add(new_setting)
 
-    await db.commit()
+    if commit:
+        await db.commit()
 
 
 @router.get("/shipping-provider", response_model=ShippingProviderSettings)
@@ -269,14 +279,9 @@ async def get_shipping_provider_settings(
     """
     Get shipping provider settings (public endpoint)
 
-    Returns whether ShipBubble is enabled for shipping rates.
+    Returns the effective provider and secure checkout readiness.
     """
-    use_shipbubble_str = await get_app_setting_value(db, "shipping_use_shipbubble", "false")
-    use_shipbubble = use_shipbubble_str.lower() == "true"
-
-    logger.info(f"[Settings] ShipBubble enabled: {use_shipbubble}")
-
-    return ShippingProviderSettings(use_shipbubble=use_shipbubble)
+    return await shipping_provider_settings(db)
 
 
 @router.get("/public/featured-rotation", response_model=FeaturedRotationSettings)
@@ -316,14 +321,31 @@ async def update_shipping_provider_settings(
     """
     Update shipping provider settings (Admin only)
 
-    Toggle between ShipBubble and local shipping rates.
+    Select one ready provider and atomically maintain the legacy setting.
     """
-    value_str = "true" if settings.use_shipbubble else "false"
-    await update_app_setting_value(db, "shipping_use_shipbubble", value_str)
-
-    logger.info(f"[Settings] Admin {current_user.email} updated ShipBubble to: {settings.use_shipbubble}")
-
-    return ShippingProviderSettings(use_shipbubble=settings.use_shipbubble)
+    effective = await shipping_provider_settings(db)
+    if not effective.readiness[settings.provider]:
+        raise HTTPException(status_code=409, detail=f"{settings.provider} is not available for secure checkout")
+    if settings.provider == "dhl" and not effective.checkout_estimates_required:
+        raise HTTPException(
+            status_code=409,
+            detail="DHL requires full secure-checkout cohort routing before admin selection",
+        )
+    # A transaction advisory lock also serializes the first write when neither
+    # setting row exists. Both keys and operator metadata commit together.
+    await db.execute(text("SELECT pg_advisory_xact_lock(736401, 1)"))
+    for key, value, value_type in (
+        ("shipping_provider", settings.provider, "string"),
+        ("shipping_use_shipbubble", "true" if settings.provider == "shipbubble" else "false", "boolean"),
+    ):
+        row = await db.scalar(select(AppSetting).where(AppSetting.key == key))
+        if row is None:
+            row = AppSetting(key=key, value_type=value_type)
+            db.add(row)
+        row.value = value
+        row.description = f"Shipping provider updated by admin {current_user.id}"
+    await db.commit()
+    return await shipping_provider_settings(db)
 
 
 @router.get("/admin/featured-rotation", response_model=FeaturedRotationSettings)
@@ -450,6 +472,67 @@ async def update_payout_hold_settings(
     logger.info(f"[Settings] Admin {current_user.email} updated payout hold days to {payload.hold_days}")
 
     return PayoutHoldSettings(hold_days=payload.hold_days, updated_at=updated_at)
+
+
+@router.get("/admin/commission", response_model=CommissionSettings)
+async def get_commission_settings(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin)
+):
+    """Get default platform commission settings (Admin only)."""
+    _ = current_user
+    result = await db.execute(
+        select(AppSetting).where(AppSetting.key == COMMISSION_SETTING_KEY)
+    )
+    setting = result.scalar_one_or_none()
+    commission_rate = normalize_commission_rate(setting.value if setting else DEFAULT_COMMISSION_RATE)
+
+    return CommissionSettings(
+        commission_rate=float(commission_rate),
+        updated_at=setting.updated_at if setting else None,
+    )
+
+
+@router.put("/admin/commission", response_model=CommissionSettings)
+async def update_commission_settings(
+    payload: CommissionSettingsUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin)
+):
+    """
+    Update default platform commission settings.
+
+    By default this affects new vendors only. If apply_to_existing_vendors is true,
+    existing vendor commission rates are also updated for future order snapshots.
+    Historical order items and payouts are not mutated.
+    """
+    commission_rate = normalize_commission_rate(payload.commission_rate)
+    await update_app_setting_value(
+        db, COMMISSION_SETTING_KEY, str(commission_rate), commit=False
+    )
+
+    if payload.apply_to_existing_vendors:
+        await db.execute(
+            sqlalchemy_update(Vendor).values(commission_rate=commission_rate)
+        )
+    await db.commit()
+
+    result = await db.execute(
+        select(AppSetting).where(AppSetting.key == COMMISSION_SETTING_KEY)
+    )
+    setting = result.scalar_one_or_none()
+
+    logger.info(
+        "[Settings] Admin %s updated default commission to %s%% (apply_to_existing_vendors=%s)",
+        current_user.email,
+        commission_rate,
+        payload.apply_to_existing_vendors,
+    )
+
+    return CommissionSettings(
+        commission_rate=float(commission_rate),
+        updated_at=setting.updated_at if setting else None,
+    )
 
 
 @router.post("/admin/db-sync", response_model=DatabaseSyncResponse)

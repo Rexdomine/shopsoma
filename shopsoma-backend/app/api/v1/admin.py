@@ -3,26 +3,139 @@ Admin API endpoints for database initialization and management
 """
 from typing import Optional, List
 from uuid import UUID
-from fastapi import APIRouter, HTTPException, Depends, Query
+from fastapi import APIRouter, HTTPException, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, or_, delete
+from sqlalchemy import select, func, or_, delete, update
 from sqlalchemy.orm import selectinload
 from datetime import datetime
 from decimal import Decimal
 import asyncio
 import os
+from pydantic import BaseModel
 
 from app.core.database import get_db
 from app.api.dependencies import get_current_admin
-from app.models.product import Product, ProductVariant, ProductImage, ProductStatus, ModerationStatus
+from app.models.audit_log import AuditLog
+from app.models.product import (
+    ModerationStatus,
+    Product,
+    ProductImage,
+    ProductStatus,
+    ProductVariant,
+    SizeStock,
+    Variation,
+)
+from app.models.stock_payment_persistence import coordinate_catalog_write
+from app.models.payment import Payment
+from app.models.setting import Setting
 from app.models.user import User, UserRole
 from app.models.vendor import Vendor, KYCStatus
 from app.models.vendor_application import VendorApplication
 from app.schemas.auth import UserResponse, UserUpdate
 from app.schemas.common import PaginatedResponse
 from app.schemas.product import ProductApprovalRequest, ProductRejectionRequest, ProductFeatureUpdate
+from app.services.test_account_classification import (
+    classify_existing_staging_accounts,
+    tag_staging_account,
+)
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+
+
+class FeaturedStorefrontUpdate(BaseModel):
+    is_featured_storefront: bool
+
+
+class TestAccountClassificationRequest(BaseModel):
+    apply: bool = False
+
+
+class BulkUserStatusUpdate(BaseModel):
+    user_ids: List[UUID]
+    is_active: bool
+
+
+def _featured_storefront_eligibility_error(vendor: Vendor, user: User) -> Optional[str]:
+    if not vendor.approved:
+        return "Only approved vendors can be featured"
+    if not user.is_active:
+        return "Inactive vendor accounts cannot be featured"
+    if vendor.is_onboarding:
+        return "Vendors must complete onboarding before they can be featured"
+    if not vendor.store_active or vendor.store_deleted_at is not None:
+        return "Only active vendor stores can be featured"
+    if not (vendor.featured_storefront_image_url or "").strip():
+        return "A vendor featured storefront image is required"
+    return None
+
+
+def _resolve_admin_order_currency(order, payments=None) -> str:
+    payment_rows = list(payments or [])
+    if payment_rows:
+        latest_payment = max(
+            payment_rows,
+            key=lambda payment: payment.created_at or datetime.min,
+        )
+        if latest_payment.currency:
+            return latest_payment.currency.upper()
+
+    return (getattr(order, "currency", None) or "NGN").upper()
+
+
+def _normalize_admin_currency(currency: Optional[str]) -> str:
+    normalized = (currency or "NGN").upper()
+    return normalized if normalized in {"NGN", "USD"} else "NGN"
+
+
+async def _get_admin_usd_to_ngn_rate(db: AsyncSession) -> Decimal:
+    result = await db.execute(
+        select(Setting).where(Setting.key == "exchange_rate_usd_to_ngn")
+    )
+    rate_setting = result.scalar_one_or_none()
+    if not rate_setting:
+        return Decimal("833")
+
+    try:
+        return Decimal(str(rate_setting.value))
+    except (ArithmeticError, ValueError, TypeError):
+        return Decimal("833")
+
+
+def _convert_admin_currency(amount: Decimal, from_currency: str, to_currency: str, usd_to_ngn_rate: Decimal) -> Decimal:
+    source = _normalize_admin_currency(from_currency)
+    target = _normalize_admin_currency(to_currency)
+
+    if source == target:
+        return amount
+    if source == "USD" and target == "NGN":
+        return (amount * usd_to_ngn_rate).quantize(Decimal("0.01"))
+    if source == "NGN" and target == "USD":
+        return (amount / usd_to_ngn_rate).quantize(Decimal("0.01"))
+    return amount
+
+
+def _should_use_product_currency_for_legacy_admin_item(item, display_currency: str) -> bool:
+    product = getattr(item, "product", None)
+    if not product or not getattr(product, "currency", None):
+        return False
+
+    product_currency = _normalize_admin_currency(product.currency)
+    item_currency = _normalize_admin_currency(getattr(item, "currency", None) or display_currency)
+    if product_currency == display_currency or item_currency != display_currency:
+        return False
+
+    product_base_price = getattr(product, "base_price", None)
+    if product_base_price is None:
+        return False
+
+    item_unit_price = Decimal(str(item.unit_price or "0"))
+    item_subtotal = Decimal(str(item.subtotal or "0"))
+    expected_subtotal = (Decimal(str(product_base_price)) * Decimal(item.quantity or 0)).quantize(Decimal("0.01"))
+
+    return (
+        item_unit_price.quantize(Decimal("0.01")) == Decimal(str(product_base_price)).quantize(Decimal("0.01"))
+        or item_subtotal.quantize(Decimal("0.01")) == expected_subtotal
+    )
 
 
 @router.post("/seed-database")
@@ -165,6 +278,8 @@ async def reset_products(db: AsyncSession = Depends(get_db)):
     Delete all products, variants, and images (for testing)
     """
     try:
+        # This test-only, unbounded reset intentionally fails closed when any
+        # Lane 2A-4B stock/payment subject exists; it has no safe bounded key set.
         # Delete in correct order due to foreign keys
         await db.execute("DELETE FROM product_images")
         await db.execute("DELETE FROM product_variants")
@@ -186,7 +301,14 @@ async def reset_products(db: AsyncSession = Depends(get_db)):
 # ===========================
 
 # Response schemas for user management
-class UserListItem(UserResponse):
+class AdminUserResponse(UserResponse):
+    """Admin-only user response including test-account audit metadata."""
+    test_account_tagged_at: Optional[datetime] = None
+    test_account_tagged_by: Optional[UUID] = None
+    test_account_tag_reason: Optional[str] = None
+
+
+class UserListItem(AdminUserResponse):
     """User list item with additional fields"""
     created_at: Optional[str] = None
     last_login: Optional[str] = None
@@ -195,6 +317,40 @@ class UserListItem(UserResponse):
 class UserListResponse(PaginatedResponse):
     """Paginated user list response"""
     items: List[UserListItem]
+
+
+@router.post("/test-accounts/classify")
+async def classify_test_accounts(
+    request: TestAccountClassificationRequest,
+    current_admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Preview or classify all current staging customer/vendor accounts."""
+    try:
+        return await classify_existing_staging_accounts(
+            db,
+            actor_id=current_admin.id,
+            apply=request.apply,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/users/{user_id}/test-account")
+async def mark_user_as_test_account(
+    user_id: UUID,
+    current_admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Idempotently mark one staging customer/vendor as a test account."""
+    try:
+        return await tag_staging_account(db, account_id=user_id, actor_id=current_admin.id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.get("/users", response_model=UserListResponse)
@@ -264,6 +420,7 @@ async def list_users(
                 "role": user.role.value,
                 "is_active": user.is_active,
                 "email_verified": user.email_verified,
+                "is_test_account": user.is_test_account,
                 "created_at": user.created_at.isoformat() if user.created_at else None,
                 "last_login": None,  # User model doesn't have last_login field yet
             }
@@ -276,7 +433,7 @@ async def list_users(
     }
 
 
-@router.get("/users/{user_id}", response_model=UserResponse)
+@router.get("/users/{user_id}", response_model=AdminUserResponse)
 async def get_user(
     user_id: UUID,
     current_admin: User = Depends(get_current_admin),
@@ -298,7 +455,7 @@ async def get_user(
     return user
 
 
-@router.put("/users/{user_id}", response_model=UserResponse)
+@router.put("/users/{user_id}", response_model=AdminUserResponse)
 async def update_user(
     user_id: UUID,
     user_data: UserUpdate,
@@ -346,6 +503,58 @@ async def update_user(
     return user
 
 
+@router.put("/users/status/bulk")
+async def bulk_update_user_status(
+    payload: BulkUserStatusUpdate,
+    current_admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Apply one reversible account-status transition to a preflighted batch."""
+    if not payload.user_ids:
+        raise HTTPException(status_code=422, detail="At least one user ID is required")
+    if len(set(payload.user_ids)) != len(payload.user_ids):
+        raise HTTPException(status_code=422, detail="Duplicate user IDs are not allowed")
+    if current_admin.id in payload.user_ids:
+        raise HTTPException(status_code=400, detail="Cannot change your own status")
+
+    users = (await db.execute(select(User).where(User.id.in_(payload.user_ids)))).scalars().all()
+    users_by_id = {user.id: user for user in users}
+    missing_ids = [str(user_id) for user_id in payload.user_ids if user_id not in users_by_id]
+    if missing_ids:
+        raise HTTPException(
+            status_code=404,
+            detail={"message": "One or more users were not found", "missing_user_ids": missing_ids},
+        )
+
+    results = []
+    for user_id in payload.user_ids:
+        user = users_by_id[user_id]
+        previous_is_active = user.is_active
+        if previous_is_active == payload.is_active:
+            results.append({"user_id": str(user.id), "status": "unchanged", "is_active": user.is_active})
+            continue
+
+        user.is_active = payload.is_active
+        db.add(
+            AuditLog(
+                user_id=current_admin.id,
+                action="user_activated" if payload.is_active else "user_deactivated",
+                entity_type="user",
+                entity_id=user.id,
+                old_values={"is_active": previous_is_active},
+                new_values={"is_active": payload.is_active},
+            )
+        )
+        results.append({"user_id": str(user.id), "status": "updated", "is_active": user.is_active})
+
+    await db.commit()
+    return {
+        "requested_count": len(payload.user_ids),
+        "updated_count": sum(result["status"] == "updated" for result in results),
+        "results": results,
+    }
+
+
 @router.put("/users/{user_id}/status")
 async def toggle_user_status(
     user_id: UUID,
@@ -374,8 +583,18 @@ async def toggle_user_status(
             detail="Cannot change your own status"
         )
 
-    # Update status
+    previous_is_active = user.is_active
     user.is_active = is_active
+    db.add(
+        AuditLog(
+            user_id=current_admin.id,
+            action="user_activated" if is_active else "user_deactivated",
+            entity_type="user",
+            entity_id=user.id,
+            old_values={"is_active": previous_is_active},
+            new_values={"is_active": is_active},
+        )
+    )
 
     await db.commit()
     await db.refresh(user)
@@ -650,12 +869,16 @@ async def list_vendors(
                 "business_phone": vendor.business_phone,
                 "email": user.email,
                 "full_name": user.full_name,
+                "role": user.role.value,
                 "approved": vendor.approved,
+                "is_featured_storefront": vendor.is_featured_storefront,
+                "featured_storefront_image_url": vendor.featured_storefront_image_url,
                 "approved_at": vendor.approved_at.isoformat() if vendor.approved_at else None,
                 "kyc_status": vendor.kyc_status.value if vendor.kyc_status else None,
                 "kyc_submitted_at": vendor.kyc_submitted_at.isoformat() if vendor.kyc_submitted_at else None,
                 "commission_rate": float(vendor.commission_rate) if vendor.commission_rate else 0.0,
                 "is_active": user.is_active,
+                "is_test_account": user.is_test_account,
                 "is_onboarding": vendor.is_onboarding,
                 "brand_info_completed": vendor.brand_info_completed,
                 "payout_info_completed": vendor.payout_info_completed,
@@ -673,6 +896,39 @@ async def list_vendors(
         "page": page,
         "page_size": page_size,
         "total_pages": total_pages,
+    }
+
+
+@router.put("/vendors/{vendor_id}/featured-storefront")
+async def update_vendor_featured_storefront(
+    vendor_id: UUID,
+    payload: FeaturedStorefrontUpdate,
+    current_admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Admin-only feature nomination; public eligibility is rechecked at read time."""
+    result = await db.execute(
+        select(Vendor, User)
+        .join(User, Vendor.user_id == User.id)
+        .where(Vendor.id == vendor_id)
+    )
+    vendor_with_user = result.first()
+    if not vendor_with_user:
+        raise HTTPException(status_code=404, detail="Vendor not found")
+
+    vendor, vendor_user = vendor_with_user
+    if payload.is_featured_storefront:
+        detail = _featured_storefront_eligibility_error(vendor, vendor_user)
+        if detail:
+            raise HTTPException(status_code=409, detail=detail)
+
+    vendor.is_featured_storefront = payload.is_featured_storefront
+    await db.commit()
+    await db.refresh(vendor)
+    return {
+        "vendor_id": str(vendor.id),
+        "is_featured_storefront": vendor.is_featured_storefront,
+        "updated_by": str(current_admin.id),
     }
 
 
@@ -720,6 +976,8 @@ async def get_vendor_details(
         "business_address": vendor.business_address,
         "business_phone": vendor.business_phone,
         "approved": vendor.approved,
+        "is_featured_storefront": vendor.is_featured_storefront,
+        "featured_storefront_image_url": vendor.featured_storefront_image_url,
         "approved_at": vendor.approved_at.isoformat() if vendor.approved_at else None,
         "approved_by": str(vendor.approved_by) if vendor.approved_by else None,
         "kyc_status": vendor.kyc_status.value if vendor.kyc_status else None,
@@ -1150,7 +1408,7 @@ async def resend_vendor_activation(
 
     Requires admin role
     """
-    from app.services.vendor_otp_service import VendorOTPService
+    from app.services.vendor_otp_service import OTPDeliveryError, VendorOTPService
 
     application_result = await db.execute(
         select(VendorApplication).where(VendorApplication.id == application_id)
@@ -1178,11 +1436,17 @@ async def resend_vendor_activation(
 
     vendor, vendor_user = vendor_row
 
-    await VendorOTPService.create_and_send_otp(
-        db=db,
-        vendor_id=vendor.id,
-        email=vendor_user.email
-    )
+    try:
+        await VendorOTPService.create_and_send_otp(
+            db=db,
+            vendor_id=vendor.id,
+            email=vendor_user.email
+        )
+    except OTPDeliveryError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Unable to send activation email. Please try again."
+        )
 
     return {
         "message": "Activation email resent successfully",
@@ -1342,7 +1606,10 @@ async def list_all_products(
                 "sku": product.sku,
                 "base_price": float(product.base_price),
                 "compare_at_price": float(product.compare_at_price) if product.compare_at_price else None,
+                "currency": product.currency,
                 "total_stock": product.total_stock,
+                "made_to_order": product.made_to_order,
+                "made_to_order_timeline": product.made_to_order_timeline,
                 "status": product.status.value,
                 "is_featured": product.is_featured,
                 "moderation_status": product.moderation_status.value,
@@ -1584,6 +1851,39 @@ async def delete_product(
 
     product_title = product.title
 
+    variant_ids = list(
+        (
+            await db.execute(
+                select(ProductVariant.id).where(ProductVariant.product_id == product_id)
+            )
+        ).scalars()
+    )
+    variation_ids = list(
+        (
+            await db.execute(
+                select(Variation.id).where(Variation.product_id == product_id)
+            )
+        ).scalars()
+    )
+    size_stock_ids = (
+        list(
+            (
+                await db.execute(
+                    select(SizeStock.id).where(SizeStock.variation_id.in_(variation_ids))
+                )
+            ).scalars()
+        )
+        if variation_ids
+        else []
+    )
+    await coordinate_catalog_write(
+        db,
+        product_ids=[product_id],
+        variation_ids=variation_ids,
+        product_variant_ids=variant_ids,
+        size_stock_ids=size_stock_ids,
+    )
+
     try:
         # Delete associated product images
         await db.execute(
@@ -1653,7 +1953,10 @@ async def get_product(
         "sku": product.sku,
         "base_price": float(product.base_price),
         "compare_at_price": float(product.compare_at_price) if product.compare_at_price else None,
+        "currency": product.currency,
         "total_stock": product.total_stock,
+        "made_to_order": product.made_to_order,
+        "made_to_order_timeline": product.made_to_order_timeline,
         "status": product.status.value,
         "moderation_status": product.moderation_status.value,
         "is_featured": product.is_featured,
@@ -1831,6 +2134,8 @@ async def list_categories(
 
     Requires admin role
     """
+    from app.models.category import Category as ProductCategory
+
     result = await db.execute(select(ProductCategory).order_by(ProductCategory.display_order))
     categories = result.scalars().all()
 
@@ -2304,6 +2609,16 @@ async def update_featured_products(
 
     Requires admin role
     """
+    current_featured_ids = list(
+        (
+            await db.execute(select(Product.id).where(Product.is_featured.is_(True)))
+        ).scalars()
+    )
+    await coordinate_catalog_write(
+        db,
+        product_ids=set(current_featured_ids).union(product_ids),
+    )
+
     # Clear existing featured status
     await db.execute(
         update(Product)
@@ -2351,7 +2666,7 @@ async def list_orders(
     query = (
         select(Order, User)
         .join(User, Order.customer_id == User.id)
-        .options(selectinload(Order.items))
+        .options(selectinload(Order.items), selectinload(Order.payments))
     )
 
     # Apply filters
@@ -2402,6 +2717,7 @@ async def list_orders(
 
     orders_data = []
     for order, user in orders_with_users:
+        display_currency = _resolve_admin_order_currency(order, order.payments)
         vendor_ids = {item.vendor_id for item in order.items}
         item_count = sum(item.quantity for item in order.items)
 
@@ -2415,6 +2731,7 @@ async def list_orders(
                     "email": user.email,
                 },
                 "total_amount": float(order.total_amount),
+                "currency": display_currency,
                 "payment_status": order.payment_status,
                 "fulfillment_status": order.fulfillment_status,
                 "created_at": order.created_at.isoformat() if order.created_at else None,
@@ -2528,6 +2845,7 @@ async def get_order(
         select(Order, User)
         .join(User, Order.customer_id == User.id)
         .where(Order.id == order_id)
+        .options(selectinload(Order.payments))
     )
     order_with_user = result.first()
 
@@ -2535,6 +2853,8 @@ async def get_order(
         raise HTTPException(status_code=404, detail="Order not found")
 
     order, user = order_with_user
+    display_currency = _resolve_admin_order_currency(order, order.payments)
+    usd_to_ngn_rate = await _get_admin_usd_to_ngn_rate(db)
 
     # Get order items
     items_result = await db.execute(
@@ -2555,17 +2875,41 @@ async def get_order(
             "full_name": user.full_name,
             "email": user.email,
         },
+        "currency": display_currency,
         "total_amount": float(order.total_amount),
         "payment_status": order.payment_status,
         "fulfillment_status": order.fulfillment_status,
         "created_at": order.created_at.isoformat() if order.created_at else None,
         "items": [
             {
+                **(
+                    lambda source_currency: {
+                        "unit_price": float(
+                            _convert_admin_currency(
+                                Decimal(str(item.unit_price or "0")),
+                                source_currency,
+                                display_currency,
+                                usd_to_ngn_rate,
+                            )
+                        ),
+                        "subtotal": float(
+                            _convert_admin_currency(
+                                Decimal(str(item.subtotal or "0")),
+                                source_currency,
+                                display_currency,
+                                usd_to_ngn_rate,
+                            )
+                        ),
+                    }
+                )(
+                    _normalize_admin_currency(item.product.currency)
+                    if _should_use_product_currency_for_legacy_admin_item(item, display_currency)
+                    else _normalize_admin_currency(getattr(item, "currency", None) or display_currency)
+                ),
                 "id": str(item.id),
                 "product_title": item.product_title,
                 "quantity": item.quantity,
-                "unit_price": float(item.unit_price),
-                "subtotal": float(item.subtotal),
+                "currency": display_currency,
                 "fulfillment_status": item.fulfillment_status,
                 "product_image_url": (
                     (
@@ -2598,7 +2942,12 @@ async def update_order_status(
 
     Requires admin role
     """
-    from app.models.order import Order
+    from app.models.order import Order, FulfillmentStatus
+    from app.services.dhl.shipments import (
+        ShipmentPhase4ConflictError,
+        ensure_order_cancellation_allowed,
+        ensure_order_manual_dhl_status_write_allowed,
+    )
     from app.services.email_service import email_service
     import logging
 
@@ -2606,7 +2955,10 @@ async def update_order_status(
 
     # Get order
     result = await db.execute(
-        select(Order, User).join(User, Order.customer_id == User.id).where(Order.id == order_id)
+        select(Order, User)
+        .join(User, Order.customer_id == User.id)
+        .where(Order.id == order_id)
+        .with_for_update()
     )
     order_with_user = result.first()
 
@@ -2614,6 +2966,28 @@ async def update_order_status(
         raise HTTPException(status_code=404, detail="Order not found")
 
     order, user = order_with_user
+
+    if status == FulfillmentStatus.CANCELLED.value:
+        try:
+            await ensure_order_cancellation_allowed(db, order_id=order.id)
+        except ShipmentPhase4ConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if status in {
+        FulfillmentStatus.PICKED_UP.value,
+        FulfillmentStatus.IN_TRANSIT.value,
+        FulfillmentStatus.OUT_FOR_DELIVERY.value,
+        FulfillmentStatus.DELIVERED.value,
+        FulfillmentStatus.DELIVERY_FAILED.value,
+        FulfillmentStatus.RETURNED.value,
+    }:
+        try:
+            await ensure_order_manual_dhl_status_write_allowed(
+                db,
+                order_id=order.id,
+                new_status=FulfillmentStatus(status),
+            )
+        except ShipmentPhase4ConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     # Update status
     order.fulfillment_status = status
@@ -2652,6 +3026,10 @@ async def cancel_order(
     Requires admin role
     """
     from app.models.order import Order
+    from app.services.dhl.shipments import (
+        ShipmentPhase4ConflictError,
+        ensure_order_cancellation_allowed,
+    )
     from app.services.email_service import email_service
     import logging
 
@@ -2659,7 +3037,10 @@ async def cancel_order(
 
     # Get order
     result = await db.execute(
-        select(Order, User).join(User, Order.customer_id == User.id).where(Order.id == order_id)
+        select(Order, User)
+        .join(User, Order.customer_id == User.id)
+        .where(Order.id == order_id)
+        .with_for_update()
     )
     order_with_user = result.first()
 
@@ -2667,6 +3048,11 @@ async def cancel_order(
         raise HTTPException(status_code=404, detail="Order not found")
 
     order, user = order_with_user
+
+    try:
+        await ensure_order_cancellation_allowed(db, order_id=order.id)
+    except ShipmentPhase4ConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     # Update status
     order.fulfillment_status = "cancelled"
@@ -3313,6 +3699,7 @@ async def export_orders(
     """
     import csv
     from io import StringIO
+    from app.models.order import Order
 
     # Get all orders
     result = await db.execute(select(Order))

@@ -193,6 +193,23 @@ export default function VendorOrders() {
     return formatPriceWithConversion(amount, 'NGN', currentCurrency, exchangeRates);
   };
 
+  const formatReceivedDate = (value: string) => {
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return '—';
+    return parsed.toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+    });
+  };
+
+  const isRecentOrder = (value: string) => {
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return false;
+    const ageMs = Date.now() - parsed.getTime();
+    return ageMs >= 0 && ageMs <= 72 * 60 * 60 * 1000;
+  };
+
   // Get items summary for an order
   const getItemsSummary = (order: VendorOrder) => {
     const totalItems = order.items.reduce((sum, item) => sum + item.quantity, 0);
@@ -210,6 +227,7 @@ export default function VendorOrders() {
           <div className="flex items-center justify-between mb-8">
             <div>
               <h1 className="text-2xl font-semibold text-gray-900">Order Management</h1>
+              <p className="mt-1 text-sm text-gray-500">Newest orders appear first.</p>
               <div className="flex items-center gap-6 mt-2 text-sm">
                 <span className="text-amber-600">
                   <span className="inline-block w-2 h-2 bg-amber-500 rounded-full mr-2"></span>
@@ -229,7 +247,7 @@ export default function VendorOrders() {
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
                 <input
                   type="text"
-                  placeholder="Search"
+                  placeholder="Search order or customer"
                   value={search}
                   onChange={handleSearchChange}
                   className="pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#105E53] focus:border-transparent w-64"
@@ -297,6 +315,9 @@ export default function VendorOrders() {
                       Order Number
                     </th>
                     <th className="px-8 py-5 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                      Received
+                    </th>
+                    <th className="px-8 py-5 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
                       Order Items
                     </th>
                     <th className="px-8 py-5 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider">
@@ -315,7 +336,18 @@ export default function VendorOrders() {
                       onClick={() => handleRowClick(order)}
                     >
                       <td className="px-8 py-6 whitespace-nowrap">
-                        <div className="text-sm font-semibold text-gray-900">Order {order.order_number}</div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-semibold text-gray-900">Order {order.order_number}</span>
+                          {isRecentOrder(order.created_at) && (
+                            <span className="rounded-full bg-[#E8F7EF] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[#19984B]">
+                              New
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-8 py-6 whitespace-nowrap">
+                        <div className="text-sm font-medium text-gray-900">{formatReceivedDate(order.created_at)}</div>
+                        <div className="text-xs text-gray-500">Newest first</div>
                       </td>
                       <td className="px-8 py-6">
                         <div className="text-sm text-gray-600">{getItemsSummary(order)}</div>

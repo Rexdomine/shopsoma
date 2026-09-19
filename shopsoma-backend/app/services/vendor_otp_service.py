@@ -1,14 +1,22 @@
 """Vendor OTP Service for activation flow"""
 import secrets
 import string
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_
 from passlib.context import CryptContext
 
-from app.models import VendorOTP, Vendor
+from app.models import VendorOTP
 from app.services.email_service import email_service
+
+
+logger = logging.getLogger(__name__)
+
+
+class OTPDeliveryError(Exception):
+    """Raised when an activation OTP cannot be handed off to the mail provider."""
 
 
 # Password context for hashing OTP codes
@@ -53,7 +61,7 @@ class VendorOTPService:
             .where(
                 and_(
                     VendorOTP.vendor_id == vendor_id,
-                    VendorOTP.is_used == False
+                    VendorOTP.is_used.is_(False)
                 )
             )
             .values(is_used=True)
@@ -81,16 +89,23 @@ class VendorOTPService:
         await db.commit()
         await db.refresh(otp)
 
-        # Send OTP via email
+        # Send OTP via email.  A persisted OTP is only usable if the provider
+        # accepted the handoff; otherwise invalidate it before reporting failure
+        # so a retry creates a fresh code instead of falsely claiming delivery.
         try:
-            await email_service.send_vendor_otp_email(
+            delivered = await email_service.send_vendor_otp_email(
                 email=email,
                 otp_code=plain_code,
                 expiry_minutes=VendorOTPService.OTP_EXPIRY_MINUTES
             )
-        except Exception as e:
-            # Log error but don't fail - OTP was created
-            print(f"Failed to send OTP email to {email}: {e}")
+        except Exception:
+            logger.exception("OTP email handoff failed for vendor_id=%s", vendor_id)
+            delivered = False
+
+        if not delivered:
+            otp.is_used = True
+            await db.commit()
+            raise OTPDeliveryError("OTP email delivery was not accepted")
 
         return otp
 
@@ -110,7 +125,7 @@ class VendorOTPService:
             .where(
                 and_(
                     VendorOTP.email == email,
-                    VendorOTP.is_used == False
+                    VendorOTP.is_used.is_(False)
                 )
             )
             .order_by(VendorOTP.created_at.desc())

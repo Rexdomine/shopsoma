@@ -1,6 +1,6 @@
 """App settings schemas"""
-from pydantic import BaseModel, Field
-from typing import Optional
+from pydantic import BaseModel, Field, model_validator
+from typing import Optional, Literal
 from datetime import datetime
 from uuid import UUID
 
@@ -35,13 +35,28 @@ class AppSettingResponse(AppSettingBase):
 
 
 class ShippingProviderSettings(BaseModel):
-    """Shipping provider settings"""
-    use_shipbubble: bool = Field(default=False, description="Use ShipBubble for shipping rates")
+    """Effective selection and readiness; legacy response field is retained."""
+    provider: Literal["manual", "shipbubble", "dhl"] = "manual"
+    use_shipbubble: bool = False
+    checkout_estimates_required: bool = False
+    readiness: dict[str, bool] = Field(default_factory=lambda: {
+        "manual": True, "shipbubble": False, "dhl": False,
+    })
 
 
 class ShippingProviderSettingsUpdate(BaseModel):
-    """Update shipping provider settings"""
-    use_shipbubble: bool
+    provider: Optional[Literal["manual", "shipbubble", "dhl"]] = None
+    use_shipbubble: Optional[bool] = None
+
+    @model_validator(mode="after")
+    def resolve_legacy_selection(self):
+        if self.provider is None:
+            if self.use_shipbubble is None:
+                raise ValueError("A shipping provider selection is required")
+            self.provider = "shipbubble" if self.use_shipbubble else "manual"
+        elif self.use_shipbubble is not None and self.use_shipbubble != (self.provider == "shipbubble"):
+            raise ValueError("Conflicting shipping provider selections")
+        return self
 
 
 class PayoutHoldSettings(BaseModel):
@@ -53,6 +68,18 @@ class PayoutHoldSettings(BaseModel):
 class PayoutHoldSettingsUpdate(BaseModel):
     """Update payout hold settings"""
     hold_days: int = Field(..., ge=0, le=3650)
+
+
+class CommissionSettings(BaseModel):
+    """Platform commission settings"""
+    commission_rate: float = Field(default=12.5, ge=0, le=100)
+    updated_at: Optional[datetime] = None
+
+
+class CommissionSettingsUpdate(BaseModel):
+    """Update platform commission settings"""
+    commission_rate: float = Field(..., ge=0, le=100)
+    apply_to_existing_vendors: bool = False
 
 
 class FeaturedRotationSettings(BaseModel):

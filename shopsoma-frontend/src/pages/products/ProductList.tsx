@@ -6,21 +6,24 @@ import Loading from '../../components/common/Loading';
 import type { Category, Product } from '../../types';
 import { productService, type ProductListParams } from '../../services/productService';
 import { categoryService } from '../../services/categoryService';
-import { MEN_HERO_IMAGE_URL, ROUTES, WOMEN_HERO_IMAGE_URL } from '../../config/constants';
+import { getFeaturedStorefrontVendors, type FeaturedStorefrontVendor } from '../../services/featuredStorefrontService';
+import { getFeaturedRotationSettings } from '../../services/settingsService';
+import {
+  IMAGE_CONFIG,
+  MEN_HERO_IMAGE_URL,
+  MEN_HERO_MOBILE_IMAGE_URL,
+  ROUTES,
+  WOMEN_HERO_IMAGE_URL,
+  WOMEN_HERO_MOBILE_IMAGE_URL,
+} from '../../config/constants';
 import ProductCard from '../../components/products/ProductCard';
 import VendorShowcaseCard from '../../components/products/VendorShowcaseCard';
 import { useWishlistActions } from '../../hooks/useWishlistActions';
 import { usePreferenceStore } from '../../store/preferenceStore';
+import { hasSolidColorHex } from '../../utils/colorDisplay';
+import { getProductImageSource, normalizeProductImageUrl } from '../../utils/productImages';
 
 const PAGE_SIZE = 12;
-
-// Spotlight vendor configuration
-const SPOTLIGHT_VENDOR = {
-  id: '1', // Replace with actual vendor ID
-  name: 'Shopsoma Fashion Store',
-  imageUrl: '/images/hero/demo-image-2.png', // Replace with actual vendor image
-  productCount: 24, // This can be dynamic if needed
-};
 
 type FilterState = {
   category: string;
@@ -79,6 +82,8 @@ type HeroContent = {
   title: string;
   body: string;
   imageUrl: string;
+  mobileImageUrl?: string;
+  imagePositionClassName?: string;
   ctaLabel?: string;
 };
 
@@ -91,23 +96,27 @@ type ProductListProps = {
 };
 
 const DEFAULT_HERO: HeroContent = {
-  title: 'Lisa Folawiyo',
-  body: 'Kooky Recipes Bad Raw Viral. Mukbang Pitchfork Party Church-key Viral Bicycle Rights Photo Chicharrones Cray. Heirloom Cray Blue Bottle Shaman Health Art Party Tumeric Salvia',
+  title: 'The ShopSoma Edit',
+  body: 'A considered selection of contemporary fashion, chosen for the way you live, work and go out.',
   imageUrl: '/images/hero/demo-image-2.png',
-  ctaLabel: 'Learn More',
+  ctaLabel: 'Shop the edit',
 };
 
 const MEN_HERO: HeroContent = {
-  title: 'Menswear: Elevated Everyday Style',
-  body: 'Discover tailored pieces, bold silhouettes and everyday staples, curated for the modern man.',
+  title: 'Menswear for the modern man',
+  body: 'Easy tailoring, confident silhouettes and everyday staples, selected for the modern man.',
   imageUrl: MEN_HERO_IMAGE_URL,
+  mobileImageUrl: MEN_HERO_MOBILE_IMAGE_URL,
+  imagePositionClassName: 'object-[40%_25%] max-sm:object-[25%_40%]',
   ctaLabel: 'Shop all menswear',
 };
 
 const WOMEN_HERO: HeroContent = {
-  title: 'Womenswear: Effortless Elegance',
-  body: 'Explore statement pieces, refined tailoring and everyday essentials crafted for modern women.',
+  title: 'Womenswear for every style',
+  body: 'Explore ShopSoma’s hand-picked selection, from quiet essentials to pieces that make an entrance.',
   imageUrl: WOMEN_HERO_IMAGE_URL,
+  mobileImageUrl: WOMEN_HERO_MOBILE_IMAGE_URL,
+  imagePositionClassName: 'object-[40%_0%] max-sm:object-[36%_42%]',
   ctaLabel: 'Shop all womenswear',
 };
 
@@ -126,6 +135,9 @@ export default function ProductList({
   const categoryParam = searchParams.get('category') || '';
 
   const [allProducts, setAllProducts] = useState<Product[]>([]);
+  const [featuredVendors, setFeaturedVendors] = useState<FeaturedStorefrontVendor[]>([]);
+  const [featuredRotationMinutes, setFeaturedRotationMinutes] = useState(10);
+  const [featuredRotationTick, setFeaturedRotationTick] = useState(0);
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -154,6 +166,47 @@ export default function ProductList({
     if (!initialParams) return undefined;
     return { ...initialParams };
   }, [initialParamsKey, initialParams]);
+  const featuredCategory = presetCategory === 'Men' ? 'men' : presetCategory === 'Women' ? 'women' : null;
+  const featuredVendor = useMemo(() => {
+    if (!featuredCategory || featuredVendors.length === 0) return null;
+    return featuredVendors[featuredRotationTick % featuredVendors.length];
+  }, [featuredCategory, featuredRotationTick, featuredVendors]);
+  const SPOTLIGHT_VENDOR = {
+    id: featuredVendor?.id ?? '',
+    name: featuredVendor?.business_name ?? '',
+    imageUrl: normalizeProductImageUrl(featuredVendor?.featured_storefront_image_url),
+    productCount: featuredVendor?.product_count ?? 0,
+  };
+
+  useEffect(() => {
+    if (!featuredCategory) {
+      setFeaturedVendors([]);
+      return;
+    }
+    let mounted = true;
+    Promise.allSettled([getFeaturedStorefrontVendors(featuredCategory), getFeaturedRotationSettings()])
+      .then(([vendorsResult, rotationResult]) => {
+        if (!mounted) return;
+        if (vendorsResult.status === 'fulfilled') {
+          setFeaturedVendors(vendorsResult.value);
+        } else {
+          setFeaturedVendors([]);
+        }
+        if (rotationResult.status === 'fulfilled') {
+          setFeaturedRotationMinutes(rotationResult.value.rotation_minutes);
+        }
+      });
+    return () => { mounted = false; };
+  }, [featuredCategory]);
+
+  useEffect(() => {
+    if (!featuredCategory || featuredVendors.length < 2) return;
+    const interval = window.setInterval(
+      () => setFeaturedRotationTick((current) => current + 1),
+      featuredRotationMinutes * 60_000,
+    );
+    return () => window.clearInterval(interval);
+  }, [featuredCategory, featuredRotationMinutes, featuredVendors.length]);
 
   const normalize = (value: string) =>
     value.toLowerCase().replace(/’/g, "'").trim();
@@ -190,29 +243,24 @@ export default function ProductList({
   };
 
   useEffect(() => {
+    let cancelled = false;
     const loadProducts = async () => {
-      const cacheKey = `shopsoma_products_${initialParamsKey || 'all'}`;
+      const cacheKey = `shopsoma_products_${initialParamsKey || 'all'}${stableInitialParams?.category_id ? ':all-pages-v2' : ''}`;
       const cacheRaw = sessionStorage.getItem(cacheKey);
-      let hasCachedData = false;
-
       if (cacheRaw) {
         try {
           const cached = JSON.parse(cacheRaw) as { products: Product[]; timestamp: number };
-          if (cached?.products?.length) {
-            setAllProducts(cached.products);
-            setLoading(false);
-            setError(null);
-            hasCachedData = true;
-          }
+          // Parse cached data only to discard malformed storage below. Cached
+          // products are never rendered without current API confirmation.
+          void cached;
         } catch {
           sessionStorage.removeItem(cacheKey);
         }
       }
 
       try {
-        if (!hasCachedData) {
-          setLoading(true);
-        }
+        if (cancelled) return;
+        setLoading(true);
         setPage(1);
         const response = await productService.getProducts({
           page: 1,
@@ -221,27 +269,61 @@ export default function ProductList({
           sort_order: 'desc',
           ...stableInitialParams,
         });
-        setAllProducts(response.products || []);
-        sessionStorage.setItem(
-          cacheKey,
-          JSON.stringify({ products: response.products || [], timestamp: Date.now() })
-        );
+        if (cancelled) return;
+        let products = response.products || [];
+        setAllProducts(products);
+        setError(null);
+        // The first page is usable immediately; additional category pages are background enrichment.
+        setLoading(false);
+        if (stableInitialParams?.category_id && response.total_pages > 1) {
+          for (let nextPage = 2; nextPage <= response.total_pages; nextPage += 1) {
+            if (cancelled) return;
+            try {
+              const pageResponse = await productService.getProducts({
+                page: nextPage,
+                page_size: 60,
+                sort_by: 'created_at',
+                sort_order: 'desc',
+                ...stableInitialParams,
+              });
+              if (cancelled) return;
+              products = products.concat(pageResponse.products || []);
+              setAllProducts(products);
+            } catch {
+              if (cancelled) return;
+              break;
+            }
+          }
+        }
+        if (cancelled) return;
+        try {
+          sessionStorage.setItem(
+            cacheKey,
+            JSON.stringify({ products, timestamp: Date.now() })
+          );
+        } catch (cacheError) {
+          // Storage quota/private-mode failures must not hide products already loaded from the API.
+          console.warn('Unable to cache products for this session', cacheError);
+        }
         setError(null);
       } catch (err) {
-        if (!hasCachedData) {
-          console.error('Failed to load products', err);
-        }
-        if (!hasCachedData) {
-          setError('We could not load the current collection. Please refresh.');
-        }
+        if (cancelled) return;
+        console.error('Failed to load products', err);
+        // Fail closed: stale session data may contain products that are now
+        // unapproved, deactivated, or no longer visible to customers.
+        setAllProducts([]);
+        setError('We could not load the current collection. Please refresh.');
       } finally {
-        if (!hasCachedData) {
+        if (!cancelled) {
           setLoading(false);
         }
       }
     };
 
     loadProducts();
+    return () => {
+      cancelled = true;
+    };
   }, [initialParamsKey, stableInitialParams]);
 
   // Derive interest category from preference
@@ -314,6 +396,7 @@ export default function ProductList({
   const [childCategoryMap, setChildCategoryMap] = useState<Record<string, Category[]>>({});
   const [featuredHoverProduct, setFeaturedHoverProduct] = useState<Product | null>(null);
   const hoverCloseRef = useRef<number | null>(null);
+  const featuredHoverImage = featuredHoverProduct ? getProductImageSource(featuredHoverProduct) : null;
 
   const hoveredNavItem = useMemo(
     () => navItems.find((item) => item.id === hoveredNavId) || null,
@@ -334,6 +417,20 @@ export default function ProductList({
       hoveredChildCategories.slice(index * perColumn, index * perColumn + perColumn)
     ).filter((group) => group.length);
   }, [hoveredChildCategories]);
+
+  const handleSpotlightImageError = (
+    event: React.SyntheticEvent<HTMLImageElement>,
+    fallbackSrc?: string
+  ) => {
+    const image = event.currentTarget;
+    if (fallbackSrc && image.dataset.fallbackApplied !== 'true') {
+      image.dataset.fallbackApplied = 'true';
+      image.src = fallbackSrc;
+      return;
+    }
+    image.src = IMAGE_CONFIG.PLACEHOLDER;
+    image.onerror = null;
+  };
 
   useEffect(() => {
     if (!hoveredNavId || childCategoryMap[hoveredNavId] || childCategoryOverrides?.[hoveredNavId]) return;
@@ -719,11 +816,18 @@ const handleFilterChange = (key: keyof FilterState, value: string) => {
     <Layout>
       {/* Store Hero Section */}
       <section
-        className="relative w-full min-h-[50vh] bg-cover bg-center flex items-end"
-        style={{
-          backgroundImage: `url('${heroContent.imageUrl}')`,
-        }}
+        className="relative w-full min-h-[50vh] overflow-hidden flex items-end"
       >
+        <picture className="absolute inset-0" aria-hidden="true">
+          {heroContent.mobileImageUrl && (
+            <source media="(max-width: 639px)" srcSet={heroContent.mobileImageUrl} />
+          )}
+          <img
+            src={heroContent.imageUrl}
+            alt=""
+            className={`h-full w-full object-cover ${heroContent.imagePositionClassName || 'object-center'}`}
+          />
+        </picture>
         {/* Dark overlay for text legibility */}
         <div className="absolute inset-0 bg-black/20" />
 
@@ -878,13 +982,12 @@ const handleFilterChange = (key: keyof FilterState, value: string) => {
                   {featuredHoverProduct ? (
                     <>
                       <div className="aspect-[4/5] bg-gray-100 overflow-hidden mb-3">
-                        {featuredHoverProduct.images?.[0]?.image_url ? (
-                          <img
-                            src={featuredHoverProduct.images[0].image_url}
-                            alt={featuredHoverProduct.title}
-                            className="w-full h-full object-cover"
-                          />
-                        ) : null}
+                        <img
+                          src={featuredHoverImage?.src || IMAGE_CONFIG.PLACEHOLDER}
+                          alt={featuredHoverProduct.title}
+                          className="w-full h-full object-cover"
+                          onError={(event) => handleSpotlightImageError(event, featuredHoverImage?.fallbackSrc)}
+                        />
                       </div>
                       <p className="text-xs font-ui uppercase tracking-[0.3em] text-gray-400 mb-2">
                         Spotlight
@@ -1115,12 +1218,12 @@ const handleFilterChange = (key: keyof FilterState, value: string) => {
                     <>
                       {/* Mobile layout: 2-column grid with full-width featured vendors */}
                       <div className="lg:hidden space-y-10">
-                        <VendorShowcaseCard
+                        {featuredVendor && <VendorShowcaseCard
                           vendorId={SPOTLIGHT_VENDOR.id}
                           vendorName={SPOTLIGHT_VENDOR.name}
                           imageUrl={SPOTLIGHT_VENDOR.imageUrl}
                           productCount={SPOTLIGHT_VENDOR.productCount}
-                        />
+                        />}
                         <div className="grid grid-cols-2 gap-x-4 gap-y-8">
                           {(() => {
                             const mobileItems = paginatedProducts.slice(0, 12).reduce<
@@ -1130,7 +1233,7 @@ const handleFilterChange = (key: keyof FilterState, value: string) => {
                               >
                             >((acc, product, index) => {
                               acc.push({ type: 'product', product });
-                              if (index === 5) {
+                              if (featuredVendor && index === 5) {
                                 acc.push({ type: 'vendor', key: 'featured-vendor' });
                               }
                               return acc;
@@ -1140,12 +1243,12 @@ const handleFilterChange = (key: keyof FilterState, value: string) => {
                               if (item.type === 'vendor') {
                                 return (
                                   <div key={item.key} className="col-span-2">
-                                    <VendorShowcaseCard
+                                    {featuredVendor && <VendorShowcaseCard
                                       vendorId={SPOTLIGHT_VENDOR.id}
-                                      vendorName="Featured Designer"
+                                      vendorName={SPOTLIGHT_VENDOR.name}
                                       imageUrl={SPOTLIGHT_VENDOR.imageUrl}
                                       productCount={SPOTLIGHT_VENDOR.productCount}
-                                    />
+                                    />}
                                   </div>
                                 );
                               }
@@ -1166,8 +1269,9 @@ const handleFilterChange = (key: keyof FilterState, value: string) => {
 
                       {/* Desktop layout: curated vendor + product grid */}
                       <div className="hidden lg:block">
+                        {featuredVendor ? <>
                         {/* Row 1: Vendor Showcase (2 cols) + 1 Product - 3 column grid */}
-                        {paginatedProducts.length >= 1 && (
+                        {featuredVendor && paginatedProducts.length >= 1 && (
                           <div className="grid grid-cols-3 gap-x-6 gap-y-10 mb-10">
                             <div className="col-span-2">
                               <VendorShowcaseCard
@@ -1226,7 +1330,7 @@ const handleFilterChange = (key: keyof FilterState, value: string) => {
                         )}
 
                         {/* Row 4: 1 Product + Vendor Showcase (2 cols) + 1 Product - 4 column grid */}
-                        {paginatedProducts.length >= 10 && (
+                        {featuredVendor && paginatedProducts.length >= 10 && (
                           <div className="grid grid-cols-4 gap-x-6 gap-y-10">
                             {paginatedProducts.slice(9, 10).map((product) => {
                               const isFavorite = favorites.has(product.id);
@@ -1248,6 +1352,21 @@ const handleFilterChange = (key: keyof FilterState, value: string) => {
                               />
                             </div>
                             {paginatedProducts.slice(10, 11).map((product) => {
+                              const isFavorite = favorites.has(product.id);
+                              return (
+                                <ProductCard
+                                  key={product.id}
+                                  product={product}
+                                  onToggleFavorite={toggleFavorite}
+                                  isFavorite={isFavorite}
+                                />
+                              );
+                            })}
+                          </div>
+                        )}
+                        </> : (
+                          <div className="grid grid-cols-4 gap-x-6 gap-y-10">
+                            {paginatedProducts.map((product) => {
                               const isFavorite = favorites.has(product.id);
                               return (
                                 <ProductCard
@@ -1382,7 +1501,11 @@ function FilterGroup({
           )}
           {options.map((option) => {
             const selectedColor = selected === option;
-            const showColorSwatch = type === 'color' && option !== 'All';
+            const meta = colorMeta?.[option];
+            const showColorSwatch =
+              type === 'color' &&
+              option !== 'All' &&
+              (hasSolidColorHex(meta?.hex) || option.toLowerCase() in COLOR_PRESETS);
             const swatchColor = showColorSwatch ? getColorValue(option) : undefined;
             const count =
               showColorSwatch && option !== 'All' ? colorMeta?.[option]?.count ?? 0 : 0;
@@ -1408,7 +1531,13 @@ function FilterGroup({
                       style={{ backgroundColor: swatchColor }}
                     />
                   )}
-                  <span>{option}</span>
+                  {!showColorSwatch && option !== 'All' ? (
+                    <span className="rounded-full border border-gray-200 px-2 py-1 text-xs font-medium text-gray-600">
+                      {option}
+                    </span>
+                  ) : (
+                    <span>{option}</span>
+                  )}
                 </div>
                 {showColorSwatch && count > 0 && (
                   <span className="text-xs text-gray-400">({count})</span>

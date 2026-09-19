@@ -1,5 +1,15 @@
 import api from './api';
 
+export class ActivationInitializationError extends Error {
+  status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = 'ActivationInitializationError';
+    this.status = status;
+  }
+}
+
 export interface InitiateActivationRequest {
   email: string;
 }
@@ -50,8 +60,9 @@ export const vendorActivationService = {
       const response = await api.post('/vendor/activation/initiate', { email });
       return response.data;
     } catch (error: any) {
+      const status = error?.response?.status ?? 0;
       const message = error?.response?.data?.detail || 'Failed to initiate activation';
-      throw new Error(message);
+      throw new ActivationInitializationError(message, status);
     }
   },
 

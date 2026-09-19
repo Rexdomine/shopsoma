@@ -1,19 +1,24 @@
+import { getShippingProviderSettings, type ShippingProviderSettings } from '../../services/settingsService';
 import { useState, useEffect } from 'react';
-import type { PaymentGateway } from '../../services/paymentService';
+import { flushSync } from 'react-dom';
+import { buildPaystackWidgetConfig, type PaymentGateway, type InitializePaymentResponse } from '../../services/paymentService';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import Layout from '../../components/layout/Layout';
 import { ROUTES } from '../../config/constants';
-import { checkoutService, type Address, type ShippingRate, type OrderReview, type CreateAddressData } from '../../services/checkoutService';
+import { NIGERIA_STATES } from '../../config/nigeriaStates';
+import { checkoutService, type Address, type ShippingRate, type OrderReview, type CreateAddressData, type CheckoutEstimate, type Order } from '../../services/checkoutService';
 import { CartService } from '../../services/cartService';
 import { paymentService } from '../../services/paymentService';
 import { useAuth } from '../../context/AuthContext';
 import { usePreferenceStore } from '../../store/preferenceStore';
 import { useCurrencyStore } from '../../store/currencyStore';
 import { useCartStore } from '../../store/cartStore';
-import { formatPriceWithConversion, type Currency } from '../../utils/pricing';
+import { convertCurrencyWithRates, formatPriceWithConversion, type Currency } from '../../utils/pricing';
 import { loadStripe } from '@stripe/stripe-js';
 import { Elements } from '@stripe/react-stripe-js';
 import StripePaymentForm from '../../components/payment/StripePaymentForm';
+import CheckoutEstimateSelector from './CheckoutEstimateSelector';
+import { clearStoredCheckoutCapability, saveCheckoutCapability } from '../../utils/checkoutCapability';
 
 // Declare Paystack type
 declare global {
@@ -44,6 +49,34 @@ const ALL_PAYMENT_OPTIONS: { id: PaymentGateway; name: string; icon: string; sup
 
 const stripePromise = loadStripe(import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY || '');
 
+const CURRENCY_PRECISION: Record<Currency, number> = { NGN: 2, USD: 2 };
+
+const hasExactMinorUnitTruth = (amount: string, amountMinor: number, currency: Currency) => {
+  if (!Number.isSafeInteger(amountMinor) || amountMinor <= 0) return false;
+  const match = /^(0|[1-9]\d*)(?:\.(\d+))?$/.exec(amount);
+  if (!match) return false;
+  const precision = CURRENCY_PRECISION[currency];
+  const fraction = match[2] ?? '';
+  if (fraction.length > precision) return false;
+  const exactMinorDigits = `${match[1]}${fraction.padEnd(precision, '0')}`
+    .replace(/^0+(?=\d)/, '');
+  return exactMinorDigits === String(amountMinor);
+};
+
+const isValidServerMoney = (amount: unknown, allowZero: boolean) => {
+  if (typeof amount !== 'string' || !/^(0|[1-9]\d*)(?:\.\d{1,2})?$/.test(amount)) return false;
+  const parsed = Number(amount);
+  return Number.isFinite(parsed) && (allowZero ? parsed >= 0 : parsed > 0);
+};
+
+const formatServerMoney = (amount: string, currency: Currency) =>
+  new Intl.NumberFormat('en-NG', {
+    style: 'currency',
+    currency,
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(Number(amount));
+
 export default function Checkout() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -64,6 +97,7 @@ export default function Checkout() {
   const [addresses, setAddresses] = useState<Address[]>([]);
   const [selectedAddressId, setSelectedAddressId] = useState<string>('');
   const [showNewAddressForm, setShowNewAddressForm] = useState(false);
+  const [editingAddressId, setEditingAddressId] = useState<string | null>(null);
   const [newAddress, setNewAddress] = useState<NewAddress>({
     full_name: '',
     phone_number: '',
@@ -76,6 +110,55 @@ export default function Checkout() {
     address_type: 'shipping',
     is_default: false,
   });
+  const resetNewAddress = () => setNewAddress({
+    full_name: user?.full_name || '',
+    phone_number: user?.phone_number || '',
+    address_line1: '',
+    address_line2: '',
+    city: '',
+    state: '',
+    postal_code: '',
+    country: 'Nigeria',
+    address_type: 'shipping',
+    is_default: false,
+  });
+
+  const [allDomesticEstimates, setAllDomesticEstimates] = useState(false);
+  const [shippingProvider, setShippingProvider] = useState<ShippingProviderSettings['provider'] | null>(null);
+  const [shippingConfigLoaded, setShippingConfigLoaded] = useState(false);
+  const [shippingConfigError, setShippingConfigError] = useState(false);
+  const [shippingConfigRetry, setShippingConfigRetry] = useState(0);
+  useEffect(() => {
+    setShippingConfigLoaded(false);
+    setShippingConfigError(false);
+    setShippingProvider(null);
+    void getShippingProviderSettings()
+      .then(config => {
+        setAllDomesticEstimates(config.checkout_estimates_required);
+        setShippingProvider(config.provider);
+      })
+      .catch(() => {
+        setAllDomesticEstimates(false);
+        setShippingProvider(null);
+        setShippingConfigError(true);
+      })
+      .finally(() => setShippingConfigLoaded(true));
+  }, [shippingConfigRetry]);
+
+  const selectedAddress = addresses.find(address => address.id === selectedAddressId);
+  const destinationCountry = selectedAddress?.country.trim().toLowerCase();
+  const secureShipping = allDomesticEstimates && (destinationCountry === 'nigeria' || destinationCountry === 'ng');
+  const draftCountry = newAddress.country.trim().toLowerCase();
+  const dhlDomesticShipping = shippingProvider === 'dhl' && secureShipping;
+  const postalCodeRequired = shippingProvider === 'dhl' && allDomesticEstimates && (draftCountry === 'nigeria' || draftCountry === 'ng');
+  const isValidDhlPostalCode = (value?: string) => {
+    const postalCode = value?.trim() || '';
+    return postalCode.length > 0 && postalCode.length <= 12;
+  };
+  const selectedAddressNeedsPostalCode = dhlDomesticShipping && !isValidDhlPostalCode(selectedAddress?.postal_code);
+  const selectedAddressPostalCodeGuidance = selectedAddress?.postal_code?.trim()
+    ? 'Update the selected delivery address with a postal code of 12 characters or fewer before continuing with DHL delivery.'
+    : 'Add a postal code to the selected delivery address before continuing with DHL delivery.';
 
   // Shipping state
   const [shippingRates, setShippingRates] = useState<ShippingRate[]>([]);
@@ -98,12 +181,28 @@ export default function Checkout() {
   const [paymentMethod, setPaymentMethod] = useState<PaymentGateway>('paystack');
   const [stripeClientSecret, setStripeClientSecret] = useState<string>('');
   const [stripePaymentIntentId, setStripePaymentIntentId] = useState<string>('');
+  const [currentPaymentGateway, setCurrentPaymentGateway] = useState<PaymentGateway | null>(null);
   const [showStripePaymentModal, setShowStripePaymentModal] = useState(false);
   const [currentOrderId, setCurrentOrderId] = useState<string>('');
+  const [enforcedOrder, setEnforcedOrder] = useState<Order | null>(null);
+  const [legacyOrderNeedsConfirmation, setLegacyOrderNeedsConfirmation] = useState(false);
+  const [checkoutEstimate, setCheckoutEstimate] = useState<CheckoutEstimate | null>(null);
+  const [checkoutCapability, setCheckoutCapability] = useState<string | undefined>();
+  const [paymentRetryAvailable, setPaymentRetryAvailable] = useState(false);
+  const [, setEstimateRequestKey] = useState<string>('');
+  const [selectionKeys] = useState(() => new Map<string, string>());
 
-  // Filter payment options based on currency
+  const newIdempotencyKey = (prefix: string) => `${prefix}-${crypto.randomUUID()}`;
+
+  const committedCheckoutCurrency = checkoutEstimate?.currency
+    ?? orderReview?.summary.currency
+    ?? enforcedOrder?.currency;
+  const displayCurrency = committedCheckoutCurrency ?? currency;
+
+  // Filter payment options based on the committed order currency once an
+  // order/estimate exists; the preference remains selectable before that.
   const paymentOptions = ALL_PAYMENT_OPTIONS.filter(option =>
-    option.supportedCurrencies.includes(currency)
+    option.supportedCurrencies.includes(displayCurrency)
   );
 
   // Auto-select first available payment method when currency changes
@@ -112,7 +211,7 @@ export default function Checkout() {
     if (!currentMethodSupported && paymentOptions.length > 0) {
       setPaymentMethod(paymentOptions[0].id);
     }
-  }, [currency, paymentMethod, paymentOptions]);
+  }, [displayCurrency, paymentMethod, paymentOptions]);
 
   // Loading states
   const [isLoadingAddresses, setIsLoadingAddresses] = useState(false);
@@ -120,9 +219,30 @@ export default function Checkout() {
   const [isReviewingOrder, setIsReviewingOrder] = useState(false);
   const [isApplyingPromo, setIsApplyingPromo] = useState(false);
   const [isCreatingOrder, setIsCreatingOrder] = useState(false);
+  const [isSavingAddress, setIsSavingAddress] = useState(false);
+  const [isSwitchingCurrency, setIsSwitchingCurrency] = useState(false);
+  const isCheckoutRequestPending = isLoadingShipping || isReviewingOrder || isCreatingOrder || isSavingAddress;
 
   // Email validation state
   const [emailError, setEmailError] = useState('');
+
+  const cartSubtotalInNgn = cart.items.reduce((sum, item) => {
+    return sum + convertCurrencyWithRates(
+      item.subtotal,
+      item.product.currency || 'NGN',
+      'NGN',
+      exchangeRates
+    );
+  }, 0);
+
+  const cartSubtotalInSelectedCurrency = cart.items.reduce((sum, item) => {
+    return sum + convertCurrencyWithRates(
+      item.subtotal,
+      item.product.currency || 'NGN',
+      currency,
+      exchangeRates
+    );
+  }, 0);
 
   // Prefill user data on mount if authenticated
   useEffect(() => {
@@ -193,10 +313,11 @@ export default function Checkout() {
   };
 
   const handleCreateAddress = async () => {
+    if (enforcedOrder) return;
     // For guest checkout, just use the address locally without saving to backend
     if (isGuestCheckout) {
       const guestAddress: Address = {
-        id: 'guest-address',
+        id: editingAddressId || 'guest-address',
         user_id: 'guest',
         full_name: newAddress.full_name,
         phone_number: newAddress.phone_number,
@@ -215,10 +336,12 @@ export default function Checkout() {
       setAddresses([guestAddress]);
       setSelectedAddressId(guestAddress.id);
       setShowNewAddressForm(false);
+      setEditingAddressId(null);
       return;
     }
 
     // For logged-in users, save to backend
+    setIsSavingAddress(true);
     try {
       const addressData: CreateAddressData = {
         full_name: newAddress.full_name,
@@ -233,27 +356,37 @@ export default function Checkout() {
         is_default: newAddress.is_default,
       };
 
-      const created = await checkoutService.createAddress(addressData);
-      setAddresses([...addresses, created]);
-      setSelectedAddressId(created.id);
+      if (editingAddressId) {
+        const updated = await checkoutService.updateAddress(editingAddressId, addressData);
+        setAddresses(addresses.map(address => {
+          if (address.id === updated.id) return updated;
+          if (updated.is_default && address.address_type === updated.address_type) {
+            return { ...address, is_default: false };
+          }
+          return address;
+        }));
+        setSelectedAddressId(updated.id);
+        // A destination change invalidates all location-derived delivery and review state.
+        setShippingRates([]);
+        setSelectedShippingRateId('');
+        setOrderReview(null);
+        setCurrentOrderId('');
+        setStep('address');
+      } else {
+        const created = await checkoutService.createAddress(addressData);
+        setAddresses([...addresses, created]);
+        setSelectedAddressId(created.id);
+      }
       setShowNewAddressForm(false);
+      setEditingAddressId(null);
 
       // Reset form
-      setNewAddress({
-        full_name: user?.full_name || '',
-        phone_number: user?.phone_number || '',
-        address_line1: '',
-        address_line2: '',
-        city: '',
-        state: '',
-        postal_code: '',
-        country: 'Nigeria',
-        address_type: 'shipping',
-        is_default: false,
-      });
+      resetNewAddress();
     } catch (error: any) {
       console.error('Error creating address:', error);
       alert(error.response?.data?.detail || 'Failed to create address. Please try again.');
+    } finally {
+      setIsSavingAddress(false);
     }
   };
 
@@ -266,7 +399,7 @@ export default function Checkout() {
       const data = await checkoutService.calculateShipping({
         country: selectedAddress.country,
         state: selectedAddress.state,
-        order_value: cart.summary.subtotal,
+        order_value: cartSubtotalInNgn,
       });
 
       setShippingRates(data.available_rates);
@@ -297,7 +430,7 @@ export default function Checkout() {
     try {
       const result = await checkoutService.validatePromoCode({
         code: promo,
-        order_subtotal: cart.summary.subtotal,
+        order_subtotal: cartSubtotalInNgn,
       });
 
       if (result.valid && result.discount_amount) {
@@ -327,7 +460,7 @@ export default function Checkout() {
     try {
       const items = cart.items.map(item => ({
         product_id: item.product_id,
-        variant_id: item.variant?.id?.startsWith('default-') ? null : item.variant?.id,
+        variant_id: !item.variant?.id || item.variant.id.startsWith('default-') ? null : item.variant.id,
         quantity: item.quantity,
       }));
 
@@ -337,7 +470,8 @@ export default function Checkout() {
       // Prepare request based on guest vs authenticated user
       const reviewRequest: any = {
         items,
-        shipping_rate_id: selectedShippingRateId || undefined,
+        currency,
+        shipping_rate_id: secureShipping ? undefined : selectedShippingRateId || undefined,
         promo_code: appliedPromo?.code,
       };
 
@@ -369,29 +503,247 @@ export default function Checkout() {
     }
   };
 
+  const clearCheckoutCapability = () => {
+    clearStoredCheckoutCapability(enforcedOrder?.id || currentOrderId);
+    setCheckoutCapability(undefined);
+    setPaymentRetryAvailable(false);
+  };
+
+  const preserveCheckoutCapabilityForReadback = (orderId: string, capability?: string) => {
+    if (capability) saveCheckoutCapability(orderId, capability);
+    setCheckoutCapability(undefined);
+    setPaymentRetryAvailable(false);
+  };
+
+  const discardExpiredCheckout = () => {
+    clearCheckoutCapability();
+    setEnforcedOrder(null);
+    setLegacyOrderNeedsConfirmation(false);
+    setCheckoutEstimate(null);
+    setShowStripePaymentModal(false);
+    setStripeClientSecret('');
+    setStripePaymentIntentId('');
+    setCurrentPaymentGateway(null);
+    setCurrentOrderId('');
+  };
+
+  const changeCheckoutCurrency = async (nextCurrency: Currency) => {
+    if (nextCurrency === currency || isCreatingOrder || isSwitchingCurrency) return;
+    if (currentPaymentGateway || showStripePaymentModal) {
+      alert('Currency cannot be changed after payment has been initialized. Cancel this payment attempt and start checkout again.');
+      return;
+    }
+
+    setIsSwitchingCurrency(true);
+    try {
+      if (enforcedOrder) {
+        await checkoutService.cancelOrder(
+          enforcedOrder.id,
+          'Customer changed checkout currency before payment',
+          checkoutCapability,
+        );
+      }
+      discardExpiredCheckout();
+      setOrderReview(null);
+      setSelectedShippingRateId('');
+      setCurrency(nextCurrency);
+      setStep(selectedAddressId ? 'shipping' : 'address');
+    } catch (error: any) {
+      const terminalAuthorization = error.response?.status === 404 || error.response?.status === 410;
+      if (terminalAuthorization) {
+        discardExpiredCheckout();
+        setOrderReview(null);
+        setSelectedShippingRateId('');
+        setCurrency(nextCurrency);
+        setStep(selectedAddressId ? 'shipping' : 'address');
+      } else {
+        alert(error.response?.data?.detail || error.message || 'We could not safely change currency. Please retry.');
+      }
+    } finally {
+      setIsSwitchingCurrency(false);
+    }
+  };
+
+  const isTerminalGuestCheckoutConflict = (error: any) => {
+    const detail = String(error?.response?.data?.detail || '').toLowerCase();
+    return error?.response?.status === 409 && (
+      detail === 'payment attempt subject binding is invalid'
+      || detail === 'payment attempt prerequisites are stale'
+    );
+  };
+
+  const isAlreadyPaidConflict = (error: any) => {
+    const detail = String(error?.response?.data?.detail || '').toLowerCase();
+    return error?.response?.status === 400 && detail === 'order has already been paid';
+  };
+
+  const openInitializedPayment = (
+    order: Order,
+    paymentData: InitializePaymentResponse,
+  ) => {
+    const gateway = paymentData.payment_gateway;
+    const supportedCurrency = paymentData.currency === 'NGN' || paymentData.currency === 'USD';
+    const hasCanonicalTruth = paymentData.status === true
+      && typeof paymentData.reference === 'string'
+      && paymentData.reference.trim().length > 0
+      && typeof paymentData.amount === 'string'
+      && supportedCurrency
+      && hasExactMinorUnitTruth(
+        paymentData.amount,
+        paymentData.amount_minor,
+        paymentData.currency,
+      );
+    if (!hasCanonicalTruth) {
+      throw new Error('Payment initialization response is incomplete');
+    }
+    const gatewaySupportsCurrency = gateway === 'paystack'
+      ? paymentData.currency === 'NGN'
+      : gateway === 'stripe' && (paymentData.currency === 'NGN' || paymentData.currency === 'USD');
+    if (!gatewaySupportsCurrency) {
+      throw new Error('Unsupported payment gateway/currency combination');
+    }
+
+    if (gateway === 'paystack') {
+      const payload = paymentData.provider_payload;
+      if (
+        !payload
+        || typeof payload.access_code !== 'string'
+        || !payload.access_code.trim()
+        || typeof payload.authorization_url !== 'string'
+        || !payload.authorization_url.trim()
+      ) {
+        throw new Error('Payment initialization response is incomplete');
+      }
+      const widgetTruth = buildPaystackWidgetConfig(paymentData, {
+        key: import.meta.env.VITE_PAYSTACK_PUBLIC_KEY,
+        email: email || 'guest@shopsoma.com',
+      });
+      // Keep the committed currency immutable through close/retry windows;
+      // Paystack callbacks may arrive after the iframe is dismissed.
+      setCurrentPaymentGateway('paystack');
+      const handler = window.PaystackPop.setup({
+        ...widgetTruth,
+        callback: (response: { reference: string }) => {
+          paymentService.verifyPayment({
+            reference: response.reference,
+            payment_gateway: gateway,
+          }).then(() => {
+            preserveCheckoutCapabilityForReadback(order.id, checkoutCapability);
+            CartService.clearCart();
+            navigate(`${ROUTES.ORDER_SUCCESS}?orderId=${order.id}&payment=success`);
+          }).catch((error) => {
+            console.error('Payment verification error:', error);
+            if (order.checkout_access_mode === 'guest_capability' && checkoutCapability) {
+              const terminalAuthorization = error.response?.status === 404 || error.response?.status === 410;
+              setIsCreatingOrder(false);
+              if (terminalAuthorization) {
+                discardExpiredCheckout();
+                alert('Checkout access expired. Payment recovery is no longer available.');
+              } else {
+                setPaymentRetryAvailable(true);
+                alert('We could not confirm your payment yet. Your saved order is still available; retry payment to reconcile it.');
+              }
+              return;
+            }
+            navigate(`${ROUTES.ORDER_SUCCESS}?orderId=${order.id}&payment=verification_failed`);
+          });
+        },
+        onClose: () => {
+          setIsCreatingOrder(false);
+          if (order.checkout_access_mode === 'guest_capability') {
+            setPaymentRetryAvailable(true);
+            alert('Payment cancelled. Your order is saved; retry payment when you are ready.');
+            return;
+          }
+          clearCheckoutCapability();
+          alert('Payment cancelled. You can retry payment from your orders page.');
+          navigate(`${ROUTES.ORDER_SUCCESS}?orderId=${order.id}&payment=cancelled`);
+        },
+      });
+      handler.openIframe();
+    } else if (gateway === 'stripe') {
+      const payload = paymentData.provider_payload;
+      if (
+        !payload
+        || typeof payload.client_secret !== 'string'
+        || !payload.client_secret.trim()
+        || typeof payload.payment_intent_id !== 'string'
+        || !payload.payment_intent_id.trim()
+      ) {
+        throw new Error('Payment initialization response is incomplete');
+      }
+      setStripeClientSecret(payload.client_secret);
+      setStripePaymentIntentId(payload.payment_intent_id);
+      setCurrentPaymentGateway(gateway);
+      setCurrentOrderId(order.id);
+      setShowStripePaymentModal(true);
+      setIsCreatingOrder(false);
+    } else {
+      throw new Error(`Unsupported payment gateway: ${gateway}`);
+    }
+  };
+
+  const initializeOrderPayment = async (order: Order, capability?: string) => {
+    setPaymentRetryAvailable(false);
+    setIsCreatingOrder(true);
+    try {
+      const enforced = order.workflow_cohort === 'domestic_checkout_v1';
+      const paymentData = await paymentService.initializePayment({
+        order_id: order.id,
+        email: email || 'guest@shopsoma.com',
+        payment_gateway: paymentMethod,
+        // Legacy orders were priced before the current preference could change;
+        // payment initialization must use the server-committed currency.
+        ...(enforced ? {} : { currency: order.currency }),
+        callback_url: `${window.location.origin}/payment/verify`,
+      }, enforced ? capability : undefined);
+      openInitializedPayment(order, paymentData);
+    } catch (error: any) {
+      if (isAlreadyPaidConflict(error)) {
+        // A provider callback may have completed payment after the original
+        // response was lost. Treat the committed order as the recovery source
+        // instead of leaving the customer in a retry loop.
+        preserveCheckoutCapabilityForReadback(order.id, capability);
+        CartService.clearCart();
+        navigate(`${ROUTES.ORDER_SUCCESS}?orderId=${order.id}&payment=success`);
+        setIsCreatingOrder(false);
+        return;
+      }
+      const terminalCheckout = error.response?.status === 404
+        || error.response?.status === 410
+        || isTerminalGuestCheckoutConflict(error);
+      if (terminalCheckout) {
+        discardExpiredCheckout();
+      } else if (!terminalCheckout) {
+        setPaymentRetryAvailable(true);
+      }
+      const retryable = error.response?.status === 503;
+      alert(retryable
+        ? 'Payment setup is temporarily unavailable. Your order is not complete; please retry.'
+        : error.response?.data?.detail || error.message || 'Failed to initialize payment.');
+      setIsCreatingOrder(false);
+    }
+  };
+
   const handlePurchase = async () => {
-    if (!selectedAddressId || !orderReview) return;
+    if (!selectedAddressId || (!secureShipping && !orderReview) || enforcedOrder) return;
 
     setIsCreatingOrder(true);
     try {
       const items = cart.items.map(item => ({
         product_id: item.product_id,
-        variant_id: item.variant?.id?.startsWith('default-') ? null : item.variant?.id,
+        variant_id: !item.variant?.id || item.variant.id.startsWith('default-') ? null : item.variant.id,
         quantity: item.quantity,
       }));
-
-      // Get selected address
       const selectedAddress = addresses.find(addr => addr.id === selectedAddressId);
-
-      // Prepare order request based on guest vs authenticated user
       const orderRequest: any = {
         items,
-        shipping_rate_id: selectedShippingRateId || undefined,
+        currency,
+        shipping_rate_id: secureShipping ? undefined : selectedShippingRateId || undefined,
         promo_code: appliedPromo?.code,
       };
 
-      if (isGuestCheckout && selectedAddress && selectedAddress.id === 'guest-address') {
-        // For guest checkout, send address data and email directly
+      if (isGuestCheckout && selectedAddress?.id === 'guest-address') {
         orderRequest.guest_address = {
           full_name: selectedAddress.full_name,
           phone_number: selectedAddress.phone_number,
@@ -404,110 +756,166 @@ export default function Checkout() {
         };
         orderRequest.customer_email = email;
       } else {
-        // For authenticated users, send address ID
         orderRequest.shipping_address_id = selectedAddressId;
         orderRequest.billing_address_id = selectedAddressId;
       }
 
-      // Create order first
       const order = await checkoutService.createOrder(orderRequest);
-
-      // Initialize payment with selected gateway
-      const paymentData = await paymentService.initializePayment({
-        order_id: order.id,
-        email: email || 'guest@shopsoma.com',
-        payment_gateway: paymentMethod,
-        currency,
-        callback_url: `${window.location.origin}/payment/verify`,
-      });
-
-      // Initialize payment based on selected gateway
-      if (paymentMethod === 'paystack') {
-        // Open Paystack popup
-        const paystackPublicKey = import.meta.env.VITE_PAYSTACK_PUBLIC_KEY;
-        const handler = window.PaystackPop.setup({
-          key: paystackPublicKey,
-          email: email || 'guest@shopsoma.com',
-          amount: Math.round(orderReview.summary.total_amount * 100), // Amount in kobo
-          currency,
-          ref: paymentData.reference,
-          callback: (response: any) => {
-            // Payment successful - handle async operations
-            console.log('Payment successful:', response);
-
-            // Verify payment and navigate (fire and forget)
-            paymentService.verifyPayment({
-              reference: response.reference,
-              payment_gateway: 'paystack',
-            }).then(() => {
-              // Clear cart
-              CartService.clearCart();
-
-              // Navigate to order confirmation with success status
-              navigate(`${ROUTES.ORDER_SUCCESS}?orderId=${order.id}&payment=success`);
-            }).catch((error) => {
-              console.error('Payment verification error:', error);
-              navigate(`${ROUTES.ORDER_SUCCESS}?orderId=${order.id}&payment=verification_failed`);
-            });
-          },
-          onClose: () => {
-            console.log('Payment popup closed');
-            setIsCreatingOrder(false);
-            alert('Payment cancelled. You can retry payment from your orders page.');
-            navigate(`${ROUTES.ORDER_SUCCESS}?orderId=${order.id}&payment=cancelled`);
-          },
-        });
-
-        handler.openIframe();
-      } else if (paymentMethod === 'stripe') {
-        // Store client secret and show Stripe payment modal
-        setStripeClientSecret(paymentData.client_secret || '');
-        setStripePaymentIntentId(paymentData.payment_intent_id || '');
-        setCurrentOrderId(order.id);
-        setShowStripePaymentModal(true);
+      if (order.workflow_cohort !== 'domestic_checkout_v1') {
+        // The order endpoint is authoritative. A configuration race may have
+        // committed a legacy order after this page advertised secure estimates;
+        // continue with that server-priced order rather than discarding its ID
+        // and creating duplicate inventory/notification side effects on retry.
+        setEnforcedOrder(order);
+        setLegacyOrderNeedsConfirmation(true);
+        setStep('payment');
         setIsCreatingOrder(false);
-      } else {
-        throw new Error(`Unsupported payment gateway: ${paymentMethod}`);
-      }
-    } catch (error: any) {
-      console.error('Error creating order:', error);
-
-      // Extract detailed error message
-      let errorMessage = 'Failed to create order. Please try again.';
-
-      if (error.response?.data?.detail) {
-        errorMessage = error.response.data.detail;
-      } else if (error.message) {
-        errorMessage = error.message;
+        return;
       }
 
-      // Log full error for debugging
-      console.error('Full error details:', {
-        message: error.message,
-        response: error.response?.data,
-        status: error.response?.status,
-      });
-
-      alert(errorMessage);
+      const capability = order.checkout_capability ?? undefined;
+      setCheckoutCapability(capability);
+      saveCheckoutCapability(order.id, capability);
+      setEnforcedOrder(order);
+      const requestKey = newIdempotencyKey('estimate');
+      setEstimateRequestKey(requestKey);
+      const estimate = await checkoutService.createCheckoutEstimate(order.id, requestKey, capability);
+      setCheckoutEstimate(estimate);
+      // The estimate is server-owned. Only expose payment after its delivery
+      // options are available for the newly created checkout order.
+      setStep('payment');
       setIsCreatingOrder(false);
+    } catch (error: any) {
+      if (error.response?.status === 404 || error.response?.status === 410) {
+        discardExpiredCheckout();
+      }
+      alert(error.response?.data?.detail || error.message || 'Failed to create order. Please try again.');
+      setIsCreatingOrder(false);
+    }
+  };
+
+  const confirmLegacyOrderTotal = async () => {
+    if (!enforcedOrder || !legacyOrderNeedsConfirmation) return;
+    setLegacyOrderNeedsConfirmation(false);
+    await initializeOrderPayment(enforcedOrder);
+  };
+
+  const refreshCheckoutEstimate = async () => {
+    if (!enforcedOrder) throw new Error('Checkout order is unavailable');
+    const requestKey = newIdempotencyKey('estimate');
+    setEstimateRequestKey(requestKey);
+    try {
+      return await checkoutService.createCheckoutEstimate(enforcedOrder.id, requestKey, checkoutCapability);
+    } catch (error: any) {
+      if (error.response?.status === 404 || error.response?.status === 410) {
+        discardExpiredCheckout();
+      }
+      throw error;
+    }
+  };
+
+  const recoverCheckoutEstimate = async () => {
+    setIsCreatingOrder(true);
+    try {
+      const estimate = await refreshCheckoutEstimate();
+      setCheckoutEstimate(estimate);
+      // A successful retry has restored server-owned delivery truth; expose
+      // the option selector and payment stage without creating another order.
+      setStep('payment');
+    } catch (error: any) {
+      if (error.response?.status === 404 || error.response?.status === 410) {
+        discardExpiredCheckout();
+      }
+      alert(error.response?.data?.detail || 'Delivery options are still unavailable. Please retry.');
+    } finally {
+      setIsCreatingOrder(false);
+    }
+  };
+
+  const restartCheckout = async () => {
+    if (!enforcedOrder || isCreatingOrder) return;
+    setIsCreatingOrder(true);
+    try {
+      await checkoutService.cancelOrder(
+        enforcedOrder.id,
+        'Customer restarted checkout before payment',
+        checkoutCapability,
+      );
+      discardExpiredCheckout();
+      setOrderReview(null);
+      setSelectedShippingRateId('');
+      setStep('address');
+    } catch (error: any) {
+      const terminalAuthorization = error.response?.status === 404 || error.response?.status === 410;
+      if (terminalAuthorization) {
+        discardExpiredCheckout();
+        setOrderReview(null);
+        setSelectedShippingRateId('');
+        setStep('address');
+      }
+      alert(error.response?.data?.detail || error.message || 'We could not safely restart checkout. Please retry.');
+    } finally {
+      setIsCreatingOrder(false);
+    }
+  };
+
+  const selectCheckoutOption = async (estimateId: string, optionId: string) => {
+    if (!enforcedOrder) throw new Error('Checkout order is unavailable');
+    const identity = `${estimateId}:${optionId}`;
+    const selectionKey = selectionKeys.get(identity) ?? newIdempotencyKey('selection');
+    selectionKeys.set(identity, selectionKey);
+    try {
+      const selectedEstimate = await checkoutService.selectCheckoutEstimateOption(
+        enforcedOrder.id,
+        estimateId,
+        optionId,
+        selectionKey,
+        checkoutCapability,
+      );
+      setCheckoutEstimate(selectedEstimate);
+      return selectedEstimate;
+    } catch (error: any) {
+      if (error.response?.status === 404 || error.response?.status === 410) {
+        discardExpiredCheckout();
+      }
+      throw error;
     }
   };
 
   const handleStripePaymentSuccess = async () => {
     try {
+      if (currentPaymentGateway !== 'stripe') {
+        throw new Error('Payment initialization response is incomplete');
+      }
       // Verify payment with backend
-      await paymentService.verifyPayment({
+      const verification = await paymentService.verifyPayment({
         payment_intent_id: stripePaymentIntentId,
-        payment_gateway: 'stripe',
+        payment_gateway: currentPaymentGateway,
       });
+      if (verification.status !== true) {
+        throw new Error('Payment verification is not complete');
+      }
 
       // Clear cart and navigate to success
+      preserveCheckoutCapabilityForReadback(currentOrderId, checkoutCapability);
       CartService.clearCart();
       setShowStripePaymentModal(false);
       navigate(`${ROUTES.ORDER_SUCCESS}?orderId=${currentOrderId}&payment=success`);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Payment verification error:', error);
       setShowStripePaymentModal(false);
+      if (enforcedOrder?.checkout_access_mode === 'guest_capability' && checkoutCapability) {
+        const terminalAuthorization = error.response?.status === 404 || error.response?.status === 410;
+        setIsCreatingOrder(false);
+        if (terminalAuthorization) {
+          discardExpiredCheckout();
+          alert('Checkout access expired. Payment recovery is no longer available.');
+        } else {
+          setPaymentRetryAvailable(true);
+          alert('We could not confirm your payment yet. Your saved order is still available; retry payment to reconcile it.');
+        }
+        return;
+      }
       navigate(`${ROUTES.ORDER_SUCCESS}?orderId=${currentOrderId}&payment=verification_failed`);
     }
   };
@@ -516,6 +924,15 @@ export default function Checkout() {
     console.error('Stripe payment error:', error);
     alert(`Payment failed: ${error}`);
     setIsCreatingOrder(false);
+  };
+
+  const handleStripePaymentClose = () => {
+    setShowStripePaymentModal(false);
+    setIsCreatingOrder(false);
+    if (enforcedOrder && currentOrderId === enforcedOrder.id) {
+      setPaymentRetryAvailable(true);
+      alert('Payment cancelled. Your order is saved; retry payment when you are ready.');
+    }
   };
 
   // Email validation regex
@@ -537,30 +954,71 @@ export default function Checkout() {
     newAddress.address_line1.trim() &&
     newAddress.city.trim() &&
     newAddress.state.trim() &&
+    (!postalCodeRequired || isValidDhlPostalCode(newAddress.postal_code)) &&
     newAddress.country.trim()
+  );
+  const missingAddressFields = [
+    !newAddress.full_name.trim() ? 'full name' : '',
+    !newAddress.address_line1.trim() ? 'street address' : '',
+    !newAddress.city.trim() ? 'city' : '',
+    !newAddress.state.trim() ? 'state' : '',
+    postalCodeRequired && !newAddress.postal_code?.trim() ? 'postal code' : '',
+    !newAddress.country.trim() ? 'country' : '',
+  ].filter(Boolean);
+  const phoneSaveGuidance = !newAddress.phone_number.trim()
+    ? 'Enter a phone number so delivery partners can reach you.'
+    : !isValidNigerianPhone(newAddress.phone_number)
+      ? 'Complete the phone number in Nigerian format, e.g. 08012345678.'
+      : '';
+  const postalCodeSaveGuidance = postalCodeRequired && !isValidDhlPostalCode(newAddress.postal_code)
+    ? newAddress.postal_code?.trim()
+      ? 'Enter a postal code with 12 characters or fewer for DHL delivery estimates.'
+      : ''
+    : '';
+  const addressSaveGuidance = !shippingConfigLoaded
+    ? 'Loading delivery configuration before this address can be saved.'
+    : shippingConfigError
+      ? 'Delivery configuration could not be loaded. Retry before saving this address.'
+      : phoneSaveGuidance || postalCodeSaveGuidance || (
+    missingAddressFields.length
+      ? `Complete ${missingAddressFields.join(', ')} to save this address.`
+      : ''
   );
   const hasSelectedAddress = !!selectedAddressId;
   const hasSelectedShipping = !!selectedShippingRateId;
-  const canPurchase = step === 'payment' && hasEmail && hasSelectedAddress && hasSelectedShipping && orderReview;
+  const canPurchase = step === 'payment' && hasEmail && hasSelectedAddress && (secureShipping || (hasSelectedShipping && orderReview)) && !enforcedOrder;
 
   const selectedShippingRate = shippingRates.find(rate => rate.id === selectedShippingRateId);
+  const shippingRateInSelectedCurrency = selectedShippingRate
+    ? convertCurrencyWithRates(Number(selectedShippingRate.base_rate), 'NGN', currency, exchangeRates)
+    : 0;
+  const promoDiscountInSelectedCurrency = appliedPromo
+    ? convertCurrencyWithRates(Number(appliedPromo.discount_amount || 0), 'NGN', currency, exchangeRates)
+    : 0;
+  const reviewSummaryCurrency = orderReview?.summary.currency ?? 'NGN';
+  const committedLegacyOrder = enforcedOrder?.workflow_cohort !== 'domestic_checkout_v1'
+    ? enforcedOrder
+    : null;
 
   // Calculate tax and total for checkout display (before order review is available)
   const TAX_RATE = 0.075; // 7.5% VAT
   const calculateCheckoutTax = () => {
+    if (checkoutEstimate?.selected_option && isValidServerMoney(checkoutEstimate.server_tax_amount, true)) {
+      return Number(checkoutEstimate.server_tax_amount);
+    }
     if (orderReview) return orderReview.summary.tax_amount;
     // Calculate tax on subtotal (before order review is created)
-    const subtotal = cart.summary.subtotal;
+    const subtotal = cartSubtotalInSelectedCurrency;
     return Math.round(subtotal * TAX_RATE * 100) / 100;
   };
 
   const calculateCheckoutTotal = () => {
     if (orderReview) return orderReview.summary.total_amount;
     // Calculate total (before order review is created)
-    const subtotal = Number(cart.summary.subtotal);
-    const shipping = Number(selectedShippingRate?.base_rate || 0);
+    const subtotal = Number(cartSubtotalInSelectedCurrency);
+    const shipping = Number(shippingRateInSelectedCurrency);
     const tax = calculateCheckoutTax();
-    const discount = Number(appliedPromo?.discount_amount || 0);
+    const discount = Number(promoDiscountInSelectedCurrency);
     return subtotal + shipping + tax - discount;
   };
 
@@ -594,9 +1052,15 @@ export default function Checkout() {
   };
 
   const handleAddressSave = async () => {
-    if (hasSelectedAddress) {
-      await handleCalculateShipping();
-      setStep('shipping');
+    if (hasSelectedAddress && !selectedAddressNeedsPostalCode) {
+      if (secureShipping) {
+        // Domestic server-owned estimates require a durable order, but the
+        // customer must see a delivery step before any payment controls.
+        setStep('shipping');
+      } else {
+        await handleCalculateShipping();
+        setStep('shipping');
+      }
     }
   };
 
@@ -619,8 +1083,8 @@ export default function Checkout() {
   );
 
   // Helper function to format price in selected currency
-  const formatPrice = (amountInNGN: number) => {
-    return formatPriceWithConversion(amountInNGN, 'NGN', currency, exchangeRates);
+  const formatPrice = (amount: number, sourceCurrency: Currency = 'NGN') => {
+    return formatPriceWithConversion(amount, sourceCurrency, displayCurrency, exchangeRates);
   };
 
   return (
@@ -642,22 +1106,24 @@ export default function Checkout() {
             {/* Currency Switcher */}
             <div className="flex items-center gap-2 border border-gray-300 rounded-sm px-3 py-1.5">
               <button
-                onClick={() => setCurrency('NGN')}
+                onClick={() => void changeCheckoutCurrency('NGN')}
+                disabled={isCreatingOrder || isSwitchingCurrency || Boolean(currentPaymentGateway) || showStripePaymentModal}
                 className={`text-xs font-semibold transition ${
                   currency === 'NGN'
                     ? 'text-primary'
-                    : 'text-gray-400 hover:text-gray-600'
+                    : 'text-gray-400 hover:text-gray-600 disabled:cursor-not-allowed'
                 }`}
               >
                 NGN
               </button>
               <span className="text-gray-300">|</span>
               <button
-                onClick={() => setCurrency('USD')}
+                onClick={() => void changeCheckoutCurrency('USD')}
+                disabled={isCreatingOrder || isSwitchingCurrency || Boolean(currentPaymentGateway) || showStripePaymentModal}
                 className={`text-xs font-semibold transition ${
                   currency === 'USD'
                     ? 'text-primary'
-                    : 'text-gray-400 hover:text-gray-600'
+                    : 'text-gray-400 hover:text-gray-600 disabled:cursor-not-allowed'
                 }`}
               >
                 USD
@@ -764,7 +1230,14 @@ export default function Checkout() {
                           <p className="text-xs text-gray-600">
                             <span className="font-semibold">Guest Checkout</span>
                             {' - '}You're checking out as a guest.
-                            <Link to="/signup" className="text-primary font-semibold hover:underline ml-1">
+                            <Link
+                              to={ROUTES.REGISTER}
+                              state={{
+                                from: { pathname: ROUTES.CHECKOUT },
+                                prefillEmail: email,
+                              }}
+                              className="text-primary font-semibold hover:underline ml-1"
+                            >
                               Create an account
                             </Link>
                             {' '}to save your address for faster checkout next time.
@@ -785,6 +1258,7 @@ export default function Checkout() {
                             >
                               <button
                                 type="button"
+                                disabled={!!enforcedOrder || isCheckoutRequestPending}
                                 onClick={() => setSelectedAddressId(addr.id)}
                                 className="flex-1 text-left"
                               >
@@ -794,49 +1268,50 @@ export default function Checkout() {
                                 </p>
                                 <p className="text-xs text-gray-500">{addr.phone_number}</p>
                               </button>
-                              {isGuestCheckout && addr.id === 'guest-address' && (
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setNewAddress({
-                                      full_name: addr.full_name,
-                                      phone_number: addr.phone_number,
-                                      address_line1: addr.address_line1,
-                                      address_line2: addr.address_line2 || '',
-                                      city: addr.city,
-                                      state: addr.state,
-                                      postal_code: addr.postal_code || '',
-                                      country: addr.country,
-                                      address_type: addr.address_type,
-                                      is_default: addr.is_default,
-                                    });
-                                    setSelectedAddressId(addr.id);
-                                    setShowNewAddressForm(true);
-                                  }}
-                                  className="text-xs font-ui uppercase tracking-[0.2em] text-primary hover:text-primary-dark"
-                                >
-                                  Edit
-                                </button>
-                              )}
+                              <button
+                                type="button"
+                                aria-label="Edit delivery address"
+                                disabled={!!enforcedOrder || isCheckoutRequestPending}
+                                onClick={() => {
+                                  setNewAddress({
+                                    full_name: addr.full_name,
+                                    phone_number: addr.phone_number,
+                                    address_line1: addr.address_line1,
+                                    address_line2: addr.address_line2 || '',
+                                    city: addr.city,
+                                    state: addr.state,
+                                    postal_code: addr.postal_code || '',
+                                    country: addr.country,
+                                    address_type: addr.address_type,
+                                    is_default: addr.is_default,
+                                  });
+                                  setEditingAddressId(addr.id);
+                                  setShowNewAddressForm(true);
+                                }}
+                                className="text-xs font-ui uppercase tracking-[0.2em] text-primary hover:text-primary-dark"
+                              >
+                                Edit
+                              </button>
                             </div>
                           ))}
 
                           {/* New Address Form */}
                           {showNewAddressForm ? (
                             <div className="border border-gray-200 p-4 rounded-sm space-y-3">
-                              <h3 className="text-sm font-semibold text-gray-800">New Address</h3>
+                              <h3 className="text-sm font-semibold text-gray-800">{editingAddressId ? 'Edit Address' : 'New Address'}</h3>
                               <div>
                                 <label className="text-xs text-gray-500">Full Name</label>
                                 <input
                                   type="text"
-                                  value={newAddress.full_name}
+                                  aria-label="Full Name"
+                                    value={newAddress.full_name}
                                   onChange={(e) => setNewAddress({ ...newAddress, full_name: e.target.value })}
                                   className="w-full border-b border-gray-300 focus:border-primary focus:outline-none py-2 text-sm"
                                   required
                                 />
                               </div>
                               <div>
-                                <label className="text-xs text-gray-500">Phone</label>
+                                <label className="text-xs text-gray-500">Phone number <span className="text-red-500">*</span></label>
                                 <div className="flex items-center gap-2 border-b border-gray-300 focus-within:border-primary py-2">
                                   <span className="inline-flex items-center gap-2 text-xs font-ui text-gray-500">
                                     <span className="inline-flex h-4 w-6 overflow-hidden rounded-sm border border-gray-200">
@@ -858,12 +1333,16 @@ export default function Checkout() {
                                     required
                                   />
                                 </div>
+                                <p className={`mt-1 text-xs ${phoneSaveGuidance ? 'text-amber-700' : 'text-gray-500'}`}>
+                                  {phoneSaveGuidance || 'Required for delivery updates. Use 08012345678 or 2348012345678.'}
+                                </p>
                               </div>
                               <div>
                                 <label className="text-xs text-gray-500">Street Address</label>
                                 <input
                                   type="text"
-                                  value={newAddress.address_line1}
+                                  aria-label="Street Address"
+                                    value={newAddress.address_line1}
                                   onChange={(e) => setNewAddress({ ...newAddress, address_line1: e.target.value })}
                                   className="w-full border-b border-gray-300 focus:border-primary focus:outline-none py-2 text-sm"
                                   required
@@ -874,6 +1353,7 @@ export default function Checkout() {
                                   <label className="text-xs text-gray-500">City</label>
                                   <input
                                     type="text"
+                                    aria-label="City"
                                     value={newAddress.city}
                                     onChange={(e) => setNewAddress({ ...newAddress, city: e.target.value })}
                                     className="w-full border-b border-gray-300 focus:border-primary focus:outline-none py-2 text-sm"
@@ -882,14 +1362,36 @@ export default function Checkout() {
                                 </div>
                                 <div>
                                   <label className="text-xs text-gray-500">State</label>
-                                  <input
-                                    type="text"
+                                  <select
+                                    aria-label="State"
                                     value={newAddress.state}
                                     onChange={(e) => setNewAddress({ ...newAddress, state: e.target.value })}
-                                    className="w-full border-b border-gray-300 focus:border-primary focus:outline-none py-2 text-sm"
+                                    className="w-full border-b border-gray-300 bg-white focus:border-primary focus:outline-none py-2 text-sm"
                                     required
-                                  />
+                                  >
+                                    <option value="" disabled>Select state</option>
+                                    {NIGERIA_STATES.map((state) => <option key={state} value={state}>{state}</option>)}
+                                  </select>
                                 </div>
+                              </div>
+                              <div>
+                                <label className="text-xs text-gray-500" htmlFor="checkout-postal-code">
+                                  Postal code {postalCodeRequired && <span className="text-red-500">*</span>}
+                                </label>
+                                <input
+                                  id="checkout-postal-code"
+                                  type="text"
+                                  aria-label="Postal code"
+                                  autoComplete="postal-code"
+                                  inputMode="numeric"
+                                  maxLength={12}
+                                  value={newAddress.postal_code || ''}
+                                  onChange={(e) => setNewAddress({ ...newAddress, postal_code: e.target.value })}
+                                  className="w-full border-b border-gray-300 focus:border-primary focus:outline-none py-2 text-sm"
+                                  placeholder="100001"
+                                  required={postalCodeRequired}
+                                />
+                                {postalCodeRequired && <p className="mt-1 text-xs text-gray-500">Required for DHL delivery estimates.</p>}
                               </div>
                               <div className="pt-2">
                                 <label className="inline-flex items-center gap-2 text-sm text-gray-600 cursor-pointer">
@@ -906,24 +1408,38 @@ export default function Checkout() {
                                 <button
                                   type="button"
                                   onClick={handleCreateAddress}
-                                  disabled={!isAddressComplete}
+                                  disabled={!isAddressComplete || !shippingConfigLoaded || shippingConfigError || isCheckoutRequestPending}
                                   className="flex-1 py-2 rounded-sm bg-primary text-white text-sm font-semibold disabled:opacity-50"
                                 >
-                                  Save Address
+                                  {editingAddressId ? 'Save changes' : 'Save Address'}
                                 </button>
                                 <button
                                   type="button"
-                                  onClick={() => setShowNewAddressForm(false)}
-                                  className="px-4 py-2 rounded-sm border border-gray-300 text-sm"
+                                  onClick={() => {
+                                    setShowNewAddressForm(false);
+                                    setEditingAddressId(null);
+                                  }}
+                                  disabled={isCheckoutRequestPending}
+                                  className="px-4 py-2 rounded-sm border border-gray-300 text-sm disabled:opacity-50"
                                 >
                                   Cancel
                                 </button>
                               </div>
+                              {(!isAddressComplete || !shippingConfigLoaded || shippingConfigError) && addressSaveGuidance && (
+                                <p className="text-xs text-amber-700">
+                                  {addressSaveGuidance}
+                                </p>
+                              )}
                             </div>
                           ) : !isGuestCheckout || addresses.length === 0 ? (
                             <button
                               type="button"
-                              onClick={() => setShowNewAddressForm(true)}
+                              disabled={!!enforcedOrder || isCheckoutRequestPending}
+                              onClick={() => {
+                                setEditingAddressId(null);
+                                resetNewAddress();
+                                setShowNewAddressForm(true);
+                              }}
                               className="w-full py-3 border border-dashed border-gray-300 rounded-sm text-sm text-gray-600 hover:border-primary hover:text-primary"
                             >
                               + Add New Address
@@ -931,10 +1447,29 @@ export default function Checkout() {
                           ) : null}
 
                           <div className="pt-4">
+                            {shippingConfigError && (
+                              <div className="mb-3 space-y-2" role="alert">
+                                <p className="text-sm text-red-700">
+                                  Delivery configuration could not be loaded. Retry before continuing.
+                                </p>
+                                <button
+                                  type="button"
+                                  onClick={() => setShippingConfigRetry(value => value + 1)}
+                                  className="text-sm font-semibold text-primary underline"
+                                >
+                                  Retry delivery configuration
+                                </button>
+                              </div>
+                            )}
+                            {selectedAddressNeedsPostalCode && (
+                              <p className="mb-3 text-sm text-amber-700" role="alert">
+                                {selectedAddressPostalCodeGuidance}
+                              </p>
+                            )}
                             <button
                               type="button"
                               onClick={handleAddressSave}
-                              disabled={!hasSelectedAddress || isLoadingShipping}
+                              disabled={!hasSelectedAddress || selectedAddressNeedsPostalCode || isCheckoutRequestPending || !shippingConfigLoaded || shippingConfigError || !!enforcedOrder}
                               className="w-full py-3 rounded-sm bg-primary text-white text-sm font-semibold disabled:opacity-50"
                             >
                               {isLoadingShipping ? 'Calculating Shipping...' : 'Continue'}
@@ -951,7 +1486,50 @@ export default function Checkout() {
                 {/* Shipping Step */}
                 <div className="space-y-4">
                   {renderStepTitle('Shipping Method', step === 'shipping' || step === 'payment')}
-                  {step === 'shipping' || step === 'payment' ? (
+                  {secureShipping ? step === 'shipping' ? (
+                    <div className="space-y-3 rounded-sm border border-gray-200 p-4">
+                      <p className="text-sm text-gray-700">We will prepare your order securely, then show the delivery options available for this address before payment.</p>
+                      {!enforcedOrder ? (
+                        <button
+                          type="button"
+                          onClick={() => void handlePurchase()}
+                          disabled={isCreatingOrder || !hasEmail || !isEmailConfirmed}
+                          className="w-full py-3 rounded-sm bg-primary text-white text-sm font-semibold disabled:opacity-50"
+                        >
+                          {isCreatingOrder ? 'Loading delivery options…' : 'Continue to delivery options'}
+                        </button>
+                      ) : !checkoutEstimate ? (
+                        isCreatingOrder ? (
+                          <div className="flex items-center gap-2 text-sm text-gray-700" role="status">
+                            <span className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                            Loading delivery options…
+                          </div>
+                        ) : (
+                          <div className="space-y-2">
+                            <p role="status" className="text-sm text-amber-700">Your order was saved, but delivery options are not ready. Retry without creating another order.</p>
+                            <button
+                              type="button"
+                              onClick={() => void recoverCheckoutEstimate()}
+                              disabled={isCreatingOrder}
+                              className="w-full py-2 border border-primary text-primary text-sm font-semibold disabled:opacity-50"
+                            >
+                              {isCreatingOrder ? 'Retrying delivery options…' : 'Retry delivery options'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => void restartCheckout()}
+                              disabled={isCreatingOrder}
+                              className="text-sm underline disabled:opacity-50"
+                            >
+                              Start again with another address
+                            </button>
+                          </div>
+                        )
+                      ) : null}
+                    </div>
+                  ) : (
+                    <p className="text-sm text-gray-600">Choose a delivery option below before payment.</p>
+                  ) : step === 'shipping' || step === 'payment' ? (
                     <div className="space-y-3">
                       {shippingRates.map((rate) => (
                         <button
@@ -971,7 +1549,7 @@ export default function Checkout() {
                               {rate.description} ({rate.min_delivery_days} - {rate.max_delivery_days} business days)
                             </p>
                           </div>
-                          <p className="text-sm font-semibold text-gray-800">{formatPrice(rate.base_rate)}</p>
+                          <p className="text-sm font-semibold text-gray-800">{formatPrice(rate.base_rate, 'NGN')}</p>
                         </button>
                       ))}
                       <button
@@ -1001,8 +1579,86 @@ export default function Checkout() {
                   {renderStepTitle('Payment Method', step === 'payment')}
                   {step === 'payment' ? (
                     <div className="space-y-3">
+                      {enforcedOrder && checkoutEstimate && (
+                        <CheckoutEstimateSelector
+                          estimate={checkoutEstimate}
+                          selectOption={selectCheckoutOption}
+                          refreshEstimate={refreshCheckoutEstimate}
+                          onSelectionConfirmed={(selectedEstimate) => {
+                            const selectedOption = selectedEstimate.selected_option;
+                            const validSelectedTruth = Boolean(
+                              selectedOption
+                              && (selectedEstimate.currency === 'NGN' || selectedEstimate.currency === 'USD')
+                              && selectedOption.currency === selectedEstimate.currency
+                              && typeof selectedOption.service_label === 'string'
+                              && selectedOption.service_label.trim()
+                              && isValidServerMoney(selectedOption.amount, true)
+                              && isValidServerMoney(selectedEstimate.server_payable_total, false)
+                            );
+                            if (!validSelectedTruth) {
+                              alert('Selected delivery pricing is invalid. Please refresh and select again.');
+                              return;
+                            }
+                            flushSync(() => setCheckoutEstimate(selectedEstimate));
+                            void initializeOrderPayment(enforcedOrder, checkoutCapability);
+                          }}
+                        />
+                      )}
+                      {enforcedOrder?.workflow_cohort === 'domestic_checkout_v1' && !checkoutEstimate && (
+                        <div className="space-y-2">
+                          <p role="status" className="text-sm text-amber-700">
+                            Your order was saved, but delivery options are not ready. Retry without creating another order.
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => void recoverCheckoutEstimate()}
+                            disabled={isCreatingOrder}
+                            className="w-full py-2 border border-primary text-primary text-sm font-semibold disabled:opacity-50"
+                          >
+                            {isCreatingOrder ? 'Retrying delivery options…' : 'Retry delivery options'}
+                          </button>
+                          <button type="button" disabled={isCreatingOrder} className="text-sm underline"
+                            onClick={() => void restartCheckout()}>
+                            Start again with another address
+                          </button>
+                        </div>
+                      )}
+                      {legacyOrderNeedsConfirmation && enforcedOrder && (
+                        <div className="space-y-3 rounded-sm border border-amber-200 bg-amber-50 p-4" role="alert">
+                          <p className="text-sm text-amber-900">
+                            Delivery configuration changed while your order was being prepared. Please confirm the server-priced total before payment.
+                          </p>
+                          <dl className="space-y-1 text-sm text-gray-700">
+                            <div className="flex justify-between"><dt>Shipping</dt><dd>{formatPriceWithConversion(enforcedOrder.shipping_cost, enforcedOrder.currency || 'NGN', enforcedOrder.currency || 'NGN', exchangeRates)}</dd></div>
+                            <div className="flex justify-between font-semibold"><dt>Total</dt><dd>{formatPriceWithConversion(enforcedOrder.total_amount, enforcedOrder.currency || 'NGN', enforcedOrder.currency || 'NGN', exchangeRates)}</dd></div>
+                          </dl>
+                          <button
+                            type="button"
+                            onClick={() => void confirmLegacyOrderTotal()}
+                            disabled={isCreatingOrder}
+                            className="w-full py-2 bg-primary text-white text-sm font-semibold disabled:opacity-50"
+                          >
+                            {isCreatingOrder ? 'Preparing payment…' : 'Confirm total and continue to payment'}
+                          </button>
+                        </div>
+                      )}
+                      {paymentRetryAvailable && enforcedOrder && (
+                        <div className="space-y-2" role="status">
+                          <p className="text-sm text-amber-700">
+                            Payment was not completed, or we could not confirm your payment yet. Your order is saved and ready to retry.
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => void initializeOrderPayment(enforcedOrder, checkoutCapability)}
+                            disabled={isCreatingOrder}
+                            className="w-full py-2 border border-primary text-primary text-sm font-semibold disabled:opacity-50"
+                          >
+                            {isCreatingOrder ? 'Retrying payment…' : 'Retry payment'}
+                          </button>
+                        </div>
+                      )}
                       {ALL_PAYMENT_OPTIONS.map((option) => {
-                        const isSupported = option.supportedCurrencies.includes(currency);
+                        const isSupported = option.supportedCurrencies.includes(displayCurrency);
                         return (
                           <label
                             key={option.id}
@@ -1027,7 +1683,7 @@ export default function Checkout() {
                                 {option.name}
                                 {!isSupported && (
                                   <span className="ml-2 text-xs text-gray-400">
-                                    (Not available for {currency})
+                                    (Not available for {displayCurrency})
                                   </span>
                                 )}
                               </span>
@@ -1045,7 +1701,7 @@ export default function Checkout() {
                       <button
                         type="button"
                         onClick={handlePurchase}
-                        disabled={!canPurchase || isCreatingOrder}
+                        disabled={!canPurchase || isCreatingOrder || legacyOrderNeedsConfirmation}
                         className="w-full py-3 rounded-sm bg-primary text-white text-sm font-semibold disabled:opacity-50"
                       >
                         {isCreatingOrder ? 'Processing...' : 'Purchase'}
@@ -1062,31 +1718,52 @@ export default function Checkout() {
             <aside className="border border-gray-200 rounded-sm p-5 space-y-4 sticky top-6 h-fit">
               <div className="flex items-center justify-between text-sm font-semibold text-gray-800">
                 <span>Order</span>
-                <span className="text-xs text-gray-500">Currency: {currency}</span>
+                <span className="text-xs text-gray-500">Currency: {displayCurrency}</span>
               </div>
               <div className="text-sm text-gray-700 space-y-2">
                 <div className="flex items-center justify-between">
                   <span>Subtotal</span>
-                  <span>{formatPrice(orderReview?.summary.subtotal ?? cart.summary.subtotal)}</span>
+                  <span>{formatPrice(
+                    enforcedOrder?.subtotal
+                      ?? committedLegacyOrder?.subtotal
+                      ?? orderReview?.summary.subtotal
+                      ?? cartSubtotalInSelectedCurrency,
+                    enforcedOrder?.currency
+                      ?? committedLegacyOrder?.currency
+                      ?? (orderReview ? reviewSummaryCurrency : currency),
+                  )}</span>
                 </div>
                 <div className="flex items-center justify-between">
-                  <span>Shipping cost</span>
-                  <span>{formatPrice(orderReview?.summary.shipping_cost ?? Number(selectedShippingRate?.base_rate || 0))}</span>
+                  <span>{checkoutEstimate?.selected_option?.service_label ?? 'Shipping cost'}</span>
+                  <span>{checkoutEstimate?.selected_option
+                    ? formatServerMoney(checkoutEstimate.selected_option.amount, checkoutEstimate.selected_option.currency)
+                    : committedLegacyOrder
+                      ? formatPrice(committedLegacyOrder.shipping_cost, committedLegacyOrder.currency)
+                      : secureShipping ? 'Select delivery option' : formatPrice(orderReview?.summary.shipping_cost ?? Number(shippingRateInSelectedCurrency), orderReview ? reviewSummaryCurrency : currency)}</span>
                 </div>
                 <div className="flex items-center justify-between">
                   <span>Tax (VAT 7.5%)</span>
-                  <span>{formatPrice(calculateCheckoutTax())}</span>
+                  <span>{formatPrice(
+                    committedLegacyOrder?.tax_amount ?? calculateCheckoutTax(),
+                    committedLegacyOrder?.currency ?? (orderReview ? reviewSummaryCurrency : currency),
+                  )}</span>
                 </div>
                 {(appliedPromo || (orderReview?.summary.discount_amount ?? 0) > 0) && (
                   <div className="flex items-center justify-between text-primary">
                     <span>Promo {appliedPromo && `(${appliedPromo.code})`}</span>
-                    <span>-{formatPrice(orderReview?.summary.discount_amount ?? appliedPromo?.discount_amount ?? 0)}</span>
+                    <span>-{formatPrice(
+                      committedLegacyOrder?.discount_amount
+                        ?? orderReview?.summary.discount_amount
+                        ?? promoDiscountInSelectedCurrency,
+                      committedLegacyOrder?.currency ?? (orderReview ? reviewSummaryCurrency : currency),
+                    )}</span>
                   </div>
                 )}
                 <div className="flex items-center gap-2 pt-2">
                   <input
                     type="text"
                     value={promo}
+                    disabled={!!enforcedOrder}
                     onChange={(e) => setPromo(e.target.value)}
                     placeholder="Promo code"
                     className="flex-1 border border-gray-300 rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-primary"
@@ -1094,7 +1771,7 @@ export default function Checkout() {
                   <button
                     type="button"
                     onClick={handleApplyPromo}
-                    disabled={isApplyingPromo}
+                    disabled={isApplyingPromo || !!enforcedOrder}
                     className="px-4 py-2 rounded-sm bg-primary text-white text-sm font-semibold disabled:opacity-50"
                   >
                     {isApplyingPromo ? '...' : 'Apply'}
@@ -1113,7 +1790,12 @@ export default function Checkout() {
               </div>
               <div className="flex items-center justify-between text-sm font-semibold text-gray-800 border-t border-gray-200 pt-3">
                 <span>Total</span>
-                <span>{formatPrice(calculateCheckoutTotal())}</span>
+                <span>{checkoutEstimate?.selected_option
+                  ? formatServerMoney(checkoutEstimate.server_payable_total, checkoutEstimate.currency)
+                  : formatPrice(
+                    committedLegacyOrder?.total_amount ?? calculateCheckoutTotal(),
+                    committedLegacyOrder?.currency ?? (orderReview ? reviewSummaryCurrency : currency),
+                  )}</span>
               </div>
               <button
                 className={`w-full py-3 rounded-sm text-sm font-semibold ${
@@ -1136,9 +1818,9 @@ export default function Checkout() {
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-semibold">Complete Payment</h2>
               <button
+                aria-label="Close payment"
                 onClick={() => {
-                  setShowStripePaymentModal(false);
-                  setIsCreatingOrder(false);
+                  handleStripePaymentClose();
                 }}
                 className="text-gray-400 hover:text-gray-600"
               >

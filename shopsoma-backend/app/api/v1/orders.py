@@ -1,23 +1,53 @@
 """Order management endpoints"""
+
 from typing import Optional, List, Dict
-from fastapi import APIRouter, Depends, HTTPException, status, Query, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Header
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update, and_, or_, func
+from sqlalchemy import select, update, func
 from sqlalchemy.orm import selectinload
-from uuid import UUID
-from datetime import datetime
+from uuid import UUID, uuid4, uuid5
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
+import hashlib
+import json
 import secrets
 import logging
 
 from app.core.database import get_db
+from app.services.vendor_visibility import customer_visible_vendor_product_filter
 from app.models.user import User, UserRole
 from app.models.order import Order, OrderItem, PaymentStatus, FulfillmentStatus
-from app.models.product import Product, ProductVariant, ProductStatus, Variation, SizeStock
+from app.models.product import (
+    Product,
+    ProductVariant,
+    ProductStatus,
+    Variation,
+    SizeStock,
+)
 from app.models.payment import Payment
 from app.models.address import Address
-from app.models.shipping_rate import ShippingRate
+from app.services.shipping.manual_rates import manual_rates_query
+from app.services.shipping.provider_settings import (
+    require_manual_order_pricing,
+    shipping_provider_settings,
+)
 from app.models.vendor import Vendor
+from app.models.fulfillment_cohort import (
+    CohortItemAllocation,
+    FulfillmentCohort,
+    FulfillmentReadinessType,
+)
+from app.models.setting import Setting
+from app.models.stock_payment_persistence import (
+    PaymentAttempt,
+    StockReservation,
+    coordinate_catalog_write,
+)
+from app.services.dhl.shipments import (
+    ShipmentPhase4ConflictError,
+    ensure_order_cancellation_allowed,
+)
+from app.services.dhl.rating import derive_sandbox_cohort_id
 from app.schemas.order import (
     OrderCreate,
     OrderUpdate,
@@ -29,14 +59,79 @@ from app.schemas.order import (
     OrderSummary,
 )
 from app.api.dependencies import get_current_active_user, get_optional_user
+from app.schemas.product import (
+    effective_variation_price,
+    normalize_color_value,
+    unique_variations_by_color,
+    unique_variations_by_size,
+    variation_regular_price,
+    variation_sale_price,
+)
 from app.services.email_service import email_service
 from app.services.vendor_notification_service import VendorNotificationService
-from app.services.account_claim import queue_account_claim_email
+from app.services.commission import get_vendor_commission_rate
 from app.core.config import settings
+from app.services.checkout.capabilities import (
+    issue_checkout_capability,
+    authorize_checkout_actor,
+)
+from app.services.shipping.capabilities import domestic_shipping_capabilities
+from app.services.checkout.reservations import release_active_order_reservations
 
 router = APIRouter(prefix="/orders", tags=["Orders"])
 MIN_ORDER_AMOUNT_NGN = Decimal("60000.00")
 logger = logging.getLogger(__name__)
+SUPPORTED_ORDER_CURRENCIES = {"NGN", "USD"}
+
+
+def _domestic_checkout_is_enforced(
+    *, customer_id: UUID, country: str, currency: str
+) -> bool:
+    """Assign only explicitly eligible new orders; absence never implies domestic."""
+    if not settings.DOMESTIC_CHECKOUT_PREREQUISITES_ENABLED:
+        return False
+    # The DHL checkout bridge is a staging/sandbox capability.  Even if an
+    # operator accidentally enables the cohort flag in production, new orders
+    # must remain on the legacy path rather than exposing the bridge there.
+    if settings.ENVIRONMENT == "production" or settings.DHL_ENVIRONMENT != "sandbox":
+        return False
+    if country.strip().casefold() not in {"nigeria", "ng"} or currency not in SUPPORTED_ORDER_CURRENCIES:
+        return False
+    if customer_id in settings.domestic_checkout_cohort_ids:
+        return True
+    percentage = settings.DOMESTIC_CHECKOUT_COHORT_PERCENTAGE
+    if percentage <= 0:
+        return False
+    bucket = int(hashlib.sha256(customer_id.bytes).hexdigest()[:8], 16) % 100
+    return bucket < percentage
+
+
+def _inventory_snapshot(product: Product, *, stock_source: str, stock_id: UUID) -> dict:
+    policy = "made_to_order" if product.made_to_order else "stock_managed"
+    subject_kind = None if product.made_to_order else stock_source
+    subject_id = None if product.made_to_order else stock_id
+    version = f"product:{product.id}:checkout-v1"
+    evidence = json.dumps(
+        {
+            "made_to_order": bool(product.made_to_order),
+            "product_id": str(product.id),
+            "subject_id": str(subject_id) if subject_id else None,
+            "subject_kind": subject_kind,
+            "version": version,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    return {
+        "inventory_policy": policy,
+        "inventory_subject_kind": subject_kind,
+        "inventory_subject_id": subject_id,
+        "inventory_source_product_id": product.id,
+        "inventory_source_catalogue_version": version,
+        "inventory_source_evidence_hash": hashlib.sha256(evidence).hexdigest(),
+        "inventory_policy_snapshot_at": func.statement_timestamp(),
+    }
+
 
 # Simple promo code configuration (should eventually move to dedicated table/service)
 PROMO_CODES = {
@@ -45,7 +140,12 @@ PROMO_CODES = {
 }
 
 
-def calculate_promo_discount(promo_code: Optional[str], subtotal: Decimal):
+def calculate_promo_discount(
+    promo_code: Optional[str],
+    subtotal: Decimal,
+    currency: str = "NGN",
+    usd_to_ngn_rate: Decimal = Decimal("833"),
+):
     """Calculate promo discount based on configured codes."""
     if not promo_code:
         return Decimal("0.00"), None
@@ -58,11 +158,18 @@ def calculate_promo_discount(promo_code: Optional[str], subtotal: Decimal):
     promo_meta = {"code": promo_code.upper()}
 
     if config["type"] == "percentage":
-        discount = (subtotal * config["value"]).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        discount = (subtotal * config["value"]).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
         promo_meta["discount_percent"] = int(config["value"] * 100)
         promo_meta["discount_amount"] = float(discount)
     else:
-        discount = config["value"]
+        discount = _convert_currency(
+            config["value"],
+            "NGN",
+            currency,
+            usd_to_ngn_rate,
+        )
         promo_meta["discount_amount"] = float(discount)
 
     if discount > subtotal:
@@ -70,6 +177,7 @@ def calculate_promo_discount(promo_code: Optional[str], subtotal: Decimal):
         promo_meta["discount_amount"] = float(discount)
 
     return discount, promo_meta
+
 
 # Tax rate (VAT 7.5% in Nigeria)
 TAX_RATE = Decimal("0.075")
@@ -96,7 +204,61 @@ def _build_admin_recipients(admin_users: List[User]) -> List[Dict[str, str]]:
     return recipients
 
 
-def _resolve_product_image_url(product: Product, variant_details: Optional[Dict[str, str]]) -> Optional[str]:
+def _normalize_currency(currency: Optional[str]) -> str:
+    normalized = (currency or "NGN").upper()
+    if normalized not in SUPPORTED_ORDER_CURRENCIES:
+        return "NGN"
+    return normalized
+
+
+async def _get_usd_to_ngn_rate(db: AsyncSession) -> Decimal:
+    result = await db.execute(
+        select(Setting).where(Setting.key == "exchange_rate_usd_to_ngn")
+    )
+    setting = result.scalar_one_or_none()
+    if not setting:
+        return Decimal("833")
+
+    try:
+        return Decimal(str(setting.value))
+    except Exception:
+        return Decimal("833")
+
+
+def _convert_currency(
+    amount: Decimal,
+    from_currency: str,
+    to_currency: str,
+    usd_to_ngn_rate: Decimal,
+) -> Decimal:
+    source = _normalize_currency(from_currency)
+    target = _normalize_currency(to_currency)
+
+    if source == target:
+        return amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+    if source == "USD" and target == "NGN":
+        return (amount * usd_to_ngn_rate).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
+
+    if source == "NGN" and target == "USD":
+        return (amount / usd_to_ngn_rate).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
+
+    return amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+def _minimum_order_amount_for_currency(
+    currency: str, usd_to_ngn_rate: Decimal
+) -> Decimal:
+    return _convert_currency(MIN_ORDER_AMOUNT_NGN, "NGN", currency, usd_to_ngn_rate)
+
+
+def _resolve_product_image_url(
+    product: Product, variant_details: Optional[Dict[str, str]]
+) -> Optional[str]:
     if variant_details and product.variations:
         variation_id = variant_details.get("variation_id")
         if variation_id:
@@ -113,19 +275,18 @@ def _resolve_product_image_url(product: Product, variant_details: Optional[Dict[
 
 
 def _resolve_order_currency(order: Order) -> str:
+    if getattr(order, "currency", None):
+        return _normalize_currency(order.currency)
     if not getattr(order, "payments", None):
         return "NGN"
     latest_payment = max(
-        order.payments,
-        key=lambda payment: payment.created_at or datetime.min
+        order.payments, key=lambda payment: payment.created_at or datetime.min
     )
     return latest_payment.currency or "NGN"
 
 
 async def resolve_order_variant(
-    db: AsyncSession,
-    product: Product,
-    variant_id: str
+    db: AsyncSession, product: Product, variant_id: str
 ) -> dict:
     """Resolve variant data across legacy variants and vendor variations."""
     variant_result = await db.execute(
@@ -134,14 +295,49 @@ async def resolve_order_variant(
     variant = variant_result.scalar_one_or_none()
 
     if variant and variant.product_id == product.id:
+        matching_variation = unique_variations_by_color(product.variations or []).get(
+            normalize_color_value(variant.color)
+        )
+        if matching_variation is None:
+            matching_variation = unique_variations_by_size(product.variations or []).get(
+                normalize_color_value(variant.size)
+            )
+        unit_price = variant.price
+        if (
+            matching_variation is not None
+            and (
+                matching_variation.price is not None
+                or matching_variation.sale_price is not None
+                or matching_variation.inherits_price is True
+                or matching_variation.inherits_sale_price is True
+            )
+        ):
+            unit_price = effective_variation_price(
+                matching_variation.price,
+                variation_sale_price(
+                matching_variation,
+                product.base_price,
+                parent_has_sale=product.compare_at_price is not None,
+            ),
+                product.base_price,
+                regular_price=variation_regular_price(
+                    matching_variation,
+                    product.base_price,
+                    product.compare_at_price,
+                ),
+            )
+        variant_stock = variant.stock
+        if product.made_to_order:
+            variant_stock = max(variant_stock, 999999)
         return {
             "variant_id": variant.id,
-            "unit_price": variant.price,
-            "stock": variant.stock,
+            "unit_price": unit_price,
+            "stock": variant_stock,
             "variant_details": {
                 "size": variant.size,
                 "color": variant.color,
                 "color_hex": variant.color_hex,
+                "variation_id": str(matching_variation.id) if matching_variation else None,
             },
             "stock_source": "product_variant",
             "stock_id": variant.id,
@@ -150,24 +346,53 @@ async def resolve_order_variant(
     size_stock_result = await db.execute(
         select(SizeStock, Variation)
         .join(Variation, SizeStock.variation_id == Variation.id)
-        .where(
-            SizeStock.id == variant_id,
-            Variation.product_id == product.id
-        )
+        .where(SizeStock.id == variant_id, Variation.product_id == product.id)
     )
     size_stock_row = size_stock_result.first()
 
     if size_stock_row:
         size_stock, variation = size_stock_row
-        unit_price = variation.price if variation.price is not None else product.base_price
+        unit_price = effective_variation_price(
+            variation.price,
+            variation_sale_price(
+                variation,
+                product.base_price,
+                parent_has_sale=product.compare_at_price is not None,
+            ),
+            product.base_price,
+            regular_price=variation_regular_price(
+                variation, product.base_price, product.compare_at_price
+            ),
+        )
+        available_stock = size_stock.stock
+        if product.made_to_order:
+            available_stock = max(available_stock, 999999)
+        color_variations = unique_variations_by_color(product.variations or [])
+        sole_color = (
+            next(iter(color_variations.values()))
+            if len(color_variations) == 1
+            else None
+        )
         return {
             "variant_id": None,
             "unit_price": unit_price,
-            "stock": size_stock.stock,
+            "stock": available_stock,
             "variant_details": {
                 "size": getattr(size_stock.size, "value", str(size_stock.size)),
-                "color": variation.title,
-                "color_hex": variation.color_hex,
+                "color": (
+                    sole_color.title
+                    if str(getattr(variation, "type", "color")).casefold() == "size" and sole_color is not None
+                    else None
+                    if str(getattr(variation, "type", "color")).casefold() == "size"
+                    else variation.title
+                ),
+                "color_hex": (
+                    sole_color.color_hex
+                    if str(getattr(variation, "type", "color")).casefold() == "size" and sole_color is not None
+                    else None
+                    if str(getattr(variation, "type", "color")).casefold() == "size"
+                    else variation.color_hex
+                ),
                 "size_stock_id": str(size_stock.id),
                 "variation_id": str(variation.id),
             },
@@ -177,21 +402,39 @@ async def resolve_order_variant(
 
     variation_result = await db.execute(
         select(Variation).where(
-            Variation.id == variant_id,
-            Variation.product_id == product.id
+            Variation.id == variant_id, Variation.product_id == product.id
         )
     )
     variation = variation_result.scalar_one_or_none()
 
     if variation:
-        unit_price = variation.price if variation.price is not None else product.base_price
+        if product.variants or (variation.is_active and bool(variation.size_stocks)):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Select a purchasable variant or size stock for this product",
+            )
+        unit_price = effective_variation_price(
+            variation.price,
+            variation_sale_price(
+                variation,
+                product.base_price,
+                parent_has_sale=product.compare_at_price is not None,
+            ),
+            product.base_price,
+            regular_price=variation_regular_price(
+                variation, product.base_price, product.compare_at_price
+            ),
+        )
+        available_stock = product.total_stock
+        if product.made_to_order:
+            available_stock = max(available_stock, 999999)
         return {
             "variant_id": None,
             "unit_price": unit_price,
-            "stock": product.total_stock,
+            "stock": available_stock,
             "variant_details": {
-                "size": None,
-                "color": variation.title,
+                "size": variation.title if str(getattr(variation, "type", "color")).casefold() == "size" else None,
+                "color": None if str(getattr(variation, "type", "color")).casefold() == "size" else variation.title,
                 "color_hex": variation.color_hex,
                 "variation_id": str(variation.id),
             },
@@ -200,8 +443,7 @@ async def resolve_order_variant(
         }
 
     raise HTTPException(
-        status_code=status.HTTP_404_NOT_FOUND,
-        detail=f"Variant {variant_id} not found"
+        status_code=status.HTTP_404_NOT_FOUND, detail=f"Variant {variant_id} not found"
     )
 
 
@@ -219,7 +461,7 @@ async def send_vendor_order_notification(
     order_date: datetime,
     items: list,
     total_payout: float,
-    scheduled_pickup_date: datetime
+    scheduled_pickup_date: datetime,
 ):
     """
     Background task to send vendor order notification email
@@ -237,30 +479,28 @@ async def send_vendor_order_notification(
                 order_date=order_date,
                 items=items,
                 total_payout=total_payout,
-                scheduled_pickup_date=scheduled_pickup_date
+                scheduled_pickup_date=scheduled_pickup_date,
             )
             logger.info(
                 "[Order Email] Vendor email queued for vendor_id=%s order=%s items=%s",
                 vendor_id,
                 order_number,
-                len(items)
+                len(items),
             )
         except Exception as exc:
             logger.exception(
                 "[Order Email] Vendor email failed for vendor_id=%s order=%s: %s",
                 vendor_id,
                 order_number,
-                exc
+                exc,
             )
 
 
 async def calculate_order_totals(
-    items_data: list,
-    shipping_cost: Decimal,
-    discount_amount: Decimal = Decimal("0.00")
+    items_data: list, shipping_cost: Decimal, discount_amount: Decimal = Decimal("0.00")
 ) -> dict:
     """Calculate order totals"""
-    subtotal = sum(Decimal(str(item.get('subtotal', 0))) for item in items_data)
+    subtotal = sum(Decimal(str(item.get("subtotal", 0))) for item in items_data)
     shipping_cost_decimal = _as_decimal(shipping_cost)
     discount_decimal = _as_decimal(discount_amount)
     tax_amount = (subtotal + shipping_cost_decimal) * TAX_RATE
@@ -271,7 +511,7 @@ async def calculate_order_totals(
         "shipping_cost": shipping_cost_decimal,
         "tax_amount": tax_amount,
         "discount_amount": discount_decimal,
-        "total_amount": total_amount
+        "total_amount": total_amount,
     }
 
 
@@ -279,7 +519,7 @@ async def calculate_order_totals(
 async def review_order(
     review_data: OrderReviewRequest,
     current_user: Optional[User] = Depends(get_optional_user),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Review an order before creation - calculates totals, validates items, finds shipping rate
@@ -295,17 +535,23 @@ async def review_order(
     For guest checkout, provide guest_address instead of shipping_address_id.
     """
     # Validate shipping address
+    checkout_currency = _normalize_currency(review_data.currency)
+    usd_to_ngn_rate = await _get_usd_to_ngn_rate(db)
     shipping_address = None
     guest_shipping_state = None
     guest_shipping_country = None
 
     if review_data.shipping_address_id:
         # Authenticated user with saved address
-        address_query = select(Address).where(Address.id == review_data.shipping_address_id)
-
-        # If user is authenticated, verify address ownership
-        if current_user:
-            address_query = address_query.where(Address.user_id == current_user.id)
+        if current_user is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Authentication required for a saved shipping address",
+            )
+        address_query = select(Address).where(
+            Address.id == review_data.shipping_address_id,
+            Address.user_id == current_user.id,
+        )
 
         address_result = await db.execute(address_query)
         shipping_address = address_result.scalar_one_or_none()
@@ -313,7 +559,7 @@ async def review_order(
         if not shipping_address:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Shipping address not found"
+                detail="Shipping address not found",
             )
     elif review_data.guest_address:
         # Guest checkout with inline address
@@ -322,7 +568,7 @@ async def review_order(
     else:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Either shipping_address_id or guest_address must be provided"
+            detail="Either shipping_address_id or guest_address must be provided",
         )
 
     # Collect and validate items
@@ -331,10 +577,18 @@ async def review_order(
 
     for item in review_data.items:
         # Get product
-        product_query = select(Product).options(
-            selectinload(Product.variants),
-            selectinload(Product.vendor)
-        ).where(Product.id == item.product_id)
+        product_query = (
+            select(Product)
+            .options(
+                selectinload(Product.variants),
+                selectinload(Product.variations).selectinload(Variation.size_stocks),
+                selectinload(Product.vendor),
+            )
+            .where(
+                Product.id == item.product_id,
+                customer_visible_vendor_product_filter(),
+            )
+        )
 
         product_result = await db.execute(product_query)
         product = product_result.scalar_one_or_none()
@@ -342,13 +596,19 @@ async def review_order(
         if not product:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Product {item.product_id} not found"
+                detail=f"Product {item.product_id} not found",
             )
 
         if product.status != ProductStatus.ACTIVE:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Product '{product.title}' is not available"
+                detail=f"Product '{product.title}' is not available",
+            )
+
+        if product.variations and not item.variant_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"A variation must be selected for '{product.title}'",
             )
 
         # Get variant if specified
@@ -358,100 +618,123 @@ async def review_order(
         variant_details = None
 
         if item.variant_id:
-            resolved_variant = await resolve_order_variant(db, product, str(item.variant_id))
+            resolved_variant = await resolve_order_variant(
+                db, product, str(item.variant_id)
+            )
             variant_id_for_response = item.variant_id
             unit_price = resolved_variant["unit_price"]
             stock = resolved_variant["stock"]
             variant_details = resolved_variant["variant_details"]
 
         # Check stock
-        if stock < item.quantity:
+        if not product.made_to_order and stock < item.quantity:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Insufficient stock for '{product.title}'. Available: {stock}"
+                detail=f"Insufficient stock for '{product.title}'. Available: {stock}",
             )
 
-        unit_price_decimal = _as_decimal(unit_price)
+        source_currency = _normalize_currency(product.currency)
+        unit_price_decimal = _convert_currency(
+            _as_decimal(unit_price),
+            source_currency,
+            checkout_currency,
+            usd_to_ngn_rate,
+        )
         item_subtotal = unit_price_decimal * Decimal(item.quantity)
         subtotal += item_subtotal
 
-        items_details.append({
-            "product_id": str(product.id),
-            "product_title": product.title,
-            "variant_id": str(variant_id_for_response) if variant_id_for_response else None,
-            "variant_details": variant_details,
-            "unit_price": float(unit_price_decimal),
-            "quantity": item.quantity,
-            "subtotal": float(item_subtotal),
-            "vendor_name": product.vendor.business_name if product.vendor else "Shopsoma"
-        })
+        items_details.append(
+            {
+                "product_id": str(product.id),
+                "product_title": product.title,
+                "variant_id": (
+                    str(variant_id_for_response) if variant_id_for_response else None
+                ),
+                "variant_details": variant_details,
+                "unit_price": float(unit_price_decimal),
+                "currency": checkout_currency,
+                "quantity": item.quantity,
+                "subtotal": float(item_subtotal),
+                "vendor_name": (
+                    product.vendor.business_name if product.vendor else "Shopsoma"
+                ),
+            }
+        )
 
     # Minimum order enforcement
-    if subtotal < MIN_ORDER_AMOUNT_NGN:
+    minimum_order_amount = _minimum_order_amount_for_currency(
+        checkout_currency, usd_to_ngn_rate
+    )
+    if subtotal < minimum_order_amount:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Minimum order amount is ₦60,000. Please add more items before checkout."
+            detail=f"Minimum order amount is {checkout_currency} {minimum_order_amount} equivalent. Please add more items before checkout.",
         )
+
+    await require_manual_order_pricing(db)
 
     # Calculate shipping
     # Use either saved address or guest address for shipping calculation
-    shipping_country = shipping_address.country if shipping_address else guest_shipping_country
-    shipping_state = shipping_address.state if shipping_address else guest_shipping_state
+    shipping_country = (
+        shipping_address.country if shipping_address else guest_shipping_country
+    )
+    shipping_state = (
+        shipping_address.state if shipping_address else guest_shipping_state
+    )
 
-    shipping_query = select(ShippingRate).where(
-        and_(
-            ShippingRate.is_active == True,
-            ShippingRate.country == shipping_country,
-            or_(
-                ShippingRate.state == shipping_state,
-                ShippingRate.state == None
-            )
-        )
-    ).order_by(ShippingRate.priority.asc())
-
-    shipping_result = await db.execute(shipping_query)
-    shipping_rates = shipping_result.scalars().all()
-
-    # Fallback: if no rates match filters but a specific rate was selected, try loading it directly
-    if not shipping_rates and review_data.shipping_rate_id:
-        direct_rate_query = select(ShippingRate).where(
-            and_(
-                ShippingRate.id == review_data.shipping_rate_id,
-                ShippingRate.is_active == True
-            )
-        )
-        direct_result = await db.execute(direct_rate_query)
-        direct_rate = direct_result.scalar_one_or_none()
-        if direct_rate:
-            shipping_rates = [direct_rate]
+    shipping_rates = list((await db.scalars(manual_rates_query(shipping_country, shipping_state))).all())
+    shipping_rates = [rate for rate in shipping_rates if (
+        rate.min_order_value is None or _convert_currency(_as_decimal(rate.min_order_value), "NGN", checkout_currency, usd_to_ngn_rate) <= subtotal
+    ) and (
+        rate.max_order_value is None or _convert_currency(_as_decimal(rate.max_order_value), "NGN", checkout_currency, usd_to_ngn_rate) >= subtotal
+    )]
 
     if not shipping_rates:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"No shipping available for {shipping_state}, {shipping_country}"
+            detail=f"No shipping available for {shipping_state}, {shipping_country}",
         )
 
     selected_rate = next((r for r in shipping_rates if r.is_default), shipping_rates[0])
     if review_data.shipping_rate_id:
-        selected_rate = next((r for r in shipping_rates if r.id == review_data.shipping_rate_id), None) or selected_rate
+        if not any(r.id == review_data.shipping_rate_id for r in shipping_rates):
+            raise HTTPException(status_code=422, detail="Selected shipping rate is not eligible")
+        selected_rate = (
+            next(
+                (r for r in shipping_rates if r.id == review_data.shipping_rate_id),
+                None,
+            )
+            or selected_rate
+        )
 
-    shipping_cost = _as_decimal(selected_rate.base_rate)
+    shipping_cost = _convert_currency(
+        _as_decimal(selected_rate.base_rate),
+        "NGN",
+        checkout_currency,
+        usd_to_ngn_rate,
+    )
 
     # Calculate discount (if promo code provided)
-    discount_amount, applied_promo = calculate_promo_discount(review_data.promo_code, subtotal)
+    discount_amount, applied_promo = calculate_promo_discount(
+        review_data.promo_code,
+        subtotal,
+        checkout_currency,
+        usd_to_ngn_rate,
+    )
 
     # Calculate totals
     tax_amount = (subtotal + shipping_cost) * TAX_RATE
     total_amount = subtotal + shipping_cost + tax_amount - discount_amount
 
     summary = OrderSummary(
+        currency=checkout_currency,
         subtotal=subtotal,
         shipping_cost=shipping_cost,
         tax_amount=tax_amount,
         discount_amount=discount_amount,
         total_amount=total_amount,
         items_count=sum(item.quantity for item in review_data.items),
-        estimated_delivery_days=selected_rate.max_delivery_days
+        estimated_delivery_days=selected_rate.max_delivery_days,
     )
 
     return OrderReviewResponse(
@@ -461,20 +744,19 @@ async def review_order(
             "id": str(selected_rate.id),
             "name": selected_rate.name,
             "description": selected_rate.description,
-            "cost": float(selected_rate.base_rate),
+            "cost": float(shipping_cost),
             "min_days": selected_rate.min_delivery_days,
-            "max_days": selected_rate.max_delivery_days
+            "max_days": selected_rate.max_delivery_days,
         },
-        applied_promo=applied_promo
+        applied_promo=applied_promo,
     )
 
 
 @router.post("", response_model=OrderResponse, status_code=status.HTTP_201_CREATED)
 async def create_order(
     order_data: OrderCreate,
-    background_tasks: BackgroundTasks,
     current_user: Optional[User] = Depends(get_optional_user),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Create a new order
@@ -489,6 +771,9 @@ async def create_order(
     Works for both authenticated users and guest checkout.
     For guest checkout, provide guest_address and customer_email.
     """
+    checkout_currency = _normalize_currency(order_data.currency)
+    usd_to_ngn_rate = await _get_usd_to_ngn_rate(db)
+
     # Handle shipping address - either from ID or create from guest data
     shipping_address = None
     shipping_address_id = None
@@ -497,11 +782,15 @@ async def create_order(
 
     if order_data.shipping_address_id:
         # Authenticated user with saved address
-        shipping_addr_query = select(Address).where(Address.id == order_data.shipping_address_id)
-
-        # If user is authenticated, verify address ownership
-        if current_user:
-            shipping_addr_query = shipping_addr_query.where(Address.user_id == current_user.id)
+        if current_user is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Authentication required for a saved shipping address",
+            )
+        shipping_addr_query = select(Address).where(
+            Address.id == order_data.shipping_address_id,
+            Address.user_id == current_user.id,
+        )
 
         shipping_result = await db.execute(shipping_addr_query)
         shipping_address = shipping_result.scalar_one_or_none()
@@ -509,48 +798,55 @@ async def create_order(
         if not shipping_address:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Shipping address not found"
+                detail="Shipping address not found",
             )
 
         shipping_address_id = shipping_address.id
-        billing_address_id = order_data.billing_address_id or order_data.shipping_address_id
-        customer_id_for_order = current_user.id if current_user else shipping_address.user_id
+        billing_address_id = (
+            order_data.billing_address_id or order_data.shipping_address_id
+        )
+        customer_id_for_order = current_user.id
 
     elif order_data.guest_address:
         if not order_data.customer_email:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Customer email required for guest checkout"
+                detail="Customer email required for guest checkout",
             )
 
         user_result = await db.execute(
-            select(User).where(User.email == order_data.customer_email)
+            select(User)
+            .where(User.email == order_data.customer_email)
+            .with_for_update()
         )
         guest_user = user_result.scalar_one_or_none()
 
-        if not guest_user:
+        if guest_user:
+            reusable_passwordless_guest = (
+                guest_user.role == UserRole.CUSTOMER
+                and guest_user.is_guest_created is True
+                and guest_user.hashed_password is None
+                and guest_user.is_active is True
+            )
+            if not reusable_passwordless_guest:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="An account already uses this email; log in to continue",
+                )
+        else:
             guest_user = User(
                 email=order_data.customer_email,
                 full_name=order_data.guest_address.full_name,
                 hashed_password=None,
                 is_active=True,
                 role=UserRole.CUSTOMER,
-                is_guest_created=True
+                is_guest_created=True,
             )
             db.add(guest_user)
             await db.flush()
-        else:
-            if not guest_user.full_name and order_data.guest_address.full_name:
-                guest_user.full_name = order_data.guest_address.full_name
-            if not guest_user.hashed_password:
-                guest_user.is_guest_created = True
-
-        if not guest_user.hashed_password:
-            queue_account_claim_email(guest_user, background_tasks)
 
         guest_addr = Address(
-            user_id=guest_user.id,
-            **order_data.guest_address.model_dump()
+            user_id=guest_user.id, **order_data.guest_address.model_dump()
         )
         db.add(guest_addr)
         await db.flush()
@@ -563,8 +859,20 @@ async def create_order(
     else:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Either shipping_address_id or guest_address must be provided"
+            detail="Either shipping_address_id or guest_address must be provided",
         )
+
+    enforced_checkout = _domestic_checkout_is_enforced(
+        customer_id=customer_id_for_order,
+        country=shipping_address.country,
+        currency=checkout_currency,
+    )
+    if (
+        enforced_checkout
+        and current_user is None
+        and not settings.checkout_capability_configured
+    ):
+        raise HTTPException(status_code=503, detail="guest checkout is not available")
 
     # Process and validate items
     order_items = []
@@ -574,11 +882,19 @@ async def create_order(
 
     for item_data in order_data.items:
         # Get product with vendor
-        product_query = select(Product).options(
-            selectinload(Product.vendor),
-            selectinload(Product.images),
-            selectinload(Product.variations)
-        ).where(Product.id == item_data.product_id)
+        product_query = (
+            select(Product)
+            .options(
+                selectinload(Product.vendor),
+                selectinload(Product.images),
+                selectinload(Product.variants),
+                selectinload(Product.variations).selectinload(Variation.size_stocks),
+            )
+            .where(
+                Product.id == item_data.product_id,
+                customer_visible_vendor_product_filter(),
+            )
+        )
 
         product_result = await db.execute(product_query)
         product = product_result.scalar_one_or_none()
@@ -586,7 +902,13 @@ async def create_order(
         if not product or product.status != ProductStatus.ACTIVE:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Product {item_data.product_id} not available"
+                detail=f"Product {item_data.product_id} not available",
+            )
+
+        if product.variations and not item_data.variant_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"A variation must be selected for '{product.title}'",
             )
 
         # Get variant if specified
@@ -598,7 +920,9 @@ async def create_order(
         stock_id = product.id
 
         if item_data.variant_id:
-            resolved_variant = await resolve_order_variant(db, product, str(item_data.variant_id))
+            resolved_variant = await resolve_order_variant(
+                db, product, str(item_data.variant_id)
+            )
             order_variant_id = resolved_variant["variant_id"]
             unit_price = resolved_variant["unit_price"]
             stock = resolved_variant["stock"]
@@ -607,89 +931,132 @@ async def create_order(
             stock_id = resolved_variant["stock_id"]
 
         # Check stock
-        if stock < item_data.quantity:
+        if not product.made_to_order and stock < item_data.quantity:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Insufficient stock for '{product.title}'"
+                detail=f"Insufficient stock for '{product.title}'",
             )
 
-        unit_price_decimal = _as_decimal(unit_price)
+        source_currency = _normalize_currency(product.currency)
+        unit_price_decimal = _convert_currency(
+            _as_decimal(unit_price),
+            source_currency,
+            checkout_currency,
+            usd_to_ngn_rate,
+        )
         item_subtotal = unit_price_decimal * Decimal(item_data.quantity)
         subtotal += item_subtotal
 
-        # Calculate vendor commission (e.g., 15%)
-        commission_rate = Decimal("0.15")
-        commission_amount = item_subtotal * commission_rate
-        vendor_payout = item_subtotal - commission_amount
+        # Snapshot vendor commission percentage at order creation so historical payouts stay stable.
+        commission_rate = get_vendor_commission_rate(product.vendor)
+        commission_fraction = commission_rate / Decimal("100")
+        commission_amount = (item_subtotal * commission_fraction).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
+        vendor_payout = (item_subtotal - commission_amount).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
 
-        order_items.append({
+        order_item_values = {
             "product_id": product.id,
             "variant_id": order_variant_id,
             "vendor_id": product.vendor_id,
             "product_title": product.title,
             "variant_details": variant_details,
             "unit_price": unit_price_decimal,
+            "currency": checkout_currency,
             "quantity": item_data.quantity,
             "subtotal": item_subtotal,
             "commission_rate": commission_rate,
             "commission_amount": commission_amount,
-            "vendor_payout": vendor_payout
-        })
-        order_item_media[product.id] = _resolve_product_image_url(product, variant_details)
+            "vendor_payout": vendor_payout,
+        }
+        if enforced_checkout:
+            order_item_values.update(
+                _inventory_snapshot(
+                    product, stock_source=stock_source, stock_id=stock_id
+                )
+            )
+        order_items.append(order_item_values)
+        order_item_media[product.id] = _resolve_product_image_url(
+            product, variant_details
+        )
 
-        stock_updates.append({
-            "source": stock_source,
-            "id": stock_id,
-            "quantity": item_data.quantity
-        })
+        if not product.made_to_order:
+            stock_updates.append(
+                {"source": stock_source, "id": stock_id, "quantity": item_data.quantity}
+            )
 
-    if subtotal < MIN_ORDER_AMOUNT_NGN:
+    minimum_order_amount = _minimum_order_amount_for_currency(
+        checkout_currency, usd_to_ngn_rate
+    )
+    if subtotal < minimum_order_amount:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Minimum order amount is ₦60,000. Please add more items before checkout."
+            detail=f"Minimum order amount is {checkout_currency} {minimum_order_amount} equivalent. Please add more items before checkout.",
         )
+
+    if not enforced_checkout:
+        await require_manual_order_pricing(db)
 
     # Get shipping rate
-    shipping_query = select(ShippingRate).where(
-        and_(
-            ShippingRate.is_active == True,
-            ShippingRate.country == shipping_address.country,
-            or_(
-                ShippingRate.state == shipping_address.state,
-                ShippingRate.state == None
-            )
+    shipping_rates = list((await db.scalars(manual_rates_query(shipping_address.country, shipping_address.state))).all())
+    shipping_rates = [rate for rate in shipping_rates if (
+        rate.min_order_value is None or _convert_currency(_as_decimal(rate.min_order_value), "NGN", checkout_currency, usd_to_ngn_rate) <= subtotal
+    ) and (
+        rate.max_order_value is None or _convert_currency(_as_decimal(rate.max_order_value), "NGN", checkout_currency, usd_to_ngn_rate) >= subtotal
+    )]
+
+    effective_shipping_settings = await shipping_provider_settings(db)
+    if enforced_checkout and not effective_shipping_settings.readiness[effective_shipping_settings.provider]:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"{effective_shipping_settings.provider} is not available for secure checkout",
         )
-    ).order_by(ShippingRate.priority.asc())
-
-    shipping_result = await db.execute(shipping_query)
-    shipping_rates = shipping_result.scalars().all()
-
-    if not shipping_rates and order_data.shipping_rate_id:
-        direct_rate_query = select(ShippingRate).where(
-            and_(
-                ShippingRate.id == order_data.shipping_rate_id,
-                ShippingRate.is_active == True
-            )
-        )
-        direct_result = await db.execute(direct_rate_query)
-        direct_rate = direct_result.scalar_one_or_none()
-        if direct_rate:
-            shipping_rates = [direct_rate]
-
-    if not shipping_rates:
+    if not shipping_rates and not (
+        enforced_checkout
+        and effective_shipping_settings.provider == "dhl"
+        and domestic_shipping_capabilities(settings).checkout_enabled
+    ):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="No shipping available for this location"
+            detail="No shipping available for this location",
         )
 
-    selected_rate = next((r for r in shipping_rates if r.is_default), shipping_rates[0])
-    if order_data.shipping_rate_id:
-        selected_rate = next((r for r in shipping_rates if r.id == order_data.shipping_rate_id), None) or selected_rate
+    if enforced_checkout:
+        # Estimate options are created only after the order exists; no rate is
+        # selected or priced into an enforced order at creation time.
+        selected_rate = None
+        shipping_cost = Decimal("0.00")
+    else:
+        selected_rate = next(
+            (r for r in shipping_rates if r.is_default), shipping_rates[0]
+        )
+        if order_data.shipping_rate_id:
+            if not any(r.id == order_data.shipping_rate_id for r in shipping_rates):
+                raise HTTPException(status_code=422, detail="Selected shipping rate is not eligible")
+            selected_rate = (
+                next(
+                    (r for r in shipping_rates if r.id == order_data.shipping_rate_id),
+                    None,
+                )
+                or selected_rate
+            )
 
-    shipping_cost = _as_decimal(selected_rate.base_rate)
+        shipping_cost = _convert_currency(
+            _as_decimal(selected_rate.base_rate),
+            "NGN",
+            checkout_currency,
+            usd_to_ngn_rate,
+        )
 
     # Calculate discount
-    discount_amount, _ = calculate_promo_discount(order_data.promo_code, subtotal)
+    discount_amount, _ = calculate_promo_discount(
+        order_data.promo_code,
+        subtotal,
+        checkout_currency,
+        usd_to_ngn_rate,
+    )
 
     # Calculate totals
     tax_amount = (subtotal + shipping_cost) * TAX_RATE
@@ -699,15 +1066,25 @@ async def create_order(
     if not customer_id_for_order:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Unable to determine customer for order"
+            detail="Unable to determine customer for order",
         )
 
     # Create order
     new_order = Order(
         order_number=generate_order_number(),
         customer_id=customer_id_for_order,
+        workflow_cohort=(
+            "domestic_checkout_v1" if enforced_checkout else "legacy_pre_bridge"
+        ),
+        workflow_policy_version=(
+            "domestic_checkout_v1" if enforced_checkout else "legacy_pre_bridge_v1"
+        ),
+        checkout_access_mode=(
+            "authenticated" if current_user is not None else "guest_capability"
+        ),
         shipping_address_id=shipping_address_id,
         billing_address_id=billing_address_id,
+        currency=checkout_currency,
         subtotal=subtotal,
         shipping_cost=shipping_cost,
         tax_amount=tax_amount,
@@ -715,7 +1092,7 @@ async def create_order(
         total_amount=total_amount,
         customer_notes=order_data.customer_notes,
         payment_status=PaymentStatus.PENDING,
-        fulfillment_status=FulfillmentStatus.ORDER_RECEIVED
+        fulfillment_status=FulfillmentStatus.ORDER_RECEIVED,
     )
 
     db.add(new_order)
@@ -724,20 +1101,88 @@ async def create_order(
     # Create order items
     created_order_items = []
     for item_dict in order_items:
-        order_item = OrderItem(
-            order_id=new_order.id,
-            **item_dict
-        )
+        order_item = OrderItem(order_id=new_order.id, **item_dict)
         db.add(order_item)
         created_order_items.append(order_item)
 
     await db.flush()  # Get order item IDs
 
+    if enforced_checkout and settings.dhl_domestic_sandbox_cohort_ids:
+        configured_cohort_ids = settings.dhl_domestic_sandbox_cohort_ids
+        products = (
+            await db.execute(
+                select(Product).where(Product.id.in_([item.product_id for item in created_order_items]))
+            )
+        ).scalars().all()
+        products_by_id = {product.id: product for product in products}
+        cohorts_by_key = {}
+        cohort_namespace = tuple(configured_cohort_ids)[0]
+        cohort_ordinals = {}
+        for order_item in created_order_items:
+            product = products_by_id[order_item.product_id]
+            readiness_type = (
+                FulfillmentReadinessType.MADE_TO_ORDER
+                if product.made_to_order
+                else FulfillmentReadinessType.READY_TO_WEAR
+            )
+            cohort_key = (order_item.vendor_id, readiness_type)
+            cohort = cohorts_by_key.get(cohort_key)
+            if cohort is None:
+                cohort_ordinals[cohort_key] = len(cohort_ordinals)
+                cohort_id = derive_sandbox_cohort_id(
+                    cohort_namespace,
+                    new_order.id,
+                    cohort_ordinals[cohort_key],
+                )
+                cohort = FulfillmentCohort(
+                    id=cohort_id,
+                    order_id=new_order.id,
+                    vendor_id=order_item.vendor_id,
+                    readiness_type=readiness_type,
+                    ready_from=datetime.now(timezone.utc),
+                    ready_through=datetime.now(timezone.utc) + timedelta(days=30),
+                )
+                db.add(cohort)
+                await db.flush()
+                cohorts_by_key[cohort_key] = cohort
+            db.add(
+                CohortItemAllocation(
+                    cohort_id=cohort.id,
+                    order_item_id=order_item.id,
+                    order_id=new_order.id,
+                    vendor_id=order_item.vendor_id,
+                    allocated_quantity=order_item.quantity,
+                )
+            )
+        await db.flush()
+
+    if enforced_checkout:
+        # Checkout estimates resolve only fulfillment-owned ready packages.
+        # Package creation, QC, sealing, and readiness remain in the custody
+        # state machine and are not created as a checkout side effect.
+        checkout_capability = None
+        if current_user is None:
+            checkout_capability = await issue_checkout_capability(db, order=new_order)
+        await db.commit()
+        order_query = (
+            select(Order)
+            .options(
+                selectinload(Order.items),
+                selectinload(Order.shipping_address),
+                selectinload(Order.billing_address),
+                selectinload(Order.customer),
+            )
+            .where(Order.id == new_order.id)
+        )
+        response_order = (await db.execute(order_query)).scalar_one()
+        if checkout_capability:
+            # Response-only attribute: never written to any persistence field.
+            response_order.checkout_capability = checkout_capability
+        return response_order
+
     # Create vendor pickups and notifications for each order item
     from app.models import VendorPickup, VendorNotification, Vendor
     from app.models.vendor_pickup import OrderType, PickupStatus
-    from datetime import datetime, timedelta
-
     vendor_cache = {}
     vendor_notifications = {}
 
@@ -746,7 +1191,9 @@ async def create_order(
         vendor = vendor_cache.get(order_item.vendor_id)
         if vendor is None:
             vendor_result = await db.execute(
-                select(Vendor).options(selectinload(Vendor.user)).where(Vendor.id == order_item.vendor_id)
+                select(Vendor)
+                .options(selectinload(Vendor.user))
+                .where(Vendor.id == order_item.vendor_id)
             )
             vendor = vendor_result.scalar_one_or_none()
             vendor_cache[order_item.vendor_id] = vendor
@@ -756,7 +1203,7 @@ async def create_order(
                 "[Order Email] Vendor not found for order=%s vendor_id=%s item=%s",
                 new_order.order_number,
                 order_item.vendor_id,
-                order_item.id
+                order_item.id,
             )
             continue
 
@@ -779,7 +1226,7 @@ async def create_order(
                 pickup_address=vendor.business_address,
                 pickup_contact_name=vendor.user.full_name if vendor.user else None,
                 pickup_contact_phone=vendor.business_phone,
-                status=PickupStatus.SCHEDULED
+                status=PickupStatus.SCHEDULED,
             )
             db.add(pickup)
 
@@ -789,13 +1236,14 @@ async def create_order(
                     "items": [],
                     "total_payout": Decimal("0.00"),
                     "scheduled_date": None,
-                }
+                },
             )
             vendor_entry["items"].append(
                 {
                     "product_title": order_item.product_title,
                     "quantity": order_item.quantity,
                     "vendor_payout": float(order_item.vendor_payout),
+                    "currency": order_item.currency,
                     "variant_details": order_item.variant_details,
                     "image_url": order_item_media.get(order_item.product_id),
                 }
@@ -809,14 +1257,14 @@ async def create_order(
                 vendor.id,
                 new_order.order_number,
                 order_item.product_title,
-                order_item.quantity
+                order_item.quantity,
             )
 
     if not vendor_notifications:
         logger.warning(
             "[Order Email] No vendor notifications built for order=%s items=%s",
             new_order.order_number,
-            len(created_order_items)
+            len(created_order_items),
         )
 
     for vendor_id, vendor_entry in vendor_notifications.items():
@@ -833,8 +1281,9 @@ async def create_order(
             data={
                 "order_number": new_order.order_number,
                 "items": items,
-                "total_payout": total_payout
-            }
+                "total_payout": total_payout,
+                "currency": new_order.currency,
+            },
         )
         db.add(notification)
 
@@ -842,8 +1291,26 @@ async def create_order(
             "[Order Email] Prepared vendor notification vendor_id=%s order=%s items=%s",
             vendor_id,
             new_order.order_number,
-            len(items)
+            len(items),
         )
+
+    # Core DML bypasses Session.before_flush, so enroll the full order/catalog
+    # subject union before the first stock statement.
+    await coordinate_catalog_write(
+        db,
+        order_ids=[new_order.id],
+        product_ids=[
+            entry["id"] for entry in stock_updates if entry["source"] == "product"
+        ],
+        product_variant_ids=[
+            entry["id"]
+            for entry in stock_updates
+            if entry["source"] == "product_variant"
+        ],
+        size_stock_ids=[
+            entry["id"] for entry in stock_updates if entry["source"] == "size_stock"
+        ],
+    )
 
     # Update stock
     for update_entry in stock_updates:
@@ -883,29 +1350,34 @@ async def create_order(
                 order_date=new_order.created_at or datetime.utcnow(),
                 items=items,
                 total_payout=total_payout,
-                scheduled_pickup_date=scheduled_date
+                scheduled_pickup_date=scheduled_date,
+                currency=new_order.currency or "NGN",
             )
             logger.info(
                 "[Order Email] Vendor email sent vendor_id=%s order=%s items=%s",
                 vendor_id,
                 new_order.order_number,
-                len(items)
+                len(items),
             )
         except Exception as exc:
             logger.exception(
                 "[Order Email] Vendor email failed vendor_id=%s order=%s: %s",
                 vendor_id,
                 new_order.order_number,
-                exc
+                exc,
             )
 
     # Load order with all relationships
-    order_query = select(Order).options(
-        selectinload(Order.items),
-        selectinload(Order.shipping_address),
-        selectinload(Order.billing_address),
-        selectinload(Order.customer)
-    ).where(Order.id == new_order.id)
+    order_query = (
+        select(Order)
+        .options(
+            selectinload(Order.items),
+            selectinload(Order.shipping_address),
+            selectinload(Order.billing_address),
+            selectinload(Order.customer),
+        )
+        .where(Order.id == new_order.id)
+    )
 
     result = await db.execute(order_query)
     loaded_order = result.scalar_one()
@@ -915,25 +1387,36 @@ async def create_order(
         # Prepare items for email
         email_items = []
         for item in loaded_order.items:
-            email_items.append({
-                'product_name': item.product_title,
-                'quantity': item.quantity,
-                'price': float(item.unit_price),
-                'subtotal': float(item.subtotal),
-                'size': item.variant_details.get('size') if item.variant_details else None,
-                'color': item.variant_details.get('color') if item.variant_details else None,
-            })
+            email_items.append(
+                {
+                    "product_name": item.product_title,
+                    "quantity": item.quantity,
+                    "price": float(item.unit_price),
+                    "currency": item.currency,
+                    "subtotal": float(item.subtotal),
+                    "size": (
+                        item.variant_details.get("size")
+                        if item.variant_details
+                        else None
+                    ),
+                    "color": (
+                        item.variant_details.get("color")
+                        if item.variant_details
+                        else None
+                    ),
+                }
+            )
 
         # Prepare shipping address for email
         shipping_addr_dict = {
-            'full_name': loaded_order.shipping_address.full_name,
-            'address_line_1': loaded_order.shipping_address.address_line1,
-            'address_line_2': loaded_order.shipping_address.address_line2,
-            'city': loaded_order.shipping_address.city,
-            'state': loaded_order.shipping_address.state,
-            'postal_code': loaded_order.shipping_address.postal_code,
-            'country': loaded_order.shipping_address.country,
-            'phone_number': loaded_order.shipping_address.phone_number,
+            "full_name": loaded_order.shipping_address.full_name,
+            "address_line_1": loaded_order.shipping_address.address_line1,
+            "address_line_2": loaded_order.shipping_address.address_line2,
+            "city": loaded_order.shipping_address.city,
+            "state": loaded_order.shipping_address.state,
+            "postal_code": loaded_order.shipping_address.postal_code,
+            "country": loaded_order.shipping_address.country,
+            "phone_number": loaded_order.shipping_address.phone_number,
         }
 
         await email_service.send_order_confirmation_email(
@@ -946,15 +1429,13 @@ async def create_order(
             shipping=float(loaded_order.shipping_cost),
             tax=float(loaded_order.tax_amount),
             total=float(loaded_order.total_amount),
-            shipping_address=shipping_addr_dict
+            shipping_address=shipping_addr_dict,
+            payment_status=loaded_order.payment_status.value,
         )
 
         # Send admin notification email to all admins
         admin_result = await db.execute(
-            select(User).where(
-                User.role == UserRole.ADMIN,
-                User.is_active == True
-            )
+            select(User).where(User.role == UserRole.ADMIN, User.is_active == True)
         )
         admin_users = [user for user in admin_result.scalars().all() if user.email]
         admin_recipients = _build_admin_recipients(admin_users)
@@ -971,17 +1452,19 @@ async def create_order(
             total=float(loaded_order.total_amount),
             payment_status=loaded_order.payment_status.value,
             shipping_address=shipping_addr_dict,
-            recipients=admin_recipients or None
+            recipients=admin_recipients or None,
         )
         logger.info(
             "[Order Email] Admin email sent=%s recipients=%s order=%s",
             admin_sent,
             [recipient.get("email") for recipient in admin_recipients],
-            loaded_order.order_number
+            loaded_order.order_number,
         )
     except Exception as e:
         # Log error but don't fail order creation if email fails
-        print(f"Failed to send order confirmation email for order {loaded_order.order_number}: {e}")
+        print(
+            f"Failed to send order confirmation email for order {loaded_order.order_number}: {e}"
+        )
 
     return loaded_order
 
@@ -992,7 +1475,7 @@ async def list_orders(
     page_size: int = Query(20, ge=1, le=100),
     status: PaymentStatus = Query(None),
     current_user: User = Depends(get_current_active_user),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Get orders for the authenticated user
@@ -1008,7 +1491,11 @@ async def list_orders(
     total = total_result.scalar()
 
     # Get paginated results
-    query = query.order_by(Order.created_at.desc()).offset((page - 1) * page_size).limit(page_size)
+    query = (
+        query.order_by(Order.created_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
     query = query.options(selectinload(Order.items), selectinload(Order.payments))
 
     result = await db.execute(query)
@@ -1017,57 +1504,95 @@ async def list_orders(
     for order in orders:
         order.currency = _resolve_order_currency(order)
 
-    return OrderListResponse(
-        orders=orders,
-        total=total,
-        page=page,
-        page_size=page_size
+    return OrderListResponse(orders=orders, total=total, page=page, page_size=page_size)
+
+
+async def _authorize_order_read(db, *, order, current_user, capability):
+    """Keep legacy passwordless guest reads; use canonical checkout auth otherwise."""
+    if current_user and current_user.role == UserRole.ADMIN:
+        return
+    if order.workflow_cohort not in {
+        "legacy_pre_bridge",
+        "legacy_ambiguous_quarantined",
+    }:
+        await authorize_checkout_actor(
+            db,
+            order=order,
+            current_user=current_user,
+            token=capability,
+            allow_expired_order_read=True,
+        )
+        return
+    if current_user:
+        if order.customer_id == current_user.id:
+            return
+    else:
+        owner = await db.get(User, order.customer_id)
+        if (
+            owner is not None
+            and owner.is_guest_created
+            and owner.hashed_password is None
+            and owner.is_active
+        ):
+            return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Not authorized to view this order",
     )
 
 
 @router.get("/{order_id}", response_model=OrderResponse)
 async def get_order(
     order_id: UUID,
+    capability: Optional[str] = Header(None, alias="X-ShopSoma-Checkout-Capability"),
     current_user: Optional[User] = Depends(get_optional_user),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Get a specific order by ID
 
     Works for both authenticated users and guest checkout.
-    Guests can view orders without authentication.
+    Legacy passwordless guests retain access; modern guests need their capability.
     """
     from app.models.product import ProductImage
 
-    query = select(Order).options(
-        selectinload(Order.items).selectinload(OrderItem.product).selectinload(Product.images),
-        selectinload(Order.shipping_address),
-        selectinload(Order.billing_address),
-        selectinload(Order.payments),
-    ).where(Order.id == order_id)
+    query = (
+        select(Order)
+        .options(
+            selectinload(Order.items)
+            .selectinload(OrderItem.product)
+            .selectinload(Product.images),
+            selectinload(Order.shipping_address),
+            selectinload(Order.billing_address),
+            selectinload(Order.payments),
+        )
+        .where(Order.id == order_id)
+        .with_for_update()
+    )
 
     result = await db.execute(query)
     order = result.scalar_one_or_none()
 
     if not order:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Order not found"
+            status_code=status.HTTP_404_NOT_FOUND, detail="Order not found"
         )
 
-    # Verify ownership if user is authenticated (unless admin)
-    if current_user:
-        if current_user.role != UserRole.ADMIN and order.customer_id != current_user.id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Not authorized to view this order"
-            )
+    # Lock the order before the canonical owner/capability rows used by checkout auth.
+    await _authorize_order_read(
+        db, order=order, current_user=current_user, capability=capability
+    )
+
+    # The plaintext capability is returned only by order creation, never by reads.
+    order.checkout_capability = None
 
     # Add product image URLs to order items
     for item in order.items:
         if item.product and item.product.images:
             # Get the primary image or first image
-            primary_image = next((img for img in item.product.images if img.is_primary), None)
+            primary_image = next(
+                (img for img in item.product.images if img.is_primary), None
+            )
             if not primary_image and item.product.images:
                 primary_image = item.product.images[0]
             item.product_image_url = primary_image.image_url if primary_image else None
@@ -1082,8 +1607,9 @@ async def get_order(
 @router.get("/{order_id}/tracking")
 async def get_order_tracking(
     order_id: UUID,
+    capability: Optional[str] = Header(None, alias="X-ShopSoma-Checkout-Capability"),
     current_user: Optional[User] = Depends(get_optional_user),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Get order tracking information
@@ -1091,34 +1617,31 @@ async def get_order_tracking(
     Returns tracking details including order status, history, and amount.
     Works for both authenticated users and guest checkout.
     """
-    query = select(Order).where(Order.id == order_id)
+    query = select(Order).where(Order.id == order_id).with_for_update()
     result = await db.execute(query)
     order = result.scalar_one_or_none()
 
     if not order:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Order not found"
+            status_code=status.HTTP_404_NOT_FOUND, detail="Order not found"
         )
 
-    # Verify ownership if user is authenticated (unless admin)
-    if current_user:
-        if current_user.role != UserRole.ADMIN and order.customer_id != current_user.id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Not authorized to view this order"
-            )
+    # Lock the order before the canonical owner/capability rows used by checkout auth.
+    await _authorize_order_read(
+        db, order=order, current_user=current_user, capability=capability
+    )
 
-    # Generate tracking ID based on order number
-    tracking_id = f"GB{order.order_number.replace('-', '')[-8:]}"
+    # Prefer the persisted carrier tracking number when available; otherwise fall back
+    # to the legacy synthetic public identifier.
+    tracking_id = order.tracking_number or f"GB{order.order_number.replace('-', '')[-8:]}"
 
     # Map fulfillment status to tracking status (new 7-status system)
     # Matches frontend OrderStatus type in orderService.ts
     status_map = {
         FulfillmentStatus.ORDER_RECEIVED: "order_placed",
-        FulfillmentStatus.PREPARING_FOR_PICKUP: "in_transit",
-        FulfillmentStatus.PICKUP_SCHEDULED: "in_transit",
-        FulfillmentStatus.PICKED_UP: "in_transit",
+        FulfillmentStatus.PREPARING_FOR_PICKUP: "order_placed",
+        FulfillmentStatus.PICKUP_SCHEDULED: "order_placed",
+        FulfillmentStatus.PICKED_UP: "picked_up",
         FulfillmentStatus.IN_TRANSIT: "in_transit",
         FulfillmentStatus.OUT_FOR_DELIVERY: "out_for_delivery",
         FulfillmentStatus.DELIVERED: "delivered",
@@ -1134,62 +1657,84 @@ async def get_order_tracking(
 
     # Order placed
     if order.created_at:
-        history.append({
-            "status": "order_placed",
-            "description": "Order confirmed by Shopsoma",
-            "occurred_at": order.created_at.isoformat()
-        })
+        history.append(
+            {
+                "status": "order_placed",
+                "description": "Order confirmed by Shopsoma",
+                "occurred_at": order.created_at.isoformat(),
+            }
+        )
 
-    # In Transit (consolidates preparing/scheduled/picked_up/in_transit)
-    if order.fulfillment_status in [
-        FulfillmentStatus.PREPARING_FOR_PICKUP,
-        FulfillmentStatus.PICKUP_SCHEDULED,
-        FulfillmentStatus.PICKED_UP,
-        FulfillmentStatus.IN_TRANSIT
-    ]:
-        history.append({
-            "status": "in_transit",
-            "description": "Order is in transit to you",
-            "occurred_at": order.updated_at.isoformat()
-        })
+    # In Transit
+    if order.fulfillment_status == FulfillmentStatus.IN_TRANSIT:
+        history.append(
+            {
+                "status": "in_transit",
+                "description": "Order is in transit to you",
+                "occurred_at": order.updated_at.isoformat(),
+            }
+        )
+
+    if order.fulfillment_status == FulfillmentStatus.PICKED_UP:
+        history.append(
+            {
+                "status": "picked_up",
+                "description": "Order has been collected by the courier",
+                "occurred_at": order.updated_at.isoformat(),
+            }
+        )
 
     # Out for Delivery
     if order.fulfillment_status == FulfillmentStatus.OUT_FOR_DELIVERY:
-        history.append({
-            "status": "out_for_delivery",
-            "description": "Out for delivery to your address",
-            "occurred_at": order.updated_at.isoformat()
-        })
+        history.append(
+            {
+                "status": "out_for_delivery",
+                "description": "Out for delivery to your address",
+                "occurred_at": order.updated_at.isoformat(),
+            }
+        )
 
     # Delivered
     if order.fulfillment_status == FulfillmentStatus.DELIVERED and order.delivered_at:
-        history.append({
-            "status": "delivered",
-            "description": "Package delivered successfully",
-            "occurred_at": order.delivered_at.isoformat()
-        })
+        history.append(
+            {
+                "status": "delivered",
+                "description": "Package delivered successfully",
+                "occurred_at": order.delivered_at.isoformat(),
+            }
+        )
 
     # Terminal states
     if order.fulfillment_status == FulfillmentStatus.DELIVERY_FAILED:
-        history.append({
-            "status": "delivery_failed",
-            "description": "Delivery attempt failed",
-            "occurred_at": order.updated_at.isoformat()
-        })
+        history.append(
+            {
+                "status": "delivery_failed",
+                "description": "Delivery attempt failed",
+                "occurred_at": order.updated_at.isoformat(),
+            }
+        )
 
     if order.fulfillment_status == FulfillmentStatus.RETURNED:
-        history.append({
-            "status": "returned",
-            "description": "Order has been returned",
-            "occurred_at": order.updated_at.isoformat()
-        })
+        history.append(
+            {
+                "status": "returned",
+                "description": "Order has been returned",
+                "occurred_at": order.updated_at.isoformat(),
+            }
+        )
 
     if order.fulfillment_status == FulfillmentStatus.CANCELLED:
-        history.append({
-            "status": "cancelled",
-            "description": "Order has been cancelled",
-            "occurred_at": order.cancelled_at.isoformat() if order.cancelled_at else order.updated_at.isoformat()
-        })
+        history.append(
+            {
+                "status": "cancelled",
+                "description": "Order has been cancelled",
+                "occurred_at": (
+                    order.cancelled_at.isoformat()
+                    if order.cancelled_at
+                    else order.updated_at.isoformat()
+                ),
+            }
+        )
 
     currency_result = await db.execute(
         select(Payment.currency)
@@ -1203,11 +1748,12 @@ async def get_order_tracking(
         "order_id": str(order.id),
         "order_number": order.order_number,
         "tracking_id": tracking_id,
+        "tracking_number": order.tracking_number,
         "amount": float(order.total_amount),
         "currency": currency,
         "updated_at": order.updated_at.isoformat(),
         "current_status": current_status,
-        "history": history
+        "history": history,
     }
 
 
@@ -1215,75 +1761,197 @@ async def get_order_tracking(
 async def cancel_order(
     order_id: UUID,
     cancel_data: OrderCancelRequest,
-    current_user: User = Depends(get_current_active_user),
-    db: AsyncSession = Depends(get_db)
+    capability: Optional[str] = Header(None, alias="X-ShopSoma-Checkout-Capability"),
+    current_user: Optional[User] = Depends(get_optional_user),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Cancel an order (only if not yet shipped)
     """
-    query = select(Order).options(selectinload(Order.items)).where(Order.id == order_id)
+    query = (
+        select(Order)
+        .options(selectinload(Order.items))
+        .where(Order.id == order_id)
+        .with_for_update()
+    )
     result = await db.execute(query)
     order = result.scalar_one_or_none()
 
     if not order:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Order not found"
+            status_code=status.HTTP_404_NOT_FOUND, detail="Order not found"
         )
 
-    # Verify ownership
-    if order.customer_id != current_user.id:
+    # Domestic orders use the canonical owner/capability path. This matters
+    # after a guest order is claimed: customer_id remains the original guest,
+    # while OrderCurrentOwner records the authenticated claimant.
+    if order.workflow_cohort == "domestic_checkout_v1":
+        await authorize_checkout_actor(
+            db,
+            order=order,
+            current_user=current_user,
+            token=capability,
+        )
+    elif current_user is None or order.customer_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not authorized to cancel this order"
+            detail="Not authorized to cancel this order",
         )
 
     # Check if order can be cancelled
-    if order.fulfillment_status in [FulfillmentStatus.PICKED_UP, FulfillmentStatus.IN_TRANSIT, FulfillmentStatus.OUT_FOR_DELIVERY, FulfillmentStatus.DELIVERED]:
+    if order.fulfillment_status in [
+        FulfillmentStatus.PICKED_UP,
+        FulfillmentStatus.IN_TRANSIT,
+        FulfillmentStatus.OUT_FOR_DELIVERY,
+        FulfillmentStatus.DELIVERED,
+    ]:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Cannot cancel order that has been shipped or delivered"
+            detail="Cannot cancel order that has been shipped or delivered",
         )
 
-    if order.fulfillment_status == FulfillmentStatus.CANCELLED:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Order is already cancelled"
+    if order.workflow_cohort == "domestic_checkout_v1":
+        unresolved_attempt = await db.scalar(
+            select(PaymentAttempt)
+            .where(
+                PaymentAttempt.order_id == order.id,
+                PaymentAttempt.state.in_({"call_started", "abandoned_unknown"}),
+            )
+            .with_for_update()
         )
+        if unresolved_attempt is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Cannot cancel order while payment outcome is unresolved",
+            )
+
+    if order.fulfillment_status == FulfillmentStatus.CANCELLED:
+        # Cancellation is intentionally idempotent so a lost response or a
+        # client retry converges on the committed terminal state, but the
+        # unresolved-payment fence above remains authoritative.
+        return order
+
+    try:
+        await ensure_order_cancellation_allowed(db, order_id=order.id)
+    except ShipmentPhase4ConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
 
     # Cancel order
     order.fulfillment_status = FulfillmentStatus.CANCELLED
     order.cancelled_at = datetime.now()
     order.cancellation_reason = cancel_data.cancellation_reason
 
-    # Restore stock
-    for item in order.items:
-        if item.variant_id:
-            await db.execute(
-                update(ProductVariant)
-                .where(ProductVariant.id == item.variant_id)
-                .values(stock=ProductVariant.stock + item.quantity)
-            )
-            continue
+    unpaid_enforced_checkout = (
+        order.workflow_cohort == "domestic_checkout_v1"
+        and order.payment_status != PaymentStatus.PAID
+    )
+    if unpaid_enforced_checkout:
+        await release_active_order_reservations(db, order=order)
+        await db.commit()
+        refreshed_result = await db.execute(query)
+        return refreshed_result.scalar_one()
 
-        size_stock_id = None
-        if item.variant_details:
-            size_stock_id = item.variant_details.get("size_stock_id")
+    size_stock_ids = [
+        UUID(str(item.variant_details["size_stock_id"]))
+        for item in order.items
+        if not item.variant_id
+        and item.variant_details
+        and item.variant_details.get("size_stock_id")
+    ]
+    consumed_reservations = []
+    paid_domestic_checkout = (
+        order.workflow_cohort == "domestic_checkout_v1"
+        and order.payment_status == PaymentStatus.PAID
+    )
+    if paid_domestic_checkout:
+        consumed_reservations = (
+            await db.scalars(
+                select(StockReservation).where(
+                    StockReservation.order_id == order.id,
+                    StockReservation.state == "consumed",
+                )
+            )
+        ).all()
+        if not consumed_reservations:
+            await db.commit()
+            refreshed_result = await db.execute(query)
+            return refreshed_result.scalar_one()
+    extant_size_stock_ids = await coordinate_catalog_write(
+        db,
+        order_ids=[order.id],
+        product_ids=[item.product_id for item in order.items if not item.variant_id],
+        product_variant_ids=[
+            item.variant_id for item in order.items if item.variant_id
+        ],
+        size_stock_ids=size_stock_ids,
+        allow_missing_size_stock_ids=True,
+    )
 
-        if size_stock_id:
-            await db.execute(
-                update(SizeStock)
-                .where(SizeStock.id == size_stock_id)
-                .values(stock=SizeStock.stock + item.quantity)
-            )
-        else:
-            await db.execute(
-                update(Product)
-                .where(Product.id == item.product_id)
-                .values(total_stock=Product.total_stock + item.quantity)
-            )
+    # Restore only stock-managed inventory that was actually consumed.
+    if consumed_reservations:
+        for reservation in consumed_reservations:
+            if reservation.inventory_subject_kind == "size_stock" and reservation.size_stock_id:
+                size_stock_id = UUID(str(reservation.size_stock_id))
+                if size_stock_id in extant_size_stock_ids:
+                    await db.execute(
+                        update(SizeStock)
+                        .where(SizeStock.id == reservation.size_stock_id)
+                        .values(stock=SizeStock.stock + reservation.quantity)
+                    )
+                continue
+            if (
+                reservation.inventory_subject_kind == "product_variant"
+                and reservation.variant_id
+            ):
+                await db.execute(
+                    update(ProductVariant)
+                    .where(ProductVariant.id == reservation.variant_id)
+                    .values(stock=ProductVariant.stock + reservation.quantity)
+                )
+                continue
+            if reservation.inventory_subject_kind == "product" and reservation.product_id:
+                await db.execute(
+                    update(Product)
+                    .where(Product.id == reservation.product_id)
+                    .values(total_stock=Product.total_stock + reservation.quantity)
+                )
+    else:
+        for item in order.items:
+            if item.inventory_policy == "made_to_order":
+                continue
+            if item.variant_id:
+                await db.execute(
+                    update(ProductVariant)
+                    .where(ProductVariant.id == item.variant_id)
+                    .values(stock=ProductVariant.stock + item.quantity)
+                )
+                continue
+
+            size_stock_id = None
+            if item.variant_details:
+                size_stock_id = item.variant_details.get("size_stock_id")
+
+            if size_stock_id and UUID(str(size_stock_id)) in extant_size_stock_ids:
+                await db.execute(
+                    update(SizeStock)
+                    .where(SizeStock.id == size_stock_id)
+                    .values(stock=SizeStock.stock + item.quantity)
+                )
+            elif size_stock_id:
+                # Product variation replacement intentionally preserves the historical
+                # SizeStock UUID as audit evidence. Do not transfer its cancelled units
+                # into a newly created inventory identity.
+                continue
+            else:
+                await db.execute(
+                    update(Product)
+                    .where(Product.id == item.product_id)
+                    .values(total_stock=Product.total_stock + item.quantity)
+                )
 
     await db.commit()
-    await db.refresh(order)
-
-    return order
+    refreshed_result = await db.execute(query)
+    return refreshed_result.scalar_one()

@@ -16,7 +16,10 @@ interface Product {
   base_price: number;
   compare_at_price: number | null;
   currency?: 'NGN' | 'USD';
+  inventory_quantity: number;
   total_stock: number;
+  made_to_order: boolean;
+  made_to_order_timeline?: string | null;
   status: 'draft' | 'active' | 'inactive' | 'archived';
   is_featured: boolean;
   moderation_status: 'pending' | 'approved' | 'rejected';
@@ -193,6 +196,21 @@ export default function AdminProducts() {
       currentCurrency,
       exchangeRates
     );
+  };
+
+  const renderStockCell = (product: Product) => {
+    if (product.made_to_order) {
+      return (
+        <div>
+          <p className="text-sm font-medium text-blue-700">Made to Order</p>
+          {product.made_to_order_timeline && (
+            <p className="text-xs text-gray-500">{product.made_to_order_timeline}</p>
+          )}
+        </div>
+      );
+    }
+
+    return <p className="text-sm text-gray-900">{product.total_stock}</p>;
   };
 
   const getModerationBadge = (status: string) => {
@@ -421,7 +439,7 @@ export default function AdminProducts() {
                         )}
                       </td>
                       <td className="px-6 py-4">
-                        <p className="text-sm text-gray-900">{product.total_stock}</p>
+                        {renderStockCell(product)}
                       </td>
                       <td className="px-6 py-4">{getStatusBadge(product.status)}</td>
                       <td className="px-6 py-4">{getModerationBadge(product.moderation_status)}</td>

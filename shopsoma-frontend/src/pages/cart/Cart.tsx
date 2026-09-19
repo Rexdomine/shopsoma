@@ -11,7 +11,7 @@ import { useWishlistActions } from '../../hooks/useWishlistActions';
 import EditVariantModal from '../../components/modals/EditVariantModal';
 import { usePreferenceStore } from '../../store/preferenceStore';
 import { useCurrencyStore } from '../../store/currencyStore';
-import { formatPriceWithConversion, type Currency } from '../../utils/pricing';
+import { convertCurrencyWithRates, formatAmount, formatPriceWithConversion, type Currency } from '../../utils/pricing';
 
 export default function Cart() {
   const navigate = useNavigate();
@@ -31,6 +31,26 @@ export default function Cart() {
     product: Product;
     variant: ProductVariant;
   } | null>(null);
+
+  const subtotalInSelectedCurrency = cart.items.reduce((sum, item) => {
+    return sum + convertCurrencyWithRates(
+      item.subtotal,
+      item.product.currency || 'NGN',
+      preferredCurrency,
+      exchangeRates
+    );
+  }, 0);
+
+  const subtotalInNgn = cart.items.reduce((sum, item) => {
+    return sum + convertCurrencyWithRates(
+      item.subtotal,
+      item.product.currency || 'NGN',
+      'NGN',
+      exchangeRates
+    );
+  }, 0);
+
+  const minimumOrderInSelectedCurrency = convertCurrencyWithRates(60000, 'NGN', preferredCurrency, exchangeRates);
 
   useEffect(() => {
     const load = async () => {
@@ -90,8 +110,8 @@ export default function Cart() {
   };
 
   const handleCheckout = () => {
-    if (cart.summary.subtotal < 60000) {
-      showToast('Minimum order is ₦60,000 (~$40). Please add more items before checkout.');
+    if (subtotalInNgn < 60000) {
+      showToast(`Minimum order is ${formatAmount(minimumOrderInSelectedCurrency, preferredCurrency)} (₦60,000 equivalent). Please add more items before checkout.`);
       return;
     }
     navigate(ROUTES.CHECKOUT);
@@ -249,9 +269,8 @@ export default function Cart() {
                 <div className="text-sm space-y-2">
                   <SummaryRow
                     label="Subtotal"
-                    value={cart.summary.subtotal}
+                    value={subtotalInSelectedCurrency}
                     currency={preferredCurrency}
-                    exchangeRates={exchangeRates}
                   />
                   <div className="flex items-center justify-between text-xs text-gray-400 italic">
                     <span>Shipping</span>
@@ -265,10 +284,9 @@ export default function Cart() {
                 <div className="border-t border-gray-200 pt-4">
                   <SummaryRow
                     label="Estimated Total"
-                    value={cart.summary.subtotal}
+                    value={subtotalInSelectedCurrency}
                     bold
                     currency={preferredCurrency}
-                    exchangeRates={exchangeRates}
                   />
                 </div>
                 <div className="space-y-3 pt-2">
@@ -329,19 +347,17 @@ function SummaryRow({
   value,
   bold,
   currency,
-  exchangeRates,
 }: {
   label: string;
   value: number;
   bold?: boolean;
   currency: Currency;
-  exchangeRates: { USD_TO_NGN: number; NGN_TO_USD: number };
 }) {
   return (
     <div className="flex items-center justify-between">
       <span className="text-sm text-gray-500">{label}</span>
       <span className={`text-sm ${bold ? 'font-semibold text-dark' : 'text-gray-700'}`}>
-        {formatPriceWithConversion(value, 'NGN', currency, exchangeRates)}
+        {formatAmount(value, currency)}
       </span>
     </div>
   );

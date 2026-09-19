@@ -1,5 +1,6 @@
 """Vendor API endpoints"""
 from typing import List, Optional
+import asyncio
 import logging
 from datetime import datetime, date, time, timedelta
 from fastapi import APIRouter, Depends, HTTPException, status, Query, BackgroundTasks
@@ -34,12 +35,68 @@ from app.schemas.vendor import (
     VendorEarningsSummary, VendorPayoutRequest,
     VendorAnalyticsSummary, VendorAnalyticsChartResponse, VendorAnalyticsStats
 )
-from app.schemas.product import ProductResponse
+from app.schemas.product import ProductResponse, ProductListResponse
 from app.models.product import ProductStatus, Variation
 from app.services.email_service import email_service
+from app.services.commission import get_default_commission_rate
+from app.services.vendor_onboarding import reconcile_vendor_onboarding
+from app.services.image_service import image_service
 
 router = APIRouter(prefix="/vendor", tags=["Vendors"])
 logger = logging.getLogger(__name__)
+
+
+async def _require_vendor_owned_uploaded_image(
+    image_url: str, vendor: Vendor
+) -> None:
+    """Accept only an existing image returned by this vendor's upload namespace."""
+    expected_key_prefix = f"vendors/{vendor.user_id}/"
+
+    if image_service.use_local_storage:
+        local_prefix = "/uploads/"
+        if not image_url.startswith(local_prefix):
+            raise HTTPException(
+                status_code=400,
+                detail="Featured storefront image must be a vendor-uploaded image",
+            )
+        image_key = image_url.removeprefix(local_prefix)
+    else:
+        storage_prefix = image_service._get_public_url("")
+        if not image_url.startswith(storage_prefix):
+            raise HTTPException(
+                status_code=400,
+                detail="Featured storefront image must be a vendor-uploaded image",
+            )
+        image_key = image_url.removeprefix(storage_prefix)
+
+    image_parts = image_key.split("/")
+    if any(part in {"", ".", ".."} for part in image_parts):
+        raise HTTPException(
+            status_code=400,
+            detail="Featured storefront image must be a vendor-uploaded image",
+        )
+
+    if not image_key.startswith(expected_key_prefix):
+        raise HTTPException(
+            status_code=403,
+            detail="Featured storefront image does not belong to this vendor",
+        )
+
+    image_info = await asyncio.to_thread(image_service.get_image_info, image_key)
+    if not image_info:
+        raise HTTPException(
+            status_code=400,
+            detail="Featured storefront image was not found in vendor storage",
+        )
+
+VENDOR_PRODUCT_RELATIONSHIPS = (
+    selectinload(Product.variants),
+    selectinload(Product.variations).selectinload(Variation.size_stocks),
+    selectinload(Product.images),
+    selectinload(Product.vendor),
+    selectinload(Product.category),
+    selectinload(Product.collection),
+)
 
 
 async def _get_payout_hold_days(db: AsyncSession) -> int:
@@ -96,6 +153,8 @@ async def create_vendor_profile(
             detail="User already has a vendor profile"
         )
 
+    default_commission_rate = await get_default_commission_rate(db)
+
     # Create vendor
     vendor = Vendor(
         user_id=current_user.id,
@@ -108,7 +167,7 @@ async def create_vendor_profile(
         bank_account_name=vendor_data.bank_account_name,
         kyc_status=KYCStatus.PENDING,
         approved=False,
-        commission_rate=12.5  # Default 12.5%
+        commission_rate=default_commission_rate
     )
 
     db.add(vendor)
@@ -160,11 +219,18 @@ async def save_brand_info(
     """
     from datetime import datetime
 
+    if brand_info.featured_storefront_image_url is not None:
+        await _require_vendor_owned_uploaded_image(
+            brand_info.featured_storefront_image_url, vendor
+        )
+
     # Update vendor with brand info
     vendor.business_phone = brand_info.business_phone
     vendor.business_description = brand_info.business_description
     vendor.business_address = brand_info.shipping_address
     vendor.logo_url = brand_info.logo_url
+    if brand_info.featured_storefront_image_url is not None:
+        vendor.featured_storefront_image_url = brand_info.featured_storefront_image_url
     vendor.returning_address = brand_info.returning_address
     vendor.open_days = brand_info.open_days
     vendor.open_hour = brand_info.open_hour
@@ -173,10 +239,7 @@ async def save_brand_info(
     # Mark brand info as completed
     vendor.brand_info_completed = True
 
-    # Check if onboarding is complete (both brand and payout info)
-    if vendor.brand_info_completed and vendor.payout_info_completed:
-        vendor.is_onboarding = False
-        vendor.onboarding_completed_at = datetime.utcnow()
+    reconcile_vendor_onboarding(vendor)
 
     await db.commit()
     await db.refresh(vendor)
@@ -204,10 +267,7 @@ async def save_payout_info(
     # Mark payout info as completed
     vendor.payout_info_completed = True
 
-    # Check if onboarding is complete (both brand and payout info)
-    if vendor.brand_info_completed and vendor.payout_info_completed:
-        vendor.is_onboarding = False
-        vendor.onboarding_completed_at = datetime.utcnow()
+    reconcile_vendor_onboarding(vendor)
 
     await db.commit()
     await db.refresh(vendor)
@@ -365,6 +425,62 @@ async def delete_vendor_asset(
 
 # ==================== VENDOR ORDERS ====================
 
+@router.get("/products", response_model=ProductListResponse)
+async def list_vendor_products(
+    vendor: Vendor = Depends(get_approved_vendor),
+    db: AsyncSession = Depends(get_db),
+    search: Optional[str] = Query(None, max_length=255),
+    status: Optional[str] = Query(None, pattern="^(draft|active|inactive|archived)$"),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    sort_by: str = Query(default="created_at", pattern="^(created_at|title|base_price|orders_count|views_count)$"),
+    sort_order: str = Query(default="desc", pattern="^(asc|desc)$"),
+):
+    """List the current vendor's products, including pending moderation items."""
+    filters = [
+        Product.vendor_id == vendor.id,
+        Product.status != ProductStatus.ARCHIVED,
+    ]
+
+    if search:
+        filters.append(
+            or_(
+                Product.title.ilike(f"%{search}%"),
+                Product.description.ilike(f"%{search}%"),
+            )
+        )
+
+    if status:
+        filters.append(Product.status == ProductStatus(status))
+
+    query = (
+        select(Product)
+        .options(*VENDOR_PRODUCT_RELATIONSHIPS)
+        .where(and_(*filters))
+    )
+
+    count_query = select(func.count()).select_from(Product).where(and_(*filters))
+    total_result = await db.execute(count_query)
+    total = total_result.scalar() or 0
+
+    sort_column = getattr(Product, sort_by)
+    if sort_order == "desc":
+        query = query.order_by(sort_column.desc())
+    else:
+        query = query.order_by(sort_column.asc())
+
+    offset = (page - 1) * page_size
+    result = await db.execute(query.offset(offset).limit(page_size))
+    products = result.scalars().all()
+
+    return ProductListResponse(
+        products=products,
+        total=total,
+        page=page,
+        page_size=page_size,
+        total_pages=(total + page_size - 1) // page_size,
+    )
+
 @router.get("/products/{product_id}", response_model=ProductResponse)
 async def get_vendor_product(
     product_id: UUID,
@@ -374,13 +490,7 @@ async def get_vendor_product(
     """Get vendor product details"""
     product_query = (
         select(Product)
-        .options(
-            selectinload(Product.variants),
-            selectinload(Product.variations).selectinload(Variation.size_stocks),
-            selectinload(Product.images),
-            selectinload(Product.category),
-            selectinload(Product.collection),
-        )
+        .options(*VENDOR_PRODUCT_RELATIONSHIPS)
         .where(
             and_(
                 Product.id == product_id,
@@ -434,18 +544,16 @@ async def list_vendor_orders(
             )
         )
 
-    # Get total count
+    # Get total count after applying the same vendor/search/status filters.
     count_query = select(func.count()).select_from(
-        select(Order.id).join(OrderItem).where(
-            OrderItem.vendor_id == vendor.id
-        ).distinct().subquery()
+        query.order_by(None).subquery()
     )
     total_result = await db.execute(count_query)
     total = total_result.scalar() or 0
 
     # Pagination
     offset = (page - 1) * page_size
-    query = query.order_by(desc(Order.created_at)).offset(offset).limit(page_size)
+    query = query.order_by(desc(Order.created_at), desc(Order.id)).offset(offset).limit(page_size)
 
     # Execute with relationships loaded
     query = query.options(
@@ -1013,26 +1121,40 @@ async def get_vendor_earnings_items(
     if end_dt:
         delivered_filters.append(Order.delivered_at <= end_dt)
 
-    completed_payouts_result = await db.execute(
-        select(Payout.payout_period_start, Payout.payout_period_end).where(
-            and_(
-                Payout.vendor_id == vendor.id,
-                Payout.status == PayoutStatus.COMPLETED
-            )
+    payout_periods_result = await db.execute(
+        select(
+            Payout.payout_period_start,
+            Payout.payout_period_end,
+            Payout.status,
+            Payout.created_at,
         )
+        .where(Payout.vendor_id == vendor.id)
+        .order_by(desc(Payout.created_at))
     )
-    completed_periods = completed_payouts_result.all()
+    payout_periods = payout_periods_result.all()
 
-    def is_paid_out(delivered: Optional[datetime]) -> bool:
+    def resolve_payout_status(delivered: Optional[datetime]) -> str:
         if not delivered:
-            return False
+            return "available"
         delivered_date = delivered.date()
         if delivered_date + timedelta(days=hold_days) > today:
-            return False
-        return any(
-            period_start <= delivered_date <= period_end
-            for period_start, period_end in completed_periods
-        )
+            return "available"
+        matching_statuses = []
+        for period_start, period_end, payout_status, _ in payout_periods:
+            if period_start <= delivered_date <= period_end:
+                if hasattr(payout_status, "value"):
+                    matching_statuses.append(payout_status.value)
+                else:
+                    matching_statuses.append(str(payout_status))
+        for status_priority in (
+            PayoutStatus.COMPLETED.value,
+            PayoutStatus.PROCESSING.value,
+            PayoutStatus.PENDING.value,
+            PayoutStatus.FAILED.value,
+        ):
+            if status_priority in matching_statuses:
+                return status_priority
+        return "available"
 
     if view == "products":
         query = select(
@@ -1085,7 +1207,7 @@ async def get_vendor_earnings_items(
                     first_image = item.product.images[0]
                     product_image_url = first_image.thumbnail_url or first_image.image_url
 
-            payout_status = "paid_out" if is_paid_out(delivered_at) else "available"
+            payout_status = resolve_payout_status(delivered_at)
             withdraw_available_at = None
             withdraw_days_left = None
             withdraw_available = False
@@ -1178,7 +1300,7 @@ async def get_vendor_earnings_items(
                 hold_days,
                 withdraw_days_left,
                 withdraw_available,
-                "paid_out" if is_paid_out(order.delivered_at) else "available",
+                resolve_payout_status(order.delivered_at),
             )
         items.append({
             "id": str(order.id),
@@ -1189,7 +1311,7 @@ async def get_vendor_earnings_items(
             "total_payout": float(total_payout),
             "status": order.fulfillment_status.value,
             "delivered_at": order.delivered_at.isoformat() if order.delivered_at else None,
-            "payout_status": "paid_out" if is_paid_out(order.delivered_at) else "available",
+            "payout_status": resolve_payout_status(order.delivered_at),
             "withdraw_available": withdraw_available,
             "withdraw_days_left": withdraw_days_left,
             "withdraw_available_at": withdraw_available_at.isoformat() if withdraw_available_at else None,
@@ -1454,7 +1576,7 @@ async def list_vendor_payouts(
     page_size: int = Query(20, ge=1, le=100, description="Items per page"),
     start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
     end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
-    status_filter: Optional[str] = Query(None, alias="status", description="Filter by payout status"),
+    status_filter: Optional[PayoutStatus] = Query(None, alias="status", description="Filter by payout status"),
     search: Optional[str] = Query(None, description="Search by payment reference or notes"),
     vendor: Vendor = Depends(get_approved_vendor),
     db: AsyncSession = Depends(get_db)
@@ -1774,7 +1896,7 @@ async def get_payout_summary(
         select(func.sum(Payout.payout_amount)).where(
             and_(
                 Payout.vendor_id == vendor.id,
-                Payout.status == "COMPLETED"
+                Payout.status == PayoutStatus.COMPLETED
             )
         )
     )
@@ -1805,7 +1927,7 @@ async def get_payout_summary(
         select(Payout).where(
             and_(
                 Payout.vendor_id == vendor.id,
-                Payout.status == "COMPLETED"
+                Payout.status == PayoutStatus.COMPLETED
             )
         ).order_by(desc(Payout.processed_at)).limit(1)
     )

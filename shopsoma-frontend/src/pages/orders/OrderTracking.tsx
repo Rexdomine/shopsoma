@@ -1,19 +1,20 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
-import { ROUTES } from '../../config/constants';
+import { ROUTES, STORAGE_KEYS } from '../../config/constants';
 import {
   orderService,
   type OrderTracking,
   type OrderStatus,
-  buildMockTracking,
 } from '../../services/orderService';
 import { checkoutService } from '../../services/checkoutService';
 import websocketService, { type OrderUpdateData } from '../../services/websocketService';
 import { useCurrencyStore } from '../../store/currencyStore';
 import { formatPriceWithConversion, type Currency } from '../../utils/pricing';
+import { loadCheckoutCapability } from '../../utils/checkoutCapability';
 
 const STATUS_STEPS: Array<{ key: OrderStatus; label: string }> = [
   { key: 'order_placed', label: 'Order Placed' },
+  { key: 'picked_up', label: 'Picked Up' },
   { key: 'in_transit', label: 'In Transit' },
   { key: 'out_for_delivery', label: 'Out for Delivery' },
   { key: 'delivered', label: 'Delivered' },
@@ -27,6 +28,7 @@ const TERMINAL_STATES: Record<OrderStatus, { label: string; color: string }> = {
   // Include normal states for type safety
   'order_placed': { label: 'Order Placed', color: 'yellow' },
   'pending_confirmation': { label: 'Pending Confirmation', color: 'yellow' },
+  'picked_up': { label: 'Picked Up', color: 'indigo' },
   'in_transit': { label: 'In Transit', color: 'blue' },
   'out_for_delivery': { label: 'Out for Delivery', color: 'blue' },
   'delivered': { label: 'Delivered', color: 'green' },
@@ -69,7 +71,7 @@ export default function OrderTracking() {
     let isMounted = true;
     (async () => {
       try {
-        const data = await orderService.getOrderTracking(orderId);
+        const data = await orderService.getOrderTracking(orderId, loadCheckoutCapability(orderId));
         if (isMounted) {
           setTracking(data);
           setError(null);
@@ -77,8 +79,9 @@ export default function OrderTracking() {
       } catch (err) {
         console.error('Failed to fetch tracking details', err);
         if (isMounted) {
-          setError('Unable to fetch live tracking details. Showing latest available information.');
-          setTracking(buildMockTracking(orderId));
+          setError('Tracking information is unavailable. Please try again later.');
+          // Never replace an authorized response with fabricated order data.
+          setTracking(null);
         }
       } finally {
         if (isMounted) {
@@ -97,7 +100,7 @@ export default function OrderTracking() {
     if (!orderId) return;
 
     // Get JWT token from localStorage (optional for guest users)
-    const token = localStorage.getItem('token');
+    const token = localStorage.getItem(STORAGE_KEYS.ACCESS_TOKEN);
 
     if (token) {
       console.log('[OrderTracking] Connecting to WebSocket with authentication for order:', orderId);
@@ -132,10 +135,12 @@ export default function OrderTracking() {
           currentStatus = 'order_placed';
         } else if (
           fulfillmentStatus === 'preparing_for_pickup' ||
-          fulfillmentStatus === 'pickup_scheduled' ||
-          fulfillmentStatus === 'picked_up' ||
-          fulfillmentStatus === 'in_transit'
+          fulfillmentStatus === 'pickup_scheduled'
         ) {
+          currentStatus = 'order_placed';
+        } else if (fulfillmentStatus === 'picked_up') {
+          currentStatus = 'picked_up';
+        } else if (fulfillmentStatus === 'in_transit') {
           currentStatus = 'in_transit';
         } else if (fulfillmentStatus === 'out_for_delivery') {
           currentStatus = 'out_for_delivery';
@@ -170,14 +175,21 @@ export default function OrderTracking() {
       });
     };
 
-    // Connect to WebSocket
-    try {
-      websocketService.connect(orderId, token, handleOrderUpdate);
-      setWsError(null);
-      console.log('[OrderTracking] WebSocket connection initiated');
-    } catch (error) {
-      console.error('[OrderTracking] WebSocket connection error:', error);
-      setWsError('WebSocket connection failed');
+    // Guest capabilities are header-only and cannot be sent by the browser
+    // WebSocket API without putting them in the URL. Use protected REST
+    // polling for guests; only authenticated users open a JWT socket.
+    if (token) {
+      try {
+        websocketService.connect(orderId, token, handleOrderUpdate);
+        setWsError(null);
+        console.log('[OrderTracking] WebSocket connection initiated');
+      } catch (error) {
+        console.error('[OrderTracking] WebSocket connection error:', error);
+        setWsError('WebSocket connection failed');
+        setIsConnectedToWebSocket(false);
+      }
+    } else {
+      setWsError('Guest tracking uses protected polling');
       setIsConnectedToWebSocket(false);
     }
 
@@ -186,11 +198,16 @@ export default function OrderTracking() {
       if (!websocketService.isConnected()) {
         console.log('[OrderTracking] WebSocket not connected, polling for updates...');
         try {
-          const data = await orderService.getOrderTracking(orderId);
+          const data = await orderService.getOrderTracking(orderId, loadCheckoutCapability(orderId));
           console.log('[OrderTracking] Polling update received:', data);
           setTracking(data);
         } catch (err) {
           console.error('[OrderTracking] Polling error:', err);
+          const status = (err as { response?: { status?: number } })?.response?.status;
+          if ([401, 403, 404, 410].includes(status ?? 0)) {
+            setTracking(null);
+            setError('Tracking information is unavailable. Please try again later.');
+          }
         }
       }
     }, 10000); // Poll every 10 seconds
@@ -221,7 +238,7 @@ export default function OrderTracking() {
 
     setLoadingOrder(true);
     try {
-      const order = await checkoutService.getOrder(orderId);
+      const order = await checkoutService.getOrder(orderId, loadCheckoutCapability(orderId));
       setOrderDetails(order);
       setShowOrderModal(true);
     } catch (err) {
@@ -302,7 +319,7 @@ export default function OrderTracking() {
           <div className="bg-white border border-gray-100 rounded-sm px-6 py-8 shadow-sm space-y-8">
             {loading ? (
               <div className="text-center text-sm text-gray-500">Fetching latest tracking updates...</div>
-            ) : (
+            ) : tracking ? (
               <>
                 {/* Terminal State Alert Banner */}
                 {isTerminalState && tracking && (
@@ -450,6 +467,10 @@ export default function OrderTracking() {
                   </div>
                 </div>
               </>
+            ) : (
+              <div className="text-center text-sm text-gray-600" role="status">
+                Tracking information is unavailable for this order. Please try again later.
+              </div>
             )}
           </div>
         </div>

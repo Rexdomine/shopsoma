@@ -14,7 +14,7 @@ Shopsoma Backend provides the core API infrastructure for the marketplace platfo
 - Admin operations & reporting
 
 **Launch Target:** December 12, 2025
-**Tech Stack:** Python 3.11+, FastAPI, PostgreSQL, Redis, Celery
+**Tech Stack:** Python 3.11+, FastAPI, PostgreSQL, optional Redis/Celery scaffolding
 
 ## Prerequisites
 
@@ -76,6 +76,8 @@ The API will be available at `http://localhost:8000`
 - ReDoc: `http://localhost:8000/api/redoc`
 
 ### 7. Start Celery Worker (Optional)
+
+Redis/Celery are not currently required for checkout, payment verification, or webhook processing. The repository still contains deployment scaffolding for a future worker setup, but no active task modules or worker entrypoint are wired into critical production flows today.
 
 In a separate terminal:
 

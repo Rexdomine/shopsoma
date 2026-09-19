@@ -53,10 +53,15 @@ export interface CreateAddressData {
 export interface ShippingRate {
   id: string;
   name: string;
-  description: string;
+  description: string | null;
   base_rate: number;
   country: string;
-  state?: string;
+  state?: string | null;
+  min_order_value?: number | null;
+  max_order_value?: number | null;
+  is_active?: boolean;
+  is_default?: boolean;
+  priority?: number;
   min_delivery_days: number;
   max_delivery_days: number;
 }
@@ -91,6 +96,7 @@ export interface OrderItem {
 
 export interface OrderReviewRequest {
   items: OrderItem[];
+  currency: 'NGN' | 'USD';
   shipping_address_id?: string;
   guest_address?: CreateAddressData;
   promo_code?: string;
@@ -98,6 +104,7 @@ export interface OrderReviewRequest {
 }
 
 export interface OrderSummary {
+  currency: 'NGN' | 'USD';
   subtotal: number;
   shipping_cost: number;
   tax_amount: number;
@@ -115,6 +122,7 @@ export interface OrderReview {
     variant_id?: string;
     variant_details?: Record<string, any>;
     unit_price: number;
+    currency: 'NGN' | 'USD';
     quantity: number;
     subtotal: number;
     vendor_name: string;
@@ -136,6 +144,7 @@ export interface OrderReview {
 
 export interface CreateOrderData {
   items: OrderItem[];
+  currency: 'NGN' | 'USD';
   shipping_address_id?: string;
   billing_address_id?: string;
   guest_address?: CreateAddressData;
@@ -161,6 +170,42 @@ export interface Order {
   fulfillment_status: string;
   created_at: string;
   items: Array<any>;
+  workflow_cohort: string;
+  checkout_access_mode: string;
+  checkout_estimate_selection_id?: string | null;
+  checkout_prerequisites_completed_at?: string | null;
+  checkout_capability?: string | null;
+}
+
+export interface CheckoutEstimateOption {
+  id: string;
+  option_key: string;
+  service_code: string;
+  service_label: string;
+  amount: string;
+  currency: 'NGN' | 'USD';
+  min_delivery_days: number | null;
+  max_delivery_days: number | null;
+}
+
+export interface CheckoutEstimate {
+  id: string;
+  order_id: string;
+  currency: 'NGN' | 'USD';
+  expires_at: string;
+  options: CheckoutEstimateOption[];
+  selected_option: CheckoutEstimateOption | null;
+  server_tax_amount: string;
+  server_payable_total: string;
+}
+
+function checkoutHeaders(capability?: string, idempotencyKey?: string) {
+  return {
+    headers: {
+      ...(idempotencyKey ? { 'X-Idempotency-Key': idempotencyKey } : {}),
+      ...(capability ? { 'X-ShopSoma-Checkout-Capability': capability } : {}),
+    },
+  };
 }
 
 /**
@@ -232,6 +277,34 @@ export const checkoutService = {
     return response.data;
   },
 
+  async createCheckoutEstimate(
+    orderId: string,
+    idempotencyKey: string,
+    capability?: string,
+  ): Promise<CheckoutEstimate> {
+    const response = await api.post(
+      `/orders/${orderId}/checkout-estimates`,
+      undefined,
+      checkoutHeaders(capability, idempotencyKey),
+    );
+    return response.data;
+  },
+
+  async selectCheckoutEstimateOption(
+    orderId: string,
+    estimateId: string,
+    optionId: string,
+    idempotencyKey: string,
+    capability?: string,
+  ): Promise<CheckoutEstimate> {
+    const response = await api.post(
+      `/orders/${orderId}/checkout-estimates/${estimateId}/options/${optionId}/select`,
+      undefined,
+      checkoutHeaders(capability, idempotencyKey),
+    );
+    return response.data;
+  },
+
   // Get user orders
   async getOrders(page = 1, pageSize = 20): Promise<{
     orders: Order[];
@@ -246,16 +319,16 @@ export const checkoutService = {
   },
 
   // Get order by ID
-  async getOrder(id: string): Promise<Order> {
-    const response = await api.get(`/orders/${id}`);
+  async getOrder(id: string, capability?: string): Promise<Order> {
+    const response = await api.get(`/orders/${id}`, checkoutHeaders(capability));
     return response.data;
   },
 
   // Cancel order
-  async cancelOrder(id: string, reason: string): Promise<Order> {
+  async cancelOrder(id: string, reason: string, capability?: string): Promise<Order> {
     const response = await api.post(`/orders/${id}/cancel`, {
       cancellation_reason: reason,
-    });
+    }, checkoutHeaders(capability));
     return response.data;
   },
 };

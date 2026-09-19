@@ -3,6 +3,7 @@ import { Mail, Lock, Eye, EyeOff, LogIn } from 'lucide-react';
 import { useNavigate, useLocation, Link } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { ROUTES, VENDOR_LOGIN_IMAGE_URL } from '../../config/constants';
+import { vendorService } from '../../services/vendorService';
 
 export default function VendorLogin() {
   const { login } = useAuth();
@@ -41,7 +42,15 @@ export default function VendorLogin() {
       if (userData?.role === 'admin') {
         navigate('/admin/users', { replace: true });
       } else if (userData?.role === 'vendor') {
-        navigate('/vendor/analytics', { replace: true });
+        try {
+          const vendorProfile = await vendorService.getProfile();
+          navigate(
+            vendorProfile.is_onboarding ? ROUTES.VENDOR_DASHBOARD : ROUTES.VENDOR_ANALYTICS,
+            { replace: true }
+          );
+        } catch {
+          navigate(ROUTES.VENDOR_DASHBOARD, { replace: true });
+        }
       } else {
         const from = (location.state as any)?.from?.pathname;
         if (from && from !== ROUTES.LOGIN) {

@@ -1,12 +1,18 @@
 """Admin order schemas with enhanced fields for super user management"""
-from pydantic import BaseModel, Field, field_validator
-from typing import Optional, List
-from datetime import datetime, date
+import re
+
+from datetime import UTC, datetime, date
 from decimal import Decimal
+from typing import List, Optional
 from uuid import UUID
+
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.models.order import PaymentStatus, FulfillmentStatus
 from app.models.vendor_pickup import PickupStatus
+
+
+_SHA256_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 # ============================================================================
@@ -127,6 +133,7 @@ class OrderItemDetail(BaseModel):
     product_image_url: Optional[str] = None
     variant_details: Optional[dict]
     unit_price: Decimal
+    currency: str
     quantity: int
     subtotal: Decimal
     commission_rate: Decimal
@@ -162,12 +169,24 @@ class PickupInfo(BaseModel):
         from_attributes = True
 
 
+class ReadyPackageInfo(BaseModel):
+    """Minimal ready-package metadata for admin shadow-quote selection."""
+    id: UUID
+    current_version: int
+    hub_id: UUID
+    ready_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
 class OrderListItem(BaseModel):
     """Order in list view"""
     id: UUID
     order_number: str
     customer: CustomerInfo
     total_amount: Decimal
+    currency: str
     payment_status: PaymentStatus
     fulfillment_status: FulfillmentStatus
     created_at: datetime
@@ -189,6 +208,7 @@ class OrderDetail(BaseModel):
     billing_address: Optional[AddressInfo]
 
     # Pricing
+    currency: str
     subtotal: Decimal
     shipping_cost: Decimal
     tax_amount: Decimal
@@ -219,6 +239,7 @@ class OrderDetail(BaseModel):
     # Items and Pickups
     items: List[OrderItemDetail]
     pickups: List[PickupInfo]
+    ready_packages: List[ReadyPackageInfo] = Field(default_factory=list)
 
     class Config:
         from_attributes = True
@@ -238,6 +259,201 @@ class OrderStats(BaseModel):
     average_order_value: Decimal
     orders_today: int
     revenue_today: Decimal
+
+
+class ShadowQuoteResult(BaseModel):
+    """Redacted operator-safe shadow quote evidence summary (no credentials, no raw payload)."""
+    order_id: UUID
+    shadow_quote_id: UUID
+    result_kind: str = Field(..., pattern="^(success|no_service|failed)$")
+    environment: str
+    adapter_version: str
+    provider: str = "dhl"
+    offers_count: int = 0
+    offers_redacted: List[dict] = Field(default_factory=list)
+    gate_status: dict = Field(default_factory=dict)
+    quoted_at: datetime
+    note: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+class DHLBookingRequest(BaseModel):
+    intent_id: UUID
+    package_id: UUID
+    package_version: int = Field(..., ge=1)
+    seal_id: UUID
+    idempotency_key: str = Field(..., min_length=1, max_length=200)
+
+
+class DHLBookingResult(BaseModel):
+    booking_id: UUID
+    order_id: UUID
+    intent_id: UUID
+    result_kind: str = Field(..., pattern="^(booked|failure|unknown|pending)$")
+    outbound_state: str
+    provider_reference: Optional[str] = None
+    tracking_number: Optional[str] = None
+    label_media_type: Optional[str] = None
+    label_sha256: Optional[str] = None
+    booked_at: Optional[datetime] = None
+    note: Optional[str] = None
+    replayed: bool = False
+
+    class Config:
+        from_attributes = True
+
+
+class DHLBookingReconciliationRequest(BaseModel):
+    resolution: str = Field(..., pattern="^(confirm_failure|confirm_success)$")
+    provider_reference: Optional[str] = Field(None, min_length=1, max_length=120)
+    tracking_number: Optional[str] = Field(None, min_length=1, max_length=120)
+    label_media_type: Optional[str] = Field(None, min_length=1, max_length=80)
+    label_content_base64: Optional[str] = Field(None, min_length=1)
+    provider_absence_evidence_ref: Optional[str] = Field(None, min_length=1, max_length=200)
+    provider_absence_evidence_sha256: Optional[str] = Field(None, min_length=64, max_length=64)
+
+    @field_validator(
+        'provider_reference',
+        'tracking_number',
+        'label_media_type',
+        'label_content_base64',
+        'provider_absence_evidence_ref',
+        'provider_absence_evidence_sha256',
+    )
+    @classmethod
+    def validate_optional_text(cls, value: Optional[str]):
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError('optional reconciliation fields must not be blank')
+        return normalized
+
+    @field_validator('provider_absence_evidence_ref')
+    @classmethod
+    def validate_provider_absence_evidence_ref(cls, value: Optional[str]):
+        if value is None:
+            return None
+        if '://' in value or value.startswith('/') or '..' in value:
+            raise ValueError('provider_absence_evidence_ref must be a private reference path, not a URL or absolute path')
+        return value
+
+    @field_validator('provider_absence_evidence_sha256')
+    @classmethod
+    def validate_provider_absence_evidence_sha256(cls, value: Optional[str]):
+        if value is None:
+            return None
+        normalized = value.lower()
+        if _SHA256_HEX_RE.fullmatch(normalized) is None:
+            raise ValueError('provider_absence_evidence_sha256 must be a lowercase SHA-256 hex digest')
+        return normalized
+
+    @model_validator(mode='after')
+    def validate_resolution_requirements(self):
+        if self.resolution == 'confirm_success':
+            if (
+                self.provider_reference is None
+                or self.tracking_number is None
+                or self.label_media_type is None
+                or self.label_content_base64 is None
+            ):
+                raise ValueError(
+                    'provider_reference, tracking_number, label_media_type, and label_content_base64 are required for confirm_success'
+                )
+            if (
+                self.provider_absence_evidence_ref is not None
+                or self.provider_absence_evidence_sha256 is not None
+            ):
+                raise ValueError(
+                    'confirm_success must not include provider_absence_evidence_ref or provider_absence_evidence_sha256'
+                )
+        else:
+            if (
+                self.provider_absence_evidence_ref is None
+                or self.provider_absence_evidence_sha256 is None
+            ):
+                raise ValueError(
+                    'provider_absence_evidence_ref and provider_absence_evidence_sha256 are required for confirm_failure'
+                )
+            if (
+                self.provider_reference is not None
+                or self.tracking_number is not None
+                or self.label_media_type is not None
+                or self.label_content_base64 is not None
+            ):
+                raise ValueError(
+                    'confirm_failure must not include provider_reference, tracking_number, label_media_type, or label_content_base64'
+                )
+        return self
+
+
+class DHLHandoffRequest(BaseModel):
+    occurred_at: datetime
+    idempotency_key: str = Field(..., min_length=1, max_length=200)
+    counterparty: str = Field(..., min_length=1, max_length=120)
+    evidence_ref: str = Field(..., min_length=1, max_length=200)
+    evidence_sha256: str = Field(..., min_length=64, max_length=64)
+
+    @field_validator('occurred_at')
+    @classmethod
+    def validate_occurred_at(cls, value: datetime) -> datetime:
+        if value.utcoffset() is None:
+            raise ValueError('occurred_at must be timezone-aware')
+        return value.astimezone(UTC)
+
+    @field_validator('counterparty')
+    @classmethod
+    def validate_counterparty(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError('counterparty must not be empty')
+        return normalized
+
+    @field_validator('evidence_ref')
+    @classmethod
+    def validate_evidence_ref(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError('evidence_ref must not be empty')
+        if '://' in normalized or normalized.startswith('/') or '..' in normalized:
+            raise ValueError('evidence_ref must be a private reference path, not a URL or absolute path')
+        return normalized
+
+    @field_validator('evidence_sha256')
+    @classmethod
+    def validate_evidence_sha256(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if _SHA256_HEX_RE.fullmatch(normalized) is None:
+            raise ValueError('evidence_sha256 must be a lowercase SHA-256 hex digest')
+        return normalized
+
+
+class DHLHandoffResult(BaseModel):
+    booking_id: UUID
+    outbound_state: str
+    occurred_at: datetime
+    custody_event_id: UUID
+
+    class Config:
+        from_attributes = True
+
+
+class DHLTrackingRefreshRequest(BaseModel):
+    booking_id: UUID
+    idempotency_key: str = Field(..., min_length=1, max_length=200)
+
+
+class DHLTrackingRefreshResult(BaseModel):
+    booking_id: UUID
+    tracking_number: str
+    outbound_state: str
+    customer_status: str
+    observations_recorded: int
+    refreshed_at: datetime
+
+    class Config:
+        from_attributes = True
 
 
 class PaginatedOrders(BaseModel):

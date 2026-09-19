@@ -31,8 +31,31 @@ class TestProductCreate:
         assert data["title"] == product_data["title"]
         assert float(data["base_price"]) == product_data["base_price"]
         assert data["vendor_id"] == str(vendor_user["vendor"].id)
+        assert data["status"] == "draft"
         assert data["moderation_status"] == "pending"
         assert "id" in data
+
+    @pytest.mark.asyncio
+    async def test_create_product_defaults_to_non_public_state_even_if_vendor_submits_active(
+        self,
+        client: AsyncClient,
+        vendor_user,
+    ):
+        """New vendor products should not become storefront-visible on creation."""
+        response = await client.post(
+            "/api/v1/products",
+            json={
+                "title": "Queued Product",
+                "base_price": 120.00,
+                "status": "active",
+            },
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 201
+        data = response.json()
+        assert data["status"] == "active"
+        assert data["moderation_status"] == "pending"
 
     @pytest.mark.asyncio
     async def test_create_product_with_variants(self, client: AsyncClient, vendor_user):
@@ -70,6 +93,317 @@ class TestProductCreate:
         assert len(data["variants"]) == 2
         assert data["variants"][0]["size"] == "M"
         assert data["variants"][1]["size"] == "L"
+
+    @pytest.mark.asyncio
+    async def test_create_product_with_numeric_size_variation(self, client: AsyncClient, vendor_user):
+        """Numeric UK/EU sizes remain creatable without invalid size-stock enum rows."""
+        response = await client.post(
+            "/api/v1/products",
+            json={
+                "title": "Numeric Size Dress",
+                "base_price": 85.00,
+                "variants": [{"size": "4", "price": 85.00, "stock": 10}],
+                "variations": [
+                    {
+                        "title": "4",
+                        "type": "size",
+                        "price": 85.00,
+                        "sizes": [],
+                    }
+                ],
+            },
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 201
+        data = response.json()
+        assert data["variants"][0]["size"] == "4"
+        assert data["variations"][0]["title"] == "4"
+        assert data["variations"][0]["size_stocks"] == []
+
+    @pytest.mark.asyncio
+    async def test_create_product_with_letter_size_uses_size_stock_as_inventory_source(
+        self, client: AsyncClient, vendor_user
+    ):
+        """Letter sizes use one canonical size-stock inventory row."""
+        response = await client.post(
+            "/api/v1/products",
+            json={
+                "title": "Letter Size Dress",
+                "base_price": 85.00,
+                "variations": [
+                    {
+                        "title": "M",
+                        "type": "size",
+                        "price": 85.00,
+                        "sizes": [{"size": "M", "stock": 10}],
+                    }
+                ],
+            },
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 201
+        data = response.json()
+        assert len(data["variants"]) == 1
+        assert data["variants"][0]["size"] == "M"
+        assert data["variants"][0]["stock"] == 10
+        assert data["variations"][0]["size_stocks"][0]["size"] == "M"
+
+    @pytest.mark.asyncio
+    async def test_create_product_rejects_duplicate_legacy_and_size_stock(
+        self, client: AsyncClient, vendor_user
+    ):
+        """A legacy size row cannot duplicate a canonical size-stock row."""
+        response = await client.post(
+            "/api/v1/products",
+            json={
+                "title": "Duplicate Size Inventory",
+                "base_price": 85.00,
+                "variants": [{"size": " m ", "price": 85.00, "stock": 10}],
+                "variations": [
+                    {
+                        "title": "M",
+                        "type": "size",
+                        "sizes": [{"size": "M", "stock": 10}],
+                    }
+                ],
+            },
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 422
+        assert "duplicate size variation inventory" in response.json()["detail"][0]["msg"]
+
+    @pytest.mark.asyncio
+    async def test_update_product_rejects_legacy_variant_overlap(
+        self, client: AsyncClient, vendor_user
+    ):
+        """Updates cannot retain a legacy size row beside a new size stock row."""
+        create_response = await client.post(
+            "/api/v1/products",
+            json={
+                "title": "Legacy Inventory Product",
+                "base_price": 85.00,
+                "variants": [{"size": "M", "price": 85.00, "stock": 10}],
+            },
+            headers=vendor_user["headers"],
+        )
+        assert create_response.status_code == 201
+
+        update_response = await client.put(
+            f"/api/v1/products/{create_response.json()['id']}",
+            json={
+                "variations": [
+                    {"title": "M", "type": "size", "sizes": [{"size": "M", "stock": 10}]}
+                ]
+            },
+            headers=vendor_user["headers"],
+        )
+
+        assert update_response.status_code == 422
+        assert "duplicate size variation inventory" in update_response.json()["detail"][0]["msg"]
+
+    @pytest.mark.asyncio
+    async def test_create_product_rejects_legacy_color_and_size_variations(
+        self, client: AsyncClient, vendor_user
+    ):
+        """Legacy color rows cannot be split from canonical size-stock inventory."""
+        response = await client.post(
+            "/api/v1/products",
+            json={
+                "title": "Legacy Color Size Split",
+                "base_price": 85.00,
+                "variants": [{"color": "Red", "price": 85.00, "stock": 10}],
+                "variations": [
+                    {"title": "M", "type": "size", "sizes": [{"size": "M", "stock": 10}]}
+                ],
+            },
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 422
+        assert "Color and size variations" in response.json()["detail"][0]["msg"]
+
+    @pytest.mark.asyncio
+    async def test_create_variant_rejects_size_stock_overlap(
+        self, client: AsyncClient, vendor_user
+    ):
+        """Standalone legacy variant writes cannot duplicate SizeStock inventory."""
+        create_response = await client.post(
+            "/api/v1/products",
+            json={
+                "title": "Canonical Size Inventory",
+                "base_price": 85.00,
+                "variations": [
+                    {"title": "M", "type": "size", "sizes": [{"size": "M", "stock": 10}]}
+                ],
+            },
+            headers=vendor_user["headers"],
+        )
+        assert create_response.status_code == 201
+
+        response = await client.post(
+            f"/api/v1/products/{create_response.json()['id']}/variants",
+            json={"size": "M", "price": 85.00, "stock": 10},
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 422
+        assert "duplicate size variation inventory" in response.json()["detail"][0]["msg"]
+
+    @pytest.mark.asyncio
+    async def test_create_variant_rejects_color_variation_size_stock_overlap(
+        self, client: AsyncClient, vendor_user
+    ):
+        """Color variations with sizes also own canonical size-stock inventory."""
+        create_response = await client.post(
+            "/api/v1/products",
+            json={
+                "title": "Color Size Stock Inventory",
+                "base_price": 85.00,
+                "variations": [
+                    {
+                        "title": "Red",
+                        "type": "color",
+                        "sizes": [{"size": "M", "stock": 10}],
+                    }
+                ],
+            },
+            headers=vendor_user["headers"],
+        )
+        assert create_response.status_code == 201
+
+        response = await client.post(
+            f"/api/v1/products/{create_response.json()['id']}/variants",
+            json={"size": "M", "price": 85.00, "stock": 10},
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 422
+        assert "duplicate size variation inventory" in response.json()["detail"][0]["msg"]
+
+    @pytest.mark.asyncio
+    async def test_update_variant_rejects_size_stock_overlap(
+        self, client: AsyncClient, vendor_user
+    ):
+        """Standalone legacy variant updates cannot duplicate SizeStock inventory."""
+        create_response = await client.post(
+            "/api/v1/products",
+            json={
+                "title": "Canonical Size Update",
+                "base_price": 85.00,
+                "variations": [
+                    {"title": "M", "type": "size", "sizes": [{"size": "M", "stock": 10}]}
+                ],
+            },
+            headers=vendor_user["headers"],
+        )
+        assert create_response.status_code == 201
+        product_id = create_response.json()["id"]
+
+        variant_response = await client.post(
+            f"/api/v1/products/{product_id}/variants",
+            json={"size": "L", "price": 85.00, "stock": 10},
+            headers=vendor_user["headers"],
+        )
+        assert variant_response.status_code == 201
+
+        response = await client.put(
+            f"/api/v1/products/{product_id}/variants/{variant_response.json()['id']}",
+            json={"size": "M"},
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 422
+        assert "duplicate size variation inventory" in response.json()["detail"][0]["msg"]
+
+    @pytest.mark.asyncio
+    async def test_create_product_rejects_color_and_size_variations(
+        self, client: AsyncClient, vendor_user
+    ):
+        """Do not expose independent color-only and size-only stock sources."""
+        response = await client.post(
+            "/api/v1/products",
+            json={
+                "title": "Ambiguous Color Size Dress",
+                "base_price": 85.00,
+                "variations": [
+                    {"title": "Red", "type": "solid", "sizes": []},
+                    {"title": "Blue", "type": "solid", "sizes": []},
+                    {"title": "M", "type": "size", "sizes": [{"size": "M", "stock": 10}]},
+                ],
+            },
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 422
+        assert "Color and size variations" in response.json()["detail"][0]["msg"]
+
+    @pytest.mark.asyncio
+    async def test_create_product_rejects_color_with_numeric_size(
+        self, client: AsyncClient, vendor_user
+    ):
+        """Numeric sizes remain valid, but not as an unpurchasable color-size split."""
+        response = await client.post(
+            "/api/v1/products",
+            json={
+                "title": "Ambiguous Numeric Color Dress",
+                "base_price": 85.00,
+                "variations": [
+                    {"title": "Red", "type": "solid", "sizes": []},
+                    {"title": "4", "type": "size", "sizes": []},
+                ],
+            },
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 422
+        assert "Color and size variations" in response.json()["detail"][0]["msg"]
+
+    @pytest.mark.asyncio
+    async def test_update_product_rejects_color_and_size_variations(
+        self, client: AsyncClient, vendor_user, sample_product
+    ):
+        """Updates must enforce the same inventory-shape invariant as creates."""
+        response = await client.put(
+            f"/api/v1/products/{sample_product.id}",
+            json={
+                "variations": [
+                    {"title": "Red", "type": "solid", "sizes": []},
+                    {"title": "M", "type": "size", "sizes": [{"size": "M", "stock": 10}]},
+                ]
+            },
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 422
+        assert "Color and size variations" in response.json()["detail"][0]["msg"]
+
+    @pytest.mark.asyncio
+    async def test_create_product_rejects_attribute_less_legacy_variant_with_size_stock(
+        self, client: AsyncClient, vendor_user
+    ):
+        """Size stock must be the only inventory source, including for bare legacy rows."""
+        response = await client.post(
+            "/api/v1/products",
+            json={
+                "title": "Bare Legacy Size Conflict",
+                "base_price": 85.00,
+                "variants": [{"price": 85.00, "stock": 10}],
+                "variations": [
+                    {
+                        "title": "M",
+                        "type": "size",
+                        "sizes": [{"size": "M", "stock": 10}],
+                    }
+                ],
+            },
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 422
+        assert "variation size stock" in response.json()["detail"][0]["msg"]
 
     @pytest.mark.asyncio
     async def test_create_product_with_images(self, client: AsyncClient, vendor_user):
@@ -141,6 +475,39 @@ class TestVendorProductView:
         assert data["vendor_id"] == str(vendor_user["vendor"].id)
 
     @pytest.mark.asyncio
+    async def test_vendor_can_list_pending_products(
+        self,
+        client: AsyncClient,
+        vendor_user,
+        db_session: AsyncSession,
+    ):
+        """Vendor dashboard should retain access to pending products."""
+        from app.models.product import Product, ProductStatus, ModerationStatus
+        import uuid
+
+        pending_product = Product(
+            id=uuid.uuid4(),
+            vendor_id=vendor_user["vendor"].id,
+            title="Pending Vendor Product",
+            base_price=70.00,
+            total_stock=4,
+            status=ProductStatus.DRAFT,
+            moderation_status=ModerationStatus.PENDING,
+        )
+        db_session.add(pending_product)
+        await db_session.commit()
+
+        response = await client.get(
+            "/api/v1/vendor/products",
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        returned_ids = {item["id"] for item in data["products"]}
+        assert str(pending_product.id) in returned_ids
+
+    @pytest.mark.asyncio
     async def test_create_product_unauthorized(self, client: AsyncClient):
         """Test product creation without authentication"""
         product_data = {
@@ -182,6 +549,36 @@ class TestProductList:
         assert "total" in data
         assert "page" in data
         assert data["total"] >= 1
+
+    @pytest.mark.asyncio
+    async def test_list_products_public_excludes_unapproved_products(
+        self,
+        client: AsyncClient,
+        vendor_user,
+        db_session: AsyncSession,
+    ):
+        """Pending moderation products must not appear on storefront listings."""
+        from app.models.product import Product, ProductStatus, ModerationStatus
+        import uuid
+
+        hidden_product = Product(
+            id=uuid.uuid4(),
+            vendor_id=vendor_user["vendor"].id,
+            title="Pending Storefront Product",
+            base_price=89.00,
+            total_stock=2,
+            status=ProductStatus.ACTIVE,
+            moderation_status=ModerationStatus.PENDING,
+        )
+        db_session.add(hidden_product)
+        await db_session.commit()
+
+        response = await client.get("/api/v1/products")
+
+        assert response.status_code == 200
+        data = response.json()
+        returned_ids = {item["id"] for item in data["products"]}
+        assert str(hidden_product.id) not in returned_ids
 
     @pytest.mark.asyncio
     async def test_list_products_with_search(self, client: AsyncClient, sample_product):
@@ -335,6 +732,69 @@ class TestProductRetrieve:
         response = await client.get(f"/api/v1/products/{draft_product.id}")
         assert response.status_code == 404  # Should not be visible
 
+    @pytest.mark.asyncio
+    async def test_get_pending_active_product_as_public_returns_not_found(
+        self,
+        client: AsyncClient,
+        vendor_user,
+        db_session: AsyncSession,
+    ):
+        """Pending moderation should block direct public detail access even if status is active."""
+        from app.models.product import Product, ProductStatus, ModerationStatus
+        import uuid
+
+        pending_product = Product(
+            id=uuid.uuid4(),
+            vendor_id=vendor_user["vendor"].id,
+            title="Pending Detail Product",
+            base_price=50.00,
+            total_stock=3,
+            status=ProductStatus.ACTIVE,
+            moderation_status=ModerationStatus.PENDING,
+        )
+        db_session.add(pending_product)
+        await db_session.commit()
+
+        response = await client.get(f"/api/v1/products/{pending_product.id}")
+
+        assert response.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_approved_product_becomes_public_after_admin_approval(
+        self,
+        client: AsyncClient,
+        vendor_user,
+        admin_user,
+    ):
+        """Admin approval should be the transition that makes a product public."""
+        create_response = await client.post(
+            "/api/v1/products",
+            json={
+                "title": "Approval Flow Product",
+                "base_price": 65.00,
+            },
+            headers=vendor_user["headers"],
+        )
+        assert create_response.status_code == 201
+        created = create_response.json()
+        product_id = created["id"]
+
+        public_before = await client.get(f"/api/v1/products/{product_id}")
+        assert public_before.status_code == 404
+
+        approval_response = await client.put(
+            f"/api/v1/admin/products/{product_id}/approve",
+            json={"notes": "Approved for storefront"},
+            headers=admin_user["headers"],
+        )
+        assert approval_response.status_code == 200
+
+        public_after = await client.get(f"/api/v1/products/{product_id}")
+        assert public_after.status_code == 200
+        approved = public_after.json()
+        assert approved["moderation_status"] == "approved"
+        assert approved["status"] == "active"
+
 
 class TestProductUpdate:
     """Test product update endpoint"""
@@ -357,6 +817,169 @@ class TestProductUpdate:
         data = response.json()
         assert data["title"] == update_data["title"]
         assert float(data["base_price"]) == update_data["base_price"]
+
+    @pytest.mark.asyncio
+    async def test_update_parent_price_syncs_replacement_inherited_variations(
+        self,
+        client: AsyncClient,
+        vendor_user,
+    ):
+        """Combined parent/variation updates must sync the replacement rows."""
+        create_response = await client.post(
+            "/api/v1/products",
+            json={
+                "title": "Replacement Variation Pricing",
+                "base_price": 100.00,
+                "compare_at_price": 120.00,
+                "product_type": "variable",
+                "variations": [
+                    {
+                        "title": "Red",
+                        "type": "color",
+                        "price": 120.00,
+                        "sale_price": 100.00,
+                        "inherits_price": True,
+                        "inherits_sale_price": True,
+                    }
+                ],
+            },
+            headers=vendor_user["headers"],
+        )
+        assert create_response.status_code == 201
+        product_id = create_response.json()["id"]
+
+        update_response = await client.put(
+            f"/api/v1/products/{product_id}",
+            json={
+                "base_price": 150.00,
+                "compare_at_price": 180.00,
+                "variations": [
+                    {
+                        "title": "Red",
+                        "type": "color",
+                        "price": 120.00,
+                        "sale_price": 100.00,
+                        "inherits_price": True,
+                        "inherits_sale_price": True,
+                    }
+                ],
+            },
+            headers=vendor_user["headers"],
+        )
+
+        assert update_response.status_code == 200
+        updated_variation = update_response.json()["variations"][0]
+        assert float(updated_variation["price"]) == 180.00
+        assert float(updated_variation["sale_price"]) == 150.00
+
+    @pytest.mark.asyncio
+    async def test_update_parent_price_persists_legacy_custom_inheritance_decision(
+        self,
+        client: AsyncClient,
+        vendor_user,
+    ):
+        """Legacy custom pricing must not be reclassified on a later parent edit."""
+        create_response = await client.post(
+            "/api/v1/products",
+            json={
+                "title": "Legacy Custom Pricing",
+                "base_price": 100.00,
+                "compare_at_price": 120.00,
+                "product_type": "variable",
+                "variations": [
+                    {
+                        "title": "Red",
+                        "type": "color",
+                        "price": 150.00,
+                        "sale_price": None,
+                    },
+                    {
+                        "title": "Blue",
+                        "type": "color",
+                        "price": 150.00,
+                        "sale_price": 100.00,
+                    },
+                ],
+            },
+            headers=vendor_user["headers"],
+        )
+        assert create_response.status_code == 201
+        product_id = create_response.json()["id"]
+
+        first_update = await client.put(
+            f"/api/v1/products/{product_id}",
+            json={"base_price": 150.00, "compare_at_price": 180.00},
+            headers=vendor_user["headers"],
+        )
+        assert first_update.status_code == 200
+        first_variations = {item["title"]: item for item in first_update.json()["variations"]}
+        assert float(first_variations["Red"]["price"]) == 150.00
+        assert first_variations["Red"]["sale_price"] is None
+        assert first_variations["Red"]["inherits_price"] is False
+        assert first_variations["Red"]["inherits_sale_price"] is False
+        assert float(first_variations["Blue"]["price"]) == 150.00
+        assert float(first_variations["Blue"]["sale_price"]) == 100.00
+        assert first_variations["Blue"]["inherits_price"] is False
+        assert first_variations["Blue"]["inherits_sale_price"] is False
+
+        second_update = await client.put(
+            f"/api/v1/products/{product_id}",
+            json={"base_price": 160.00, "compare_at_price": 190.00},
+            headers=vendor_user["headers"],
+        )
+        assert second_update.status_code == 200
+        second_variations = {item["title"]: item for item in second_update.json()["variations"]}
+        assert float(second_variations["Red"]["price"]) == 150.00
+        assert second_variations["Red"]["sale_price"] is None
+        assert float(second_variations["Blue"]["price"]) == 150.00
+        assert float(second_variations["Blue"]["sale_price"]) == 100.00
+
+    @pytest.mark.asyncio
+    async def test_update_single_product_stock_syncs_legacy_variant_stock(
+        self,
+        client: AsyncClient,
+        vendor_user,
+        db_session: AsyncSession,
+    ):
+        """Editing single-product stock should update the storefront variant stock source too."""
+        from app.models.product import Product, ProductVariant, ProductStatus, ModerationStatus, ProductType
+        import uuid
+
+        product = Product(
+            id=uuid.uuid4(),
+            vendor_id=vendor_user["vendor"].id,
+            title="Single Stock Sync Product",
+            base_price=80.00,
+            total_stock=0,
+            status=ProductStatus.ACTIVE,
+            moderation_status=ModerationStatus.APPROVED,
+            product_type=ProductType.SINGLE,
+        )
+        db_session.add(product)
+        await db_session.flush()
+
+        variant = ProductVariant(
+            id=uuid.uuid4(),
+            product_id=product.id,
+            size="M",
+            price=80.00,
+            stock=0,
+            is_available=False,
+        )
+        db_session.add(variant)
+        await db_session.commit()
+
+        response = await client.put(
+            f"/api/v1/products/{product.id}",
+            json={"total_stock": 7},
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_stock"] == 7
+        assert data["variants"][0]["stock"] == 7
+        assert data["variants"][0]["is_available"] is True
 
     @pytest.mark.asyncio
     async def test_update_product_unauthorized(self, client: AsyncClient, sample_product):
@@ -424,8 +1047,17 @@ class TestProductDelete:
     """Test product deletion endpoint"""
 
     @pytest.mark.asyncio
-    async def test_delete_product_success(self, client: AsyncClient, vendor_user, sample_product):
+    async def test_delete_product_success(
+        self,
+        client: AsyncClient,
+        vendor_user,
+        sample_product,
+        db_session: AsyncSession,
+    ):
         """Test successful product deletion (soft delete)"""
+        from app.models.product import Product, ProductStatus
+        from sqlalchemy import select
+
         response = await client.delete(
             f"/api/v1/products/{sample_product.id}",
             headers=vendor_user["headers"]
@@ -433,14 +1065,15 @@ class TestProductDelete:
 
         assert response.status_code == 204
 
-        # Verify product is archived
-        get_response = await client.get(
-            f"/api/v1/products/{sample_product.id}",
-            headers=vendor_user["headers"]
+        # Verify product is archived in persistence and hidden from the public catalog
+        archived_result = await db_session.execute(
+            select(Product).where(Product.id == sample_product.id)
         )
-        # Should still exist for vendor but be archived
-        assert get_response.status_code == 200
-        assert get_response.json()["status"] == "archived"
+        archived_product = archived_result.scalar_one()
+        assert archived_product.status == ProductStatus.ARCHIVED
+
+        public_response = await client.get(f"/api/v1/products/{sample_product.id}")
+        assert public_response.status_code == 404
 
     @pytest.mark.asyncio
     async def test_delete_product_unauthorized(self, client: AsyncClient, sample_product):

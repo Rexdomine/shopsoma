@@ -5,6 +5,8 @@ import { Bookmark } from 'lucide-react';
 import { IMAGE_CONFIG } from '../../config/constants';
 import { useCurrencyStore } from '../../store/currencyStore';
 import { formatPriceWithConversion } from '../../utils/pricing';
+import { hasSolidColorHex } from '../../utils/colorDisplay';
+import { getProductImageSources } from '../../utils/productImages';
 
 interface ProductCardProps {
   product: Product;
@@ -23,8 +25,9 @@ export default function ProductCard({
   const { currentCurrency, exchangeRates } = useCurrencyStore();
 
   const placeholderImage = IMAGE_CONFIG.PLACEHOLDER;
-  const primaryImage = product.images?.[0]?.image_url || placeholderImage;
-  const secondaryImage = product.images?.[1]?.image_url || primaryImage;
+  const productImages = getProductImageSources(product);
+  const primaryImage = productImages[0] ?? { src: placeholderImage };
+  const secondaryImage = productImages[1] ?? primaryImage;
 
   const sizeOptions = Array.from(
     new Set(
@@ -48,9 +51,18 @@ export default function ProductCard({
     return Array.from(colorMap.values());
   })();
 
-  const handleImageError = (event: React.SyntheticEvent<HTMLImageElement>) => {
-    event.currentTarget.src = placeholderImage;
-    event.currentTarget.onerror = null;
+  const handleImageError = (
+    event: React.SyntheticEvent<HTMLImageElement>,
+    fallbackSrc?: string
+  ) => {
+    const image = event.currentTarget;
+    if (fallbackSrc && image.dataset.fallbackApplied !== 'true') {
+      image.dataset.fallbackApplied = 'true';
+      image.src = fallbackSrc;
+      return;
+    }
+    image.src = placeholderImage;
+    image.onerror = null;
   };
 
   const displayPrice = product.variants?.[0]?.price || product.base_price;
@@ -88,25 +100,25 @@ export default function ProductCard({
 
         {/* Primary Image */}
         <img
-          src={primaryImage}
+          src={primaryImage.src}
           alt={product.title}
           className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-300 z-0 ${
-            isHovered && secondaryImage !== primaryImage ? 'opacity-0' : 'opacity-100'
+            isHovered && secondaryImage.src !== primaryImage.src ? 'opacity-0' : 'opacity-100'
           }`}
-          onError={handleImageError}
+          onError={(event) => handleImageError(event, primaryImage.fallbackSrc)}
           onLoad={() => setImageLoaded(true)}
           style={{ display: imageLoaded ? 'block' : 'block' }}
         />
 
         {/* Secondary Image (shown on hover) */}
-        {secondaryImage !== primaryImage && imageLoaded && (
+        {secondaryImage.src !== primaryImage.src && imageLoaded && (
           <img
-            src={secondaryImage}
+            src={secondaryImage.src}
             alt={product.title}
             className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-300 z-0 ${
               isHovered ? 'opacity-100' : 'opacity-0'
             }`}
-            onError={handleImageError}
+            onError={(event) => handleImageError(event, secondaryImage.fallbackSrc)}
           />
         )}
 
@@ -163,12 +175,16 @@ export default function ProductCard({
                         key={colorOption.color}
                         className="flex flex-col items-center"
                       >
-                        {colorOption.hex && (
+                        {hasSolidColorHex(colorOption.hex) ? (
                           <span
                             className="w-6 h-6 border border-gray-300"
-                            style={{ backgroundColor: colorOption.hex }}
+                            style={{ backgroundColor: colorOption.hex! }}
                             title={colorOption.color}
                           />
+                        ) : (
+                          <span className="rounded-full border border-gray-200 px-2 py-1 text-[10px] font-medium uppercase tracking-[0.08em] text-dark">
+                            {colorOption.color}
+                          </span>
                         )}
                       </div>
                     ))}

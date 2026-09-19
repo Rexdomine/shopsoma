@@ -23,6 +23,7 @@ import {
   type VendorEarningsOrderRow,
   type VendorEarningsSummary,
   type EarningsViewMode,
+  type VendorPayoutStatus,
 } from '../../services/vendorService';
 
 type EarningsRow = VendorEarningsProductRow | VendorEarningsOrderRow;
@@ -163,6 +164,42 @@ export default function VendorEarnings() {
     }
     return null;
   };
+  const renderPayoutStatusBadge = (
+    payoutStatus?: VendorPayoutStatus | null,
+    available?: boolean,
+    daysLeft?: number | null,
+  ) => {
+    const normalized = payoutStatus || 'available';
+    if (normalized === 'completed' || normalized === 'paid_out') {
+      return (
+        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 text-emerald-700">
+          Paid out
+        </span>
+      );
+    }
+    if (normalized === 'pending') {
+      return (
+        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-700">
+          Withdrawal pending
+        </span>
+      );
+    }
+    if (normalized === 'processing') {
+      return (
+        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-50 text-blue-700">
+          Processing
+        </span>
+      );
+    }
+    if (normalized === 'failed') {
+      return (
+        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-rose-50 text-rose-700">
+          Withdrawal failed
+        </span>
+      );
+    }
+    return renderWithdrawalBadge(available, daysLeft);
+  };
   const tableColumns = viewMode === 'products' ? 9 : 8;
   const renderChange = (value?: number | null) => {
     if (value === null || value === undefined) {
@@ -176,6 +213,11 @@ export default function VendorEarnings() {
         {displayValue}
       </span>
     );
+  };
+  const earningsDetailState = {
+    returnTo: ROUTES.VENDOR_EARNINGS,
+    returnLabel: 'Back to Earnings & Payouts',
+    activePrimary: 'earnings',
   };
 
   return (
@@ -405,18 +447,10 @@ export default function VendorEarnings() {
                       <td className="px-4 py-3 font-semibold text-gray-900">
                         <div className="flex flex-col gap-1">
                           <span>{formatAmount(productRow.vendor_payout)}</span>
-                          {productRow.payout_status !== 'paid_out' &&
-                            renderWithdrawalBadge(productRow.withdraw_available, productRow.withdraw_days_left)}
-                          {productRow.payout_status === 'paid_out' && (
-                            <span
-                              className={`text-[11px] font-medium px-2 py-0.5 rounded-full w-fit ${
-                                productRow.payout_status === 'paid_out'
-                                  ? 'bg-emerald-50 text-emerald-700'
-                                  : 'bg-amber-50 text-amber-700'
-                              }`}
-                            >
-                              {productRow.payout_status === 'paid_out' ? 'Paid out' : 'Available'}
-                            </span>
+                          {renderPayoutStatusBadge(
+                            productRow.payout_status,
+                            productRow.withdraw_available,
+                            productRow.withdraw_days_left,
                           )}
                         </div>
                       </td>
@@ -426,7 +460,7 @@ export default function VendorEarnings() {
                           type="button"
                           className="h-8 w-8 rounded-full border border-gray-200 flex items-center justify-center hover:bg-gray-100"
                           aria-label="View details"
-                          onClick={() => navigate(`${ROUTES.VENDOR_PRODUCTS}/${productRow.product_id}/view`)}
+                          onClick={() => navigate(`${ROUTES.VENDOR_PRODUCTS}/${productRow.product_id}/view`, { state: earningsDetailState })}
                         >
                           <Eye className="w-4 h-4 text-gray-600" />
                         </button>
@@ -448,12 +482,10 @@ export default function VendorEarnings() {
                       <td className="px-4 py-3 font-semibold text-gray-900">
                         <div className="flex flex-col gap-1">
                           <span>{formatAmount(orderRow.total_payout)}</span>
-                          {orderRow.payout_status !== 'paid_out' &&
-                            renderWithdrawalBadge(orderRow.withdraw_available, orderRow.withdraw_days_left)}
-                          {orderRow.payout_status === 'paid_out' && (
-                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 text-emerald-700">
-                              Paid out
-                            </span>
+                          {renderPayoutStatusBadge(
+                            orderRow.payout_status,
+                            orderRow.withdraw_available,
+                            orderRow.withdraw_days_left,
                           )}
                         </div>
                       </td>
@@ -463,7 +495,7 @@ export default function VendorEarnings() {
                           type="button"
                           className="h-8 w-8 rounded-full border border-gray-200 flex items-center justify-center hover:bg-gray-100"
                           aria-label="View details"
-                          onClick={() => navigate(ROUTES.VENDOR_ORDER_DETAIL.replace(':id', orderRow.id))}
+                          onClick={() => navigate(ROUTES.VENDOR_ORDER_DETAIL.replace(':id', orderRow.id), { state: earningsDetailState })}
                         >
                           <Eye className="w-4 h-4 text-gray-600" />
                         </button>

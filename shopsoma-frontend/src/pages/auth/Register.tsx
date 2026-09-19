@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type SVGProps } from 'react';
 import { Eye, EyeOff, AlertCircle } from 'lucide-react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import Layout from '../../components/layout/Layout';
 import { subscribeToNewsletter } from '../../services/newsletterService';
+import { ROUTES } from '../../config/constants';
 
 // Password validation rules
 const validatePassword = (password: string) => {
@@ -14,6 +15,11 @@ const validatePassword = (password: string) => {
   };
   const isValid = rules.minLength && rules.hasUppercase && rules.hasNumber;
   return { ...rules, isValid };
+};
+
+type RegisterLocationState = {
+  from?: { pathname?: string };
+  prefillEmail?: string;
 };
 
 export default function Register() {
@@ -34,6 +40,14 @@ export default function Register() {
 
   const { register } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
+  const locationState = location.state as RegisterLocationState | null;
+
+  useEffect(() => {
+    if (locationState?.prefillEmail) {
+      setForm((prev) => ({ ...prev, email: locationState.prefillEmail ?? prev.email }));
+    }
+  }, [locationState?.prefillEmail]);
 
   const passwordValidation = validatePassword(form.password);
   const isComplete = form.fullName.trim() && form.email.trim() && form.password.trim() && passwordValidation.isValid;
@@ -78,8 +92,8 @@ export default function Register() {
         }
       }
 
-      // Redirect to home after successful registration
-      navigate('/', { replace: true });
+      const from = locationState?.from?.pathname;
+      navigate(from && from !== ROUTES.REGISTER ? from : '/', { replace: true });
     } catch (err: any) {
       setError(err.message || 'Registration failed. Please try again.');
     } finally {

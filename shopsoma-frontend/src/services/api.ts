@@ -1,7 +1,12 @@
 import axios from 'axios';
 import type { AxiosInstance, AxiosError } from 'axios';
 import { API_BASE_URL, STORAGE_KEYS } from '../config/constants';
-import { useAuthStore } from '../store/authStore';
+
+const clearStoredAuthSession = () => {
+  localStorage.removeItem(STORAGE_KEYS.ACCESS_TOKEN);
+  localStorage.removeItem(STORAGE_KEYS.REFRESH_TOKEN);
+  localStorage.removeItem(STORAGE_KEYS.USER);
+};
 
 // Create axios instance
 const api: AxiosInstance = axios.create({
@@ -52,7 +57,7 @@ api.interceptors.response.use(
         }
       } catch (refreshError) {
         // Refresh failed, logout user
-        useAuthStore.getState().logout();
+        clearStoredAuthSession();
         const isVendorRoute = window.location.pathname.startsWith('/vendor');
         window.location.href = isVendorRoute ? '/vendor/login' : '/login';
         return Promise.reject(refreshError);

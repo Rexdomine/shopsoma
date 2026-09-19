@@ -27,11 +27,38 @@ const buildStatusBadge = (status: 'Live' | 'Archived') => {
   );
 };
 
-const getStockStatus = (stock: number) => {
-  if (stock <= 5) {
-    return { label: 'Low Stock', className: 'bg-emerald-50 text-emerald-700' };
+const getFulfillmentStatus = (product: CollectionProductSummary) => {
+  if (product.made_to_order) {
+    return {
+      label: 'Made to Order',
+      detail: product.made_to_order_timeline
+        ? `Made to Order • ${product.made_to_order_timeline}`
+        : 'Made to Order',
+      className: 'bg-sky-50 text-sky-700',
+    };
   }
-  return { label: 'In Stock', className: 'bg-gray-100 text-gray-600' };
+
+  if (product.total_stock <= 0) {
+    return {
+      label: 'Out of Stock',
+      detail: 'Out of Stock',
+      className: 'bg-gray-100 text-gray-600',
+    };
+  }
+
+  if (product.total_stock <= 5) {
+    return {
+      label: 'Low Stock',
+      detail: `Low Stock • ${product.total_stock} left`,
+      className: 'bg-emerald-50 text-emerald-700',
+    };
+  }
+
+  return {
+    label: 'Ready to Ship',
+    detail: `${product.total_stock} In Stock`,
+    className: 'bg-gray-100 text-gray-600',
+  };
 };
 
 export default function VendorCollectionDetail() {
@@ -77,6 +104,8 @@ export default function VendorCollectionDetail() {
       status: product.status,
       base_price: product.base_price,
       total_stock: product.total_stock || 0,
+      made_to_order: product.made_to_order,
+      made_to_order_timeline: product.made_to_order_timeline,
       created_at: product.created_at,
       image_url: primaryImage?.thumbnail_url || primaryImage?.image_url || null,
       collection_name: product.collection_name || null,
@@ -356,13 +385,15 @@ export default function VendorCollectionDetail() {
                     <th className="py-3 px-4 font-medium">Product Name</th>
                     <th className="py-3 px-4 font-medium">Status</th>
                     <th className="py-3 px-4 font-medium">Price</th>
-                    <th className="py-3 px-4 font-medium">Stock</th>
+                    <th className="py-3 px-4 font-medium">Fulfillment</th>
                     <th className="py-3 px-4 font-medium">Date Created</th>
                     <th className="py-3 px-4 font-medium text-right"></th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
-                  {pagedProducts.map((product) => (
+                  {pagedProducts.map((product) => {
+                    const fulfillment = getFulfillmentStatus(product);
+                    return (
                     <tr key={product.id} className="hover:bg-gray-50">
                       <td className="py-3 px-4">
                         <div className="flex items-center gap-3">
@@ -376,15 +407,15 @@ export default function VendorCollectionDetail() {
                       </td>
                       <td className="py-3 px-4">
                         <span
-                          className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold ${getStockStatus(product.total_stock).className}`}
+                          className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold ${fulfillment.className}`}
                         >
-                          {getStockStatus(product.total_stock).label}
+                          {fulfillment.label}
                         </span>
                       </td>
                       <td className="py-3 px-4 font-semibold text-gray-800">
                         {formatDisplayPrice(product.base_price)}
                       </td>
-                      <td className="py-3 px-4 text-emerald-700 font-semibold">{product.total_stock} In Stock</td>
+                      <td className={`py-3 px-4 font-semibold ${product.made_to_order ? 'text-sky-700' : 'text-emerald-700'}`}>{fulfillment.detail}</td>
                       <td className="py-3 px-4 text-gray-600">
                         {new Date(product.created_at).toLocaleDateString('en-GB')}
                       </td>
@@ -423,7 +454,7 @@ export default function VendorCollectionDetail() {
                         </div>
                       </td>
                     </tr>
-                  ))}
+                  )})}
                 </tbody>
               </table>
             </div>
@@ -508,6 +539,7 @@ export default function VendorCollectionDetail() {
                     ))
                   : modalProducts.map((product) => {
                       const checked = selectedProducts.has(product.id);
+                      const fulfillment = getFulfillmentStatus(product);
                       const collectionLabel = product.collection_name || 'Uncategorized';
                       const collectionClass = product.collection_name
                         ? 'bg-gray-100 text-gray-600'
@@ -544,15 +576,15 @@ export default function VendorCollectionDetail() {
                             </span>
                           </div>
                           <span
-                            className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold ${getStockStatus(product.total_stock).className}`}
+                            className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold ${fulfillment.className}`}
                           >
-                            {getStockStatus(product.total_stock).label}
+                            {fulfillment.label}
                           </span>
                           <span className="text-sm font-semibold text-gray-800">
                             {formatDisplayPrice(product.base_price)}
                           </span>
-                          <span className="text-sm text-emerald-700 font-semibold">
-                            {product.total_stock} In Stock
+                          <span className={`text-sm font-semibold ${product.made_to_order ? 'text-sky-700' : 'text-emerald-700'}`}>
+                            {fulfillment.detail}
                           </span>
                           <span className="text-sm text-gray-500">
                             {new Date(product.created_at).toLocaleDateString('en-GB')}

@@ -304,13 +304,19 @@ export default function AdminProductDetail() {
                                       {sizeStock.stock} units
                                     </td>
                                     <td className="px-3 py-2 whitespace-nowrap">
-                                      <span className={`px-2 py-1 rounded-full text-xs font-medium ${
-                                        sizeStock.stock > 0
-                                          ? 'bg-green-100 text-green-800'
-                                          : 'bg-red-100 text-red-800'
-                                      }`}>
-                                        {sizeStock.stock > 0 ? 'In Stock' : 'Out of Stock'}
-                                      </span>
+                                      {product.made_to_order ? (
+                                        <span className="px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                                          Made to Order
+                                        </span>
+                                      ) : (
+                                        <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                                          sizeStock.stock > 0
+                                            ? 'bg-green-100 text-green-800'
+                                            : 'bg-red-100 text-red-800'
+                                        }`}>
+                                          {sizeStock.stock > 0 ? 'In Stock' : 'Out of Stock'}
+                                        </span>
+                                      )}
                                     </td>
                                   </tr>
                                 ))}
@@ -391,14 +397,29 @@ export default function AdminProductDetail() {
             <div className="bg-white rounded-xl shadow-sm p-6">
               <h2 className="text-lg font-semibold text-gray-900 mb-4">Inventory</h2>
               <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-gray-500">Total Stock</span>
-                  <span className="text-sm font-medium text-gray-900">{product.total_stock || 0}</span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-gray-500">Inventory Quantity</span>
-                  <span className="text-sm font-medium text-gray-900">{product.inventory_quantity || 0}</span>
-                </div>
+                {product.made_to_order ? (
+                  <>
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-gray-500">Fulfillment</span>
+                      <span className="text-sm font-medium text-blue-700">Made to Order</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-gray-500">Production Timeline</span>
+                      <span className="text-sm font-medium text-gray-900">{product.made_to_order_timeline || 'Not set'}</span>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-gray-500">Total Stock</span>
+                      <span className="text-sm font-medium text-gray-900">{product.total_stock || 0}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-gray-500">Inventory Quantity</span>
+                      <span className="text-sm font-medium text-gray-900">{product.inventory_quantity || 0}</span>
+                    </div>
+                  </>
+                )}
               </div>
             </div>
 

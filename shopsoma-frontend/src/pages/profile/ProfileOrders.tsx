@@ -7,6 +7,7 @@ import { checkoutService, type Order } from '../../services/checkoutService';
 import { useAuth } from '../../context/AuthContext';
 import { usePreferenceStore } from '../../store/preferenceStore';
 import { formatPriceWithCurrency } from '../../utils/pricing';
+import CustomerShippingQuotes from '../../components/shipping/CustomerShippingQuotes';
 
 export default function ProfileOrders() {
   const navigate = useNavigate();
@@ -324,6 +325,8 @@ export default function ProfileOrders() {
                       <span>{formatPriceWithCurrency(selectedOrder.total_amount, preferredCurrency)}</span>
                     </div>
                   </div>
+
+                  <CustomerShippingQuotes orderId={selectedOrder.id} />
 
                   <div className="flex flex-col sm:flex-row gap-3 pt-2">
                     <button

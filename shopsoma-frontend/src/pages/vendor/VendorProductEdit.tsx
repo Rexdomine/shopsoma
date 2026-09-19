@@ -24,6 +24,12 @@ export default function VendorProductEdit() {
   const [comparePrice, setComparePrice] = useState('');
   const [stock, setStock] = useState('');
   const [status, setStatus] = useState<'draft' | 'active' | 'inactive' | 'archived'>('draft');
+  const [madeToOrder, setMadeToOrder] = useState(false);
+  const [productionTimeline, setProductionTimeline] = useState('');
+  const [weightKg, setWeightKg] = useState('');
+  const [lengthCm, setLengthCm] = useState('');
+  const [widthCm, setWidthCm] = useState('');
+  const [heightCm, setHeightCm] = useState('');
 
   useEffect(() => {
     const fetchProduct = async () => {
@@ -35,7 +41,7 @@ export default function VendorProductEdit() {
 
       try {
         setLoading(true);
-        const data = await productService.getProduct(id);
+        const data = await productService.getVendorProduct(id);
         setProduct(data);
 
         // Pre-populate form fields
@@ -45,6 +51,12 @@ export default function VendorProductEdit() {
         setComparePrice(data.compare_at_price?.toString() || '');
         setStock(data.total_stock?.toString() || '0');
         setStatus(data.status);
+        setMadeToOrder(Boolean(data.made_to_order));
+        setProductionTimeline(data.made_to_order_timeline || '');
+        setWeightKg(data.weight_kg?.toString() || '');
+        setLengthCm(data.length_cm?.toString() || '');
+        setWidthCm(data.width_cm?.toString() || '');
+        setHeightCm(data.height_cm?.toString() || '');
       } catch (err: any) {
         console.error('Failed to load product', err);
         error(
@@ -59,6 +71,12 @@ export default function VendorProductEdit() {
 
     fetchProduct();
   }, [id, navigate, error]);
+
+  useEffect(() => {
+    if (madeToOrder) {
+      setStock('');
+    }
+  }, [madeToOrder]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -76,16 +94,55 @@ export default function VendorProductEdit() {
       return;
     }
 
+    if (madeToOrder && !productionTimeline.trim()) {
+      warning('Estimated production time is required for made-to-order items');
+      return;
+    }
+
+    const parcelMeasurements = [weightKg, lengthCm, widthCm, heightCm];
+    const hasParcelMeasurement = parcelMeasurements.some((value) => value.trim());
+    if (
+      hasParcelMeasurement &&
+      !parcelMeasurements.every((value) => value.trim() && parseFloat(value) > 0)
+    ) {
+      warning('Enter positive values for all parcel measurements, or leave them all blank');
+      return;
+    }
+
     try {
       setSaving(true);
 
+      const hasExistingParcelMeasurement = [
+        product?.weight_kg,
+        product?.length_cm,
+        product?.width_cm,
+        product?.height_cm,
+      ].some((value) => value !== null && value !== undefined);
+      const parcelUpdate = hasParcelMeasurement
+        ? {
+            weight_kg: parseFloat(weightKg),
+            length_cm: parseFloat(lengthCm),
+            width_cm: parseFloat(widthCm),
+            height_cm: parseFloat(heightCm),
+          }
+        : hasExistingParcelMeasurement
+          ? {
+              weight_kg: null,
+              length_cm: null,
+              width_cm: null,
+              height_cm: null,
+            }
+          : {};
       const updateData: Partial<Product> = {
         title: title.trim(),
         description: description.trim(),
         base_price: parseFloat(basePrice),
         compare_at_price: comparePrice ? parseFloat(comparePrice) : undefined,
-        total_stock: stock ? parseInt(stock) : 0,
+        total_stock: madeToOrder ? 0 : stock ? parseInt(stock) : 0,
         status,
+        made_to_order: madeToOrder,
+        made_to_order_timeline: madeToOrder ? productionTimeline.trim() : undefined,
+        ...parcelUpdate,
       };
 
       await productService.updateProduct(id, updateData as any);
@@ -230,6 +287,41 @@ export default function VendorProductEdit() {
                   </div>
                 </div>
 
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="flex items-center gap-3 pt-8">
+                    <input
+                      id="madeToOrder"
+                      type="checkbox"
+                      checked={madeToOrder}
+                      onChange={(e) => setMadeToOrder(e.target.checked)}
+                      className="w-4 h-4 text-[#105E53] rounded border-gray-300 focus:ring-[#105E53]"
+                    />
+                    <label htmlFor="madeToOrder" className="text-sm font-medium text-gray-700">
+                      Made to Order
+                    </label>
+                  </div>
+
+                  <div>
+                    <label htmlFor="productionTimeline" className="block text-sm font-medium text-gray-700 mb-2">
+                      Estimated Production Time {madeToOrder ? '*' : ''}
+                    </label>
+                    <input
+                      id="productionTimeline"
+                      type="text"
+                      value={productionTimeline}
+                      onChange={(e) => setProductionTimeline(e.target.value)}
+                      className="w-full rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
+                      placeholder="E.g., 2-3 weeks"
+                      required={madeToOrder}
+                    />
+                    {madeToOrder && (
+                      <p className="mt-2 text-xs text-[#105E53]">
+                        Required for made-to-order pieces so customers see the fulfillment timeline.
+                      </p>
+                    )}
+                  </div>
+                </div>
+
                 {/* Stock and Status Row */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   <div>
@@ -242,9 +334,19 @@ export default function VendorProductEdit() {
                       min="0"
                       value={stock}
                       onChange={(e) => setStock(e.target.value)}
-                      className="w-full rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
-                      placeholder="0"
+                      disabled={madeToOrder}
+                      className={`w-full rounded-lg border px-4 py-2.5 text-sm transition ${
+                        madeToOrder
+                          ? 'border-gray-300 bg-gray-100 text-gray-400 cursor-not-allowed'
+                          : 'border-gray-300 bg-white focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20'
+                      }`}
+                      placeholder={madeToOrder ? 'Disabled for made-to-order' : '0'}
                     />
+                    <p className="mt-2 text-xs text-gray-500">
+                      {madeToOrder
+                        ? 'Inventory tracking is disabled for made-to-order products.'
+                        : 'Use stock only for ready-to-ship inventory.'}
+                    </p>
                   </div>
 
                   <div>
@@ -263,6 +365,28 @@ export default function VendorProductEdit() {
                       <option value="archived">Archived</option>
                     </select>
                   </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+                  {[
+                    ['weightKg', 'Weight (kg)', weightKg, setWeightKg],
+                    ['lengthCm', 'Length (cm)', lengthCm, setLengthCm],
+                    ['widthCm', 'Width (cm)', widthCm, setWidthCm],
+                    ['heightCm', 'Height (cm)', heightCm, setHeightCm],
+                  ].map(([field, label, value, setter]) => (
+                    <div key={field as string}>
+                      <label htmlFor={field as string} className="block text-sm font-medium text-gray-700 mb-2">{label as string} *</label>
+                      <input
+                        id={field as string}
+                        type="number"
+                        min="0.001"
+                        step="0.001"
+                        value={value as string}
+                        onChange={(e) => (setter as (value: string) => void)(e.target.value)}
+                        className="w-full rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
+                      />
+                    </div>
+                  ))}
                 </div>
 
                 {/* Info Note */}

@@ -1,8 +1,17 @@
 import api from './api';
 
+function capabilityHeaders(capability?: string) {
+  return {
+    headers: {
+      ...(capability ? { 'X-ShopSoma-Checkout-Capability': capability } : {}),
+    },
+  };
+}
+
 export type OrderStatus =
   | 'order_placed'
   | 'pending_confirmation'
+  | 'picked_up'
   | 'in_transit'
   | 'out_for_delivery'
   | 'delivered'
@@ -20,6 +29,7 @@ export interface OrderTracking {
   order_id: string;
   order_number: string;
   tracking_id: string;
+  tracking_number?: string | null;
   amount: number;
   currency: string;
   updated_at: string;
@@ -28,8 +38,8 @@ export interface OrderTracking {
 }
 
 export const orderService = {
-  async getOrderTracking(orderId: string): Promise<OrderTracking> {
-    const response = await api.get(`/orders/${orderId}/tracking`);
+  async getOrderTracking(orderId: string, capability?: string): Promise<OrderTracking> {
+    const response = await api.get(`/orders/${orderId}/tracking`, capabilityHeaders(capability));
     return response.data;
   },
 };
@@ -42,6 +52,7 @@ export const buildMockTracking = (orderId: string): OrderTracking => {
     order_id: orderId,
     order_number: orderId,
     tracking_id: trackingId,
+    tracking_number: trackingId,
     amount: 85000,
     currency: 'NGN',
     updated_at: today.toISOString(),

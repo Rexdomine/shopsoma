@@ -35,9 +35,11 @@ export default function AddToBagModal({
   const size = variant?.size ?? 'Unique';
   const color = variant?.color ?? 'As shown';
   const stockCount = variant?.stock ?? product.total_stock ?? 0;
-  const availability = stockCount > 0
-    ? `In Stock (${stockCount} available)`
-    : 'Out of Stock';
+  const availability = product.made_to_order
+    ? `Made to Order${product.made_to_order_timeline ? ` • ${product.made_to_order_timeline}` : ''}`
+    : stockCount > 0
+      ? `In Stock (${stockCount} available)`
+      : 'Out of Stock';
   const thumbnail = product.images?.[0]?.image_url ?? IMAGE_CONFIG.PLACEHOLDER;
 
   return (

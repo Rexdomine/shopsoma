@@ -30,6 +30,7 @@ class Vendor(Base):
     business_address = Column(Text, nullable=True)
     business_phone = Column(String(20), nullable=True)
     logo_url = Column(Text, nullable=True)
+    featured_storefront_image_url = Column(Text, nullable=True)
     returning_address = Column(Text, nullable=True)
     open_days = Column(ARRAY(String(3)), nullable=True)  # ["MON", "TUE", "WED", ...]
     open_hour = Column(String(5), nullable=True)  # "09:00"
@@ -55,6 +56,7 @@ class Vendor(Base):
     approved = Column(Boolean, default=False, nullable=False, index=True)
     approved_at = Column(DateTime(timezone=True), nullable=True)
     approved_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    is_featured_storefront = Column(Boolean, default=False, nullable=False, index=True)
 
     # Store Status
     store_active = Column(Boolean, default=True, nullable=False, index=True)

@@ -34,6 +34,7 @@ export const STORAGE_KEYS = {
   ACCESS_TOKEN: 'shopsoma_access_token',
   REFRESH_TOKEN: 'shopsoma_refresh_token',
   USER: 'shopsoma_user',
+  VENDOR_ONBOARDING_WELCOME_SEEN: 'shopsoma_vendor_onboarding_welcome_seen',
   THEME: 'shopsoma_theme',
 } as const;
 
@@ -69,6 +70,7 @@ export const ROUTES = {
   VERIFY_EMAIL: '/verify-email',
   CLAIM_ACCOUNT: '/claim-account',
   PRODUCTS: '/products',
+  CATEGORY: '/category/:slug',
   PRODUCT_DETAIL: '/products/:id',
   CART: '/cart',
   CHECKOUT: '/checkout',
@@ -120,8 +122,10 @@ export const IMAGE_CONFIG = {
 } as const;
 
 // Storefront hero assets
-export const MEN_HERO_IMAGE_URL = '/images/hero/men-hero-placeholder.jpg';
-export const WOMEN_HERO_IMAGE_URL = '/images/hero/women-hero-placeholder.jpg';
+export const MEN_HERO_IMAGE_URL = '/images/hero/men/men-hero-dsc06941-desktop.webp';
+export const MEN_HERO_MOBILE_IMAGE_URL = '/images/hero/men/men-hero-dsc06941-mobile.webp';
+export const WOMEN_HERO_IMAGE_URL = '/images/hero/women/women-hero-img-2101-desktop.webp';
+export const WOMEN_HERO_MOBILE_IMAGE_URL = '/images/hero/women/women-hero-img-2101-mobile.webp';
 export const VENDOR_LOGIN_IMAGE_URL = '/images/profilebanner.jpg';
 
 // Toast Configuration

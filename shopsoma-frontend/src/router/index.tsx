@@ -14,6 +14,7 @@ import VendorLayout from '../components/vendor/VendorLayout';
 const Home = lazy(() => import('../pages/Home'));
 const ProductDetail = lazy(() => import('../pages/products/ProductDetail'));
 const ProductList = lazy(() => import('../pages/products/ProductList'));
+const CategoryStorefront = lazy(() => import('../pages/products/CategoryStorefront'));
 const MenStorefront = lazy(() => import('../pages/products/MenStorefront'));
 const WomenStorefront = lazy(() => import('../pages/products/WomenStorefront'));
 const ShopEditsStorefront = lazy(() => import('../pages/products/ShopEditsStorefront'));
@@ -63,6 +64,7 @@ const ProfileWishlist = lazy(() => import('../pages/profile/ProfileWishlist'));
 const ProfileNewsletter = lazy(() => import('../pages/profile/ProfileNewsletter'));
 const ProfileManagePreference = lazy(() => import('../pages/profile/ProfileManagePreference'));
 const ProfilePayments = lazy(() => import('../pages/profile/ProfilePayments'));
+const AdminDashboard = lazy(() => import('../pages/admin/AdminDashboard'));
 const AdminUsers = lazy(() => import('../pages/admin/AdminUsers'));
 const AdminProducts = lazy(() => import('../pages/admin/AdminProducts'));
 const AdminProductDetail = lazy(() => import('../pages/admin/AdminProductDetail'));
@@ -182,6 +184,16 @@ const router = createBrowserRouter([
       <ErrorBoundary>
         <Suspense fallback={<Loading fullScreen message="Loading products..." />}>
           <ProductList />
+        </Suspense>
+      </ErrorBoundary>
+    ),
+  },
+  {
+    path: ROUTES.CATEGORY,
+    element: (
+      <ErrorBoundary>
+        <Suspense fallback={<Loading fullScreen message="Loading category..." />}>
+          <CategoryStorefront />
         </Suspense>
       </ErrorBoundary>
     ),
@@ -427,6 +439,30 @@ const router = createBrowserRouter([
     ),
   },
   {
+    path: ROUTES.VENDOR_PAYOUT_INFO,
+    element: (
+      <ErrorBoundary>
+        <Suspense fallback={<Loading fullScreen message="Loading settings..." />}>
+          <VendorLayout>
+            <BrandInfoSettings />
+          </VendorLayout>
+        </Suspense>
+      </ErrorBoundary>
+    ),
+  },
+  {
+    path: ROUTES.VENDOR_SECURITY,
+    element: (
+      <ErrorBoundary>
+        <Suspense fallback={<Loading fullScreen message="Loading settings..." />}>
+          <VendorLayout>
+            <BrandInfoSettings />
+          </VendorLayout>
+        </Suspense>
+      </ErrorBoundary>
+    ),
+  },
+  {
     path: ROUTES.VENDOR_EARNINGS,
     element: (
       <ErrorBoundary>
@@ -652,6 +688,18 @@ const router = createBrowserRouter([
       <ErrorBoundary>
         <Suspense fallback={<Loading fullScreen message="Loading..." />}>
           <ProfilePayments />
+        </Suspense>
+      </ErrorBoundary>
+    ),
+  },
+  {
+    path: ROUTES.ADMIN_DASHBOARD,
+    element: (
+      <ErrorBoundary>
+        <Suspense fallback={<Loading fullScreen message="Loading admin overview..." />}>
+          <ProtectedRoute roles={['admin']}>
+            <AdminDashboard />
+          </ProtectedRoute>
         </Suspense>
       </ErrorBoundary>
     ),

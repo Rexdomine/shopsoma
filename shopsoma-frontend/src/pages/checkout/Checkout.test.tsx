@@ -1,0 +1,1305 @@
+import type { ReactNode } from 'react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const mocks = vi.hoisted(() => ({
+  getShippingProviderSettings: vi.fn(),
+  getAddresses: vi.fn(),
+  calculateShipping: vi.fn(),
+  reviewOrder: vi.fn(),
+  createOrder: vi.fn(),
+  createCheckoutEstimate: vi.fn(),
+  selectCheckoutEstimateOption: vi.fn(),
+  cancelOrder: vi.fn(),
+  createAddress: vi.fn(),
+  updateAddress: vi.fn(),
+  initializePayment: vi.fn(),
+  verifyPayment: vi.fn(),
+  buildPaystackWidgetConfig: vi.fn(),
+  stripeFormProps: vi.fn(),
+  stripeElementsProps: vi.fn(),
+  clearCart: vi.fn(),
+  auth: {
+    isAuthenticated: true,
+    user: { id: 'customer-1', email: 'buyer@example.com', full_name: 'Buyer', phone_number: '08012345678' },
+  },
+  preference: { currency: 'NGN', setCurrency: vi.fn() },
+  currencyState: { exchangeRates: { NGN: 1, USD: 0.000625 } },
+  cartState: {
+    cart: {
+      items: [{
+        id: 'cart-1', product_id: 'product-1', quantity: 1, price: 60000, subtotal: 60000,
+        product: { id: 'product-1', title: 'Dress', currency: 'NGN', base_price: 60000 },
+        variant: { id: 'default-product-1', price: 60000 },
+      }],
+      summary: { subtotal: 60000, discount: 0, shipping: 0, tax: 0, total: 60000, itemCount: 1 },
+    },
+  },
+}));
+
+vi.mock('../../components/layout/Layout', () => ({
+  default: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+}));
+vi.mock('../../components/payment/StripePaymentForm', () => ({
+  default: (props: unknown) => {
+    mocks.stripeFormProps(props);
+    return <div>Stripe form</div>;
+  },
+}));
+vi.mock('@stripe/stripe-js', () => ({ loadStripe: vi.fn(() => Promise.resolve(null)) }));
+vi.mock('@stripe/react-stripe-js', () => ({
+  Elements: (props: { children: ReactNode }) => {
+    mocks.stripeElementsProps(props);
+    return <div>{props.children}</div>;
+  },
+}));
+vi.mock('../../context/AuthContext', () => ({
+  useAuth: () => mocks.auth,
+}));
+vi.mock('../../store/preferenceStore', () => ({
+  usePreferenceStore: () => mocks.preference,
+}));
+vi.mock('../../store/currencyStore', () => ({
+  useCurrencyStore: (selector: (state: typeof mocks.currencyState) => unknown) =>
+    selector(mocks.currencyState),
+}));
+vi.mock('../../store/cartStore', () => ({
+  useCartStore: (selector: (state: typeof mocks.cartState) => unknown) => selector(mocks.cartState),
+}));
+vi.mock('../../services/cartService', () => ({ CartService: { clearCart: mocks.clearCart } }));
+vi.mock('../../services/checkoutService', () => ({
+  checkoutService: {
+    getAddresses: mocks.getAddresses,
+    calculateShipping: mocks.calculateShipping,
+    reviewOrder: mocks.reviewOrder,
+    createOrder: mocks.createOrder,
+    createCheckoutEstimate: mocks.createCheckoutEstimate,
+    selectCheckoutEstimateOption: mocks.selectCheckoutEstimateOption,
+    cancelOrder: mocks.cancelOrder,
+    createAddress: mocks.createAddress,
+    updateAddress: mocks.updateAddress,
+    validatePromoCode: vi.fn(),
+  },
+}));
+vi.mock('../../services/settingsService', () => ({ getShippingProviderSettings: mocks.getShippingProviderSettings }));
+vi.mock('../../services/paymentService', () => ({
+  paymentService: {
+    initializePayment: mocks.initializePayment,
+    verifyPayment: mocks.verifyPayment,
+  },
+  buildPaystackWidgetConfig: mocks.buildPaystackWidgetConfig,
+}));
+
+import Checkout from './Checkout';
+
+const address = {
+  id: 'address-1', user_id: 'customer-1', full_name: 'Buyer', phone_number: '08012345678',
+  address_line1: '1 Test Street', city: 'Lagos', state: 'Lagos', postal_code: '100001', country: 'Nigeria',
+  address_type: 'shipping', is_default: true, created_at: '2026-01-01', updated_at: '2026-01-01',
+};
+const rate = {
+  id: 'legacy-rate-1', name: 'Standard', description: 'Legacy review rate', base_rate: 2500,
+  country: 'Nigeria', state: 'Lagos', min_delivery_days: 3, max_delivery_days: 5,
+};
+const review = {
+  summary: { currency: 'NGN', subtotal: 60000, shipping_cost: 2500, tax_amount: 0, discount_amount: 0, total_amount: 62500, items_count: 1 },
+  items: [],
+};
+const order = {
+  id: 'order-1', order_number: 'SHP-1', customer_id: 'customer-1', currency: 'NGN',
+  subtotal: 60000, shipping_cost: 2500, tax_amount: 0, discount_amount: 0, total_amount: 62500,
+  payment_status: 'pending', fulfillment_status: 'pending', created_at: '2026-01-01', items: [],
+  workflow_cohort: 'domestic_checkout_v1', checkout_access_mode: 'authenticated',
+};
+const estimate = {
+  id: 'estimate-1', order_id: 'order-1', currency: 'NGN', expires_at: '2099-01-01T00:00:00Z',
+  server_tax_amount: '0.00', server_payable_total: '62500.00', selected_option: null,
+  options: [{
+    id: 'option-1', option_key: 'standard', service_code: 'static_standard', service_label: 'Standard delivery',
+    amount: '2500.00', currency: 'NGN', min_delivery_days: 3, max_delivery_days: 5,
+  }],
+};
+
+function CheckoutTestRoutes() {
+  const location = useLocation();
+  return (
+    <>
+      <div data-testid="checkout-location">{`${location.pathname}${location.search}${location.hash}`}</div>
+      <Routes>
+        <Route path="/checkout" element={<Checkout />} />
+        <Route path="/order-success" element={<div>Order success route</div>} />
+      </Routes>
+    </>
+  );
+}
+
+async function reachPaymentStep(selectStripe = true) {
+  render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+  await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
+  fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+  await screen.findByText('Standard');
+  const continueButtons = screen.getAllByRole('button', { name: 'Continue' });
+  fireEvent.click(continueButtons[continueButtons.length - 1]);
+  await waitFor(() => expect(mocks.reviewOrder).toHaveBeenCalled());
+  if (selectStripe) fireEvent.click(screen.getByRole('radio', { name: /Stripe/ }));
+  fireEvent.click(screen.getAllByRole('button', { name: 'Purchase' })[0]);
+  await waitFor(() => expect(mocks.createOrder).toHaveBeenCalled());
+}
+
+const paystackInitialization = {
+  status: true, message: 'ready', payment_gateway: 'paystack', reference: 'canonical-ref',
+  amount: '62500.00', amount_minor: 6250000, currency: 'NGN',
+  provider_payload: {
+    access_code: 'canonical-access',
+    authorization_url: 'https://provider.invalid/session',
+  },
+};
+
+type PaystackTestConfig = {
+  onClose: () => void;
+  callback: (response: { reference: string }) => void;
+};
+
+type StripeTestProps = {
+  onSuccess: () => Promise<void>;
+};
+
+async function openEnforcedPaystack() {
+  const openIframe = vi.fn();
+  let config: PaystackTestConfig | undefined;
+  const paystackSetup = vi.fn((receivedConfig: PaystackTestConfig) => {
+    config = receivedConfig;
+    return { openIframe };
+  });
+  window.PaystackPop = { setup: paystackSetup };
+  mocks.initializePayment.mockResolvedValue(paystackInitialization);
+  await reachPaymentStep(false);
+  const selectDelivery = screen.queryByRole('button', { name: 'Select Standard delivery' });
+  if (selectDelivery) {
+    fireEvent.click(selectDelivery);
+  }
+  fireEvent.click(await screen.findByRole('button', { name: 'Continue to payment' }));
+  await waitFor(() => expect(openIframe).toHaveBeenCalled());
+  return {
+    openIframe,
+    getConfig: () => {
+      if (!config) throw new Error('Paystack config was not captured');
+      return config;
+    },
+  };
+}
+
+function mockGuestCapability(capability: string) {
+  mocks.createOrder.mockResolvedValueOnce({
+    ...order,
+    customer_id: null,
+    checkout_access_mode: 'guest_capability',
+    checkout_capability: capability,
+  });
+}
+
+async function openEnforcedGuestStripe(capability: string) {
+  mockGuestCapability(capability);
+  await reachPaymentStep(true);
+  fireEvent.click(screen.getByRole('button', { name: 'Select Standard delivery' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Continue to payment' }));
+  await screen.findByText('Stripe form');
+  const props = mocks.stripeFormProps.mock.lastCall?.[0] as StripeTestProps | undefined;
+  if (!props) throw new Error('Stripe form props were not captured');
+  return props;
+}
+
+describe('Checkout M5 sequencing and recovery', () => {
+  it.each(['', 'default-product-1', '550e8400-e29b-41d4-a716-446655440000'])('normalizes optional cart variant %j in review and create', async (variantId) => {
+    // cartService supplies an empty ID for a real single-product cart item.
+    mocks.cartState.cart.items[0].variant.id = variantId;
+    await reachPaymentStep();
+    const expected = !variantId || variantId.startsWith('default-') ? null : variantId;
+    for (const request of [mocks.reviewOrder, mocks.createOrder]) {
+      expect(request.mock.calls[0][0].items[0].variant_id).toBe(expected);
+    }
+  });
+
+  it('disables delivery-estimate creation if the email is edited until it is reconfirmed', async () => {
+    mocks.getShippingProviderSettings.mockResolvedValue({ provider: 'manual', checkout_estimates_required: true });
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Continue' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+
+    const deliveryButton = screen.getByRole('button', { name: 'Continue to delivery options' });
+    expect(deliveryButton).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.change(screen.getByPlaceholderText('you@example.com'), { target: { value: 'not-an-email' } });
+
+    expect(deliveryButton).toBeDisabled();
+    fireEvent.click(deliveryButton);
+    expect(mocks.createOrder).not.toHaveBeenCalled();
+  });
+
+  it('shows an in-progress delivery state instead of a retry warning while the initial estimate is pending', async () => {
+    mocks.getShippingProviderSettings.mockResolvedValue({ provider: 'manual', checkout_estimates_required: true });
+    let resolveEstimate: (value: typeof estimate) => void = () => undefined;
+    mocks.createCheckoutEstimate.mockImplementationOnce(() => new Promise<typeof estimate>((resolve) => {
+      resolveEstimate = resolve;
+    }));
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Continue' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    await screen.findByText(/show the delivery options available for this address before payment/i);
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to delivery options' }));
+
+    expect(await screen.findByText('Loading delivery options…', { selector: 'div[role="status"]' })).toBeInTheDocument();
+    expect(screen.queryByText(/Your order was saved, but delivery options are not ready/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Retry delivery options' })).not.toBeInTheDocument();
+
+    resolveEstimate(estimate);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Select Standard delivery' })).toBeEnabled());
+  });
+
+  it('uses saved manual estimates without legacy quote or review before payment', async () => {
+    mocks.getShippingProviderSettings.mockResolvedValue({ provider: 'manual', checkout_estimates_required: true });
+    mocks.calculateShipping.mockRejectedValue(new Error('Legacy quote must not run'));
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Continue' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    expect(screen.getByText(/show the delivery options available for this address before payment/i)).toBeInTheDocument();
+    expect(screen.queryByRole('radio', { name: /Stripe/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to delivery options' }));
+    await screen.findByRole('button', { name: 'Select Standard delivery' });
+    expect(mocks.calculateShipping).not.toHaveBeenCalled();
+    expect(mocks.reviewOrder).not.toHaveBeenCalled();
+    expect(mocks.initializePayment).not.toHaveBeenCalled();
+    expect(mocks.createOrder.mock.calls[0][0].shipping_rate_id).toBeUndefined();
+    expect(screen.getByRole('button', { name: 'Continue to payment' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Select Standard delivery' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Continue to payment' })).toBeEnabled());
+    expect(screen.getAllByText('NGN 2,500.00').length).toBeGreaterThan(0);
+  });
+
+  it('requires confirmation of the committed server-priced legacy order before payment', async () => {
+    mocks.getShippingProviderSettings.mockResolvedValue({ provider: 'dhl', checkout_estimates_required: true });
+    mocks.createOrder.mockResolvedValueOnce({ ...order, workflow_cohort: 'legacy_pre_bridge' });
+
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to delivery options' }));
+    fireEvent.click(await screen.findByRole('radio', { name: /Stripe/ }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Purchase' })[0]);
+    await waitFor(() => expect(mocks.createOrder).toHaveBeenCalledTimes(1));
+
+    expect(mocks.createCheckoutEstimate).not.toHaveBeenCalled();
+    expect(mocks.initializePayment).not.toHaveBeenCalled();
+    const confirm = await screen.findByRole('button', { name: 'Confirm total and continue to payment' });
+    expect(confirm).toBeEnabled();
+    fireEvent.click(confirm);
+    await waitFor(() => expect(mocks.initializePayment).toHaveBeenCalledTimes(1));
+    expect(mocks.initializePayment).toHaveBeenCalledWith({
+      order_id: 'order-1', email: 'buyer@example.com', payment_gateway: 'stripe',
+      currency: 'NGN', callback_url: `${window.location.origin}/payment/verify`,
+    }, undefined);
+  });
+
+  it('initializes a raced legacy order with its committed currency', async () => {
+    mocks.getShippingProviderSettings.mockResolvedValue({ provider: 'dhl', checkout_estimates_required: true });
+    mocks.createOrder.mockResolvedValueOnce({ ...order, currency: 'USD', workflow_cohort: 'legacy_pre_bridge' });
+
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to delivery options' }));
+    fireEvent.click(await screen.findByRole('radio', { name: /Stripe/ }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Purchase' })[0]);
+    fireEvent.click(await screen.findByRole('button', { name: 'Confirm total and continue to payment' }));
+
+    await waitFor(() => expect(mocks.initializePayment).toHaveBeenCalledTimes(1));
+    expect(mocks.initializePayment).toHaveBeenCalledWith(expect.objectContaining({
+      order_id: 'order-1',
+      currency: 'USD',
+    }), undefined);
+    expect(screen.getByText('Currency: USD')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'NGN' })).toBeDisabled();
+    expect(screen.getByRole('radio', { name: /Paystack/ })).toBeDisabled();
+    expect(screen.queryByText('Select delivery option')).not.toBeInTheDocument();
+    expect(screen.getByText(/62,500\.00/)).toBeInTheDocument();
+  });
+
+  it('retries payment for the committed legacy order without creating a replacement', async () => {
+    mocks.getShippingProviderSettings.mockResolvedValue({ provider: 'dhl', checkout_estimates_required: true });
+    mocks.createOrder.mockResolvedValueOnce({ ...order, workflow_cohort: 'legacy_pre_bridge' });
+    mocks.initializePayment
+      .mockRejectedValueOnce({ response: { status: 503 } })
+      .mockResolvedValueOnce(paystackInitialization);
+    const openIframe = vi.fn();
+    window.PaystackPop = { setup: vi.fn(() => ({ openIframe })) };
+
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to delivery options' }));
+    fireEvent.click(await screen.findByRole('radio', { name: /Paystack/ }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Purchase' })[0]);
+    fireEvent.click(await screen.findByRole('button', { name: 'Confirm total and continue to payment' }));
+
+    await waitFor(() => expect(mocks.initializePayment).toHaveBeenCalledTimes(1));
+    expect(await screen.findByRole('button', { name: 'Retry payment' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry payment' }));
+
+    await waitFor(() => expect(openIframe).toHaveBeenCalled());
+    expect(mocks.initializePayment).toHaveBeenCalledTimes(2);
+    expect(mocks.initializePayment).toHaveBeenLastCalledWith(expect.objectContaining({ order_id: 'order-1' }), undefined);
+    expect(mocks.createOrder).toHaveBeenCalledTimes(1);
+    expect(mocks.createCheckoutEstimate).not.toHaveBeenCalled();
+  });
+
+  it('reopens same-order retry after closing raced legacy Stripe payment', async () => {
+    mocks.getShippingProviderSettings.mockResolvedValue({ provider: 'dhl', checkout_estimates_required: true });
+    mocks.createOrder.mockResolvedValueOnce({ ...order, workflow_cohort: 'legacy_pre_bridge' });
+
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to delivery options' }));
+    fireEvent.click(await screen.findByRole('radio', { name: /Stripe/ }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Purchase' })[0]);
+    fireEvent.click(await screen.findByRole('button', { name: 'Confirm total and continue to payment' }));
+
+    await waitFor(() => expect(mocks.initializePayment).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText('Stripe form')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Close payment' }));
+
+    const retry = await screen.findByRole('button', { name: 'Retry payment' });
+    expect(retry).toBeEnabled();
+    fireEvent.click(retry);
+    await waitFor(() => expect(mocks.initializePayment).toHaveBeenCalledTimes(2));
+    expect(mocks.initializePayment).toHaveBeenLastCalledWith(expect.objectContaining({ order_id: 'order-1' }), undefined);
+    expect(mocks.createOrder).toHaveBeenCalledTimes(1);
+  });
+
+  it('creates manual shipping estimates for a guest address and preserves its capability', async () => {
+    mocks.auth.isAuthenticated = false;
+    mocks.getShippingProviderSettings.mockResolvedValue({ provider: 'manual', checkout_estimates_required: true });
+    mockGuestCapability('guest-manual-capability');
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    fireEvent.change(await screen.findByPlaceholderText('you@example.com'), { target: { value: 'guest@example.com' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    fireEvent.click(screen.getByRole('button', { name: '+ Add New Address' }));
+    const stateSelect = screen.getByRole('combobox', { name: 'State' });
+    expect(screen.getByRole('option', { name: 'Lagos' })).toBeInTheDocument();
+    for (const [label, value] of [['Full Name', 'Guest Buyer'], ['Street Address', '1 Test Street'], ['City', 'Lagos'], ['State', 'Lagos'], ['Postal code', '100001']]) {
+      fireEvent.change(screen.getByLabelText(label), { target: { value } });
+    }
+    expect(stateSelect).toHaveValue('Lagos');
+    fireEvent.change(screen.getByPlaceholderText('08012345678'), { target: { value: '08012345678' } });
+    fireEvent.click(screen.getByRole('button', { name: /Save Address/i }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Continue' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    expect(screen.getByText(/show the delivery options available for this address before payment/i)).toBeInTheDocument();
+    expect(screen.queryByRole('radio', { name: /Stripe/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to delivery options' }));
+    await screen.findByRole('button', { name: 'Select Standard delivery' });
+    expect(screen.getByRole('button', { name: 'Edit delivery address' })).toBeDisabled();
+    expect(mocks.createOrder).toHaveBeenCalledWith(expect.objectContaining({ customer_email: 'guest@example.com', guest_address: expect.objectContaining({ state: 'Lagos', postal_code: '100001' }) }));
+    expect(mocks.createCheckoutEstimate).toHaveBeenCalledWith('order-1', expect.any(String), 'guest-manual-capability');
+    expect(sessionStorage.getItem('shopsoma_checkout_capability:order-1')).toBe('guest-manual-capability');
+    expect(mocks.calculateShipping).not.toHaveBeenCalled();
+    expect(mocks.initializePayment).not.toHaveBeenCalled();
+  });
+
+  it('requires a postal code before a guest checkout address can be saved', async () => {
+    mocks.auth.isAuthenticated = false;
+    mocks.getShippingProviderSettings.mockResolvedValueOnce({ provider: 'dhl', checkout_estimates_required: true });
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    fireEvent.change(await screen.findByPlaceholderText('you@example.com'), { target: { value: 'guest@example.com' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    fireEvent.click(screen.getByRole('button', { name: '+ Add New Address' }));
+
+    for (const [label, value] of [['Full Name', 'Guest Buyer'], ['Street Address', '1 Test Street'], ['City', 'Lagos'], ['State', 'Lagos']]) {
+      fireEvent.change(screen.getByLabelText(label), { target: { value } });
+    }
+    fireEvent.change(screen.getByPlaceholderText('08012345678'), { target: { value: '08012345678' } });
+
+    expect(screen.getByRole('textbox', { name: 'Postal code' })).toHaveAttribute('required');
+    expect(screen.getByRole('button', { name: 'Save Address' })).toBeDisabled();
+    expect(screen.getByText(/Complete postal code to save this address/i)).toBeInTheDocument();
+    expect(mocks.createAddress).not.toHaveBeenCalled();
+  });
+
+  it('keeps postal code optional while manual shipping is active', async () => {
+    mocks.auth.isAuthenticated = false;
+    mocks.getShippingProviderSettings.mockResolvedValueOnce({ provider: 'manual', checkout_estimates_required: true });
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    fireEvent.change(await screen.findByPlaceholderText('you@example.com'), { target: { value: 'guest@example.com' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    fireEvent.click(screen.getByRole('button', { name: '+ Add New Address' }));
+
+    for (const [label, value] of [['Full Name', 'Guest Buyer'], ['Street Address', '1 Test Street'], ['City', 'Lagos'], ['State', 'Lagos']]) {
+      fireEvent.change(screen.getByLabelText(label), { target: { value } });
+    }
+    fireEvent.change(screen.getByPlaceholderText('08012345678'), { target: { value: '08012345678' } });
+
+    expect(screen.getByRole('textbox', { name: 'Postal code' })).not.toHaveAttribute('required');
+    expect(screen.getByRole('button', { name: 'Save Address' })).toBeEnabled();
+  });
+
+  it('requires a postal code on a selected saved address before DHL checkout can continue', async () => {
+    const addressWithoutPostalCode = { ...address, postal_code: '' };
+    mocks.getAddresses.mockResolvedValueOnce({ addresses: [addressWithoutPostalCode] });
+    mocks.getShippingProviderSettings.mockResolvedValueOnce({ provider: 'dhl', checkout_estimates_required: true });
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+
+    await screen.findByText(/Add a postal code to the selected delivery address/i);
+    expect(screen.getByRole('button', { name: 'Continue' })).toBeDisabled();
+    expect(mocks.createOrder).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit delivery address' }));
+    expect(screen.getByRole('textbox', { name: 'Postal code' })).toHaveValue('');
+    fireEvent.change(screen.getByRole('textbox', { name: 'Postal code' }), { target: { value: '100001' } });
+    mocks.updateAddress.mockResolvedValueOnce({ ...address, postal_code: '100001' });
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() => expect(mocks.updateAddress).toHaveBeenCalledWith('address-1', expect.objectContaining({ postal_code: '100001' })));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Continue' })).toBeEnabled());
+  });
+
+  it('blocks a saved DHL address with a postal code longer than the provider allows', async () => {
+    mocks.getAddresses.mockResolvedValueOnce({ addresses: [{ ...address, postal_code: '1234567890123' }] });
+    mocks.getShippingProviderSettings.mockResolvedValueOnce({ provider: 'dhl', checkout_estimates_required: true });
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+
+    await screen.findByText(/postal code of 12 characters or fewer/i);
+    expect(screen.getByRole('button', { name: 'Continue' })).toBeDisabled();
+    expect(mocks.createOrder).not.toHaveBeenCalled();
+  });
+
+  it('waits for shipping configuration before allowing a checkout address to be saved', async () => {
+    mocks.auth.isAuthenticated = false;
+    let resolveSettings!: (value: { provider: string; checkout_estimates_required: boolean }) => void;
+    mocks.getShippingProviderSettings.mockReturnValueOnce(new Promise(resolve => { resolveSettings = resolve; }));
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    fireEvent.change(await screen.findByPlaceholderText('you@example.com'), { target: { value: 'guest@example.com' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    fireEvent.click(screen.getByRole('button', { name: '+ Add New Address' }));
+
+    for (const [label, value] of [['Full Name', 'Guest Buyer'], ['Street Address', '1 Test Street'], ['City', 'Lagos'], ['State', 'Lagos']]) {
+      fireEvent.change(screen.getByLabelText(label), { target: { value } });
+    }
+    fireEvent.change(screen.getByPlaceholderText('08012345678'), { target: { value: '08012345678' } });
+
+    expect(screen.getByRole('button', { name: 'Save Address' })).toBeDisabled();
+    expect(screen.getByText(/Loading delivery configuration before this address can be saved/i)).toBeInTheDocument();
+    resolveSettings({ provider: 'dhl', checkout_estimates_required: true });
+    await waitFor(() => expect(screen.getByText(/Complete postal code to save this address/i)).toBeInTheDocument());
+    expect(screen.getByRole('button', { name: 'Save Address' })).toBeDisabled();
+  });
+
+  it('blocks checkout and offers retry when shipping configuration fails', async () => {
+    mocks.getShippingProviderSettings
+      .mockRejectedValueOnce(new Error('temporary settings outage'))
+      .mockResolvedValueOnce({ provider: 'manual', checkout_estimates_required: false });
+
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('could not be loaded');
+    expect(screen.getByRole('button', { name: 'Continue' })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry delivery configuration' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Continue' })).toBeEnabled());
+    expect(mocks.getShippingProviderSettings).toHaveBeenCalledTimes(2);
+  });
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    mocks.auth.isAuthenticated = true;
+    mocks.cartState.cart.items[0].variant.id = 'default-product-1';
+    sessionStorage.clear();
+    vi.stubGlobal('alert', vi.fn());
+    vi.stubGlobal('crypto', { randomUUID: vi.fn(() => `id-${Math.random()}`) });
+    mocks.getShippingProviderSettings.mockResolvedValue({ provider: 'manual', checkout_estimates_required: false });
+    mocks.getAddresses.mockResolvedValue({ addresses: [address] });
+    mocks.calculateShipping.mockResolvedValue({ available_rates: [rate], recommended_rate: rate });
+    mocks.reviewOrder.mockResolvedValue(review);
+    mocks.createOrder.mockResolvedValue(order);
+    mocks.createCheckoutEstimate.mockResolvedValue(estimate);
+    mocks.cancelOrder.mockResolvedValue({ ...order, fulfillment_status: 'cancelled' });
+    mocks.selectCheckoutEstimateOption.mockResolvedValue({ ...estimate, selected_option: estimate.options[0] });
+    mocks.buildPaystackWidgetConfig.mockImplementation((initialization, customer) => ({
+      key: customer.key,
+      email: customer.email,
+      amount: initialization.amount_minor,
+      currency: initialization.currency,
+      ref: initialization.reference,
+      access_code: initialization.provider_payload?.access_code,
+    }));
+    mocks.initializePayment.mockResolvedValue({
+      status: true, message: 'ready', payment_gateway: 'stripe', reference: 'server-ref',
+      amount: '62500.00', amount_minor: 6250000, currency: 'NGN',
+      provider_payload: { client_secret: 'secret', payment_intent_id: 'pi-1' },
+    });
+  });
+
+  it('lets an authenticated customer edit the selected checkout address in place', async () => {
+    const updated = { ...address, address_line1: '2 Updated Street' };
+    mocks.updateAddress.mockResolvedValueOnce(updated);
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit delivery address' }));
+    expect(screen.getByRole('heading', { name: 'Edit Address' })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Street Address'), { target: { value: '2 Updated Street' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() => expect(mocks.updateAddress).toHaveBeenCalledWith('address-1', expect.objectContaining({
+      address_line1: '2 Updated Street',
+    })));
+    expect(screen.getByText(/2 Updated Street/)).toBeInTheDocument();
+    expect(mocks.createAddress).not.toHaveBeenCalled();
+  });
+
+  it('clears canceled edit values before opening a fresh authenticated address form', async () => {
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit delivery address' }));
+    fireEvent.change(screen.getByLabelText('Street Address'), { target: { value: 'Unsubmitted edit' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    fireEvent.click(screen.getByRole('button', { name: '+ Add New Address' }));
+
+    expect(screen.getByRole('heading', { name: 'New Address' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Street Address')).toHaveValue('');
+    expect(screen.getByLabelText('Full Name')).toHaveValue('Buyer');
+  });
+
+  it('keeps the selected delivery address when a different address edit is cancelled', async () => {
+    const secondary = { ...address, id: 'address-2', address_line1: '2 Test Street', state: 'Abuja', is_default: false };
+    mocks.getAddresses.mockResolvedValueOnce({ addresses: [address, secondary] });
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Edit delivery address' })[1]);
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+
+    await waitFor(() => expect(mocks.calculateShipping).toHaveBeenCalledWith(expect.objectContaining({ state: 'Lagos' })));
+  });
+
+  it('blocks checkout progression until an authenticated address save settles', async () => {
+    let resolveUpdate!: (value: typeof address) => void;
+    mocks.updateAddress.mockReturnValueOnce(new Promise(resolve => { resolveUpdate = resolve; }));
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit delivery address' }));
+    fireEvent.change(screen.getByLabelText('Street Address'), { target: { value: '2 Updated Street' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(mocks.updateAddress).toHaveBeenCalled());
+    expect(screen.getByRole('button', { name: 'Continue' })).toBeDisabled();
+
+    resolveUpdate({ ...address, address_line1: '2 Updated Street' });
+    await waitFor(() => expect(screen.getByText(/2 Updated Street/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Continue' })).toBeEnabled());
+  });
+
+  it('locks address changes while a delivery calculation is pending', async () => {
+    let resolveShipping!: (value: { available_rates: Array<typeof rate>; recommended_rate: typeof rate }) => void;
+    mocks.calculateShipping.mockReturnValueOnce(new Promise(resolve => { resolveShipping = resolve; }));
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    await waitFor(() => expect(mocks.calculateShipping).toHaveBeenCalled());
+    expect(screen.getByRole('button', { name: 'Edit delivery address' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '+ Add New Address' })).toBeDisabled();
+
+    resolveShipping!({ available_rates: [rate], recommended_rate: rate });
+    await screen.findByText('Standard');
+  });
+
+  it('clears the prior local default when an edited address becomes the default', async () => {
+    const secondary = { ...address, id: 'address-2', address_line1: '2 Test Street', is_default: false };
+    mocks.getAddresses.mockResolvedValueOnce({ addresses: [address, secondary] });
+    mocks.updateAddress.mockResolvedValueOnce({ ...secondary, is_default: true });
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Edit delivery address' })[1]);
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(mocks.updateAddress).toHaveBeenCalledWith('address-2', expect.objectContaining({ is_default: true })));
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Edit delivery address' })[0]);
+    expect(screen.getByRole('checkbox')).not.toBeChecked();
+  });
+
+  it('creates the order then estimate and waits for explicit server option selection before payment', async () => {
+    await reachPaymentStep();
+
+    expect(mocks.createCheckoutEstimate).toHaveBeenCalledWith('order-1', expect.stringMatching(/^estimate-/), undefined);
+    expect(mocks.initializePayment).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Continue to payment' })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Select Standard delivery' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Continue to payment' })).toBeEnabled());
+    expect(mocks.initializePayment).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to payment' }));
+
+    await waitFor(() => expect(mocks.initializePayment).toHaveBeenCalledWith({
+      order_id: 'order-1', email: 'buyer@example.com', payment_gateway: 'stripe',
+      callback_url: `${window.location.origin}/payment/verify`,
+    }, undefined));
+    expect(mocks.createOrder.mock.invocationCallOrder[0]).toBeLessThan(mocks.createCheckoutEstimate.mock.invocationCallOrder[0]);
+    expect(mocks.createCheckoutEstimate.mock.invocationCallOrder[0]).toBeLessThan(mocks.initializePayment.mock.invocationCallOrder[0]);
+  });
+
+  it('cancels the unpaid committed checkout before recalculating delivery in another currency', async () => {
+    mocks.getShippingProviderSettings.mockResolvedValue({ provider: 'manual', checkout_estimates_required: true });
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to delivery options' }));
+    await screen.findByRole('button', { name: 'Select Standard delivery' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'USD' }));
+
+    await waitFor(() => expect(mocks.cancelOrder).toHaveBeenCalledWith(
+      'order-1',
+      'Customer changed checkout currency before payment',
+      undefined,
+    ));
+    expect(mocks.preference.setCurrency).toHaveBeenCalledWith('USD');
+    expect(screen.queryByRole('button', { name: 'Select Standard delivery' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Continue to delivery options' })).toBeEnabled();
+    expect(mocks.createOrder).toHaveBeenCalledTimes(1);
+    expect(mocks.initializePayment).not.toHaveBeenCalled();
+  });
+
+  it('displays the committed subtotal for a secure checkout order', async () => {
+    mocks.getShippingProviderSettings.mockResolvedValue({ provider: 'manual', checkout_estimates_required: true });
+    mocks.createOrder.mockResolvedValueOnce({
+      ...order,
+      subtotal: 61000,
+      total_amount: 63500,
+    });
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to delivery options' }));
+    await screen.findByRole('button', { name: 'Select Standard delivery' });
+
+    expect(screen.getByText('₦61,000')).toBeInTheDocument();
+    expect(screen.queryByText('₦60,000')).not.toBeInTheDocument();
+  });
+
+  it('commits selected server shipping, tax, and payable truth before Paystack opens', async () => {
+    const selectedEstimate = {
+      ...estimate,
+      server_tax_amount: '5250.00',
+      server_payable_total: '75250.00',
+      selected_option: {
+        ...estimate.options[0],
+        service_label: 'Express delivery',
+        amount: '10000.00',
+      },
+    };
+    mocks.selectCheckoutEstimateOption.mockResolvedValueOnce(selectedEstimate);
+    mocks.initializePayment.mockResolvedValueOnce({
+      ...paystackInitialization,
+      amount: '75250.00',
+      amount_minor: 7525000,
+    });
+    const visibleAtProviderOpen = vi.fn();
+    window.PaystackPop = {
+      setup: vi.fn(() => ({
+        openIframe: () => visibleAtProviderOpen(document.body.textContent),
+      })),
+    };
+    await reachPaymentStep(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Select Standard delivery' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Continue to payment' }));
+
+    await waitFor(() => expect(visibleAtProviderOpen).toHaveBeenCalledTimes(1));
+    const visible = visibleAtProviderOpen.mock.calls[0][0];
+    expect(visible).toContain('Express delivery');
+    expect(visible).toContain('₦10,000.00');
+    expect(visible).toContain('₦5,250');
+    expect(visible).toContain('₦75,250.00');
+  });
+
+  it('commits selected server shipping, tax, and payable truth before Stripe renders', async () => {
+    const selectedEstimate = {
+      ...estimate,
+      server_tax_amount: '5250.00',
+      server_payable_total: '75250.00',
+      selected_option: {
+        ...estimate.options[0],
+        service_label: 'Express delivery',
+        amount: '10000.00',
+      },
+    };
+    mocks.selectCheckoutEstimateOption.mockResolvedValueOnce(selectedEstimate);
+    mocks.initializePayment.mockResolvedValueOnce({
+      status: true, message: 'ready', payment_gateway: 'stripe', reference: 'server-ref',
+      amount: '75250.00', amount_minor: 7525000, currency: 'NGN',
+      provider_payload: { client_secret: 'secret', payment_intent_id: 'pi-selected' },
+    });
+    await reachPaymentStep(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Select Standard delivery' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Continue to payment' }));
+
+    expect(await screen.findByText('Stripe form')).toBeInTheDocument();
+    expect(screen.getByText('Express delivery')).toBeInTheDocument();
+    expect(screen.getByText('₦10,000.00')).toBeInTheDocument();
+    expect(screen.getByText('₦5,250')).toBeInTheDocument();
+    expect(screen.getByText('₦75,250.00')).toBeInTheDocument();
+  });
+
+  it('does not initialize or open a provider for malformed selected payable truth', async () => {
+    mocks.selectCheckoutEstimateOption.mockResolvedValueOnce({
+      ...estimate,
+      server_payable_total: 'not-money',
+      selected_option: estimate.options[0],
+    });
+    const openIframe = vi.fn();
+    const paystackSetup = vi.fn(() => ({ openIframe }));
+    window.PaystackPop = { setup: paystackSetup };
+    await reachPaymentStep(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Select Standard delivery' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Continue to payment' }));
+
+    await waitFor(() => expect(alert).toHaveBeenCalledWith(expect.stringMatching(/delivery.*invalid/i)));
+    expect(mocks.initializePayment).not.toHaveBeenCalled();
+    expect(paystackSetup).not.toHaveBeenCalled();
+    expect(openIframe).not.toHaveBeenCalled();
+    expect(screen.queryByText('Stripe form')).not.toBeInTheDocument();
+  });
+
+  it('offers truthful estimate recovery after the order is persisted and estimate creation fails', async () => {
+    mocks.createCheckoutEstimate.mockRejectedValueOnce({ response: { status: 503, data: { detail: 'temporarily unavailable' } } });
+    await reachPaymentStep();
+
+    expect(mocks.createOrder).toHaveBeenCalledTimes(1);
+    expect(mocks.initializePayment).not.toHaveBeenCalled();
+    expect(await screen.findByRole('button', { name: 'Retry delivery options' })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry delivery options' }));
+    expect(await screen.findByRole('button', { name: 'Select Standard delivery' })).toBeEnabled();
+    expect(mocks.createOrder).toHaveBeenCalledTimes(1);
+    expect(mocks.createCheckoutEstimate).toHaveBeenCalledTimes(2);
+
+  });
+
+  it('returns a recovered domestic estimate to delivery options before payment', async () => {
+    mocks.getShippingProviderSettings.mockResolvedValue({ provider: 'manual', checkout_estimates_required: true });
+    mocks.createCheckoutEstimate.mockRejectedValueOnce({ response: { status: 503, data: { detail: 'temporarily unavailable' } } });
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to delivery options' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry delivery options' }));
+
+    expect(await screen.findByRole('button', { name: 'Select Standard delivery' })).toBeEnabled();
+    expect(screen.getByRole('radio', { name: /Stripe/ })).toBeInTheDocument();
+    expect(mocks.createOrder).toHaveBeenCalledTimes(1);
+    expect(mocks.createCheckoutEstimate).toHaveBeenCalledTimes(2);
+    expect(mocks.initializePayment).not.toHaveBeenCalled();
+  });
+
+  it('cancels a shipping-stage domestic order so the guest can correct an invalid address', async () => {
+    mocks.getShippingProviderSettings.mockResolvedValue({ provider: 'manual', checkout_estimates_required: true });
+    mocks.createCheckoutEstimate.mockRejectedValueOnce({ response: { status: 422, data: { detail: 'Postal code required for DHL rating' } } });
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to delivery options' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Start again with another address' }));
+
+    await waitFor(() => expect(mocks.cancelOrder).toHaveBeenCalledWith(
+      'order-1',
+      'Customer restarted checkout before payment',
+      undefined,
+    ));
+    expect(screen.getByRole('button', { name: '+ Add New Address' })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: 'Retry delivery options' })).not.toBeInTheDocument();
+    expect(mocks.initializePayment).not.toHaveBeenCalled();
+  });
+
+  it('cancels the saved order before restarting after estimate failure', async () => {
+    mocks.createCheckoutEstimate.mockRejectedValueOnce({ response: { status: 503, data: { detail: 'temporarily unavailable' } } });
+    await reachPaymentStep();
+
+    expect(await screen.findByRole('button', { name: 'Start again with another address' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Start again with another address' }));
+    await waitFor(() => expect(mocks.cancelOrder).toHaveBeenCalledWith(
+      'order-1',
+      'Customer restarted checkout before payment',
+      undefined,
+    ));
+    expect(mocks.createOrder).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([404, 410])('clears expired checkout state when restarting returns %s', async (status) => {
+    mocks.createCheckoutEstimate.mockRejectedValueOnce({ response: { status: 503, data: { detail: 'temporarily unavailable' } } });
+    await reachPaymentStep();
+
+    mocks.cancelOrder.mockRejectedValueOnce({ response: { status, data: { detail: 'Checkout access expired' } } });
+    fireEvent.click(await screen.findByRole('button', { name: 'Start again with another address' }));
+
+    await waitFor(() => expect(mocks.cancelOrder).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole('heading', { name: 'Checkout' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Continue' })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: 'Retry delivery options' })).not.toBeInTheDocument();
+  });
+
+  it('keeps a 503 payment initialization visibly incomplete and retryable', async () => {
+    mocks.initializePayment.mockRejectedValueOnce({ response: { status: 503 } });
+    await reachPaymentStep();
+    fireEvent.click(screen.getByRole('button', { name: 'Select Standard delivery' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Continue to payment' }));
+
+    await waitFor(() => expect(alert).toHaveBeenCalledWith(expect.stringMatching(/not complete.*retry/i)));
+    expect(screen.getByRole('button', { name: 'Continue to payment' })).toBeEnabled();
+    expect(screen.queryByText('Stripe form')).not.toBeInTheDocument();
+  });
+
+  it('recovers to the paid order when retry races a completed provider payment', async () => {
+    mocks.initializePayment.mockRejectedValueOnce({
+      response: { status: 400, data: { detail: 'Order has already been paid' } },
+    });
+    await reachPaymentStep();
+    fireEvent.click(screen.getByRole('button', { name: 'Select Standard delivery' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Continue to payment' }));
+
+    await waitFor(() => expect(screen.getByTestId('checkout-location')).toHaveTextContent(
+      '/order-success?orderId=order-1&payment=success',
+    ));
+    expect(screen.queryByRole('button', { name: 'Retry payment' })).not.toBeInTheDocument();
+    expect(mocks.clearCart).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a guest Paystack capability in session storage and retries the same order after close', async () => {
+    const capability = 'guest-capability-never-persist';
+    mocks.createOrder.mockResolvedValueOnce({
+      ...order,
+      customer_id: null,
+      checkout_access_mode: 'guest_capability',
+      checkout_capability: capability,
+    });
+    const storageSpy = vi.spyOn(Storage.prototype, 'setItem');
+
+    const { getConfig } = await openEnforcedPaystack();
+    getConfig().onClose();
+
+    const retry = await screen.findByRole('button', { name: 'Retry payment' });
+    expect(screen.getByRole('heading', { name: 'Checkout' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'USD' })).toBeDisabled();
+    expect(mocks.cancelOrder).not.toHaveBeenCalled();
+    expect(mocks.createOrder).toHaveBeenCalledTimes(1);
+    expect(storageSpy).toHaveBeenCalledWith('shopsoma_checkout_capability:order-1', capability);
+
+    fireEvent.click(retry);
+    await waitFor(() => expect(mocks.initializePayment).toHaveBeenCalledTimes(2));
+    expect(mocks.initializePayment).toHaveBeenLastCalledWith({
+      order_id: 'order-1', email: 'buyer@example.com', payment_gateway: 'paystack',
+      callback_url: `${window.location.origin}/payment/verify`,
+    }, capability);
+    expect(mocks.createOrder).toHaveBeenCalledTimes(1);
+    expect(mocks.createCheckoutEstimate).toHaveBeenCalledTimes(1);
+    expect(storageSpy).toHaveBeenCalledWith('shopsoma_checkout_capability:order-1', capability);
+  });
+
+  it.each([404, 410])('clears guest capability after terminal payment initialization status %s', async (status) => {
+    const capability = 'terminal-capability';
+    mocks.createOrder.mockResolvedValueOnce({
+      ...order,
+      customer_id: null,
+      checkout_access_mode: 'guest_capability',
+      checkout_capability: capability,
+    });
+    const { getConfig } = await openEnforcedPaystack();
+    getConfig().onClose();
+    mocks.initializePayment.mockRejectedValueOnce({ response: { status, data: { detail: 'Checkout access expired' } } });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry payment' }));
+
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Retry payment' })).not.toBeInTheDocument());
+    expect(mocks.initializePayment).toHaveBeenLastCalledWith(expect.any(Object), capability);
+    expect(mocks.createOrder).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    'payment attempt subject binding is invalid',
+    'payment attempt prerequisites are stale',
+  ])('creates a fresh guest order after terminal payment initialization conflict "%s"', async (detail) => {
+    const capability = `terminal-conflict-${detail}`;
+    const replacementCapability = `replacement-${detail}`;
+    mockGuestCapability(capability);
+    mocks.createOrder.mockResolvedValueOnce({
+      ...order,
+      id: `replacement-order-${detail}`,
+      customer_id: null,
+      checkout_access_mode: 'guest_capability',
+      checkout_capability: replacementCapability,
+    });
+    await reachPaymentStep(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Select Standard delivery' }));
+    mocks.initializePayment.mockRejectedValueOnce({ response: { status: 409, data: { detail } } });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Continue to payment' }));
+
+    await waitFor(() => expect(alert).toHaveBeenCalledWith(detail));
+    expect(screen.queryByRole('button', { name: 'Retry payment' })).not.toBeInTheDocument();
+    expect(mocks.createOrder).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Purchase' })[0]);
+
+    await waitFor(() => expect(mocks.createOrder).toHaveBeenCalledTimes(2));
+    expect(mocks.createCheckoutEstimate).toHaveBeenLastCalledWith(
+      `replacement-order-${detail}`,
+      expect.stringMatching(/^estimate-/),
+      replacementCapability,
+    );
+    expect(mocks.initializePayment).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps guest Paystack callback HTTP 503 recovery on Checkout and retries the saved order', async () => {
+    const capability = 'callback-503-capability';
+    mockGuestCapability(capability);
+    const localStorageSpy = vi.spyOn(window.localStorage, 'setItem');
+    mocks.verifyPayment.mockRejectedValueOnce({ response: { status: 503 } });
+    const { getConfig } = await openEnforcedPaystack();
+
+    getConfig().callback({ reference: 'callback-503-ref' });
+
+    expect(await screen.findByText(/could not confirm your payment yet/i)).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Checkout' })).toBeInTheDocument();
+    expect(screen.getByTestId('checkout-location')).toHaveTextContent('/checkout');
+    fireEvent.click(screen.getByRole('button', { name: 'Retry payment' }));
+    await waitFor(() => expect(mocks.initializePayment).toHaveBeenCalledTimes(2));
+    expect(mocks.initializePayment).toHaveBeenLastCalledWith(expect.objectContaining({
+      order_id: 'order-1',
+      payment_gateway: 'paystack',
+    }), capability);
+    expect(mocks.createOrder).toHaveBeenCalledTimes(1);
+    expect(mocks.createCheckoutEstimate).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('checkout-location').textContent).not.toContain(capability);
+    expect(localStorageSpy).not.toHaveBeenCalledWith(expect.anything(), capability);
+  });
+
+  it('keeps guest Paystack callback network recovery on Checkout and retries the saved order', async () => {
+    const capability = 'callback-network-capability';
+    mockGuestCapability(capability);
+    mocks.verifyPayment.mockRejectedValueOnce(new Error('Network Error'));
+    const { getConfig } = await openEnforcedPaystack();
+
+    getConfig().callback({ reference: 'callback-network-ref' });
+
+    expect(await screen.findByText(/could not confirm your payment yet/i)).toBeInTheDocument();
+    expect(screen.getByTestId('checkout-location')).toHaveTextContent('/checkout');
+    fireEvent.click(screen.getByRole('button', { name: 'Retry payment' }));
+    await waitFor(() => expect(mocks.initializePayment).toHaveBeenCalledTimes(2));
+    expect(mocks.initializePayment).toHaveBeenLastCalledWith(expect.objectContaining({
+      order_id: 'order-1',
+      payment_gateway: 'paystack',
+    }), capability);
+    expect(mocks.createOrder).toHaveBeenCalledTimes(1);
+    expect(mocks.createCheckoutEstimate).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([404, 410])('fails closed after guest Paystack callback terminal status %s', async (status) => {
+    const capability = `callback-terminal-${status}-capability`;
+    const replacementCapability = `replacement-${status}-capability`;
+    mockGuestCapability(capability);
+    mocks.createOrder.mockResolvedValueOnce({
+      ...order,
+      id: `replacement-order-${status}`,
+      customer_id: null,
+      checkout_access_mode: 'guest_capability',
+      checkout_capability: replacementCapability,
+    });
+    mocks.verifyPayment.mockRejectedValueOnce({
+      response: { status, data: { detail: 'Checkout access expired' } },
+    });
+    const { getConfig } = await openEnforcedPaystack();
+
+    getConfig().callback({ reference: `callback-terminal-${status}-ref` });
+
+    await waitFor(() => expect(alert).toHaveBeenCalledWith(expect.stringMatching(/expired|no longer available/i)));
+    expect(screen.getByRole('heading', { name: 'Checkout' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Retry payment' })).not.toBeInTheDocument();
+    expect(screen.getByTestId('checkout-location')).toHaveTextContent('/checkout');
+    expect(mocks.initializePayment).toHaveBeenCalledTimes(1);
+    expect(mocks.createOrder).toHaveBeenCalledTimes(1);
+    expect(mocks.createCheckoutEstimate).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Purchase' })[0]);
+
+    await waitFor(() => expect(mocks.createOrder).toHaveBeenCalledTimes(2));
+    expect(mocks.createCheckoutEstimate).toHaveBeenLastCalledWith(
+      `replacement-order-${status}`,
+      expect.stringMatching(/^estimate-/),
+      replacementCapability,
+    );
+    expect(mocks.initializePayment).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([404, 410])('creates a fresh guest order after delivery selection terminal status %s', async (status) => {
+    const capability = `selection-terminal-${status}-capability`;
+    const replacementCapability = `selection-replacement-${status}-capability`;
+    mockGuestCapability(capability);
+    mocks.createOrder.mockResolvedValueOnce({
+      ...order,
+      id: `selection-replacement-order-${status}`,
+      customer_id: null,
+      checkout_access_mode: 'guest_capability',
+      checkout_capability: replacementCapability,
+    });
+    await reachPaymentStep(false);
+    mocks.selectCheckoutEstimateOption.mockRejectedValueOnce({
+      isAxiosError: true,
+      response: { status, data: { detail: 'Checkout access expired' } },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Select Standard delivery' }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Select Standard delivery' })).not.toBeInTheDocument());
+    fireEvent.click(screen.getAllByRole('button', { name: 'Purchase' })[0]);
+
+    await waitFor(() => expect(mocks.createOrder).toHaveBeenCalledTimes(2));
+    expect(mocks.createCheckoutEstimate).toHaveBeenLastCalledWith(
+      `selection-replacement-order-${status}`,
+      expect.stringMatching(/^estimate-/),
+      replacementCapability,
+    );
+  });
+
+  it.each([404, 410])('creates a fresh guest order when conflict refresh returns terminal status %s', async (status) => {
+    const capability = `refresh-terminal-${status}-capability`;
+    const replacementCapability = `refresh-replacement-${status}-capability`;
+    mockGuestCapability(capability);
+    mocks.createOrder.mockResolvedValueOnce({
+      ...order,
+      id: `refresh-replacement-order-${status}`,
+      customer_id: null,
+      checkout_access_mode: 'guest_capability',
+      checkout_capability: replacementCapability,
+    });
+    await reachPaymentStep(false);
+    mocks.selectCheckoutEstimateOption.mockRejectedValueOnce({
+      isAxiosError: true,
+      response: { status: 409, data: { detail: 'stale checkout estimate' } },
+    });
+    mocks.createCheckoutEstimate.mockRejectedValueOnce({
+      isAxiosError: true,
+      response: { status, data: { detail: 'Checkout access expired' } },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Select Standard delivery' }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Select Standard delivery' })).not.toBeInTheDocument());
+    fireEvent.click(screen.getAllByRole('button', { name: 'Purchase' })[0]);
+
+    await waitFor(() => expect(mocks.createOrder).toHaveBeenCalledTimes(2));
+    expect(mocks.createCheckoutEstimate).toHaveBeenLastCalledWith(
+      `refresh-replacement-order-${status}`,
+      expect.stringMatching(/^estimate-/),
+      replacementCapability,
+    );
+  });
+
+  it('clears guest capability after verified Paystack success', async () => {
+    const capability = 'successful-capability';
+    mockGuestCapability(capability);
+    const localStorageSpy = vi.spyOn(window.localStorage, 'setItem');
+    mocks.verifyPayment.mockResolvedValueOnce({ status: true });
+    const { getConfig } = await openEnforcedPaystack();
+    getConfig().onClose();
+    expect(await screen.findByRole('button', { name: 'Retry payment' })).toBeEnabled();
+
+    getConfig().callback({ reference: 'canonical-ref' });
+
+    await waitFor(() => expect(mocks.verifyPayment).toHaveBeenCalled());
+    await screen.findByText('Order success route');
+    expect(screen.queryByRole('button', { name: 'Retry payment' })).not.toBeInTheDocument();
+    expect(screen.getByTestId('checkout-location')).toHaveTextContent('/order-success?orderId=order-1&payment=success');
+    expect(screen.getByTestId('checkout-location').textContent).not.toContain(capability);
+    expect(localStorageSpy).not.toHaveBeenCalledWith(expect.anything(), capability);
+  });
+
+  it.each([
+    ['HTTP 503 pending verification', { response: { status: 503 } }],
+    ['a transient network error', new Error('Network Error')],
+  ])('keeps guest Stripe recovery in memory after %s and retries the same order', async (_label, failure) => {
+    const capability = 'stripe-retry-capability';
+    const localStorageSpy = vi.spyOn(window.localStorage, 'setItem');
+    mocks.verifyPayment.mockRejectedValueOnce(failure);
+    const stripeForm = await openEnforcedGuestStripe(capability);
+
+    await stripeForm.onSuccess();
+
+    expect(await screen.findByText(/could not confirm your payment yet/i)).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Checkout' })).toBeInTheDocument();
+    expect(screen.getByTestId('checkout-location')).toHaveTextContent('/checkout');
+    expect(screen.queryByText('Stripe form')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry payment' }));
+
+    await waitFor(() => expect(mocks.initializePayment).toHaveBeenCalledTimes(2));
+    expect(mocks.initializePayment).toHaveBeenLastCalledWith(expect.objectContaining({
+      order_id: 'order-1',
+      payment_gateway: 'stripe',
+    }), capability);
+    expect(mocks.createOrder).toHaveBeenCalledTimes(1);
+    expect(mocks.createCheckoutEstimate).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('checkout-location').textContent).not.toContain(capability);
+    expect(localStorageSpy).not.toHaveBeenCalledWith(expect.anything(), capability);
+  });
+
+  it('keeps guest Stripe recovery on the same order when verification returns HTTP 200 status false', async () => {
+    const capability = 'stripe-processing-capability';
+    const localStorageSpy = vi.spyOn(window.localStorage, 'setItem');
+    mocks.verifyPayment.mockResolvedValueOnce({ status: false, message: 'processing' });
+    const stripeForm = await openEnforcedGuestStripe(capability);
+
+    await stripeForm.onSuccess();
+
+    expect(await screen.findByText(/could not confirm your payment yet/i)).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Checkout' })).toBeInTheDocument();
+    expect(screen.getByTestId('checkout-location')).toHaveTextContent('/checkout');
+    expect(mocks.clearCart).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry payment' }));
+
+    await waitFor(() => expect(mocks.initializePayment).toHaveBeenCalledTimes(2));
+    expect(mocks.initializePayment).toHaveBeenLastCalledWith(expect.objectContaining({
+      order_id: 'order-1',
+      payment_gateway: 'stripe',
+    }), capability);
+    expect(mocks.createOrder).toHaveBeenCalledTimes(1);
+    expect(mocks.createCheckoutEstimate).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('checkout-location').textContent).not.toContain(capability);
+    expect(localStorageSpy).not.toHaveBeenCalledWith(expect.anything(), capability);
+  });
+
+  it.each([404, 410])('discards guest Stripe recovery after terminal verification status %s and creates a fresh order', async (status) => {
+    const capability = `stripe-terminal-${status}-capability`;
+    const replacementCapability = `stripe-replacement-${status}-capability`;
+    mocks.verifyPayment.mockRejectedValueOnce({
+      response: { status, data: { detail: 'Checkout access expired' } },
+    });
+    const stripeForm = await openEnforcedGuestStripe(capability);
+    mocks.createOrder.mockResolvedValueOnce({
+      ...order,
+      id: `stripe-replacement-order-${status}`,
+      customer_id: null,
+      checkout_access_mode: 'guest_capability',
+      checkout_capability: replacementCapability,
+    });
+
+    await stripeForm.onSuccess();
+
+    expect(alert).toHaveBeenCalledWith(expect.stringMatching(/expired|no longer available/i));
+    expect(screen.getByRole('heading', { name: 'Checkout' })).toBeInTheDocument();
+    expect(screen.getByTestId('checkout-location')).toHaveTextContent('/checkout');
+    await waitFor(() => expect(screen.queryByText('Stripe form')).not.toBeInTheDocument());
+    expect(screen.queryByRole('button', { name: 'Retry payment' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getAllByRole('button', { name: 'Purchase' })[0]);
+
+    await waitFor(() => expect(mocks.createOrder).toHaveBeenCalledTimes(2));
+    expect(mocks.createCheckoutEstimate).toHaveBeenLastCalledWith(
+      `stripe-replacement-order-${status}`,
+      expect.stringMatching(/^estimate-/),
+      replacementCapability,
+    );
+    expect(mocks.initializePayment).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears guest Stripe recovery after verified success and navigates normally', async () => {
+    const capability = 'stripe-success-capability';
+    const localStorageSpy = vi.spyOn(window.localStorage, 'setItem');
+    mocks.verifyPayment.mockResolvedValueOnce({ status: true });
+    const stripeForm = await openEnforcedGuestStripe(capability);
+
+    await stripeForm.onSuccess();
+
+    await screen.findByText('Order success route');
+    expect(mocks.clearCart).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('checkout-location')).toHaveTextContent('/order-success?orderId=order-1&payment=success');
+    expect(screen.getByTestId('checkout-location').textContent).not.toContain(capability);
+    expect(localStorageSpy).not.toHaveBeenCalledWith(expect.anything(), capability);
+  });
+
+  it('keeps authenticated Paystack cancellation on the existing completed-order route', async () => {
+    const { getConfig } = await openEnforcedPaystack();
+
+    getConfig().onClose();
+
+    expect(alert).toHaveBeenCalledWith('Payment cancelled. You can retry payment from your orders page.');
+    expect(screen.queryByRole('button', { name: 'Retry payment' })).not.toBeInTheDocument();
+  });
+
+  it('opens only returned Stripe truth when local preference is Paystack', async () => {
+    const paystackSetup = vi.fn();
+    window.PaystackPop = { setup: paystackSetup };
+    await reachPaymentStep(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Select Standard delivery' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Continue to payment' }));
+
+    expect(await screen.findByText('Stripe form')).toBeInTheDocument();
+    expect(paystackSetup).not.toHaveBeenCalled();
+    expect(mocks.stripeElementsProps).toHaveBeenCalledWith(expect.objectContaining({
+      options: { clientSecret: 'secret' },
+    }));
+    expect(mocks.stripeFormProps).toHaveBeenCalledWith(expect.objectContaining({
+      isProcessing: false,
+    }));
+  });
+
+  it('fails closed when returned Paystack truth uses USD', async () => {
+    const openIframe = vi.fn();
+    const paystackSetup = vi.fn(() => ({ openIframe }));
+    window.PaystackPop = { setup: paystackSetup };
+    const returned = {
+      status: true, message: 'ready', payment_gateway: 'paystack', reference: 'canonical-ref',
+      amount: '101.25', amount_minor: 10125, currency: 'USD',
+      provider_payload: { access_code: 'canonical-access', authorization_url: 'https://provider.invalid/session' },
+    };
+    mocks.initializePayment.mockResolvedValueOnce(returned);
+    await reachPaymentStep(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Select Standard delivery' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Continue to payment' }));
+
+    await waitFor(() => expect(alert).toHaveBeenCalledWith(expect.stringMatching(/unsupported/i)));
+    expect(openIframe).not.toHaveBeenCalled();
+    expect(paystackSetup).not.toHaveBeenCalled();
+    expect(mocks.buildPaystackWidgetConfig).not.toHaveBeenCalled();
+    expect(screen.queryByText('Stripe form')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Continue to payment' })).toBeEnabled();
+  });
+
+  it.each([
+    ['unsupported gateway', { payment_gateway: 'unknown' }],
+    ['unsupported Stripe currency', { payment_gateway: 'stripe', currency: 'EUR' }],
+    ['contradictory amount and minor truth', { amount: '62500.01', amount_minor: 6250000 }],
+    ['missing Stripe payload', { payment_gateway: 'stripe', provider_payload: undefined }],
+    ['malformed Stripe payload', { payment_gateway: 'stripe', provider_payload: { client_secret: '', payment_intent_id: 42 } }],
+    ['missing Paystack payload', { payment_gateway: 'paystack', provider_payload: undefined }],
+  ])('fails closed for %s and leaves payment retryable', async (_label, override) => {
+    const openIframe = vi.fn();
+    const paystackSetup = vi.fn(() => ({ openIframe }));
+    window.PaystackPop = { setup: paystackSetup };
+    mocks.initializePayment.mockResolvedValueOnce({
+      status: true, message: 'ready', reference: 'server-ref', amount: '62500.00',
+      amount_minor: 6250000, currency: 'NGN',
+      provider_payload: { client_secret: 'secret', payment_intent_id: 'pi-1', access_code: 'access' },
+      ...override,
+    });
+    await reachPaymentStep(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Select Standard delivery' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Continue to payment' }));
+
+    await waitFor(() => expect(alert).toHaveBeenCalledWith(expect.stringMatching(/failed to initialize|incomplete|unsupported/i)));
+    expect(paystackSetup).not.toHaveBeenCalled();
+    expect(openIframe).not.toHaveBeenCalled();
+    expect(screen.queryByText('Stripe form')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Continue to payment' })).toBeEnabled();
+  });
+});

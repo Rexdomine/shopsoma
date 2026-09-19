@@ -85,6 +85,7 @@ class VendorBrandInfoUpdate(BaseModel):
     email: Optional[str] = None
     business_description: Optional[str] = None
     logo_url: Optional[str] = None
+    featured_storefront_image_url: Optional[str] = None
     shipping_country: Optional[str] = None
     shipping_address: str = Field(..., min_length=1)
     returning_country: Optional[str] = None
@@ -112,6 +113,7 @@ class VendorResponse(BaseModel):
     business_address: Optional[str]
     business_phone: Optional[str]
     logo_url: Optional[str]
+    featured_storefront_image_url: Optional[str]
     returning_address: Optional[str]
     open_days: Optional[List[str]]
     open_hour: Optional[str]
@@ -166,6 +168,14 @@ class DesignerResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class FeaturedStorefrontVendorResponse(BaseModel):
+    """Safe public representation of an admin-curated storefront vendor."""
+    id: UUID4
+    business_name: str
+    featured_storefront_image_url: str
+    product_count: int
 
 
 # ==================== VENDOR PICKUP SCHEMAS ====================

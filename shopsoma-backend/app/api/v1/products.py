@@ -4,6 +4,7 @@ Product CRUD API endpoints
 from typing import List, Optional, Dict, Any, Tuple
 import csv
 import io
+import math
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,9 +12,11 @@ from sqlalchemy import select, func, or_, and_
 from sqlalchemy.orm import selectinload
 
 from app.core.database import get_db
-from app.api.dependencies import get_current_user, get_current_vendor, get_current_admin, get_optional_user
+from app.api.dependencies import get_completed_vendor, get_current_admin
+from app.services.vendor_visibility import customer_visible_vendor_product_filter
 from app.models.user import User
 from app.models.category import Category
+from app.models.collection import Collection
 from app.models.product import Product, ProductVariant, ProductImage, ProductStatus, ProductType, ModerationStatus, Variation, SizeStock, SizeEnum
 from app.models.vendor import Vendor
 from app.schemas.product import (
@@ -21,7 +24,6 @@ from app.schemas.product import (
     ProductUpdate,
     ProductResponse,
     ProductListResponse,
-    ProductSearchParams,
     ProductVariantCreate,
     ProductVariantUpdate,
     ProductVariantResponse,
@@ -29,14 +31,108 @@ from app.schemas.product import (
     ProductImageUpdate,
     ProductImageResponse,
     ProductModerationUpdate,
-    VariationCreate,
-    VariationUpdate,
-    VariationResponse,
-    SizeStockCreate,
-    SizeStockResponse,
+    validate_variation_inventory_shape,
+    variation_inventory_axis_signature,
+    normalize_color_value,
+    unique_variations_by_color,
+    unique_variations_by_size,
+    effective_variation_price,
+    variation_regular_price,
+    variation_sale_price,
 )
 
 router = APIRouter(prefix="/products", tags=["products"])
+
+def _variation_inherits_parent_price(
+    variation: Variation,
+    marker_name: str,
+    persisted_value: Any,
+    legacy_parent_value: Any,
+    null_value_inherits: bool = True,
+) -> bool:
+    marker = getattr(variation, marker_name, None)
+    if marker is not None:
+        return marker
+    if persisted_value is None:
+        return null_value_inherits
+    return persisted_value == legacy_parent_value
+
+
+def _sync_inherited_variation_prices(
+    variations: list[Any],
+    legacy_variants: list[Any],
+    *,
+    old_base_price: Any,
+    old_compare_at_price: Any,
+    new_base_price: Any,
+    new_compare_at_price: Any,
+) -> None:
+    """Propagate parent price edits without overwriting explicit variation prices."""
+    legacy_regular_price = old_compare_at_price or old_base_price
+    for variation in variations:
+        inherits_regular_price = _variation_inherits_parent_price(
+            variation, "inherits_price", variation.price, legacy_regular_price
+        )
+        inherits_sale_price = _variation_inherits_parent_price(
+            variation,
+            "inherits_sale_price",
+            variation.sale_price,
+            old_base_price,
+            null_value_inherits=inherits_regular_price,
+        )
+        if getattr(variation, "inherits_sale_price", None) is None:
+            inherits_sale_price = inherits_regular_price and inherits_sale_price
+        if getattr(variation, "inherits_price", None) is None:
+            variation.inherits_price = inherits_regular_price
+        if getattr(variation, "inherits_sale_price", None) is None:
+            variation.inherits_sale_price = inherits_sale_price
+        if inherits_regular_price:
+            variation.price = new_compare_at_price
+        if inherits_sale_price:
+            effective_regular_price = (
+                variation.price
+                if variation.price is not None
+                else (new_compare_at_price or new_base_price)
+            )
+            variation.sale_price = (
+                new_base_price
+                if new_compare_at_price is not None
+                and new_base_price < effective_regular_price
+                else None
+            )
+
+        if not (inherits_regular_price or inherits_sale_price):
+            continue
+        variation_type = str(getattr(variation, "type", "color")).casefold()
+        variation_title = normalize_color_value(variation.title)
+        variation_index = (
+            unique_variations_by_size(variations)
+            if variation_type == "size"
+            else unique_variations_by_color(variations)
+        )
+        if variation_index.get(variation_title) is not variation:
+            continue
+        for legacy_variant in legacy_variants:
+            legacy_value = (
+                legacy_variant.size if variation_type == "size" else legacy_variant.color
+            )
+            if normalize_color_value(legacy_value) == variation_title:
+                # Legacy variants store the effective purchase price. Preserve
+                # an explicit variation sale when only the regular price is
+                # inherited from the product.
+                legacy_variant.price = effective_variation_price(
+                    variation.price,
+                    variation_sale_price(
+                        variation,
+                        new_base_price,
+                        parent_has_sale=new_compare_at_price is not None,
+                    ),
+                    new_base_price,
+                    regular_price=variation_regular_price(
+                        variation, new_base_price, new_compare_at_price
+                    ),
+                )
+
 
 PRODUCT_RELATIONSHIPS = (
     selectinload(Product.variants),
@@ -113,6 +209,42 @@ def _parse_decimal(value: Optional[str], field: str, row: int, errors: List[Dict
         return None
 
 
+_MAX_PRODUCT_MEASUREMENT = 9999999.999
+
+
+def _parse_positive_decimal(value: Optional[str], field: str, row: int, errors: List[Dict[str, Any]]) -> Optional[float]:
+    parsed = _parse_decimal(value, field, row, errors)
+    if parsed is not None and (
+        not math.isfinite(parsed)
+        or parsed < 0.001
+        or parsed > _MAX_PRODUCT_MEASUREMENT
+    ):
+        errors.append({
+            "row": row,
+            "field": field,
+            "message": "Must be between 0.001 and 9999999.999",
+        })
+        return None
+    return parsed
+
+
+def _sync_single_product_variant_inventory(product: Product) -> None:
+    """Keep legacy variant stock aligned with single-product total_stock."""
+    if product.product_type != ProductType.SINGLE:
+        return
+    if product.variations:
+        return
+    if not product.variants:
+        return
+
+    synced_stock = 0 if product.made_to_order else int(product.total_stock or 0)
+    is_available = True if product.made_to_order else synced_stock > 0
+
+    for variant in product.variants:
+        variant.stock = synced_stock
+        variant.is_available = is_available
+
+
 async def _get_category_by_slug(db: AsyncSession, slug: str) -> Optional[Category]:
     result = await db.execute(select(Category).where(Category.slug == slug, Category.is_active == True))
     return result.scalar_one_or_none()
@@ -121,8 +253,6 @@ async def _get_category_by_slug(db: AsyncSession, slug: str) -> Optional[Categor
 async def _get_collection_by_name(
     db: AsyncSession, vendor_id: UUID, name: str
 ) -> Optional["Collection"]:
-    from app.models.collection import Collection
-
     result = await db.execute(
         select(Collection).where(
             Collection.vendor_id == vendor_id,
@@ -138,7 +268,7 @@ async def _get_collection_by_name(
 @router.post("", response_model=ProductResponse, status_code=status.HTTP_201_CREATED)
 async def create_product(
     product_data: ProductCreate,
-    current_user: User = Depends(get_current_vendor),
+    vendor: Vendor = Depends(get_completed_vendor),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -152,11 +282,6 @@ async def create_product(
     - **images**: Optional list of images (max 10)
     """
     # Get vendor record
-    result = await db.execute(
-        select(Vendor).where(Vendor.user_id == current_user.id)
-    )
-    vendor = result.scalar_one_or_none()
-
     if not vendor:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -188,6 +313,10 @@ async def create_product(
         made_to_order_timeline=product_data.made_to_order_timeline,
         care_instructions=product_data.care_instructions,
         fabric_composition=product_data.fabric_composition,
+        weight_kg=product_data.weight_kg,
+        length_cm=product_data.length_cm,
+        width_cm=product_data.width_cm,
+        height_cm=product_data.height_cm,
         meta_title=product_data.meta_title,
         meta_description=product_data.meta_description,
         size_guide=product_data.size_guide.model_dump() if product_data.size_guide else None,
@@ -207,6 +336,8 @@ async def create_product(
                 color_hex=variation_data.color_hex,
                 price=variation_data.price,
                 sale_price=variation_data.sale_price,
+                inherits_price=variation_data.inherits_price,
+                inherits_sale_price=variation_data.inherits_sale_price,
                 images=variation_data.images,
                 is_active=variation_data.is_active,
             )
@@ -267,15 +398,13 @@ async def create_product(
 @router.post("/bulk-upload/single", status_code=status.HTTP_201_CREATED)
 async def bulk_upload_single_products(
     file: UploadFile = File(..., description="CSV file for single products"),
-    current_user: User = Depends(get_current_vendor),
+    vendor: Vendor = Depends(get_completed_vendor),
     db: AsyncSession = Depends(get_db)
 ):
     """Bulk upload single products from CSV (vendors only)."""
     if not file.filename or not file.filename.lower().endswith(".csv"):
         raise HTTPException(status_code=400, detail="Please upload a CSV file.")
 
-    result = await db.execute(select(Vendor).where(Vendor.user_id == current_user.id))
-    vendor = result.scalar_one_or_none()
     if not vendor or not vendor.approved:
         raise HTTPException(status_code=403, detail="Vendor account not approved.")
 
@@ -300,6 +429,10 @@ async def bulk_upload_single_products(
         base_price = _parse_decimal(row.get("base_price"), "base_price", row_index, row_errors)
         compare_price = _parse_decimal(row.get("compare_at_price"), "compare_at_price", row_index, row_errors)
         total_stock = _parse_int(row.get("total_stock"), "total_stock", row_index, row_errors)
+        weight_kg = _parse_positive_decimal(row.get("weight_kg"), "weight_kg", row_index, row_errors)
+        length_cm = _parse_positive_decimal(row.get("length_cm"), "length_cm", row_index, row_errors)
+        width_cm = _parse_positive_decimal(row.get("width_cm"), "width_cm", row_index, row_errors)
+        height_cm = _parse_positive_decimal(row.get("height_cm"), "height_cm", row_index, row_errors)
         status_value = (row.get("status") or "draft").strip().lower()
 
         if not title:
@@ -348,6 +481,10 @@ async def bulk_upload_single_products(
             made_to_order_timeline=(row.get("made_to_order_timeline") or "").strip() or None,
             care_instructions=(row.get("care_instructions") or "").strip() or None,
             fabric_composition=(row.get("fabric_composition") or "").strip() or None,
+            weight_kg=weight_kg,
+            length_cm=length_cm,
+            width_cm=width_cm,
+            height_cm=height_cm,
             moderation_status=ModerationStatus.PENDING,
         )
         products_to_create.append(product)
@@ -364,15 +501,13 @@ async def bulk_upload_single_products(
 @router.post("/bulk-upload/variable", status_code=status.HTTP_201_CREATED)
 async def bulk_upload_variable_products(
     file: UploadFile = File(..., description="CSV file for variable products"),
-    current_user: User = Depends(get_current_vendor),
+    vendor: Vendor = Depends(get_completed_vendor),
     db: AsyncSession = Depends(get_db)
 ):
     """Bulk upload variable products (with variations) from CSV."""
     if not file.filename or not file.filename.lower().endswith(".csv"):
         raise HTTPException(status_code=400, detail="Please upload a CSV file.")
 
-    result = await db.execute(select(Vendor).where(Vendor.user_id == current_user.id))
-    vendor = result.scalar_one_or_none()
     if not vendor or not vendor.approved:
         raise HTTPException(status_code=403, detail="Vendor account not approved.")
 
@@ -397,7 +532,10 @@ async def bulk_upload_variable_products(
         currency = (row.get("currency") or "NGN").strip().upper()
         base_price = _parse_decimal(row.get("base_price"), "base_price", row_index, row_errors)
         compare_price = _parse_decimal(row.get("compare_at_price"), "compare_at_price", row_index, row_errors)
-
+        weight_kg = _parse_positive_decimal(row.get("weight_kg"), "weight_kg", row_index, row_errors)
+        length_cm = _parse_positive_decimal(row.get("length_cm"), "length_cm", row_index, row_errors)
+        width_cm = _parse_positive_decimal(row.get("width_cm"), "width_cm", row_index, row_errors)
+        height_cm = _parse_positive_decimal(row.get("height_cm"), "height_cm", row_index, row_errors)
         color_name = (row.get("color_name") or "").strip()
         color_hex = (row.get("color_hex") or "").strip() or None
         size = (row.get("size") or "").strip()
@@ -454,6 +592,10 @@ async def bulk_upload_variable_products(
                 "made_to_order_timeline": (row.get("made_to_order_timeline") or "").strip() or None,
                 "care_instructions": (row.get("care_instructions") or "").strip() or None,
                 "fabric_composition": (row.get("fabric_composition") or "").strip() or None,
+                "weight_kg": weight_kg,
+                "length_cm": length_cm,
+                "width_cm": width_cm,
+                "height_cm": height_cm,
                 "variations": {},
             }
 
@@ -496,6 +638,10 @@ async def bulk_upload_variable_products(
             made_to_order_timeline=group["made_to_order_timeline"],
             care_instructions=group["care_instructions"],
             fabric_composition=group["fabric_composition"],
+            weight_kg=group["weight_kg"],
+            length_cm=group["length_cm"],
+            width_cm=group["width_cm"],
+            height_cm=group["height_cm"],
             moderation_status=ModerationStatus.PENDING,
         )
         db.add(product)
@@ -509,6 +655,11 @@ async def bulk_upload_variable_products(
                 color_hex=variation_data["color_hex"],
                 price=variation_data["price"],
                 sale_price=variation_data["sale_price"],
+                inherits_price=variation_data["price"] is None,
+                inherits_sale_price=(
+                    variation_data["sale_price"] is None
+                    and variation_data["price"] is None
+                ),
                 images=[],
                 is_active=True,
             )
@@ -543,36 +694,23 @@ async def list_products(
     page_size: int = Query(default=20, ge=1, le=100),
     sort_by: str = Query(default="created_at", pattern="^(created_at|title|base_price|orders_count|views_count)$"),
     sort_order: str = Query(default="desc", pattern="^(asc|desc)$"),
-    current_user: Optional[User] = Depends(get_optional_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
     List products with filters and pagination
 
-    - Public endpoint (shows only active/approved products to non-vendors)
-    - Vendors can see their own products regardless of status
-    - Admins can see all products
+    - Public storefront endpoint
+    - Returns only customer-visible products
     """
     # Build query
     query = select(Product).options(*PRODUCT_RELATIONSHIPS)
 
     # Apply filters
-    filters = []
-
-    # Non-vendors can only see active, approved products
-    if not current_user or current_user.role == "customer":
-        filters.append(Product.status == ProductStatus.ACTIVE)
-        filters.append(Product.moderation_status == ModerationStatus.APPROVED)
-    elif current_user.role == "vendor":
-        # Vendors see only their own products (excluding archived/deleted)
-        result = await db.execute(
-            select(Vendor.id).where(Vendor.user_id == current_user.id)
-        )
-        vendor_id_result = result.scalar_one_or_none()
-        if vendor_id_result:
-            filters.append(Product.vendor_id == vendor_id_result)
-            # Exclude archived products (soft-deleted)
-            filters.append(Product.status != ProductStatus.ARCHIVED)
+    filters = [
+        Product.status == ProductStatus.ACTIVE,
+        Product.moderation_status == ModerationStatus.APPROVED,
+        customer_visible_vendor_product_filter(),
+    ]
 
     # Search
     if search:
@@ -592,7 +730,7 @@ async def list_products(
         )
 
     # Vendor filter
-    if vendor_id and (not current_user or current_user.role == "admin"):
+    if vendor_id:
         filters.append(Product.vendor_id == vendor_id)
 
     # Status filter
@@ -653,17 +791,24 @@ async def list_products(
 @router.get("/{product_id}", response_model=ProductResponse)
 async def get_product(
     product_id: UUID,
-    current_user: Optional[User] = Depends(get_optional_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
     Get a single product by ID
 
-    - Public endpoint (only active/approved products for non-vendors)
-    - Vendors can view their own products
-    - Admins can view all products
+    - Public storefront endpoint
+    - Returns only customer-visible products
     """
-    query = select(Product).options(*PRODUCT_RELATIONSHIPS).where(Product.id == product_id)
+    query = (
+        select(Product)
+        .options(*PRODUCT_RELATIONSHIPS)
+        .where(
+            Product.id == product_id,
+            Product.status == ProductStatus.ACTIVE,
+            Product.moderation_status == ModerationStatus.APPROVED,
+            customer_visible_vendor_product_filter(),
+        )
+    )
 
     result = await db.execute(query)
     product = result.scalar_one_or_none()
@@ -674,25 +819,11 @@ async def get_product(
             detail="Product not found"
         )
 
-    # Permission check
-    if not current_user or current_user.role == "customer":
-        if product.status != ProductStatus.ACTIVE or product.moderation_status != ModerationStatus.APPROVED:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Product not found"
-            )
-    elif current_user.role == "vendor":
-        # Check if product belongs to vendor
-        result = await db.execute(
-            select(Vendor.id).where(Vendor.user_id == current_user.id)
+    if product.status != ProductStatus.ACTIVE or product.moderation_status != ModerationStatus.APPROVED:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Product not found"
         )
-        vendor_id = result.scalar_one_or_none()
-
-        if product.vendor_id != vendor_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Not authorized to view this product"
-            )
 
     # Increment views
     product.views_count += 1
@@ -713,20 +844,16 @@ async def get_product(
 async def update_product(
     product_id: UUID,
     product_data: ProductUpdate,
-    current_user: User = Depends(get_current_vendor),
+    vendor: Vendor = Depends(get_completed_vendor),
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Update a product (vendors only - own products)
+    Update a product (vendor only)
 
-    - Vendors can only update their own products
-    - Cannot update moderation status (admin only)
+    - **product_id**: Product UUID
+    - Only product owner can update
     """
-    # Get vendor
-    result = await db.execute(
-        select(Vendor.id).where(Vendor.user_id == current_user.id)
-    )
-    vendor_id = result.scalar_one_or_none()
+    vendor_id = vendor.id
 
     if not vendor_id:
         raise HTTPException(
@@ -758,8 +885,35 @@ async def update_product(
     # Update fields
     update_data = product_data.model_dump(exclude_unset=True)
 
+    old_base_price = product.base_price
+    old_compare_at_price = product.compare_at_price
+    inherited_price_update = "base_price" in update_data or "compare_at_price" in update_data
+
     # Handle variations separately for sync logic
     variations_data = update_data.pop("variations", None)
+    variations_to_sync = product.variations
+
+    # ProductUpdate validates only the incoming variation payload. When an
+    # existing product retains legacy variants, include those persisted rows in
+    # the same invariant before replacing any variations.
+    if (
+        variations_data is not None
+        and variation_inventory_axis_signature(product_data.variations)
+        != variation_inventory_axis_signature(product.variations)
+    ):
+        try:
+            validate_variation_inventory_shape(product_data.variations, product.variants)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=[
+                    {
+                        "loc": ["body", "variations"],
+                        "msg": str(exc),
+                        "type": "value_error",
+                    }
+                ],
+            ) from exc
 
     for field, value in update_data.items():
         if field == "status":
@@ -771,6 +925,7 @@ async def update_product(
 
     # Sync variations if provided
     if variations_data is not None:
+        variations_to_sync = []
         # Delete all existing variations (cascade will delete size_stocks)
         await db.execute(
             select(Variation).where(Variation.product_id == product_id)
@@ -780,18 +935,36 @@ async def update_product(
 
         # Create new variations
         for variation_data in variations_data:
+            inherits_price = variation_data.get("inherits_price")
+            inherits_sale_price = variation_data.get("inherits_sale_price")
+            variation_price = variation_data.get("price")
+            variation_sale_price = variation_data.get("sale_price")
+            if inherited_price_update and inherits_price is True:
+                variation_price = product.compare_at_price
+            if inherited_price_update and inherits_sale_price is True:
+                variation_sale_price = product.base_price if product.compare_at_price is not None else None
             variation = Variation(
                 product_id=product.id,
                 title=variation_data["title"],
                 type=variation_data.get("type", "color"),
                 color_hex=variation_data.get("color_hex"),
-                price=variation_data.get("price"),
-                sale_price=variation_data.get("sale_price"),
+                price=variation_price,
+                sale_price=variation_sale_price,
+                inherits_price=inherits_price,
+                inherits_sale_price=inherits_sale_price,
                 images=variation_data.get("images", []),
                 is_active=variation_data.get("is_active", True),
             )
             db.add(variation)
             await db.flush()  # Get variation ID
+            if inherited_price_update:
+                if variation.inherits_price is True:
+                    variation.price = product.compare_at_price
+                if variation.inherits_sale_price is True:
+                    variation.sale_price = (
+                        product.base_price if product.compare_at_price is not None else None
+                    )
+            variations_to_sync.append(variation)
 
             # Add size stocks for this variation
             if "sizes" in variation_data:
@@ -807,13 +980,28 @@ async def update_product(
     if any(field in update_data for field in ["title", "description"]):
         product.moderation_status = ModerationStatus.PENDING
 
+    if any(field in update_data for field in ["total_stock", "made_to_order"]):
+        _sync_single_product_variant_inventory(product)
+
+    if inherited_price_update:
+        _sync_inherited_variation_prices(
+            variations_to_sync,
+            product.variants or [],
+            old_base_price=old_base_price,
+            old_compare_at_price=old_compare_at_price,
+            new_base_price=product.base_price,
+            new_compare_at_price=product.compare_at_price,
+        )
+
     await db.commit()
 
-    # Reload with relationships to avoid lazy loading issues
+    # Reload with relationships to avoid lazy loading issues and stale
+    # relationship collections after delete/recreate synchronization.
     result = await db.execute(
         select(Product)
         .options(*PRODUCT_RELATIONSHIPS)
         .where(Product.id == product_id)
+        .execution_options(populate_existing=True)
     )
     product = result.scalar_one()
 
@@ -823,7 +1011,7 @@ async def update_product(
 @router.delete("/{product_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_product(
     product_id: UUID,
-    current_user: User = Depends(get_current_vendor),
+    vendor: Vendor = Depends(get_completed_vendor),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -834,7 +1022,7 @@ async def delete_product(
     """
     # Get vendor
     result = await db.execute(
-        select(Vendor.id).where(Vendor.user_id == current_user.id)
+        select(Vendor.id).where(Vendor.id == vendor.id)
     )
     vendor_id = result.scalar_one_or_none()
 
@@ -878,18 +1066,23 @@ async def delete_product(
 async def create_variant(
     product_id: UUID,
     variant_data: ProductVariantCreate,
-    current_user: User = Depends(get_current_vendor),
+    vendor: Vendor = Depends(get_completed_vendor),
     db: AsyncSession = Depends(get_db)
 ):
     """Create a product variant"""
     # Check product ownership
     result = await db.execute(
-        select(Vendor.id).where(Vendor.user_id == current_user.id)
+        select(Vendor.id).where(Vendor.id == vendor.id)
     )
     vendor_id = result.scalar_one_or_none()
 
     result = await db.execute(
-        select(Product).where(Product.id == product_id)
+        select(Product)
+        .options(
+            selectinload(Product.variants),
+            selectinload(Product.variations).selectinload(Variation.size_stocks),
+        )
+        .where(Product.id == product_id)
     )
     product = result.scalar_one_or_none()
 
@@ -899,7 +1092,14 @@ async def create_variant(
             detail="Product not found"
         )
 
-    # Create variant
+    try:
+        validate_variation_inventory_shape(product.variations, [*product.variants, variant_data])
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=[{"loc": ["body"], "msg": str(exc), "type": "value_error"}],
+        ) from exc
+
     variant = ProductVariant(
         product_id=product_id,
         **variant_data.model_dump()
@@ -916,18 +1116,23 @@ async def update_variant(
     product_id: UUID,
     variant_id: UUID,
     variant_data: ProductVariantUpdate,
-    current_user: User = Depends(get_current_vendor),
+    vendor: Vendor = Depends(get_completed_vendor),
     db: AsyncSession = Depends(get_db)
 ):
     """Update a product variant"""
     # Check ownership
     result = await db.execute(
-        select(Vendor.id).where(Vendor.user_id == current_user.id)
+        select(Vendor.id).where(Vendor.id == vendor.id)
     )
     vendor_id = result.scalar_one_or_none()
 
     result = await db.execute(
-        select(Product).where(Product.id == product_id)
+        select(Product)
+        .options(
+            selectinload(Product.variants),
+            selectinload(Product.variations).selectinload(Variation.size_stocks),
+        )
+        .where(Product.id == product_id)
     )
     product = result.scalar_one_or_none()
 
@@ -937,7 +1142,6 @@ async def update_variant(
             detail="Product not found"
         )
 
-    # Get variant
     result = await db.execute(
         select(ProductVariant).where(
             and_(ProductVariant.id == variant_id, ProductVariant.product_id == product_id)
@@ -951,8 +1155,41 @@ async def update_variant(
             detail="Variant not found"
         )
 
-    # Update
+    # Validate changes to inventory axes against the canonical variation inventory.
+    # Price/stock/availability edits do not alter the inventory shape and can be
+    # applied without re-running this cross-record validation.
     update_data = variant_data.model_dump(exclude_unset=True)
+    inventory_axis_changed = any(
+        field in update_data and update_data[field] != getattr(variant, field)
+        for field in ("size", "color")
+    )
+    if inventory_axis_changed:
+        candidate_variants = []
+        for existing_variant in product.variants:
+            candidate_data = {
+                field: getattr(existing_variant, field)
+                for field in (
+                    "size",
+                    "color",
+                    "color_hex",
+                    "price",
+                    "stock",
+                    "sku",
+                    "is_available",
+                )
+            }
+            if existing_variant.id == variant.id:
+                candidate_data.update(update_data)
+            candidate_variants.append(ProductVariantCreate.model_construct(**candidate_data))
+
+        try:
+            validate_variation_inventory_shape(product.variations, candidate_variants)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=[{"loc": ["body"], "msg": str(exc), "type": "value_error"}],
+            ) from exc
+
     for field, value in update_data.items():
         setattr(variant, field, value)
 
@@ -966,13 +1203,13 @@ async def update_variant(
 async def delete_variant(
     product_id: UUID,
     variant_id: UUID,
-    current_user: User = Depends(get_current_vendor),
+    vendor: Vendor = Depends(get_completed_vendor),
     db: AsyncSession = Depends(get_db)
 ):
     """Delete a product variant"""
     # Check ownership
     result = await db.execute(
-        select(Vendor.id).where(Vendor.user_id == current_user.id)
+        select(Vendor.id).where(Vendor.id == vendor.id)
     )
     vendor_id = result.scalar_one_or_none()
 
@@ -1013,13 +1250,13 @@ async def delete_variant(
 async def create_image(
     product_id: UUID,
     image_data: ProductImageCreate,
-    current_user: User = Depends(get_current_vendor),
+    vendor: Vendor = Depends(get_completed_vendor),
     db: AsyncSession = Depends(get_db)
 ):
     """Add a product image"""
     # Check ownership
     result = await db.execute(
-        select(Vendor.id).where(Vendor.user_id == current_user.id)
+        select(Vendor.id).where(Vendor.id == vendor.id)
     )
     vendor_id = result.scalar_one_or_none()
 
@@ -1050,13 +1287,13 @@ async def create_image(
 async def delete_image(
     product_id: UUID,
     image_id: UUID,
-    current_user: User = Depends(get_current_vendor),
+    vendor: Vendor = Depends(get_completed_vendor),
     db: AsyncSession = Depends(get_db)
 ):
     """Delete a product image"""
     # Check ownership
     result = await db.execute(
-        select(Vendor.id).where(Vendor.user_id == current_user.id)
+        select(Vendor.id).where(Vendor.id == vendor.id)
     )
     vendor_id = result.scalar_one_or_none()
 

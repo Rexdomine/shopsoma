@@ -1,13 +1,17 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, Eye, Check, X, AlertCircle, CheckCircle, Store, TrendingUp, Package, ShoppingBag, RotateCcw, Trash2 } from 'lucide-react';
+import { Search, Eye, Check, X, AlertCircle, CheckCircle, Store, TrendingUp, Package, ShoppingBag, RotateCcw, Trash2, Star, Power, PowerOff, Tag } from 'lucide-react';
 import AdminSidebar from '../../components/admin/AdminSidebar';
 import { adminService, type VendorListItem } from '../../services/adminService';
+import { useAuth } from '../../context/AuthContext';
 
 export default function AdminVendors() {
   const navigate = useNavigate();
+  const { user } = useAuth();
   const [vendors, setVendors] = useState<VendorListItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [bulkLoading, setBulkLoading] = useState(false);
   const [search, setSearch] = useState('');
   const [approvedFilter, setApprovedFilter] = useState<string>('all');
   const [kycFilter] = useState<string>('all');
@@ -17,11 +21,18 @@ export default function AdminVendors() {
   const [totalPages, setTotalPages] = useState(1);
   const [total, setTotal] = useState(0);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
 
   const pageSize = 20;
+  const canTagTestAccounts = import.meta.env.VITE_ENVIRONMENT === 'staging';
 
   useEffect(() => {
     loadVendors();
+  }, [page, approvedFilter, kycFilter, onboardingFilter, storeStatusFilter, search]);
+
+  useEffect(() => {
+    // Never retain hidden selections after the result set changes.
+    setSelectedIds([]);
   }, [page, approvedFilter, kycFilter, onboardingFilter, storeStatusFilter, search]);
 
   const loadVendors = async () => {
@@ -65,6 +76,31 @@ export default function AdminVendors() {
     setTimeout(() => setMessage(null), 5000);
   };
 
+  const handleBulkStatus = async (isActive: boolean) => {
+    const targetIds = selectedIds.filter((id) => id !== user?.id);
+    if (targetIds.length === 0) {
+      showMessage('error', 'Select at least one other vendor account to change its status');
+      return;
+    }
+
+    const action = isActive ? 'activate' : 'deactivate';
+    if (!window.confirm(`${action === 'activate' ? 'Activate' : 'Deactivate'} ${targetIds.length} selected vendor account${targetIds.length === 1 ? '' : 's'}? This is reversible.`)) {
+      return;
+    }
+
+    try {
+      setBulkLoading(true);
+      const result = await adminService.bulkUpdateUserStatus(targetIds, isActive);
+      setSelectedIds([]);
+      showMessage('success', `${result.updated_count} vendor account${result.updated_count === 1 ? '' : 's'} ${action}d successfully`);
+      await loadVendors();
+    } catch (error: any) {
+      showMessage('error', error?.response?.data?.detail || error.message || `Failed to ${action} selected vendor accounts`);
+    } finally {
+      setBulkLoading(false);
+    }
+  };
+
   const handleRestoreStore = async (vendorId: string, businessName: string) => {
     if (!window.confirm(`Are you sure you want to restore ${businessName}'s store?`)) {
       return;
@@ -80,6 +116,54 @@ export default function AdminVendors() {
     }
   };
 
+  const handleToggleVendorAccount = async (vendor: VendorListItem) => {
+    const action = vendor.is_active ? 'Deactivate' : 'Activate';
+    if (!window.confirm(`${action} this vendor account? This is reversible and does not delete its store, products, orders, or history.`)) {
+      return;
+    }
+
+    try {
+      setActionLoading(vendor.user_id);
+      await adminService.toggleUserStatus(vendor.user_id, !vendor.is_active);
+      showMessage('success', `${vendor.business_name} account ${vendor.is_active ? 'deactivated' : 'activated'} successfully`);
+      await loadVendors();
+    } catch (error: any) {
+      showMessage('error', error?.response?.data?.detail || error?.message || 'Failed to update vendor account status');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleMarkAsTestAccount = async (vendor: VendorListItem) => {
+    if (vendor.is_test_account) return;
+    if (!window.confirm(`Mark ${vendor.business_name} as a test account? This makes it eligible for staging purge workflows.`)) return;
+    try {
+      setActionLoading(vendor.user_id);
+      await adminService.markUserAsTestAccount(vendor.user_id);
+      showMessage('success', `${vendor.business_name} marked as a test account`);
+      await loadVendors();
+    } catch (error: any) {
+      showMessage('error', error?.response?.data?.detail || error?.message || 'Failed to mark test account');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleFeaturedStorefront = async (vendor: VendorListItem) => {
+    try {
+      const updated = await adminService.updateVendorFeaturedStorefront(
+        vendor.id,
+        !vendor.is_featured_storefront,
+      );
+      setVendors((current) => current.map((item) => item.id === vendor.id
+        ? { ...item, is_featured_storefront: updated.is_featured_storefront }
+        : item));
+      showMessage('success', `${vendor.business_name} ${updated.is_featured_storefront ? 'will appear' : 'will no longer appear'} in eligible storefront rotations.`);
+    } catch (error: any) {
+      showMessage('error', error?.response?.data?.detail || 'Failed to update featured storefront status');
+    }
+  };
+
   const filteredVendors = vendors.filter((vendor) => {
     if (storeStatusFilter === 'deleted') {
       return !!vendor.store_deleted_at;
@@ -90,6 +174,8 @@ export default function AdminVendors() {
     }
     return true;
   });
+
+  const selectableVendors = filteredVendors.filter((vendor) => vendor.user_id !== user?.id);
 
   const getKYCBadge = (kycStatus?: string) => {
     switch (kycStatus) {
@@ -147,6 +233,7 @@ export default function AdminVendors() {
         {/* Message */}
         {message && (
           <div
+            role="alert"
             className={`rounded-xl p-4 flex items-center gap-3 ${
               message.type === 'success'
                 ? 'bg-green-50 border border-green-200 text-green-800'
@@ -287,6 +374,20 @@ export default function AdminVendors() {
           </div>
         </div>
 
+        {selectedIds.length > 0 && (
+          <div role="region" aria-label="Bulk account status actions" className="bg-blue-50 border border-blue-200 rounded-xl p-4 flex items-center justify-between">
+            <p>{selectedIds.length} selected. Status changes are reversible; no permanent deletion.</p>
+            <div className="flex gap-2">
+              <button disabled={bulkLoading} onClick={() => handleBulkStatus(true)}>
+                Activate selected
+              </button>
+              <button disabled={bulkLoading} onClick={() => handleBulkStatus(false)}>
+                Deactivate selected
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Vendors table */}
         <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
           {loading ? (
@@ -304,11 +405,24 @@ export default function AdminVendors() {
               <table className="w-full">
                 <thead className="bg-gray-50 border-b border-gray-200">
                   <tr>
+                    <th>
+                      <input
+                        aria-label="Select all visible vendors"
+                        type="checkbox"
+                        checked={selectableVendors.length > 0 && selectableVendors.every((vendor) => selectedIds.includes(vendor.user_id))}
+                        onChange={(event) => setSelectedIds((current) => event.target.checked
+                          ? Array.from(new Set([...current, ...selectableVendors.map((vendor) => vendor.user_id)]))
+                          : current.filter((id) => !selectableVendors.some((vendor) => vendor.user_id === id)))}
+                      />
+                    </th>
                     <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
                       Business
                     </th>
                     <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                      Status
+                      Approval
+                    </th>
+                    <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                      Account
                     </th>
                     <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
                       Store
@@ -330,10 +444,24 @@ export default function AdminVendors() {
                 <tbody className="divide-y divide-gray-200">
                   {filteredVendors.map((vendor) => (
                     <tr key={vendor.id} className="hover:bg-gray-50 transition">
+                      <td>
+                        <input
+                          aria-label={`Select ${vendor.email}`}
+                          type="checkbox"
+                          disabled={vendor.user_id === user?.id}
+                          checked={selectedIds.includes(vendor.user_id)}
+                          onChange={(event) => setSelectedIds(event.target.checked ? [...selectedIds, vendor.user_id] : selectedIds.filter((id) => id !== vendor.user_id))}
+                        />
+                      </td>
                       <td className="px-6 py-4">
                         <div>
                           <p className="text-sm font-semibold text-gray-900">{vendor.business_name}</p>
                           <p className="text-xs text-gray-500">{vendor.email}</p>
+                          {vendor.is_test_account && (
+                            <span className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded text-xs font-bold bg-amber-100 text-amber-800 border border-amber-200">
+                              <Tag className="w-3 h-3" /> TEST ACCOUNT
+                            </span>
+                          )}
                           <p className="text-xs text-gray-400 mt-0.5">{vendor.full_name}</p>
                         </div>
                       </td>
@@ -348,6 +476,12 @@ export default function AdminVendors() {
                             Pending
                           </span>
                         )}
+                      </td>
+                      <td className="px-6 py-4">
+                        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium ${vendor.is_active ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                          {vendor.is_active ? <CheckCircle className="w-3 h-3" /> : <AlertCircle className="w-3 h-3" />}
+                          Account {vendor.is_active ? 'Active' : 'Inactive'}
+                        </span>
                       </td>
                       <td className="px-6 py-4">
                         {vendor.store_deleted_at ? (
@@ -418,6 +552,37 @@ export default function AdminVendors() {
                               <RotateCcw className="w-4 h-4" />
                             </button>
                           )}
+                          <button
+                            type="button"
+                            onClick={() => handleFeaturedStorefront(vendor)}
+                            className={`p-2 rounded-lg transition ${vendor.is_featured_storefront ? 'bg-amber-100 text-amber-700 hover:bg-amber-200' : 'text-gray-500 hover:bg-gray-100 hover:text-amber-700'}`}
+                            title={vendor.is_featured_storefront ? 'Remove from featured storefront rotation' : 'Feature in storefront rotation'}
+                          >
+                            <Star className={`w-4 h-4 ${vendor.is_featured_storefront ? 'fill-current' : ''}`} />
+                          </button>
+                          {canTagTestAccounts && vendor.role !== 'admin' && !vendor.is_test_account && (
+                            <button
+                              type="button"
+                              onClick={() => handleMarkAsTestAccount(vendor)}
+                              disabled={actionLoading === vendor.user_id}
+                              aria-label="Mark vendor as test account"
+                              className="p-2 text-amber-600 hover:bg-amber-50 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
+                              title="Mark as test account"
+                            >
+                              <Tag className="w-4 h-4" />
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => handleToggleVendorAccount(vendor)}
+                            disabled={vendor.user_id === user?.id || actionLoading === vendor.user_id}
+                            aria-label={`${vendor.is_active ? 'Deactivate' : 'Activate'} vendor account`}
+                            aria-busy={actionLoading === vendor.user_id}
+                            className="p-2 text-[#105E53] hover:bg-green-50 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
+                            title={vendor.user_id === user?.id ? 'Cannot modify your own account status' : `${vendor.is_active ? 'Deactivate' : 'Activate'} vendor account`}
+                          >
+                            {vendor.is_active ? <PowerOff className="w-4 h-4" /> : <Power className="w-4 h-4" />}
+                          </button>
                           <button
                             onClick={() => navigate(`/admin/vendors/${vendor.id}`)}
                             className="p-2 text-gray-600 hover:text-[#105E53] hover:bg-gray-100 rounded-lg transition"
