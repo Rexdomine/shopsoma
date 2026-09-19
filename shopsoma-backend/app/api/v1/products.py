@@ -111,7 +111,7 @@ def _sync_inherited_variation_prices(
                 legacy_variant.price = effective_variation_price(
                     variation.price,
                     variation.sale_price,
-                    legacy_regular_price,
+                    new_base_price,
                 )
 
 

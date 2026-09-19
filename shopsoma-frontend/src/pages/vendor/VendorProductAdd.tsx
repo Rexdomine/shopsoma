@@ -912,7 +912,8 @@ export default function VendorProductAdd() {
           const customRegularPrice = variation.price ? parseFloat(variation.price) : undefined;
           const customSalePrice = variation.salesPrice ? parseFloat(variation.salesPrice) : undefined;
           const inheritedRegularPrice = compareAtPrice ?? parsedProductPrice;
-          const inheritedSalePrice = compareAtPrice ? basePrice : undefined;
+          const inheritedSalePrice =
+            compareAtPrice && basePrice < inheritedRegularPrice ? basePrice : undefined;
           const hasCustomRegularPrice =
             variation.hasDifferentPricing &&
             customRegularPrice !== undefined &&
@@ -931,7 +932,7 @@ export default function VendorProductAdd() {
               : inheritedSalePrice
             : inheritedSalePrice;
           const inheritsRegularPrice = !hasCustomRegularPrice;
-          const inheritsSalePrice = !hasCustomSalePrice;
+          const inheritsSalePrice = !hasCustomSalePrice && inheritedSalePrice !== undefined;
           const variationBasePrice = variationSalePrice ?? variationRegularPrice;
           if (variation.type === 'Color') {
             const colorStock = shouldTrackStock ? parseInt(variation.colorStock || '0', 10) || 0 : 0;

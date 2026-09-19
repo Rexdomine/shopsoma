@@ -141,6 +141,27 @@ def test_parent_price_update_preserves_explicit_sale_in_legacy_variant():
     assert legacy_variant.price == Decimal("70")
 
 
+def test_parent_price_update_uses_new_base_when_compare_at_is_removed():
+    variation = SimpleNamespace(
+        id="inherited", title="4", type="size", price=Decimal("100"),
+        sale_price=None, inherits_price=True, inherits_sale_price=True,
+        is_active=True,
+    )
+    legacy_variant = SimpleNamespace(size="4", color=None, price=Decimal("100"))
+
+    _sync_inherited_variation_prices(
+        [variation],
+        [legacy_variant],
+        old_base_price=Decimal("80"),
+        old_compare_at_price=Decimal("100"),
+        new_base_price=Decimal("60"),
+        new_compare_at_price=None,
+    )
+
+    assert (variation.price, variation.sale_price) == (None, None)
+    assert legacy_variant.price == Decimal("60")
+
+
 def test_parent_price_update_uses_regular_price_when_explicit_sale_is_invalid():
     variation = SimpleNamespace(
         id="mixed", title="4", type="size", price=Decimal("60"),
