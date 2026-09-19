@@ -27,6 +27,7 @@ from app.schemas.product import (
     unique_variations_by_color,
     unique_variations_by_size,
     variation_regular_price,
+    variation_sale_price,
 )
 from app.api.dependencies import get_optional_user
 from app.models.user import User
@@ -74,14 +75,17 @@ def resolve_variant_response(
                     normalize_color_value(variant.size)
                 )
             if variation is not None and (
-                variation.price is not None or variation.sale_price is not None
+                variation.price is not None
+                or variation.sale_price is not None
+                or variation.inherits_price is True
+                or variation.inherits_sale_price is True
             ):
                 regular_price = variation_regular_price(
                     variation, product.base_price, getattr(product, "compare_at_price", None)
                 )
                 response.price = effective_variation_price(
                     variation.price,
-                    variation.sale_price,
+                    variation_sale_price(variation, product.base_price),
                     product.base_price,
                     regular_price=regular_price,
                 )
@@ -97,7 +101,7 @@ def resolve_variant_response(
         )
         base_price = effective_variation_price(
             variation.price,
-            variation.sale_price,
+            variation_sale_price(variation, product.base_price),
             product.base_price,
             regular_price=regular_price,
         )
