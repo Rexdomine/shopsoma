@@ -928,7 +928,7 @@ export default function VendorProductAdd() {
           const variationSalePrice = variation.hasDifferentPricing
             ? hasCustomSalePrice
               ? customSalePrice
-              : undefined
+              : inheritedSalePrice
             : inheritedSalePrice;
           const inheritsRegularPrice = !hasCustomRegularPrice;
           const inheritsSalePrice = !hasCustomSalePrice;
