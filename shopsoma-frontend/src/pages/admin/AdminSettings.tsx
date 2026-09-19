@@ -9,8 +9,10 @@ import {
   WalletCards,
   Percent,
   ListChecks,
+  Rocket,
 } from 'lucide-react';
 import ManualShippingSettings from '../../components/admin/ManualShippingSettings';
+import ComingSoonSettings from '../../components/admin/ComingSoonSettings';
 import type { ShippingProviderSettings } from '../../services/settingsService';
 import AdminSidebar from '../../components/admin/AdminSidebar';
 import {
@@ -64,7 +66,7 @@ export default function AdminSettings() {
   const [lastDbSync, setLastDbSync] = useState<string | null>(null);
   const [syncProgress, setSyncProgress] = useState(0);
   const [syncStatus, setSyncStatus] = useState<'idle' | 'running' | 'success' | 'error'>('idle');
-  const settingsCategories = ['currency', 'shipping', 'rates', 'payout', 'commission', 'featured', 'database'] as const;
+  const settingsCategories = ['currency', 'shipping', 'rates', 'payout', 'commission', 'featured', 'coming-soon', 'database'] as const;
   const categoryFromHash = () => {
     const value = window.location.hash.replace(/^#/, '');
     return settingsCategories.includes(value as typeof settingsCategories[number]) ? value : 'currency';
@@ -72,6 +74,8 @@ export default function AdminSettings() {
   const [category, setCategory] = useState(categoryFromHash);
   const [manualRatesDirty, setManualRatesDirty] = useState(false);
   const [manualRatesBusy, setManualRatesBusy] = useState(false);
+  const [comingSoonDirty, setComingSoonDirty] = useState(false);
+  const [comingSoonBusy, setComingSoonBusy] = useState(false);
   const discardManualRatesRef = useRef<(() => void) | null>(null);
   const syncTimerRef = useRef<number | null>(null);
   const switchCategoryRef = useRef<(next: string, writeHistory?: boolean) => boolean>((next) => {
@@ -451,10 +455,11 @@ export default function AdminSettings() {
     ['payout', 'Payouts', 'Hold periods and settlement rules', WalletCards],
     ['commission', 'Commission', 'Vendor defaults and future orders', Percent],
     ['featured', 'Featured', 'Homepage rotation timing', RefreshCw],
+    ['coming-soon', 'Coming soon', 'Public launch gate and countdown', Rocket],
     ['database', 'Database', 'Local-only development tools', Database],
   ] as const;
-  const dirty = hasChanges || payoutHoldChanged || commissionChanged || applyCommissionToExisting || featuredRotationChanged || manualRatesDirty;
-  const savingAny = saving || savingShipping || savingPayoutHold || savingCommission || savingFeaturedRotation || manualRatesBusy;
+  const dirty = hasChanges || payoutHoldChanged || commissionChanged || applyCommissionToExisting || featuredRotationChanged || manualRatesDirty || comingSoonDirty;
+  const savingAny = saving || savingShipping || savingPayoutHold || savingCommission || savingFeaturedRotation || manualRatesBusy || comingSoonBusy;
   const Summary = ({ title, value, detail }: { title: string; value: string; detail: string }) => (
     <div className="rounded-xl border border-slate-200 bg-slate-50 p-4"><p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{title}</p><p className="mt-2 text-xl font-semibold text-slate-950">{value}</p><p className="mt-1 text-xs text-slate-500">{detail}</p></div>
   );
@@ -501,6 +506,7 @@ export default function AdminSettings() {
     {category === 'payout' && <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-7"><p className="text-xs font-bold uppercase tracking-[0.16em] text-[#105E53]">Settlements</p><h2 className="mt-1 text-2xl font-semibold text-slate-950">Payout hold</h2><p className="mt-1 text-sm text-slate-600">Keep vendor funds on hold for the configured number of days before payout eligibility.</p>{payoutHold && <div className="mt-6 mb-6"><Summary title="Current value" value={`${payoutHold.hold_days} days`} detail="applies to future payout eligibility" /></div>}<label className="block max-w-sm text-sm font-semibold">Hold duration<input type="number" min="0" max="3650" value={payoutHoldInput} onChange={e => handlePayoutHoldChange(e.target.value)} className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2.5" /><span className="mt-1 block text-xs font-normal text-slate-500">Allowed range: 0–3,650 days.</span></label>{saveBar(handleSavePayoutHold, handleResetPayoutHold, payoutHoldChanged, savingPayoutHold)}</div>}
     {category === 'commission' && <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-7"><p className="text-xs font-bold uppercase tracking-[0.16em] text-[#105E53]">Vendor economics</p><h2 className="mt-1 text-2xl font-semibold text-slate-950">Commission default</h2><p className="mt-1 text-sm text-slate-600">Set the default percentage for new vendors without changing historical order math.</p>{commissionSettings && <div className="mt-6 mb-6"><Summary title="Current value" value={`${commissionSettings.commission_rate}%`} detail="default commission" /></div>}<label className="block max-w-sm text-sm font-semibold">Commission percentage<input type="number" min="0" max="100" value={commissionInput} onChange={e => handleCommissionChange(e.target.value)} className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2.5" /></label><label className="mt-5 flex max-w-xl gap-3 text-sm text-slate-600"><input type="checkbox" checked={applyCommissionToExisting} onChange={e => setApplyCommissionToExisting(e.target.checked)} className="mt-1" />Also update existing vendor defaults for future orders.</label>{saveBar(handleSaveCommission, handleResetCommission, commissionChanged || applyCommissionToExisting, savingCommission)}</div>}
     {category === 'featured' && <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-7"><p className="text-xs font-bold uppercase tracking-[0.16em] text-[#105E53]">Storefront curation</p><h2 className="mt-1 text-2xl font-semibold text-slate-950">Featured rotation</h2><p className="mt-1 text-sm text-slate-600">Control how often the homepage featured selection changes.</p>{featuredRotation && <div className="mt-6 mb-6"><Summary title="Current value" value={`${featuredRotation.rotation_minutes} minutes`} detail="between automatic rotations" /></div>}<label className="block max-w-sm text-sm font-semibold">Rotation interval<input type="number" min="1" max="1440" value={featuredRotationInput} onChange={e => handleFeaturedRotationChange(e.target.value)} className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2.5" /><span className="mt-1 block text-xs font-normal text-slate-500">Allowed range: 1–1,440 minutes.</span></label>{saveBar(handleSaveFeaturedRotation, handleResetFeaturedRotation, featuredRotationChanged, savingFeaturedRotation)}</div>}
+    {category === 'coming-soon' && <ComingSoonSettings onDirtyChange={setComingSoonDirty} onBusyChange={setComingSoonBusy} />}
     {category === 'database' && <div className="rounded-2xl border border-amber-200 bg-white p-5 shadow-sm sm:p-7"><p className="text-xs font-bold uppercase tracking-[0.16em] text-amber-700">Developer tools</p><h2 className="mt-1 text-2xl font-semibold text-slate-950">Local database sync</h2><p className="mt-1 text-sm text-slate-600">This destructive action is intentionally available only in local development. It never runs against hosted environments.</p><div className="mt-6 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"><strong>Local-only gate.</strong> Syncing replaces local data with Render staging data.</div><button type="button" onClick={handleDbSync} disabled={syncingDb} className="mt-6 inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50"><RefreshCw className="h-4 w-4" />{syncingDb ? 'Syncing…' : 'Sync Render to Local'}</button>{lastDbSync && <p className="mt-4 text-sm text-slate-600">{lastDbSync}</p>}{syncStatus === 'running' && <p className="mt-2 text-xs text-slate-500">Sync progress: {syncProgress}%</p>}</div>}
     </section></div></div></main><ToastContainer toasts={toasts} onClose={hideToast} /></div>;
 }
