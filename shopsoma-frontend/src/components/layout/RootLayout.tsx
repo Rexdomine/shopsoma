@@ -15,13 +15,26 @@ const AUTH_ENTRY_PATHS = new Set([
   '/claim-account',
 ]);
 
+const TRANSACTIONAL_RETURN_PATHS = [
+  '/checkout',
+  '/order-success',
+  '/orders',
+  '/track',
+  '/profile/payments',
+];
+
 type GateState = 'loading' | 'open' | 'closed';
+
+function startsAtPath(pathname: string, path: string): boolean {
+  return pathname === path || pathname.startsWith(`${path}/`);
+}
 
 export function shouldBypassComingSoon(pathname: string, role?: User['role'] | null): boolean {
   return role === 'admin'
     || pathname.startsWith('/admin')
     || pathname.startsWith('/vendor')
-    || AUTH_ENTRY_PATHS.has(pathname);
+    || AUTH_ENTRY_PATHS.has(pathname)
+    || TRANSACTIONAL_RETURN_PATHS.some((path) => startsAtPath(pathname, path));
 }
 
 export function gateLocationKey(pathname: string, search: string): string {
@@ -33,42 +46,43 @@ export function gateLocationKey(pathname: string, search: string): string {
  * Wraps all routes and handles scroll restoration
  */
 export default function RootLayout() {
-  const { pathname, search } = useLocation();
+  const { pathname } = useLocation();
   const { user, isLoading: authLoading } = useAuth();
   const [gateState, setGateState] = useState<GateState>('loading');
-  const [resolvedLocation, setResolvedLocation] = useState<string | null>(null);
-  const locationKey = gateLocationKey(pathname, search);
+  const [resolvedScope, setResolvedScope] = useState<'public' | 'bypass' | null>(null);
 
   useEffect(() => {
     window.scrollTo(0, 0);
   }, [pathname]);
 
   const bypassComingSoon = shouldBypassComingSoon(pathname, user?.role);
+  const gateScope = bypassComingSoon ? 'bypass' : 'public';
 
   useEffect(() => {
+    if (resolvedScope === gateScope) return undefined;
     if (bypassComingSoon) {
       setGateState('open');
-      setResolvedLocation(locationKey);
+      setResolvedScope('bypass');
       return undefined;
     }
+
     let mounted = true;
     setGateState('loading');
-    setResolvedLocation(null);
     getComingSoonSettings().then((settings) => {
       if (mounted) {
         setGateState(settings.enabled ? 'closed' : 'open');
-        setResolvedLocation(locationKey);
+        setResolvedScope('public');
       }
     }).catch(() => {
       if (mounted) {
         setGateState('open');
-        setResolvedLocation(locationKey);
+        setResolvedScope('public');
       }
     });
     return () => { mounted = false; };
-  }, [bypassComingSoon, locationKey]);
+  }, [bypassComingSoon, gateScope, resolvedScope]);
 
-  if (authLoading || (!bypassComingSoon && (gateState === 'loading' || resolvedLocation !== locationKey))) {
+  if (authLoading || (!bypassComingSoon && (gateState === 'loading' || resolvedScope !== 'public'))) {
     return <Loading fullScreen message="Preparing ShopSoma..." />;
   }
 

@@ -21,8 +21,12 @@ describe('shouldBypassComingSoon', () => {
     expect(shouldBypassComingSoon('/products', 'vendor')).toBe(false);
   });
 
-  it('keeps guests and customers behind the gate on storefront routes', () => {
-    expect(shouldBypassComingSoon('/', null)).toBe(false);
+  it('preserves transactional and account-return routes', () => {
+    expect(shouldBypassComingSoon('/checkout', 'customer')).toBe(true);
+    expect(shouldBypassComingSoon('/order-success', 'customer')).toBe(true);
+    expect(shouldBypassComingSoon('/orders/order-1', 'customer')).toBe(true);
+    expect(shouldBypassComingSoon('/track/order-1', 'customer')).toBe(true);
+    expect(shouldBypassComingSoon('/profile/payments', 'customer')).toBe(true);
     expect(shouldBypassComingSoon('/products', 'customer')).toBe(false);
   });
 

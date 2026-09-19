@@ -1,8 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowRight, Instagram, Mail } from 'lucide-react';
+import type { SyntheticEvent } from 'react';
 import { getComingSoonSettings, type ComingSoonSettings } from '../services/settingsService';
 
 const DEFAULT_IMAGE = '/images/hero/campaign/campaign-exterior-desktop.webp';
+
+function handleImageFallback(event: SyntheticEvent<HTMLImageElement>) {
+  const image = event.currentTarget;
+  if (image.dataset.fallbackAttempted === 'true') {
+    image.onerror = null;
+    image.style.visibility = 'hidden';
+    return;
+  }
+  image.dataset.fallbackAttempted = 'true';
+  image.src = DEFAULT_IMAGE;
+}
 
 type Countdown = { days: number; hours: number; minutes: number; seconds: number };
 
@@ -143,7 +155,7 @@ export default function ComingSoon({ onReleased }: ComingSoonProps) {
         </section>
 
         <section className="relative min-h-[420px] lg:min-h-screen" aria-label="ShopSoma campaign image">
-          <img src={settings.image_url || DEFAULT_IMAGE} alt="ShopSoma campaign storefront" className="absolute inset-0 h-full w-full object-cover" onError={(event) => { event.currentTarget.src = DEFAULT_IMAGE; }} />
+          <img src={settings.image_url || DEFAULT_IMAGE} alt="ShopSoma campaign storefront" className="absolute inset-0 h-full w-full object-cover" onError={handleImageFallback} />
           <div className="absolute inset-0 bg-gradient-to-t from-[#0e302d]/45 via-transparent to-transparent" aria-hidden="true" />
           <div className="absolute bottom-6 left-6 max-w-xs text-sm leading-6 text-white/80 sm:bottom-10 sm:left-10">Curated style, independent voices, and pieces worth keeping.</div>
         </section>

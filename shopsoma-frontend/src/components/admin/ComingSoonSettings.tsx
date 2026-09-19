@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { CalendarClock, Image as ImageIcon, Loader2, Save, Sparkles } from 'lucide-react';
+import type { SyntheticEvent } from 'react';
 import {
   getAdminComingSoonSettings,
   updateComingSoonSettings,
@@ -9,6 +10,25 @@ import { useToast } from '../../hooks/useToast';
 import ToastContainer from '../ui/ToastContainer';
 
 const DEFAULT_IMAGE = '/images/hero/campaign/campaign-exterior-desktop.webp';
+
+type ApiError = { response?: { data?: { detail?: unknown } } };
+
+function getErrorDetail(error: unknown): string | undefined {
+  if (!error || typeof error !== 'object') return undefined;
+  const detail = (error as ApiError).response?.data?.detail;
+  return typeof detail === 'string' ? detail : undefined;
+}
+
+function handleImageFallback(event: SyntheticEvent<HTMLImageElement>) {
+  const image = event.currentTarget;
+  if (image.dataset.fallbackAttempted === 'true') {
+    image.onerror = null;
+    image.style.visibility = 'hidden';
+    return;
+  }
+  image.dataset.fallbackAttempted = 'true';
+  image.src = DEFAULT_IMAGE;
+}
 
 function toLocalInput(value: string | null): string {
   if (!value) return '';
@@ -44,7 +64,7 @@ export default function ComingSoonSettings({ onDirtyChange, onBusyChange }: Comi
         setLaunchAt(toLocalInput(value.launch_at));
         setImageUrl(value.image_url || DEFAULT_IMAGE);
       })
-      .catch((err: any) => error(err.response?.data?.detail || 'Failed to load launch settings', 'Error'))
+      .catch((err: unknown) => error(getErrorDetail(err) || 'Failed to load launch settings', 'Error'))
       .finally(() => setLoading(false));
   }, [error]);
 
@@ -79,8 +99,8 @@ export default function ComingSoonSettings({ onDirtyChange, onBusyChange }: Comi
       setLaunchAt(toLocalInput(updated.launch_at));
       setImageUrl(updated.image_url);
       success('Coming-soon settings saved', 'Storefront updated');
-    } catch (err: any) {
-      error(err.response?.data?.detail || 'Failed to save coming-soon settings', 'Error');
+    } catch (err: unknown) {
+      error(getErrorDetail(err) || 'Failed to save coming-soon settings', 'Error');
     } finally {
       setSaving(false);
     }
@@ -134,7 +154,7 @@ export default function ComingSoonSettings({ onDirtyChange, onBusyChange }: Comi
           </div>
 
           <div className="overflow-hidden rounded-2xl border border-[#105E53]/20 bg-[#123B38] shadow-inner">
-            <img src={imageUrl || DEFAULT_IMAGE} alt="ShopSoma launch campaign preview" className="h-44 w-full object-cover opacity-90" onError={(event) => { event.currentTarget.src = DEFAULT_IMAGE; }} />
+            <img src={imageUrl || DEFAULT_IMAGE} alt="ShopSoma launch campaign preview" className="h-44 w-full object-cover opacity-90" onError={handleImageFallback} />
             <div className="p-4 text-white"><p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#E7C97A]">Preview</p><p className="mt-2 font-serif text-xl">A new way to shop is arriving.</p><p className="mt-2 text-xs leading-5 text-white/70">Visitors will see the countdown and this campaign image while launch mode is enabled.</p></div>
           </div>
         </div>
