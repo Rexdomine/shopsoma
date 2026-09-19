@@ -1,0 +1,20 @@
+# Render production frontend blueprint.
+# The API, database, workers, and secrets are managed separately.
+services:
+  - type: web
+    name: shopsoma-production
+    env: static
+    branch: main
+    buildCommand: "cd shopsoma-frontend && npm ci && npm run build"
+    staticPublishPath: shopsoma-frontend/dist
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      - key: VITE_API_BASE_URL
+        value: https://shopsoma-production-api.onrender.com/api/v1
+      - key: VITE_ENVIRONMENT
+        value: production
+    autoDeploy: false
+    pullRequestPreviewsEnabled: false
