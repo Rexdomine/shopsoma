@@ -707,7 +707,11 @@ export default function VendorProductAdd() {
 
     // Validate price if different pricing is enabled
     if (variationHasDifferentPricing) {
-      if (variationPrice && (isNaN(parseFloat(variationPrice)) || parseFloat(variationPrice) <= 0)) {
+      if (!variationPrice.trim()) {
+        warning('Variation price is required when different pricing is enabled');
+        return;
+      }
+      if (isNaN(parseFloat(variationPrice)) || parseFloat(variationPrice) <= 0) {
         warning('Invalid variation price');
         return;
       }
