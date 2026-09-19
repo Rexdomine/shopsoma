@@ -724,7 +724,12 @@ async def apply_coupon(
     user_id, sess_id = await get_user_or_session_id(current_user, session_id)
     user_uuid = cast_uuid(user_id)
 
-    query = select(CartItem).options(*CART_ITEM_LOAD_OPTIONS)
+    query = (
+        select(CartItem)
+        .join(CartItem.product)
+        .options(*CART_ITEM_LOAD_OPTIONS)
+        .where(customer_visible_vendor_product_filter())
+    )
     if user_uuid:
         query = query.where(CartItem.user_id == user_uuid)
     else:

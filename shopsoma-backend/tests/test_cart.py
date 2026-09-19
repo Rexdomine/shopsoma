@@ -259,6 +259,39 @@ async def test_add_to_cart_rejects_unapproved_product(
 
 
 @pytest.mark.asyncio
+async def test_apply_coupon_rejects_carted_product_after_moderation_revoke(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    sample_product,
+):
+    session_headers = {"X-Session-ID": "coupon-hidden-product-session"}
+    added = await client.post(
+        "/api/v1/cart/items",
+        json={
+            "product_id": str(sample_product.id),
+            "variant_id": f"default-{sample_product.id}",
+            "quantity": 1,
+        },
+        headers=session_headers,
+    )
+    assert added.status_code == 200
+
+    from app.models.product import ModerationStatus
+
+    sample_product.moderation_status = ModerationStatus.PENDING
+    await db_session.commit()
+
+    response = await client.post(
+        "/api/v1/cart/apply-coupon",
+        json={"code": "ANY-CODE"},
+        headers=session_headers,
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Cart is empty"
+
+
+@pytest.mark.asyncio
 async def test_quantity_update_rejects_cart_item_after_vendor_deactivation(
     client: AsyncClient,
     admin_user,
