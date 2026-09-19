@@ -692,6 +692,17 @@ class ProductResponse(ProductBase):
                     if variation is None:
                         continue
                     if (
+                        variant.price is not None
+                        and variation.price is None
+                        and variation.sale_price is None
+                        and variation.inherits_price is None
+                        and variation.inherits_sale_price is None
+                    ):
+                        # A persisted legacy variant with an explicit price is
+                        # authoritative when its companion variation is only a
+                        # null-marker placeholder.
+                        continue
+                    if (
                         variation.price is None
                         and variation_sale_price(variation, self.base_price) is None
                         and not (

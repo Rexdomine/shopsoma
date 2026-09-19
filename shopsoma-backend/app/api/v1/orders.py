@@ -310,12 +310,6 @@ async def resolve_order_variant(
                 or matching_variation.sale_price is not None
                 or matching_variation.inherits_price is True
                 or matching_variation.inherits_sale_price is True
-                or (
-                    matching_variation.price is None
-                    and matching_variation.sale_price is None
-                    and matching_variation.inherits_price is None
-                    and matching_variation.inherits_sale_price is None
-                )
             )
         ):
             unit_price = effective_variation_price(

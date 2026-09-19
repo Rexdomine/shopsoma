@@ -384,6 +384,31 @@ def test_existing_variant_merges_matching_variation_compare_at_price():
     assert product.variants[0].compare_at_price == Decimal("100.00")
 
 
+def test_existing_variant_keeps_explicit_price_for_null_marker_variation():
+    now = datetime.now(timezone.utc)
+    product_id = uuid4()
+    variation = VariationResponse.model_construct(
+        id=uuid4(), product_id=product_id, title="M", type="size",
+        color_hex=None, price=None, sale_price=None,
+        inherits_price=None, inherits_sale_price=None, images=[], is_active=True,
+        created_at=now, updated_at=now, size_stocks=[],
+    )
+    variant = ProductVariantResponse.model_construct(
+        id=uuid4(), product_id=product_id, size="M", color=None, color_hex=None,
+        price=Decimal("75.00"), compare_at_price=None, stock=1, sku=None,
+        is_available=True, created_at=now, updated_at=now,
+    )
+    product = ProductResponse.model_construct(
+        id=product_id, base_price=Decimal("100.00"),
+        compare_at_price=Decimal("120.00"), variants=[variant], variations=[variation],
+    )
+
+    product.generate_variants_from_variations()  # pyright: ignore[reportCallIssue]
+
+    assert product.variants[0].price == Decimal("75.00")
+    assert product.variants[0].compare_at_price is None
+
+
 def test_existing_size_variant_inherits_sole_color_hex():
     now = datetime.now(timezone.utc)
     product_id = uuid4()

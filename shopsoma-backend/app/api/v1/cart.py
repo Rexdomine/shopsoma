@@ -79,12 +79,6 @@ def resolve_variant_response(
                 or variation.sale_price is not None
                 or variation.inherits_price is True
                 or variation.inherits_sale_price is True
-                or (
-                    variation.price is None
-                    and variation.sale_price is None
-                    and variation.inherits_price is None
-                    and variation.inherits_sale_price is None
-                )
             ):
                 regular_price = variation_regular_price(
                     variation, product.base_price, getattr(product, "compare_at_price", None)
