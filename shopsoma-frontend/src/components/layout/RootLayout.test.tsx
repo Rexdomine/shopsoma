@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   COMING_SOON_CACHE_MS,
   gateLocationKey,
+  gateStateAfterRefreshFailure,
   isGateCacheFresh,
   shouldBypassComingSoon,
   shouldShowGateLoading,
@@ -35,6 +36,17 @@ describe('shouldShowGateLoading', () => {
   it('blocks the initial public resolution and scope changes', () => {
     expect(shouldShowGateLoading(false, false, 'loading', null, 'public')).toBe(true);
     expect(shouldShowGateLoading(false, false, 'open', 'bypass', 'public')).toBe(true);
+  });
+});
+
+describe('gateStateAfterRefreshFailure', () => {
+  it('preserves a closed gate during background refresh failures', () => {
+    expect(gateStateAfterRefreshFailure('closed', true)).toBe('closed');
+    expect(gateStateAfterRefreshFailure('open', true)).toBe('open');
+  });
+
+  it('keeps initial failures fail-open', () => {
+    expect(gateStateAfterRefreshFailure('loading', false)).toBe('open');
   });
 });
 

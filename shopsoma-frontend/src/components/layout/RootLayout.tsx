@@ -64,6 +64,13 @@ export function shouldShowGateLoading(
   return authLoading || (!bypassComingSoon && (gateState === 'loading' || resolvedScope !== gateScope));
 }
 
+export function gateStateAfterRefreshFailure(
+  currentState: GateState,
+  isBackgroundRevalidation: boolean,
+): GateState {
+  return isBackgroundRevalidation ? currentState : 'open';
+}
+
 /**
  * Root Layout Component
  * Wraps all routes and handles scroll restoration
@@ -103,8 +110,10 @@ export default function RootLayout() {
       }
     }).catch(() => {
       if (mounted) {
-        setGateState('open');
-        setResolvedScope('public');
+        setGateState((currentState) => gateStateAfterRefreshFailure(currentState, isBackgroundRevalidation));
+        if (!isBackgroundRevalidation) {
+          setResolvedScope('public');
+        }
         setResolvedAt(Date.now());
       }
     });
