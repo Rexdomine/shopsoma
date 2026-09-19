@@ -87,7 +87,12 @@ def _sync_inherited_variation_prices(
         if inherits_regular_price:
             variation.price = new_compare_at_price
         if inherits_sale_price:
-            variation.sale_price = new_base_price if new_compare_at_price is not None else None
+            variation.sale_price = (
+                new_base_price
+                if new_compare_at_price is not None
+                and new_base_price < variation.price
+                else None
+            )
 
         if not (inherits_regular_price or inherits_sale_price):
             continue
