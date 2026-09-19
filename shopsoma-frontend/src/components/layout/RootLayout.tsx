@@ -15,6 +15,8 @@ const AUTH_ENTRY_PATHS = new Set([
   '/claim-account',
 ]);
 
+type GateState = 'loading' | 'open' | 'closed';
+
 export function shouldBypassComingSoon(pathname: string, role?: User['role'] | null): boolean {
   return role === 'admin'
     || pathname.startsWith('/admin')
@@ -29,8 +31,7 @@ export function shouldBypassComingSoon(pathname: string, role?: User['role'] | n
 export default function RootLayout() {
   const { pathname } = useLocation();
   const { user, isLoading: authLoading } = useAuth();
-  const [comingSoon, setComingSoon] = useState(false);
-  const [comingSoonLoading, setComingSoonLoading] = useState(true);
+  const [gateState, setGateState] = useState<GateState>('loading');
 
   useEffect(() => {
     window.scrollTo(0, 0);
@@ -40,25 +41,26 @@ export default function RootLayout() {
 
   useEffect(() => {
     if (bypassComingSoon) {
-      setComingSoon(false);
-      setComingSoonLoading(false);
+      setGateState('open');
       return undefined;
     }
     let mounted = true;
-    setComingSoonLoading(true);
+    setGateState('loading');
     getComingSoonSettings().then((settings) => {
-      if (mounted) setComingSoon(settings.enabled);
+      if (mounted) setGateState(settings.enabled ? 'closed' : 'open');
     }).catch(() => {
-      if (mounted) setComingSoon(false);
-    }).finally(() => {
-      if (mounted) setComingSoonLoading(false);
+      if (mounted) setGateState('open');
     });
     return () => { mounted = false; };
   }, [bypassComingSoon]);
 
-  if (authLoading || (!bypassComingSoon && comingSoonLoading)) {
+  if (authLoading || (!bypassComingSoon && gateState === 'loading')) {
     return <Loading fullScreen message="Preparing ShopSoma..." />;
   }
 
-  return comingSoon && !bypassComingSoon ? <ComingSoon /> : <Outlet />;
+  if (gateState === 'closed' && !bypassComingSoon) {
+    return <ComingSoon onReleased={() => setGateState('open')} />;
+  }
+
+  return <Outlet />;
 }

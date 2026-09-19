@@ -21,7 +21,11 @@ function pad(value: number) {
   return value.toString().padStart(2, '0');
 }
 
-export default function ComingSoon() {
+interface ComingSoonProps {
+  onReleased?: () => void;
+}
+
+export default function ComingSoon({ onReleased }: ComingSoonProps) {
   const [settings, setSettings] = useState<ComingSoonSettings | null>(null);
   const [countdown, setCountdown] = useState<Countdown>(() => getCountdown(null));
 
@@ -34,9 +38,10 @@ export default function ComingSoon() {
     }).catch(() => {
       // Fail open: an unavailable settings endpoint must not take down the storefront.
       setSettings({ enabled: false, launch_at: null, image_url: DEFAULT_IMAGE });
+      onReleased?.();
     });
     return () => { mounted = false; };
-  }, []);
+  }, [onReleased]);
 
   useEffect(() => {
     if (!settings?.enabled || !settings.launch_at) return undefined;
@@ -45,10 +50,11 @@ export default function ComingSoon() {
       setCountdown(next);
       if (new Date(settings.launch_at as string).getTime() <= Date.now()) {
         setSettings((current: ComingSoonSettings | null) => current ? { ...current, enabled: false } : current);
+        onReleased?.();
       }
     }, 1000);
     return () => window.clearInterval(timer);
-  }, [settings]);
+  }, [settings, onReleased]);
 
   const launchLabel = useMemo(() => {
     if (!settings?.launch_at) return 'Launching soon';
@@ -89,7 +95,7 @@ export default function ComingSoon() {
         </section>
 
         <section className="relative min-h-[420px] lg:min-h-screen" aria-label="ShopSoma campaign image">
-          <picture><source media="(max-width: 767px)" srcSet="/images/hero/campaign/campaign-exterior-mobile.webp" /><img src={settings.image_url || DEFAULT_IMAGE} alt="ShopSoma campaign storefront" className="absolute inset-0 h-full w-full object-cover" onError={(event) => { event.currentTarget.src = DEFAULT_IMAGE; }} /></picture>
+          <img src={settings.image_url || DEFAULT_IMAGE} alt="ShopSoma campaign storefront" className="absolute inset-0 h-full w-full object-cover" onError={(event) => { event.currentTarget.src = DEFAULT_IMAGE; }} />
           <div className="absolute inset-0 bg-gradient-to-t from-[#0e302d]/45 via-transparent to-transparent" aria-hidden="true" />
           <div className="absolute bottom-6 left-6 max-w-xs text-sm leading-6 text-white/80 sm:bottom-10 sm:left-10">Curated style, independent voices, and pieces worth keeping.</div>
         </section>

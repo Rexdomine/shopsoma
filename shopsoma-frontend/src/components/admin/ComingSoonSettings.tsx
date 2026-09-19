@@ -21,7 +21,12 @@ function toIso(value: string): string | null {
   return value ? new Date(value).toISOString() : null;
 }
 
-export default function ComingSoonSettings() {
+interface ComingSoonSettingsProps {
+  onDirtyChange?: (dirty: boolean) => void;
+  onBusyChange?: (busy: boolean) => void;
+}
+
+export default function ComingSoonSettings({ onDirtyChange, onBusyChange }: ComingSoonSettingsProps) {
   const { success, error } = useToast();
   const [settings, setSettings] = useState<ComingSoonSettingsValue | null>(null);
   const [enabled, setEnabled] = useState(false);
@@ -47,6 +52,15 @@ export default function ComingSoonSettings() {
     || launchAt !== toLocalInput(settings?.launch_at ?? null)
     || imageUrl !== (settings?.image_url || DEFAULT_IMAGE)
   );
+
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+    onBusyChange?.(saving);
+    return () => {
+      onDirtyChange?.(false);
+      onBusyChange?.(false);
+    };
+  }, [dirty, saving, onBusyChange, onDirtyChange]);
 
   const save = async () => {
     if (launchAt && new Date(launchAt).getTime() <= Date.now()) {
