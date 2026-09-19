@@ -147,11 +147,12 @@ def test_inherited_variation_sale_uses_product_compare_at_in_cart_pricing():
     assert cart_item.price == 90
 
 
+def test_legacy_variant_price_is_preserved_for_null_marker_variation():
     variation = SimpleNamespace(
         id="00000000-0000-4000-8000-000000000002",
         title="M", type="size", color_hex=None, price=None, sale_price=None,
-        is_active=True, size_stocks=[], created_at=datetime.now(timezone.utc),
-        updated_at=datetime.now(timezone.utc),
+        inherits_price=None, inherits_sale_price=None, is_active=True, size_stocks=[],
+        created_at=datetime.now(timezone.utc), updated_at=datetime.now(timezone.utc),
     )
     product = SimpleNamespace(
         id="00000000-0000-4000-8000-000000000001", base_price=100,
