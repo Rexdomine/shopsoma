@@ -16,5 +16,9 @@ services:
         value: https://shopsoma-production-api.onrender.com/api/v1
       - key: VITE_ENVIRONMENT
         value: production
+      - key: VITE_PAYSTACK_PUBLIC_KEY
+        sync: false
+      - key: VITE_STRIPE_PUBLISHABLE_KEY
+        sync: false
     autoDeploy: false
     pullRequestPreviewsEnabled: false
