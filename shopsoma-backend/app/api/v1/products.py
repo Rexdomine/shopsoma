@@ -37,6 +37,7 @@ from app.schemas.product import (
     unique_variations_by_color,
     unique_variations_by_size,
     effective_variation_price,
+    variation_regular_price,
 )
 
 router = APIRouter(prefix="/products", tags=["products"])
@@ -122,6 +123,9 @@ def _sync_inherited_variation_prices(
                     variation.price,
                     variation.sale_price,
                     new_base_price,
+                    regular_price=variation_regular_price(
+                        variation, new_base_price, new_compare_at_price
+                    ),
                 )
 
 

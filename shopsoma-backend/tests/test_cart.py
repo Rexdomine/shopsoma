@@ -128,7 +128,25 @@ def test_existing_variation_cart_row_uses_and_persists_current_sale_price():
     assert calculate_cart_summary([cart_item]).subtotal == 160
 
 
-def test_legacy_size_cart_row_keeps_legacy_price_when_size_variation_has_no_override():
+def test_inherited_variation_sale_uses_product_compare_at_in_cart_pricing():
+    variation = SimpleNamespace(
+        id="00000000-0000-4000-8000-000000000004",
+        title="Red", color_hex="#ff0000", price=None, sale_price=90,
+        inherits_price=True, is_active=True, size_stocks=[],
+        created_at=datetime.now(timezone.utc), updated_at=datetime.now(timezone.utc),
+    )
+    product = SimpleNamespace(
+        id="00000000-0000-4000-8000-000000000005", base_price=80,
+        compare_at_price=100, total_stock=10, made_to_order=False,
+        variants=[], variations=[variation],
+    )
+    cart_item = SimpleNamespace(product=product, variant_id=variation.id, price=80, quantity=1)
+
+    assert resolve_cart_item_price(cart_item) == 90
+    assert reprice_cart_item(cart_item) is True
+    assert cart_item.price == 90
+
+
     variation = SimpleNamespace(
         id="00000000-0000-4000-8000-000000000002",
         title="M", type="size", color_hex=None, price=None, sale_price=None,

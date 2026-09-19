@@ -489,7 +489,28 @@ def test_existing_size_variant_merges_matching_size_variation_price():
     assert product.variants[0].compare_at_price == Decimal("100.00")
 
 
-def test_null_or_invalid_variation_sale_does_not_override_regular_price():
+def test_inherited_regular_price_uses_compare_at_for_explicit_sale():
+    now = datetime.now(timezone.utc)
+    variation = VariationResponse.model_construct(
+        id=uuid4(), product_id=uuid4(), title="Red", type="color", color_hex=None,
+        price=None, sale_price=Decimal("90.00"), inherits_price=True,
+        inherits_sale_price=False, images=[], is_active=True,
+        created_at=now, updated_at=now, size_stocks=[],
+    )
+    product = ProductResponse.model_construct(
+        id=variation.product_id,
+        base_price=Decimal("80.00"),
+        compare_at_price=Decimal("100.00"),
+        variants=[],
+        variations=[variation],
+    )
+
+    product.generate_variants_from_variations()  # pyright: ignore[reportCallIssue]
+
+    assert product.variants[0].price == Decimal("90.00")
+    assert product.variants[0].compare_at_price == Decimal("100.00")
+
+
     for sale_price in (None, Decimal("0.00"), Decimal("120.00")):
         product = _product_with_variation(
             price=Decimal("100.00"),

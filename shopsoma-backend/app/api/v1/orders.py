@@ -64,6 +64,7 @@ from app.schemas.product import (
     normalize_color_value,
     unique_variations_by_color,
     unique_variations_by_size,
+    variation_regular_price,
 )
 from app.services.email_service import email_service
 from app.services.vendor_notification_service import VendorNotificationService
@@ -312,6 +313,11 @@ async def resolve_order_variant(
                 matching_variation.price,
                 matching_variation.sale_price,
                 product.base_price,
+                regular_price=variation_regular_price(
+                    matching_variation,
+                    product.base_price,
+                    product.compare_at_price,
+                ),
             )
         variant_stock = variant.stock
         if product.made_to_order:
@@ -340,7 +346,12 @@ async def resolve_order_variant(
     if size_stock_row:
         size_stock, variation = size_stock_row
         unit_price = effective_variation_price(
-            variation.price, variation.sale_price, product.base_price
+            variation.price,
+            variation.sale_price,
+            product.base_price,
+            regular_price=variation_regular_price(
+                variation, product.base_price, product.compare_at_price
+            ),
         )
         available_stock = size_stock.stock
         if product.made_to_order:
@@ -392,7 +403,12 @@ async def resolve_order_variant(
                 detail="Select a purchasable variant or size stock for this product",
             )
         unit_price = effective_variation_price(
-            variation.price, variation.sale_price, product.base_price
+            variation.price,
+            variation.sale_price,
+            product.base_price,
+            regular_price=variation_regular_price(
+                variation, product.base_price, product.compare_at_price
+            ),
         )
         available_stock = product.total_stock
         if product.made_to_order:
