@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
 import ComingSoon from '../../pages/ComingSoon';
-import { getComingSoonSettings } from '../../services/settingsService';
+import { getComingSoonSettings, type ComingSoonSettings } from '../../services/settingsService';
 import { useAuth } from '../../context/AuthContext';
 import type { User } from '../../types';
 import Loading from '../common/Loading';
@@ -82,6 +82,7 @@ export default function RootLayout() {
   const [gateState, setGateState] = useState<GateState>('loading');
   const [resolvedScope, setResolvedScope] = useState<'public' | 'bypass' | null>(null);
   const [resolvedAt, setResolvedAt] = useState<number | null>(null);
+  const [resolvedSettings, setResolvedSettings] = useState<ComingSoonSettings | null>(null);
 
   useEffect(() => {
     window.scrollTo(0, 0);
@@ -106,6 +107,7 @@ export default function RootLayout() {
     getComingSoonSettings().then((settings) => {
       if (mounted) {
         setGateState(settings.enabled ? 'closed' : 'open');
+        setResolvedSettings(settings);
         setResolvedScope('public');
         setResolvedAt(Date.now());
       }
@@ -132,7 +134,7 @@ export default function RootLayout() {
   }
 
   if (gateState === 'closed' && !bypassComingSoon) {
-    return <ComingSoon onReleased={() => setGateState('open')} />;
+    return <ComingSoon initialSettings={resolvedSettings ?? undefined} onReleased={() => setGateState('open')} />;
   }
 
   return <Outlet />;
