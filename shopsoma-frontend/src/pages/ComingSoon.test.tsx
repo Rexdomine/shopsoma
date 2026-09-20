@@ -26,6 +26,21 @@ describe('ComingSoon', () => {
     expect(getByRole('status')).toHaveTextContent('Loading launch settings…');
   });
 
+  it('links the Instagram icon to the official ShopSoma Africa profile', async () => {
+    getComingSoonSettings.mockResolvedValue({
+      enabled: true,
+      launch_at: null,
+      image_url: '/campaign.webp',
+    });
+
+    const { getByRole } = render(<ComingSoon />);
+
+    await waitFor(() => expect(getByRole('link', { name: 'ShopSoma on Instagram' })).toHaveAttribute(
+      'href',
+      'https://www.instagram.com/shopsoma.africa?stkn=N3E1dndjZTBsajdk',
+    ));
+  });
+
   it('releases the parent when a follow-up settings read reports the gate is open', async () => {
     getComingSoonSettings.mockResolvedValue({
       enabled: false,
