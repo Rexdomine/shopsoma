@@ -33,7 +33,12 @@ export function blocksFor(body: string): DocumentBlock[] {
       // A completed bullet followed by prose starts a new paragraph, even
       // when the source extraction omitted the separating blank line.
       if (/[.!?]["'”’)]?$/.test(previous)) { flushList(); }
-      else { appendWrapped(list, line); continue; }
+      else {
+        const lastIndex = list.length - 1;
+        const separator = /[-–—]$/.test(previous) ? '' : ' ';
+        list[lastIndex] = `${previous}${separator}${line}`;
+        continue;
+      }
     }
     if (line.endsWith('-') && lines[index + 1]) {
       const joined = `${line}${lines[index + 1]}`;

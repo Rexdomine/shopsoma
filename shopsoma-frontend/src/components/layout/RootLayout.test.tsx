@@ -69,6 +69,8 @@ describe('shouldBypassComingSoon', () => {
     expect(shouldBypassComingSoon('/orders/order-1', 'customer')).toBe(true);
     expect(shouldBypassComingSoon('/track/order-1', 'customer')).toBe(true);
     expect(shouldBypassComingSoon('/profile/payments', 'customer')).toBe(true);
+    expect(shouldBypassComingSoon('/profile/orders', 'customer')).toBe(true);
+    expect(shouldBypassComingSoon('/profile/orders/archived', 'customer')).toBe(true);
     expect(shouldBypassComingSoon('/products', 'customer')).toBe(false);
   });
 

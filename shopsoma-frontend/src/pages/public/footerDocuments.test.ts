@@ -39,4 +39,11 @@ describe('footer document contract', () => {
       { kind: 'heading', lines: ['Made-to-Order?'] },
     ]);
   });
+
+  it('appends non-bullet continuations to the active bullet', () => {
+    expect(blocksFor('CONDITIONS\n• Returns are accepted if\napplicable; and\nwithin the return window.')).toEqual([
+      { kind: 'heading', lines: ['CONDITIONS'] },
+      { kind: 'list', lines: ['Returns are accepted if applicable; and within the return window.'] },
+    ]);
+  });
 });
