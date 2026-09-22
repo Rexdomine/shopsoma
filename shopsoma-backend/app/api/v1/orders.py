@@ -1647,8 +1647,8 @@ async def get_order_tracking(
         in {"legacy_pre_bridge", "legacy_ambiguous_quarantined"}
     ):
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Order number access requires authentication",
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Order not found",
         )
 
     # Lock the order before the canonical owner/capability rows used by checkout auth.
