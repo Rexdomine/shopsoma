@@ -111,6 +111,12 @@ async def test_secure_guest_read_capabilities(
         actual[label] = response.status_code
         if response.status_code == 200:
             assert token not in response.text
+    if suffix:
+        number_response = await client.get(
+            f"/api/v1/orders/{payload['order_number'].lower()}{suffix}",
+            headers={"X-ShopSoma-Checkout-Capability": token},
+        )
+        assert number_response.status_code == 200, number_response.text
     cap = (
         await db_session.execute(
             select(OrderGuestCapability).where(
