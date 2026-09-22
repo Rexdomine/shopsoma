@@ -22,6 +22,7 @@ const TRANSACTIONAL_RETURN_PATHS = [
   '/orders',
   '/track',
   '/profile/payments',
+  '/profile/orders',
 ];
 
 type GateState = 'loading' | 'open' | 'closed';

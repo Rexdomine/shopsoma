@@ -2,6 +2,12 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { subscribeToNewsletter } from '../../services/newsletterService';
 
+export const FOOTER_SECTIONS = [
+  { key: 'customer-care', title: 'Customer Care', links: [{ to: '/contact', label: 'Contact Us' }, { to: '/track', label: 'Track your order' }, { to: '/shipping', label: 'Shipping' }, { to: '/returns', label: 'Returns and Refunds' }, { to: '/faqs', label: 'FAQ' }] },
+  { key: 'about', title: 'About ShopSoma', links: [{ to: '/about', label: 'About Us' }, { to: '/collaborate', label: 'Become a ShopSoma partner' }] },
+  { key: 'policies', title: 'Policies', links: [{ to: '/terms', label: 'Terms of Use' }, { to: '/privacy', label: 'Privacy Policy' }, { to: '/cookies', label: 'Cookie Policy' }] },
+] as const;
+
 export default function Footer() {
   const currentYear = new Date().getFullYear();
   const [email, setEmail] = useState('');
@@ -32,44 +38,7 @@ export default function Footer() {
     }
   };
 
-  const sections = [
-    {
-      key: 'customer-care',
-      title: 'Customer Care',
-      links: [
-        { to: '/contact', label: 'Contact us' },
-        { to: '/email', label: 'Email us' },
-        { to: '/faqs', label: 'FAQs' }
-      ]
-    },
-    {
-      key: 'shipping-returns',
-      title: 'Shipping and Returns',
-      links: [
-        { to: '/track', label: 'Track an order' },
-        { to: '/returns', label: 'Return an Order' },
-        { to: '/shipping', label: 'Shipping times and Costs' }
-      ]
-    },
-    {
-      key: 'about',
-      title: 'About Shopsoma',
-      links: [
-        { to: '/about', label: 'About us' },
-        { to: '/careers', label: 'Careers and Openings' },
-        { to: '/collaborate', label: 'Become a collaborator' }
-      ]
-    },
-    {
-      key: 'policies',
-      title: 'Policies',
-      links: [
-        { to: '/privacy', label: 'Privacy Policy' },
-        { to: '/terms', label: 'Terms of Use' },
-        { to: '/shipping-policy', label: 'Shipping Policy' }
-      ]
-    }
-  ];
+  const sections = FOOTER_SECTIONS;
 
   const toggleSection = (key: string) => {
     setOpenSection((current) => (current === key ? null : key));
@@ -129,6 +98,8 @@ export default function Footer() {
                   <button
                     type="button"
                     onClick={() => toggleSection(section.key)}
+                    aria-expanded={isOpen}
+                    aria-controls={`footer-${section.key}-links`}
                     className="w-full flex items-center justify-between text-left"
                   >
                     <span className="text-xs font-ui uppercase tracking-[0.25em]" style={{ color: '#1E5053' }}>
@@ -141,7 +112,7 @@ export default function Footer() {
                     </span>
                   </button>
                   {isOpen && (
-                    <div className="mt-3 space-y-2">
+                    <div id={`footer-${section.key}-links`} className="mt-3 space-y-2">
                       {section.links.map((link) => (
                         <Link
                           key={link.to}
@@ -210,46 +181,10 @@ export default function Footer() {
                 </div>
               </div>
 
-              {/* Customer Care */}
-              <div>
-                <h3 className="text-sm font-ui uppercase tracking-[0.3em] mb-4 text-[#1E5053]">Customer Care</h3>
-                <ul className="space-y-2">
-                  <li><Link to="/contact" className="text-sm font-serif text-[#1E5053] hover:underline">Contact us</Link></li>
-                  <li><Link to="/email" className="text-sm font-serif text-[#1E5053] hover:underline">Email us</Link></li>
-                  <li><Link to="/faqs" className="text-sm font-serif text-[#1E5053] hover:underline">FAQs</Link></li>
-                </ul>
-              </div>
-
-              {/* Shipping & Returns */}
-              <div>
-                <h3 className="text-sm font-ui uppercase tracking-[0.3em] mb-4 text-[#1E5053]">Shipping & Returns</h3>
-                <ul className="space-y-2">
-                  <li><Link to="/track" className="text-sm font-serif text-[#1E5053] hover:underline">Track an order</Link></li>
-                  <li><Link to="/returns" className="text-sm font-serif text-[#1E5053] hover:underline">Return an Order</Link></li>
-                  <li><Link to="/shipping" className="text-sm font-serif text-[#1E5053] hover:underline">Shipping times and Costs</Link></li>
-                </ul>
-              </div>
-
-              {/* About Shopsoma & Policies */}
-              <div className="space-y-6">
-                <div>
-                  <h3 className="text-sm font-ui uppercase tracking-[0.3em] mb-4 text-[#1E5053]">About Shopsoma</h3>
-                  <ul className="space-y-2">
-                    <li><Link to="/about" className="text-sm font-serif text-[#1E5053] hover:underline">About us</Link></li>
-                    <li><Link to="/careers" className="text-sm font-serif text-[#1E5053] hover:underline">Careers and Openings</Link></li>
-                    <li><Link to="/collaborate" className="text-sm font-serif text-[#1E5053] hover:underline">Become a collaborator</Link></li>
-                  </ul>
-                </div>
-
-                <div>
-                  <h3 className="text-sm font-ui uppercase tracking-[0.3em] mb-4 text-[#1E5053]">Policies</h3>
-                  <ul className="space-y-2">
-                    <li><Link to="/privacy" className="text-sm font-serif text-[#1E5053] hover:underline">Privacy Policy</Link></li>
-                    <li><Link to="/terms" className="text-sm font-serif text-[#1E5053] hover:underline">Terms of Use</Link></li>
-                    <li><Link to="/shipping-policy" className="text-sm font-serif text-[#1E5053] hover:underline">Shipping Policy</Link></li>
-                  </ul>
-                </div>
-              </div>
+              {sections.map((section) => <div key={section.key}>
+                <h3 className="text-sm font-ui uppercase tracking-[0.3em] mb-4 text-[#1E5053]">{section.title}</h3>
+                <ul className="space-y-2">{section.links.map((link) => <li key={link.to}><Link to={link.to} className="text-sm font-serif text-[#1E5053] hover:underline">{link.label}</Link></li>)}</ul>
+              </div>)}
             </div>
 
             <div className="mt-8 border-t border-[#1E5053] pt-4 text-xs font-ui uppercase tracking-[0.3em] text-[#1E5053]">
