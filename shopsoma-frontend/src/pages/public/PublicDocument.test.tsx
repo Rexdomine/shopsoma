@@ -40,7 +40,7 @@ describe('public footer documents', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Track order' }));
     expect(screen.getByRole('alert')).toHaveTextContent('not the order number');
     expect(screen.getByTestId('location')).toHaveTextContent('/');
-    fireEvent.change(screen.getByLabelText(/Enter your order details/), { target: { value: ' 12345678-1234-1234-1234-123456789abc ' } });
+    fireEvent.change(screen.getByLabelText(/Enter your order details/), { target: { value: ' 12345678-1234-1234-1234-123456789ABC ' } });
     fireEvent.click(screen.getByRole('button', { name: 'Track order' }));
     expect(screen.getByTestId('location')).toHaveTextContent('/track/12345678-1234-1234-1234-123456789abc');
   });

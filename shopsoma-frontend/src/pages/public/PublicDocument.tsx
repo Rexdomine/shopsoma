@@ -32,7 +32,7 @@ export default function PublicDocument({ documentKey }: { documentKey: FooterDoc
       return;
     }
     setError('');
-    navigate(`/track/${encodeURIComponent(value)}`);
+    navigate(`/track/${encodeURIComponent(value.toLowerCase())}`);
   };
   return <Layout>
   <main className="mx-auto w-full max-w-4xl px-6 py-14 text-[#1E5053] sm:px-10 lg:py-20" data-document={documentKey}>

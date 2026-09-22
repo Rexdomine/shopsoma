@@ -629,7 +629,9 @@ const router = createBrowserRouter([
     element: (
       <ErrorBoundary>
         <Suspense fallback={<Loading fullScreen message="Loading..." />}>
-          <ProfileOrders />
+          <ProtectedRoute>
+            <ProfileOrders />
+          </ProtectedRoute>
         </Suspense>
       </ErrorBoundary>
     ),

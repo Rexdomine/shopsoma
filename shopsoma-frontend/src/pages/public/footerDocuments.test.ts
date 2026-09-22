@@ -20,7 +20,7 @@ describe('footer document contract', () => {
   });
 
   it('preserves normalized source order, headings, and bullets for every document', () => {
-    const normalize = (value: string) => value.replace(/•\s*/g, '').replace(/\s+/g, ' ').trim();
+    const normalize = (value: string) => value.replace(/•\s*/g, '').replace(/\s+/g, ' ').replace(/([-–—])\s+/g, '$1').trim();
     for (const document of Object.values(FOOTER_DOCUMENTS)) {
       const blocks = blocksFor(document.body);
       const rendered = blocks.flatMap((block) => block.lines).join(' ');
@@ -28,5 +28,15 @@ describe('footer document contract', () => {
       expect(blocks.some((block) => block.kind === 'heading')).toBe(true);
       if (document.body.includes('•')) expect(blocks.some((block) => block.kind === 'list')).toBe(true);
     }
+  });
+
+  it('keeps policy prose separate from a completed final bullet and rejoins wrapped words', () => {
+    const blocks = blocksFor('CONDITIONS\n• valid proof of purchase.\nPlease take reasonable care.\n\nMade-to-\nOrder?');
+    expect(blocks).toEqual([
+      { kind: 'heading', lines: ['CONDITIONS'] },
+      { kind: 'list', lines: ['valid proof of purchase.'] },
+      { kind: 'paragraph', lines: ['Please take reasonable care.'] },
+      { kind: 'heading', lines: ['Made-to-Order?'] },
+    ]);
   });
 });

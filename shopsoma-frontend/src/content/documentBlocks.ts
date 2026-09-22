@@ -18,18 +18,29 @@ export function blocksFor(body: string): DocumentBlock[] {
   let list: string[] = [];
   const flushParagraph = () => { if (paragraph.length) { blocks.push({ kind: 'paragraph', lines: paragraph }); paragraph = []; } };
   const flushList = () => { if (list.length) { blocks.push({ kind: 'list', lines: list }); list = []; } };
+  const appendWrapped = (target: string[], line: string) => {
+    const previous = target[target.length - 1];
+    if (previous && /[-–—]$/.test(previous)) target[target.length - 1] = `${previous}${line}`;
+    else target.push(line);
+  };
 
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
     if (!line) { flushList(); flushParagraph(); continue; }
     if (line.startsWith('•')) { flushParagraph(); list.push(line.slice(1).trim()); continue; }
-    if (list.length) { list[list.length - 1] = `${list[list.length - 1]} ${line}`; continue; }
-    if (/^What\b/i.test(line) && line.endsWith('-') && lines[index + 1]) {
-      const joined = `${line} ${lines[index + 1]}`;
+    if (list.length) {
+      const previous = list[list.length - 1];
+      // A completed bullet followed by prose starts a new paragraph, even
+      // when the source extraction omitted the separating blank line.
+      if (/[.!?]["'”’)]?$/.test(previous)) { flushList(); }
+      else { appendWrapped(list, line); continue; }
+    }
+    if (line.endsWith('-') && lines[index + 1]) {
+      const joined = `${line}${lines[index + 1]}`;
       if (joined.endsWith('?')) { flushParagraph(); blocks.push({ kind: 'heading', lines: [joined] }); index += 1; continue; }
     }
     if (isHeadingLine(line)) { flushParagraph(); blocks.push({ kind: 'heading', lines: [line] }); }
-    else paragraph.push(line);
+    else appendWrapped(paragraph, line);
   }
   flushList(); flushParagraph();
   return blocks;
