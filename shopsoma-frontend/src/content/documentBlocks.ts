@@ -33,7 +33,7 @@ export function blocksFor(body: string): DocumentBlock[] {
       // PDF extraction can insert a blank line at a page break inside a
       // sentence. Keep lower-case continuations in the same paragraph while
       // retaining normal blank-line paragraph boundaries.
-      if (paragraph.length && previous && next && /^[a-z]/.test(next) && !/[.!?…][\"'”’)]?$/.test(previous)) continue;
+      if (paragraph.length && previous && next && /^[a-z]/.test(next) && !/[.!?…]["'”’)]?$/.test(previous)) continue;
       flushList(); flushParagraph(); continue;
     }
     if (line.startsWith('•')) { flushParagraph(); list.push(line.slice(1).trim()); continue; }
