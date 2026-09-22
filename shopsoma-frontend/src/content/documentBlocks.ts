@@ -4,6 +4,7 @@ const EXPLICIT_HEADINGS = new Set([
   'Orders, Returns & General Enquiries', 'Brand & Partnership Enquiries', 'Marketing, Press & Creative Enquiries',
   'International Delivery', 'Ready-To-Wear (RTW)', 'Made-to-Order (MTO)', 'Shipping Costs', 'Split Shipments', 'Tracking Your Order',
   'Return Window', 'Return Conditions', 'Made-to-Order (MTO) Items', 'Final Sale', 'Exchanges', 'Refunds',
+  'Delivery Delays', 'Starting a Return', 'Quality Check', 'Return Shipping', 'Damaged, Defective or Incorrect Items', 'Your Statutory Rights',
   'ORDERS & PAYMENT', 'PRODUCTS & SIZING', 'SHIPPING & DELIVERY', 'RETURNS & REFUNDS', 'ACCOUNT & SUPPORT',
   'Partner with SHOPSOMA', 'Brand & Designer Partnerships', 'From Africa, with Style.', '‘Track Your Order’', 'Essential Cookies', 'Preference Cookies', 'Analytics Cookies', 'Marketing Cookies',
 ]);

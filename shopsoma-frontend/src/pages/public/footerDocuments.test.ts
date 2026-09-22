@@ -46,4 +46,12 @@ describe('footer document contract', () => {
       { kind: 'list', lines: ['Returns are accepted if applicable; and within the return window.'] },
     ]);
   });
+
+  it('recognizes supplied title-case policy section headings', () => {
+    const blocks = blocksFor('Delivery Delays\nShipping may take longer.\n\nStarting a Return\nFollow these steps.\n\nQuality Check\nItems are inspected.\n\nReturn Shipping\nUse the provided label.\n\nDamaged, Defective or Incorrect Items\nContact support.\n\nYour Statutory Rights\nYour legal rights remain unaffected.');
+    expect(blocks.filter((block) => block.kind === 'heading').map((block) => block.lines[0])).toEqual([
+      'Delivery Delays', 'Starting a Return', 'Quality Check', 'Return Shipping',
+      'Damaged, Defective or Incorrect Items', 'Your Statutory Rights',
+    ]);
+  });
 });
