@@ -1604,20 +1604,26 @@ async def get_order(
     return order
 
 
-@router.get("/{order_id}/tracking")
+@router.get("/{order_ref}/tracking")
 async def get_order_tracking(
-    order_id: UUID,
+    order_ref: str,
     capability: Optional[str] = Header(None, alias="X-ShopSoma-Checkout-Capability"),
     current_user: Optional[User] = Depends(get_optional_user),
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Get order tracking information
+    Get order tracking information by internal UUID or customer-facing order number.
 
     Returns tracking details including order status, history, and amount.
     Works for both authenticated users and guest checkout.
     """
-    query = select(Order).where(Order.id == order_id).with_for_update()
+    try:
+        order_uuid = UUID(order_ref)
+    except ValueError:
+        order_uuid = None
+
+    order_filter = Order.id == order_uuid if order_uuid else Order.order_number == order_ref
+    query = select(Order).where(order_filter).with_for_update()
     result = await db.execute(query)
     order = result.scalar_one_or_none()
 

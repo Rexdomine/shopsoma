@@ -39,7 +39,7 @@ describe('public footer documents', () => {
     const { container } = show('track');
     expect(container.querySelector('article')).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { level: 1, name: 'Track Your Order' })).toBeInTheDocument();
-    expect(screen.getByLabelText(/Enter your order details below/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Enter your order ID or order number/)).toBeInTheDocument();
   });
   it('links the exact contact email addresses', () => {
     show('contact');
@@ -49,11 +49,14 @@ describe('public footer documents', () => {
     show('track');
     fireEvent.click(screen.getByRole('button', { name: 'Track order' }));
     expect(screen.getByRole('alert')).toHaveTextContent('Enter your order ID');
-    fireEvent.change(screen.getByLabelText(/Enter your order details/), { target: { value: 'order/one?two' } });
+    fireEvent.change(screen.getByLabelText(/Enter your order ID or order number/), { target: { value: 'order/one?two' } });
     fireEvent.click(screen.getByRole('button', { name: 'Track order' }));
-    expect(screen.getByRole('alert')).toHaveTextContent('not the order number');
+    expect(screen.getByRole('alert')).toHaveTextContent('full order ID or order number');
     expect(screen.getByTestId('location')).toHaveTextContent('/');
-    fireEvent.change(screen.getByLabelText(/Enter your order details/), { target: { value: ' 12345678-1234-1234-1234-123456789ABC ' } });
+    fireEvent.change(screen.getByLabelText(/Enter your order ID or order number/), { target: { value: 'SHP-20260915-D791820A' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Track order' }));
+    expect(screen.getByTestId('location')).toHaveTextContent('/track/SHP-20260915-D791820A');
+    fireEvent.change(screen.getByLabelText(/Enter your order ID or order number/), { target: { value: ' 12345678-1234-1234-1234-123456789ABC ' } });
     fireEvent.click(screen.getByRole('button', { name: 'Track order' }));
     expect(screen.getByTestId('location')).toHaveTextContent('/track/12345678-1234-1234-1234-123456789abc');
   });
