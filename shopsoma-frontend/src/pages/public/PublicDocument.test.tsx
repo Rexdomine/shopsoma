@@ -7,7 +7,7 @@ import Footer from '../../components/layout/Footer';
 import { FOOTER_DOCUMENTS } from '../../content/footerDocuments';
 import type { FooterDocumentKey } from '../../content/footerDocuments';
 import { subscribeToNewsletter } from '../../services/newsletterService';
-vi.mock('../../components/layout/Layout', () => ({ default: ({ children }: { children: ReactNode }) => <>{children}</> }));
+vi.mock('../../components/layout/Layout', () => ({ default: ({ children }: { children: ReactNode }) => <main>{children}</main> }));
 vi.mock('../../services/newsletterService', () => ({ subscribeToNewsletter: vi.fn() }));
 const normalize = (text: string) => text.replace(/•/g, '').replace(/\s/g, '');
 function Location() { return <output data-testid="location">{useLocation().pathname}</output>; }
@@ -19,6 +19,12 @@ describe('public footer documents', () => {
     expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(FOOTER_DOCUMENTS[key].title);
     expect(normalize(container.querySelector('article')!.textContent!)).toBe(normalize(FOOTER_DOCUMENTS[key].body));
   });
+  it('uses the layout main landmark without nesting another main', () => {
+    const { container } = show('shipping');
+    expect(screen.getAllByRole('main')).toHaveLength(1);
+    expect(container.querySelector('main > div[data-document="shipping"]')).toBeInTheDocument();
+  });
+
   it('keeps wrapped shipping prose out of headings and renders section headings', () => {
     show('shipping');
     expect(screen.getByRole('heading', { name: 'Shipping Costs' })).toBeInTheDocument();
