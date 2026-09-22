@@ -53,7 +53,7 @@ describe('public footer documents', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Track order' }));
     expect(screen.getByRole('alert')).toHaveTextContent('full order ID or order number');
     expect(screen.getByTestId('location')).toHaveTextContent('/');
-    fireEvent.change(screen.getByLabelText(/Enter your order ID or order number/), { target: { value: 'SHP-20260915-D791820A' } });
+    fireEvent.change(screen.getByLabelText(/Enter your order ID or order number/), { target: { value: ' shp-20260915-d791820a ' } });
     fireEvent.click(screen.getByRole('button', { name: 'Track order' }));
     expect(screen.getByTestId('location')).toHaveTextContent('/track/SHP-20260915-D791820A');
     fireEvent.change(screen.getByLabelText(/Enter your order ID or order number/), { target: { value: ' 12345678-1234-1234-1234-123456789ABC ' } });

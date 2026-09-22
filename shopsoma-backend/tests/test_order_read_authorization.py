@@ -196,11 +196,13 @@ async def test_legacy_guest_read_requires_persisted_passwordless_active_guest(
     payload = created.json()
     assert payload["checkout_capability"] is None
     url = f"/api/v1/orders/{payload['id']}{suffix}"
-    guest = await db_session.get(User, uuid.UUID(payload["customer_id"]))
     actual = {"guest": (await client.get(url)).status_code}
+    number_url = f"/api/v1/orders/{payload['order_number'].lower()}{suffix}"
+    actual["guest_by_number"] = (await client.get(number_url)).status_code in {403, 404}
     actual["stranger_denied"] = (
         await client.get(url, headers=customer_user["headers"])
     ).status_code in {403, 404}
+    guest = await db_session.get(User, uuid.UUID(payload["customer_id"]))
     for field, value, original in [
         ("is_active", False, True),
         ("hashed_password", "registered-test-hash", None),
@@ -213,6 +215,7 @@ async def test_legacy_guest_read_requires_persisted_passwordless_active_guest(
         await db_session.commit()
     assert actual == {
         "guest": 200,
+        "guest_by_number": True,
         "stranger_denied": True,
         "is_active": True,
         "hashed_password": True,

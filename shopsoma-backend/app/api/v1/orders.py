@@ -1622,6 +1622,12 @@ async def get_order_tracking(
     except ValueError:
         order_uuid = None
 
+    if order_uuid is None and current_user is None and capability is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Order number access requires authentication or checkout capability",
+        )
+
     order_filter = (
         Order.id == order_uuid
         if order_uuid
