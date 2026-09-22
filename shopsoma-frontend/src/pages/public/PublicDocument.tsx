@@ -45,7 +45,7 @@ export default function PublicDocument({ documentKey }: { documentKey: FooterDoc
       {error && <p role="alert" className="text-sm text-red-700">{error}</p>}
     </form>}
     {documentKey === 'partner' && <a href={ROUTES.VENDOR_SIGNUP} className="mt-8 inline-flex border border-[#1E5053] px-6 py-3 text-xs font-ui uppercase tracking-[0.2em]">Apply to become a ShopSoma partner</a>}
-    <article className="mt-12 space-y-8 font-serif leading-7">{blocksFor(document.body).map((block, index) => block.kind === 'heading' ? <section key={`${documentKey}-${index}`}><h2 className="mb-2 text-xl font-ui font-medium">{block.lines[0]}</h2></section> : block.kind === 'list' ? <ul key={`${documentKey}-${index}`} className="list-disc space-y-1 pl-6">{block.lines.map((line) => <li key={line}><LinkedText text={line} /></li>)}</ul> : <p key={`${documentKey}-${index}`}><LinkedText text={block.lines.join(' ')} /></p>)}</article>
+    {!isTrack && <article className="mt-12 space-y-8 font-serif leading-7">{blocksFor(document.body).map((block, index) => block.kind === 'heading' ? <section key={`${documentKey}-${index}`}><h2 className="mb-2 text-xl font-ui font-medium">{block.lines[0]}</h2></section> : block.kind === 'list' ? <ul key={`${documentKey}-${index}`} className="list-disc space-y-1 pl-6">{block.lines.map((line) => <li key={line}><LinkedText text={line} /></li>)}</ul> : <p key={`${documentKey}-${index}`}><LinkedText text={block.lines.join(' ')} /></p>)}</article>}
   </div>
   </Layout>;
 }

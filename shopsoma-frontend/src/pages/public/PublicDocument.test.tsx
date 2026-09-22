@@ -17,7 +17,8 @@ describe('public footer documents', () => {
   it.each(Object.keys(FOOTER_DOCUMENTS) as FooterDocumentKey[])('preserves all %s article copy in source order', (key) => {
     const { container } = show(key);
     expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(FOOTER_DOCUMENTS[key].title);
-    expect(normalize(container.querySelector('article')!.textContent!)).toBe(normalize(FOOTER_DOCUMENTS[key].body));
+    if (key === 'track') expect(container.querySelector('article')).not.toBeInTheDocument();
+    else expect(normalize(container.querySelector('article')!.textContent!)).toBe(normalize(FOOTER_DOCUMENTS[key].body));
   });
   it('uses the layout main landmark without nesting another main', () => {
     const { container } = show('shipping');
@@ -33,6 +34,12 @@ describe('public footer documents', () => {
   it('joins the wrapped FAQ question into one heading', () => {
     show('faq');
     expect(screen.getByRole('heading', { name: /What is the difference between Ready-to-Wear and Made-to-\s*Order\?/ })).toBeInTheDocument();
+  });
+  it('does not duplicate tracking copy below the tracking form', () => {
+    const { container } = show('track');
+    expect(container.querySelector('article')).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1, name: 'Track Your Order' })).toBeInTheDocument();
+    expect(screen.getByLabelText(/Enter your order details below/)).toBeInTheDocument();
   });
   it('links the exact contact email addresses', () => {
     show('contact');

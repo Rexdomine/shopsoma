@@ -27,7 +27,15 @@ export function blocksFor(body: string): DocumentBlock[] {
 
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
-    if (!line) { flushList(); flushParagraph(); continue; }
+    if (!line) {
+      const next = lines.slice(index + 1).find(Boolean);
+      const previous = paragraph[paragraph.length - 1];
+      // PDF extraction can insert a blank line at a page break inside a
+      // sentence. Keep lower-case continuations in the same paragraph while
+      // retaining normal blank-line paragraph boundaries.
+      if (paragraph.length && previous && next && /^[a-z]/.test(next) && !/[.!?…][\"'”’)]?$/.test(previous)) continue;
+      flushList(); flushParagraph(); continue;
+    }
     if (line.startsWith('•')) { flushParagraph(); list.push(line.slice(1).trim()); continue; }
     if (list.length) {
       const previous = list[list.length - 1];

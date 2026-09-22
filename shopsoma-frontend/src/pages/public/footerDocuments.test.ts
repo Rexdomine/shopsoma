@@ -47,6 +47,14 @@ describe('footer document contract', () => {
     ]);
   });
 
+  it('keeps lower-case sentence continuations together across extracted page breaks', () => {
+    expect(blocksFor('TERMS\nThe item may be returned where an item is\n\ndamaged, defective, or incorrectly supplied.\n\nPRIVACY\nWe rely on the appropriate legal basis for the relevant\n\nprocessing, including performance of a contract.')).toEqual([
+      { kind: 'heading', lines: ['TERMS'] },
+      { kind: 'paragraph', lines: ['The item may be returned where an item is', 'damaged, defective, or incorrectly supplied.'] },
+      { kind: 'heading', lines: ['PRIVACY'] },
+      { kind: 'paragraph', lines: ['We rely on the appropriate legal basis for the relevant', 'processing, including performance of a contract.'] },
+    ]);
+  });
   it('recognizes supplied title-case policy section headings', () => {
     const blocks = blocksFor('Delivery Delays\nShipping may take longer.\n\nStarting a Return\nFollow these steps.\n\nQuality Check\nItems are inspected.\n\nReturn Shipping\nUse the provided label.\n\nDamaged, Defective or Incorrect Items\nContact support.\n\nYour Statutory Rights\nYour legal rights remain unaffected.');
     expect(blocks.filter((block) => block.kind === 'heading').map((block) => block.lines[0])).toEqual([
