@@ -1,0 +1,36 @@
+export type DocumentBlock = { kind: 'heading' | 'paragraph' | 'list'; lines: string[] };
+
+const EXPLICIT_HEADINGS = new Set([
+  'Orders, Returns & General Enquiries', 'Brand & Partnership Enquiries', 'Marketing, Press & Creative Enquiries',
+  'International Delivery', 'Ready-To-Wear (RTW)', 'Made-to-Order (MTO)', 'Shipping Costs', 'Split Shipments', 'Tracking Your Order',
+  'Return Window', 'Return Conditions', 'Made-to-Order (MTO) Items', 'Final Sale', 'Exchanges', 'Refunds',
+  'ORDERS & PAYMENT', 'PRODUCTS & SIZING', 'SHIPPING & DELIVERY', 'RETURNS & REFUNDS', 'ACCOUNT & SUPPORT',
+  'Partner with SHOPSOMA', 'Brand & Designer Partnerships', 'From Africa, with Style.', '‘Track Your Order’', 'Essential Cookies', 'Preference Cookies', 'Analytics Cookies', 'Marketing Cookies',
+]);
+
+const isHeadingLine = (line: string) =>
+  /^\d+[.)]\s+/.test(line) || /^[A-Z][A-Z &’'—-]{3,}$/.test(line) || EXPLICIT_HEADINGS.has(line) || /\?$/.test(line);
+
+export function blocksFor(body: string): DocumentBlock[] {
+  const lines = body.split(/\r?\n/).map((line) => line.trim());
+  const blocks: DocumentBlock[] = [];
+  let paragraph: string[] = [];
+  let list: string[] = [];
+  const flushParagraph = () => { if (paragraph.length) { blocks.push({ kind: 'paragraph', lines: paragraph }); paragraph = []; } };
+  const flushList = () => { if (list.length) { blocks.push({ kind: 'list', lines: list }); list = []; } };
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (!line) { flushList(); flushParagraph(); continue; }
+    if (line.startsWith('•')) { flushParagraph(); list.push(line.slice(1).trim()); continue; }
+    if (list.length) { list[list.length - 1] = `${list[list.length - 1]} ${line}`; continue; }
+    if (/^What\b/i.test(line) && line.endsWith('-') && lines[index + 1]) {
+      const joined = `${line} ${lines[index + 1]}`;
+      if (joined.endsWith('?')) { flushParagraph(); blocks.push({ kind: 'heading', lines: [joined] }); index += 1; continue; }
+    }
+    if (isHeadingLine(line)) { flushParagraph(); blocks.push({ kind: 'heading', lines: [line] }); }
+    else paragraph.push(line);
+  }
+  flushList(); flushParagraph();
+  return blocks;
+}

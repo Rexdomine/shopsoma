@@ -76,6 +76,7 @@ export const ROUTES = {
   CHECKOUT: '/checkout',
   ORDER_SUCCESS: '/order-success',
   ORDER_TRACKING: '/track/:orderId',
+  TRACK_ENTRY: '/track', CONTACT: '/contact', SHIPPING: '/shipping', RETURNS: '/returns', FAQS: '/faqs', ABOUT: '/about', COLLABORATE: '/collaborate', TERMS: '/terms', PRIVACY: '/privacy', COOKIES: '/cookies',
   VENDOR_DASHBOARD: '/vendor/dashboard',
   VENDOR_PRODUCTS: '/vendor/products',
   VENDOR_ORDERS: '/vendor/orders',

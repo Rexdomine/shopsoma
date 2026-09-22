@@ -51,6 +51,8 @@ const VerifyEmail = lazy(() => import('../pages/auth/VerifyEmail'));
 const ClaimAccount = lazy(() => import('../pages/auth/ClaimAccount'));
 const OrderSuccess = lazy(() => import('../pages/orders/OrderSuccess'));
 const OrderTracking = lazy(() => import('../pages/orders/OrderTracking'));
+const PublicDocument = lazy(() => import('../pages/public/PublicDocument'));
+const documentElement = (documentKey: Parameters<typeof PublicDocument>[0]['documentKey']) => (<ErrorBoundary><Suspense fallback={<Loading fullScreen message="Loading document..." />}><PublicDocument documentKey={documentKey} /></Suspense></ErrorBoundary>);
 const BrandInfoSettings = lazy(() => import('../pages/vendor/BrandInfoSettings'));
 const Profile = lazy(() => import('../pages/profile/Profile'));
 const ProfileEdit = lazy(() => import('../pages/profile/ProfileEdit'));
@@ -238,6 +240,16 @@ const router = createBrowserRouter([
       </ErrorBoundary>
     ),
   },
+  { path: ROUTES.TRACK_ENTRY, element: documentElement('track') },
+  { path: ROUTES.CONTACT, element: documentElement('contact') },
+  { path: ROUTES.SHIPPING, element: documentElement('shipping') },
+  { path: ROUTES.RETURNS, element: documentElement('returns') },
+  { path: ROUTES.FAQS, element: documentElement('faq') },
+  { path: ROUTES.ABOUT, element: documentElement('about') },
+  { path: ROUTES.COLLABORATE, element: documentElement('partner') },
+  { path: ROUTES.TERMS, element: documentElement('terms') },
+  { path: ROUTES.PRIVACY, element: documentElement('privacy') },
+  { path: ROUTES.COOKIES, element: documentElement('cookies') },
   {
     path: ROUTES.ORDER_TRACKING,
     element: (
