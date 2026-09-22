@@ -1622,10 +1622,13 @@ async def get_order_tracking(
     except ValueError:
         order_uuid = None
 
-    if order_uuid is None and current_user is None and capability is None:
+    # Customer-facing order numbers are discoverable identifiers, so never use
+    # them to resolve a legacy guest order anonymously. UUID links retain the
+    # existing passwordless legacy-guest behavior.
+    if order_uuid is None and current_user is None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Order number access requires authentication or checkout capability",
+            detail="Order number access requires authentication",
         )
 
     order_filter = (

@@ -197,8 +197,17 @@ async def test_legacy_guest_read_requires_persisted_passwordless_active_guest(
     assert payload["checkout_capability"] is None
     url = f"/api/v1/orders/{payload['id']}{suffix}"
     actual = {"guest": (await client.get(url)).status_code}
-    number_url = f"/api/v1/orders/{payload['order_number'].lower()}{suffix}"
-    actual["guest_by_number"] = (await client.get(number_url)).status_code in {403, 404}
+    if suffix:
+        number_url = f"/api/v1/orders/{payload['order_number'].lower()}{suffix}"
+        actual["guest_by_number"] = (
+            await client.get(number_url)
+        ).status_code in {403, 404}
+        actual["guest_by_number_with_header"] = (
+            await client.get(
+                number_url,
+                headers={"X-ShopSoma-Checkout-Capability": "arbitrary-header"},
+            )
+        ).status_code in {403, 404}
     actual["stranger_denied"] = (
         await client.get(url, headers=customer_user["headers"])
     ).status_code in {403, 404}
@@ -213,14 +222,18 @@ async def test_legacy_guest_read_requires_persisted_passwordless_active_guest(
         actual[field] = (await client.get(url)).status_code in {403, 404}
         setattr(guest, field, original)
         await db_session.commit()
-    assert actual == {
+    expected = {
         "guest": 200,
-        "guest_by_number": True,
         "stranger_denied": True,
         "is_active": True,
         "hashed_password": True,
         "is_guest_created": True,
     }
+    if suffix:
+        expected.update(
+            {"guest_by_number": True, "guest_by_number_with_header": True}
+        )
+    assert actual == expected
 
 
 @pytest.mark.asyncio
