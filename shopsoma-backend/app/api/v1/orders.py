@@ -1622,7 +1622,11 @@ async def get_order_tracking(
     except ValueError:
         order_uuid = None
 
-    order_filter = Order.id == order_uuid if order_uuid else Order.order_number == order_ref
+    order_filter = (
+        Order.id == order_uuid
+        if order_uuid
+        else Order.order_number == order_ref.upper()
+    )
     query = select(Order).where(order_filter).with_for_update()
     result = await db.execute(query)
     order = result.scalar_one_or_none()
