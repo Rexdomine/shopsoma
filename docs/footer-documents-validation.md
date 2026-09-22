@@ -5,7 +5,7 @@ Ten client-supplied informational destinations, shared desktop/mobile footer nav
 
 ## Executed local checks
 - Source fidelity: all ten bodies match the corresponding complete PDF sections after whitespace normalization. Explicit design annotation removed; source legal/editorial references preserved and noted in `shopsoma-frontend/src/content/REVIEW-NOTES.md`.
-- Node 20 focused Vitest: 24 tests passed (2 files: 18 in `PublicDocument.test.tsx`, 6 in `footerDocuments.test.ts`). Includes complete rendered article text, headings, mailto, tracking navigation/validation, partner CTA, accordion state and mocked newsletter contract.
+- Node 20 focused Vitest: 26 tests passed (2 files: 19 in `PublicDocument.test.tsx`, 7 in `footerDocuments.test.ts`). Includes complete rendered article text, headings, mailto, tracking navigation/validation, partner CTA, tracking-copy deduplication, page-break paragraph continuity, accordion state and mocked newsletter contract.
 - `npm run build`: passed (TypeScript + Vite).
 - `npm run lint`: passed, 0 errors / 279 warnings; untouched base has 0 errors / 277 warnings. Two additional react-refresh export warnings are nonblocking.
 - Chromium: 10 pages at 390, 768, 1366 and 1440px; all 40 rendered without horizontal overflow or page exceptions. All ten footer links clicked successfully; mobile accordions exercised. Mobile Contact page screenshot visually reviewed.
