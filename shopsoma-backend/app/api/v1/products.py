@@ -58,7 +58,10 @@ def _variation_inherits_parent_price(
         return marker
     if persisted_value is None:
         return null_value_inherits
-    return persisted_value == legacy_parent_value
+    # A nullable marker plus a stored price is an unknown legacy state. Price
+    # equality alone cannot distinguish an inherited value from an explicit
+    # override, so preserve it rather than overwriting it on a parent edit.
+    return False
 
 
 def _sync_inherited_variation_prices(

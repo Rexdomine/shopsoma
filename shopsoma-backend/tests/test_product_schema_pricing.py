@@ -80,6 +80,14 @@ def test_legacy_null_price_is_treated_as_inherited_without_a_marker():
     ) is True
 
 
+def test_unknown_equal_legacy_price_is_preserved_without_a_marker():
+    legacy = SimpleNamespace(price=Decimal("100.00"), inherits_price=None)
+
+    assert _variation_inherits_parent_price(
+        legacy, "inherits_price", legacy.price, Decimal("100.00")
+    ) is False
+
+
 def test_inherited_sale_marker_wins_over_persisted_sale_price():
     variation = SimpleNamespace(
         sale_price=Decimal("80.00"),

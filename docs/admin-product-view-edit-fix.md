@@ -6,7 +6,7 @@ The admin list links were valid, but the detail/edit pages read through `GET /pr
 
 The pages now use the existing admin-only product endpoints. Load errors remain visible on the requested page; save validation errors retain the form. The admin detail endpoint now uses the shared product response contract with eager-loaded relationships, rather than a hand-built response referencing the nonexistent `ProductVariant.is_active` attribute. The admin update endpoint accepts an explicit validated field allow-list rather than arbitrary mapped attributes. The UI's nonexistent `inventory_quantity` editor was removed; `total_stock` remains.
 
-Delete, Approve and Deny routes/buttons are unchanged. No database migration, provider call, order mutation, or storefront visibility relaxation is part of this repair. Existing scalar stock editing remains an absolute value update; full concurrency-safe catalog/variant editing is separate work.
+Delete, Approve and Deny routes/buttons are unchanged. This repair includes the additive Alembic revision `b8c9d0e1f2a3`, which adds the nullable `product_variants.inherits_price` marker and backfills existing generic `ProductVariant` rows as explicit (`FALSE`) because equal prices cannot safely prove inheritance. Apply the migration before deploying code that reads or writes that ORM field; the migration is additive and does not require a product-data backfill beyond that conservative marker classification. Existing scalar stock editing remains an absolute value update; full concurrency-safe catalog/variant editing is separate work.
 
 ## Boundaries and failure behavior
 
