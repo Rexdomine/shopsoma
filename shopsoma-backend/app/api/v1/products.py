@@ -72,6 +72,24 @@ def _sync_inherited_variation_prices(
 ) -> None:
     """Propagate parent price edits without overwriting explicit variation prices."""
     legacy_regular_price = old_compare_at_price or old_base_price
+
+    # Legacy single-product rows can have ProductVariant records without any
+    # Variation rows.  Those variants are the effective purchase-price records
+    # for cart/order resolution, so keep them aligned with the parent price.
+    if not variations:
+        new_regular_price = new_compare_at_price or new_base_price
+        new_effective_price = (
+            new_base_price
+            if new_compare_at_price is not None and new_base_price < new_regular_price
+            else new_regular_price
+        )
+        for legacy_variant in legacy_variants:
+            legacy_variant.price = new_effective_price
+            legacy_variant.compare_at_price = (
+                new_regular_price if new_effective_price < new_regular_price else None
+            )
+        return
+
     for variation in variations:
         inherits_regular_price = _variation_inherits_parent_price(
             variation, "inherits_price", variation.price, legacy_regular_price

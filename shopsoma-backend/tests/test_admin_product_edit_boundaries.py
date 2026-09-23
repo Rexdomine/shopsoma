@@ -160,6 +160,47 @@ async def test_admin_price_edit_syncs_inherited_variation_and_legacy_variant(
 
 
 @pytest.mark.asyncio
+async def test_admin_price_edit_syncs_generic_legacy_variant_without_variation(
+    client, admin_user, sample_product, db_session
+):
+    from app.models.product import ProductVariant
+
+    variant = ProductVariant(
+        product_id=sample_product.id,
+        price=sample_product.base_price,
+        stock=sample_product.total_stock,
+        is_available=True,
+    )
+    db_session.add(variant)
+    await db_session.commit()
+
+    response = await client.put(
+        f"/api/v1/admin/products/{sample_product.id}",
+        headers=admin_user["headers"],
+        json={"base_price": 12000, "compare_at_price": 15000},
+    )
+    assert response.status_code == 200, response.text
+    await db_session.refresh(variant)
+    assert variant.price == 12000
+    assert variant.compare_at_price == 15000
+
+
+@pytest.mark.asyncio
+async def test_admin_can_read_legacy_product_with_short_title(
+    client, admin_user, sample_product, db_session
+):
+    sample_product.title = "X"
+    await db_session.commit()
+
+    response = await client.get(
+        f"/api/v1/admin/products/{sample_product.id}",
+        headers=admin_user["headers"],
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["title"] == "X"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("field", ["base_price", "compare_at_price"])
 async def test_admin_price_edit_rejects_shared_product_ceiling(
     client, admin_user, sample_product, field

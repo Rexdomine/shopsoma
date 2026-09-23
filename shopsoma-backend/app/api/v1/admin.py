@@ -58,6 +58,14 @@ from app.services.test_account_classification import (
 router = APIRouter(prefix="/admin", tags=["admin"])
 
 
+class AdminProductResponse(ProductResponse):
+    """Product response that remains readable for legacy admin-repair records."""
+
+    # Admin repair must be able to load historical rows created before the
+    # current create/update validation (for example a one-character title).
+    title: str
+
+
 class AdminProductUpdate(BaseModel):
     """Explicit allow-list for the admin product edit form."""
     model_config = ConfigDict(extra="forbid")
@@ -2023,7 +2031,7 @@ async def delete_product(
         )
 
 
-@router.get("/products/{product_id}", response_model=ProductResponse)
+@router.get("/products/{product_id}", response_model=AdminProductResponse)
 async def get_product(
     product_id: UUID,
     current_admin: User = Depends(get_current_admin),
