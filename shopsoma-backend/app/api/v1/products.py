@@ -1370,6 +1370,12 @@ async def update_variant(
                 detail=[{"loc": ["body"], "msg": str(exc), "type": "value_error"}],
             ) from exc
 
+    # An explicit stock or availability edit transfers inventory ownership from
+    # the parent product back to this variant. Otherwise a later product-level
+    # total_stock edit would overwrite the direct variant edit.
+    if "stock" in update_data or "is_available" in update_data:
+        variant.inherits_stock = False
+
     for field, value in update_data.items():
         setattr(variant, field, value)
 

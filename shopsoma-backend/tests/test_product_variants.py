@@ -75,3 +75,32 @@ async def test_delete_variant_scopes_to_product_id(
     )
 
     assert response.status_code == 404
+
+
+async def test_update_variant_clears_stock_inheritance_on_explicit_inventory_edit(
+    client,
+    db_session,
+    vendor_user,
+    sample_product,
+):
+    variant = ProductVariant(
+        id=uuid.uuid4(),
+        product_id=sample_product.id,
+        price=Decimal("99.99"),
+        inherits_stock=True,
+        stock=sample_product.total_stock,
+        is_available=True,
+    )
+    db_session.add(variant)
+    await db_session.commit()
+
+    response = await client.put(
+        f"/api/v1/products/{sample_product.id}/variants/{variant.id}",
+        json={"stock": 3},
+        headers=vendor_user["headers"],
+    )
+
+    assert response.status_code == 200, response.text
+    await db_session.refresh(variant)
+    assert variant.stock == 3
+    assert variant.inherits_stock is False
