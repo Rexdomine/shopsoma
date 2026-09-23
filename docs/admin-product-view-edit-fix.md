@@ -13,7 +13,7 @@ Delete, Approve and Deny routes/buttons are unchanged. No database migration, pr
 - Browser admin pages → authenticated admin API → product row.
 - Anonymous users, customers and vendors cannot use these admin read/write routes.
 - Pending/rejected draft products remain unavailable through the public storefront endpoint.
-- Ordinary edits preserve moderation unless explicitly changed through the existing admin form.
+- Ordinary edits preserve moderation and featuring; featuring remains available only through the existing dedicated admin action.
 - Required-field nulls, unknown fields, invalid categories and inconsistent compare-at/base prices fail before commit.
 - Product writes commit once. No provider/outbox/queue side effects are introduced. A lost response still requires read-back before an operator retries; no new automatic mutation retry is added.
 - Backend response compatibility must be deployed before (or atomically with) frontend changes. The PUT acknowledgement retains its existing message/product_id shape.
@@ -24,7 +24,7 @@ Executed locally against disposable PostgreSQL test databases:
 
 ```sh
 pytest tests/test_admin_featured_products.py tests/test_admin_product_edit_boundaries.py tests/test_products.py -q
-# 72 passed
+# 76 passed
 python -m flake8 app/api/v1/admin.py tests/test_admin_featured_products.py tests/test_admin_product_edit_boundaries.py --select=E9,F63,F7,F82 --show-source --statistics
 # passed
 ```

@@ -42,7 +42,11 @@ from app.schemas.product import (
     ProductFeatureUpdate,
     ProductResponse,
 )
-from app.api.v1.products import PRODUCT_RELATIONSHIPS, _sync_single_product_variant_inventory
+from app.api.v1.products import (
+    PRODUCT_RELATIONSHIPS,
+    _sync_inherited_variation_prices,
+    _sync_single_product_variant_inventory,
+)
 from app.services.vendor_activation_service import (
     activation_eligibility, activation_is_eligible, lock_activation_identity,
 )
@@ -61,15 +65,15 @@ class AdminProductUpdate(BaseModel):
     title: Optional[str] = Field(None, min_length=3, max_length=255)
     description: Optional[str] = Field(None, max_length=5000)
     category_id: Optional[UUID] = None
-    base_price: Optional[Decimal] = Field(None, gt=0, decimal_places=2)
-    compare_at_price: Optional[Decimal] = Field(None, gt=0, decimal_places=2)
+    base_price: Optional[Decimal] = Field(None, gt=0, le=Decimal("999999.99"), decimal_places=2)
+    compare_at_price: Optional[Decimal] = Field(None, gt=0, le=Decimal("999999.99"), decimal_places=2)
     total_stock: Optional[int] = Field(None, ge=0)
     status: Optional[ProductStatus] = None
-    is_featured: Optional[bool] = None
+
 
     @model_validator(mode="after")
     def reject_null_required_fields(self):
-        for field in ("title", "base_price", "total_stock", "status", "is_featured"):
+        for field in ("title", "base_price", "total_stock", "status"):
             if field in self.model_fields_set and getattr(self, field) is None:
                 raise ValueError(f"{field} cannot be null")
         return self
@@ -2065,6 +2069,8 @@ async def update_product(
         raise HTTPException(status_code=404, detail="Product not found")
 
     changes = product_data.model_dump(exclude_unset=True)
+    old_base_price = product.base_price
+    old_compare_at_price = product.compare_at_price
     merged_base = changes.get("base_price", product.base_price)
     merged_compare = changes.get("compare_at_price", product.compare_at_price)
     if merged_compare is not None and merged_compare < merged_base:
@@ -2076,6 +2082,16 @@ async def update_product(
 
     for field, value in changes.items():
         setattr(product, field, value)
+
+    if "base_price" in changes or "compare_at_price" in changes:
+        _sync_inherited_variation_prices(
+            product.variations,
+            product.variants,
+            old_base_price=old_base_price,
+            old_compare_at_price=old_compare_at_price,
+            new_base_price=product.base_price,
+            new_compare_at_price=product.compare_at_price,
+        )
 
     if "total_stock" in changes:
         _sync_single_product_variant_inventory(product)

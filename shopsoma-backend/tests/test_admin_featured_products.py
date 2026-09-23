@@ -154,7 +154,6 @@ async def test_admin_product_edit_is_allowlisted_and_reads_back(
             "compare_at_price": None,
             "total_stock": 7,
             "status": "draft",
-            "is_featured": True,
         },
         headers=admin_user["headers"],
     )

@@ -32,7 +32,6 @@ export default function AdminProductEdit() {
 
   // Form state - Status
   const [status, setStatus] = useState<'draft' | 'active' | 'inactive' | 'archived'>('draft');
-  const [isFeatured, setIsFeatured] = useState(false);
 
   useEffect(() => {
     const fetchProduct = async () => {
@@ -56,7 +55,6 @@ export default function AdminProductEdit() {
         setComparePrice(data.compare_at_price?.toString() || '');
         setTotalStock(data.total_stock?.toString() || '0');
         setStatus(data.status);
-        setIsFeatured(data.is_featured || false);
       } catch (err: any) {
         console.error('Failed to load product', err);
         setLoadError(apiErrorMessage(err, 'Failed to load product. Please try again.'));
@@ -95,7 +93,6 @@ export default function AdminProductEdit() {
         compare_at_price: comparePrice ? parseFloat(comparePrice) : null,
         total_stock: totalStock ? parseInt(totalStock) : 0,
         status,
-        is_featured: isFeatured,
       };
 
       await adminService.updateProduct(id, updateData);
@@ -324,25 +321,6 @@ export default function AdminProductEdit() {
                 </div>
 
 
-              </div>
-
-              {/* Featured Product */}
-              <div className="flex items-start">
-                <div className="flex items-center h-5">
-                  <input
-                    id="isFeatured"
-                    type="checkbox"
-                    checked={isFeatured}
-                    onChange={(e) => setIsFeatured(e.target.checked)}
-                    className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
-                  />
-                </div>
-                <div className="ml-3">
-                  <label htmlFor="isFeatured" className="text-sm font-medium text-gray-700">
-                    Featured Product
-                  </label>
-                  <p className="text-xs text-gray-500">Display this product in featured sections</p>
-                </div>
               </div>
             </div>
           </div>

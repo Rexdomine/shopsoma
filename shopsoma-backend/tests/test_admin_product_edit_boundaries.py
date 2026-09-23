@@ -117,3 +117,70 @@ async def test_admin_total_stock_edit_syncs_legacy_single_product_variant(
     await db_session.refresh(variant)
     assert variant.stock == 0
     assert variant.is_available is False
+
+
+@pytest.mark.asyncio
+async def test_admin_price_edit_syncs_inherited_variation_and_legacy_variant(
+    client, admin_user, sample_product, db_session
+):
+    from app.models.product import Variation, ProductVariant
+
+    sample_product.compare_at_price = 149.99
+    await db_session.flush()
+    variation = Variation(
+        product_id=sample_product.id,
+        title="Red",
+        type="color",
+        price=149.99,
+        sale_price=99.99,
+        inherits_price=True,
+        inherits_sale_price=True,
+    )
+    variant = ProductVariant(
+        product_id=sample_product.id,
+        color="red",
+        price=149.99,
+        stock=sample_product.total_stock,
+        is_available=True,
+    )
+    db_session.add_all([variation, variant])
+    await db_session.commit()
+
+    response = await client.put(
+        f"/api/v1/admin/products/{sample_product.id}",
+        headers=admin_user["headers"],
+        json={"base_price": 12000, "compare_at_price": 15000},
+    )
+    assert response.status_code == 200, response.text
+    await db_session.refresh(variation)
+    await db_session.refresh(variant)
+    assert variation.price == 15000
+    assert variation.sale_price == 12000
+    assert variant.price == 12000
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["base_price", "compare_at_price"])
+async def test_admin_price_edit_rejects_shared_product_ceiling(
+    client, admin_user, sample_product, field
+):
+    response = await client.put(
+        f"/api/v1/admin/products/{sample_product.id}",
+        headers=admin_user["headers"],
+        json={field: 1000000},
+    )
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_admin_generic_edit_cannot_change_featured_status(
+    client, admin_user, sample_product, db_session
+):
+    response = await client.put(
+        f"/api/v1/admin/products/{sample_product.id}",
+        headers=admin_user["headers"],
+        json={"is_featured": True},
+    )
+    assert response.status_code == 422
+    await db_session.refresh(sample_product)
+    assert sample_product.is_featured is False
