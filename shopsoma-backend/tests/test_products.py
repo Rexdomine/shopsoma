@@ -108,7 +108,7 @@ class TestProductCreate:
                 "title": "Legacy Single Stock Product",
                 "base_price": 85.00,
                 "total_stock": 7,
-                "variants": [{"price": 85.00, "stock": 0, "is_available": False}],
+                "variants": [{"price": 85.00}],
             },
             headers=vendor_user["headers"],
         )
@@ -170,6 +170,7 @@ class TestProductCreate:
                 "title": "Made To Order Sized Product",
                 "base_price": 85.00,
                 "made_to_order": True,
+                "made_to_order_timeline": "Ships in 2-3 weeks",
                 "variants": [
                     {
                         "size": "M",
