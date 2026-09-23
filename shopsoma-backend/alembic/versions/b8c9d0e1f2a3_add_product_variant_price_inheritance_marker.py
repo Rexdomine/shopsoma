@@ -22,6 +22,15 @@ def upgrade() -> None:
         "product_variants",
         sa.Column("inherits_price", sa.Boolean(), nullable=True),
     )
+    # Existing generic rows cannot be classified safely from equal prices:
+    # equality also represents a legitimate explicit price. Mark them
+    # conservative/explicit so future parent edits cannot overwrite them.
+    op.execute(
+        sa.text(
+            "UPDATE product_variants SET inherits_price = FALSE "
+            "WHERE size IS NULL AND color IS NULL AND inherits_price IS NULL"
+        )
+    )
 
 
 def downgrade() -> None:

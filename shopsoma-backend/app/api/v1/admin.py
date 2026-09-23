@@ -1,7 +1,7 @@
 """
 Admin API endpoints for database initialization and management
 """
-from typing import Optional, List
+from typing import Any, Optional, List
 from uuid import UUID
 from fastapi import APIRouter, HTTPException, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -40,7 +40,9 @@ from app.schemas.product import (
     ProductApprovalRequest,
     ProductRejectionRequest,
     ProductFeatureUpdate,
-    ProductResponse,
+    ProductImageResponse,
+    ProductVariantResponse,
+    VariationResponse,
 )
 from app.api.v1.products import (
     PRODUCT_RELATIONSHIPS,
@@ -84,13 +86,66 @@ class AdminProductVariantResponse(BaseModel):
         return self
 
 
-class AdminProductResponse(ProductResponse):
-    """Product response that remains readable for legacy admin-repair records."""
+class AdminProductResponse(BaseModel):
+    """Output-only product shape tolerant of historical admin-repair rows.
 
-    # Admin repair must be able to load historical rows created before the
-    # current create/update validation (for example a one-character title).
+    Unlike the storefront response, this schema intentionally does not inherit
+    ProductBase/ProductResponse validation. Admins must be able to open and
+    repair rows written before current product constraints existed.
+    """
+
+    id: UUID
+    vendor_id: UUID
     title: str
-    variants: List[AdminProductVariantResponse] = []  # pyright: ignore[reportIncompatibleVariableOverride]
+    description: Optional[str] = None
+    category_id: Optional[UUID] = None
+    collection_id: Optional[UUID] = None
+    sku: Optional[str] = None
+    base_price: Decimal
+    compare_at_price: Optional[Decimal] = None
+    currency: str
+    total_stock: int
+    status: str
+    is_featured: bool
+    product_type: str
+    made_to_order: bool
+    made_to_order_timeline: Optional[str] = None
+    care_instructions: Optional[str] = None
+    fabric_composition: Optional[str] = None
+    weight_kg: Optional[Decimal] = None
+    length_cm: Optional[Decimal] = None
+    width_cm: Optional[Decimal] = None
+    height_cm: Optional[Decimal] = None
+    meta_title: Optional[str] = None
+    meta_description: Optional[str] = None
+    size_guide: Any = None
+    vendor_name: Optional[str] = None
+    category_name: Optional[str] = None
+    category_parent_name: Optional[str] = None
+    collection_name: Optional[str] = None
+    moderation_status: str
+    moderation_notes: Optional[str] = None
+    views_count: int
+    orders_count: int
+    created_at: datetime
+    updated_at: datetime
+    variants: List[AdminProductVariantResponse] = []
+    variations: List[VariationResponse] = []
+    images: List[ProductImageResponse] = []
+
+    model_config = ConfigDict(from_attributes=True)
+
+    @model_validator(mode="after")
+    def derive_generic_variant_compare_at_price(self):
+        self.base_price = self.base_price.quantize(Decimal("0.01"))
+        if self.compare_at_price is not None:
+            self.compare_at_price = self.compare_at_price.quantize(Decimal("0.01"))
+        if self.compare_at_price is None:
+            return self
+        for variant in self.variants:
+            if variant.size is None and variant.color is None and variant.compare_at_price is None:
+                variant.compare_at_price = self.compare_at_price
+        return self
 
 
 class AdminProductUpdate(BaseModel):

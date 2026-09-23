@@ -2,6 +2,7 @@
 import uuid
 
 import pytest
+from sqlalchemy import text
 
 
 @pytest.mark.asyncio
@@ -170,6 +171,7 @@ async def test_admin_price_edit_syncs_generic_legacy_variant_without_variation(
         price=sample_product.base_price,
         stock=sample_product.total_stock,
         is_available=True,
+        inherits_price=True,
     )
     db_session.add(variant)
     await db_session.commit()
@@ -302,3 +304,25 @@ async def test_admin_read_tolerates_invalid_legacy_variant_fields(
     payload = response.json()["variants"][0]
     assert payload["color_hex"] == "#GGGGGG"
     assert payload["stock"] == -1
+
+
+@pytest.mark.asyncio
+async def test_admin_read_tolerates_invalid_legacy_product_fields(
+    client, admin_user, sample_product, db_session
+):
+    await db_session.execute(text("SET LOCAL session_replication_role = replica"))
+    sample_product.title = "X"
+    sample_product.base_price = -1
+    sample_product.total_stock = -1
+    await db_session.commit()
+
+    response = await client.get(
+        f"/api/v1/admin/products/{sample_product.id}",
+        headers=admin_user["headers"],
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["title"] == "X"
+    assert payload["base_price"] == "-1.00"
+    assert payload["total_stock"] == -1
+

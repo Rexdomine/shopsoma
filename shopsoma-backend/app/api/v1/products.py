@@ -93,13 +93,12 @@ def _sync_inherited_variation_prices(
         for legacy_variant in legacy_variants:
             if legacy_variant.size is not None or legacy_variant.color is not None:
                 continue
-            # New variant writes persist this marker. Legacy rows retain the
-            # equality fallback until they are explicitly classified.
-            if getattr(legacy_variant, "inherits_price", None) is False:
-                continue
+            # Null is an unknown legacy state. The migration backfills existing
+            # generic rows to False because equality cannot distinguish an
+            # explicit price from inherited pricing; never overwrite unknown
+            # legacy data during a later parent edit.
             if getattr(legacy_variant, "inherits_price", None) is not True:
-                if legacy_variant.price != legacy_effective_price:
-                    continue
+                continue
             legacy_variant.price = new_effective_price
         return
 
