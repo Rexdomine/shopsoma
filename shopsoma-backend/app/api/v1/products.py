@@ -1331,10 +1331,35 @@ async def create_variant(
             detail=[{"loc": ["body"], "msg": str(exc), "type": "value_error"}],
         ) from exc
 
+    explicit_inventory = bool(
+        {"stock", "is_available"} & variant_data.model_fields_set
+    )
+    inherits_stock = (
+        product.product_type == ProductType.SINGLE
+        and not product.variations
+        and variant_data.size is None
+        and variant_data.color is None
+        and not explicit_inventory
+    )
     variant = ProductVariant(
         product_id=product_id,
         inherits_price=False,
-        **variant_data.model_dump()
+        inherits_stock=inherits_stock,
+        size=variant_data.size,
+        color=variant_data.color,
+        color_hex=variant_data.color_hex,
+        price=variant_data.price,
+        stock=(
+            (0 if product.made_to_order else int(product.total_stock or 0))
+            if inherits_stock
+            else variant_data.stock
+        ),
+        sku=variant_data.sku,
+        is_available=(
+            (True if product.made_to_order else int(product.total_stock or 0) > 0)
+            if inherits_stock
+            else variant_data.is_available
+        ),
     )
     db.add(variant)
     await db.commit()

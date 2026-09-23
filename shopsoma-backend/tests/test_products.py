@@ -157,6 +157,44 @@ class TestProductCreate:
         assert variant.is_available is False
 
     @pytest.mark.asyncio
+    async def test_create_standalone_axisless_variant_inherits_total_stock(
+        self, client: AsyncClient, vendor_user, db_session
+    ):
+        """Omitted inventory uses the product stock authority."""
+        from sqlalchemy import select
+        from app.models.product import Product, ProductVariant
+
+        product_response = await client.post(
+            "/api/v1/products",
+            json={
+                "title": "Standalone Variant Stock Product",
+                "base_price": 85.00,
+                "total_stock": 7,
+            },
+            headers=vendor_user["headers"],
+        )
+        assert product_response.status_code == 201, product_response.text
+
+        response = await client.post(
+            f"/api/v1/products/{product_response.json()['id']}/variants",
+            json={"price": 85.00},
+            headers=vendor_user["headers"],
+        )
+        assert response.status_code == 201, response.text
+
+        variant = (
+            await db_session.execute(
+                select(ProductVariant).where(
+                    ProductVariant.product_id == product_response.json()["id"]
+                )
+            )
+        ).scalar_one()
+        product = await db_session.get(Product, product_response.json()["id"])
+        assert variant.inherits_stock is True
+        assert variant.stock == product.total_stock == 7
+        assert variant.is_available is True
+
+    @pytest.mark.asyncio
     async def test_create_made_to_order_product_preserves_explicit_variant_inventory(
         self, client: AsyncClient, vendor_user, db_session
     ):
