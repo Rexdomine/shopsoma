@@ -331,6 +331,11 @@ def _sync_single_product_variant_inventory(product: Product) -> None:
     is_available = True if product.made_to_order else synced_stock > 0
 
     for variant in product.variants:
+        # A single product may still carry explicit size/color variants even
+        # without Variation rows. Only the axis-less legacy inventory row is
+        # represented by the product-level total_stock field.
+        if variant.size is not None or variant.color is not None:
+            continue
         variant.stock = synced_stock
         variant.is_available = is_available
 

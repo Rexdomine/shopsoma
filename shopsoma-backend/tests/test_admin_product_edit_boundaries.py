@@ -121,6 +121,34 @@ async def test_admin_total_stock_edit_syncs_legacy_single_product_variant(
 
 
 @pytest.mark.asyncio
+async def test_admin_total_stock_edit_preserves_explicit_size_color_variant_stock(
+    client, admin_user, sample_product, db_session
+):
+    from app.models.product import ProductVariant
+
+    variant = ProductVariant(
+        product_id=sample_product.id,
+        size="M",
+        color="blue",
+        price=sample_product.base_price,
+        stock=7,
+        is_available=True,
+    )
+    db_session.add(variant)
+    await db_session.commit()
+
+    response = await client.put(
+        f"/api/v1/admin/products/{sample_product.id}",
+        headers=admin_user["headers"],
+        json={"total_stock": 0},
+    )
+    assert response.status_code == 200, response.text
+    await db_session.refresh(variant)
+    assert variant.stock == 7
+    assert variant.is_available is True
+
+
+@pytest.mark.asyncio
 async def test_admin_price_edit_syncs_inherited_variation_and_legacy_variant(
     client, admin_user, sample_product, db_session
 ):
