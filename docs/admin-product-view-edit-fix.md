@@ -24,7 +24,7 @@ Executed locally against disposable PostgreSQL test databases:
 
 ```sh
 pytest tests/test_admin_featured_products.py tests/test_admin_product_edit_boundaries.py tests/test_products.py -q
-# 71 passed
+# 72 passed
 python -m flake8 app/api/v1/admin.py tests/test_admin_featured_products.py tests/test_admin_product_edit_boundaries.py --select=E9,F63,F7,F82 --show-source --statistics
 # passed
 ```

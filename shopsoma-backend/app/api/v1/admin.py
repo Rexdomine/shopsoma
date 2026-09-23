@@ -42,7 +42,7 @@ from app.schemas.product import (
     ProductFeatureUpdate,
     ProductResponse,
 )
-from app.api.v1.products import PRODUCT_RELATIONSHIPS
+from app.api.v1.products import PRODUCT_RELATIONSHIPS, _sync_single_product_variant_inventory
 from app.services.vendor_activation_service import (
     activation_eligibility, activation_is_eligible, lock_activation_identity,
 )
@@ -65,12 +65,11 @@ class AdminProductUpdate(BaseModel):
     compare_at_price: Optional[Decimal] = Field(None, gt=0, decimal_places=2)
     total_stock: Optional[int] = Field(None, ge=0)
     status: Optional[ProductStatus] = None
-    moderation_status: Optional[ModerationStatus] = None
     is_featured: Optional[bool] = None
 
     @model_validator(mode="after")
     def reject_null_required_fields(self):
-        for field in ("title", "base_price", "total_stock", "status", "moderation_status", "is_featured"):
+        for field in ("title", "base_price", "total_stock", "status", "is_featured"):
             if field in self.model_fields_set and getattr(self, field) is None:
                 raise ValueError(f"{field} cannot be null")
         return self
@@ -2054,9 +2053,11 @@ async def update_product(
 
     Requires admin role
     """
-    # Get product
+    # Get product and the legacy single-product variant relationships needed for stock sync.
     result = await db.execute(
-        select(Product).where(Product.id == product_id)
+        select(Product)
+        .options(selectinload(Product.variants), selectinload(Product.variations))
+        .where(Product.id == product_id)
     )
     product = result.scalar_one_or_none()
 
@@ -2075,6 +2076,9 @@ async def update_product(
 
     for field, value in changes.items():
         setattr(product, field, value)
+
+    if "total_stock" in changes:
+        _sync_single_product_variant_inventory(product)
 
     await db.commit()
     await db.refresh(product)

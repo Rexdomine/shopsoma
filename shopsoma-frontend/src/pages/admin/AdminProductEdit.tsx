@@ -32,7 +32,6 @@ export default function AdminProductEdit() {
 
   // Form state - Status
   const [status, setStatus] = useState<'draft' | 'active' | 'inactive' | 'archived'>('draft');
-  const [moderationStatus, setModerationStatus] = useState<'pending' | 'approved' | 'rejected'>('pending');
   const [isFeatured, setIsFeatured] = useState(false);
 
   useEffect(() => {
@@ -57,7 +56,6 @@ export default function AdminProductEdit() {
         setComparePrice(data.compare_at_price?.toString() || '');
         setTotalStock(data.total_stock?.toString() || '0');
         setStatus(data.status);
-        setModerationStatus(data.moderation_status);
         setIsFeatured(data.is_featured || false);
       } catch (err: any) {
         console.error('Failed to load product', err);
@@ -92,12 +90,11 @@ export default function AdminProductEdit() {
       const updateData: AdminProductUpdatePayload = {
         title: title.trim(),
         description: description.trim(),
-        category_id: categoryId.trim() || undefined,
+        category_id: categoryId.trim() || null,
         base_price: parseFloat(basePrice),
-        compare_at_price: comparePrice ? parseFloat(comparePrice) : undefined,
+        compare_at_price: comparePrice ? parseFloat(comparePrice) : null,
         total_stock: totalStock ? parseInt(totalStock) : 0,
         status,
-        moderation_status: moderationStatus,
         is_featured: isFeatured,
       };
 
@@ -326,23 +323,7 @@ export default function AdminProductEdit() {
                   <p className="text-xs text-gray-500 mt-1">Product visibility status</p>
                 </div>
 
-                {/* Moderation Status */}
-                <div>
-                  <label htmlFor="moderationStatus" className="block text-sm font-medium text-gray-700 mb-2">
-                    Moderation Status
-                  </label>
-                  <select
-                    id="moderationStatus"
-                    value={moderationStatus}
-                    onChange={(e) => setModerationStatus(e.target.value as any)}
-                    className="w-full rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
-                  >
-                    <option value="pending">Pending Review</option>
-                    <option value="approved">Approved</option>
-                    <option value="rejected">Rejected</option>
-                  </select>
-                  <p className="text-xs text-gray-500 mt-1">Admin moderation status</p>
-                </div>
+
               </div>
 
               {/* Featured Product */}

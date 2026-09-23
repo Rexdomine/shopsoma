@@ -154,7 +154,6 @@ async def test_admin_product_edit_is_allowlisted_and_reads_back(
             "compare_at_price": None,
             "total_stock": 7,
             "status": "draft",
-            "moderation_status": "rejected",
             "is_featured": True,
         },
         headers=admin_user["headers"],
@@ -171,7 +170,7 @@ async def test_admin_product_edit_is_allowlisted_and_reads_back(
     assert payload["title"] == "Updated Admin Product"
     assert payload["base_price"] == "120.00"
     assert payload["compare_at_price"] is None
-    assert payload["moderation_status"] == "rejected"
+    assert payload["moderation_status"] == "approved"
     assert payload["total_stock"] == 7
 
 

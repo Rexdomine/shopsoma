@@ -9,7 +9,6 @@ export interface AdminProductUpdatePayload {
   compare_at_price?: number | null;
   total_stock?: number;
   status?: Product['status'];
-  moderation_status?: Product['moderation_status'];
   is_featured?: boolean;
 }
 
