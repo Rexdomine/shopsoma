@@ -5,6 +5,9 @@ from typing import List, Optional, Dict, Any, Tuple
 import csv
 import io
 import math
+import ipaddress
+import re
+from urllib.parse import urlparse
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -159,6 +162,7 @@ BULK_SINGLE_HEADERS = [
     "fabric_composition",
     "status",
 ]
+BULK_IMAGE_HEADERS = [f"image_{index}_url" for index in range(1, 6)]
 
 BULK_VARIABLE_HEADERS = [
     "product_title",
@@ -181,6 +185,59 @@ BULK_VARIABLE_HEADERS = [
     "variation_price",
     "variation_sale_price",
 ]
+
+
+def _parse_image_urls(
+    row: Dict[str, Optional[str]], row_index: int, errors: List[Dict[str, Any]]
+) -> List[str]:
+    """Validate optional hosted image links without network I/O; preserve URL bytes/order."""
+    urls: List[str] = []
+    for field in BULK_IMAGE_HEADERS:
+        value = row.get(field)
+        if value in (None, ""):
+            continue
+        try:
+            # Reject characters browsers may silently strip or reinterpret.
+            if len(value) > 2048 or "\\" in value or any(
+                ch.isspace() or ord(ch) < 32 or ord(ch) == 127 for ch in value
+            ):
+                raise ValueError
+            parsed = urlparse(value)
+            host = parsed.hostname
+            if (
+                parsed.scheme != "https" or not host
+                or parsed.username is not None or parsed.password is not None
+            ):
+                raise ValueError
+            host = host.rstrip(".").lower()
+            labels = host.split(".")
+            if len(host) > 253 or len(labels) < 2 or any(
+                not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label)
+                for label in labels
+            ):
+                raise ValueError
+            # A numeric final label triggers browser IPv4 parsing (including hex/octal).
+            if re.fullmatch(r"(?:[0-9]+|0x[0-9a-f]+)", labels[-1]):
+                raise ValueError
+            if labels[-1] in {"localhost", "local", "internal", "lan", "home"}:
+                raise ValueError
+            try:
+                ipaddress.ip_address(host)
+            except ValueError:
+                pass  # A syntactically valid DNS name; no DNS/reachability claim.
+            else:
+                raise ValueError
+            if parsed.port is not None and not (1 <= parsed.port <= 65535):
+                raise ValueError
+        except (ValueError, UnicodeError):
+            errors.append({
+                "row": row_index, "field": field,
+                "message": "Must be a public HTTPS URL of at most 2048 characters",
+            })
+            continue
+        if value not in urls:
+            urls.append(value)
+    return urls
 
 
 def _parse_bool(value: Optional[str]) -> bool:
@@ -424,6 +481,7 @@ async def bulk_upload_single_products(
 
     for row_index, row in enumerate(reader, start=2):
         row_errors: List[Dict[str, Any]] = []
+        image_urls = _parse_image_urls(row, row_index, row_errors)
         title = (row.get("title") or "").strip()
         category_slug = (row.get("category_slug") or "").strip()
         currency = (row.get("currency") or "NGN").strip().upper()
@@ -492,6 +550,13 @@ async def bulk_upload_single_products(
             height_cm=height_cm,
             moderation_status=ModerationStatus.PENDING,
         )
+        for display_order, image_url in enumerate(image_urls):
+            product.images.append(ProductImage(
+                image_url=image_url,
+                thumbnail_url=image_url,
+                display_order=display_order,
+                is_primary=display_order == 0,
+            ))
         products_to_create.append(product)
 
     for sku, rows in sku_rows.items():
@@ -505,7 +570,11 @@ async def bulk_upload_single_products(
         raise HTTPException(status_code=422, detail={"message": "Validation failed", "errors": errors})
 
     db.add_all(products_to_create)
-    await db.commit()
+    try:
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
 
     return {"success": True, "created_count": len(products_to_create)}
 
@@ -541,6 +610,7 @@ async def bulk_upload_variable_products(
 
     for row_index, row in enumerate(reader, start=2):
         row_errors: List[Dict[str, Any]] = []
+        row_image_urls = _parse_image_urls(row, row_index, row_errors)
         title = (row.get("product_title") or "").strip()
         category_slug = (row.get("category_slug") or "").strip()
         currency = (row.get("currency") or "NGN").strip().upper()
@@ -615,8 +685,15 @@ async def bulk_upload_variable_products(
                 "length_cm": length_cm,
                 "width_cm": width_cm,
                 "height_cm": height_cm,
+                "images": [],
                 "variations": {},
             }
+
+        for image_url in row_image_urls:
+            if image_url not in grouped[group_key]["images"]:
+                grouped[group_key]["images"].append(image_url)
+        if len(grouped[group_key]["images"]) > 5:
+            errors.append({"row": row_index, "field": "image_1_url", "message": "At most 5 unique image URLs are allowed per product"})
 
         variations = grouped[group_key]["variations"]
         variation_key = f"{color_name.lower()}::{color_hex or ''}"
@@ -674,6 +751,15 @@ async def bulk_upload_variable_products(
         db.add(product)
         await db.flush()
 
+        for display_order, image_url in enumerate(group["images"]):
+            db.add(ProductImage(
+                product_id=product.id,
+                image_url=image_url,
+                thumbnail_url=image_url,
+                display_order=display_order,
+                is_primary=display_order == 0,
+            ))
+
         for variation_data in group["variations"].values():
             variation = Variation(
                 product_id=product.id,
@@ -703,7 +789,11 @@ async def bulk_upload_variable_products(
 
         created += 1
 
-    await db.commit()
+    try:
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
 
     return {"success": True, "created_count": created}
 
