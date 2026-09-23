@@ -126,6 +126,44 @@ class TestProductCreate:
         assert variant.is_available is True
 
     @pytest.mark.asyncio
+    async def test_create_made_to_order_product_preserves_explicit_variant_inventory(
+        self, client: AsyncClient, vendor_user, db_session
+    ):
+        """Made-to-order normalization applies only to inherited generic rows."""
+        from sqlalchemy import select
+        from app.models.product import ProductVariant
+
+        response = await client.post(
+            "/api/v1/products",
+            json={
+                "title": "Made To Order Sized Product",
+                "base_price": 85.00,
+                "made_to_order": True,
+                "variants": [
+                    {
+                        "size": "M",
+                        "price": 85.00,
+                        "stock": 9,
+                        "is_available": False,
+                    }
+                ],
+            },
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 201, response.text
+        variant = (
+            await db_session.execute(
+                select(ProductVariant).where(
+                    ProductVariant.product_id == response.json()["id"]
+                )
+            )
+        ).scalar_one()
+        assert variant.inherits_stock is False
+        assert variant.stock == 9
+        assert variant.is_available is False
+
+    @pytest.mark.asyncio
     async def test_create_product_with_numeric_size_variation(self, client: AsyncClient, vendor_user):
         """Numeric UK/EU sizes remain creatable without invalid size-stock enum rows."""
         response = await client.post(

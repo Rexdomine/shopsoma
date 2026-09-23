@@ -501,15 +501,13 @@ async def create_product(
                 color_hex=variant_data.color_hex,
                 price=variant_data.price,
                 stock=(
-                    0 if product.made_to_order else int(product.total_stock or 0)
+                    (0 if product.made_to_order else int(product.total_stock or 0))
                     if inherits_stock
                     else variant_data.stock
                 ),
                 sku=variant_data.sku,
                 is_available=(
-                    True
-                    if product.made_to_order
-                    else int(product.total_stock or 0) > 0
+                    (True if product.made_to_order else int(product.total_stock or 0) > 0)
                     if inherits_stock
                     else variant_data.is_available
                 ),
