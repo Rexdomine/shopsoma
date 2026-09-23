@@ -72,6 +72,11 @@ def _sync_inherited_variation_prices(
 ) -> None:
     """Propagate parent price edits without overwriting explicit variation prices."""
     legacy_regular_price = old_compare_at_price or old_base_price
+    legacy_effective_price = (
+        old_base_price
+        if old_compare_at_price is not None and old_base_price < legacy_regular_price
+        else legacy_regular_price
+    )
 
     # Legacy single-product rows can have one generic ProductVariant without
     # Variation rows. That row is the effective purchase-price record for
@@ -90,9 +95,9 @@ def _sync_inherited_variation_prices(
                 continue
             # Axis-less legacy rows may be explicitly priced through the
             # variant endpoint. Treat only rows still carrying the previous
-            # parent regular price as inherited; otherwise preserve the
+            # parent effective price as inherited; otherwise preserve the
             # caller-supplied generic price.
-            if legacy_variant.price != legacy_regular_price:
+            if legacy_variant.price != legacy_effective_price:
                 continue
             legacy_variant.price = new_effective_price
         return
