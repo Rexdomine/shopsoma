@@ -714,6 +714,7 @@ async def test_durable_attempt_result_and_shared_cooldown(
 async def test_concurrent_entrypoints_only_send_once_with_independent_sessions(
     client, db_session, admin_user, approved_invitee, monkeypatch
 ):
+    from sqlalchemy import text
     from app.core.database import get_db
     from app.main import app
 
@@ -722,6 +723,7 @@ async def test_concurrent_entrypoints_only_send_once_with_independent_sessions(
     session_factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
     old_override = app.dependency_overrides[get_db]
     sessions = []
+    request_pids = []
     entered_provider = asyncio.Event()
     release_provider = asyncio.Event()
     calls = []
@@ -729,6 +731,7 @@ async def test_concurrent_entrypoints_only_send_once_with_independent_sessions(
     async def independent_db():
         async with session_factory() as session:
             sessions.append(session)
+            request_pids.append(await session.scalar(text("SELECT pg_backend_pid()")))
             yield session
 
     async def provider(*args, **kwargs):
@@ -739,14 +742,36 @@ async def test_concurrent_entrypoints_only_send_once_with_independent_sessions(
 
     app.dependency_overrides[get_db] = independent_db
     monkeypatch.setattr(email_service, "send_email", provider)
+    second_task = None
     first = asyncio.create_task(client.post(paths[0], headers=admin_user["headers"]))
     try:
         await asyncio.wait_for(entered_provider.wait(), 10)
-        second = await asyncio.wait_for(
-            client.post(paths[1], headers=admin_user["headers"]), 10
+        second_task = asyncio.create_task(
+            client.post(paths[1], headers=admin_user["headers"])
         )
-        assert second.status_code == 429, second.text
+
+        async def wait_for_second_lock():
+            async with session_factory() as observer:
+                while True:
+                    if len(request_pids) == 2:
+                        wait_type = await observer.scalar(
+                            text(
+                                "SELECT wait_event_type FROM pg_stat_activity WHERE pid = :pid"
+                            ),
+                            {"pid": request_pids[1]},
+                        )
+                        await observer.rollback()
+                        if wait_type == "Lock":
+                            return
+                    assert (
+                        not second_task.done()
+                    ), "Second resend bypassed provider-held locks"
+                    await asyncio.sleep(0.02)
+
+        await asyncio.wait_for(wait_for_second_lock(), 5)
         release_provider.set()
+        second = await asyncio.wait_for(second_task, 10)
+        assert second.status_code == 429, second.text
         response = await asyncio.wait_for(first, 10)
         assert response.status_code == 200, response.text
         assert len(sessions) == 2 and sessions[0] is not sessions[1]
@@ -758,6 +783,10 @@ async def test_concurrent_entrypoints_only_send_once_with_independent_sessions(
         if not first.done():
             first.cancel()
         await asyncio.gather(first, return_exceptions=True)
+        if second_task is not None:
+            if not second_task.done():
+                second_task.cancel()
+            await asyncio.gather(second_task, return_exceptions=True)
         app.dependency_overrides[get_db] = old_override
 
 
@@ -902,3 +931,223 @@ async def test_resend_waits_for_locked_state_then_rechecks_eligibility(
             if not request.done():
                 request.cancel()
             await asyncio.gather(request, return_exceptions=True)
+
+
+async def block_activation(session, vendor, user, state):
+    if state == "deactivated":
+        session.add(
+            AuditLog(
+                user_id=user.id,
+                action="user_deactivated",
+                entity_type="user",
+                entity_id=user.id,
+            )
+        )
+    elif state == "paused":
+        vendor.store_paused_at = datetime.now(timezone.utc)
+    elif state == "deleted":
+        vendor.store_deleted_at = datetime.now(timezone.utc)
+    elif state == "completed":
+        vendor.onboarding_completed_at = datetime.now(timezone.utc)
+    await session.commit()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "boundary", ["initiate", "resend-otp", "verify-otp", "set-password"]
+)
+@pytest.mark.parametrize("state", ["deactivated", "paused", "deleted", "completed"])
+async def test_late_ineligibility_at_every_public_boundary(
+    client, db_session, approved_invitee, boundary, state
+):
+    _, vendor, user, codes = approved_invitee
+    initiated = await client.post(
+        "/api/v1/vendor/activation/initiate", json={"email": user.email}
+    )
+    token = initiated.json()["token"]
+    body = {"token": token, "otp_code": codes[-1]}
+    if boundary == "initiate":
+        body = {"email": user.email}
+    if boundary == "set-password":
+        verified = await client.post("/api/v1/vendor/activation/verify-otp", json=body)
+        body = {
+            "activation_token": verified.json()["activation_token"],
+            "password": "Changed!Password123",
+        }
+    original_hash, original_verified = user.hashed_password, user.email_verified
+    await block_activation(db_session, vendor, user, state)
+    response = await client.post(f"/api/v1/vendor/activation/{boundary}", json=body)
+    assert response.status_code == 409, response.text
+    await db_session.refresh(user)
+    assert not user.is_active and user.hashed_password == original_hash
+    assert user.email_verified == original_verified
+    assert len(codes) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("boundary", ["resend-otp", "verify-otp", "set-password"])
+@pytest.mark.parametrize("identity", ["email", "subject", "invalid_uuid"])
+async def test_activation_token_must_match_current_identity(
+    client, db_session, approved_invitee, boundary, identity
+):
+    from app.core.security import create_access_token
+
+    _, _, user, codes = approved_invitee
+    payload = {
+        "sub": str(user.id),
+        "email": user.email,
+        "purpose": (
+            "vendor_activation_password"
+            if boundary == "set-password"
+            else "vendor_activation"
+        ),
+    }
+    if identity == "email":
+        user.email = "changed@example.com"
+        await db_session.commit()
+    else:
+        payload["sub"] = str(uuid.uuid4()) if identity == "subject" else "not-a-uuid"
+    token = create_access_token(data=payload)
+    body = {"token": token, "otp_code": codes[-1]}
+    if boundary == "set-password":
+        body = {"activation_token": token, "password": "Changed!Password123"}
+    response = await client.post(f"/api/v1/vendor/activation/{boundary}", json=body)
+    assert response.status_code == 401, response.text
+    assert len(codes) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("boundary", ["initiate", "resend-otp", "verify-otp"])
+async def test_public_rechecks_after_otp_helper_commit(
+    client, db_session, approved_invitee, monkeypatch, boundary
+):
+    _, vendor, user, codes = approved_invitee
+    initiated = await client.post(
+        "/api/v1/vendor/activation/initiate", json={"email": user.email}
+    )
+    body = {"token": initiated.json()["token"], "otp_code": codes[-1]}
+    if boundary == "initiate":
+        otp = await db_session.scalar(
+            select(VendorOTP).where(VendorOTP.vendor_id == vendor.id)
+        )
+        otp.is_used = True
+        await db_session.commit()
+        body = {"email": user.email}
+    original_commit = db_session.commit
+    changed = False
+    factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+
+    async def commit_then_pause():
+        nonlocal changed
+        await original_commit()
+        if not changed:
+            changed = True
+            async with factory() as writer:
+                fresh = await writer.get(Vendor, vendor.id)
+                fresh.store_paused_at = datetime.now(timezone.utc)
+                await writer.commit()
+
+    monkeypatch.setattr(db_session, "commit", commit_then_pause)
+    response = await client.post(f"/api/v1/vendor/activation/{boundary}", json=body)
+    assert response.status_code == 409, response.text
+    await db_session.refresh(user)
+    assert not user.email_verified and not user.is_active
+
+
+@pytest.mark.asyncio
+async def test_admin_rechecks_after_durable_attempt_before_dispatch(
+    client, db_session, admin_user, approved_invitee, monkeypatch
+):
+    _, vendor, user, _ = approved_invitee
+    original_commit = db_session.commit
+    changed = False
+    calls = []
+    factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+
+    async def commit_then_pause():
+        nonlocal changed
+        await original_commit()
+        if not changed:
+            changed = True
+            async with factory() as writer:
+                fresh = await writer.get(Vendor, vendor.id)
+                fresh.store_paused_at = datetime.now(timezone.utc)
+                await writer.commit()
+
+    async def provider(*args, **kwargs):
+        calls.append(args)
+        return True
+
+    monkeypatch.setattr(db_session, "commit", commit_then_pause)
+    monkeypatch.setattr(email_service, "send_email", provider)
+    response = await client.post(
+        f"/api/v1/admin/vendors/{vendor.id}/resend-activation",
+        headers=admin_user["headers"],
+    )
+    assert response.status_code == 409, response.text
+    assert calls == []
+    logs = await resend_logs(db_session, vendor.id)
+    assert len(logs) == 2
+    attempt = next(log for log in logs if log.action.endswith("_attempt"))
+    result = next(log for log in logs if log.action.endswith("_result"))
+    assert result.new_values["attempt_id"] == str(attempt.id)
+    assert result.new_values["delivery"] == "skipped_ineligible"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("locked_model", [User, Vendor], ids=["user", "vendor"])
+async def test_provider_await_holds_eligibility_rows(
+    client, db_session, admin_user, approved_invitee, monkeypatch, locked_model
+):
+    from sqlalchemy import text
+
+    _, vendor, user, _ = approved_invitee
+    factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+    target_id = user.id if locked_model is User else vendor.id
+    calls = []
+
+    async def provider(*args, **kwargs):
+        async with factory() as observer:
+            assert len(await resend_logs(observer, vendor.id)) == 1
+        async with factory() as writer:
+            await writer.execute(text("SET LOCAL lock_timeout = '150ms'"))
+            with pytest.raises(Exception, match="lock timeout"):
+                await writer.execute(
+                    locked_model.__table__.update()
+                    .where(locked_model.id == target_id)
+                    .values(
+                        **(
+                            {"is_active": True}
+                            if locked_model is User
+                            else {"store_active": False}
+                        )
+                    )
+                )
+            await writer.rollback()
+        calls.append(True)
+        return True
+
+    monkeypatch.setattr(email_service, "send_email", provider)
+    response = await client.post(
+        f"/api/v1/admin/vendors/{vendor.id}/resend-activation",
+        headers=admin_user["headers"],
+    )
+    assert response.status_code == 200, response.text
+    assert calls == [True]
+
+
+@pytest.mark.asyncio
+async def test_audit_only_deactivation_waits_for_identity_lock(
+    db_session, admin_user, approved_invitee
+):
+    from app.api.v1.admin import toggle_user_status
+    from sqlalchemy import text
+
+    _, vendor, user, _ = approved_invitee
+    factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+    async with factory() as holder, factory() as writer:
+        await holder.execute(select(User).where(User.id == user.id).with_for_update())
+        await writer.execute(text("SET LOCAL lock_timeout = '150ms'"))
+        with pytest.raises(Exception, match="lock timeout"):
+            await toggle_user_status(user.id, False, admin_user["user"], writer)
+        await writer.rollback()

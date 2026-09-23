@@ -5,7 +5,7 @@ from typing import Optional, List
 from uuid import UUID
 from fastapi import APIRouter, HTTPException, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, or_, delete, update, and_, exists
+from sqlalchemy import select, func, or_, delete, update, and_
 from sqlalchemy.orm import selectinload
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -36,27 +36,15 @@ from app.models.vendor_application import VendorApplication
 from app.schemas.auth import UserResponse, UserUpdate
 from app.schemas.common import PaginatedResponse
 from app.schemas.product import ProductApprovalRequest, ProductRejectionRequest, ProductFeatureUpdate
+from app.services.vendor_activation_service import (
+    activation_eligibility, activation_is_eligible, lock_activation_identity,
+)
 from app.services.test_account_classification import (
     classify_existing_staging_accounts,
     tag_staging_account,
 )
 
 router = APIRouter(prefix="/admin", tags=["admin"])
-
-
-def _activation_resend_eligibility():
-    """Canonical SQL rule shared by activation-resend reads and writes."""
-    return and_(
-        Vendor.approved.is_(True), User.role == UserRole.VENDOR,
-        User.is_active.is_(False), Vendor.is_onboarding.is_(True),
-        Vendor.store_active.is_(True), Vendor.store_paused_at.is_(None),
-        Vendor.store_deleted_at.is_(None), Vendor.onboarding_completed_at.is_(None),
-        ~exists(select(AuditLog.id).where(
-            AuditLog.action == "user_deactivated",
-            AuditLog.entity_type == "user",
-            AuditLog.entity_id == User.id,
-        )),
-    )
 
 
 class FeaturedStorefrontUpdate(BaseModel):
@@ -584,9 +572,11 @@ async def toggle_user_status(
 
     Requires admin role
     """
-    # Get user
+    # Even deactivating an already-inactive invitee writes a deny audit.
+    # Lock explicitly: an unchanged boolean alone produces no locking UPDATE.
     result = await db.execute(
         select(User).where(User.id == user_id)
+        .execution_options(populate_existing=True).with_for_update()
     )
     user = result.scalar_one_or_none()
 
@@ -830,7 +820,7 @@ async def list_vendors(
     Requires admin role
     """
     # Build query with join to User
-    eligibility = _activation_resend_eligibility()
+    eligibility = activation_eligibility()
     query = select(Vendor, User, eligibility.label("activation_resend_eligible")).join(User, Vendor.user_id == User.id)
     
     # Apply filters
@@ -1017,7 +1007,7 @@ async def get_vendor_details(
         "total_revenue": float(vendor.total_revenue) if vendor.total_revenue else 0.0,
         "created_at": vendor.created_at.isoformat() if vendor.created_at else None,
         "updated_at": vendor.updated_at.isoformat() if vendor.updated_at else None,
-        "activation_resend_eligible": await db.scalar(select(_activation_resend_eligibility()).where(Vendor.id == vendor_id).select_from(Vendor).join(User, Vendor.user_id == User.id)),
+        "activation_resend_eligible": await db.scalar(select(activation_eligibility()).where(Vendor.id == vendor_id).select_from(Vendor).join(User, Vendor.user_id == User.id)),
     }
 
 
@@ -1418,14 +1408,11 @@ async def update_application_notes(
 
 
 async def _resend_vendor_activation_safely(vendor_id: UUID, admin: User, db: AsyncSession, application_id: UUID | None = None):
-    query = (select(Vendor, User).join(User, Vendor.user_id == User.id)
-             .where(Vendor.id == vendor_id)
-             .execution_options(populate_existing=True).with_for_update())
-    row = (await db.execute(query)).first()
+    row = await lock_activation_identity(db, vendor_id=vendor_id)
     if not row:
         raise HTTPException(status_code=404, detail="Vendor not found")
     vendor, user = row
-    eligibility = await db.scalar(select(_activation_resend_eligibility()).select_from(Vendor).join(User, Vendor.user_id == User.id).where(Vendor.id == vendor_id))
+    eligibility = await activation_is_eligible(db, vendor_id)
     if not eligibility:
         raise HTTPException(status_code=409, detail="Vendor is not eligible for activation email resend")
     if application_id is not None:
@@ -1453,6 +1440,19 @@ async def _resend_vendor_activation_safely(vendor_id: UUID, admin: User, db: Asy
     await db.flush()
     attempt_id = attempt.id
     await db.commit()
+    # The durable attempt released the original locks. Reacquire them and
+    # snapshot current identity before IO; retain them through the result commit.
+    row = await lock_activation_identity(db, vendor_id=vendor_uuid)
+    if not row or not await activation_is_eligible(db, vendor_uuid):
+        db.add(AuditLog(user_id=actor_id, action="vendor_activation_email_resend_result",
+                        entity_type="vendor", entity_id=vendor_uuid,
+                        new_values={"attempt_id": str(attempt_id), "email": email,
+                                    "delivery": "skipped_ineligible"}))
+        await db.commit()
+        raise HTTPException(status_code=409, detail="Vendor is not eligible for activation email resend")
+    vendor, user = row
+    email, name = user.email, user.full_name or "there"
+
     try:
         from app.services.email_service import email_service
         accepted = await email_service.send_vendor_activation_invitation_email(
