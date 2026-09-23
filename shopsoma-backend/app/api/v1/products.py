@@ -336,8 +336,9 @@ def _sync_single_product_variant_inventory(product: Product) -> None:
         # represented by the product-level total_stock field.
         if variant.size is not None or variant.color is not None:
             continue
-        variant.stock = synced_stock
-        variant.is_available = is_available
+        if variant.inherits_stock is True:
+            variant.stock = synced_stock
+            variant.is_available = is_available
 
 
 async def _get_category_by_slug(db: AsyncSession, slug: str) -> Optional[Category]:
@@ -455,6 +456,7 @@ async def create_product(
                 product_id=product.id,
                 size=variant_data.size,
                 inherits_price=False,
+                inherits_stock=False,
                 color=variant_data.color,
                 color_hex=variant_data.color_hex,
                 price=variant_data.price,

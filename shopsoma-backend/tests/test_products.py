@@ -961,7 +961,7 @@ class TestProductUpdate:
         variant = ProductVariant(
             id=uuid.uuid4(),
             product_id=product.id,
-            size="M",
+            inherits_stock=True,
             price=80.00,
             stock=0,
             is_available=False,
