@@ -48,6 +48,9 @@ from app.api.v1.products import (
     PRODUCT_RELATIONSHIPS,
     _sync_inherited_variation_prices,
     _sync_single_product_variant_inventory,
+    normalize_color_value,
+    unique_variations_by_color,
+    unique_variations_by_size,
 )
 from app.services.vendor_activation_service import (
     activation_eligibility, activation_is_eligible, lock_activation_identity,
@@ -2254,6 +2257,31 @@ async def update_product_variant(
     # variant. Otherwise a later parent edit would overwrite the admin's value.
     if "price" in variant_data:
         variant.inherits_price = False
+        variation_result = await db.execute(
+            select(Variation).where(Variation.product_id == product_id)
+        )
+        variations = variation_result.scalars().all()
+        matching_variation = None
+        if variant.color is not None:
+            matching_variation = unique_variations_by_color(variations).get(
+                normalize_color_value(variant.color)
+            )
+        if matching_variation is None and variant.size is not None:
+            matching_variation = unique_variations_by_size(variations).get(
+                normalize_color_value(variant.size)
+            )
+        if (
+            matching_variation is not None
+            and matching_variation.inherits_price is True
+            and variant_data["price"] is not None
+        ):
+            # Checkout resolves supported mixed products through Variation when
+            # its inheritance marker is active. Make the direct legacy edit the
+            # authoritative explicit price in both representations.
+            matching_variation.price = variant_data["price"]
+            matching_variation.sale_price = None
+            matching_variation.inherits_price = False
+            matching_variation.inherits_sale_price = False
     if "stock" in variant_data or "is_available" in variant_data:
         variant.inherits_stock = False
 
