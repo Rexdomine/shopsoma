@@ -484,24 +484,35 @@ async def create_product(
     # Add variants if provided (legacy system - backward compatibility)
     if product_data.variants:
         for variant_data in product_data.variants:
+            inherits_stock = (
+                product.product_type == ProductType.SINGLE
+                and not product_data.variations
+                and variant_data.size is None
+                and variant_data.color is None
+            )
             variant = ProductVariant(
                 product_id=product.id,
                 size=variant_data.size,
                 inherits_price=False,
                 # A generic legacy row on a single product is the compatibility
                 # projection of product.total_stock, not an independent axis.
-                inherits_stock=(
-                    product.product_type == ProductType.SINGLE
-                    and not product_data.variations
-                    and variant_data.size is None
-                    and variant_data.color is None
-                ),
+                inherits_stock=inherits_stock,
                 color=variant_data.color,
                 color_hex=variant_data.color_hex,
                 price=variant_data.price,
-                stock=variant_data.stock,
+                stock=(
+                    0 if product.made_to_order else int(product.total_stock or 0)
+                    if inherits_stock
+                    else variant_data.stock
+                ),
                 sku=variant_data.sku,
-                is_available=variant_data.is_available,
+                is_available=(
+                    True
+                    if product.made_to_order
+                    else int(product.total_stock or 0) > 0
+                    if inherits_stock
+                    else variant_data.is_available
+                ),
             )
             db.add(variant)
 

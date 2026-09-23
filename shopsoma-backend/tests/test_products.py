@@ -108,7 +108,7 @@ class TestProductCreate:
                 "title": "Legacy Single Stock Product",
                 "base_price": 85.00,
                 "total_stock": 7,
-                "variants": [{"price": 85.00, "stock": 7}],
+                "variants": [{"price": 85.00, "stock": 0, "is_available": False}],
             },
             headers=vendor_user["headers"],
         )
@@ -122,6 +122,8 @@ class TestProductCreate:
             )
         ).scalar_one()
         assert variant.inherits_stock is True
+        assert variant.stock == 7
+        assert variant.is_available is True
 
     @pytest.mark.asyncio
     async def test_create_product_with_numeric_size_variation(self, client: AsyncClient, vendor_user):
