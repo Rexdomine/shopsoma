@@ -88,6 +88,12 @@ def _sync_inherited_variation_prices(
         for legacy_variant in legacy_variants:
             if legacy_variant.size is not None or legacy_variant.color is not None:
                 continue
+            # Axis-less legacy rows may be explicitly priced through the
+            # variant endpoint. Treat only rows still carrying the previous
+            # parent regular price as inherited; otherwise preserve the
+            # caller-supplied generic price.
+            if legacy_variant.price != legacy_regular_price:
+                continue
             legacy_variant.price = new_effective_price
         return
 

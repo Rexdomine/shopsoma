@@ -120,6 +120,21 @@ def test_legacy_null_sale_is_custom_when_regular_price_is_custom():
     ) is False
 
 
+def test_parent_price_update_preserves_explicit_generic_legacy_variant_price():
+    explicit_generic = SimpleNamespace(size=None, color=None, price=Decimal("150"))
+
+    _sync_inherited_variation_prices(
+        [],
+        [explicit_generic],
+        old_base_price=Decimal("80"),
+        old_compare_at_price=Decimal("100"),
+        new_base_price=Decimal("90"),
+        new_compare_at_price=Decimal("110"),
+    )
+
+    assert explicit_generic.price == Decimal("150")
+
+
 def test_parent_price_update_only_moves_inherited_variations_and_legacy_variants():
     inherited = SimpleNamespace(
         id="inherited", title="4", type="size", price=Decimal("100"),
