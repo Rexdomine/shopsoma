@@ -1250,13 +1250,13 @@ async def list_vendor_applications(
         vendor_ids = [app.vendor_id for app in applications if app.vendor_id]
         if vendor_ids:
             vendor_result = await db.execute(
-                select(Vendor, User)
+                select(Vendor, User, activation_eligibility())
                 .join(User, Vendor.user_id == User.id)
                 .where(Vendor.id.in_(vendor_ids))
             )
             vendor_by_id = {
-                str(vendor.id): (vendor, user)
-                for vendor, user in vendor_result.all()
+                str(vendor.id): (vendor, user, eligible)
+                for vendor, user, eligible in vendor_result.all()
             }
     
     # Calculate pagination info
@@ -1280,6 +1280,11 @@ async def list_vendor_applications(
                 "website_link": app.website_link,
                 "social_media_handles": app.social_media_handles,
                 "status": app.status,
+                "activation_resend_eligible": bool(
+                    app.status == "approved" and app.vendor_id
+                    and str(app.vendor_id) in vendor_by_id
+                    and vendor_by_id[str(app.vendor_id)][2]
+                ),
                 "admin_notes": app.admin_notes,
                 "vendor_id": str(app.vendor_id) if app.vendor_id else None,
                 "created_at": app.created_at.isoformat() if app.created_at else None,
@@ -1340,15 +1345,16 @@ async def get_vendor_application(
     
     vendor_user = None
     vendor = None
+    resend_eligible = False
     if application.vendor_id:
         vendor_result = await db.execute(
-            select(Vendor, User)
+            select(Vendor, User, activation_eligibility())
             .join(User, Vendor.user_id == User.id)
             .where(Vendor.id == application.vendor_id)
         )
         vendor_row = vendor_result.first()
         if vendor_row:
-            vendor, vendor_user = vendor_row
+            vendor, vendor_user, resend_eligible = vendor_row
 
     return {
         "id": str(application.id),
@@ -1367,6 +1373,7 @@ async def get_vendor_application(
         "website_link": application.website_link,
         "social_media_handles": application.social_media_handles,
         "status": application.status,
+        "activation_resend_eligible": bool(application.status == "approved" and resend_eligible),
         "admin_notes": application.admin_notes,
         "reviewed_by": str(application.reviewed_by) if application.reviewed_by else None,
         "reviewed_at": application.reviewed_at.isoformat() if application.reviewed_at else None,

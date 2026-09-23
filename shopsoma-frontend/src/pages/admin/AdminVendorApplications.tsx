@@ -84,6 +84,9 @@ export default function AdminVendorApplications() {
   };
 
   const handleResendActivation = async (application: VendorApplication) => {
+    if (application.activation_resend_eligible !== true || actionLoading === application.id) {
+      return;
+    }
     if (!confirm(`Resend activation email to ${application.email}?`)) {
       return;
     }
@@ -94,7 +97,7 @@ export default function AdminVendorApplications() {
       const setupSuffix = response.account_already_setup
         ? ' This account is already set up, so the invite link will direct them to reset password/contact admin guidance.'
         : '';
-      showMessage('success', `Activation email sent to ${response.email}.${setupSuffix}`);
+      showMessage('success', `Activation email accepted by the provider for ${response.email}.${setupSuffix}`);
       loadApplications();
     } catch (error: any) {
       console.error('Failed to resend activation email:', error);
@@ -111,7 +114,7 @@ export default function AdminVendorApplications() {
   };
 
   const canResendActivation = (app: VendorApplication) => {
-    return app.status === 'approved';
+    return app.activation_resend_eligible === true;
   };
 
   const getStatusBadge = (status: string) => {

@@ -93,6 +93,7 @@ export interface VendorApplication {
   vendor_brand_info_completed?: boolean;
   vendor_payout_info_completed?: boolean;
   activation_email_sent?: boolean;
+  activation_resend_eligible?: boolean;
   created_at: string;
   reviewed_at?: string;
 }

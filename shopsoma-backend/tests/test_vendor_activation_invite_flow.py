@@ -86,6 +86,17 @@ async def assert_eligibility(client, headers, vendor, expected):
     listed = next(row for row in listing.json()["items"] if row["id"] == str(vendor.id))
     assert listed["activation_resend_eligible"] is expected
     assert detail.json()["activation_resend_eligible"] is expected
+    applications = await client.get(
+        "/api/v1/admin/vendor-applications?status=approved", headers=headers
+    )
+    assert applications.status_code == 200
+    application = next(row for row in applications.json()["items"] if row["vendor_id"] == str(vendor.id))
+    assert application["activation_resend_eligible"] is expected
+    application_detail = await client.get(
+        f"/api/v1/admin/vendor-applications/{application['id']}", headers=headers
+    )
+    assert application_detail.status_code == 200
+    assert application_detail.json()["activation_resend_eligible"] is expected
 
 
 def persisted_columns(model):
@@ -1195,3 +1206,28 @@ async def test_bulk_deactivation_of_inactive_invitee_revokes_existing_capability
     assert redeemed.status_code == 409, redeemed.text
     await db_session.refresh(user)
     assert not user.is_active and user.hashed_password == password_before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("application_state", ["pending_review", "rejected", "unlinked"])
+async def test_application_projection_rejects_nonapproved_or_unlinked(
+    client, db_session, admin_user, approved_invitee, application_state
+):
+    application, _, _, _ = approved_invitee
+    if application_state == "unlinked":
+        application.vendor_id = None
+    else:
+        application.status = application_state
+    await db_session.commit()
+    listing = await client.get(
+        f"/api/v1/admin/vendor-applications?status={application.status}",
+        headers=admin_user["headers"],
+    )
+    detail = await client.get(
+        f"/api/v1/admin/vendor-applications/{application.id}",
+        headers=admin_user["headers"],
+    )
+    assert listing.status_code == detail.status_code == 200
+    row = next(item for item in listing.json()["items"] if item["id"] == str(application.id))
+    assert row["activation_resend_eligible"] is False
+    assert detail.json()["activation_resend_eligible"] is False
