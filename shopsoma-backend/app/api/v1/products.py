@@ -93,12 +93,13 @@ def _sync_inherited_variation_prices(
         for legacy_variant in legacy_variants:
             if legacy_variant.size is not None or legacy_variant.color is not None:
                 continue
-            # Axis-less legacy rows may be explicitly priced through the
-            # variant endpoint. Treat only rows still carrying the previous
-            # parent effective price as inherited; otherwise preserve the
-            # caller-supplied generic price.
-            if legacy_variant.price != legacy_effective_price:
+            # New variant writes persist this marker. Legacy rows retain the
+            # equality fallback until they are explicitly classified.
+            if getattr(legacy_variant, "inherits_price", None) is False:
                 continue
+            if getattr(legacy_variant, "inherits_price", None) is not True:
+                if legacy_variant.price != legacy_effective_price:
+                    continue
             legacy_variant.price = new_effective_price
         return
 
@@ -446,6 +447,7 @@ async def create_product(
             variant = ProductVariant(
                 product_id=product.id,
                 size=variant_data.size,
+                inherits_price=False,
                 color=variant_data.color,
                 color_hex=variant_data.color_hex,
                 price=variant_data.price,
@@ -1270,6 +1272,7 @@ async def create_variant(
 
     variant = ProductVariant(
         product_id=product_id,
+        inherits_price=False,
         **variant_data.model_dump()
     )
     db.add(variant)
