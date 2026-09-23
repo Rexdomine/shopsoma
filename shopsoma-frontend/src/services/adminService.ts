@@ -56,6 +56,7 @@ export interface VendorListItem {
   store_deleted_at?: string;
   is_featured_storefront?: boolean;
   featured_storefront_image_url?: string | null;
+  activation_resend_eligible: boolean;
 }
 
 export interface VendorListFilters {
@@ -92,6 +93,7 @@ export interface VendorApplication {
   vendor_brand_info_completed?: boolean;
   vendor_payout_info_completed?: boolean;
   activation_email_sent?: boolean;
+  activation_resend_eligible?: boolean;
   created_at: string;
   reviewed_at?: string;
 }
@@ -248,6 +250,11 @@ export const adminService = {
     applicationId: string
   ): Promise<{ message: string; email: string; account_already_setup?: boolean }> {
     const response = await api.post(`/admin/vendor-applications/${applicationId}/resend-activation`);
+    return response.data;
+  },
+
+  async resendVendorActivationForVendor(vendorId: string): Promise<{ message: string; email: string }> {
+    const response = await api.post(`/admin/vendors/${vendorId}/resend-activation`);
     return response.data;
   },
 

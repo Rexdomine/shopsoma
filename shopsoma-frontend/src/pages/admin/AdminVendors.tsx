@@ -134,6 +134,26 @@ export default function AdminVendors() {
     }
   };
 
+  const handleResendActivation = async (vendor: VendorListItem) => {
+    if (!vendor.activation_resend_eligible || actionLoading === `resend-${vendor.id}`) return;
+    if (!window.confirm(`Resend the activation email to ${vendor.email}? This does not change account or store status.`)) return;
+    try {
+      setActionLoading(`resend-${vendor.id}`);
+      await adminService.resendVendorActivationForVendor(vendor.id);
+      showMessage('success', `Activation email accepted by the email provider for ${vendor.email}. Delivery may take a few minutes.`);
+      await loadVendors();
+    } catch (error: any) {
+      const status = error?.response?.status;
+      const detail = error?.response?.data?.detail;
+      const errorText = typeof detail === 'string' ? detail : error?.message;
+      showMessage('error', status === 429
+        ? (errorText || 'Activation email resend is temporarily on cooldown. Please try again later.')
+        : (errorText || 'Failed to resend activation email. Please try again.'));
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
   const handleMarkAsTestAccount = async (vendor: VendorListItem) => {
     if (vendor.is_test_account) return;
     if (!window.confirm(`Mark ${vendor.business_name} as a test account? This makes it eligible for staging purge workflows.`)) return;
@@ -543,6 +563,17 @@ export default function AdminVendors() {
                       </td>
                       <td className="px-6 py-4">
                         <div className="flex items-center justify-end gap-2">
+                          {vendor.activation_resend_eligible && (
+                            <button
+                              type="button"
+                              onClick={() => handleResendActivation(vendor)}
+                              disabled={actionLoading === `resend-${vendor.id}`}
+                              className="px-2 py-1 text-xs text-[#105E53] border border-[#105E53]/30 hover:bg-[#105E53]/10 rounded-lg transition disabled:opacity-50"
+                              title="Resend activation email"
+                            >
+                              {actionLoading === `resend-${vendor.id}` ? 'Sending…' : 'Resend activation'}
+                            </button>
+                          )}
                           {vendor.store_deleted_at && (
                             <button
                               onClick={() => handleRestoreStore(vendor.id, vendor.business_name)}

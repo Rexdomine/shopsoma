@@ -1,38 +1,21 @@
-# Progress — Admin Account Lifecycle Controls
-
-## 2026-09-17 — Setup
-- User approved the phased lifecycle plan and authorized implementation of PR 1 only.
-- Fetched `origin`; confirmed PR #151 is merged and `origin/develop` is `ab1ac34c5d563139171fa123a43ab8ad8d5b6d38`.
-- Created isolated worktree:
-  - Path: `/opt/data/projects/shopsoma-worktrees/admin-account-lifecycle-controls`
-  - Branch: `feat/admin-account-lifecycle-controls`
-  - Base: `origin/develop`
-- Inspected existing account status/delete endpoints, `User`/`Vendor` models, vendor list response, and relationship constraints.
-- Attempted `hermes-plan-bootstrap --title "Build Admin Account Lifecycle Controls"`; it failed because the command is not installed. Created `task_plan.md`, `findings.md`, and `progress.md` directly instead.
-
-- Added RED regression `test_deactivating_vendor_hides_products_from_public_catalog`; it failed as expected because a deactivated vendor's product was still returned by `/api/v1/products`.
-- Implemented the first public-sellability enforcement in `app/api/v1/products.py`: public list/detail now require approved, completed-onboarding, active/non-deleted store and active vendor account.
-- Re-ran the regression GREEN: passed.
-- Added RED regression `test_deactivating_user_writes_lifecycle_audit_event`; it failed as expected because no audit event was persisted.
-- Implemented transactionally coupled `AuditLog` creation in `PUT /admin/users/{user_id}/status` with actor, target, activation action, and old/new active state.
-- Re-ran `tests/test_vendor_account_lifecycle.py -q`: 2 passed.
-
-- Added RED regression for bulk deactivation; initial route design conflicted with the existing dynamic user-update route and returned `422`. Moved the endpoint to unambiguous `PUT /admin/users/status/bulk`, then verified GREEN.
-- Added a distinct RED regression proving duplicate IDs must be rejected before mutation; it failed (`200`) before the duplicate preflight was added, then passed after the minimal guard.
-
-- Added RED/GREEN preflight regressions for a batch containing a missing ID (initially raised `KeyError`) and a batch containing the acting admin (initially returned `200`). Both now fail closed without mutations.
-
-- Added RED/GREEN public-designer discovery regression; `/api/v1/designers` now applies the same account/store/onboarding eligibility rule instead of exposing merely approved vendors.
-
-- Added reusable `app/services/vendor_visibility.py` customer-sellability predicate and applied it to public products, cart add, order review, and order creation.
-- RED/GREEN regressions now prove a deactivated vendor’s product is rejected by direct cart submission, checkout review, and final order creation; focused safety suite currently has 10 passing regressions across lifecycle/public/cart/checkout paths.
-
-- Added RED/GREEN seller-eligibility regressions for wishlist read/add, stale-cart read and quantity update, plus pre-payment checkout-estimate creation after a vendor account deactivation.
-- Applied the shared customer-sellability predicate to wishlist read/add and cart read; cart quantity updates now revalidate the stored product before mutation. Checkout-estimate creation revalidates seller eligibility before authorization and again after its commit/reload boundary, before estimate work.
-- UI TDD: added Admin Users regression proving a failed bulk deactivation retains selection, emits accessible error feedback, and prevents selection of the acting admin. Fixed the observed unhandled-rejection/self-selection defects; applied the same guarded error/selection flow to Admin Vendors.
-- Backend safety suite now includes wishlist, stale cart mutation/read, and checkout-estimate seller revalidation; all focused checks are green.
-- Surrounding backend Admin/vendor/onboarding regression set: 9 passed.
-- Full frontend suite: 140 passed, 1 failed in untouched `src/pages/checkout/Checkout.test.tsx` guest Paystack capability session-storage assertion; implementation-specific frontend tests and production build pass. Treat this as a baseline gate pending independent diagnosis, not as lifecycle evidence.
-- Published commit `857e6f119fd8a3833a2be980999e35e108877afa` on `feat/admin-account-lifecycle-controls` and opened PR #152 against `develop`: https://github.com/Rexdomine/shopsoma/pull/152.
-- Requested exact-head Codex review with `@codex review`. Hosted checks were queued/in progress at publication; no merge, deployment, or production/staging data mutation occurred.
-- Adversarial UI review follow-up: added explicit vendor account-state labels, acting-admin protection and duplicate-submit locking for individual vendor status actions, accessible API-detail errors, and current-result-set selection scoping. Focused frontend lifecycle tests: 4 passed; build passed. The full focused backend matrix: 50 passed.
+# Progress — admin activation resend
+- Loaded stateful preflight, Groot orchestration, Rex Planning With Files and NightWing QA skills.
+- Main repository has unrelated modifications; left untouched. Created isolated worktree from freshly fetched develop d6ea44cf1aca4214998256a8f8b2e02841f3b854.
+- Ran hermes-plan-bootstrap; inherited tracked planning files described older lifecycle task. Replaced planning content in this new feature lane only.
+- No production changes, deployments or emails sent.
+- Resumed after Rex approved local verification and explicitly requested end-to-end delivery. Earlier workers left a partial unverified slice; not release-ready.
+- Repaired missing jwt dependency by creating isolated /opt/data/tmp/resend-test-venv from the exact backend requirements (87 packages installed), leaving the shared environment untouched.
+- Critical recovery findings: approval creates a temporary password, so password-null is not an eligibility marker; current partial tests fake OTP helper commits and must be replaced with invitation-provider seam tests. Local PostgreSQL isolated at 127.0.0.1:55483.
+- Finish line remains tested candidate, independent review, fresh PR into develop and exact-head hosted/review evidence; no merge/deploy.
+- Exact-base activation regression: 6 passed. Baseline backend critical flake8: 0 errors.
+- Candidate frontend: 7 focused lifecycle/resend tests passed under Node20; strict eslint --quiet and production build passed. Local built-UI Playwright QA passed eligible-only button, confirm/cancel, loading, acceptance feedback, cooldown error and mobile reachability; no JS page errors. API responses were explicit browser mocks, not provider delivery proof.
+- Initial partial candidate backend had 3 failures/5 passes due stale mocks/active-account expectations. Those stale mocks made two unauthenticated Brevo calls rejected with 401; no credentials or email delivery. Provider-seam test isolation is required before further candidate tests.
+- Candidate revised backend intermediate run: 9 passed, but coverage incomplete; Drax moved to verified Codex CLI route to finish real approval, provider-boundary durability, concurrency and activation-journey regressions.
+- Final focused backend parent rerun: 32 passed in 78.53s. Real approval/temp hash, template escaping, unchanged persisted user/vendor/OTP, role and eligibility matrix, cross-entrypoint cooldown, durable pre-provider audit via independent connection, ambiguous outcomes, concurrent requests, actual User/Vendor row-lock waits, and real OTP/password/login journey passed.
+- Preliminary generic reviewer claimed plain joined FOR UPDATE locks only Vendor (and cited wrong lines). Rejected as unsupported: PostgreSQL locks both selected tables by default and the real User/Vendor contention tests each prove waiting and refreshed denial. An independent exact-candidate confirmation remains required; no preliminary PASS claimed.
+- PR #185 published at c7d9e5269a4b441585ed1bb1e8350cf0e22a42f7. Fresh parent focused backend32/32, UI7/7, lint/build and browser flow passed. Full frontend191passed12failed, all Checkout; base also fails Checkout. No full-suite-green claim.
+- Exact-head Codex found P1 downstream redemption eligibility and P2 post-commit dispatch eligibility races. Combined remediation uses shared policy at every public activation boundary, binds current token identity, guards after OTP helper commits, and re-locks through provider handoff. User-status writer explicitly locks even for audit-only deactivation.
+- Real PostgreSQL remediation RED:31failed32passed plus audit-only regression failed. GREEN:64passed; parent reran the complete64-test activation suite successfully after final changes. Backend critical flake8 and diff check passed. External re-review and final NightWing confirmation remain required; no merge/deploy.
+- Follow-up Codex and independent NightWing both identified the bulk-status sibling: unchanged inactive vendors had no deny audit or explicit lock. Added bulk locking in UUID order and audit-only deny intent while preserving unchanged response counts. Two new RED regressions failed on the previous head; final combined activation/account-lifecycle suite76/76 passed in157.49s. Fresh external confirmation pending.
+- Application-list/detail parity correction: both API projections now expose canonical activation_resend_eligible (including approved/link scope) and both existing UI consumers gate resend and report provider acceptance. Projection RED observed missing field; final backend activation+account-lifecycle79/79 passed, frontend vendor/application10/10 passed, strict lint/build/critical flake8 passed. Latest external confirmation remains pending.
+- Baseline full backend export initially omitted repository-root artifacts, causing two render configuration tests to fail at 4%; root artifacts restored. Targeted rerun of all 6 deployment tests passed. Treat the original full run as diagnostic, not a clean baseline verdict.

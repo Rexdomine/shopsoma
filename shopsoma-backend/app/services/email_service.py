@@ -2,10 +2,11 @@
 Email Service using Brevo (formerly SendinBlue)
 Handles all transactional email sending for the platform
 """
+import html
 import logging
 from typing import Optional, Dict, Any, List
 from datetime import datetime
-from urllib.parse import urljoin
+from urllib.parse import urljoin, quote
 from pathlib import Path
 import base64
 from decimal import Decimal
@@ -997,13 +998,25 @@ class EmailService:
         html_content = self._wrap_email("Application Update", body_html, preheader)
         return await self.send_email(email, first_name, subject, html_content)
 
+    async def send_vendor_activation_invitation_email(self, email: str, name: str, activation_link: str) -> bool:
+        """Send an activation invitation without creating or rotating OTP state."""
+        safe_name = html.escape(name or "there")
+        safe_link = html.escape(activation_link, quote=True)
+        body_html = f"""<p>Hi {safe_name},</p>
+        <p>Your Shopsoma vendor account has been approved. Open the link below to continue activation.</p>
+        <p><a href="{safe_link}">Activate your vendor account</a></p>
+        <p>If you did not apply, you can ignore this email.</p>"""
+        return await self.send_email(email, name or "Vendor", "Activate your Shopsoma vendor account",
+                                     self._wrap_email("Activate Your Vendor Account", body_html,
+                                                      "Your Shopsoma vendor account is ready to activate."))
+
     async def send_vendor_otp_email(self, email: str, otp_code: str, expiry_minutes: int = 15) -> bool:
         """Send vendor activation OTP code via email"""
         subject = "Your Shopsoma Designer Verification Code"
 
         # Get the activation link with email parameter
         frontend_url = getattr(settings, 'FRONTEND_BASE_URL', 'http://localhost:5173')
-        activation_link = f"{frontend_url}/vendor/otp?email={email}"
+        activation_link = f"{frontend_url.rstrip('/')}/vendor/otp?email={quote(email, safe='')}"
 
         body_html = f"""
         <div style="text-align:center;margin:32px 0;">
