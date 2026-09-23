@@ -171,10 +171,19 @@ async def test_variable_image_limit_is_per_product_across_all_rows(client, vendo
         name: f"https://cdn.example.com/{index}.jpg" for index, name in enumerate(BULK_IMAGE_HEADERS)
     })
     second = product_row("variable", size="M", variant_sku="CSV-IMAGE-SHIRT-BLUE-M",
-                         image_1_url="https://cdn.example.com/sixth.jpg")
-    response = await upload(client, vendor_user, "variable", [row, second])
+                         image_3_url="https://cdn.example.com/sixth.jpg")
+    third = product_row("variable", size="L", variant_sku="CSV-IMAGE-SHIRT-BLUE-L")
+    response = await upload(client, vendor_user, "variable", [row, second, third])
     assert response.status_code == 422, response.text
-    assert any(error["row"] == 3 and "5 unique" in error["message"] for error in response.json()["detail"]["errors"])
+    limit_errors = [
+        error for error in response.json()["detail"]["errors"]
+        if "5 unique" in error["message"]
+    ]
+    assert limit_errors == [{
+        "row": 3,
+        "field": "image_3_url",
+        "message": "At most 5 unique image URLs are allowed per product",
+    }]
     assert await db_session.scalar(select(func.count()).select_from(Product)) == 0
     assert await db_session.scalar(select(func.count()).select_from(ProductImage)) == 0
 

@@ -691,11 +691,20 @@ async def bulk_upload_variable_products(
                 "variations": {},
             }
 
-        for image_url in row_image_urls:
-            if image_url not in grouped[group_key]["images"]:
-                grouped[group_key]["images"].append(image_url)
-        if len(grouped[group_key]["images"]) > 5:
-            errors.append({"row": row_index, "field": "image_1_url", "message": "At most 5 unique image URLs are allowed per product"})
+        group_images = grouped[group_key]["images"]
+        valid_image_urls = set(row_image_urls)
+        for field in BULK_IMAGE_HEADERS:
+            image_url = (row.get(field) or "").strip()
+            if not image_url or image_url not in valid_image_urls or image_url in group_images:
+                continue
+            if len(group_images) >= 5:
+                errors.append({
+                    "row": row_index,
+                    "field": field,
+                    "message": "At most 5 unique image URLs are allowed per product",
+                })
+                continue
+            group_images.append(image_url)
 
         variations = grouped[group_key]["variations"]
         variation_key = f"{color_name.lower()}::{color_hex or ''}"
