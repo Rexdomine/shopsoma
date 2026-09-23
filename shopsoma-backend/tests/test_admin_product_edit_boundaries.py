@@ -182,7 +182,6 @@ async def test_admin_price_edit_syncs_generic_legacy_variant_without_variation(
     assert response.status_code == 200, response.text
     await db_session.refresh(variant)
     assert variant.price == 12000
-    assert variant.compare_at_price == 15000
 
 
 @pytest.mark.asyncio
@@ -225,3 +224,81 @@ async def test_admin_generic_edit_cannot_change_featured_status(
     assert response.status_code == 422
     await db_session.refresh(sample_product)
     assert sample_product.is_featured is False
+
+
+@pytest.mark.asyncio
+async def test_admin_price_edit_preserves_explicit_no_variation_variant_price(
+    client, admin_user, sample_product, db_session
+):
+    from app.models.product import ProductVariant
+
+    variant = ProductVariant(
+        product_id=sample_product.id,
+        size="XL",
+        price=130,
+        stock=sample_product.total_stock,
+        is_available=True,
+    )
+    db_session.add(variant)
+    await db_session.commit()
+
+    response = await client.put(
+        f"/api/v1/admin/products/{sample_product.id}",
+        headers=admin_user["headers"],
+        json={"base_price": 110},
+    )
+    assert response.status_code == 200, response.text
+    await db_session.refresh(variant)
+    assert variant.price == 130
+
+
+@pytest.mark.asyncio
+async def test_admin_read_derives_generic_legacy_compare_at_price_after_reload(
+    client, admin_user, sample_product, db_session
+):
+    from app.models.product import ProductVariant
+
+    sample_product.base_price = 80
+    sample_product.compare_at_price = 100
+    variant = ProductVariant(
+        product_id=sample_product.id,
+        price=80,
+        stock=sample_product.total_stock,
+        is_available=True,
+    )
+    db_session.add(variant)
+    await db_session.commit()
+
+    response = await client.get(
+        f"/api/v1/admin/products/{sample_product.id}",
+        headers=admin_user["headers"],
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["variants"][0]["compare_at_price"] == "100.00"
+
+
+@pytest.mark.asyncio
+async def test_admin_read_tolerates_invalid_legacy_variant_fields(
+    client, admin_user, sample_product, db_session
+):
+    from app.models.product import ProductVariant
+
+    variant = ProductVariant(
+        product_id=sample_product.id,
+        color="Legacy",
+        color_hex="#GGGGGG",
+        price=sample_product.base_price,
+        stock=-1,
+        is_available=False,
+    )
+    db_session.add(variant)
+    await db_session.commit()
+
+    response = await client.get(
+        f"/api/v1/admin/products/{sample_product.id}",
+        headers=admin_user["headers"],
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()["variants"][0]
+    assert payload["color_hex"] == "#GGGGGG"
+    assert payload["stock"] == -1

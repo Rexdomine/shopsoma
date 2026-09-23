@@ -58,12 +58,39 @@ from app.services.test_account_classification import (
 router = APIRouter(prefix="/admin", tags=["admin"])
 
 
+class AdminProductVariantResponse(BaseModel):
+    """Output-only variant shape tolerant of historical repair records."""
+
+    id: UUID
+    product_id: UUID
+    size: Optional[str] = None
+    color: Optional[str] = None
+    color_hex: Optional[str] = None
+    price: Decimal = Field(..., decimal_places=2)
+    stock: int
+    sku: Optional[str] = None
+    is_available: bool = True
+    compare_at_price: Optional[Decimal] = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+    @model_validator(mode="after")
+    def normalize_money_precision(self):
+        self.price = self.price.quantize(Decimal("0.01"))
+        if self.compare_at_price is not None:
+            self.compare_at_price = self.compare_at_price.quantize(Decimal("0.01"))
+        return self
+
+
 class AdminProductResponse(ProductResponse):
     """Product response that remains readable for legacy admin-repair records."""
 
     # Admin repair must be able to load historical rows created before the
     # current create/update validation (for example a one-character title).
     title: str
+    variants: List[AdminProductVariantResponse] = []  # pyright: ignore[reportIncompatibleVariableOverride]
 
 
 class AdminProductUpdate(BaseModel):
