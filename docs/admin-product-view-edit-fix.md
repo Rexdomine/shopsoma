@@ -20,14 +20,17 @@ Delete, Approve and Deny routes/buttons are unchanged. This repair includes the 
 
 ## Verification
 
-Executed locally against disposable PostgreSQL test databases:
+Executed locally against the disposable PostgreSQL database configured for this worktree:
 
 ```sh
-pytest tests/test_admin_featured_products.py tests/test_admin_product_edit_boundaries.py tests/test_products.py -q
-# 76 passed
-python -m flake8 app/api/v1/admin.py tests/test_admin_featured_products.py tests/test_admin_product_edit_boundaries.py --select=E9,F63,F7,F82 --show-source --statistics
+env -i PATH=/opt/data/tmp/resend-test-venv/bin:/usr/local/bin:/usr/bin:/bin HOME=/opt/data DATABASE_URL="$TEST_DATABASE_URL" SECRET_KEY=local-only-resend-regression-secret ENVIRONMENT=test USE_LOCAL_STORAGE=true ALLOW_LOCAL_STORAGE_IN_NON_DEV=true /opt/data/tmp/resend-test-venv/bin/python -m pytest -q tests/test_admin_product_edit_boundaries.py tests/test_product_schema_pricing.py tests/test_product_variants.py tests/test_cart.py
+# 105 passed
+python3 -m compileall -q app tests
+ git diff --check
 # passed
 ```
+
+The final pricing matrix covers inherited regular/sale combinations, axis-less and size/color rows, matching and nonmatching variations, explicit stock/price ownership, and admin/vendor direct-edit authority. It also covers production creation of inherited axis-less stock and rejection of non-positive admin variant prices before synchronization. Broad repository flake8 still reports pre-existing legacy-file violations; the changed code has no new syntax or diff-check failures.
 
 Frontend (Node 22 for Vitest):
 
