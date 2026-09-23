@@ -1137,10 +1137,11 @@ async def test_provider_await_holds_eligibility_rows(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("bulk", [False, True], ids=["single", "bulk"])
 async def test_audit_only_deactivation_waits_for_identity_lock(
-    db_session, admin_user, approved_invitee
+    db_session, admin_user, approved_invitee, bulk
 ):
-    from app.api.v1.admin import toggle_user_status
+    from app.api.v1.admin import toggle_user_status, bulk_update_user_status, BulkUserStatusUpdate
     from sqlalchemy import text
 
     _, vendor, user, _ = approved_invitee
@@ -1149,5 +1150,48 @@ async def test_audit_only_deactivation_waits_for_identity_lock(
         await holder.execute(select(User).where(User.id == user.id).with_for_update())
         await writer.execute(text("SET LOCAL lock_timeout = '150ms'"))
         with pytest.raises(Exception, match="lock timeout"):
-            await toggle_user_status(user.id, False, admin_user["user"], writer)
+            if bulk:
+                await bulk_update_user_status(
+                    BulkUserStatusUpdate(user_ids=[user.id], is_active=False),
+                    admin_user["user"], writer,
+                )
+            else:
+                await toggle_user_status(user.id, False, admin_user["user"], writer)
         await writer.rollback()
+
+
+@pytest.mark.asyncio
+async def test_bulk_deactivation_of_inactive_invitee_revokes_existing_capability(
+    client, db_session, admin_user, approved_invitee
+):
+    from app.core.security import create_access_token
+
+    _, vendor, user, _ = approved_invitee
+    password_before = user.hashed_password
+    token = create_access_token(data={
+        "sub": str(user.id), "email": user.email,
+        "purpose": "vendor_activation_password",
+    })
+    response = await client.put(
+        "/api/v1/admin/users/status/bulk",
+        headers=admin_user["headers"],
+        json={"user_ids": [str(user.id)], "is_active": False},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["updated_count"] == 0
+    assert response.json()["results"][0]["status"] == "unchanged"
+    audit = await db_session.scalar(select(AuditLog).where(
+        AuditLog.entity_id == user.id,
+        AuditLog.entity_type == "user",
+        AuditLog.action == "user_deactivated",
+    ))
+    assert audit is not None
+    assert audit.user_id == admin_user["user"].id
+    assert audit.old_values == audit.new_values == {"is_active": False}
+    await assert_eligibility(client, admin_user["headers"], vendor, False)
+    redeemed = await client.post("/api/v1/vendor/activation/set-password", json={
+        "activation_token": token, "password": "BlockedRecovery!123",
+    })
+    assert redeemed.status_code == 409, redeemed.text
+    await db_session.refresh(user)
+    assert not user.is_active and user.hashed_password == password_before

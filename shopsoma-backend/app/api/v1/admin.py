@@ -522,7 +522,10 @@ async def bulk_update_user_status(
     if current_admin.id in payload.user_ids:
         raise HTTPException(status_code=400, detail="Cannot change your own status")
 
-    users = (await db.execute(select(User).where(User.id.in_(payload.user_ids)))).scalars().all()
+    users = (await db.execute(
+        select(User).where(User.id.in_(payload.user_ids)).order_by(User.id)
+        .execution_options(populate_existing=True).with_for_update()
+    )).scalars().all()
     users_by_id = {user.id: user for user in users}
     missing_ids = [str(user_id) for user_id in payload.user_ids if user_id not in users_by_id]
     if missing_ids:
@@ -535,10 +538,13 @@ async def bulk_update_user_status(
     for user_id in payload.user_ids:
         user = users_by_id[user_id]
         previous_is_active = user.is_active
-        if previous_is_active == payload.is_active:
+        unchanged = previous_is_active == payload.is_active
+        if unchanged and payload.is_active:
             results.append({"user_id": str(user.id), "status": "unchanged", "is_active": user.is_active})
             continue
 
+        # Explicit deactivation also revokes never-activated invitees whose
+        # boolean was already false. Preserve response counts, record the intent.
         user.is_active = payload.is_active
         db.add(
             AuditLog(
@@ -550,7 +556,7 @@ async def bulk_update_user_status(
                 new_values={"is_active": payload.is_active},
             )
         )
-        results.append({"user_id": str(user.id), "status": "updated", "is_active": user.is_active})
+        results.append({"user_id": str(user.id), "status": "unchanged" if unchanged else "updated", "is_active": user.is_active})
 
     await db.commit()
     return {
