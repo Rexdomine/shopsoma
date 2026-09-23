@@ -122,6 +122,32 @@ async def test_csv_invalid_image_aborts_entire_batch(client, vendor_user, db_ses
 
 
 @pytest.mark.asyncio
+async def test_csv_variable_conflicting_skus_reject_before_writes(
+    client, vendor_user, db_session, image_category
+):
+    first = product_row("variable", product_sku="CSV-IMAGE-SHIRT-A")
+    second = product_row(
+        "variable",
+        product_sku="CSV-IMAGE-SHIRT-B",
+        size="M",
+        variant_sku="CSV-IMAGE-SHIRT-BLUE-M",
+    )
+
+    response = await upload(client, vendor_user, "variable", [first, second])
+
+    assert response.status_code == 422, response.text
+    errors = response.json()["detail"]["errors"]
+    sku_errors = [error for error in errors if error["field"] == "product_sku"]
+    assert [error["row"] for error in sku_errors] == [2, 3]
+    assert all(
+        error["message"] == "Rows for one product must use the same product SKU"
+        for error in sku_errors
+    )
+    assert await db_session.scalar(select(func.count()).select_from(Product)) == 0
+    assert await db_session.scalar(select(func.count()).select_from(ProductImage)) == 0
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("mode", ["single", "variable"])
 async def test_csv_image_commit_failure_rolls_back_products_and_images(
     client, vendor_user, db_session, image_category, monkeypatch, mode

@@ -606,6 +606,7 @@ async def bulk_upload_variable_products(
     grouped: Dict[str, Dict[str, Any]] = {}
     sku_rows: Dict[str, List[int]] = {}
     sku_groups: Dict[str, set[str]] = {}
+    grouped_skus: Dict[str, Dict[str, List[int]]] = {}
     allowed_sizes = {size.value for size in SizeEnum}
 
     for row_index, row in enumerate(reader, start=2):
@@ -662,6 +663,7 @@ async def bulk_upload_variable_products(
         if product_sku:
             sku_rows.setdefault(product_sku, []).append(row_index)
             sku_groups.setdefault(product_sku, set()).add(group_key)
+            grouped_skus.setdefault(group_key, {}).setdefault(product_sku, []).append(row_index)
 
         if row_errors:
             errors.extend(row_errors)
@@ -718,6 +720,16 @@ async def bulk_upload_variable_products(
         elif await db.scalar(select(Product.id).where(Product.sku == sku).limit(1)):
             for row_index in rows:
                 errors.append({"row": row_index, "field": "product_sku", "message": f"Product SKU '{sku}' already exists"})
+
+    for group_key, skus in grouped_skus.items():
+        if len(skus) > 1:
+            for rows in skus.values():
+                for row_index in rows:
+                    errors.append({
+                        "row": row_index,
+                        "field": "product_sku",
+                        "message": "Rows for one product must use the same product SKU",
+                    })
 
     if errors:
         raise HTTPException(status_code=422, detail={"message": "Validation failed", "errors": errors})
