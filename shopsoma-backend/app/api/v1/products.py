@@ -341,6 +341,38 @@ def _sync_single_product_variant_inventory(product: Product) -> None:
             variant.is_available = is_available
 
 
+def _sync_direct_variant_price_to_inherited_variation(
+    variations: list[Any],
+    *,
+    price: Any,
+    size: Any,
+    color: Any,
+) -> None:
+    """Make a direct legacy-variant price edit authoritative when inherited."""
+    if price is None:
+        return
+
+    matching_variation = None
+    if color is not None:
+        matching_variation = unique_variations_by_color(variations).get(
+            normalize_color_value(color)
+        )
+    if matching_variation is None and size is not None:
+        matching_variation = unique_variations_by_size(variations).get(
+            normalize_color_value(size)
+        )
+    if matching_variation is None or not (
+        matching_variation.inherits_price is True
+        or matching_variation.inherits_sale_price is True
+    ):
+        return
+
+    matching_variation.price = price
+    matching_variation.sale_price = None
+    matching_variation.inherits_price = False
+    matching_variation.inherits_sale_price = False
+
+
 async def _get_category_by_slug(db: AsyncSession, slug: str) -> Optional[Category]:
     result = await db.execute(select(Category).where(Category.slug == slug, Category.is_active == True))
     return result.scalar_one_or_none()
@@ -1377,6 +1409,12 @@ async def update_variant(
         variant.inherits_stock = False
     if "price" in update_data:
         variant.inherits_price = False
+        _sync_direct_variant_price_to_inherited_variation(
+            product.variations,
+            price=update_data["price"],
+            size=update_data.get("size", variant.size),
+            color=update_data.get("color", variant.color),
+        )
 
     for field, value in update_data.items():
         setattr(variant, field, value)

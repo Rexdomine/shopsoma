@@ -512,3 +512,51 @@ async def test_admin_read_tolerates_invalid_legacy_product_fields(
     assert payload["base_price"] == "-1.00"
     assert payload["total_stock"] == -1
 
+
+@pytest.mark.asyncio
+async def test_admin_direct_variant_price_and_color_edit_matches_submitted_axis(
+    client, admin_user, sample_product, db_session
+):
+    from app.models.product import ProductVariant, Variation
+
+    old_variation = Variation(
+        product_id=sample_product.id,
+        title="Red",
+        type="color",
+        price=sample_product.base_price,
+        inherits_price=True,
+        inherits_sale_price=True,
+    )
+    new_variation = Variation(
+        product_id=sample_product.id,
+        title="Blue",
+        type="color",
+        price=sample_product.base_price,
+        inherits_price=True,
+        inherits_sale_price=True,
+    )
+    variant = ProductVariant(
+        product_id=sample_product.id,
+        color="red",
+        price=sample_product.base_price,
+        inherits_price=True,
+    )
+    db_session.add_all([old_variation, new_variation, variant])
+    await db_session.commit()
+
+    response = await client.put(
+        f"/api/v1/admin/products/{sample_product.id}/variants/{variant.id}",
+        headers=admin_user["headers"],
+        json={"price": "88.00", "color": "blue"},
+    )
+
+    assert response.status_code == 200, response.text
+    await db_session.refresh(variant)
+    await db_session.refresh(old_variation)
+    await db_session.refresh(new_variation)
+    assert variant.color == "blue"
+    assert old_variation.inherits_price is True
+    assert new_variation.price == 88
+    assert new_variation.inherits_price is False
+    assert new_variation.inherits_sale_price is False
+

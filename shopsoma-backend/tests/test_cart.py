@@ -470,7 +470,9 @@ async def test_add_to_cart_succeeds_after_single_product_stock_update(
     variant = ProductVariant(
         id=uuid.uuid4(),
         product_id=product.id,
-        size="M",
+        size=None,
+        color=None,
+        inherits_stock=True,
         price=95.00,
         stock=0,
         is_available=False,
