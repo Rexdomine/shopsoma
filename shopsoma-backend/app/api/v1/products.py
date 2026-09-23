@@ -1375,6 +1375,8 @@ async def update_variant(
     # total_stock edit would overwrite the direct variant edit.
     if "stock" in update_data or "is_available" in update_data:
         variant.inherits_stock = False
+    if "price" in update_data:
+        variant.inherits_price = False
 
     for field, value in update_data.items():
         setattr(variant, field, value)

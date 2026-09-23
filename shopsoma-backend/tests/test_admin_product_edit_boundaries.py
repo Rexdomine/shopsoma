@@ -122,6 +122,57 @@ async def test_admin_total_stock_edit_syncs_legacy_single_product_variant(
 
 
 @pytest.mark.asyncio
+async def test_admin_direct_variant_price_edit_clears_price_inheritance(
+    client, admin_user, sample_product, db_session
+):
+    from app.models.product import ProductVariant
+
+    variant = ProductVariant(
+        product_id=sample_product.id,
+        price=sample_product.base_price,
+        inherits_price=True,
+    )
+    db_session.add(variant)
+    await db_session.commit()
+
+    response = await client.put(
+        f"/api/v1/admin/products/{sample_product.id}/variants/{variant.id}",
+        headers=admin_user["headers"],
+        json={"price": "88.00"},
+    )
+    assert response.status_code == 200, response.text
+    await db_session.refresh(variant)
+    assert variant.price == 88
+    assert variant.inherits_price is False
+
+
+@pytest.mark.asyncio
+async def test_admin_direct_variant_stock_edit_clears_stock_inheritance(
+    client, admin_user, sample_product, db_session
+):
+    from app.models.product import ProductVariant
+
+    variant = ProductVariant(
+        product_id=sample_product.id,
+        price=sample_product.base_price,
+        stock=sample_product.total_stock,
+        inherits_stock=True,
+    )
+    db_session.add(variant)
+    await db_session.commit()
+
+    response = await client.put(
+        f"/api/v1/admin/products/{sample_product.id}/variants/{variant.id}",
+        headers=admin_user["headers"],
+        json={"stock": 7},
+    )
+    assert response.status_code == 200, response.text
+    await db_session.refresh(variant)
+    assert variant.stock == 7
+    assert variant.inherits_stock is False
+
+
+@pytest.mark.asyncio
 async def test_admin_total_stock_edit_preserves_explicit_size_color_variant_stock(
     client, admin_user, sample_product, db_session
 ):

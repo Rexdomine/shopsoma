@@ -2238,14 +2238,24 @@ async def update_product_variant(
 
     Requires admin role
     """
-    # Get variant
+    # Get variant and ensure the path product owns it.
     result = await db.execute(
-        select(ProductVariant).where(ProductVariant.id == variant_id)
+        select(ProductVariant).where(
+            ProductVariant.id == variant_id,
+            ProductVariant.product_id == product_id,
+        )
     )
     variant = result.scalar_one_or_none()
 
     if not variant:
         raise HTTPException(status_code=404, detail="Variant not found")
+
+    # Direct edits transfer ownership from inherited parent values back to the
+    # variant. Otherwise a later parent edit would overwrite the admin's value.
+    if "price" in variant_data:
+        variant.inherits_price = False
+    if "stock" in variant_data or "is_available" in variant_data:
+        variant.inherits_stock = False
 
     # Update fields
     for field, value in variant_data.items():
