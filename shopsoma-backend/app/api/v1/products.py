@@ -488,7 +488,14 @@ async def create_product(
                 product_id=product.id,
                 size=variant_data.size,
                 inherits_price=False,
-                inherits_stock=False,
+                # A generic legacy row on a single product is the compatibility
+                # projection of product.total_stock, not an independent axis.
+                inherits_stock=(
+                    product.product_type == ProductType.SINGLE
+                    and not product_data.variations
+                    and variant_data.size is None
+                    and variant_data.color is None
+                ),
                 color=variant_data.color,
                 color_hex=variant_data.color_hex,
                 price=variant_data.price,

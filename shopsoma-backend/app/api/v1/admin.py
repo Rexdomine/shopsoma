@@ -4,6 +4,7 @@ Admin API endpoints for database initialization and management
 from typing import Any, Optional, List
 from uuid import UUID
 from fastapi import APIRouter, HTTPException, Depends, Query, status
+from fastapi.encoders import jsonable_encoder
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, or_, delete, update, and_
 from sqlalchemy.orm import selectinload
@@ -12,7 +13,7 @@ from decimal import Decimal
 from urllib.parse import quote
 import asyncio
 import os
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from app.core.database import get_db
 from app.core.config import settings
@@ -42,6 +43,7 @@ from app.schemas.product import (
     ProductFeatureUpdate,
     ProductImageResponse,
     ProductVariantResponse,
+    ProductVariantUpdate,
     VariationResponse,
 )
 from app.api.v1.products import (
@@ -2239,6 +2241,16 @@ async def update_product_variant(
 
     Requires admin role
     """
+    try:
+        update_data = ProductVariantUpdate.model_validate(variant_data).model_dump(
+            exclude_unset=True
+        )
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=jsonable_encoder(exc.errors()),
+        ) from exc
+
     # Get variant and ensure the path product owns it.
     result = await db.execute(
         select(ProductVariant).where(
@@ -2253,7 +2265,7 @@ async def update_product_variant(
 
     # Direct edits transfer ownership from inherited parent values back to the
     # variant. Otherwise a later parent edit would overwrite the admin's value.
-    if "price" in variant_data:
+    if "price" in update_data:
         variant.inherits_price = False
         variation_result = await db.execute(
             select(Variation).where(Variation.product_id == product_id)
@@ -2261,15 +2273,15 @@ async def update_product_variant(
         variations = variation_result.scalars().all()
         _sync_direct_variant_price_to_inherited_variation(
             variations,
-            price=variant_data["price"],
-            size=variant_data.get("size", variant.size),
-            color=variant_data.get("color", variant.color),
+            price=update_data["price"],
+            size=update_data.get("size", variant.size),
+            color=update_data.get("color", variant.color),
         )
-    if "stock" in variant_data or "is_available" in variant_data:
+    if "stock" in update_data or "is_available" in update_data:
         variant.inherits_stock = False
 
     # Update fields
-    for field, value in variant_data.items():
+    for field, value in update_data.items():
         if hasattr(variant, field):
             setattr(variant, field, value)
 

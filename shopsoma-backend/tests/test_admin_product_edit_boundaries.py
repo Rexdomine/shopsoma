@@ -147,6 +147,32 @@ async def test_admin_direct_variant_price_edit_clears_price_inheritance(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("price", ["0", "-1.00"])
+async def test_admin_direct_variant_price_edit_rejects_non_positive_price(
+    client, admin_user, sample_product, db_session, price
+):
+    from app.models.product import ProductVariant
+
+    variant = ProductVariant(
+        product_id=sample_product.id,
+        price=sample_product.base_price,
+        inherits_price=True,
+    )
+    db_session.add(variant)
+    await db_session.commit()
+
+    response = await client.put(
+        f"/api/v1/admin/products/{sample_product.id}/variants/{variant.id}",
+        headers=admin_user["headers"],
+        json={"price": price},
+    )
+    assert response.status_code == 422
+    await db_session.refresh(variant)
+    assert variant.price == sample_product.base_price
+    assert variant.inherits_price is True
+
+
+@pytest.mark.asyncio
 async def test_admin_direct_variant_price_edit_updates_inherited_matching_variation(
     client, admin_user, sample_product, db_session
 ):

@@ -95,6 +95,35 @@ class TestProductCreate:
         assert data["variants"][1]["size"] == "L"
 
     @pytest.mark.asyncio
+    async def test_create_single_product_axisless_variant_inherits_total_stock(
+        self, client: AsyncClient, vendor_user, db_session
+    ):
+        """The legacy generic row must follow the product stock authority."""
+        from sqlalchemy import select
+        from app.models.product import ProductVariant
+
+        response = await client.post(
+            "/api/v1/products",
+            json={
+                "title": "Legacy Single Stock Product",
+                "base_price": 85.00,
+                "total_stock": 7,
+                "variants": [{"price": 85.00, "stock": 7}],
+            },
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 201, response.text
+        variant = (
+            await db_session.execute(
+                select(ProductVariant).where(
+                    ProductVariant.product_id == response.json()["id"]
+                )
+            )
+        ).scalar_one()
+        assert variant.inherits_stock is True
+
+    @pytest.mark.asyncio
     async def test_create_product_with_numeric_size_variation(self, client: AsyncClient, vendor_user):
         """Numeric UK/EU sizes remain creatable without invalid size-stock enum rows."""
         response = await client.post(
