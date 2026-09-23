@@ -5,15 +5,17 @@ from typing import Optional, List
 from uuid import UUID
 from fastapi import APIRouter, HTTPException, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, or_, delete, update
+from sqlalchemy import select, func, or_, delete, update, and_, exists
 from sqlalchemy.orm import selectinload
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from urllib.parse import quote
 import asyncio
 import os
 from pydantic import BaseModel
 
 from app.core.database import get_db
+from app.core.config import settings
 from app.api.dependencies import get_current_admin
 from app.models.audit_log import AuditLog
 from app.models.product import (
@@ -40,6 +42,21 @@ from app.services.test_account_classification import (
 )
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+
+
+def _activation_resend_eligibility():
+    """Canonical SQL rule shared by activation-resend reads and writes."""
+    return and_(
+        Vendor.approved.is_(True), User.role == UserRole.VENDOR,
+        User.is_active.is_(False), Vendor.is_onboarding.is_(True),
+        Vendor.store_active.is_(True), Vendor.store_paused_at.is_(None),
+        Vendor.store_deleted_at.is_(None), Vendor.onboarding_completed_at.is_(None),
+        ~exists(select(AuditLog.id).where(
+            AuditLog.action == "user_deactivated",
+            AuditLog.entity_type == "user",
+            AuditLog.entity_id == User.id,
+        )),
+    )
 
 
 class FeaturedStorefrontUpdate(BaseModel):
@@ -813,7 +830,8 @@ async def list_vendors(
     Requires admin role
     """
     # Build query with join to User
-    query = select(Vendor, User).join(User, Vendor.user_id == User.id)
+    eligibility = _activation_resend_eligibility()
+    query = select(Vendor, User, eligibility.label("activation_resend_eligible")).join(User, Vendor.user_id == User.id)
     
     # Apply filters
     filters = []
@@ -889,8 +907,9 @@ async def list_vendors(
                 "store_active": vendor.store_active,
                 "store_paused_at": vendor.store_paused_at.isoformat() if vendor.store_paused_at else None,
                 "store_deleted_at": vendor.store_deleted_at.isoformat() if vendor.store_deleted_at else None,
+                "activation_resend_eligible": activation_resend_eligible,
             }
-            for vendor, user in vendors_with_users
+            for vendor, user, activation_resend_eligible in vendors_with_users
         ],
         "total": total,
         "page": page,
@@ -998,6 +1017,7 @@ async def get_vendor_details(
         "total_revenue": float(vendor.total_revenue) if vendor.total_revenue else 0.0,
         "created_at": vendor.created_at.isoformat() if vendor.created_at else None,
         "updated_at": vendor.updated_at.isoformat() if vendor.updated_at else None,
+        "activation_resend_eligible": await db.scalar(select(_activation_resend_eligibility()).where(Vendor.id == vendor_id).select_from(Vendor).join(User, Vendor.user_id == User.id)),
     }
 
 
@@ -1397,6 +1417,67 @@ async def update_application_notes(
     }
 
 
+async def _resend_vendor_activation_safely(vendor_id: UUID, admin: User, db: AsyncSession, application_id: UUID | None = None):
+    query = (select(Vendor, User).join(User, Vendor.user_id == User.id)
+             .where(Vendor.id == vendor_id)
+             .execution_options(populate_existing=True).with_for_update())
+    row = (await db.execute(query)).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Vendor not found")
+    vendor, user = row
+    eligibility = await db.scalar(select(_activation_resend_eligibility()).select_from(Vendor).join(User, Vendor.user_id == User.id).where(Vendor.id == vendor_id))
+    if not eligibility:
+        raise HTTPException(status_code=409, detail="Vendor is not eligible for activation email resend")
+    if application_id is not None:
+        linked = await db.scalar(select(VendorApplication.id).where(
+            VendorApplication.id == application_id,
+            VendorApplication.vendor_id == vendor.id,
+            VendorApplication.status == "approved",
+        ))
+        if linked is None:
+            raise HTTPException(status_code=409, detail="Vendor is not linked to this approved application")
+
+    email, name, vendor_uuid, actor_id = user.email, user.full_name or "there", vendor.id, admin.id
+    db_now = await db.scalar(select(func.clock_timestamp()))
+    recent = await db.scalar(select(AuditLog.id).where(
+        AuditLog.action == "vendor_activation_email_resend_attempt",
+        AuditLog.entity_type == "vendor", AuditLog.entity_id == vendor_uuid,
+        AuditLog.created_at >= db_now - timedelta(minutes=10)).limit(1))
+    if recent is not None:
+        raise HTTPException(status_code=429, detail="Activation email was recently requested. Please try again in 10 minutes.")
+
+    attempt = AuditLog(user_id=actor_id, action="vendor_activation_email_resend_attempt",
+                       entity_type="vendor", entity_id=vendor_uuid, created_at=db_now,
+                       new_values={"email": email, "delivery": "pending"})
+    db.add(attempt)
+    await db.flush()
+    attempt_id = attempt.id
+    await db.commit()
+    try:
+        from app.services.email_service import email_service
+        accepted = await email_service.send_vendor_activation_invitation_email(
+            email, name, f"{(settings.FRONTEND_BASE_URL or 'http://localhost:5173').rstrip('/')}/vendor/otp?email={quote(email, safe='')}"
+        )
+    except Exception as exc:
+        accepted, provider_error = None, type(exc).__name__
+    else:
+        provider_error = None
+    db.add(AuditLog(user_id=actor_id, action="vendor_activation_email_resend_result",
+                    entity_type="vendor", entity_id=vendor_uuid,
+                    new_values={"attempt_id": str(attempt_id), "email": email,
+                                "delivery": "provider_accepted" if accepted is True else "unknown",
+                                **({"error": provider_error} if provider_error else {})}))
+    await db.commit()
+    if accepted is True:
+        return {"message": "Activation email accepted by provider", "email": email, "account_already_setup": False}
+    raise HTTPException(status_code=503, detail="Unable to confirm activation email provider acceptance. Please try again.")
+
+
+@router.post("/vendors/{vendor_id}/resend-activation")
+async def resend_vendor_activation_for_vendor(vendor_id: UUID, current_admin: User = Depends(get_current_admin), db: AsyncSession = Depends(get_db)):
+    return await _resend_vendor_activation_safely(vendor_id, current_admin, db)
+
+
 @router.post("/vendor-applications/{application_id}/resend-activation")
 async def resend_vendor_activation(
     application_id: UUID,
@@ -1408,8 +1489,6 @@ async def resend_vendor_activation(
 
     Requires admin role
     """
-    from app.services.vendor_otp_service import OTPDeliveryError, VendorOTPService
-
     application_result = await db.execute(
         select(VendorApplication).where(VendorApplication.id == application_id)
     )
@@ -1436,23 +1515,7 @@ async def resend_vendor_activation(
 
     vendor, vendor_user = vendor_row
 
-    try:
-        await VendorOTPService.create_and_send_otp(
-            db=db,
-            vendor_id=vendor.id,
-            email=vendor_user.email
-        )
-    except OTPDeliveryError:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Unable to send activation email. Please try again."
-        )
-
-    return {
-        "message": "Activation email resent successfully",
-        "email": vendor_user.email,
-        "account_already_setup": vendor_user.is_active
-    }
+    return await _resend_vendor_activation_safely(vendor.id, current_admin, db, application_id=application.id)
 
 
 @router.post("/vendors/{vendor_id}/restore")
