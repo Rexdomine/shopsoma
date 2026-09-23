@@ -126,6 +126,37 @@ class TestProductCreate:
         assert variant.is_available is True
 
     @pytest.mark.asyncio
+    async def test_create_single_product_preserves_explicit_axisless_inventory(
+        self, client: AsyncClient, vendor_user, db_session
+    ):
+        """Explicit axis-less inventory is not treated as an inherited projection."""
+        from sqlalchemy import select
+        from app.models.product import ProductVariant
+
+        response = await client.post(
+            "/api/v1/products",
+            json={
+                "title": "Explicit Generic Inventory Product",
+                "base_price": 85.00,
+                "total_stock": 7,
+                "variants": [{"price": 85.00, "stock": 3, "is_available": False}],
+            },
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 201, response.text
+        variant = (
+            await db_session.execute(
+                select(ProductVariant).where(
+                    ProductVariant.product_id == response.json()["id"]
+                )
+            )
+        ).scalar_one()
+        assert variant.inherits_stock is False
+        assert variant.stock == 3
+        assert variant.is_available is False
+
+    @pytest.mark.asyncio
     async def test_create_made_to_order_product_preserves_explicit_variant_inventory(
         self, client: AsyncClient, vendor_user, db_session
     ):

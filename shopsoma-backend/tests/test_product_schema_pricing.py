@@ -8,6 +8,7 @@ from app.api.v1.products import (
     _sync_inherited_variation_prices,
     _variation_inherits_parent_price,
 )
+from app.api.v1.admin import AdminVariationResponse
 from app.schemas.product import (
     ProductResponse,
     ProductUpdate,
@@ -20,6 +21,40 @@ from app.schemas.product import (
     variation_inventory_axis_signature,
     variation_sale_price,
 )
+
+
+def test_admin_variation_output_accepts_legacy_importer_values():
+    """Admin repair reads must not apply storefront input constraints."""
+    now = datetime.now(timezone.utc)
+    result = AdminVariationResponse.model_validate(
+        {
+            "id": uuid4(),
+            "product_id": uuid4(),
+            "title": "Legacy color",
+            "type": "color",
+            "color_hex": "not-a-hex-value",
+            "price": Decimal("85.00"),
+            "sale_price": None,
+            "images": None,
+            "is_active": True,
+            "created_at": now,
+            "updated_at": now,
+            "size_stocks": [
+                {
+                    "id": uuid4(),
+                    "variation_id": uuid4(),
+                    "size": "UNSUPPORTED-LEGACY-SIZE",
+                    "stock": -2,
+                    "created_at": now,
+                    "updated_at": now,
+                }
+            ],
+        }
+    )
+
+    assert result.color_hex == "not-a-hex-value"
+    assert result.size_stocks[0].size == "UNSUPPORTED-LEGACY-SIZE"
+    assert result.size_stocks[0].stock == -2
 
 def test_variation_inheritance_markers_preserve_equal_explicit_overrides():
     inherited = VariationCreate(

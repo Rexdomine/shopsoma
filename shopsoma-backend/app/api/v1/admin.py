@@ -44,7 +44,6 @@ from app.schemas.product import (
     ProductImageResponse,
     ProductVariantResponse,
     ProductVariantUpdate,
-    VariationResponse,
 )
 from app.api.v1.products import (
     PRODUCT_RELATIONSHIPS,
@@ -87,6 +86,40 @@ class AdminProductVariantResponse(BaseModel):
         if self.compare_at_price is not None:
             self.compare_at_price = self.compare_at_price.quantize(Decimal("0.01"))
         return self
+
+
+class AdminSizeStockResponse(BaseModel):
+    """Output-only size stock shape tolerant of importer repair records."""
+
+    id: UUID
+    variation_id: UUID
+    size: Any
+    stock: int
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminVariationResponse(BaseModel):
+    """Output-only variation shape tolerant of historical importer values."""
+
+    id: UUID
+    product_id: UUID
+    title: str
+    type: str = "color"
+    color_hex: Optional[str] = None
+    price: Optional[Decimal] = None
+    sale_price: Optional[Decimal] = None
+    inherits_price: Optional[bool] = None
+    inherits_sale_price: Optional[bool] = None
+    images: Any = None
+    is_active: bool = True
+    created_at: datetime
+    updated_at: datetime
+    size_stocks: List[AdminSizeStockResponse] = []
+
+    model_config = ConfigDict(from_attributes=True)
 
 
 class AdminProductResponse(BaseModel):
@@ -133,7 +166,7 @@ class AdminProductResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     variants: List[AdminProductVariantResponse] = []
-    variations: List[VariationResponse] = []
+    variations: List[AdminVariationResponse] = []
     images: List[ProductImageResponse] = []
 
     model_config = ConfigDict(from_attributes=True)

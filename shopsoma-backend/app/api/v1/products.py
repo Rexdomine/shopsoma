@@ -484,11 +484,15 @@ async def create_product(
     # Add variants if provided (legacy system - backward compatibility)
     if product_data.variants:
         for variant_data in product_data.variants:
+            explicit_inventory = bool(
+                {"stock", "is_available"} & variant_data.model_fields_set
+            )
             inherits_stock = (
                 product.product_type == ProductType.SINGLE
                 and not product_data.variations
                 and variant_data.size is None
                 and variant_data.color is None
+                and not explicit_inventory
             )
             variant = ProductVariant(
                 product_id=product.id,
