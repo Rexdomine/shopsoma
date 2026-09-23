@@ -187,6 +187,45 @@ async def test_admin_direct_variant_price_edit_updates_inherited_matching_variat
 
 
 @pytest.mark.asyncio
+async def test_admin_direct_variant_price_edit_updates_sale_inherited_variation(
+    client, admin_user, sample_product, db_session
+):
+    from app.models.product import ProductVariant, Variation
+
+    variation = Variation(
+        product_id=sample_product.id,
+        title="Red",
+        type="color",
+        price=120,
+        sale_price=sample_product.base_price,
+        inherits_price=False,
+        inherits_sale_price=True,
+    )
+    variant = ProductVariant(
+        product_id=sample_product.id,
+        color="red",
+        price=120,
+        inherits_price=False,
+    )
+    db_session.add_all([variation, variant])
+    await db_session.commit()
+
+    response = await client.put(
+        f"/api/v1/admin/products/{sample_product.id}/variants/{variant.id}",
+        headers=admin_user["headers"],
+        json={"price": "88.00"},
+    )
+    assert response.status_code == 200, response.text
+    await db_session.refresh(variant)
+    await db_session.refresh(variation)
+    assert variant.price == 88
+    assert variation.price == 88
+    assert variation.sale_price is None
+    assert variation.inherits_price is False
+    assert variation.inherits_sale_price is False
+
+
+@pytest.mark.asyncio
 async def test_admin_direct_variant_stock_edit_clears_stock_inheritance(
     client, admin_user, sample_product, db_session
 ):

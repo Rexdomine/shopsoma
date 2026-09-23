@@ -2272,7 +2272,10 @@ async def update_product_variant(
             )
         if (
             matching_variation is not None
-            and matching_variation.inherits_price is True
+            and (
+                matching_variation.inherits_price is True
+                or matching_variation.inherits_sale_price is True
+            )
             and variant_data["price"] is not None
         ):
             # Checkout resolves supported mixed products through Variation when
