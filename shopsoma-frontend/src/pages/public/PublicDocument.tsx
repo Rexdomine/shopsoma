@@ -27,21 +27,23 @@ export default function PublicDocument({ documentKey }: { documentKey: FooterDoc
     event.preventDefault();
     const value = orderId.trim();
     if (!value) { setError('Enter your order ID to continue.'); return; }
-    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)) {
-      setError('Use the full order ID from your tracking link, not the order number.');
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+    const isOrderNumber = /^[a-z0-9][a-z0-9-]{0,49}$/i.test(value);
+    if (!isUuid && !isOrderNumber) {
+      setError('Use the full order ID or order number from your confirmation or tracking link.');
       return;
     }
     setError('');
-    navigate(`/track/${encodeURIComponent(value.toLowerCase())}`);
+    navigate(`/track/${encodeURIComponent(isUuid ? value.toLowerCase() : value.toUpperCase())}`);
   };
   return <Layout>
   <div className="mx-auto w-full max-w-4xl px-6 py-14 text-[#1E5053] sm:px-10 lg:py-20" data-document={documentKey}>
     <p className="text-xs font-ui uppercase tracking-[0.3em]">ShopSoma</p>
     <h1 className="mt-4 text-3xl font-serif sm:text-5xl">{document.title}</h1>
     {isTrack && <form onSubmit={submit} className="mt-10 max-w-xl space-y-3 rounded border border-[#1E5053] p-5" aria-label="Track your order">
-      <label htmlFor="order-number" className="block text-sm font-ui">Enter your order details below to see the latest status of your order</label>
-      <p id="order-id-help" className="text-sm">Use the order ID from your tracking link. You will need access to that order through your account or the original checkout session. You can also <a href={ROUTES.PROFILE_ORDERS} className="underline">view your account orders</a>.</p>
-      <div className="flex gap-2"><input id="order-number" aria-describedby="order-id-help" placeholder="Order ID" value={orderId} onChange={(e) => setOrderId(e.target.value)} className="min-w-0 flex-1 border border-[#1E5053] px-3 py-2" /><button className="bg-[#1E5053] px-4 py-2 text-sm text-white" type="submit">Track order</button></div>
+      <label htmlFor="order-number" className="block text-sm font-ui">Enter your order ID or order number below to see the latest status of your order</label>
+      <p id="order-id-help" className="text-sm">Use the full order ID or customer-facing order number from your confirmation or tracking link. You will need access to that order through your account or the original checkout session. You can also <a href={ROUTES.PROFILE_ORDERS} className="underline">view your account orders</a>.</p>
+      <div className="flex gap-2"><input id="order-number" aria-describedby="order-id-help" placeholder="Order ID or order number" value={orderId} onChange={(e) => setOrderId(e.target.value)} className="min-w-0 flex-1 border border-[#1E5053] px-3 py-2" /><button className="bg-[#1E5053] px-4 py-2 text-sm text-white" type="submit">Track order</button></div>
       {error && <p role="alert" className="text-sm text-red-700">{error}</p>}
     </form>}
     {documentKey === 'partner' && <a href={ROUTES.VENDOR_SIGNUP} className="mt-8 inline-flex border border-[#1E5053] px-6 py-3 text-xs font-ui uppercase tracking-[0.2em]">Apply to become a ShopSoma partner</a>}

@@ -56,6 +56,7 @@ export default function OrderTracking() {
   const [isConnectedToWebSocket, setIsConnectedToWebSocket] = useState(false);
   const [wsError, setWsError] = useState<string | null>(null);
   const exchangeRates = useCurrencyStore((state) => state.exchangeRates);
+  const resolvedOrderId = tracking?.order_id ?? orderId;
   const orderCurrency = (orderDetails?.currency || 'NGN') as Currency;
   const formatOrderPrice = (amount: number) =>
     formatPriceWithConversion(amount, 'NGN', orderCurrency, exchangeRates);
@@ -102,8 +103,8 @@ export default function OrderTracking() {
     // Get JWT token from localStorage (optional for guest users)
     const token = localStorage.getItem(STORAGE_KEYS.ACCESS_TOKEN);
 
-    if (token) {
-      console.log('[OrderTracking] Connecting to WebSocket with authentication for order:', orderId);
+    if (token && tracking?.order_id) {
+      console.log('[OrderTracking] Connecting to WebSocket with authentication for order:', tracking.order_id);
     } else {
       console.log('[OrderTracking] Connecting to WebSocket in guest mode for order:', orderId);
     }
@@ -178,9 +179,9 @@ export default function OrderTracking() {
     // Guest capabilities are header-only and cannot be sent by the browser
     // WebSocket API without putting them in the URL. Use protected REST
     // polling for guests; only authenticated users open a JWT socket.
-    if (token) {
+    if (token && tracking?.order_id) {
       try {
-        websocketService.connect(orderId, token, handleOrderUpdate);
+        websocketService.connect(tracking.order_id, token, handleOrderUpdate);
         setWsError(null);
         console.log('[OrderTracking] WebSocket connection initiated');
       } catch (error) {
@@ -219,7 +220,7 @@ export default function OrderTracking() {
       clearInterval(pollInterval);
       setIsConnectedToWebSocket(false);
     };
-  }, [orderId]);
+  }, [orderId, tracking?.order_id]);
 
   const activeIndex = useMemo(() => {
     if (!tracking) return 0;
@@ -234,11 +235,14 @@ export default function OrderTracking() {
   }, [tracking]);
 
   const handleViewOrderDetails = async () => {
-    if (!orderId) return;
+    if (!resolvedOrderId) return;
 
     setLoadingOrder(true);
     try {
-      const order = await checkoutService.getOrder(orderId, loadCheckoutCapability(orderId));
+      const order = await checkoutService.getOrder(
+        resolvedOrderId,
+        loadCheckoutCapability(resolvedOrderId),
+      );
       setOrderDetails(order);
       setShowOrderModal(true);
     } catch (err) {
