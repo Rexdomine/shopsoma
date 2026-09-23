@@ -63,7 +63,7 @@ const SINGLE_SAMPLE_ROWS = [
   {
     title: 'Classic Linen Shirt',
     description: 'Lightweight linen shirt',
-    category_slug: 'menswear-shirts',
+    category_slug: 'men-tops-shirts',
     currency: 'NGN',
     base_price: '15000',
     compare_at_price: '18000',
@@ -86,7 +86,7 @@ const VARIABLE_SAMPLE_ROWS = [
   {
     product_title: 'Silk Slip Dress',
     description: 'Soft silk slip dress',
-    category_slug: 'womens-dresses',
+    category_slug: 'women-dresses-casual',
     currency: 'USD',
     base_price: '180',
     compare_at_price: '220',
@@ -111,7 +111,7 @@ const VARIABLE_SAMPLE_ROWS = [
   {
     product_title: 'Silk Slip Dress',
     description: 'Soft silk slip dress',
-    category_slug: 'womens-dresses',
+    category_slug: 'women-dresses-casual',
     currency: 'USD',
     base_price: '180',
     compare_at_price: '220',
@@ -258,6 +258,12 @@ export default function BulkUploadModal({ isOpen, onClose, onUploaded }: BulkUpl
         setErrors([detail.message || 'Validation failed.']);
       } else if (typeof detail === 'string') {
         setErrors([detail]);
+      } else if (detail?.message) {
+        setErrors([
+          detail.missing_headers
+            ? `${detail.message}: ${detail.missing_headers.join(', ')}`
+            : detail.message,
+        ]);
       } else {
         setErrors(['Upload failed. Please check your CSV and try again.']);
       }
@@ -319,7 +325,7 @@ export default function BulkUploadModal({ isOpen, onClose, onUploaded }: BulkUpl
               <h3 className="text-sm font-semibold text-gray-900 mb-2">CSV Instructions</h3>
               {mode === 'single' ? (
                 <ul className="text-xs text-gray-600 space-y-1 list-disc list-inside">
-                  <li>Use category slug (example: menswear-shirts).</li>
+                  <li>Use category slug (example: men-tops-shirts).</li>
                   <li>Currency must be NGN or USD.</li>
                   <li>Status can be draft, active, inactive, archived.</li>
                   <li>Leave optional fields blank if not needed.</li>

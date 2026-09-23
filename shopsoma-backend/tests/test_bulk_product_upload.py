@@ -228,3 +228,42 @@ async def test_bulk_upload_variable_products_success(client: AsyncClient, vendor
     assert by_title["Red"].inherits_sale_price is True
     assert by_title["Blue"].inherits_price is False
     assert by_title["Blue"].inherits_sale_price is False
+
+
+@pytest.mark.asyncio
+async def test_bulk_upload_variable_rejects_product_sku_reused_by_multiple_products(client: AsyncClient, vendor_user, db_session):
+    from app.models.category import Category
+
+    category = Category(name="SKU Test Dresses", slug="sku-test-dresses")
+    db_session.add(category)
+    await db_session.commit()
+
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=[
+        "product_title", "description", "category_slug", "currency", "base_price",
+        "compare_at_price", "product_sku", "collection_name", "made_to_order",
+        "made_to_order_timeline", "care_instructions", "fabric_composition",
+        "color_name", "color_hex", "size", "stock", "variant_sku",
+        "variation_price", "variation_sale_price",
+    ])
+    writer.writeheader()
+    common = {
+        "description": "Test dress", "category_slug": "sku-test-dresses", "currency": "USD",
+        "base_price": "100", "compare_at_price": "120", "product_sku": "DUPLICATE-SKU",
+        "collection_name": "", "made_to_order": "false", "made_to_order_timeline": "",
+        "care_instructions": "", "fabric_composition": "", "color_name": "Red",
+        "color_hex": "#FF0000", "size": "M", "stock": "2", "variation_price": "",
+        "variation_sale_price": "",
+    }
+    writer.writerow({**common, "product_title": "Dress One", "variant_sku": "DUP-1"})
+    writer.writerow({**common, "product_title": "Dress Two", "variant_sku": "DUP-2"})
+
+    response = await client.post(
+        "/api/v1/products/bulk-upload/variable",
+        files={"file": ("duplicate.csv", output.getvalue(), "text/csv")},
+        headers=vendor_user["headers"],
+    )
+    assert response.status_code == 422
+    errors = response.json()["detail"]["errors"]
+    assert sum(error["field"] == "product_sku" for error in errors) == 2
+    assert all("multiple products" in error["message"] for error in errors if error["field"] == "product_sku")

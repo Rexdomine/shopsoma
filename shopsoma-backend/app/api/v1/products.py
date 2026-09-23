@@ -420,6 +420,7 @@ async def bulk_upload_single_products(
 
     errors: List[Dict[str, Any]] = []
     products_to_create: List[Product] = []
+    sku_rows: Dict[str, List[int]] = {}
 
     for row_index, row in enumerate(reader, start=2):
         row_errors: List[Dict[str, Any]] = []
@@ -459,6 +460,10 @@ async def bulk_upload_single_products(
             if not collection:
                 row_errors.append({"row": row_index, "field": "collection_name", "message": "Collection not found"})
 
+        sku = (row.get("sku") or "").strip()
+        if sku:
+            sku_rows.setdefault(sku, []).append(row_index)
+
         if row_errors:
             errors.extend(row_errors)
             continue
@@ -488,6 +493,13 @@ async def bulk_upload_single_products(
             moderation_status=ModerationStatus.PENDING,
         )
         products_to_create.append(product)
+
+    for sku, rows in sku_rows.items():
+        if len(rows) > 1:
+            for row_index in rows:
+                errors.append({"row": row_index, "field": "sku", "message": f"SKU '{sku}' is duplicated in this file"})
+        elif await db.scalar(select(Product.id).where(Product.sku == sku).limit(1)):
+            errors.append({"row": rows[0], "field": "sku", "message": f"SKU '{sku}' already exists"})
 
     if errors:
         raise HTTPException(status_code=422, detail={"message": "Validation failed", "errors": errors})
@@ -523,6 +535,8 @@ async def bulk_upload_variable_products(
 
     errors: List[Dict[str, Any]] = []
     grouped: Dict[str, Dict[str, Any]] = {}
+    sku_rows: Dict[str, List[int]] = {}
+    sku_groups: Dict[str, set[str]] = {}
     allowed_sizes = {size.value for size in SizeEnum}
 
     for row_index, row in enumerate(reader, start=2):
@@ -573,11 +587,16 @@ async def bulk_upload_variable_products(
             if not collection:
                 row_errors.append({"row": row_index, "field": "collection_name", "message": "Collection not found"})
 
+        product_sku = (row.get("product_sku") or "").strip()
+        group_key = f"{title.lower()}::{category_slug.lower()}::{currency}"
+        if product_sku:
+            sku_rows.setdefault(product_sku, []).append(row_index)
+            sku_groups.setdefault(product_sku, set()).add(group_key)
+
         if row_errors:
             errors.extend(row_errors)
             continue
 
-        group_key = f"{title.lower()}::{category_slug.lower()}::{currency}"
         if group_key not in grouped:
             grouped[group_key] = {
                 "title": title,
@@ -614,6 +633,14 @@ async def bulk_upload_variable_products(
         variations[variation_key]["sizes"].append(
             {"size": size, "stock": stock}
         )
+
+    for sku, rows in sku_rows.items():
+        if len(sku_groups.get(sku, set())) > 1:
+            for row_index in rows:
+                errors.append({"row": row_index, "field": "product_sku", "message": f"Product SKU '{sku}' is used by multiple products in this file"})
+        elif await db.scalar(select(Product.id).where(Product.sku == sku).limit(1)):
+            for row_index in rows:
+                errors.append({"row": row_index, "field": "product_sku", "message": f"Product SKU '{sku}' already exists"})
 
     if errors:
         raise HTTPException(status_code=422, detail={"message": "Validation failed", "errors": errors})
