@@ -1,5 +1,17 @@
 import api from './api';
-import type { User, PaginatedResponse } from '../types';
+import type { User, PaginatedResponse, Product } from '../types';
+
+export interface AdminProductUpdatePayload {
+  title?: string;
+  description?: string;
+  category_id?: string | null;
+  base_price?: number;
+  compare_at_price?: number | null;
+  total_stock?: number;
+  status?: Product['status'];
+  moderation_status?: Product['moderation_status'];
+  is_featured?: boolean;
+}
 
 export interface UserListItem extends User {
   created_at: string;
@@ -281,6 +293,16 @@ export const adminService = {
   },
 
   // ==================== PRODUCT MANAGEMENT ====================
+
+  async getProduct(productId: string): Promise<Product> {
+    const response = await api.get(`/admin/products/${productId}`);
+    return response.data;
+  },
+
+  async updateProduct(productId: string, data: AdminProductUpdatePayload): Promise<{ message: string; product_id: string }> {
+    const response = await api.put(`/admin/products/${productId}`, data);
+    return response.data;
+  },
 
   // List all products with pagination and filters
   async listProducts(filters?: {

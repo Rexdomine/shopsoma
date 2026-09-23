@@ -12,7 +12,7 @@ from decimal import Decimal
 from urllib.parse import quote
 import asyncio
 import os
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.core.database import get_db
 from app.core.config import settings
@@ -33,9 +33,16 @@ from app.models.setting import Setting
 from app.models.user import User, UserRole
 from app.models.vendor import Vendor, KYCStatus
 from app.models.vendor_application import VendorApplication
+from app.models.category import Category
 from app.schemas.auth import UserResponse, UserUpdate
 from app.schemas.common import PaginatedResponse
-from app.schemas.product import ProductApprovalRequest, ProductRejectionRequest, ProductFeatureUpdate
+from app.schemas.product import (
+    ProductApprovalRequest,
+    ProductRejectionRequest,
+    ProductFeatureUpdate,
+    ProductResponse,
+)
+from app.api.v1.products import PRODUCT_RELATIONSHIPS
 from app.services.vendor_activation_service import (
     activation_eligibility, activation_is_eligible, lock_activation_identity,
 )
@@ -45,6 +52,28 @@ from app.services.test_account_classification import (
 )
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+
+
+class AdminProductUpdate(BaseModel):
+    """Explicit allow-list for the admin product edit form."""
+    model_config = ConfigDict(extra="forbid")
+
+    title: Optional[str] = Field(None, min_length=3, max_length=255)
+    description: Optional[str] = Field(None, max_length=5000)
+    category_id: Optional[UUID] = None
+    base_price: Optional[Decimal] = Field(None, gt=0, decimal_places=2)
+    compare_at_price: Optional[Decimal] = Field(None, gt=0, decimal_places=2)
+    total_stock: Optional[int] = Field(None, ge=0)
+    status: Optional[ProductStatus] = None
+    moderation_status: Optional[ModerationStatus] = None
+    is_featured: Optional[bool] = None
+
+    @model_validator(mode="after")
+    def reject_null_required_fields(self):
+        for field in ("title", "base_price", "total_stock", "status", "moderation_status", "is_featured"):
+            if field in self.model_fields_set and getattr(self, field) is None:
+                raise ValueError(f"{field} cannot be null")
+        return self
 
 
 class FeaturedStorefrontUpdate(BaseModel):
@@ -1991,7 +2020,7 @@ async def delete_product(
         )
 
 
-@router.get("/products/{product_id}")
+@router.get("/products/{product_id}", response_model=ProductResponse)
 async def get_product(
     product_id: UUID,
     current_admin: User = Depends(get_current_admin),
@@ -2003,72 +2032,20 @@ async def get_product(
     Requires admin role
     """
     result = await db.execute(
-        select(Product).where(Product.id == product_id)
+        select(Product).options(*PRODUCT_RELATIONSHIPS).where(Product.id == product_id)
     )
     product = result.scalar_one_or_none()
 
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
 
-    # Get product images
-    image_result = await db.execute(
-        select(ProductImage).where(ProductImage.product_id == product_id)
-    )
-    images = image_result.scalars().all()
-
-    # Get product variants
-    variant_result = await db.execute(
-        select(ProductVariant).where(ProductVariant.product_id == product_id)
-    )
-    variants = variant_result.scalars().all()
-
-    return {
-        "id": str(product.id),
-        "title": product.title,
-        "description": product.description,
-        "sku": product.sku,
-        "base_price": float(product.base_price),
-        "compare_at_price": float(product.compare_at_price) if product.compare_at_price else None,
-        "currency": product.currency,
-        "total_stock": product.total_stock,
-        "made_to_order": product.made_to_order,
-        "made_to_order_timeline": product.made_to_order_timeline,
-        "status": product.status.value,
-        "moderation_status": product.moderation_status.value,
-        "is_featured": product.is_featured,
-        "views_count": product.views_count,
-        "orders_count": product.orders_count,
-        "created_at": product.created_at.isoformat() if product.created_at else None,
-        "updated_at": product.updated_at.isoformat() if product.updated_at else None,
-        "images": [
-            {
-                "id": str(image.id),
-                "image_url": image.image_url,
-                "alt_text": image.alt_text,
-                "is_primary": image.is_primary,
-                "display_order": image.display_order,
-            }
-            for image in images
-        ],
-        "variants": [
-            {
-                "id": str(variant.id),
-                "sku": variant.sku,
-                "size": variant.size,
-                "color": variant.color,
-                "price": float(variant.price),
-                "stock": variant.stock,
-                "is_active": variant.is_active,
-            }
-            for variant in variants
-        ]
-    }
+    return product
 
 
 @router.put("/products/{product_id}")
 async def update_product(
     product_id: UUID,
-    product_data: dict,
+    product_data: AdminProductUpdate,
     current_admin: User = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db)
 ):
@@ -2086,18 +2063,23 @@ async def update_product(
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
 
-    # Update fields
-    for field, value in product_data.items():
-        if hasattr(product, field):
-            setattr(product, field, value)
+    changes = product_data.model_dump(exclude_unset=True)
+    merged_base = changes.get("base_price", product.base_price)
+    merged_compare = changes.get("compare_at_price", product.compare_at_price)
+    if merged_compare is not None and merged_compare < merged_base:
+        raise HTTPException(status_code=422, detail="compare_at_price must be greater than or equal to base_price")
+
+    if "category_id" in changes and changes["category_id"] is not None:
+        if await db.get(Category, changes["category_id"]) is None:
+            raise HTTPException(status_code=422, detail="Category not found")
+
+    for field, value in changes.items():
+        setattr(product, field, value)
 
     await db.commit()
     await db.refresh(product)
 
-    return {
-        "message": "Product updated successfully",
-        "product_id": str(product.id)
-    }
+    return {"message": "Product updated successfully", "product_id": str(product.id)}
 
 
 @router.get("/products/{product_id}/variants")
