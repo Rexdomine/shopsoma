@@ -1473,7 +1473,15 @@ async def update_variant(
         setattr(variant, field, value)
 
     if update_data:
-        await mark_product_content_pending(db=db, product_id=product_id)
+        reviewable_variant_fields = {
+            "size",
+            "color",
+            "color_hex",
+            "price",
+            "sku",
+        }
+        if reviewable_variant_fields.intersection(update_data):
+            await mark_product_content_pending(db=db, product_id=product_id)
     await db.commit()
     await db.refresh(variant)
 
