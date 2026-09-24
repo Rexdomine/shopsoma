@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Edit2, Loader2, Package, Tag, Trash2 } from 'lucide-react';
+import { ArrowLeft, CheckCircle, Edit2, Loader2, Package, Tag, Trash2, XCircle } from 'lucide-react';
 import { ROUTES } from '../../config/constants';
 import { apiErrorMessage } from '../../utils/apiErrorMessage';
 import { adminService } from '../../services/adminService';
@@ -29,6 +29,53 @@ export default function AdminProductDetail() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isModerating, setIsModerating] = useState(false);
+  const moderationBusy = useRef(false);
+  const moderationDialog = useRef<HTMLDivElement>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [moderationAction, setModerationAction] = useState<'approve' | 'deny' | null>(null);
+  const [approvalNotes, setApprovalNotes] = useState('');
+  const [rejectionReason, setRejectionReason] = useState('');
+  const [rejectionNotes, setRejectionNotes] = useState('');
+  const [moderationError, setModerationError] = useState<string | null>(null);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
+
+  const refreshProduct = async () => {
+    if (!id) return;
+    setIsRefreshing(true);
+    try {
+      const data = await adminService.getProduct(id);
+      setProduct(data);
+      setRefreshError(null);
+    } catch (err: any) {
+      const message = apiErrorMessage(err, 'Failed to refresh product. Please try again.');
+      setRefreshError(message);
+      error(message, 'Refresh Failed');
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!moderationAction) return;
+    const opener = document.activeElement as HTMLElement | null;
+    const dialog = moderationDialog.current;
+    dialog?.querySelector<HTMLTextAreaElement>('textarea')?.focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !moderationBusy.current) {
+        setModerationAction(null);
+        setModerationError(null);
+      }
+      if (event.key !== 'Tab') return;
+      const controls = Array.from(dialog?.querySelectorAll<HTMLElement>('textarea:not(:disabled), button:not(:disabled)') || []);
+      const first = controls[0], last = controls[controls.length - 1];
+      if (!first) { event.preventDefault(); return; }
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    };
+    dialog?.addEventListener('keydown', onKeyDown);
+    return () => { dialog?.removeEventListener('keydown', onKeyDown); opener?.focus(); };
+  }, [moderationAction]);
 
   useEffect(() => {
     const fetchProduct = async () => {
@@ -53,6 +100,33 @@ export default function AdminProductDetail() {
 
     fetchProduct();
   }, [id, navigate, error]);
+
+  const handleModeration = async () => {
+    if (!product || !moderationAction || product.moderation_status !== 'pending' || moderationBusy.current || isRefreshing || refreshError) return;
+    if (moderationAction === 'deny' && rejectionReason.trim().length < 10) {
+      setModerationError('Rejection reason must be at least 10 characters');
+      return;
+    }
+    moderationBusy.current = true;
+    try {
+      setIsModerating(true);
+      setModerationError(null);
+      if (moderationAction === 'approve') {
+        await adminService.approveProduct(product.id, approvalNotes.trim() || undefined);
+      } else {
+        await adminService.rejectProduct(product.id, rejectionReason.trim(), rejectionNotes.trim() || undefined);
+      }
+      success(moderationAction === 'approve' ? 'Product approved successfully.' : 'Product denied successfully.', 'Moderation complete');
+      setModerationAction(null);
+      setApprovalNotes(''); setRejectionReason(''); setRejectionNotes('');
+      await refreshProduct();
+    } catch (err: any) {
+      setModerationError(apiErrorMessage(err, 'Moderation action failed'));
+    } finally {
+      moderationBusy.current = false;
+      setIsModerating(false);
+    }
+  };
 
   const getStatusColor = (status?: string) => {
     switch (status?.toLowerCase()) {
@@ -151,7 +225,7 @@ export default function AdminProductDetail() {
             Back to Products
           </button>
 
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-4">
             <div>
               <h1 className="text-3xl font-bold text-gray-900">{product.title}</h1>
               <p className="text-sm text-gray-500 mt-1">
@@ -159,8 +233,14 @@ export default function AdminProductDetail() {
               </p>
             </div>
 
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center gap-3">
               <CurrencySwitcher value={currentCurrency} onChange={setCurrency} />
+              {product.moderation_status === 'pending' && !refreshError && (
+                <>
+                  <button type="button" onClick={() => setModerationAction('approve')} disabled={isModerating || isRefreshing} className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50"><CheckCircle className="h-4 w-4" />Approve Product</button>
+                  <button type="button" onClick={() => setModerationAction('deny')} disabled={isModerating || isRefreshing} className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50"><XCircle className="h-4 w-4" />Deny Product</button>
+                </>
+              )}
               <button
                 onClick={() => navigate(ROUTES.ADMIN_PRODUCT_EDIT.replace(':id', product.id))}
                 className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
@@ -178,6 +258,15 @@ export default function AdminProductDetail() {
             </div>
           </div>
         </div>
+
+        {refreshError && (
+          <div role="alert" className="mb-6 rounded-lg border border-yellow-300 bg-yellow-50 p-4 text-yellow-900">
+            <p>The moderation action succeeded, but the displayed product could not be refreshed. {refreshError}</p>
+            <button type="button" disabled={isRefreshing} onClick={refreshProduct} className="mt-2 font-medium underline disabled:opacity-50">
+              {isRefreshing ? 'Refreshing…' : 'Refresh product'}
+            </button>
+          </div>
+        )}
 
         {/* Product Info Grid */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -497,6 +586,24 @@ export default function AdminProductDetail() {
           </div>
         </div>
       </div>
+
+      {moderationAction && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-black/50 p-4" ref={moderationDialog} role="dialog" aria-modal="true" aria-labelledby="moderation-title">
+          <div className="mx-auto mt-16 w-full max-w-lg rounded-lg bg-white p-6 space-y-4">
+            <h3 id="moderation-title" className="text-lg font-semibold">{moderationAction === 'approve' ? 'Approve Product' : 'Deny Product'}</h3>
+            {moderationAction === 'approve' ? <>
+              <p>Approve “{product.title}”? The vendor will be notified.</p>
+              <label className="block text-sm font-medium">Approval Notes (Optional)<textarea disabled={isModerating || isRefreshing} aria-label="Approval Notes (Optional)" value={approvalNotes} onChange={e => setApprovalNotes(e.target.value)} maxLength={500} rows={3} className="mt-1 w-full rounded border p-2" /></label>
+            </> : <>
+              <p>Deny “{product.title}”? The vendor will be notified.</p>
+              <label className="block text-sm font-medium">Rejection Reason *<textarea disabled={isModerating || isRefreshing} aria-label="Rejection Reason *" value={rejectionReason} onChange={e => setRejectionReason(e.target.value)} maxLength={1000} rows={3} className="mt-1 w-full rounded border p-2" /></label>
+              <label className="block text-sm font-medium">Rejection Notes (Optional)<textarea disabled={isModerating || isRefreshing} aria-label="Rejection Notes (Optional)" value={rejectionNotes} onChange={e => setRejectionNotes(e.target.value)} maxLength={500} rows={3} className="mt-1 w-full rounded border p-2" /></label>
+            </>}
+            {moderationError && <p role="alert" className="text-sm text-red-700">{moderationError}</p>}
+            <div className="flex justify-end gap-3"><button type="button" onClick={() => { setModerationAction(null); setModerationError(null); }} disabled={isModerating || isRefreshing} className="rounded border px-4 py-2">Cancel</button><button type="button" onClick={handleModeration} disabled={isModerating || isRefreshing} className="rounded bg-blue-600 px-4 py-2 text-white disabled:opacity-50">{isModerating ? 'Processing…' : moderationAction === 'approve' ? 'Approve Product' : 'Deny Product'}</button></div>
+          </div>
+        </div>
+      )}
 
       {/* Delete Confirmation Modal */}
       {deleteModalOpen && (

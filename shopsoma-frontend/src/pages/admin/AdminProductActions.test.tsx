@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -59,6 +59,102 @@ describe('admin product view/edit API boundaries', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Admin access required');
     expect(screen.queryByText('Admin product list')).toBeNull();
     expect(screen.getByRole('button', { name: 'Back to Products' })).toBeTruthy();
+  });
+  it('approves a pending detail with optional notes and refreshes in place', async () => {
+    mocks.put.mockResolvedValueOnce({ data: { message: 'approved' } });
+    mount('view');
+    await screen.findByRole('heading', { name: product.title });
+    fireEvent.click(screen.getByRole('button', { name: 'Approve Product' }));
+    fireEvent.change(screen.getByLabelText('Approval Notes (Optional)'), { target: { value: 'Looks good' } });
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /^Approve Product$/ }));
+    await waitFor(() => expect(mocks.put).toHaveBeenCalledWith('/admin/products/product-1/approve', { notes: 'Looks good' }));
+    await waitFor(() => expect(mocks.get).toHaveBeenCalledTimes(2));
+    expect(screen.getByTestId('location').textContent).toBe('/admin/products/product-1');
+  });
+  it('validates denial reason and preserves entered values when rejection fails', async () => {
+    mocks.put.mockRejectedValueOnce({ response: { data: { detail: 'Unable to reject' } } });
+    mount('view');
+    await screen.findByRole('heading', { name: product.title });
+    fireEvent.click(screen.getByRole('button', { name: 'Deny Product' }));
+    fireEvent.change(screen.getByLabelText('Rejection Reason *'), { target: { value: 'too short' } });
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /^Deny Product$/ }));
+    expect(await screen.findByText('Rejection reason must be at least 10 characters')).toBeTruthy();
+    fireEvent.change(screen.getByLabelText('Rejection Reason *'), { target: { value: 'The images do not meet quality requirements.' } });
+    fireEvent.change(screen.getByLabelText('Rejection Notes (Optional)'), { target: { value: 'Please update photos' } });
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /^Deny Product$/ }));
+    await waitFor(() => expect(mocks.put).toHaveBeenCalledWith('/admin/products/product-1/reject', { reason: 'The images do not meet quality requirements.', notes: 'Please update photos' }));
+    expect((screen.getByLabelText('Rejection Reason *') as HTMLTextAreaElement).value).toContain('quality');
+    expect((screen.getByLabelText('Rejection Notes (Optional)') as HTMLTextAreaElement).value).toBe('Please update photos');
+  });
+  it('denies from the detail page, then shows the server-returned rejected status', async () => {
+    mount('view');
+    fireEvent.click(await screen.findByRole('button', { name: 'Deny Product' }));
+    fireEvent.change(screen.getByLabelText('Rejection Reason *'), { target: { value: '  Product images need correction  ' } });
+    mocks.get.mockResolvedValueOnce({ data: { ...product, moderation_status: 'rejected' } });
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Deny Product' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(await screen.findByText(/^rejected$/i)).toBeTruthy();
+    expect(mocks.put).toHaveBeenCalledWith('/admin/products/product-1/reject', { reason: 'Product images need correction', notes: null });
+    expect(screen.queryByRole('button', { name: 'Approve Product' })).toBeNull();
+    expect(screen.getByTestId('location')).toHaveTextContent('/admin/products/product-1');
+  });
+  it('cancels and escapes without sending a mutation, and focuses the dialog', async () => {
+    mount('view');
+    fireEvent.click(await screen.findByRole('button', { name: 'Approve Product' }));
+    expect(screen.getByLabelText('Approval Notes (Optional)')).toHaveFocus();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Deny Product' }));
+    fireEvent.keyDown(screen.getByLabelText('Rejection Reason *'), { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(mocks.put).not.toHaveBeenCalled();
+  });
+  it('disables confirmation and prevents duplicate in-flight approval', async () => {
+    let finish!: (value: unknown) => void;
+    mocks.put.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    mount('view');
+    fireEvent.click(await screen.findByRole('button', { name: 'Approve Product' }));
+    const confirm = within(screen.getByRole('dialog')).getByRole('button', { name: 'Approve Product' });
+    fireEvent.click(confirm);
+    fireEvent.click(confirm);
+    expect(confirm).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled();
+    expect(mocks.put).toHaveBeenCalledTimes(1);
+    mocks.get.mockResolvedValueOnce({ data: { ...product, moderation_status: 'approved' } });
+    finish({ data: {} });
+    expect(await screen.findByText(/^approved$/i)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Approve Product' })).toBeNull();
+  });
+  it('renders structured moderation errors and retains notes for retry', async () => {
+    mocks.put.mockRejectedValueOnce({ response: { data: { detail: [{ msg: 'Approval not permitted' }] } } });
+    mount('view');
+    fireEvent.click(await screen.findByRole('button', { name: 'Approve Product' }));
+    fireEvent.change(screen.getByLabelText('Approval Notes (Optional)'), { target: { value: 'Keep this note' } });
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Approve Product' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Approval not permitted');
+    expect(screen.getByLabelText('Approval Notes (Optional)')).toHaveValue('Keep this note');
+    expect(mocks.get).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('location')).toHaveTextContent('/admin/products/product-1');
+  });
+  it('retries only the GET after successful moderation but failed refresh', async () => {
+    mount('view');
+    fireEvent.click(await screen.findByRole('button', { name: 'Approve Product' }));
+    mocks.get.mockRejectedValueOnce(new Error('Read temporarily unavailable'));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Approve Product' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('moderation action succeeded');
+    expect(screen.queryByRole('button', { name: 'Approve Product' })).toBeNull();
+    mocks.get.mockResolvedValueOnce({ data: { ...product, moderation_status: 'approved' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh product' }));
+    expect(await screen.findByText(/^approved$/i)).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(mocks.put).toHaveBeenCalledTimes(1);
+    expect(mocks.get).toHaveBeenCalledTimes(3);
+  });
+  it.each(['approved', 'rejected'] as const)('does not show moderation actions for %s products', async status => {
+    mocks.get.mockResolvedValue({ data: { ...product, moderation_status: status } });
+    mount('view');
+    await screen.findByRole('heading', { name: product.title });
+    expect(screen.queryByRole('button', { name: 'Approve Product' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Deny Product' })).toBeNull();
   });
   it('keeps edits and renders structured validation failures after a failed save', async () => {
     mocks.get.mockResolvedValue({ data: { ...product } });
