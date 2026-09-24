@@ -61,6 +61,7 @@ export default function AdminProducts() {
   const [approvalModal, setApprovalModal] = useState<Product | null>(null);
   const [approvalNotes, setApprovalNotes] = useState('');
   const [deleteModal, setDeleteModal] = useState<Product | null>(null);
+  const [reconciliationRequired, setReconciliationRequired] = useState(false);
   const moderationOwner = useRef(`${Date.now()}-${Math.random().toString(36).slice(2)}`);
 
   const pageSize = 20;
@@ -73,7 +74,7 @@ export default function AdminProducts() {
     loadProducts();
   }, [page, moderationFilter, statusFilter, search]);
 
-  const loadProducts = async () => {
+  const loadProducts = async (): Promise<boolean> => {
     try {
       setLoading(true);
 
@@ -90,8 +91,11 @@ export default function AdminProducts() {
       setProducts(response.items);
       setTotal(response.total);
       setTotalPages(response.total_pages);
+      setReconciliationRequired(false);
+      return true;
     } catch (err: any) {
       showMessage('error', err.message || 'Failed to load products');
+      return false;
     } finally {
       setLoading(false);
     }
@@ -159,7 +163,11 @@ export default function AdminProducts() {
             setApprovalModal(null);
             setApprovalNotes('');
             showMessage('error', 'Another admin already moderated this product. The list was refreshed.');
-            await loadProducts();
+            const refreshed = await loadProducts();
+            if (!refreshed) {
+              setReconciliationRequired(true);
+              showMessage('error', 'The moderation conflict could not be reconciled because the list refresh failed. Refresh the list before retrying.');
+            }
           } else if (outcomeMayBeCommitted) {
             showMessage('error', 'The moderation outcome could not be confirmed. Refresh the list before retrying.');
           } else {
@@ -224,7 +232,11 @@ export default function AdminProducts() {
             setRejectionReason('');
             setRejectionNotes('');
             showMessage('error', 'Another admin already moderated this product. The list was refreshed.');
-            await loadProducts();
+            const refreshed = await loadProducts();
+            if (!refreshed) {
+              setReconciliationRequired(true);
+              showMessage('error', 'The moderation conflict could not be reconciled because the list refresh failed. Refresh the list before retrying.');
+            }
           } else if (outcomeMayBeCommitted) {
             showMessage('error', 'The moderation outcome could not be confirmed. Refresh the list before retrying.');
           } else {
@@ -395,6 +407,14 @@ export default function AdminProducts() {
             }`}
           >
             {message.text}
+          </div>
+        )}
+        {reconciliationRequired && (
+          <div role="alert" className="p-4 rounded-lg bg-yellow-50 text-yellow-900">
+            <p>The product list could not be refreshed after a moderation conflict. Moderation actions are disabled until the authoritative list is loaded.</p>
+            <button type="button" onClick={() => loadProducts()} disabled={loading} className="mt-2 font-medium underline disabled:opacity-50">
+              {loading ? 'Refreshing…' : 'Refresh product list'}
+            </button>
           </div>
         )}
 
@@ -608,7 +628,7 @@ export default function AdminProducts() {
                             <>
                               <button
                                 onClick={() => setApprovalModal(product)}
-                                disabled={actionLoading === product.id}
+                                disabled={actionLoading === product.id || reconciliationRequired}
                                 className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-white bg-green-600 hover:bg-green-700 rounded-lg disabled:opacity-50"
                                 title="Approve Product"
                               >
@@ -616,7 +636,7 @@ export default function AdminProducts() {
                               </button>
                               <button
                                 onClick={() => setRejectModal(product)}
-                                disabled={actionLoading === product.id}
+                                disabled={actionLoading === product.id || reconciliationRequired}
                                 className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg disabled:opacity-50"
                                 title="Reject Product"
                               >

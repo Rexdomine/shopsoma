@@ -325,6 +325,17 @@ describe('admin product view/edit API boundaries', () => {
     expect(mocks.error).toHaveBeenCalledWith(expect.stringContaining('already moderated'), 'Moderation conflict');
     expect(mocks.put).toHaveBeenCalledTimes(1);
   });
+  it('preserves conflict context when the detail refresh fails', async () => {
+    mocks.put.mockRejectedValueOnce({ response: { status: 409, data: { detail: 'Product moderation has already been decided' } } });
+    mount('view');
+    await screen.findByRole('heading', { name: product.title });
+    fireEvent.click(screen.getByRole('button', { name: 'Approve Product' }));
+    mocks.get.mockResolvedValueOnce({ data: { ...product } });
+    mocks.get.mockRejectedValueOnce(new Error('Read temporarily unavailable'));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Approve Product' }));
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/already moderated.*current status could not be loaded/i));
+    expect(screen.getByRole('alert')).not.toHaveTextContent(/moderation action succeeded/i);
+  });
   it.each(['approve', 'reject'] as const)('refreshes the admin list after a %s 409 conflict', async action => {
     mocks.put.mockRejectedValueOnce({ response: { status: 409, data: { detail: 'Product moderation has already been decided' } } });
     render(<MemoryRouter><AdminProducts /></MemoryRouter>);
@@ -339,6 +350,18 @@ describe('admin product view/edit API boundaries', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     expect(await screen.findByText(/already moderated.*list was refreshed/i)).toBeTruthy();
     expect(mocks.get.mock.calls.filter(([url]) => String(url).startsWith('/admin/products?')).length).toBeGreaterThanOrEqual(2);
+  });
+  it('retains an explicit reconciliation state when the list refresh fails after a 409', async () => {
+    mocks.put.mockRejectedValueOnce({ response: { status: 409, data: { detail: 'Product moderation has already been decided' } } });
+    render(<MemoryRouter><AdminProducts /></MemoryRouter>);
+    await screen.findByText(product.title);
+    fireEvent.click(screen.getByTitle('Approve Product'));
+    mocks.get.mockResolvedValueOnce({ data: { ...product } });
+    mocks.get.mockRejectedValueOnce(new Error('List temporarily unavailable'));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Approve Product' })[1]);
+    await waitFor(() => expect(screen.getByText(/moderation conflict could not be reconciled/i)).toBeTruthy());
+    expect(screen.getByTitle('Approve Product')).toBeDisabled();
+    expect(screen.getByTitle('Reject Product')).toBeDisabled();
   });
   it('list moderation honors the shared ambiguity marker before issuing a PUT', async () => {
     render(<MemoryRouter><AdminProducts /></MemoryRouter>);

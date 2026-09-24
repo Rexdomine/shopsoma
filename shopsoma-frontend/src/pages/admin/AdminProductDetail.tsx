@@ -48,6 +48,7 @@ export default function AdminProductDetail() {
   const [moderationError, setModerationError] = useState<string | null>(null);
   const [moderationOutcomeUnknown, setModerationOutcomeUnknown] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
+  const [refreshErrorContext, setRefreshErrorContext] = useState<'success' | 'conflict' | null>(null);
 
   const reconcileModeration = async (
     productId: string,
@@ -68,13 +69,14 @@ export default function AdminProductDetail() {
     return { product: null };
   };
 
-  const refreshProduct = async () => {
+  const refreshProduct = async (context: 'success' | 'conflict' = 'success') => {
     if (!id) return;
     setIsRefreshing(true);
     try {
       const data = await adminService.getProduct(id);
       setProduct(data);
       setRefreshError(null);
+      setRefreshErrorContext(null);
       if (data.moderation_status !== 'pending') localStorage.removeItem(moderationAmbiguityKey(data.id));
       const ambiguityIsCurrent = data.moderation_status === 'pending' && hasCurrentModerationAmbiguity(data);
       if (moderationOutcomeUnknown && moderationAction && ambiguityIsCurrent) {
@@ -115,6 +117,7 @@ export default function AdminProductDetail() {
         setModerationError(message);
       } else {
         setRefreshError(message);
+        setRefreshErrorContext(context);
         error(message, 'Refresh Failed');
       }
     } finally {
@@ -260,7 +263,7 @@ export default function AdminProductDetail() {
             setApprovalNotes(''); setRejectionReason(''); setRejectionNotes('');
             setModerationError(null);
             error('Another admin already moderated this product. The current status was loaded.', 'Moderation conflict');
-            await refreshProduct();
+            await refreshProduct('conflict');
           } else if (!outcomeMayBeCommitted || !product || !moderationAction) {
             if (product) localStorage.removeItem(lockKey);
             setModerationError(apiErrorMessage(err, 'Moderation action failed'));
@@ -433,8 +436,10 @@ export default function AdminProductDetail() {
 
         {refreshError && (
           <div role="alert" className="mb-6 rounded-lg border border-yellow-300 bg-yellow-50 p-4 text-yellow-900">
-            <p>The moderation action succeeded, but the displayed product could not be refreshed. {refreshError}</p>
-            <button type="button" disabled={isRefreshing} onClick={refreshProduct} className="mt-2 font-medium underline disabled:opacity-50">
+            <p>{refreshErrorContext === 'conflict'
+              ? `Another admin already moderated this product, but the current status could not be loaded. ${refreshError}`
+              : `The moderation action succeeded, but the displayed product could not be refreshed. ${refreshError}`}</p>
+            <button type="button" disabled={isRefreshing} onClick={() => refreshProduct()} className="mt-2 font-medium underline disabled:opacity-50">
               {isRefreshing ? 'Refreshing…' : 'Refresh product'}
             </button>
           </div>
@@ -443,7 +448,7 @@ export default function AdminProductDetail() {
         {moderationOutcomeUnknown && !moderationAction && (
           <div role="alert" className="mb-6 rounded-lg border border-yellow-300 bg-yellow-50 p-4 text-yellow-900">
             <p>{moderationError || 'A previous moderation request could not be confirmed. Refresh the product before retrying.'}</p>
-            <button type="button" disabled={isRefreshing} onClick={refreshProduct} className="mt-2 font-medium underline disabled:opacity-50">
+            <button type="button" disabled={isRefreshing} onClick={() => refreshProduct()} className="mt-2 font-medium underline disabled:opacity-50">
               {isRefreshing ? 'Refreshing…' : 'Refresh product status'}
             </button>
           </div>
@@ -781,7 +786,7 @@ export default function AdminProductDetail() {
               <label className="block text-sm font-medium">Rejection Notes (Optional)<textarea disabled={isModerating || isRefreshing} aria-label="Rejection Notes (Optional)" value={rejectionNotes} onChange={e => setRejectionNotes(e.target.value)} maxLength={500} rows={3} className="mt-1 w-full rounded border p-2" /></label>
             </>}
             {moderationError && <p role="alert" className="text-sm text-red-700">{moderationError}</p>}
-            {moderationOutcomeUnknown && <button type="button" onClick={refreshProduct} disabled={isRefreshing} className="text-sm font-medium underline disabled:opacity-50">{isRefreshing ? 'Refreshing…' : 'Refresh product status'}</button>}
+            {moderationOutcomeUnknown && <button type="button" onClick={() => refreshProduct()} disabled={isRefreshing} className="text-sm font-medium underline disabled:opacity-50">{isRefreshing ? 'Refreshing…' : 'Refresh product status'}</button>}
             <div className="flex justify-end gap-3"><button type="button" onClick={() => { setModerationAction(null); setModerationError(null); }} disabled={isModerating || isRefreshing} className="rounded border px-4 py-2">Cancel</button><button type="button" onClick={handleModeration} disabled={isModerating || isRefreshing || moderationOutcomeUnknown} className="rounded bg-blue-600 px-4 py-2 text-white disabled:opacity-50">{isModerating ? 'Processing…' : moderationOutcomeUnknown ? 'Refresh required' : moderationAction === 'approve' ? 'Approve Product' : 'Deny Product'}</button></div>
           </div>
         </div>
