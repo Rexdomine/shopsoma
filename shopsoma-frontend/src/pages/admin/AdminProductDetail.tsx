@@ -254,7 +254,14 @@ export default function AdminProductDetail() {
         } catch (err: any) {
           const status = err?.response?.status;
           const outcomeMayBeCommitted = !err?.response || (typeof status === 'number' && status >= 500);
-          if (!outcomeMayBeCommitted || !product || !moderationAction) {
+          if (status === 409) {
+            localStorage.removeItem(lockKey);
+            setModerationAction(null);
+            setApprovalNotes(''); setRejectionReason(''); setRejectionNotes('');
+            setModerationError(null);
+            error('Another admin already moderated this product. The current status was loaded.', 'Moderation conflict');
+            await refreshProduct();
+          } else if (!outcomeMayBeCommitted || !product || !moderationAction) {
             if (product) localStorage.removeItem(lockKey);
             setModerationError(apiErrorMessage(err, 'Moderation action failed'));
           } else {

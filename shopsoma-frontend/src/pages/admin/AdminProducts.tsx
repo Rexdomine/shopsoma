@@ -154,7 +154,13 @@ export default function AdminProducts() {
         } catch (err: any) {
           const status = err?.response?.status;
           const outcomeMayBeCommitted = !err?.response || (typeof status === 'number' && status >= 500);
-          if (outcomeMayBeCommitted) {
+          if (status === 409) {
+            localStorage.removeItem(lockKey);
+            setApprovalModal(null);
+            setApprovalNotes('');
+            showMessage('error', 'Another admin already moderated this product. The list was refreshed.');
+            await loadProducts();
+          } else if (outcomeMayBeCommitted) {
             showMessage('error', 'The moderation outcome could not be confirmed. Refresh the list before retrying.');
           } else {
             localStorage.removeItem(lockKey);
@@ -212,7 +218,14 @@ export default function AdminProducts() {
         } catch (err: any) {
           const status = err?.response?.status;
           const outcomeMayBeCommitted = !err?.response || (typeof status === 'number' && status >= 500);
-          if (outcomeMayBeCommitted) {
+          if (status === 409) {
+            localStorage.removeItem(lockKey);
+            setRejectModal(null);
+            setRejectionReason('');
+            setRejectionNotes('');
+            showMessage('error', 'Another admin already moderated this product. The list was refreshed.');
+            await loadProducts();
+          } else if (outcomeMayBeCommitted) {
             showMessage('error', 'The moderation outcome could not be confirmed. Refresh the list before retrying.');
           } else {
             localStorage.removeItem(lockKey);

@@ -312,6 +312,34 @@ describe('admin product view/edit API boundaries', () => {
     expect(screen.queryByRole('button', { name: 'Approve Product' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Deny Product' })).toBeNull();
   });
+  it('reconciles a detail 409 conflict through the authoritative product refresh', async () => {
+    mocks.put.mockRejectedValueOnce({ response: { status: 409, data: { detail: 'Product moderation has already been decided' } } });
+    mount('view');
+    await screen.findByRole('heading', { name: product.title });
+    fireEvent.click(screen.getByRole('button', { name: 'Approve Product' }));
+    mocks.get.mockResolvedValueOnce({ data: { ...product } });
+    mocks.get.mockResolvedValueOnce({ data: { ...product, moderation_status: 'rejected' } });
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Approve Product' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(await screen.findByText(/^rejected$/i)).toBeTruthy();
+    expect(mocks.error).toHaveBeenCalledWith(expect.stringContaining('already moderated'), 'Moderation conflict');
+    expect(mocks.put).toHaveBeenCalledTimes(1);
+  });
+  it.each(['approve', 'reject'] as const)('refreshes the admin list after a %s 409 conflict', async action => {
+    mocks.put.mockRejectedValueOnce({ response: { status: 409, data: { detail: 'Product moderation has already been decided' } } });
+    render(<MemoryRouter><AdminProducts /></MemoryRouter>);
+    await screen.findByText(product.title);
+    fireEvent.click(screen.getByTitle(action === 'approve' ? 'Approve Product' : 'Reject Product'));
+    if (action === 'reject') {
+      fireEvent.change(screen.getByPlaceholderText('Explain why this product cannot be approved (minimum 10 characters)...'), { target: { value: 'Product needs better images' } });
+    }
+    const confirmName = action === 'approve' ? 'Approve Product' : 'Reject Product';
+    fireEvent.click(screen.getAllByRole('button', { name: confirmName })[1]);
+    await waitFor(() => expect(mocks.put).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(await screen.findByText(/already moderated.*list was refreshed/i)).toBeTruthy();
+    expect(mocks.get.mock.calls.filter(([url]) => String(url).startsWith('/admin/products?')).length).toBeGreaterThanOrEqual(2);
+  });
   it('list moderation honors the shared ambiguity marker before issuing a PUT', async () => {
     render(<MemoryRouter><AdminProducts /></MemoryRouter>);
     await screen.findByText(product.title);
