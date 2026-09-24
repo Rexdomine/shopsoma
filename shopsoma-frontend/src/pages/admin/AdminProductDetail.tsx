@@ -230,60 +230,68 @@ export default function AdminProductDetail() {
     }
     moderationBusy.current = true;
     try {
-      setIsModerating(true);
-      setModerationError(null);
-      setModerationOutcomeUnknown(false);
-      saveModerationAmbiguity(product, moderationOwner.current);
-      const claimedMarker = JSON.parse(localStorage.getItem(lockKey) || '{}') as { owner?: string };
-      if (claimedMarker.owner !== moderationOwner.current) {
-        setModerationOutcomeUnknown(true);
-        setModerationError('Another admin tab claimed moderation for this product. Refresh the product before retrying.');
+      const lockManager = typeof navigator !== 'undefined' ? navigator.locks : undefined;
+      if (!lockManager) {
+        setModerationError('This browser cannot safely coordinate moderation across admin tabs. Use a supported browser and try again.');
         return;
       }
-      if (moderationAction === 'approve') {
-        await adminService.approveProduct(product.id, approvalNotes.trim() || undefined);
-      } else {
-        await adminService.rejectProduct(product.id, rejectionReason.trim(), rejectionNotes.trim() || undefined);
-      }
-      localStorage.removeItem(moderationAmbiguityKey(product.id));
-      success(moderationAction === 'approve' ? 'Product approved successfully.' : 'Product denied successfully.', 'Moderation complete');
-      setModerationAction(null);
-      setApprovalNotes(''); setRejectionReason(''); setRejectionNotes('');
-      await refreshProduct();
-    } catch (err: any) {
-      const status = err?.response?.status;
-      const outcomeMayBeCommitted = !err?.response || (typeof status === 'number' && status >= 500);
-      if (!outcomeMayBeCommitted || !product || !moderationAction) {
-        if (product) localStorage.removeItem(moderationAmbiguityKey(product.id));
-        setModerationError(apiErrorMessage(err, 'Moderation action failed'));
-      } else {
-        setModerationOutcomeUnknown(true);
-        setIsRefreshing(true);
-        try {
-          const reconciled = await reconcileModeration(product.id, moderationAction, product);
-          setRefreshError(null);
-          if (reconciled.product?.moderation_status === (moderationAction === 'approve' ? 'approved' : 'rejected')) {
-            success(moderationAction === 'approve' ? 'Product approval verified.' : 'Product denial verified.', 'Moderation complete');
-            setModerationOutcomeUnknown(false);
-            setModerationError(null);
-            setModerationAction(null);
-            setApprovalNotes(''); setRejectionReason(''); setRejectionNotes('');
-          } else if (reconciled.product) {
-            setModerationOutcomeUnknown(false);
-            setModerationError('The moderation request was not confirmed. Review the current status before retrying.');
-            setModerationAction(null);
-            setApprovalNotes(''); setRejectionReason(''); setRejectionNotes('');
-          } else {
-            setModerationError('The moderation request is still pending. Refresh again before retrying.');
-          }
-        } catch (reconciliationError: any) {
-          saveModerationAmbiguity(product, moderationOwner.current);
+      await lockManager.request(`shopsoma-admin-moderation:${product.id}`, { ifAvailable: true }, async lock => {
+        if (!lock) {
           setModerationOutcomeUnknown(true);
-          setModerationError(`The moderation outcome could not be confirmed. Refresh the product before retrying. ${apiErrorMessage(reconciliationError, 'Refresh failed')}`);
-        } finally {
-          setIsRefreshing(false);
+          setModerationError('Another admin tab is processing this product. Refresh the product before retrying.');
+          return;
         }
-      }
+        setIsModerating(true);
+        setModerationError(null);
+        setModerationOutcomeUnknown(false);
+        saveModerationAmbiguity(product, moderationOwner.current);
+        try {
+          if (moderationAction === 'approve') {
+            await adminService.approveProduct(product.id, approvalNotes.trim() || undefined);
+          } else {
+            await adminService.rejectProduct(product.id, rejectionReason.trim(), rejectionNotes.trim() || undefined);
+          }
+          localStorage.removeItem(lockKey);
+          success(moderationAction === 'approve' ? 'Product approved successfully.' : 'Product denied successfully.', 'Moderation complete');
+          setModerationAction(null);
+          setApprovalNotes(''); setRejectionReason(''); setRejectionNotes('');
+          await refreshProduct();
+        } catch (err: any) {
+          const status = err?.response?.status;
+          const outcomeMayBeCommitted = !err?.response || (typeof status === 'number' && status >= 500);
+          if (!outcomeMayBeCommitted || !product || !moderationAction) {
+            if (product) localStorage.removeItem(lockKey);
+            setModerationError(apiErrorMessage(err, 'Moderation action failed'));
+          } else {
+            setModerationOutcomeUnknown(true);
+            setIsRefreshing(true);
+            try {
+              const reconciled = await reconcileModeration(product.id, moderationAction, product);
+              setRefreshError(null);
+              if (reconciled.product?.moderation_status === (moderationAction === 'approve' ? 'approved' : 'rejected')) {
+                success(moderationAction === 'approve' ? 'Product approval verified.' : 'Product denial verified.', 'Moderation complete');
+                setModerationOutcomeUnknown(false);
+                setModerationError(null);
+                setModerationAction(null);
+                setApprovalNotes(''); setRejectionReason(''); setRejectionNotes('');
+              } else if (reconciled.product) {
+                setModerationOutcomeUnknown(false);
+                setModerationError('The moderation request was not confirmed. Review the current status before retrying.');
+                setModerationAction(null);
+                setApprovalNotes(''); setRejectionReason(''); setRejectionNotes('');
+              } else {
+                setModerationError('The moderation request is still pending. Refresh again before retrying.');
+              }
+            } catch (reconciliationError: any) {
+              saveModerationAmbiguity(product, moderationOwner.current);
+              setModerationOutcomeUnknown(true);
+              setModerationError(`The moderation outcome could not be confirmed. Refresh the product before retrying. ${apiErrorMessage(reconciliationError, 'Refresh failed')}`);
+            } finally {
+              setIsRefreshing(false);
+            }
+          }
+        }
+      });
     } finally {
       moderationBusy.current = false;
       setIsModerating(false);

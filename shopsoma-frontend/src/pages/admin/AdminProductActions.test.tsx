@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({ get: vi.fn(), put: vi.fn(), error: vi.fn(), success: vi.fn(), warning: vi.fn(), hideToast: vi.fn(), setCurrency: vi.fn() }));
+const mocks = vi.hoisted(() => ({ get: vi.fn(), put: vi.fn(), lockRequest: vi.fn(), error: vi.fn(), success: vi.fn(), warning: vi.fn(), hideToast: vi.fn(), setCurrency: vi.fn() }));
 vi.mock('../../services/api', () => ({ default: { get: mocks.get, put: mocks.put } }));
 vi.mock('../../hooks/useToast', () => ({ useToast: () => ({ toasts: [], error: mocks.error, success: mocks.success, warning: mocks.warning, hideToast: mocks.hideToast }) }));
 vi.mock('../../store/currencyStore', () => ({ useCurrencyStore: () => ({ currentCurrency: 'NGN', exchangeRates: {}, setCurrency: mocks.setCurrency }) }));
@@ -27,6 +27,8 @@ beforeEach(() => {
     throw { response: { status: 404, data: { detail: 'Product not found' } } };
   });
   mocks.put.mockResolvedValue({ data: { message: 'Product updated successfully', product_id: product.id } });
+  mocks.lockRequest.mockImplementation(async (_name: string, _options: unknown, callback: (lock: object) => Promise<unknown>) => callback({}));
+  Object.defineProperty(navigator, 'locks', { configurable: true, value: { request: mocks.lockRequest } });
   vi.spyOn(console, 'error').mockImplementation(() => {});
 });
 afterEach(() => { cleanup(); sessionStorage.clear(); localStorage.clear(); vi.restoreAllMocks(); });
@@ -123,6 +125,15 @@ describe('admin product view/edit API boundaries', () => {
     finish({ data: {} });
     expect(await screen.findByText(/^approved$/i)).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Approve Product' })).toBeNull();
+  });
+  it('does not send a mutation when another tab holds the atomic moderation lock', async () => {
+    mocks.lockRequest.mockImplementationOnce(async (_name: string, _options: unknown, callback: (lock: null) => Promise<unknown>) => callback(null));
+    mount('view');
+    fireEvent.click(await screen.findByRole('button', { name: 'Approve Product' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Approve Product' }));
+    await waitFor(() => expect(screen.getByText(/another admin tab is processing/i)).toBeTruthy());
+    expect(mocks.put).not.toHaveBeenCalled();
+    expect(mocks.lockRequest).toHaveBeenCalledWith('shopsoma-admin-moderation:product-1', { ifAvailable: true }, expect.any(Function));
   });
   it('renders structured moderation errors and retains notes for retry', async () => {
     mocks.put.mockRejectedValueOnce({ response: { data: { detail: [{ msg: 'Approval not permitted' }] } } });
