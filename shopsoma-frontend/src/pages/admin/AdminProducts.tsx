@@ -41,11 +41,7 @@ interface Product {
   updated_at: string;
 }
 
-const sameTimestamp = (left: string, right: string): boolean => {
-  const leftMillis = Date.parse(left);
-  const rightMillis = Date.parse(right);
-  return Number.isFinite(leftMillis) && leftMillis === rightMillis;
-};
+const sameTimestamp = (left: string, right: string): boolean => left === right;
 
 export default function AdminProducts() {
   const navigate = useNavigate();

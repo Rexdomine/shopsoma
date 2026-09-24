@@ -420,6 +420,21 @@ describe('admin product view/edit API boundaries', () => {
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(mocks.put).not.toHaveBeenCalled();
   });
+  it('list moderation preserves timestamp precision for same-millisecond revisions', async () => {
+    render(<MemoryRouter><AdminProducts /></MemoryRouter>);
+    await screen.findByText(product.title);
+    fireEvent.click(screen.getByTitle('Approve Product'));
+    mocks.get.mockResolvedValueOnce({
+      data: {
+        ...product,
+        title: 'Vendor revised within the same millisecond',
+        updated_at: '2026-09-23T10:00:00.000002Z',
+      },
+    });
+    fireEvent.click(screen.getAllByRole('button', { name: 'Approve Product' })[1]);
+    expect(await screen.findByText(/changed after the approval dialog opened/i)).toBeTruthy();
+    expect(mocks.put).not.toHaveBeenCalled();
+  });
   it('list denial validates the trimmed reason length before sending the trimmed payload', async () => {
     render(<MemoryRouter><AdminProducts /></MemoryRouter>);
     await screen.findByText(product.title);
