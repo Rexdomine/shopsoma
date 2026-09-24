@@ -1,5 +1,6 @@
 import asyncio
 from collections import Counter
+from datetime import datetime, timezone
 from uuid import uuid4
 
 import pytest
@@ -52,7 +53,9 @@ async def test_vendor_child_write_returns_approved_product_to_pending(
 ):
     product = await _pending_product(db_session, vendor_user)
     product.moderation_status = ModerationStatus.APPROVED
+    product.moderated_at = datetime.now(timezone.utc)
     product.moderated_by = admin_user["user"].id
+    product.moderation_notes = "Prior decision"
     await db_session.commit()
 
     await mark_product_content_pending(db=db_session, product_id=product.id)

@@ -1214,6 +1214,9 @@ async def update_product(
     # Reset moderation for parent content and every child variation rewrite.
     if variations_data is not None or any(field in update_data for field in ["title", "description"]):
         product.moderation_status = ModerationStatus.PENDING
+        product.moderated_at = None
+        product.moderated_by = None
+        product.moderation_notes = None
 
     if any(field in update_data for field in ["total_stock", "made_to_order"]):
         _sync_single_product_variant_inventory(product)
@@ -1469,7 +1472,8 @@ async def update_variant(
     for field, value in update_data.items():
         setattr(variant, field, value)
 
-    await mark_product_content_pending(db=db, product_id=product_id)
+    if update_data:
+        await mark_product_content_pending(db=db, product_id=product_id)
     await db.commit()
     await db.refresh(variant)
 
