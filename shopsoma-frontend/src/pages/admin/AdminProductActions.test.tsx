@@ -224,6 +224,13 @@ describe('admin product view/edit API boundaries', () => {
     expect(screen.getByText(/another admin tab/i)).toBeTruthy();
     expect(mocks.put).not.toHaveBeenCalled();
   });
+  it('releases a stale ambiguity lock after its bounded lease expires', async () => {
+    localStorage.setItem('admin-moderation-outcome-unknown:product-1', JSON.stringify({ cycleSignature: 'old', leaseUntil: Date.now() - 1, owner: 'old-tab' }));
+    mount('view');
+    await screen.findByRole('heading', { name: product.title });
+    expect(screen.getByRole('button', { name: 'Approve Product' })).not.toBeDisabled();
+    expect(localStorage.getItem('admin-moderation-outcome-unknown:product-1')).toBeNull();
+  });
   it('keeps an ambiguity lock when pending content changes without an authoritative cycle value', async () => {
     mocks.put.mockRejectedValueOnce(new Error('Network disconnected'));
     mount('view');

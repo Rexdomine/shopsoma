@@ -20,6 +20,7 @@ function formatDate(dateStr: string) {
 }
 
 const moderationAmbiguityKey = (productId: string) => `admin-moderation-outcome-unknown:${productId}`;
+const moderationLeaseMs = 2 * 60 * 1000;
 
 type ModerationCycleProduct = Pick<Product, 'id' | 'title' | 'description'>;
 
@@ -27,8 +28,8 @@ const hasCurrentModerationAmbiguity = (product: ModerationCycleProduct) => {
   try {
     const marker = localStorage.getItem(moderationAmbiguityKey(product.id));
     if (!marker) return false;
-    const parsed = JSON.parse(marker) as { cycleSignature?: string };
-    if (parsed.cycleSignature) return true;
+    const parsed = JSON.parse(marker) as { cycleSignature?: string; leaseUntil?: number };
+    if (parsed.cycleSignature && typeof parsed.leaseUntil === 'number' && parsed.leaseUntil > Date.now()) return true;
   } catch {
     // Treat malformed persisted state as stale and clear it below.
   }
@@ -36,11 +37,13 @@ const hasCurrentModerationAmbiguity = (product: ModerationCycleProduct) => {
   return false;
 };
 
-const saveModerationAmbiguity = (product: ModerationCycleProduct) => {
+const saveModerationAmbiguity = (product: ModerationCycleProduct, owner: string) => {
   localStorage.setItem(moderationAmbiguityKey(product.id), JSON.stringify({
     // Admin edits do not expose an authoritative moderation-cycle boundary.
     // Keep the lock until the server reports a terminal outcome.
-    cycleSignature: `${product.title}\u0000${product.description ?? ''}`,
+    cycleSignature: `${product.title}\\u0000${product.description ?? ''}`,
+    owner,
+    leaseUntil: Date.now() + moderationLeaseMs,
   }));
 };
 
@@ -56,6 +59,7 @@ export default function AdminProductDetail() {
   const [isDeleting, setIsDeleting] = useState(false);
   const [isModerating, setIsModerating] = useState(false);
   const moderationBusy = useRef(false);
+  const moderationOwner = useRef(`${Date.now()}-${Math.random().toString(36).slice(2)}`);
   const moderationDialog = useRef<HTMLDivElement>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [moderationAction, setModerationAction] = useState<'approve' | 'deny' | null>(null);
@@ -81,7 +85,7 @@ export default function AdminProductDetail() {
       }
       if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 250));
     }
-    saveModerationAmbiguity({ id: productId, title: originalCycle.title, description: originalCycle.description });
+    saveModerationAmbiguity({ id: productId, title: originalCycle.title, description: originalCycle.description }, moderationOwner.current);
     return { product: null };
   };
 
@@ -210,12 +214,32 @@ export default function AdminProductDetail() {
       setModerationError('Rejection reason must be at least 10 characters');
       return;
     }
+    const lockKey = moderationAmbiguityKey(product.id);
+    const existingMarker = localStorage.getItem(lockKey);
+    if (existingMarker) {
+      try {
+        const marker = JSON.parse(existingMarker) as { owner?: string; leaseUntil?: number };
+        if (marker.leaseUntil && marker.leaseUntil > Date.now() && marker.owner !== moderationOwner.current) {
+          setModerationOutcomeUnknown(true);
+          setModerationError('Another admin tab has an unconfirmed moderation request for this product. Refresh the product before retrying.');
+          return;
+        }
+      } catch {
+        localStorage.removeItem(lockKey);
+      }
+    }
     moderationBusy.current = true;
     try {
       setIsModerating(true);
       setModerationError(null);
       setModerationOutcomeUnknown(false);
-      saveModerationAmbiguity(product);
+      saveModerationAmbiguity(product, moderationOwner.current);
+      const claimedMarker = JSON.parse(localStorage.getItem(lockKey) || '{}') as { owner?: string };
+      if (claimedMarker.owner !== moderationOwner.current) {
+        setModerationOutcomeUnknown(true);
+        setModerationError('Another admin tab claimed moderation for this product. Refresh the product before retrying.');
+        return;
+      }
       if (moderationAction === 'approve') {
         await adminService.approveProduct(product.id, approvalNotes.trim() || undefined);
       } else {
@@ -253,7 +277,7 @@ export default function AdminProductDetail() {
             setModerationError('The moderation request is still pending. Refresh again before retrying.');
           }
         } catch (reconciliationError: any) {
-          saveModerationAmbiguity(product);
+          saveModerationAmbiguity(product, moderationOwner.current);
           setModerationOutcomeUnknown(true);
           setModerationError(`The moderation outcome could not be confirmed. Refresh the product before retrying. ${apiErrorMessage(reconciliationError, 'Refresh failed')}`);
         } finally {
