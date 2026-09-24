@@ -97,9 +97,9 @@ export default function AdminProducts() {
     }
   };
 
-  const confirmPendingModeration = async (product: Product) => {
+  const confirmPendingModeration = async (product: Product): Promise<Pick<Product, 'id' | 'title' | 'description' | 'moderation_status'> | null> => {
     try {
-      const latest = await adminService.getProduct(product.id);
+      const latest = await adminService.getProduct(product.id) as Pick<Product, 'id' | 'title' | 'description' | 'moderation_status'>;
       if (latest.moderation_status !== 'pending') {
         setApprovalModal(null);
         setRejectModal(null);
@@ -108,12 +108,12 @@ export default function AdminProducts() {
         setRejectionNotes('');
         showMessage('error', 'This product has already been moderated. The list was refreshed.');
         await loadProducts();
-        return false;
+        return null;
       }
-      return true;
+      return latest;
     } catch (err: any) {
       showMessage('error', err?.response?.data?.detail || err.message || 'Unable to verify current moderation status');
-      return false;
+      return null;
     }
   };
 
@@ -141,12 +141,13 @@ export default function AdminProducts() {
           showMessage('error', 'This product has an unconfirmed moderation request. Refresh the list before retrying.');
           return;
         }
-        if (!await confirmPendingModeration(product)) return;
-        saveModerationAmbiguity(product, moderationOwner.current);
+        const latest = await confirmPendingModeration(product);
+        if (!latest) return;
+        saveModerationAmbiguity(latest, moderationOwner.current);
         try {
-          await adminService.approveProduct(product.id, approvalNotes || undefined);
+          await adminService.approveProduct(latest.id, approvalNotes || undefined);
           localStorage.removeItem(lockKey);
-          showMessage('success', `Product "${product.title}" approved successfully. Vendor has been notified.`);
+          showMessage('success', `Product "${latest.title}" approved successfully. Vendor has been notified.`);
           setApprovalModal(null);
           setApprovalNotes('');
           await loadProducts();
@@ -171,7 +172,7 @@ export default function AdminProducts() {
       showMessage('error', 'Rejection reason is required');
       return;
     }
-    if (rejectionReason.length < 10) {
+    if (rejectionReason.trim().length < 10) {
       showMessage('error', 'Rejection reason must be at least 10 characters');
       return;
     }
@@ -197,12 +198,13 @@ export default function AdminProducts() {
           showMessage('error', 'This product has an unconfirmed moderation request. Refresh the list before retrying.');
           return;
         }
-        if (!await confirmPendingModeration(product)) return;
-        saveModerationAmbiguity(product, moderationOwner.current);
+        const latest = await confirmPendingModeration(product);
+        if (!latest) return;
+        saveModerationAmbiguity(latest, moderationOwner.current);
         try {
-          await adminService.rejectProduct(product.id, rejectionReason.trim(), rejectionNotes.trim() || undefined);
+          await adminService.rejectProduct(latest.id, rejectionReason.trim(), rejectionNotes.trim() || undefined);
           localStorage.removeItem(lockKey);
-          showMessage('success', `Product "${product.title}" rejected. Vendor has been notified.`);
+          showMessage('success', `Product "${latest.title}" rejected. Vendor has been notified.`);
           setRejectModal(null);
           setRejectionReason('');
           setRejectionNotes('');
@@ -713,7 +715,7 @@ export default function AdminProducts() {
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent"
               />
               <p className="text-xs text-gray-500 mt-1">
-                {rejectionReason.length}/10 characters minimum
+                {rejectionReason.trim().length}/10 characters minimum
               </p>
             </div>
 
@@ -744,7 +746,7 @@ export default function AdminProducts() {
               </button>
               <button
                 onClick={handleRejectProduct}
-                disabled={actionLoading === rejectModal.id || rejectionReason.length < 10}
+                disabled={actionLoading === rejectModal.id || rejectionReason.trim().length < 10}
                 className="px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg disabled:opacity-50"
               >
                 {actionLoading === rejectModal.id ? 'Rejecting...' : 'Reject Product'}

@@ -224,12 +224,27 @@ export default function AdminProductDetail() {
         setIsModerating(true);
         setModerationError(null);
         setModerationOutcomeUnknown(false);
-        saveModerationAmbiguity(product, moderationOwner.current);
+        let latestProduct: Product;
+        try {
+          latestProduct = await adminService.getProduct(product.id);
+          setProduct(latestProduct);
+        } catch (err: any) {
+          setModerationError(apiErrorMessage(err, 'Unable to verify the current moderation status.'));
+          return;
+        }
+        if (latestProduct.moderation_status !== 'pending') {
+          localStorage.removeItem(lockKey);
+          setModerationAction(null);
+          setApprovalNotes(''); setRejectionReason(''); setRejectionNotes('');
+          setModerationError('This product has already been moderated. The page was refreshed.');
+          return;
+        }
+        saveModerationAmbiguity(latestProduct, moderationOwner.current);
         try {
           if (moderationAction === 'approve') {
-            await adminService.approveProduct(product.id, approvalNotes.trim() || undefined);
+            await adminService.approveProduct(latestProduct.id, approvalNotes.trim() || undefined);
           } else {
-            await adminService.rejectProduct(product.id, rejectionReason.trim(), rejectionNotes.trim() || undefined);
+            await adminService.rejectProduct(latestProduct.id, rejectionReason.trim(), rejectionNotes.trim() || undefined);
           }
           localStorage.removeItem(lockKey);
           success(moderationAction === 'approve' ? 'Product approved successfully.' : 'Product denied successfully.', 'Moderation complete');
