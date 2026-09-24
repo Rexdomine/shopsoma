@@ -26,7 +26,7 @@ async def transition_product_moderation(
         raise HTTPException(status_code=422, detail="A moderation decision must be approved or rejected")
 
     now = datetime.now(timezone.utc)
-    await coordinate_catalog_write(db, product_ids=[product_id])
+    await coordinate_catalog_write(db, product_ids=[product_id], lock_only=True)
     locked_status = await db.scalar(
         select(Product.status).where(Product.id == product_id).with_for_update()
     )

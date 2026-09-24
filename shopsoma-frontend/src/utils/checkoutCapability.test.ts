@@ -54,4 +54,32 @@ describe('checkoutCapability session bridge', () => {
     clearStoredCheckoutCapability('ShP-2026-Ab12');
     expect(loadCheckoutCapability('shp-2026-ab12')).toBeUndefined();
   });
+
+  it('returns and preserves a legacy token when canonical migration fails', () => {
+    const legacyKey = 'shopsoma_checkout_capability:shp-legacy-write-failure';
+    sessionStorage.setItem(legacyKey, 'legacy-token');
+    const originalSetItem = sessionStorage.setItem;
+    sessionStorage.setItem = (key: string, value: string) => {
+      if (key !== legacyKey) throw new Error('storage quota exceeded');
+      originalSetItem.call(sessionStorage, key, value);
+    };
+
+    expect(loadCheckoutCapability('shp-legacy-write-failure')).toBe('legacy-token');
+    expect(sessionStorage.getItem(legacyKey)).toBe('legacy-token');
+  });
+
+  it('returns the token when legacy cleanup fails after canonical migration', () => {
+    const legacyKey = 'shopsoma_checkout_capability:shp-legacy-remove-failure';
+    const canonicalKey = 'shopsoma_checkout_capability:SHP-LEGACY-REMOVE-FAILURE';
+    sessionStorage.setItem(legacyKey, 'legacy-token');
+    const originalRemoveItem = sessionStorage.removeItem;
+    sessionStorage.removeItem = (key: string) => {
+      if (key === legacyKey) throw new Error('storage cleanup failed');
+      originalRemoveItem.call(sessionStorage, key);
+    };
+
+    expect(loadCheckoutCapability('shp-legacy-remove-failure')).toBe('legacy-token');
+    expect(sessionStorage.getItem(canonicalKey)).toBe('legacy-token');
+    expect(sessionStorage.getItem(legacyKey)).toBe('legacy-token');
+  });
 });

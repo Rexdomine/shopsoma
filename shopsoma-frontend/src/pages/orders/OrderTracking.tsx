@@ -68,6 +68,7 @@ export default function OrderTracking() {
     setTracking(null);
     setOrderDetails(null);
     setShowOrderModal(false);
+    setLoadingOrder(false);
     setLoading(true);
   }, [orderId]);
 

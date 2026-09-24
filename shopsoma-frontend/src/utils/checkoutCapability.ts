@@ -28,8 +28,12 @@ export const loadCheckoutCapability = (orderId?: string | null): string | undefi
 
     // Migrate values written by the pre-normalization frontend without changing
     // the capability token itself.
-    sessionStorage.setItem(canonicalKey, legacyValue);
-    sessionStorage.removeItem(legacyKey);
+    try {
+      sessionStorage.setItem(canonicalKey, legacyValue);
+      sessionStorage.removeItem(legacyKey);
+    } catch {
+      // Keep the readable legacy value available if migration cannot complete.
+    }
     return legacyValue;
   } catch {
     return undefined;

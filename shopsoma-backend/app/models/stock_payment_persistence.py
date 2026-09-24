@@ -511,6 +511,7 @@ async def coordinate_catalog_write(
     product_variant_ids=(),
     size_stock_ids=(),
     allow_missing_size_stock_ids: bool = False,
+    lock_only: bool = False,
 ) -> frozenset[uuid.UUID]:
     """Acquire one complete coordinator set for SQLAlchemy Core catalog DML.
 
@@ -630,7 +631,10 @@ async def coordinate_catalog_write(
     # Core DML does not enter SQLAlchemy's before_flush hook. Keep the product
     # moderation revision aligned with the detailed inventory rows locked above
     # so an in-flight checkout/cancellation cannot validate stale review state.
-    if parent_product_ids:
+    # Moderation uses this coordinator as a lock-only preflight because its
+    # expected_updated_at conditional must be evaluated against the revision it
+    # received from the caller.
+    if parent_product_ids and not lock_only:
         await session.execute(
             text(
                 "UPDATE products SET updated_at = statement_timestamp() "
