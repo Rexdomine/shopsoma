@@ -29,16 +29,17 @@ async def _pending_product(db_session, vendor_user):
 
 
 async def _call_moderation(action, product_id, admin_user, session):
+    expected_updated_at = await session.scalar(select(Product.updated_at).where(Product.id == product_id))
     if action == "approve":
         return await admin_api.approve_product(
             product_id,
-            ProductApprovalRequest(notes="approved by test"),
+            ProductApprovalRequest(notes="approved by test", expected_updated_at=expected_updated_at),
             admin_user["user"],
             session,
         )
     return await admin_api.reject_product(
         product_id,
-        ProductRejectionRequest(reason="insufficient product information"),
+        ProductRejectionRequest(reason="insufficient product information", expected_updated_at=expected_updated_at),
         admin_user["user"],
         session,
     )
@@ -139,16 +140,17 @@ async def test_terminal_retry_returns_conflict_without_second_notification(
     )
 
     async with TestSessionLocal() as session:
+        expected_updated_at = await session.scalar(select(Product.updated_at).where(Product.id == product.id))
         first = await admin_api.approve_product(
             product.id,
-            ProductApprovalRequest(notes=None),
+            ProductApprovalRequest(notes=None, expected_updated_at=expected_updated_at),
             admin_user["user"],
             session,
         )
         with pytest.raises(HTTPException, match="already been decided") as error:
             await admin_api.approve_product(
                 product.id,
-                ProductApprovalRequest(notes=None),
+                ProductApprovalRequest(notes=None, expected_updated_at=expected_updated_at),
                 admin_user["user"],
                 session,
             )
@@ -173,9 +175,10 @@ async def test_notification_failure_does_not_rollback_winning_transition(
     )
 
     async with TestSessionLocal() as session:
+        expected_updated_at = await session.scalar(select(Product.updated_at).where(Product.id == product.id))
         response = await admin_api.reject_product(
             product.id,
-            ProductRejectionRequest(reason="insufficient product information"),
+            ProductRejectionRequest(reason="insufficient product information", expected_updated_at=expected_updated_at),
             admin_user["user"],
             session,
         )
@@ -186,3 +189,35 @@ async def test_notification_failure_does_not_rollback_winning_transition(
         )
     assert response["moderation_status"] == "rejected"
     assert persisted.moderation_status is ModerationStatus.REJECTED
+
+
+@pytest.mark.asyncio
+async def test_stale_product_revision_cannot_be_moderated(
+    db_session, vendor_user, admin_user, monkeypatch
+):
+    product = await _pending_product(db_session, vendor_user)
+    expected_updated_at = product.updated_at
+    product.title = "Vendor revised after admin review"
+    await db_session.commit()
+    calls = 0
+
+    async def approved_email(**_kwargs):
+        nonlocal calls
+        calls += 1
+
+    monkeypatch.setattr(
+        "app.services.email_service.email_service.send_product_approved_email",
+        approved_email,
+    )
+
+    async with TestSessionLocal() as session:
+        with pytest.raises(HTTPException) as error:
+            await admin_api.approve_product(
+                product.id,
+                ProductApprovalRequest(notes=None, expected_updated_at=expected_updated_at),
+                admin_user["user"],
+                session,
+            )
+
+    assert error.value.status_code == 409
+    assert calls == 0

@@ -329,18 +329,20 @@ export const adminService = {
   },
 
   // Approve a product
-  async approveProduct(productId: string, notes?: string): Promise<any> {
+  async approveProduct(productId: string, expectedUpdatedAt: string, notes?: string): Promise<any> {
     const response = await api.put(`/admin/products/${productId}/approve`, {
-      notes: notes || null
+      notes: notes || null,
+      expected_updated_at: expectedUpdatedAt
     });
     return response.data;
   },
 
   // Reject a product
-  async rejectProduct(productId: string, reason: string, notes?: string): Promise<any> {
+  async rejectProduct(productId: string, reason: string, expectedUpdatedAt: string, notes?: string): Promise<any> {
     const response = await api.put(`/admin/products/${productId}/reject`, {
       reason,
-      notes: notes || null
+      notes: notes || null,
+      expected_updated_at: expectedUpdatedAt
     });
     return response.data;
   },

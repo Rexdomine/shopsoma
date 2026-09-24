@@ -245,9 +245,9 @@ export default function AdminProductDetail() {
         saveModerationAmbiguity(latestProduct, moderationOwner.current);
         try {
           if (moderationAction === 'approve') {
-            await adminService.approveProduct(latestProduct.id, approvalNotes.trim() || undefined);
+            await adminService.approveProduct(latestProduct.id, latestProduct.updated_at, approvalNotes.trim() || undefined);
           } else {
-            await adminService.rejectProduct(latestProduct.id, rejectionReason.trim(), rejectionNotes.trim() || undefined);
+            await adminService.rejectProduct(latestProduct.id, rejectionReason.trim(), latestProduct.updated_at, rejectionNotes.trim() || undefined);
           }
           localStorage.removeItem(lockKey);
           success(moderationAction === 'approve' ? 'Product approved successfully.' : 'Product denied successfully.', 'Moderation complete');
@@ -439,7 +439,7 @@ export default function AdminProductDetail() {
             <p>{refreshErrorContext === 'conflict'
               ? `Another admin already moderated this product, but the current status could not be loaded. ${refreshError}`
               : `The moderation action succeeded, but the displayed product could not be refreshed. ${refreshError}`}</p>
-            <button type="button" disabled={isRefreshing} onClick={() => refreshProduct()} className="mt-2 font-medium underline disabled:opacity-50">
+            <button type="button" disabled={isRefreshing} onClick={() => refreshProduct(refreshErrorContext || 'success')} className="mt-2 font-medium underline disabled:opacity-50">
               {isRefreshing ? 'Refreshing…' : 'Refresh product'}
             </button>
           </div>

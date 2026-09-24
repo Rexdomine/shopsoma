@@ -72,7 +72,7 @@ describe('admin product view/edit API boundaries', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Approve Product' }));
     fireEvent.change(screen.getByLabelText('Approval Notes (Optional)'), { target: { value: 'Looks good' } });
     fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /^Approve Product$/ }));
-    await waitFor(() => expect(mocks.put).toHaveBeenCalledWith('/admin/products/product-1/approve', { notes: 'Looks good' }));
+    await waitFor(() => expect(mocks.put).toHaveBeenCalledWith('/admin/products/product-1/approve', { notes: 'Looks good', expected_updated_at: '2026-09-23T10:00:00Z' }));
     await waitFor(() => expect(mocks.get).toHaveBeenCalledTimes(3));
     expect(screen.getByTestId('location').textContent).toBe('/admin/products/product-1');
   });
@@ -87,7 +87,7 @@ describe('admin product view/edit API boundaries', () => {
     fireEvent.change(screen.getByLabelText('Rejection Reason *'), { target: { value: 'The images do not meet quality requirements.' } });
     fireEvent.change(screen.getByLabelText('Rejection Notes (Optional)'), { target: { value: 'Please update photos' } });
     fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /^Deny Product$/ }));
-    await waitFor(() => expect(mocks.put).toHaveBeenCalledWith('/admin/products/product-1/reject', { reason: 'The images do not meet quality requirements.', notes: 'Please update photos' }));
+    await waitFor(() => expect(mocks.put).toHaveBeenCalledWith('/admin/products/product-1/reject', { reason: 'The images do not meet quality requirements.', notes: 'Please update photos', expected_updated_at: '2026-09-23T10:00:00Z' }));
     expect((screen.getByLabelText('Rejection Reason *') as HTMLTextAreaElement).value).toContain('quality');
     expect((screen.getByLabelText('Rejection Notes (Optional)') as HTMLTextAreaElement).value).toBe('Please update photos');
   });
@@ -100,7 +100,7 @@ describe('admin product view/edit API boundaries', () => {
     fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Deny Product' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     expect(await screen.findByText(/^rejected$/i)).toBeTruthy();
-    expect(mocks.put).toHaveBeenCalledWith('/admin/products/product-1/reject', { reason: 'Product images need correction', notes: null });
+    expect(mocks.put).toHaveBeenCalledWith('/admin/products/product-1/reject', { reason: 'Product images need correction', notes: null, expected_updated_at: '2026-09-23T10:00:00Z' });
     expect(screen.queryByRole('button', { name: 'Approve Product' })).toBeNull();
     expect(screen.getByTestId('location')).toHaveTextContent('/admin/products/product-1');
   });
@@ -409,7 +409,7 @@ describe('admin product view/edit API boundaries', () => {
     expect(screen.getAllByRole('button', { name: 'Reject Product' })[1]).toBeDisabled();
     fireEvent.change(reason, { target: { value: '  valid rejection reason  ' } });
     fireEvent.click(screen.getAllByRole('button', { name: 'Reject Product' })[1]);
-    await waitFor(() => expect(mocks.put).toHaveBeenCalledWith('/admin/products/product-1/reject', { reason: 'valid rejection reason', notes: null }));
+    await waitFor(() => expect(mocks.put).toHaveBeenCalledWith('/admin/products/product-1/reject', { reason: 'valid rejection reason', notes: null, expected_updated_at: '2026-09-23T10:00:00Z' }));
   });
   it('keeps edits and renders structured validation failures after a failed save', async () => {
     mocks.get.mockResolvedValue({ data: { ...product } });

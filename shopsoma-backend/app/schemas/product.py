@@ -921,12 +921,14 @@ class ProductModerationUpdate(BaseModel):
 class ProductApprovalRequest(BaseModel):
     """Schema for approving a product"""
     notes: Optional[str] = Field(None, max_length=500, description="Optional approval notes")
+    expected_updated_at: datetime = Field(..., description="Product revision observed by the moderating admin")
 
 
 class ProductRejectionRequest(BaseModel):
     """Schema for rejecting a product"""
     reason: str = Field(..., min_length=10, max_length=1000, description="Rejection reason (required)")
     notes: Optional[str] = Field(None, max_length=500, description="Additional notes")
+    expected_updated_at: datetime = Field(..., description="Product revision observed by the moderating admin")
 
 
 class ProductFeatureUpdate(BaseModel):

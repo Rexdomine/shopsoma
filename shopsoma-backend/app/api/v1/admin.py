@@ -1918,6 +1918,7 @@ async def _transition_product_moderation(
     admin_id: UUID,
     target_status: ModerationStatus,
     moderation_notes: Optional[str],
+    expected_updated_at: datetime,
 ):
     """Atomically allow exactly one pending product moderation transition."""
     now = datetime.now(timezone.utc)
@@ -1949,6 +1950,7 @@ async def _transition_product_moderation(
         .where(
             Product.id == product_id,
             Product.moderation_status == ModerationStatus.PENDING,
+            Product.updated_at == expected_updated_at,
         )
         .values(**values)
         .returning(
@@ -1994,6 +1996,7 @@ async def approve_product(
         admin_id=current_admin.id,
         target_status=ModerationStatus.APPROVED,
         moderation_notes=request.notes,
+        expected_updated_at=request.expected_updated_at,
     )
 
     logger = logging.getLogger(__name__)
@@ -2045,6 +2048,7 @@ async def reject_product(
         admin_id=current_admin.id,
         target_status=ModerationStatus.REJECTED,
         moderation_notes=moderation_notes,
+        expected_updated_at=request.expected_updated_at,
     )
 
     logger = logging.getLogger(__name__)

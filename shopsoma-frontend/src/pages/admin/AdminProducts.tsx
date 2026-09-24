@@ -101,9 +101,9 @@ export default function AdminProducts() {
     }
   };
 
-  const confirmPendingModeration = async (product: Product): Promise<Pick<Product, 'id' | 'title' | 'description' | 'moderation_status'> | null> => {
+  const confirmPendingModeration = async (product: Product): Promise<Pick<Product, 'id' | 'title' | 'description' | 'moderation_status' | 'updated_at'> | null> => {
     try {
-      const latest = await adminService.getProduct(product.id) as Pick<Product, 'id' | 'title' | 'description' | 'moderation_status'>;
+      const latest = await adminService.getProduct(product.id) as Pick<Product, 'id' | 'title' | 'description' | 'moderation_status' | 'updated_at'>;
       if (latest.moderation_status !== 'pending') {
         setApprovalModal(null);
         setRejectModal(null);
@@ -149,7 +149,7 @@ export default function AdminProducts() {
         if (!latest) return;
         saveModerationAmbiguity(latest, moderationOwner.current);
         try {
-          await adminService.approveProduct(latest.id, approvalNotes || undefined);
+          await adminService.approveProduct(latest.id, latest.updated_at, approvalNotes || undefined);
           localStorage.removeItem(lockKey);
           showMessage('success', `Product "${latest.title}" approved successfully. Vendor has been notified.`);
           setApprovalModal(null);
@@ -216,7 +216,7 @@ export default function AdminProducts() {
         if (!latest) return;
         saveModerationAmbiguity(latest, moderationOwner.current);
         try {
-          await adminService.rejectProduct(latest.id, rejectionReason.trim(), rejectionNotes.trim() || undefined);
+          await adminService.rejectProduct(latest.id, rejectionReason.trim(), latest.updated_at, rejectionNotes.trim() || undefined);
           localStorage.removeItem(lockKey);
           showMessage('success', `Product "${latest.title}" rejected. Vendor has been notified.`);
           setRejectModal(null);
