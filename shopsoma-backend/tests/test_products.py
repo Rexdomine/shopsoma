@@ -1043,6 +1043,7 @@ class TestProductUpdate:
         product = await db_session.get(Product, product_id)
         product.moderation_status = ModerationStatus.APPROVED
         product.moderated_at = datetime.now(timezone.utc)
+        product.moderated_by = vendor_user["user"].id
         product.moderation_notes = "Prior decision"
         await db_session.commit()
 
