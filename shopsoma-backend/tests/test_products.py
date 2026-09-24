@@ -923,7 +923,10 @@ class TestProductRetrieve:
 
         approval_response = await client.put(
             f"/api/v1/admin/products/{product_id}/approve",
-            json={"notes": "Approved for storefront"},
+            json={
+                "notes": "Approved for storefront",
+                "expected_updated_at": created["updated_at"],
+            },
             headers=admin_user["headers"],
         )
         assert approval_response.status_code == 200

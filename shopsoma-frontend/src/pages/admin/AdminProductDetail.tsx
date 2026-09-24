@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Edit2, Loader2, Package, Tag, Trash2 } from 'lucide-react';
+import { ArrowLeft, CheckCircle, Edit2, Loader2, Package, Tag, Trash2, XCircle } from 'lucide-react';
 import { ROUTES } from '../../config/constants';
 import { apiErrorMessage } from '../../utils/apiErrorMessage';
 import { adminService } from '../../services/adminService';
@@ -10,6 +10,13 @@ import ToastContainer from '../../components/ui/ToastContainer';
 import CurrencySwitcher from '../../components/common/CurrencySwitcher';
 import { useCurrencyStore } from '../../store/currencyStore';
 import { formatPriceWithConversion } from '../../utils/pricing';
+import {
+  hasCurrentModerationAmbiguity,
+  moderationAmbiguityKey,
+  moderationLockName,
+  saveModerationAmbiguity,
+  type ModerationCycleProduct,
+} from '../../utils/adminModerationCoordination';
 
 function formatDate(dateStr: string) {
   const d = new Date(dateStr);
@@ -29,6 +36,115 @@ export default function AdminProductDetail() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isModerating, setIsModerating] = useState(false);
+  const moderationBusy = useRef(false);
+  const moderationOwner = useRef(`${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const moderationDialog = useRef<HTMLDivElement>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [moderationAction, setModerationAction] = useState<'approve' | 'deny' | null>(null);
+  const [approvalNotes, setApprovalNotes] = useState('');
+  const [rejectionReason, setRejectionReason] = useState('');
+  const [rejectionNotes, setRejectionNotes] = useState('');
+  const [moderationError, setModerationError] = useState<string | null>(null);
+  const [moderationOutcomeUnknown, setModerationOutcomeUnknown] = useState(false);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
+  const [refreshErrorContext, setRefreshErrorContext] = useState<'success' | 'conflict' | null>(null);
+
+  const reconcileModeration = async (
+    productId: string,
+    action: 'approve' | 'deny',
+    originalCycle: ModerationCycleProduct,
+  ): Promise<{ product: Product | null }> => {
+    const expectedStatus = action === 'approve' ? 'approved' : 'rejected';
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const data = await adminService.getProduct(productId);
+      setProduct(data);
+      if (data.moderation_status === expectedStatus || data.moderation_status !== 'pending') {
+        localStorage.removeItem(moderationAmbiguityKey(productId));
+        return { product: data };
+      }
+      if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 250));
+    }
+    saveModerationAmbiguity({ id: productId, title: originalCycle.title, description: originalCycle.description }, moderationOwner.current);
+    return { product: null };
+  };
+
+  const refreshProduct = async (context: 'success' | 'conflict' = 'success') => {
+    if (!id) return;
+    setIsRefreshing(true);
+    try {
+      const data = await adminService.getProduct(id);
+      setProduct(data);
+      setRefreshError(null);
+      setRefreshErrorContext(null);
+      if (data.moderation_status !== 'pending') localStorage.removeItem(moderationAmbiguityKey(data.id));
+      const ambiguityIsCurrent = data.moderation_status === 'pending' && hasCurrentModerationAmbiguity(data);
+      if (moderationOutcomeUnknown && moderationAction && ambiguityIsCurrent) {
+        const expectedStatus = moderationAction === 'approve' ? 'approved' : 'rejected';
+        if (data.moderation_status === expectedStatus) {
+          success(moderationAction === 'approve' ? 'Product approval verified.' : 'Product denial verified.', 'Moderation complete');
+          setModerationOutcomeUnknown(false);
+          setModerationError(null);
+          setModerationAction(null);
+          setApprovalNotes(''); setRejectionReason(''); setRejectionNotes('');
+        } else if (data.moderation_status !== 'pending') {
+          setModerationOutcomeUnknown(false);
+          setModerationError('The moderation request was not confirmed. Review the current status before retrying.');
+          setModerationAction(null);
+          setApprovalNotes(''); setRejectionReason(''); setRejectionNotes('');
+        } else {
+          setModerationOutcomeUnknown(true);
+          setModerationError('The moderation request is still pending. Refresh again before retrying.');
+        }
+      } else if (moderationOutcomeUnknown && moderationAction && !ambiguityIsCurrent) {
+        setModerationOutcomeUnknown(false);
+        setModerationError(null);
+        setModerationAction(null);
+        setApprovalNotes(''); setRejectionReason(''); setRejectionNotes('');
+      } else if (moderationOutcomeUnknown && data.moderation_status !== 'pending') {
+        localStorage.removeItem(moderationAmbiguityKey(data.id));
+        setModerationOutcomeUnknown(false);
+        setModerationError(null);
+      } else if (moderationOutcomeUnknown && data.moderation_status === 'pending' && ambiguityIsCurrent) {
+        setModerationError('The moderation request is still pending. Refresh again before retrying.');
+      } else {
+        setModerationOutcomeUnknown(false);
+      }
+    } catch (err: any) {
+      const message = apiErrorMessage(err, 'Failed to refresh product. Please try again.');
+      if (moderationOutcomeUnknown && !moderationAction) {
+        setRefreshError(null);
+        setModerationError(message);
+      } else {
+        setRefreshError(message);
+        setRefreshErrorContext(context);
+        error(message, 'Refresh Failed');
+      }
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!moderationAction) return;
+    const opener = document.activeElement as HTMLElement | null;
+    const dialog = moderationDialog.current;
+    dialog?.querySelector<HTMLTextAreaElement>('textarea')?.focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !moderationBusy.current) {
+        setModerationAction(null);
+        setModerationError(null);
+      }
+      if (event.key !== 'Tab') return;
+      const controls = Array.from(dialog?.querySelectorAll<HTMLElement>('textarea:not(:disabled), button:not(:disabled)') || []);
+      const first = controls[0], last = controls[controls.length - 1];
+      if (!first) { event.preventDefault(); return; }
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    };
+    dialog?.addEventListener('keydown', onKeyDown);
+    return () => { dialog?.removeEventListener('keydown', onKeyDown); opener?.focus(); };
+  }, [moderationAction]);
 
   useEffect(() => {
     const fetchProduct = async () => {
@@ -43,6 +159,12 @@ export default function AdminProductDetail() {
         setLoadError(null);
         const data = await adminService.getProduct(id);
         setProduct(data);
+        if (data.moderation_status === 'pending' && hasCurrentModerationAmbiguity(data)) {
+          setModerationOutcomeUnknown(true);
+          setModerationError('A previous moderation request could not be confirmed. Refresh the product before retrying.');
+        } else if (data.moderation_status !== 'pending') {
+          localStorage.removeItem(moderationAmbiguityKey(data.id));
+        }
       } catch (err: any) {
         console.error('Failed to load product', err);
         setLoadError(apiErrorMessage(err, 'Failed to load product. Please try again.'));
@@ -53,6 +175,141 @@ export default function AdminProductDetail() {
 
     fetchProduct();
   }, [id, navigate, error]);
+
+  useEffect(() => {
+    if (!id) return;
+    const key = moderationAmbiguityKey(id);
+    const onStorage = (event: StorageEvent) => {
+      if (event.storageArea !== localStorage || event.key !== key || !event.newValue) return;
+      setModerationOutcomeUnknown(true);
+      setModerationError('Another admin tab has an unconfirmed moderation request for this product. Refresh the product before retrying.');
+      setModerationAction(null);
+      setApprovalNotes(''); setRejectionReason(''); setRejectionNotes('');
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, [id]);
+
+  const handleModeration = async () => {
+    if (!product || !moderationAction || product.moderation_status !== 'pending' || moderationBusy.current || isRefreshing || refreshError || moderationOutcomeUnknown) return;
+    if (moderationAction === 'deny' && rejectionReason.trim().length < 10) {
+      setModerationError('Rejection reason must be at least 10 characters');
+      return;
+    }
+    const lockKey = moderationAmbiguityKey(product.id);
+    const existingMarker = localStorage.getItem(lockKey);
+    if (existingMarker) {
+      try {
+        const marker = JSON.parse(existingMarker) as { owner?: string; leaseUntil?: number };
+        if (marker.leaseUntil && marker.leaseUntil > Date.now() && marker.owner !== moderationOwner.current) {
+          setModerationOutcomeUnknown(true);
+          setModerationError('Another admin tab has an unconfirmed moderation request for this product. Refresh the product before retrying.');
+          return;
+        }
+      } catch {
+        localStorage.removeItem(lockKey);
+      }
+    }
+    moderationBusy.current = true;
+    setIsModerating(true);
+    try {
+      const lockManager = typeof navigator !== 'undefined' ? navigator.locks : undefined;
+      if (!lockManager) {
+        setModerationError('This browser cannot safely coordinate moderation across admin tabs. Use a supported browser and try again.');
+        return;
+      }
+      await lockManager.request(moderationLockName(product.id), { ifAvailable: true }, async lock => {
+        if (!lock) {
+          setModerationOutcomeUnknown(true);
+          setModerationError('Another admin tab is processing this product. Refresh the product before retrying.');
+          return;
+        }
+        setIsModerating(true);
+        setModerationError(null);
+        setModerationOutcomeUnknown(false);
+        let latestProduct: Product;
+        try {
+          latestProduct = await adminService.getProduct(product.id);
+          setProduct(latestProduct);
+        } catch (err: any) {
+          setModerationError(apiErrorMessage(err, 'Unable to verify the current moderation status.'));
+          return;
+        }
+        if (latestProduct.moderation_status !== 'pending') {
+          localStorage.removeItem(lockKey);
+          setModerationAction(null);
+          setApprovalNotes(''); setRejectionReason(''); setRejectionNotes('');
+          setModerationError('This product has already been moderated. The page was refreshed.');
+          return;
+        }
+        if (latestProduct.updated_at !== product.updated_at) {
+          localStorage.removeItem(lockKey);
+          setProduct(latestProduct);
+          setModerationAction(null);
+          setApprovalNotes(''); setRejectionReason(''); setRejectionNotes('');
+          setModerationError('This product changed after it was loaded. Review the updated product before moderating again.');
+          return;
+        }
+        saveModerationAmbiguity(latestProduct, moderationOwner.current);
+        try {
+          if (moderationAction === 'approve') {
+            await adminService.approveProduct(latestProduct.id, latestProduct.updated_at, approvalNotes.trim() || undefined);
+          } else {
+            await adminService.rejectProduct(latestProduct.id, rejectionReason.trim(), latestProduct.updated_at, rejectionNotes.trim() || undefined);
+          }
+          localStorage.removeItem(lockKey);
+          success(moderationAction === 'approve' ? 'Product approved successfully.' : 'Product denied successfully.', 'Moderation complete');
+          setModerationAction(null);
+          setApprovalNotes(''); setRejectionReason(''); setRejectionNotes('');
+          await refreshProduct();
+        } catch (err: any) {
+          const status = err?.response?.status;
+          const outcomeMayBeCommitted = !err?.response || (typeof status === 'number' && status >= 500);
+          if (status === 409) {
+            localStorage.removeItem(lockKey);
+            setModerationAction(null);
+            setApprovalNotes(''); setRejectionReason(''); setRejectionNotes('');
+            setModerationError(null);
+            error('Another admin already moderated this product. The current status was loaded.', 'Moderation conflict');
+            await refreshProduct('conflict');
+          } else if (!outcomeMayBeCommitted || !product || !moderationAction) {
+            if (product) localStorage.removeItem(lockKey);
+            setModerationError(apiErrorMessage(err, 'Moderation action failed'));
+          } else {
+            setModerationOutcomeUnknown(true);
+            setIsRefreshing(true);
+            try {
+              const reconciled = await reconcileModeration(product.id, moderationAction, product);
+              setRefreshError(null);
+              if (reconciled.product?.moderation_status === (moderationAction === 'approve' ? 'approved' : 'rejected')) {
+                success(moderationAction === 'approve' ? 'Product approval verified.' : 'Product denial verified.', 'Moderation complete');
+                setModerationOutcomeUnknown(false);
+                setModerationError(null);
+                setModerationAction(null);
+                setApprovalNotes(''); setRejectionReason(''); setRejectionNotes('');
+              } else if (reconciled.product) {
+                setModerationOutcomeUnknown(false);
+                setModerationError('The moderation request was not confirmed. Review the current status before retrying.');
+                setModerationAction(null);
+                setApprovalNotes(''); setRejectionReason(''); setRejectionNotes('');
+              } else {
+                setModerationError('The moderation request is still pending. Refresh again before retrying.');
+              }
+            } catch (reconciliationError: any) {
+              saveModerationAmbiguity(product, moderationOwner.current);
+              setModerationOutcomeUnknown(true);
+              setModerationError(`The moderation outcome could not be confirmed. Refresh the product before retrying. ${apiErrorMessage(reconciliationError, 'Refresh failed')}`);
+            } finally {
+              setIsRefreshing(false);
+            }
+          }
+        }
+      });
+    } finally {
+      moderationBusy.current = false;
+      setIsModerating(false);
+    }
+  };
 
   const getStatusColor = (status?: string) => {
     switch (status?.toLowerCase()) {
@@ -151,7 +408,7 @@ export default function AdminProductDetail() {
             Back to Products
           </button>
 
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-4">
             <div>
               <h1 className="text-3xl font-bold text-gray-900">{product.title}</h1>
               <p className="text-sm text-gray-500 mt-1">
@@ -159,8 +416,14 @@ export default function AdminProductDetail() {
               </p>
             </div>
 
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center gap-3">
               <CurrencySwitcher value={currentCurrency} onChange={setCurrency} />
+              {product.moderation_status === 'pending' && !refreshError && (
+                <>
+                  <button type="button" onClick={() => setModerationAction('approve')} disabled={isModerating || isRefreshing || moderationOutcomeUnknown} className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50"><CheckCircle className="h-4 w-4" />Approve Product</button>
+                  <button type="button" onClick={() => setModerationAction('deny')} disabled={isModerating || isRefreshing || moderationOutcomeUnknown} className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50"><XCircle className="h-4 w-4" />Deny Product</button>
+                </>
+              )}
               <button
                 onClick={() => navigate(ROUTES.ADMIN_PRODUCT_EDIT.replace(':id', product.id))}
                 className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
@@ -178,6 +441,26 @@ export default function AdminProductDetail() {
             </div>
           </div>
         </div>
+
+        {refreshError && (
+          <div role="alert" className="mb-6 rounded-lg border border-yellow-300 bg-yellow-50 p-4 text-yellow-900">
+            <p>{refreshErrorContext === 'conflict'
+              ? `Another admin already moderated this product, but the current status could not be loaded. ${refreshError}`
+              : `The moderation action succeeded, but the displayed product could not be refreshed. ${refreshError}`}</p>
+            <button type="button" disabled={isRefreshing} onClick={() => refreshProduct(refreshErrorContext || 'success')} className="mt-2 font-medium underline disabled:opacity-50">
+              {isRefreshing ? 'Refreshing…' : 'Refresh product'}
+            </button>
+          </div>
+        )}
+
+        {moderationOutcomeUnknown && !moderationAction && (
+          <div role="alert" className="mb-6 rounded-lg border border-yellow-300 bg-yellow-50 p-4 text-yellow-900">
+            <p>{moderationError || 'A previous moderation request could not be confirmed. Refresh the product before retrying.'}</p>
+            <button type="button" disabled={isRefreshing} onClick={() => refreshProduct()} className="mt-2 font-medium underline disabled:opacity-50">
+              {isRefreshing ? 'Refreshing…' : 'Refresh product status'}
+            </button>
+          </div>
+        )}
 
         {/* Product Info Grid */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -497,6 +780,25 @@ export default function AdminProductDetail() {
           </div>
         </div>
       </div>
+
+      {moderationAction && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-black/50 p-4" ref={moderationDialog} role="dialog" aria-modal="true" aria-labelledby="moderation-title">
+          <div className="mx-auto mt-16 w-full max-w-lg rounded-lg bg-white p-6 space-y-4">
+            <h3 id="moderation-title" className="text-lg font-semibold">{moderationAction === 'approve' ? 'Approve Product' : 'Deny Product'}</h3>
+            {moderationAction === 'approve' ? <>
+              <p>Approve “{product.title}”? The vendor will be notified.</p>
+              <label className="block text-sm font-medium">Approval Notes (Optional)<textarea disabled={isModerating || isRefreshing} aria-label="Approval Notes (Optional)" value={approvalNotes} onChange={e => setApprovalNotes(e.target.value)} maxLength={500} rows={3} className="mt-1 w-full rounded border p-2" /></label>
+            </> : <>
+              <p>Deny “{product.title}”? The vendor will be notified.</p>
+              <label className="block text-sm font-medium">Rejection Reason *<textarea disabled={isModerating || isRefreshing} aria-label="Rejection Reason *" value={rejectionReason} onChange={e => setRejectionReason(e.target.value)} maxLength={1000} rows={3} className="mt-1 w-full rounded border p-2" /></label>
+              <label className="block text-sm font-medium">Rejection Notes (Optional)<textarea disabled={isModerating || isRefreshing} aria-label="Rejection Notes (Optional)" value={rejectionNotes} onChange={e => setRejectionNotes(e.target.value)} maxLength={500} rows={3} className="mt-1 w-full rounded border p-2" /></label>
+            </>}
+            {moderationError && <p role="alert" className="text-sm text-red-700">{moderationError}</p>}
+            {moderationOutcomeUnknown && <button type="button" onClick={() => refreshProduct()} disabled={isRefreshing} className="text-sm font-medium underline disabled:opacity-50">{isRefreshing ? 'Refreshing…' : 'Refresh product status'}</button>}
+            <div className="flex justify-end gap-3"><button type="button" onClick={() => { setModerationAction(null); setModerationError(null); }} disabled={isModerating || isRefreshing} className="rounded border px-4 py-2">Cancel</button><button type="button" onClick={handleModeration} disabled={isModerating || isRefreshing || moderationOutcomeUnknown} className="rounded bg-blue-600 px-4 py-2 text-white disabled:opacity-50">{isModerating ? 'Processing…' : moderationOutcomeUnknown ? 'Refresh required' : moderationAction === 'approve' ? 'Approve Product' : 'Deny Product'}</button></div>
+          </div>
+        </div>
+      )}
 
       {/* Delete Confirmation Modal */}
       {deleteModalOpen && (

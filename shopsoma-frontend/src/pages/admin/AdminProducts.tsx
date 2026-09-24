@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Search, CheckCircle, XCircle, Eye, Package, AlertCircle, Edit2, Trash2 } from 'lucide-react';
 import AdminSidebar from '../../components/admin/AdminSidebar';
@@ -7,6 +7,12 @@ import { ROUTES } from '../../config/constants';
 import CurrencySwitcher from '../../components/common/CurrencySwitcher';
 import { useCurrencyStore } from '../../store/currencyStore';
 import { formatPriceWithConversion } from '../../utils/pricing';
+import {
+  hasCurrentModerationAmbiguity,
+  moderationAmbiguityKey,
+  moderationLockName,
+  saveModerationAmbiguity,
+} from '../../utils/adminModerationCoordination';
 
 interface Product {
   id: string;
@@ -35,6 +41,12 @@ interface Product {
   updated_at: string;
 }
 
+const sameTimestamp = (left: string, right: string): boolean => {
+  const leftMillis = Date.parse(left);
+  const rightMillis = Date.parse(right);
+  return Number.isFinite(leftMillis) && leftMillis === rightMillis;
+};
+
 export default function AdminProducts() {
   const navigate = useNavigate();
   const { currentCurrency, setCurrency, exchangeRates, fetchExchangeRate } = useCurrencyStore();
@@ -55,6 +67,8 @@ export default function AdminProducts() {
   const [approvalModal, setApprovalModal] = useState<Product | null>(null);
   const [approvalNotes, setApprovalNotes] = useState('');
   const [deleteModal, setDeleteModal] = useState<Product | null>(null);
+  const [reconciliationRequired, setReconciliationRequired] = useState(false);
+  const moderationOwner = useRef(`${Date.now()}-${Math.random().toString(36).slice(2)}`);
 
   const pageSize = 20;
 
@@ -66,7 +80,7 @@ export default function AdminProducts() {
     loadProducts();
   }, [page, moderationFilter, statusFilter, search]);
 
-  const loadProducts = async () => {
+  const loadProducts = async (): Promise<boolean> => {
     try {
       setLoading(true);
 
@@ -83,25 +97,99 @@ export default function AdminProducts() {
       setProducts(response.items);
       setTotal(response.total);
       setTotalPages(response.total_pages);
+      setReconciliationRequired(false);
+      return true;
     } catch (err: any) {
       showMessage('error', err.message || 'Failed to load products');
+      return false;
     } finally {
       setLoading(false);
     }
   };
 
+  const confirmPendingModeration = async (product: Product): Promise<Pick<Product, 'id' | 'title' | 'description' | 'moderation_status' | 'updated_at'> | null> => {
+    try {
+      const latest = await adminService.getProduct(product.id) as Pick<Product, 'id' | 'title' | 'description' | 'moderation_status' | 'updated_at'>;
+      if (latest.moderation_status !== 'pending') {
+        setApprovalModal(null);
+        setRejectModal(null);
+        setApprovalNotes('');
+        setRejectionReason('');
+        setRejectionNotes('');
+        showMessage('error', 'This product has already been moderated. The list was refreshed.');
+        await loadProducts();
+        return null;
+      }
+      return latest;
+    } catch (err: any) {
+      showMessage('error', err?.response?.data?.detail || err.message || 'Unable to verify current moderation status');
+      return null;
+    }
+  };
+
   const handleApproveProduct = async () => {
     if (!approvalModal) return;
-
+    const product = approvalModal;
+    const lockKey = moderationAmbiguityKey(product.id);
+    if (hasCurrentModerationAmbiguity(product)) {
+      showMessage('error', 'This product has an unconfirmed moderation request. Refresh the list before retrying.');
+      return;
+    }
+    const lockManager = typeof navigator !== 'undefined' ? navigator.locks : undefined;
+    if (!lockManager) {
+      showMessage('error', 'This browser cannot safely coordinate moderation across admin tabs.');
+      return;
+    }
     try {
-      setActionLoading(approvalModal.id);
-      await adminService.approveProduct(approvalModal.id, approvalNotes || undefined);
-      showMessage('success', `Product "${approvalModal.title}" approved successfully. Vendor has been notified.`);
-      setApprovalModal(null);
-      setApprovalNotes('');
-      loadProducts();
-    } catch (err: any) {
-      showMessage('error', err?.response?.data?.detail || err.message || 'Failed to approve product');
+      setActionLoading(product.id);
+      await lockManager.request(moderationLockName(product.id), { ifAvailable: true }, async lock => {
+        if (!lock) {
+          showMessage('error', 'Another admin tab is processing this product. Refresh the list before retrying.');
+          return;
+        }
+        if (hasCurrentModerationAmbiguity(product)) {
+          showMessage('error', 'This product has an unconfirmed moderation request. Refresh the list before retrying.');
+          return;
+        }
+        const latest = await confirmPendingModeration(product);
+        if (!latest) return;
+        if (!sameTimestamp(latest.updated_at, product.updated_at)) {
+          localStorage.removeItem(lockKey);
+          setApprovalModal(null);
+          setApprovalNotes('');
+          showMessage('error', 'This product changed after the approval dialog opened. The list was refreshed; review the updated product before approving.');
+          await loadProducts();
+          return;
+        }
+        saveModerationAmbiguity(latest, moderationOwner.current);
+        try {
+          await adminService.approveProduct(latest.id, latest.updated_at, approvalNotes || undefined);
+          localStorage.removeItem(lockKey);
+          showMessage('success', `Product "${latest.title}" approved successfully. Vendor has been notified.`);
+          setApprovalModal(null);
+          setApprovalNotes('');
+          await loadProducts();
+        } catch (err: any) {
+          const status = err?.response?.status;
+          const outcomeMayBeCommitted = !err?.response || (typeof status === 'number' && status >= 500);
+          if (status === 409) {
+            localStorage.removeItem(lockKey);
+            setApprovalModal(null);
+            setApprovalNotes('');
+            showMessage('error', 'Another admin already moderated this product. The list was refreshed.');
+            const refreshed = await loadProducts();
+            if (!refreshed) {
+              setReconciliationRequired(true);
+              showMessage('error', 'The moderation conflict could not be reconciled because the list refresh failed. Refresh the list before retrying.');
+            }
+          } else if (outcomeMayBeCommitted) {
+            showMessage('error', 'The moderation outcome could not be confirmed. Refresh the list before retrying.');
+          } else {
+            localStorage.removeItem(lockKey);
+            showMessage('error', err?.response?.data?.detail || err.message || 'Failed to approve product');
+          }
+        }
+      });
     } finally {
       setActionLoading(null);
     }
@@ -112,22 +200,74 @@ export default function AdminProducts() {
       showMessage('error', 'Rejection reason is required');
       return;
     }
-
-    if (rejectionReason.length < 10) {
+    if (rejectionReason.trim().length < 10) {
       showMessage('error', 'Rejection reason must be at least 10 characters');
       return;
     }
-
+    const product = rejectModal;
+    const lockKey = moderationAmbiguityKey(product.id);
+    if (hasCurrentModerationAmbiguity(product)) {
+      showMessage('error', 'This product has an unconfirmed moderation request. Refresh the list before retrying.');
+      return;
+    }
+    const lockManager = typeof navigator !== 'undefined' ? navigator.locks : undefined;
+    if (!lockManager) {
+      showMessage('error', 'This browser cannot safely coordinate moderation across admin tabs.');
+      return;
+    }
     try {
-      setActionLoading(rejectModal.id);
-      await adminService.rejectProduct(rejectModal.id, rejectionReason, rejectionNotes || undefined);
-      showMessage('success', `Product "${rejectModal.title}" rejected. Vendor has been notified.`);
-      setRejectModal(null);
-      setRejectionReason('');
-      setRejectionNotes('');
-      loadProducts();
-    } catch (err: any) {
-      showMessage('error', err?.response?.data?.detail || err.message || 'Failed to reject product');
+      setActionLoading(product.id);
+      await lockManager.request(moderationLockName(product.id), { ifAvailable: true }, async lock => {
+        if (!lock) {
+          showMessage('error', 'Another admin tab is processing this product. Refresh the list before retrying.');
+          return;
+        }
+        if (hasCurrentModerationAmbiguity(product)) {
+          showMessage('error', 'This product has an unconfirmed moderation request. Refresh the list before retrying.');
+          return;
+        }
+        const latest = await confirmPendingModeration(product);
+        if (!latest) return;
+        if (!sameTimestamp(latest.updated_at, product.updated_at)) {
+          localStorage.removeItem(lockKey);
+          setRejectModal(null);
+          setRejectionReason('');
+          setRejectionNotes('');
+          showMessage('error', 'This product changed after the denial dialog opened. The list was refreshed; review the updated product before denying.');
+          await loadProducts();
+          return;
+        }
+        saveModerationAmbiguity(latest, moderationOwner.current);
+        try {
+          await adminService.rejectProduct(latest.id, rejectionReason.trim(), latest.updated_at, rejectionNotes.trim() || undefined);
+          localStorage.removeItem(lockKey);
+          showMessage('success', `Product "${latest.title}" rejected. Vendor has been notified.`);
+          setRejectModal(null);
+          setRejectionReason('');
+          setRejectionNotes('');
+          await loadProducts();
+        } catch (err: any) {
+          const status = err?.response?.status;
+          const outcomeMayBeCommitted = !err?.response || (typeof status === 'number' && status >= 500);
+          if (status === 409) {
+            localStorage.removeItem(lockKey);
+            setRejectModal(null);
+            setRejectionReason('');
+            setRejectionNotes('');
+            showMessage('error', 'Another admin already moderated this product. The list was refreshed.');
+            const refreshed = await loadProducts();
+            if (!refreshed) {
+              setReconciliationRequired(true);
+              showMessage('error', 'The moderation conflict could not be reconciled because the list refresh failed. Refresh the list before retrying.');
+            }
+          } else if (outcomeMayBeCommitted) {
+            showMessage('error', 'The moderation outcome could not be confirmed. Refresh the list before retrying.');
+          } else {
+            localStorage.removeItem(lockKey);
+            showMessage('error', err?.response?.data?.detail || err.message || 'Failed to reject product');
+          }
+        }
+      });
     } finally {
       setActionLoading(null);
     }
@@ -290,6 +430,14 @@ export default function AdminProducts() {
             }`}
           >
             {message.text}
+          </div>
+        )}
+        {reconciliationRequired && (
+          <div role="alert" className="p-4 rounded-lg bg-yellow-50 text-yellow-900">
+            <p>The product list could not be refreshed after a moderation conflict. Moderation actions are disabled until the authoritative list is loaded.</p>
+            <button type="button" onClick={() => loadProducts()} disabled={loading} className="mt-2 font-medium underline disabled:opacity-50">
+              {loading ? 'Refreshing…' : 'Refresh product list'}
+            </button>
           </div>
         )}
 
@@ -503,7 +651,7 @@ export default function AdminProducts() {
                             <>
                               <button
                                 onClick={() => setApprovalModal(product)}
-                                disabled={actionLoading === product.id}
+                                disabled={actionLoading === product.id || reconciliationRequired}
                                 className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-white bg-green-600 hover:bg-green-700 rounded-lg disabled:opacity-50"
                                 title="Approve Product"
                               >
@@ -511,7 +659,7 @@ export default function AdminProducts() {
                               </button>
                               <button
                                 onClick={() => setRejectModal(product)}
-                                disabled={actionLoading === product.id}
+                                disabled={actionLoading === product.id || reconciliationRequired}
                                 className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg disabled:opacity-50"
                                 title="Reject Product"
                               >
@@ -623,7 +771,7 @@ export default function AdminProducts() {
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent"
               />
               <p className="text-xs text-gray-500 mt-1">
-                {rejectionReason.length}/10 characters minimum
+                {rejectionReason.trim().length}/10 characters minimum
               </p>
             </div>
 
@@ -654,7 +802,7 @@ export default function AdminProducts() {
               </button>
               <button
                 onClick={handleRejectProduct}
-                disabled={actionLoading === rejectModal.id || rejectionReason.length < 10}
+                disabled={actionLoading === rejectModal.id || rejectionReason.trim().length < 10}
                 className="px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg disabled:opacity-50"
               >
                 {actionLoading === rejectModal.id ? 'Rejecting...' : 'Reject Product'}
