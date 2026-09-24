@@ -1015,6 +1015,55 @@ class TestProductUpdate:
         assert float(updated_variation["sale_price"]) == 150.00
 
     @pytest.mark.asyncio
+    async def test_variation_rewrite_clears_prior_moderation_metadata(
+        self,
+        client: AsyncClient,
+        vendor_user,
+        db_session: AsyncSession,
+    ):
+        """A replacement variation set must not retain the prior decision audit."""
+        from app.models.product import ModerationStatus, Product
+        from datetime import datetime, timezone
+
+        create_response = await client.post(
+            "/api/v1/products",
+            json={
+                "title": "Variation Moderation Metadata",
+                "base_price": 100.00,
+                "product_type": "variable",
+                "variations": [
+                    {"title": "Red", "type": "color", "price": 100.00},
+                ],
+            },
+            headers=vendor_user["headers"],
+        )
+        assert create_response.status_code == 201
+        product_id = create_response.json()["id"]
+
+        product = await db_session.get(Product, product_id)
+        product.moderation_status = ModerationStatus.APPROVED
+        product.moderated_at = datetime.now(timezone.utc)
+        product.moderation_notes = "Prior decision"
+        await db_session.commit()
+
+        update_response = await client.put(
+            f"/api/v1/products/{product_id}",
+            json={
+                "variations": [
+                    {"title": "Blue", "type": "color", "price": 100.00},
+                ],
+            },
+            headers=vendor_user["headers"],
+        )
+
+        assert update_response.status_code == 200
+        await db_session.refresh(product)
+        assert product.moderation_status is ModerationStatus.PENDING
+        assert product.moderated_at is None
+        assert product.moderated_by is None
+        assert product.moderation_notes is None
+
+    @pytest.mark.asyncio
     async def test_update_parent_price_persists_legacy_custom_inheritance_decision(
         self,
         client: AsyncClient,
