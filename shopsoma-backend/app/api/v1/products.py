@@ -22,6 +22,7 @@ from app.models.category import Category
 from app.models.collection import Collection
 from app.models.product import Product, ProductVariant, ProductImage, ProductStatus, ProductType, ModerationStatus, Variation, SizeStock, SizeEnum
 from app.models.vendor import Vendor
+from app.services.product_moderation import transition_product_moderation
 from app.schemas.product import (
     ProductCreate,
     ProductUpdate,
@@ -1627,13 +1628,14 @@ async def moderate_product(
             detail="Product not found"
         )
 
-    # Update moderation
-    product.moderation_status = ModerationStatus(moderation_data.moderation_status)
-    product.moderation_notes = moderation_data.moderation_notes
-    product.moderated_by = current_user.id
-    product.moderated_at = func.now()
-
-    await db.commit()
+    await transition_product_moderation(
+        db=db,
+        product_id=product_id,
+        admin_id=current_user.id,
+        target_status=ModerationStatus(moderation_data.moderation_status),
+        moderation_notes=moderation_data.moderation_notes,
+        expected_updated_at=moderation_data.expected_updated_at,
+    )
 
     # Reload with relationships to avoid lazy loading issues
     result = await db.execute(

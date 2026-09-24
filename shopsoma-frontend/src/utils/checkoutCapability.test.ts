@@ -7,7 +7,18 @@ import {
 } from './checkoutCapability';
 
 describe('checkoutCapability session bridge', () => {
-  beforeEach(() => sessionStorage.clear());
+  beforeEach(() => {
+    const values = new Map<string, string>();
+    const storage = {
+      clear: () => values.clear(),
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, value),
+      removeItem: (key: string) => values.delete(key),
+    };
+    Object.defineProperty(globalThis, 'sessionStorage', { configurable: true, value: storage });
+    Object.defineProperty(window, 'sessionStorage', { configurable: true, value: storage });
+    Object.defineProperty(window, 'localStorage', { configurable: true, value: storage });
+  });
 
   it('scopes a guest checkout capability to one order within session storage', () => {
     saveCheckoutCapability('order-1', 'secret-capability');
@@ -26,5 +37,49 @@ describe('checkoutCapability session bridge', () => {
 
     expect(loadCheckoutCapability('order-1')).toBeUndefined();
     expect(loadCheckoutCapability('order-2')).toBe('other-capability');
+  });
+
+  it('migrates a capability saved under the legacy unnormalized key', () => {
+    sessionStorage.setItem('shopsoma_checkout_capability:shp-legacy', 'legacy-token');
+
+    expect(loadCheckoutCapability('shp-legacy')).toBe('legacy-token');
+    clearStoredCheckoutCapability('shp-legacy');
+    expect(loadCheckoutCapability('SHP-LEGACY')).toBeUndefined();
+  });
+
+  it('uses one case-insensitive key for save, load, and clear', () => {
+    saveCheckoutCapability(' shp-2026-ab12 ', 'secret-token');
+    expect(loadCheckoutCapability('SHP-2026-AB12')).toBe('secret-token');
+
+    clearStoredCheckoutCapability('ShP-2026-Ab12');
+    expect(loadCheckoutCapability('shp-2026-ab12')).toBeUndefined();
+  });
+
+  it('returns and preserves a legacy token when canonical migration fails', () => {
+    const legacyKey = 'shopsoma_checkout_capability:shp-legacy-write-failure';
+    sessionStorage.setItem(legacyKey, 'legacy-token');
+    const originalSetItem = sessionStorage.setItem;
+    sessionStorage.setItem = (key: string, value: string) => {
+      if (key !== legacyKey) throw new Error('storage quota exceeded');
+      originalSetItem.call(sessionStorage, key, value);
+    };
+
+    expect(loadCheckoutCapability('shp-legacy-write-failure')).toBe('legacy-token');
+    expect(sessionStorage.getItem(legacyKey)).toBe('legacy-token');
+  });
+
+  it('returns the token when legacy cleanup fails after canonical migration', () => {
+    const legacyKey = 'shopsoma_checkout_capability:shp-legacy-remove-failure';
+    const canonicalKey = 'shopsoma_checkout_capability:SHP-LEGACY-REMOVE-FAILURE';
+    sessionStorage.setItem(legacyKey, 'legacy-token');
+    const originalRemoveItem = sessionStorage.removeItem;
+    sessionStorage.removeItem = (key: string) => {
+      if (key === legacyKey) throw new Error('storage cleanup failed');
+      originalRemoveItem.call(sessionStorage, key);
+    };
+
+    expect(loadCheckoutCapability('shp-legacy-remove-failure')).toBe('legacy-token');
+    expect(sessionStorage.getItem(canonicalKey)).toBe('legacy-token');
+    expect(sessionStorage.getItem(legacyKey)).toBe('legacy-token');
   });
 });
