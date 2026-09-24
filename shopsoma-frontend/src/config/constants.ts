@@ -76,6 +76,7 @@ export const ROUTES = {
   CHECKOUT: '/checkout',
   ORDER_SUCCESS: '/order-success',
   ORDER_TRACKING: '/track/:orderId',
+  TRACK_ENTRY: '/track', CONTACT: '/contact', SHIPPING: '/shipping', RETURNS: '/returns', FAQS: '/faqs', ABOUT: '/about', COLLABORATE: '/collaborate', TERMS: '/terms', PRIVACY: '/privacy', COOKIES: '/cookies',
   VENDOR_DASHBOARD: '/vendor/dashboard',
   VENDOR_PRODUCTS: '/vendor/products',
   VENDOR_ORDERS: '/vendor/orders',
@@ -126,7 +127,7 @@ export const MEN_HERO_IMAGE_URL = '/images/hero/men/men-hero-dsc06941-desktop.we
 export const MEN_HERO_MOBILE_IMAGE_URL = '/images/hero/men/men-hero-dsc06941-mobile.webp';
 export const WOMEN_HERO_IMAGE_URL = '/images/hero/women/women-hero-img-2101-desktop.webp';
 export const WOMEN_HERO_MOBILE_IMAGE_URL = '/images/hero/women/women-hero-img-2101-mobile.webp';
-export const VENDOR_LOGIN_IMAGE_URL = '/images/profilebanner.jpg';
+export const VENDOR_LOGIN_IMAGE_URL = '/images/hero/campaign/campaign-exterior-desktop.webp';
 
 // Toast Configuration
 export const TOAST_DURATION = 3000;

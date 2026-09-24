@@ -776,6 +776,7 @@ export default function Checkout() {
       const capability = order.checkout_capability ?? undefined;
       setCheckoutCapability(capability);
       saveCheckoutCapability(order.id, capability);
+      saveCheckoutCapability(order.order_number, capability);
       setEnforcedOrder(order);
       const requestKey = newIdempotencyKey('estimate');
       setEstimateRequestKey(requestKey);

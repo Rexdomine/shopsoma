@@ -5,6 +5,9 @@ from typing import List, Optional, Dict, Any, Tuple
 import csv
 import io
 import math
+import ipaddress
+import re
+from urllib.parse import urlparse
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,6 +22,10 @@ from app.models.category import Category
 from app.models.collection import Collection
 from app.models.product import Product, ProductVariant, ProductImage, ProductStatus, ProductType, ModerationStatus, Variation, SizeStock, SizeEnum
 from app.models.vendor import Vendor
+from app.services.product_moderation import (
+    mark_product_content_pending,
+    transition_product_moderation,
+)
 from app.schemas.product import (
     ProductCreate,
     ProductUpdate,
@@ -55,7 +62,10 @@ def _variation_inherits_parent_price(
         return marker
     if persisted_value is None:
         return null_value_inherits
-    return persisted_value == legacy_parent_value
+    # A nullable marker plus a stored price is an unknown legacy state. Price
+    # equality alone cannot distinguish an inherited value from an explicit
+    # override, so preserve it rather than overwriting it on a parent edit.
+    return False
 
 
 def _sync_inherited_variation_prices(
@@ -69,6 +79,36 @@ def _sync_inherited_variation_prices(
 ) -> None:
     """Propagate parent price edits without overwriting explicit variation prices."""
     legacy_regular_price = old_compare_at_price or old_base_price
+    legacy_effective_price = (
+        old_base_price
+        if old_compare_at_price is not None and old_base_price < legacy_regular_price
+        else legacy_regular_price
+    )
+
+    # Legacy single-product rows can have one generic ProductVariant without
+    # Variation rows. That row is the effective purchase-price record for
+    # cart/order resolution. Attribute-bearing rows are explicit size/color
+    # prices and must not be overwritten merely because no Variation rows are
+    # present.
+    if not variations:
+        new_regular_price = new_compare_at_price or new_base_price
+        new_effective_price = (
+            new_base_price
+            if new_compare_at_price is not None and new_base_price < new_regular_price
+            else new_regular_price
+        )
+        for legacy_variant in legacy_variants:
+            if legacy_variant.size is not None or legacy_variant.color is not None:
+                continue
+            # Null is an unknown legacy state. The migration backfills existing
+            # generic rows to False because equality cannot distinguish an
+            # explicit price from inherited pricing; never overwrite unknown
+            # legacy data during a later parent edit.
+            if getattr(legacy_variant, "inherits_price", None) is not True:
+                continue
+            legacy_variant.price = new_effective_price
+        return
+
     for variation in variations:
         inherits_regular_price = _variation_inherits_parent_price(
             variation, "inherits_price", variation.price, legacy_regular_price
@@ -159,6 +199,7 @@ BULK_SINGLE_HEADERS = [
     "fabric_composition",
     "status",
 ]
+BULK_IMAGE_HEADERS = [f"image_{index}_url" for index in range(1, 6)]
 
 BULK_VARIABLE_HEADERS = [
     "product_title",
@@ -181,6 +222,59 @@ BULK_VARIABLE_HEADERS = [
     "variation_price",
     "variation_sale_price",
 ]
+
+
+def _parse_image_urls(
+    row: Dict[str, Optional[str]], row_index: int, errors: List[Dict[str, Any]]
+) -> List[str]:
+    """Validate optional hosted image links without network I/O; preserve URL bytes/order."""
+    urls: List[str] = []
+    for field in BULK_IMAGE_HEADERS:
+        value = row.get(field)
+        if value in (None, ""):
+            continue
+        try:
+            # Reject characters browsers may silently strip or reinterpret.
+            if len(value) > 2048 or "\\" in value or any(
+                ch.isspace() or ord(ch) < 32 or ord(ch) == 127 for ch in value
+            ):
+                raise ValueError
+            parsed = urlparse(value)
+            host = parsed.hostname
+            if (
+                parsed.scheme != "https" or not host
+                or parsed.username is not None or parsed.password is not None
+            ):
+                raise ValueError
+            host = host.rstrip(".").lower()
+            labels = host.split(".")
+            if len(host) > 253 or len(labels) < 2 or any(
+                not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label)
+                for label in labels
+            ):
+                raise ValueError
+            # A numeric final label triggers browser IPv4 parsing (including hex/octal).
+            if re.fullmatch(r"(?:[0-9]+|0x[0-9a-f]+)", labels[-1]):
+                raise ValueError
+            if labels[-1] in {"localhost", "local", "internal", "lan", "home"}:
+                raise ValueError
+            try:
+                ipaddress.ip_address(host)
+            except ValueError:
+                pass  # A syntactically valid DNS name; no DNS/reachability claim.
+            else:
+                raise ValueError
+            if parsed.port is not None and not (1 <= parsed.port <= 65535):
+                raise ValueError
+        except (ValueError, UnicodeError):
+            errors.append({
+                "row": row_index, "field": field,
+                "message": "Must be a public HTTPS URL of at most 2048 characters",
+            })
+            continue
+        if value not in urls:
+            urls.append(value)
+    return urls
 
 
 def _parse_bool(value: Optional[str]) -> bool:
@@ -241,8 +335,46 @@ def _sync_single_product_variant_inventory(product: Product) -> None:
     is_available = True if product.made_to_order else synced_stock > 0
 
     for variant in product.variants:
-        variant.stock = synced_stock
-        variant.is_available = is_available
+        # A single product may still carry explicit size/color variants even
+        # without Variation rows. Only the axis-less legacy inventory row is
+        # represented by the product-level total_stock field.
+        if variant.size is not None or variant.color is not None:
+            continue
+        if variant.inherits_stock is True:
+            variant.stock = synced_stock
+            variant.is_available = is_available
+
+
+def _sync_direct_variant_price_to_inherited_variation(
+    variations: list[Any],
+    *,
+    price: Any,
+    size: Any,
+    color: Any,
+) -> None:
+    """Make a direct legacy-variant price edit authoritative when inherited."""
+    if price is None:
+        return
+
+    matching_variation = None
+    if color is not None:
+        matching_variation = unique_variations_by_color(variations).get(
+            normalize_color_value(color)
+        )
+    if matching_variation is None and size is not None:
+        matching_variation = unique_variations_by_size(variations).get(
+            normalize_color_value(size)
+        )
+    if matching_variation is None or not (
+        matching_variation.inherits_price is True
+        or matching_variation.inherits_sale_price is True
+    ):
+        return
+
+    matching_variation.price = price
+    matching_variation.sale_price = None
+    matching_variation.inherits_price = False
+    matching_variation.inherits_sale_price = False
 
 
 async def _get_category_by_slug(db: AsyncSession, slug: str) -> Optional[Category]:
@@ -356,15 +488,37 @@ async def create_product(
     # Add variants if provided (legacy system - backward compatibility)
     if product_data.variants:
         for variant_data in product_data.variants:
+            explicit_inventory = bool(
+                {"stock", "is_available"} & variant_data.model_fields_set
+            )
+            inherits_stock = (
+                product.product_type == ProductType.SINGLE
+                and not product_data.variations
+                and variant_data.size is None
+                and variant_data.color is None
+                and not explicit_inventory
+            )
             variant = ProductVariant(
                 product_id=product.id,
                 size=variant_data.size,
+                inherits_price=False,
+                # A generic legacy row on a single product is the compatibility
+                # projection of product.total_stock, not an independent axis.
+                inherits_stock=inherits_stock,
                 color=variant_data.color,
                 color_hex=variant_data.color_hex,
                 price=variant_data.price,
-                stock=variant_data.stock,
+                stock=(
+                    (0 if product.made_to_order else int(product.total_stock or 0))
+                    if inherits_stock
+                    else variant_data.stock
+                ),
                 sku=variant_data.sku,
-                is_available=variant_data.is_available,
+                is_available=(
+                    (True if product.made_to_order else int(product.total_stock or 0) > 0)
+                    if inherits_stock
+                    else variant_data.is_available
+                ),
             )
             db.add(variant)
 
@@ -420,9 +574,11 @@ async def bulk_upload_single_products(
 
     errors: List[Dict[str, Any]] = []
     products_to_create: List[Product] = []
+    sku_rows: Dict[str, List[int]] = {}
 
     for row_index, row in enumerate(reader, start=2):
         row_errors: List[Dict[str, Any]] = []
+        image_urls = _parse_image_urls(row, row_index, row_errors)
         title = (row.get("title") or "").strip()
         category_slug = (row.get("category_slug") or "").strip()
         currency = (row.get("currency") or "NGN").strip().upper()
@@ -459,6 +615,10 @@ async def bulk_upload_single_products(
             if not collection:
                 row_errors.append({"row": row_index, "field": "collection_name", "message": "Collection not found"})
 
+        sku = (row.get("sku") or "").strip()
+        if sku:
+            sku_rows.setdefault(sku, []).append(row_index)
+
         if row_errors:
             errors.extend(row_errors)
             continue
@@ -487,13 +647,31 @@ async def bulk_upload_single_products(
             height_cm=height_cm,
             moderation_status=ModerationStatus.PENDING,
         )
+        for display_order, image_url in enumerate(image_urls):
+            product.images.append(ProductImage(
+                image_url=image_url,
+                thumbnail_url=image_url,
+                display_order=display_order,
+                is_primary=display_order == 0,
+            ))
         products_to_create.append(product)
+
+    for sku, rows in sku_rows.items():
+        if len(rows) > 1:
+            for row_index in rows:
+                errors.append({"row": row_index, "field": "sku", "message": f"SKU '{sku}' is duplicated in this file"})
+        elif await db.scalar(select(Product.id).where(Product.sku == sku).limit(1)):
+            errors.append({"row": rows[0], "field": "sku", "message": f"SKU '{sku}' already exists"})
 
     if errors:
         raise HTTPException(status_code=422, detail={"message": "Validation failed", "errors": errors})
 
     db.add_all(products_to_create)
-    await db.commit()
+    try:
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
 
     return {"success": True, "created_count": len(products_to_create)}
 
@@ -523,10 +701,14 @@ async def bulk_upload_variable_products(
 
     errors: List[Dict[str, Any]] = []
     grouped: Dict[str, Dict[str, Any]] = {}
+    sku_rows: Dict[str, List[int]] = {}
+    sku_groups: Dict[str, set[str]] = {}
+    grouped_skus: Dict[str, Dict[str, List[int]]] = {}
     allowed_sizes = {size.value for size in SizeEnum}
 
     for row_index, row in enumerate(reader, start=2):
         row_errors: List[Dict[str, Any]] = []
+        row_image_urls = _parse_image_urls(row, row_index, row_errors)
         title = (row.get("product_title") or "").strip()
         category_slug = (row.get("category_slug") or "").strip()
         currency = (row.get("currency") or "NGN").strip().upper()
@@ -573,11 +755,17 @@ async def bulk_upload_variable_products(
             if not collection:
                 row_errors.append({"row": row_index, "field": "collection_name", "message": "Collection not found"})
 
+        product_sku = (row.get("product_sku") or "").strip()
+        group_key = f"{title.lower()}::{category_slug.lower()}::{currency}"
+        if product_sku:
+            sku_rows.setdefault(product_sku, []).append(row_index)
+            sku_groups.setdefault(product_sku, set()).add(group_key)
+            grouped_skus.setdefault(group_key, {}).setdefault(product_sku, []).append(row_index)
+
         if row_errors:
             errors.extend(row_errors)
             continue
 
-        group_key = f"{title.lower()}::{category_slug.lower()}::{currency}"
         if group_key not in grouped:
             grouped[group_key] = {
                 "title": title,
@@ -596,8 +784,24 @@ async def bulk_upload_variable_products(
                 "length_cm": length_cm,
                 "width_cm": width_cm,
                 "height_cm": height_cm,
+                "images": [],
                 "variations": {},
             }
+
+        group_images = grouped[group_key]["images"]
+        valid_image_urls = set(row_image_urls)
+        for field in BULK_IMAGE_HEADERS:
+            image_url = (row.get(field) or "").strip()
+            if not image_url or image_url not in valid_image_urls or image_url in group_images:
+                continue
+            if len(group_images) >= 5:
+                errors.append({
+                    "row": row_index,
+                    "field": field,
+                    "message": "At most 5 unique image URLs are allowed per product",
+                })
+                continue
+            group_images.append(image_url)
 
         variations = grouped[group_key]["variations"]
         variation_key = f"{color_name.lower()}::{color_hex or ''}"
@@ -614,6 +818,24 @@ async def bulk_upload_variable_products(
         variations[variation_key]["sizes"].append(
             {"size": size, "stock": stock}
         )
+
+    for sku, rows in sku_rows.items():
+        if len(sku_groups.get(sku, set())) > 1:
+            for row_index in rows:
+                errors.append({"row": row_index, "field": "product_sku", "message": f"Product SKU '{sku}' is used by multiple products in this file"})
+        elif await db.scalar(select(Product.id).where(Product.sku == sku).limit(1)):
+            for row_index in rows:
+                errors.append({"row": row_index, "field": "product_sku", "message": f"Product SKU '{sku}' already exists"})
+
+    for group_key, skus in grouped_skus.items():
+        if len(skus) > 1:
+            for rows in skus.values():
+                for row_index in rows:
+                    errors.append({
+                        "row": row_index,
+                        "field": "product_sku",
+                        "message": "Rows for one product must use the same product SKU",
+                    })
 
     if errors:
         raise HTTPException(status_code=422, detail={"message": "Validation failed", "errors": errors})
@@ -647,6 +869,15 @@ async def bulk_upload_variable_products(
         db.add(product)
         await db.flush()
 
+        for display_order, image_url in enumerate(group["images"]):
+            db.add(ProductImage(
+                product_id=product.id,
+                image_url=image_url,
+                thumbnail_url=image_url,
+                display_order=display_order,
+                is_primary=display_order == 0,
+            ))
+
         for variation_data in group["variations"].values():
             variation = Variation(
                 product_id=product.id,
@@ -676,7 +907,11 @@ async def bulk_upload_variable_products(
 
         created += 1
 
-    await db.commit()
+    try:
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
 
     return {"success": True, "created_count": created}
 
@@ -915,6 +1150,15 @@ async def update_product(
                 ],
             ) from exc
 
+    # Acquire the catalog coordinator before any moderation-relevant parent or
+    # child write. This advances the revision while the write is serialized, so
+    # a moderation decision based on the prior revision cannot approve it.
+    content_rewrite = variations_data is not None or any(
+        field in update_data for field in ["title", "description"]
+    )
+    if content_rewrite:
+        await mark_product_content_pending(db=db, product_id=product_id)
+
     for field, value in update_data.items():
         if field == "status":
             setattr(product, field, ProductStatus(value))
@@ -975,10 +1219,6 @@ async def update_product(
                         stock=size_data.get("stock", 0),
                     )
                     db.add(size_stock)
-
-    # Reset moderation if content changed
-    if any(field in update_data for field in ["title", "description"]):
-        product.moderation_status = ModerationStatus.PENDING
 
     if any(field in update_data for field in ["total_stock", "made_to_order"]):
         _sync_single_product_variant_inventory(product)
@@ -1100,11 +1340,38 @@ async def create_variant(
             detail=[{"loc": ["body"], "msg": str(exc), "type": "value_error"}],
         ) from exc
 
+    explicit_inventory = bool(
+        {"stock", "is_available"} & variant_data.model_fields_set
+    )
+    inherits_stock = (
+        product.product_type == ProductType.SINGLE
+        and not product.variations
+        and variant_data.size is None
+        and variant_data.color is None
+        and not explicit_inventory
+    )
     variant = ProductVariant(
         product_id=product_id,
-        **variant_data.model_dump()
+        inherits_price=False,
+        inherits_stock=inherits_stock,
+        size=variant_data.size,
+        color=variant_data.color,
+        color_hex=variant_data.color_hex,
+        price=variant_data.price,
+        stock=(
+            (0 if product.made_to_order else int(product.total_stock or 0))
+            if inherits_stock
+            else variant_data.stock
+        ),
+        sku=variant_data.sku,
+        is_available=(
+            (True if product.made_to_order else int(product.total_stock or 0) > 0)
+            if inherits_stock
+            else variant_data.is_available
+        ),
     )
     db.add(variant)
+    await mark_product_content_pending(db=db, product_id=product_id)
     await db.commit()
     await db.refresh(variant)
 
@@ -1190,9 +1457,33 @@ async def update_variant(
                 detail=[{"loc": ["body"], "msg": str(exc), "type": "value_error"}],
             ) from exc
 
+    # An explicit stock or availability edit transfers inventory ownership from
+    # the parent product back to this variant. Otherwise a later product-level
+    # total_stock edit would overwrite the direct variant edit.
+    if "stock" in update_data or "is_available" in update_data:
+        variant.inherits_stock = False
+    if "price" in update_data:
+        variant.inherits_price = False
+        _sync_direct_variant_price_to_inherited_variation(
+            product.variations,
+            price=update_data["price"],
+            size=update_data.get("size", variant.size),
+            color=update_data.get("color", variant.color),
+        )
+
     for field, value in update_data.items():
         setattr(variant, field, value)
 
+    if update_data:
+        reviewable_variant_fields = {
+            "size",
+            "color",
+            "color_hex",
+            "price",
+            "sku",
+        }
+        if reviewable_variant_fields.intersection(update_data):
+            await mark_product_content_pending(db=db, product_id=product_id)
     await db.commit()
     await db.refresh(variant)
 
@@ -1238,6 +1529,7 @@ async def delete_variant(
             detail="Variant not found"
         )
 
+    await mark_product_content_pending(db=db, product_id=product_id)
     await db.delete(variant)
     await db.commit()
 
@@ -1277,6 +1569,7 @@ async def create_image(
         **image_data.model_dump()
     )
     db.add(image)
+    await mark_product_content_pending(db=db, product_id=product_id)
     await db.commit()
     await db.refresh(image)
 
@@ -1322,6 +1615,7 @@ async def delete_image(
             detail="Image not found"
         )
 
+    await mark_product_content_pending(db=db, product_id=product_id)
     await db.delete(image)
     await db.commit()
 
@@ -1356,13 +1650,14 @@ async def moderate_product(
             detail="Product not found"
         )
 
-    # Update moderation
-    product.moderation_status = ModerationStatus(moderation_data.moderation_status)
-    product.moderation_notes = moderation_data.moderation_notes
-    product.moderated_by = current_user.id
-    product.moderated_at = func.now()
-
-    await db.commit()
+    await transition_product_moderation(
+        db=db,
+        product_id=product_id,
+        admin_id=current_user.id,
+        target_status=ModerationStatus(moderation_data.moderation_status),
+        moderation_notes=moderation_data.moderation_notes,
+        expected_updated_at=moderation_data.expected_updated_at,
+    )
 
     # Reload with relationships to avoid lazy loading issues
     result = await db.execute(

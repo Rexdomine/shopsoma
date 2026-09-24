@@ -1,23 +1,18 @@
-# Findings — Admin Account Lifecycle Controls
-
-## User-approved direction
-- Deliver PR 1 now: reversible user/vendor lifecycle controls and bulk reversible actions.
-- After review and Rex-authorized merge, proceed to PR 2 (test-data classification/complete purge), then PR 3 (guarded real-account erasure/anonymization).
-- Vendor deactivation must remove products from public visibility and prevent new sales while preserving historical business records.
-
-## Baseline discovered before implementation
-- `User.is_active` already exists and authentication dependencies reject inactive users.
-- `Vendor` has `store_active`, `store_paused_at`, and `store_deleted_at`; these must not be conflated with account deactivation.
-- `app/api/v1/admin.py` already contains a single-user status endpoint and an unsafe generic hard-delete endpoint.
-- `AdminUsers.tsx` currently exposes single-user status/delete affordances; Admin Vendors has no equivalent complete lifecycle/bulk workflow.
-- The current hard-delete path removes customer order/payment/return rows and cascades a vendor’s catalog; it is unsuitable as normal production lifecycle behavior.
-- Some vendor-owned rows have `RESTRICT` relations (notably payment/pickup-related paths), confirming deletion cannot be assumed complete or safe without a dedicated purge design.
-- Public discovery originally applied seller/store filters inconsistently. This PR now centralizes product/customer sellability (product active + moderation-approved; vendor approved, completed onboarding, active/non-deleted store; linked vendor user active) and applies it to product list/detail, designers, cart add, checkout review/creation, and wishlist read/add. Stale cart quantity/read/guest-merge and checkout-estimate boundaries remain to be assessed before PR closure.
-- `Vendor` already supports vendor-initiated pause/activate and soft store deletion. Admin account deactivation must remain distinct from those states: it changes `User.is_active` and must not mutate store fields, while all public/new-sale eligibility must require both account and store eligibility.
-- `AuditLog` supports actor user ID, action, target entity ID/type, old/new JSON values, timestamp, IP and user agent. It is currently not written by lifecycle endpoints and can be used without a new schema migration for PR 1.
-- Existing backend tests use async API fixtures and an isolated PostgreSQL database; `test_admin_delete_user.py` documents the unsafe current hard-delete behavior and must be superseded for PR 1 scope rather than expanded.
-
-## Safety boundaries
-- This PR performs no destructive account or product deletion.
-- No test/seed data, Render configuration, external provider data, or real user data will be modified.
-- Any bulk mutation must have a full request preflight and explicit per-target result.
+# Findings — admin activation resend
+## Context
+Production email URL/CORS mismatch was diagnosed; Rex says configuration fixed. Old emails retain old host. User requests permanent admin resend feature and fresh PR into develop for staging testing after merge.
+## Preflight boundary map
+Admin browser -> authenticated admin API (actor authenticated server-side); API -> PostgreSQL (authoritative vendor/user state, audit, cooldown); API -> existing email service/Brevo (acceptance is not mailbox delivery); vendor email link -> public activation -> OTP verification -> password setup. No production provider calls are authorized during development.
+## State and invariants
+Approved but never setup is eligible. Fully setup uses password recovery, not activation. Inactive does NOT alone imply never setup: admin-deactivated users must not be reactivated via this operation. Resend never approves, activates, changes password, or changes store flags. Map actual fields and lifecycle audit before implementation.
+## Identity, retry, crash windows
+Vendor UUID and linked user/email from DB, authenticated admin actor; browser must not supply destination. Duplicate sends/cooldown must be server-enforced. Reuse existing safe service where possible, document email accepted/DB commit/response loss uncertainty; no exactly-once delivery claims. Before email failure, no false success; provider timeout is ambiguous and UI must not claim definite non-delivery. Prefer sending invitation link without unnecessarily rotating OTP if existing invite architecture permits; implementation must document chosen contract.
+## Time and parity
+Use authoritative UTC clock and lock-safe cooldown. Existing OTP expiry and session expiry remain unchanged. Audit migration vs ORM parity if adding schema. Audit admin resend vs approval/public initiate/resend for eligibility and code invalidation. Email query values must be URL encoded and base URL deployment-configured, not hardcoded to production.
+## Resume verification
+- Exact requirements installed in isolated Python3.12 venv; baseline activation6/6 and critical flake8 pass.
+- Frontend lifecycle tests7/7 pass; build and strict error-level lint pass. Built-UI mocked-API browser QA passed desktop/mobile action journeys.
+- Full Node20 Vitest is not green at either base or candidate: base187pass11fail/198, candidate190pass13fail/203; failures confined to Checkout. Checkout implementation and tests have identical SHA256 across base/candidate. These are inherited timing-sensitive tests; not fixed in this scoped PR, and not a green-suite claim. Hosted frontend gate runs build (not Vitest).
+- Resend uses invitation-only semantics: preserves OTP state, link uses canonical configured origin, existing public initiate handles expired/used/missing OTPs. Password existence and email_verified cannot identify setup completion. Audited user_deactivated plus current account/vendor/store state is the conservative guard.
+## Regressions
+Non-admin forbidden; eligible send; pending/active/suspended/deleted blocked; double-click/concurrent retry/cooldown; provider rejection/ambiguous failure; audit actor/target; encoded + email; UI success/failure/retry and reachable action; vendor follows invite through OTP/password in isolated tests.

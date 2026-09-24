@@ -8,6 +8,7 @@ from app.api.v1.products import (
     _sync_inherited_variation_prices,
     _variation_inherits_parent_price,
 )
+from app.api.v1.admin import AdminVariationResponse
 from app.schemas.product import (
     ProductResponse,
     ProductUpdate,
@@ -20,6 +21,40 @@ from app.schemas.product import (
     variation_inventory_axis_signature,
     variation_sale_price,
 )
+
+
+def test_admin_variation_output_accepts_legacy_importer_values():
+    """Admin repair reads must not apply storefront input constraints."""
+    now = datetime.now(timezone.utc)
+    result = AdminVariationResponse.model_validate(
+        {
+            "id": uuid4(),
+            "product_id": uuid4(),
+            "title": "Legacy color",
+            "type": "color",
+            "color_hex": "not-a-hex-value",
+            "price": Decimal("85.00"),
+            "sale_price": None,
+            "images": None,
+            "is_active": True,
+            "created_at": now,
+            "updated_at": now,
+            "size_stocks": [
+                {
+                    "id": uuid4(),
+                    "variation_id": uuid4(),
+                    "size": "UNSUPPORTED-LEGACY-SIZE",
+                    "stock": -2,
+                    "created_at": now,
+                    "updated_at": now,
+                }
+            ],
+        }
+    )
+
+    assert result.color_hex == "not-a-hex-value"
+    assert result.size_stocks[0].size == "UNSUPPORTED-LEGACY-SIZE"
+    assert result.size_stocks[0].stock == -2
 
 def test_variation_inheritance_markers_preserve_equal_explicit_overrides():
     inherited = VariationCreate(
@@ -80,6 +115,14 @@ def test_legacy_null_price_is_treated_as_inherited_without_a_marker():
     ) is True
 
 
+def test_unknown_equal_legacy_price_is_preserved_without_a_marker():
+    legacy = SimpleNamespace(price=Decimal("100.00"), inherits_price=None)
+
+    assert _variation_inherits_parent_price(
+        legacy, "inherits_price", legacy.price, Decimal("100.00")
+    ) is False
+
+
 def test_inherited_sale_marker_wins_over_persisted_sale_price():
     variation = SimpleNamespace(
         sale_price=Decimal("80.00"),
@@ -118,6 +161,74 @@ def test_legacy_null_sale_is_custom_when_regular_price_is_custom():
         Decimal("100.00"),
         null_value_inherits=False,
     ) is False
+
+
+def test_parent_price_update_syncs_generic_legacy_variant_sale_price():
+    inherited_generic = SimpleNamespace(
+        size=None, color=None, price=Decimal("80"), inherits_price=True
+    )
+
+    _sync_inherited_variation_prices(
+        [],
+        [inherited_generic],
+        old_base_price=Decimal("80"),
+        old_compare_at_price=Decimal("100"),
+        new_base_price=Decimal("90"),
+        new_compare_at_price=Decimal("110"),
+    )
+
+    assert inherited_generic.price == Decimal("90")
+
+
+def test_parent_price_update_preserves_explicit_generic_legacy_variant_price():
+    explicit_generic = SimpleNamespace(
+        size=None, color=None, price=Decimal("150"), inherits_price=False
+    )
+
+    _sync_inherited_variation_prices(
+        [],
+        [explicit_generic],
+        old_base_price=Decimal("80"),
+        old_compare_at_price=Decimal("100"),
+        new_base_price=Decimal("90"),
+        new_compare_at_price=Decimal("110"),
+    )
+
+    assert explicit_generic.price == Decimal("150")
+
+
+def test_parent_price_update_preserves_equal_explicit_generic_legacy_variant_price():
+    explicit_generic = SimpleNamespace(
+        size=None, color=None, price=Decimal("80"), inherits_price=False
+    )
+
+    _sync_inherited_variation_prices(
+        [],
+        [explicit_generic],
+        old_base_price=Decimal("80"),
+        old_compare_at_price=Decimal("100"),
+        new_base_price=Decimal("90"),
+        new_compare_at_price=Decimal("110"),
+    )
+
+    assert explicit_generic.price == Decimal("80")
+
+
+def test_parent_price_update_preserves_unknown_generic_legacy_variant_price():
+    unknown_generic = SimpleNamespace(
+        size=None, color=None, price=Decimal("80"), inherits_price=None
+    )
+
+    _sync_inherited_variation_prices(
+        [],
+        [unknown_generic],
+        old_base_price=Decimal("80"),
+        old_compare_at_price=Decimal("100"),
+        new_base_price=Decimal("90"),
+        new_compare_at_price=Decimal("110"),
+    )
+
+    assert unknown_generic.price == Decimal("80")
 
 
 def test_parent_price_update_only_moves_inherited_variations_and_legacy_variants():

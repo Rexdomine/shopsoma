@@ -676,6 +676,17 @@ class ProductResponse(ProductBase):
         # variation pricing so persisted legacy variants expose the same
         # effective and compare-at prices as vendor variation responses.
         if self.variants:
+            if not self.variations and self.compare_at_price is not None:
+                for variant in self.variants:
+                    if (
+                        variant.size is None
+                        and variant.color is None
+                        and variant.price < self.compare_at_price
+                    ):
+                        # ProductVariant has no compare-at column. Derive the
+                        # generic legacy row's display value from the parent so
+                        # a fresh request does not lose the sale metadata.
+                        variant.compare_at_price = self.compare_at_price
             if self.variations:
                 variations_by_title = unique_variations_by_color(self.variations)
                 variations_by_size = unique_variations_by_size(self.variations)
@@ -909,17 +920,20 @@ class ProductModerationUpdate(BaseModel):
     """Schema for admin product moderation"""
     moderation_status: str = Field(..., pattern="^(pending|approved|rejected)$")
     moderation_notes: Optional[str] = Field(None, max_length=1000)
+    expected_updated_at: datetime = Field(..., description="Product revision observed by the moderating admin")
 
 
 class ProductApprovalRequest(BaseModel):
     """Schema for approving a product"""
     notes: Optional[str] = Field(None, max_length=500, description="Optional approval notes")
+    expected_updated_at: datetime = Field(..., description="Product revision observed by the moderating admin")
 
 
 class ProductRejectionRequest(BaseModel):
     """Schema for rejecting a product"""
     reason: str = Field(..., min_length=10, max_length=1000, description="Rejection reason (required)")
     notes: Optional[str] = Field(None, max_length=500, description="Additional notes")
+    expected_updated_at: datetime = Field(..., description="Product revision observed by the moderating admin")
 
 
 class ProductFeatureUpdate(BaseModel):

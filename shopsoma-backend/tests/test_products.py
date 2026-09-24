@@ -5,6 +5,7 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.product import ModerationStatus
 
 class TestProductCreate:
     """Test product creation endpoint"""
@@ -93,6 +94,145 @@ class TestProductCreate:
         assert len(data["variants"]) == 2
         assert data["variants"][0]["size"] == "M"
         assert data["variants"][1]["size"] == "L"
+
+    @pytest.mark.asyncio
+    async def test_create_single_product_axisless_variant_inherits_total_stock(
+        self, client: AsyncClient, vendor_user, db_session
+    ):
+        """The legacy generic row must follow the product stock authority."""
+        from sqlalchemy import select
+        from app.models.product import ProductVariant
+
+        response = await client.post(
+            "/api/v1/products",
+            json={
+                "title": "Legacy Single Stock Product",
+                "base_price": 85.00,
+                "total_stock": 7,
+                "variants": [{"price": 85.00}],
+            },
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 201, response.text
+        variant = (
+            await db_session.execute(
+                select(ProductVariant).where(
+                    ProductVariant.product_id == response.json()["id"]
+                )
+            )
+        ).scalar_one()
+        assert variant.inherits_stock is True
+        assert variant.stock == 7
+        assert variant.is_available is True
+
+    @pytest.mark.asyncio
+    async def test_create_single_product_preserves_explicit_axisless_inventory(
+        self, client: AsyncClient, vendor_user, db_session
+    ):
+        """Explicit axis-less inventory is not treated as an inherited projection."""
+        from sqlalchemy import select
+        from app.models.product import ProductVariant
+
+        response = await client.post(
+            "/api/v1/products",
+            json={
+                "title": "Explicit Generic Inventory Product",
+                "base_price": 85.00,
+                "total_stock": 7,
+                "variants": [{"price": 85.00, "stock": 3, "is_available": False}],
+            },
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 201, response.text
+        variant = (
+            await db_session.execute(
+                select(ProductVariant).where(
+                    ProductVariant.product_id == response.json()["id"]
+                )
+            )
+        ).scalar_one()
+        assert variant.inherits_stock is False
+        assert variant.stock == 3
+        assert variant.is_available is False
+
+    @pytest.mark.asyncio
+    async def test_create_standalone_axisless_variant_inherits_total_stock(
+        self, client: AsyncClient, vendor_user, db_session
+    ):
+        """Omitted inventory uses the product stock authority."""
+        from sqlalchemy import select
+        from app.models.product import Product, ProductVariant
+
+        product_response = await client.post(
+            "/api/v1/products",
+            json={
+                "title": "Standalone Variant Stock Product",
+                "base_price": 85.00,
+                "total_stock": 7,
+            },
+            headers=vendor_user["headers"],
+        )
+        assert product_response.status_code == 201, product_response.text
+
+        response = await client.post(
+            f"/api/v1/products/{product_response.json()['id']}/variants",
+            json={"price": 85.00},
+            headers=vendor_user["headers"],
+        )
+        assert response.status_code == 201, response.text
+
+        variant = (
+            await db_session.execute(
+                select(ProductVariant).where(
+                    ProductVariant.product_id == product_response.json()["id"]
+                )
+            )
+        ).scalar_one()
+        product = await db_session.get(Product, product_response.json()["id"])
+        assert variant.inherits_stock is True
+        assert variant.stock == product.total_stock == 7
+        assert variant.is_available is True
+
+    @pytest.mark.asyncio
+    async def test_create_made_to_order_product_preserves_explicit_variant_inventory(
+        self, client: AsyncClient, vendor_user, db_session
+    ):
+        """Made-to-order normalization applies only to inherited generic rows."""
+        from sqlalchemy import select
+        from app.models.product import ProductVariant
+
+        response = await client.post(
+            "/api/v1/products",
+            json={
+                "title": "Made To Order Sized Product",
+                "base_price": 85.00,
+                "made_to_order": True,
+                "made_to_order_timeline": "Ships in 2-3 weeks",
+                "variants": [
+                    {
+                        "size": "M",
+                        "price": 85.00,
+                        "stock": 9,
+                        "is_available": False,
+                    }
+                ],
+            },
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 201, response.text
+        variant = (
+            await db_session.execute(
+                select(ProductVariant).where(
+                    ProductVariant.product_id == response.json()["id"]
+                )
+            )
+        ).scalar_one()
+        assert variant.inherits_stock is False
+        assert variant.stock == 9
+        assert variant.is_available is False
 
     @pytest.mark.asyncio
     async def test_create_product_with_numeric_size_variation(self, client: AsyncClient, vendor_user):
@@ -784,7 +924,10 @@ class TestProductRetrieve:
 
         approval_response = await client.put(
             f"/api/v1/admin/products/{product_id}/approve",
-            json={"notes": "Approved for storefront"},
+            json={
+                "notes": "Approved for storefront",
+                "expected_updated_at": created["updated_at"],
+            },
             headers=admin_user["headers"],
         )
         assert approval_response.status_code == 200
@@ -871,6 +1014,154 @@ class TestProductUpdate:
         updated_variation = update_response.json()["variations"][0]
         assert float(updated_variation["price"]) == 180.00
         assert float(updated_variation["sale_price"]) == 150.00
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("rewrite_payload", "initial_status"),
+        [
+            ({"title": "Rewritten title"}, ModerationStatus.APPROVED),
+            ({"title": "Rewritten title"}, ModerationStatus.PENDING),
+            ({"description": "Rewritten description"}, ModerationStatus.APPROVED),
+            ({"description": "Rewritten description"}, ModerationStatus.PENDING),
+            (
+                {
+                    "variations": [
+                        {"title": "Blue", "type": "color", "price": 100.00},
+                    ],
+                },
+                ModerationStatus.APPROVED,
+            ),
+            (
+                {
+                    "variations": [
+                        {"title": "Blue", "type": "color", "price": 100.00},
+                    ],
+                },
+                ModerationStatus.PENDING,
+            ),
+        ],
+        ids=[
+            "parent-title-approved",
+            "parent-title-pending",
+            "parent-description-approved",
+            "parent-description-pending",
+            "variation-replacement-approved",
+            "variation-replacement-pending",
+        ],
+    )
+    async def test_content_rewrite_advances_revision_before_stale_moderation(
+        self,
+        client: AsyncClient,
+        vendor_user,
+        admin_user,
+        db_session: AsyncSession,
+        rewrite_payload,
+        initial_status,
+    ):
+        """Every moderation-relevant rewrite invalidates the prior admin revision."""
+        from datetime import datetime, timezone
+        from fastapi import HTTPException
+        from app.api.v1 import admin as admin_api
+        from app.models.product import ModerationStatus, Product
+        from app.schemas.product import ProductApprovalRequest
+        from tests.conftest import TestSessionLocal
+
+        create_response = await client.post(
+            "/api/v1/products",
+            json={
+                "title": "Revision Guard Product",
+                "base_price": 100.00,
+                "product_type": "variable",
+                "variations": [
+                    {"title": "Red", "type": "color", "price": 100.00},
+                ],
+            },
+            headers=vendor_user["headers"],
+        )
+        assert create_response.status_code == 201
+        product_id = create_response.json()["id"]
+
+        product = await db_session.get(Product, product_id)
+        product.moderation_status = initial_status
+        if initial_status is ModerationStatus.APPROVED:
+            product.moderated_at = datetime.now(timezone.utc)
+            product.moderated_by = admin_user["user"].id
+        await db_session.commit()
+        await db_session.refresh(product)
+        expected_updated_at = product.updated_at
+
+        rewrite_response = await client.put(
+            f"/api/v1/products/{product_id}",
+            json=rewrite_payload,
+            headers=vendor_user["headers"],
+        )
+        assert rewrite_response.status_code == 200
+        rewritten = rewrite_response.json()
+        assert rewritten["moderation_status"] == "pending"
+        assert rewritten["updated_at"] != expected_updated_at.isoformat()
+
+        async with TestSessionLocal() as moderation_session:
+            with pytest.raises(HTTPException) as error:
+                await admin_api.approve_product(
+                    product_id,
+                    ProductApprovalRequest(
+                        notes="stale approval",
+                        expected_updated_at=expected_updated_at,
+                    ),
+                    admin_user["user"],
+                    moderation_session,
+                )
+        assert error.value.status_code == 409
+
+    @pytest.mark.asyncio
+    async def test_variation_rewrite_clears_prior_moderation_metadata(
+        self,
+        client: AsyncClient,
+        vendor_user,
+        db_session: AsyncSession,
+    ):
+        """A replacement variation set must not retain the prior decision audit."""
+        from app.models.product import ModerationStatus, Product
+        from datetime import datetime, timezone
+
+        create_response = await client.post(
+            "/api/v1/products",
+            json={
+                "title": "Variation Moderation Metadata",
+                "base_price": 100.00,
+                "product_type": "variable",
+                "variations": [
+                    {"title": "Red", "type": "color", "price": 100.00},
+                ],
+            },
+            headers=vendor_user["headers"],
+        )
+        assert create_response.status_code == 201
+        product_id = create_response.json()["id"]
+
+        product = await db_session.get(Product, product_id)
+        product.moderation_status = ModerationStatus.APPROVED
+        product.moderated_at = datetime.now(timezone.utc)
+        product.moderated_by = vendor_user["user"].id
+        product.moderation_notes = "Prior decision"
+        await db_session.commit()
+
+        update_response = await client.put(
+            f"/api/v1/products/{product_id}",
+            json={
+                "variations": [
+                    {"title": "Blue", "type": "color", "price": 100.00},
+                ],
+            },
+            headers=vendor_user["headers"],
+        )
+
+        assert update_response.status_code == 200
+        await db_session.refresh(product)
+        assert product.moderation_status is ModerationStatus.PENDING
+        assert product.moderated_at is None
+        assert product.moderated_by is None
+        assert product.moderation_notes is None
 
     @pytest.mark.asyncio
     async def test_update_parent_price_persists_legacy_custom_inheritance_decision(
@@ -961,7 +1252,7 @@ class TestProductUpdate:
         variant = ProductVariant(
             id=uuid.uuid4(),
             product_id=product.id,
-            size="M",
+            inherits_stock=True,
             price=80.00,
             stock=0,
             is_available=False,
@@ -1146,6 +1437,112 @@ class TestProductVariants:
         assert float(data["price"]) == 90.00
 
     @pytest.mark.asyncio
+    async def test_empty_variant_update_preserves_approved_moderation(
+        self,
+        client: AsyncClient,
+        vendor_user,
+        sample_product,
+        db_session: AsyncSession,
+    ):
+        """An empty variant update must not create a new moderation revision."""
+        from app.models.product import ModerationStatus, ProductVariant
+        import uuid
+
+        variant = ProductVariant(
+            id=uuid.uuid4(),
+            product_id=sample_product.id,
+            size="M",
+            price=85.00,
+            stock=10,
+        )
+        sample_product.moderation_status = ModerationStatus.APPROVED
+        sample_product.moderation_notes = "Prior decision"
+        db_session.add(variant)
+        await db_session.commit()
+
+        response = await client.put(
+            f"/api/v1/products/{sample_product.id}/variants/{variant.id}",
+            json={},
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 200
+        await db_session.refresh(sample_product)
+        assert sample_product.moderation_status is ModerationStatus.APPROVED
+        assert sample_product.moderation_notes == "Prior decision"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("payload", [{"stock": 25}, {"is_available": False}])
+    async def test_inventory_only_variant_update_preserves_approved_moderation(
+        self,
+        client: AsyncClient,
+        vendor_user,
+        sample_product,
+        db_session: AsyncSession,
+        payload,
+    ):
+        """Operational inventory edits must not hide an approved product."""
+        from app.models.product import ModerationStatus, ProductVariant
+        import uuid
+
+        variant = ProductVariant(
+            id=uuid.uuid4(),
+            product_id=sample_product.id,
+            size="M",
+            price=85.00,
+            stock=10,
+            is_available=True,
+        )
+        sample_product.moderation_status = ModerationStatus.APPROVED
+        sample_product.moderation_notes = "Prior decision"
+        db_session.add(variant)
+        await db_session.commit()
+
+        response = await client.put(
+            f"/api/v1/products/{sample_product.id}/variants/{variant.id}",
+            json=payload,
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 200
+        await db_session.refresh(sample_product)
+        assert sample_product.moderation_status is ModerationStatus.APPROVED
+        assert sample_product.moderation_notes == "Prior decision"
+
+    @pytest.mark.asyncio
+    async def test_reviewable_variant_update_returns_approved_product_to_pending(
+        self,
+        client: AsyncClient,
+        vendor_user,
+        sample_product,
+        db_session: AsyncSession,
+    ):
+        """Catalog content edits must still create a new moderation revision."""
+        from app.models.product import ModerationStatus, ProductVariant
+        import uuid
+
+        variant = ProductVariant(
+            id=uuid.uuid4(),
+            product_id=sample_product.id,
+            size="M",
+            price=85.00,
+            stock=10,
+        )
+        sample_product.moderation_status = ModerationStatus.APPROVED
+        db_session.add(variant)
+        await db_session.commit()
+
+        response = await client.put(
+            f"/api/v1/products/{sample_product.id}/variants/{variant.id}",
+            json={"price": 90.00},
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 200
+        await db_session.refresh(sample_product)
+        assert sample_product.moderation_status is ModerationStatus.PENDING
+
+    @pytest.mark.asyncio
     async def test_delete_variant(
         self,
         client: AsyncClient,
@@ -1236,12 +1633,19 @@ class TestProductModeration:
         self,
         client: AsyncClient,
         admin_user,
-        sample_product
+        sample_product,
+        db_session,
     ):
         """Test approving a product"""
+        from app.models.product import ModerationStatus
+
+        sample_product.moderation_status = ModerationStatus.PENDING
+        await db_session.commit()
+        await db_session.refresh(sample_product)
         moderation_data = {
             "moderation_status": "approved",
-            "moderation_notes": "Looks good!"
+            "moderation_notes": "Looks good!",
+            "expected_updated_at": sample_product.updated_at.isoformat(),
         }
 
         response = await client.patch(
@@ -1260,12 +1664,19 @@ class TestProductModeration:
         self,
         client: AsyncClient,
         admin_user,
-        sample_product
+        sample_product,
+        db_session,
     ):
         """Test rejecting a product"""
+        from app.models.product import ModerationStatus
+
+        sample_product.moderation_status = ModerationStatus.PENDING
+        await db_session.commit()
+        await db_session.refresh(sample_product)
         moderation_data = {
             "moderation_status": "rejected",
-            "moderation_notes": "Violates policy"
+            "moderation_notes": "Violates policy",
+            "expected_updated_at": sample_product.updated_at.isoformat(),
         }
 
         response = await client.patch(
@@ -1287,7 +1698,8 @@ class TestProductModeration:
     ):
         """Test that vendors cannot moderate products"""
         moderation_data = {
-            "moderation_status": "approved"
+            "moderation_status": "approved",
+            "expected_updated_at": sample_product.updated_at.isoformat(),
         }
 
         response = await client.patch(

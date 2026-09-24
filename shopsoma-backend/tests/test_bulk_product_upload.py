@@ -3,7 +3,41 @@ import csv
 import pytest
 from httpx import AsyncClient
 
-from app.api.v1.products import _parse_positive_decimal
+from app.api.v1.products import _parse_positive_decimal, _parse_image_urls
+
+
+def test_bulk_image_url_validation_is_syntax_only_and_bounded() -> None:
+    valid = "https://cdn.example.com/image.jpg?signature=a%2Bb%3D"
+    errors = []
+    assert _parse_image_urls({"image_1_url": valid}, 2, errors) == [valid]
+    assert errors == []
+
+    invalid = [
+        "http://cdn.example.com/image.jpg",
+        "https://user:password@cdn.example.com/image.jpg",
+        "https://localhost/image.jpg",
+        "https://127.0.0.1/image.jpg",
+        "https://127.1/image.jpg",
+        "https://2130706433/image.jpg",
+        "https://0x7f000001/image.jpg",
+        "https://cdn.example.com/image\\\\name.jpg",
+        "https://bad_host.example/image.jpg",
+        "https://bad..example/image.jpg",
+        "https://cdn.example.com/image.jpg\n",
+        "https://cdn.example.com/" + "x" * 2041,
+    ]
+    for value in invalid:
+        errors = []
+        assert _parse_image_urls({"image_1_url": value}, 2, errors) == []
+        assert errors and errors[0]["row"] == 2
+
+
+def test_bulk_image_url_validation_deduplicates_and_limits() -> None:
+    row = {f"image_{index}_url": f"https://cdn.example.com/{index}.jpg" for index in range(1, 6)}
+    row["image_5_url"] = row["image_1_url"]
+    errors = []
+    assert _parse_image_urls(row, 2, errors) == [f"https://cdn.example.com/{index}.jpg" for index in range(1, 5)]
+    assert errors == []
 
 
 def test_bulk_measurement_parser_rejects_below_storage_precision_and_non_finite() -> None:
@@ -228,3 +262,42 @@ async def test_bulk_upload_variable_products_success(client: AsyncClient, vendor
     assert by_title["Red"].inherits_sale_price is True
     assert by_title["Blue"].inherits_price is False
     assert by_title["Blue"].inherits_sale_price is False
+
+
+@pytest.mark.asyncio
+async def test_bulk_upload_variable_rejects_product_sku_reused_by_multiple_products(client: AsyncClient, vendor_user, db_session):
+    from app.models.category import Category
+
+    category = Category(name="SKU Test Dresses", slug="sku-test-dresses")
+    db_session.add(category)
+    await db_session.commit()
+
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=[
+        "product_title", "description", "category_slug", "currency", "base_price",
+        "compare_at_price", "product_sku", "collection_name", "made_to_order",
+        "made_to_order_timeline", "care_instructions", "fabric_composition",
+        "color_name", "color_hex", "size", "stock", "variant_sku",
+        "variation_price", "variation_sale_price",
+    ])
+    writer.writeheader()
+    common = {
+        "description": "Test dress", "category_slug": "sku-test-dresses", "currency": "USD",
+        "base_price": "100", "compare_at_price": "120", "product_sku": "DUPLICATE-SKU",
+        "collection_name": "", "made_to_order": "false", "made_to_order_timeline": "",
+        "care_instructions": "", "fabric_composition": "", "color_name": "Red",
+        "color_hex": "#FF0000", "size": "M", "stock": "2", "variation_price": "",
+        "variation_sale_price": "",
+    }
+    writer.writerow({**common, "product_title": "Dress One", "variant_sku": "DUP-1"})
+    writer.writerow({**common, "product_title": "Dress Two", "variant_sku": "DUP-2"})
+
+    response = await client.post(
+        "/api/v1/products/bulk-upload/variable",
+        files={"file": ("duplicate.csv", output.getvalue(), "text/csv")},
+        headers=vendor_user["headers"],
+    )
+    assert response.status_code == 422
+    errors = response.json()["detail"]["errors"]
+    assert sum(error["field"] == "product_sku" for error in errors) == 2
+    assert all("multiple products" in error["message"] for error in errors if error["field"] == "product_sku")

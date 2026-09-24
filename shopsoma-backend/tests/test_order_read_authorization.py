@@ -111,6 +111,12 @@ async def test_secure_guest_read_capabilities(
         actual[label] = response.status_code
         if response.status_code == 200:
             assert token not in response.text
+    if suffix:
+        number_response = await client.get(
+            f"/api/v1/orders/{payload['order_number'].lower()}{suffix}",
+            headers={"X-ShopSoma-Checkout-Capability": token},
+        )
+        assert number_response.status_code == 200, number_response.text
     cap = (
         await db_session.execute(
             select(OrderGuestCapability).where(
@@ -196,11 +202,20 @@ async def test_legacy_guest_read_requires_persisted_passwordless_active_guest(
     payload = created.json()
     assert payload["checkout_capability"] is None
     url = f"/api/v1/orders/{payload['id']}{suffix}"
-    guest = await db_session.get(User, uuid.UUID(payload["customer_id"]))
     actual = {"guest": (await client.get(url)).status_code}
+    if suffix:
+        number_url = f"/api/v1/orders/{payload['order_number'].lower()}{suffix}"
+        actual["guest_by_number"] = (await client.get(number_url)).status_code
+        actual["guest_by_number_with_header"] = (
+            await client.get(
+                number_url,
+                headers={"X-ShopSoma-Checkout-Capability": "arbitrary-header"},
+            )
+        ).status_code
     actual["stranger_denied"] = (
         await client.get(url, headers=customer_user["headers"])
     ).status_code in {403, 404}
+    guest = await db_session.get(User, uuid.UUID(payload["customer_id"]))
     for field, value, original in [
         ("is_active", False, True),
         ("hashed_password", "registered-test-hash", None),
@@ -211,13 +226,18 @@ async def test_legacy_guest_read_requires_persisted_passwordless_active_guest(
         actual[field] = (await client.get(url)).status_code in {403, 404}
         setattr(guest, field, original)
         await db_session.commit()
-    assert actual == {
+    expected = {
         "guest": 200,
         "stranger_denied": True,
         "is_active": True,
         "hashed_password": True,
         "is_guest_created": True,
     }
+    if suffix:
+        expected.update(
+            {"guest_by_number": 404, "guest_by_number_with_header": 404}
+        )
+    assert actual == expected
 
 
 @pytest.mark.asyncio

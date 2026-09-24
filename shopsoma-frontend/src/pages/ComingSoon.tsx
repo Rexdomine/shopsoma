@@ -165,7 +165,7 @@ export default function ComingSoon({ onReleased, initialSettings }: ComingSoonPr
             </div>
           </div>
 
-          <footer className="relative flex items-center justify-between border-t border-white/10 pt-5 text-xs text-white/50"><span>© ShopSoma</span><div className="flex items-center gap-4"><a href="mailto:hello@shopsoma.com" aria-label="Email ShopSoma" className="transition hover:text-[#E7C97A]"><Mail className="h-4 w-4" /></a><a href="https://instagram.com" aria-label="ShopSoma on Instagram" className="transition hover:text-[#E7C97A]"><Instagram className="h-4 w-4" /></a><span className="flex items-center gap-1 text-white/70">Stay close <ArrowRight className="h-3.5 w-3.5" /></span></div></footer>
+          <footer className="relative flex items-center justify-between border-t border-white/10 pt-5 text-xs text-white/50"><span>© ShopSoma</span><div className="flex items-center gap-4"><a href="mailto:hello@shopsoma.com" aria-label="Email ShopSoma" className="transition hover:text-[#E7C97A]"><Mail className="h-4 w-4" /></a><a href="https://www.instagram.com/shopsoma.africa?stkn=N3E1dndjZTBsajdk" aria-label="ShopSoma on Instagram" className="transition hover:text-[#E7C97A]"><Instagram className="h-4 w-4" /></a><span className="flex items-center gap-1 text-white/70">Stay close <ArrowRight className="h-3.5 w-3.5" /></span></div></footer>
         </section>
 
         <section className="relative min-h-[420px] lg:min-h-screen" aria-label="ShopSoma campaign image">

@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   toggleUserStatus: vi.fn(),
   restoreVendorStore: vi.fn(),
   updateVendorFeaturedStorefront: vi.fn(),
+  resendVendorActivationForVendor: vi.fn(),
 }));
 
 vi.mock('../../components/admin/AdminSidebar', () => ({ default: () => null }));
@@ -35,9 +36,25 @@ const vendor = {
   total_revenue: 0,
   created_at: '2026-01-01T00:00:00Z',
   store_active: true,
+  activation_resend_eligible: false,
 };
 
-const actingAdminVendor = { ...vendor, id: 'vendor-admin', user_id: 'admin-user', email: 'admin@example.com', role: 'admin' };
+const eligibleInactiveVendor = {
+  ...vendor,
+  id: 'vendor-eligible-inactive',
+  user_id: 'eligible-inactive-user',
+  email: 'eligible@example.com',
+  is_active: false,
+  activation_resend_eligible: true,
+};
+const actingAdminVendor = {
+  ...vendor,
+  id: 'vendor-admin',
+  user_id: 'admin-user',
+  email: 'admin@example.com',
+  role: 'admin',
+  activation_resend_eligible: false,
+};
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -66,4 +83,57 @@ it('keeps selection and shows API detail after a failed bulk update', async () =
   await waitFor(() => expect(mocks.bulkUpdateUserStatus).toHaveBeenCalledWith(['vendor-user'], false));
   expect(await screen.findByRole('alert')).toHaveTextContent('Account status cannot be changed');
   expect(screen.getByRole('checkbox', { name: 'Select vendor@example.com' })).toBeChecked();
+});
+
+it('hides resend for ineligible vendors', async () => {
+  mocks.listVendors.mockResolvedValue({ items: [{ ...vendor, activation_resend_eligible: false }, actingAdminVendor], total: 2, total_pages: 1 });
+  render(<AdminVendors />);
+  expect(await screen.findAllByText('Vendor One')).not.toHaveLength(0);
+  expect(screen.queryByRole('button', { name: 'Resend activation' })).not.toBeInTheDocument();
+});
+
+it('respects confirmation cancellation', async () => {
+  mocks.listVendors.mockResolvedValue({ items: [eligibleInactiveVendor, actingAdminVendor], total: 2, total_pages: 1 });
+  vi.spyOn(window, 'confirm').mockReturnValue(false);
+  render(<AdminVendors />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Resend activation' }));
+  expect(window.confirm).toHaveBeenCalled();
+  expect(mocks.resendVendorActivationForVendor).not.toHaveBeenCalled();
+});
+
+it('prevents duplicate resends while pending, refreshes, and reports provider acceptance', async () => {
+  let resolveRequest!: () => void;
+  mocks.listVendors.mockResolvedValue({ items: [eligibleInactiveVendor, actingAdminVendor], total: 2, total_pages: 1 });
+  mocks.resendVendorActivationForVendor.mockReturnValue(new Promise<void>((resolve) => { resolveRequest = resolve; }));
+  render(<AdminVendors />);
+  const resend = await screen.findByRole('button', { name: 'Resend activation' });
+  fireEvent.click(resend);
+  fireEvent.click(resend);
+  expect(mocks.resendVendorActivationForVendor).toHaveBeenCalledTimes(1);
+  expect(screen.getByRole('button', { name: 'Sending…' })).toBeDisabled();
+  resolveRequest();
+  expect(await screen.findByRole('alert')).toHaveTextContent('accepted by the email provider');
+  await waitFor(() => expect(mocks.listVendors).toHaveBeenCalledTimes(2));
+});
+
+it('shows cooldown errors and keeps resend usable after a 429', async () => {
+  mocks.listVendors.mockResolvedValue({ items: [eligibleInactiveVendor, actingAdminVendor], total: 2, total_pages: 1 });
+  mocks.resendVendorActivationForVendor.mockRejectedValue({ response: { status: 429, data: { detail: 'Try again in 30 seconds' } } });
+  render(<AdminVendors />);
+  const resend = await screen.findByRole('button', { name: 'Resend activation' });
+  fireEvent.click(resend);
+  expect(await screen.findByRole('alert')).toHaveTextContent('Try again in 30 seconds');
+  fireEvent.click(resend);
+  await waitFor(() => expect(mocks.resendVendorActivationForVendor).toHaveBeenCalledTimes(2));
+});
+
+it('shows a generic error and keeps resend usable after an ambiguous 503', async () => {
+  mocks.listVendors.mockResolvedValue({ items: [eligibleInactiveVendor, actingAdminVendor], total: 2, total_pages: 1 });
+  mocks.resendVendorActivationForVendor.mockRejectedValue({ response: { status: 503, data: {} } });
+  render(<AdminVendors />);
+  const resend = await screen.findByRole('button', { name: 'Resend activation' });
+  fireEvent.click(resend);
+  expect(await screen.findByRole('alert')).toHaveTextContent('Failed to resend activation email. Please try again.');
+  fireEvent.click(resend);
+  await waitFor(() => expect(mocks.resendVendorActivationForVendor).toHaveBeenCalledTimes(2));
 });

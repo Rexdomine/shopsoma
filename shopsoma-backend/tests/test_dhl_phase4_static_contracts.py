@@ -1157,6 +1157,7 @@ def test_order_tracking_returns_persisted_carrier_number_on_initial_http_load() 
     orders_source = (ROOT / 'app' / 'api' / 'v1' / 'orders.py').read_text()
     frontend_tracking_source = (ROOT.parent / 'shopsoma-frontend' / 'src' / 'services' / 'orderService.ts').read_text()
     assert 'tracking_id = order.tracking_number or f"GB{order.order_number.replace(\'-\', \'\')[-8:]}"' in orders_source
+    assert 'else Order.order_number == order_ref.upper()' in orders_source
     assert '"tracking_number": order.tracking_number,' in orders_source
     assert 'tracking_number?: string | null;' in frontend_tracking_source
     assert 'tracking_number: trackingId,' in frontend_tracking_source

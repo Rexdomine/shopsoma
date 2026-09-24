@@ -4,13 +4,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update
 from pydantic import BaseModel, EmailStr
 from typing import Optional
-from uuid import UUID
 
 from app.core.database import get_db
 from app.core.security import create_access_token
 from app.models import Vendor, User
 from app.services.vendor_otp_service import OTPDeliveryError, VendorOTPService
 from app.core.config import settings
+from app.services.vendor_activation_service import lock_activation_identity, require_activation_identity
 
 
 router = APIRouter(prefix="/vendor/activation", tags=["Vendor Activation"])
@@ -95,6 +95,13 @@ async def initiate_vendor_activation(
             detail="Vendor profile not found"
         )
 
+    row = await lock_activation_identity(db, user_id=user.id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Vendor profile not found")
+    vendor, user = row
+    if user.email != request.email:
+        raise HTTPException(status_code=401, detail="Invalid activation identity")
+
     # If this vendor has already completed account setup, provide
     # a user-friendly response with the password reset route.
     if vendor.approved and user.is_active:
@@ -112,6 +119,9 @@ async def initiate_vendor_activation(
             detail="Your vendor account is pending approval. You'll receive an email once approved."
         )
 
+    subject, email = str(user.id), user.email
+    vendor, user = await require_activation_identity(db, subject, email)
+
     # Check if there's already a valid OTP
     existing_otp = await VendorOTPService.get_latest_otp(db, user.email)
 
@@ -128,6 +138,9 @@ async def initiate_vendor_activation(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Unable to send verification code. Please try again."
             )
+
+    # OTP creation commits internally and releases the initial locks.
+    vendor, user = await require_activation_identity(db, subject, email)
 
     # Create a temporary token for this activation session
     # This token is NOT for authentication, just for identifying the vendor during OTP flow
@@ -172,6 +185,8 @@ async def verify_vendor_otp(
             detail="Invalid activation token"
         )
 
+    vendor, user = await require_activation_identity(db, user_id, email)
+
     # Verify OTP
     success, message, otp = await VendorOTPService.verify_otp(
         db=db,
@@ -185,42 +200,12 @@ async def verify_vendor_otp(
             detail=message
         )
 
-    # Get user and vendor
-    user_uuid = UUID(user_id)
-    user_result = await db.execute(
-        select(User).where(User.id == user_uuid)
-    )
-    user = user_result.scalar_one_or_none()
-
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found"
-        )
-
-    vendor_result = await db.execute(
-        select(Vendor).where(Vendor.user_id == user.id)
-    )
-    vendor = vendor_result.scalar_one_or_none()
-
-    # Mark email as verified but DON'T activate account yet
-    # Account will be fully activated after password is set
-    if not user.email_verified:
-        user.email_verified = True
-
-    # Ensure vendor is marked as approved and set initial onboarding state
-    if vendor:
-        if not vendor.approved:
-            vendor.approved = True
-
-        # Set initial onboarding state for new vendors
-        if vendor.is_onboarding and not vendor.brand_info_completed and not vendor.payout_info_completed:
-            # Vendor is starting fresh onboarding
-            vendor.is_onboarding = True
-            vendor.brand_info_completed = False
-            vendor.payout_info_completed = False
-
-    await db.commit()
+    # Verification commits internally. Reacquire and revalidate before any
+    # account mutation or password capability; verification never grants approval.
+    vendor, user = await require_activation_identity(db, user_id, email)
+    if otp.vendor_id != vendor.id:
+        raise HTTPException(status_code=401, detail="Invalid activation token")
+    user.email_verified = True
 
     # Mint a distinct capability only after OTP verification. The initiation
     # token must never authorize password persistence by itself.
@@ -233,6 +218,8 @@ async def verify_vendor_otp(
         },
         expires_delta=timedelta(minutes=15),
     )
+
+    await db.commit()
 
     return VerifyOTPResponse(
         message="Email verified successfully! Please create your password.",
@@ -268,29 +255,7 @@ async def resend_vendor_otp(
             detail="Invalid activation token"
         )
 
-    # Get user and vendor
-    user_uuid = UUID(user_id)
-    user_result = await db.execute(
-        select(User).where(User.id == user_uuid)
-    )
-    user = user_result.scalar_one_or_none()
-
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found"
-        )
-
-    vendor_result = await db.execute(
-        select(Vendor).where(Vendor.user_id == user.id)
-    )
-    vendor = vendor_result.scalar_one_or_none()
-
-    if not vendor:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Vendor profile not found"
-        )
+    vendor, user = await require_activation_identity(db, user_id, email)
 
     # Generate and send new OTP
     try:
@@ -304,6 +269,8 @@ async def resend_vendor_otp(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Unable to send verification code. Please try again."
         )
+
+    vendor, user = await require_activation_identity(db, user_id, email)
 
     return {
         "message": "New verification code sent successfully",
@@ -346,24 +313,8 @@ async def set_vendor_password(
             detail="Password must be at least 8 characters long"
         )
 
-    # Get user
-    user_uuid = UUID(user_id)
-    user_result = await db.execute(
-        select(User).where(User.id == user_uuid)
-    )
-    user = user_result.scalar_one_or_none()
-
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found"
-        )
-
-    if user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Vendor account is already active"
-        )
+    vendor, user = await require_activation_identity(db, user_id, email)
+    user_uuid = user.id
 
     # Claim activation atomically. A conditional update prevents two workers
     # carrying the same capability from both changing the password before
@@ -385,9 +336,7 @@ async def set_vendor_password(
             detail="Vendor account is already active"
         )
 
-    await db.commit()
-
-    # Generate auth tokens for login
+    # Generate auth tokens while the eligibility locks still protect identity.
     access_token = create_access_token(
         data={"sub": str(user.id), "email": user.email, "role": user.role.value}
     )
@@ -396,6 +345,8 @@ async def set_vendor_password(
     refresh_token = create_refresh_token(
         data={"sub": str(user.id), "email": user.email, "role": user.role.value}
     )
+
+    await db.commit()
 
     return {
         "message": "Password set successfully! Your account is now active.",

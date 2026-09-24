@@ -1,19 +1,22 @@
 """
 Admin API endpoints for database initialization and management
 """
-from typing import Optional, List
+from typing import Any, Optional, List
 from uuid import UUID
 from fastapi import APIRouter, HTTPException, Depends, Query, status
+from fastapi.encoders import jsonable_encoder
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, or_, delete, update
+from sqlalchemy import select, func, or_, delete, update, and_
 from sqlalchemy.orm import selectinload
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from urllib.parse import quote
 import asyncio
 import os
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from app.core.database import get_db
+from app.core.config import settings
 from app.api.dependencies import get_current_admin
 from app.models.audit_log import AuditLog
 from app.models.product import (
@@ -31,15 +34,176 @@ from app.models.setting import Setting
 from app.models.user import User, UserRole
 from app.models.vendor import Vendor, KYCStatus
 from app.models.vendor_application import VendorApplication
+from app.models.category import Category
 from app.schemas.auth import UserResponse, UserUpdate
 from app.schemas.common import PaginatedResponse
-from app.schemas.product import ProductApprovalRequest, ProductRejectionRequest, ProductFeatureUpdate
+from app.schemas.product import (
+    ProductApprovalRequest,
+    ProductRejectionRequest,
+    ProductFeatureUpdate,
+    ProductImageResponse,
+    ProductVariantResponse,
+    ProductVariantUpdate,
+)
+from app.api.v1.products import (
+    PRODUCT_RELATIONSHIPS,
+    _sync_direct_variant_price_to_inherited_variation,
+    _sync_inherited_variation_prices,
+    _sync_single_product_variant_inventory,
+)
+from app.services.product_moderation import transition_product_moderation
+from app.services.vendor_activation_service import (
+    activation_eligibility, activation_is_eligible, lock_activation_identity,
+)
 from app.services.test_account_classification import (
     classify_existing_staging_accounts,
     tag_staging_account,
 )
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+
+
+class AdminProductVariantResponse(BaseModel):
+    """Output-only variant shape tolerant of historical repair records."""
+
+    id: UUID
+    product_id: UUID
+    size: Optional[str] = None
+    color: Optional[str] = None
+    color_hex: Optional[str] = None
+    price: Decimal = Field(..., decimal_places=2)
+    stock: int
+    sku: Optional[str] = None
+    is_available: bool = True
+    compare_at_price: Optional[Decimal] = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+    @model_validator(mode="after")
+    def normalize_money_precision(self):
+        self.price = self.price.quantize(Decimal("0.01"))
+        if self.compare_at_price is not None:
+            self.compare_at_price = self.compare_at_price.quantize(Decimal("0.01"))
+        return self
+
+
+class AdminSizeStockResponse(BaseModel):
+    """Output-only size stock shape tolerant of importer repair records."""
+
+    id: UUID
+    variation_id: UUID
+    size: Any
+    stock: int
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminVariationResponse(BaseModel):
+    """Output-only variation shape tolerant of historical importer values."""
+
+    id: UUID
+    product_id: UUID
+    title: str
+    type: str = "color"
+    color_hex: Optional[str] = None
+    price: Optional[Decimal] = None
+    sale_price: Optional[Decimal] = None
+    inherits_price: Optional[bool] = None
+    inherits_sale_price: Optional[bool] = None
+    images: Any = None
+    is_active: bool = True
+    created_at: datetime
+    updated_at: datetime
+    size_stocks: List[AdminSizeStockResponse] = []
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminProductResponse(BaseModel):
+    """Output-only product shape tolerant of historical admin-repair rows.
+
+    Unlike the storefront response, this schema intentionally does not inherit
+    ProductBase/ProductResponse validation. Admins must be able to open and
+    repair rows written before current product constraints existed.
+    """
+
+    id: UUID
+    vendor_id: UUID
+    title: str
+    description: Optional[str] = None
+    category_id: Optional[UUID] = None
+    collection_id: Optional[UUID] = None
+    sku: Optional[str] = None
+    base_price: Decimal
+    compare_at_price: Optional[Decimal] = None
+    currency: str
+    total_stock: int
+    status: str
+    is_featured: bool
+    product_type: str
+    made_to_order: bool
+    made_to_order_timeline: Optional[str] = None
+    care_instructions: Optional[str] = None
+    fabric_composition: Optional[str] = None
+    weight_kg: Optional[Decimal] = None
+    length_cm: Optional[Decimal] = None
+    width_cm: Optional[Decimal] = None
+    height_cm: Optional[Decimal] = None
+    meta_title: Optional[str] = None
+    meta_description: Optional[str] = None
+    size_guide: Any = None
+    vendor_name: Optional[str] = None
+    category_name: Optional[str] = None
+    category_parent_name: Optional[str] = None
+    collection_name: Optional[str] = None
+    moderation_status: str
+    moderation_notes: Optional[str] = None
+    views_count: int
+    orders_count: int
+    created_at: datetime
+    updated_at: datetime
+    variants: List[AdminProductVariantResponse] = []
+    variations: List[AdminVariationResponse] = []
+    images: List[ProductImageResponse] = []
+
+    model_config = ConfigDict(from_attributes=True)
+
+    @model_validator(mode="after")
+    def derive_generic_variant_compare_at_price(self):
+        self.base_price = self.base_price.quantize(Decimal("0.01"))
+        if self.compare_at_price is not None:
+            self.compare_at_price = self.compare_at_price.quantize(Decimal("0.01"))
+        if self.compare_at_price is None:
+            return self
+        for variant in self.variants:
+            if variant.size is None and variant.color is None and variant.compare_at_price is None:
+                variant.compare_at_price = self.compare_at_price
+        return self
+
+
+class AdminProductUpdate(BaseModel):
+    """Explicit allow-list for the admin product edit form."""
+    model_config = ConfigDict(extra="forbid")
+
+    title: Optional[str] = Field(None, min_length=3, max_length=255)
+    description: Optional[str] = Field(None, max_length=5000)
+    category_id: Optional[UUID] = None
+    base_price: Optional[Decimal] = Field(None, gt=0, le=Decimal("999999.99"), decimal_places=2)
+    compare_at_price: Optional[Decimal] = Field(None, gt=0, le=Decimal("999999.99"), decimal_places=2)
+    total_stock: Optional[int] = Field(None, ge=0)
+    status: Optional[ProductStatus] = None
+
+
+    @model_validator(mode="after")
+    def reject_null_required_fields(self):
+        for field in ("title", "base_price", "total_stock", "status"):
+            if field in self.model_fields_set and getattr(self, field) is None:
+                raise ValueError(f"{field} cannot be null")
+        return self
 
 
 class FeaturedStorefrontUpdate(BaseModel):
@@ -517,7 +681,10 @@ async def bulk_update_user_status(
     if current_admin.id in payload.user_ids:
         raise HTTPException(status_code=400, detail="Cannot change your own status")
 
-    users = (await db.execute(select(User).where(User.id.in_(payload.user_ids)))).scalars().all()
+    users = (await db.execute(
+        select(User).where(User.id.in_(payload.user_ids)).order_by(User.id)
+        .execution_options(populate_existing=True).with_for_update()
+    )).scalars().all()
     users_by_id = {user.id: user for user in users}
     missing_ids = [str(user_id) for user_id in payload.user_ids if user_id not in users_by_id]
     if missing_ids:
@@ -530,10 +697,13 @@ async def bulk_update_user_status(
     for user_id in payload.user_ids:
         user = users_by_id[user_id]
         previous_is_active = user.is_active
-        if previous_is_active == payload.is_active:
+        unchanged = previous_is_active == payload.is_active
+        if unchanged and payload.is_active:
             results.append({"user_id": str(user.id), "status": "unchanged", "is_active": user.is_active})
             continue
 
+        # Explicit deactivation also revokes never-activated invitees whose
+        # boolean was already false. Preserve response counts, record the intent.
         user.is_active = payload.is_active
         db.add(
             AuditLog(
@@ -545,7 +715,7 @@ async def bulk_update_user_status(
                 new_values={"is_active": payload.is_active},
             )
         )
-        results.append({"user_id": str(user.id), "status": "updated", "is_active": user.is_active})
+        results.append({"user_id": str(user.id), "status": "unchanged" if unchanged else "updated", "is_active": user.is_active})
 
     await db.commit()
     return {
@@ -567,9 +737,11 @@ async def toggle_user_status(
 
     Requires admin role
     """
-    # Get user
+    # Even deactivating an already-inactive invitee writes a deny audit.
+    # Lock explicitly: an unchanged boolean alone produces no locking UPDATE.
     result = await db.execute(
         select(User).where(User.id == user_id)
+        .execution_options(populate_existing=True).with_for_update()
     )
     user = result.scalar_one_or_none()
 
@@ -813,7 +985,8 @@ async def list_vendors(
     Requires admin role
     """
     # Build query with join to User
-    query = select(Vendor, User).join(User, Vendor.user_id == User.id)
+    eligibility = activation_eligibility()
+    query = select(Vendor, User, eligibility.label("activation_resend_eligible")).join(User, Vendor.user_id == User.id)
     
     # Apply filters
     filters = []
@@ -889,8 +1062,9 @@ async def list_vendors(
                 "store_active": vendor.store_active,
                 "store_paused_at": vendor.store_paused_at.isoformat() if vendor.store_paused_at else None,
                 "store_deleted_at": vendor.store_deleted_at.isoformat() if vendor.store_deleted_at else None,
+                "activation_resend_eligible": activation_resend_eligible,
             }
-            for vendor, user in vendors_with_users
+            for vendor, user, activation_resend_eligible in vendors_with_users
         ],
         "total": total,
         "page": page,
@@ -998,6 +1172,7 @@ async def get_vendor_details(
         "total_revenue": float(vendor.total_revenue) if vendor.total_revenue else 0.0,
         "created_at": vendor.created_at.isoformat() if vendor.created_at else None,
         "updated_at": vendor.updated_at.isoformat() if vendor.updated_at else None,
+        "activation_resend_eligible": await db.scalar(select(activation_eligibility()).where(Vendor.id == vendor_id).select_from(Vendor).join(User, Vendor.user_id == User.id)),
     }
 
 
@@ -1234,13 +1409,13 @@ async def list_vendor_applications(
         vendor_ids = [app.vendor_id for app in applications if app.vendor_id]
         if vendor_ids:
             vendor_result = await db.execute(
-                select(Vendor, User)
+                select(Vendor, User, activation_eligibility())
                 .join(User, Vendor.user_id == User.id)
                 .where(Vendor.id.in_(vendor_ids))
             )
             vendor_by_id = {
-                str(vendor.id): (vendor, user)
-                for vendor, user in vendor_result.all()
+                str(vendor.id): (vendor, user, eligible)
+                for vendor, user, eligible in vendor_result.all()
             }
     
     # Calculate pagination info
@@ -1264,6 +1439,11 @@ async def list_vendor_applications(
                 "website_link": app.website_link,
                 "social_media_handles": app.social_media_handles,
                 "status": app.status,
+                "activation_resend_eligible": bool(
+                    app.status == "approved" and app.vendor_id
+                    and str(app.vendor_id) in vendor_by_id
+                    and vendor_by_id[str(app.vendor_id)][2]
+                ),
                 "admin_notes": app.admin_notes,
                 "vendor_id": str(app.vendor_id) if app.vendor_id else None,
                 "created_at": app.created_at.isoformat() if app.created_at else None,
@@ -1324,15 +1504,16 @@ async def get_vendor_application(
     
     vendor_user = None
     vendor = None
+    resend_eligible = False
     if application.vendor_id:
         vendor_result = await db.execute(
-            select(Vendor, User)
+            select(Vendor, User, activation_eligibility())
             .join(User, Vendor.user_id == User.id)
             .where(Vendor.id == application.vendor_id)
         )
         vendor_row = vendor_result.first()
         if vendor_row:
-            vendor, vendor_user = vendor_row
+            vendor, vendor_user, resend_eligible = vendor_row
 
     return {
         "id": str(application.id),
@@ -1351,6 +1532,7 @@ async def get_vendor_application(
         "website_link": application.website_link,
         "social_media_handles": application.social_media_handles,
         "status": application.status,
+        "activation_resend_eligible": bool(application.status == "approved" and resend_eligible),
         "admin_notes": application.admin_notes,
         "reviewed_by": str(application.reviewed_by) if application.reviewed_by else None,
         "reviewed_at": application.reviewed_at.isoformat() if application.reviewed_at else None,
@@ -1397,6 +1579,77 @@ async def update_application_notes(
     }
 
 
+async def _resend_vendor_activation_safely(vendor_id: UUID, admin: User, db: AsyncSession, application_id: UUID | None = None):
+    row = await lock_activation_identity(db, vendor_id=vendor_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Vendor not found")
+    vendor, user = row
+    eligibility = await activation_is_eligible(db, vendor_id)
+    if not eligibility:
+        raise HTTPException(status_code=409, detail="Vendor is not eligible for activation email resend")
+    if application_id is not None:
+        linked = await db.scalar(select(VendorApplication.id).where(
+            VendorApplication.id == application_id,
+            VendorApplication.vendor_id == vendor.id,
+            VendorApplication.status == "approved",
+        ))
+        if linked is None:
+            raise HTTPException(status_code=409, detail="Vendor is not linked to this approved application")
+
+    email, name, vendor_uuid, actor_id = user.email, user.full_name or "there", vendor.id, admin.id
+    db_now = await db.scalar(select(func.clock_timestamp()))
+    recent = await db.scalar(select(AuditLog.id).where(
+        AuditLog.action == "vendor_activation_email_resend_attempt",
+        AuditLog.entity_type == "vendor", AuditLog.entity_id == vendor_uuid,
+        AuditLog.created_at >= db_now - timedelta(minutes=10)).limit(1))
+    if recent is not None:
+        raise HTTPException(status_code=429, detail="Activation email was recently requested. Please try again in 10 minutes.")
+
+    attempt = AuditLog(user_id=actor_id, action="vendor_activation_email_resend_attempt",
+                       entity_type="vendor", entity_id=vendor_uuid, created_at=db_now,
+                       new_values={"email": email, "delivery": "pending"})
+    db.add(attempt)
+    await db.flush()
+    attempt_id = attempt.id
+    await db.commit()
+    # The durable attempt released the original locks. Reacquire them and
+    # snapshot current identity before IO; retain them through the result commit.
+    row = await lock_activation_identity(db, vendor_id=vendor_uuid)
+    if not row or not await activation_is_eligible(db, vendor_uuid):
+        db.add(AuditLog(user_id=actor_id, action="vendor_activation_email_resend_result",
+                        entity_type="vendor", entity_id=vendor_uuid,
+                        new_values={"attempt_id": str(attempt_id), "email": email,
+                                    "delivery": "skipped_ineligible"}))
+        await db.commit()
+        raise HTTPException(status_code=409, detail="Vendor is not eligible for activation email resend")
+    vendor, user = row
+    email, name = user.email, user.full_name or "there"
+
+    try:
+        from app.services.email_service import email_service
+        accepted = await email_service.send_vendor_activation_invitation_email(
+            email, name, f"{(settings.FRONTEND_BASE_URL or 'http://localhost:5173').rstrip('/')}/vendor/otp?email={quote(email, safe='')}"
+        )
+    except Exception as exc:
+        accepted, provider_error = None, type(exc).__name__
+    else:
+        provider_error = None
+    db.add(AuditLog(user_id=actor_id, action="vendor_activation_email_resend_result",
+                    entity_type="vendor", entity_id=vendor_uuid,
+                    new_values={"attempt_id": str(attempt_id), "email": email,
+                                "delivery": "provider_accepted" if accepted is True else "unknown",
+                                **({"error": provider_error} if provider_error else {})}))
+    await db.commit()
+    if accepted is True:
+        return {"message": "Activation email accepted by provider", "email": email, "account_already_setup": False}
+    raise HTTPException(status_code=503, detail="Unable to confirm activation email provider acceptance. Please try again.")
+
+
+@router.post("/vendors/{vendor_id}/resend-activation")
+async def resend_vendor_activation_for_vendor(vendor_id: UUID, current_admin: User = Depends(get_current_admin), db: AsyncSession = Depends(get_db)):
+    return await _resend_vendor_activation_safely(vendor_id, current_admin, db)
+
+
 @router.post("/vendor-applications/{application_id}/resend-activation")
 async def resend_vendor_activation(
     application_id: UUID,
@@ -1408,8 +1661,6 @@ async def resend_vendor_activation(
 
     Requires admin role
     """
-    from app.services.vendor_otp_service import OTPDeliveryError, VendorOTPService
-
     application_result = await db.execute(
         select(VendorApplication).where(VendorApplication.id == application_id)
     )
@@ -1436,23 +1687,7 @@ async def resend_vendor_activation(
 
     vendor, vendor_user = vendor_row
 
-    try:
-        await VendorOTPService.create_and_send_otp(
-            db=db,
-            vendor_id=vendor.id,
-            email=vendor_user.email
-        )
-    except OTPDeliveryError:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Unable to send activation email. Please try again."
-        )
-
-    return {
-        "message": "Activation email resent successfully",
-        "email": vendor_user.email,
-        "account_already_setup": vendor_user.is_active
-    }
+    return await _resend_vendor_activation_safely(vendor.id, current_admin, db, application_id=application.id)
 
 
 @router.post("/vendors/{vendor_id}/restore")
@@ -1667,81 +1902,62 @@ async def update_product_featured(
     }
 
 
-@router.put("/products/{product_id}/approve")
-async def approve_product(
-    product_id: UUID,
-    request: ProductApprovalRequest,
-    current_admin: User = Depends(get_current_admin),
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Approve a product
-
-    This endpoint approves a product for sale on the platform and sends
-    an email notification to the vendor.
-
-    Requires admin role
-    """
-    from datetime import datetime
-    from app.services.email_service import email_service
-    import logging
-
-    logger = logging.getLogger(__name__)
-
-    # Get product with vendor information
+async def _moderation_subject(db: AsyncSession, product_id: UUID):
     result = await db.execute(
         select(Product, Vendor, User)
         .join(Vendor, Product.vendor_id == Vendor.id)
         .join(User, Vendor.user_id == User.id)
         .where(Product.id == product_id)
     )
-    product_with_vendor = result.first()
+    return result.first()
 
-    if not product_with_vendor:
+
+@router.put("/products/{product_id}/approve")
+async def approve_product(
+    product_id: UUID,
+    request: ProductApprovalRequest,
+    current_admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Atomically approve a pending product, then notify its vendor."""
+    from app.services.email_service import email_service
+    import logging
+
+    subject = await _moderation_subject(db, product_id)
+    if not subject:
         raise HTTPException(status_code=404, detail="Product not found")
+    product, vendor, user = subject
+    transitioned = await transition_product_moderation(
+        db=db,
+        product_id=product_id,
+        admin_id=current_admin.id,
+        target_status=ModerationStatus.APPROVED,
+        moderation_notes=request.notes,
+        expected_updated_at=request.expected_updated_at,
+    )
 
-    product, vendor, user = product_with_vendor
-
-    # Check if already approved
-    if product.moderation_status == ModerationStatus.APPROVED:
-        raise HTTPException(status_code=400, detail="Product is already approved")
-
-    # Update product status
-    product.moderation_status = ModerationStatus.APPROVED
-    product.moderated_at = datetime.utcnow()
-    product.moderated_by = current_admin.id
-    product.moderation_notes = request.notes
-
-    # Set product to active if it was pending
-    if product.status == ProductStatus.DRAFT:
-        product.status = ProductStatus.ACTIVE
-
-    await db.commit()
-    await db.refresh(product)
-
-    # Send email notification to vendor
+    logger = logging.getLogger(__name__)
     try:
         await email_service.send_product_approved_email(
             email=user.email,
             vendor_name=user.full_name or vendor.business_name,
-            product_title=product.title,
-            product_id=str(product.id),
-            notes=request.notes
+            product_title=transitioned["title"],
+            product_id=str(product_id),
+            notes=request.notes,
         )
-        logger.info(f"Product approval email sent to {user.email} for product {product.id}")
-    except Exception as e:
-        # Log error but don't fail the approval operation
-        logger.error(f"Failed to send approval email to {user.email}: {e}")
+        logger.info("Product approval email sent to %s for product %s", user.email, product_id)
+    except Exception as exc:
+        logger.error("Failed to send approval email to %s: %s", user.email, exc)
 
     return {
         "message": "Product approved successfully",
-        "product_id": str(product.id),
-        "title": product.title,
-        "moderation_status": product.moderation_status.value,
-        "status": product.status.value,
-        "moderated_at": product.moderated_at.isoformat(),
-        "moderated_by": str(current_admin.id),
-        "email_sent": True
+        "product_id": str(product_id),
+        "title": transitioned["title"],
+        "moderation_status": transitioned["moderation_status"].value,
+        "status": transitioned["status"].value,
+        "moderated_at": transitioned["moderated_at"].isoformat(),
+        "moderated_by": str(transitioned["moderated_by"]),
+        "email_sent": True,
     }
 
 
@@ -1750,75 +1966,52 @@ async def reject_product(
     product_id: UUID,
     request: ProductRejectionRequest,
     current_admin: User = Depends(get_current_admin),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ):
-    """
-    Reject a product
-
-    This endpoint rejects a product from being sold on the platform and sends
-    an email notification to the vendor with the rejection reason.
-
-    Requires admin role
-    """
-    from datetime import datetime
+    """Atomically reject a pending product, then notify its vendor."""
     from app.services.email_service import email_service
     import logging
 
-    logger = logging.getLogger(__name__)
-
-    # Get product with vendor information
-    result = await db.execute(
-        select(Product, Vendor, User)
-        .join(Vendor, Product.vendor_id == Vendor.id)
-        .join(User, Vendor.user_id == User.id)
-        .where(Product.id == product_id)
-    )
-    product_with_vendor = result.first()
-
-    if not product_with_vendor:
+    subject = await _moderation_subject(db, product_id)
+    if not subject:
         raise HTTPException(status_code=404, detail="Product not found")
-
-    product, vendor, user = product_with_vendor
-
-    # Update product status
-    product.moderation_status = ModerationStatus.REJECTED
-    product.moderated_at = datetime.utcnow()
-    product.moderated_by = current_admin.id
-    product.moderation_notes = f"REJECTION REASON: {request.reason}"
+    product, vendor, user = subject
+    moderation_notes = f"REJECTION REASON: {request.reason}"
     if request.notes:
-        product.moderation_notes += f"\n\nADMIN NOTES: {request.notes}"
+        moderation_notes += f"\n\nADMIN NOTES: {request.notes}"
+    transitioned = await transition_product_moderation(
+        db=db,
+        product_id=product_id,
+        admin_id=current_admin.id,
+        target_status=ModerationStatus.REJECTED,
+        moderation_notes=moderation_notes,
+        expected_updated_at=request.expected_updated_at,
+    )
 
-    # Set product back to draft
-    product.status = ProductStatus.DRAFT
-
-    await db.commit()
-    await db.refresh(product)
-
-    # Send email notification to vendor
+    logger = logging.getLogger(__name__)
     try:
         await email_service.send_product_rejected_email(
             email=user.email,
             vendor_name=user.full_name or vendor.business_name,
-            product_title=product.title,
-            product_id=str(product.id),
+            product_title=transitioned["title"],
+            product_id=str(product_id),
             reason=request.reason,
-            notes=request.notes
+            notes=request.notes,
         )
-        logger.info(f"Product rejection email sent to {user.email} for product {product.id}")
-    except Exception as e:
-        # Log error but don't fail the rejection operation
-        logger.error(f"Failed to send rejection email to {user.email}: {e}")
+        logger.info("Product rejection email sent to %s for product %s", user.email, product_id)
+    except Exception as exc:
+        logger.error("Failed to send rejection email to %s: %s", user.email, exc)
 
     return {
         "message": "Product rejected successfully",
-        "product_id": str(product.id),
-        "title": product.title,
-        "moderation_status": product.moderation_status.value,
-        "status": product.status.value,
-        "moderated_at": product.moderated_at.isoformat(),
-        "moderated_by": str(current_admin.id),
+        "product_id": str(product_id),
+        "title": transitioned["title"],
+        "moderation_status": transitioned["moderation_status"].value,
+        "status": transitioned["status"].value,
+        "moderated_at": transitioned["moderated_at"].isoformat(),
+        "moderated_by": str(transitioned["moderated_by"]),
         "rejection_reason": request.reason,
-        "email_sent": True
+        "email_sent": True,
     }
 
 
@@ -1915,7 +2108,7 @@ async def delete_product(
         )
 
 
-@router.get("/products/{product_id}")
+@router.get("/products/{product_id}", response_model=AdminProductResponse)
 async def get_product(
     product_id: UUID,
     current_admin: User = Depends(get_current_admin),
@@ -1927,72 +2120,20 @@ async def get_product(
     Requires admin role
     """
     result = await db.execute(
-        select(Product).where(Product.id == product_id)
+        select(Product).options(*PRODUCT_RELATIONSHIPS).where(Product.id == product_id)
     )
     product = result.scalar_one_or_none()
 
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
 
-    # Get product images
-    image_result = await db.execute(
-        select(ProductImage).where(ProductImage.product_id == product_id)
-    )
-    images = image_result.scalars().all()
-
-    # Get product variants
-    variant_result = await db.execute(
-        select(ProductVariant).where(ProductVariant.product_id == product_id)
-    )
-    variants = variant_result.scalars().all()
-
-    return {
-        "id": str(product.id),
-        "title": product.title,
-        "description": product.description,
-        "sku": product.sku,
-        "base_price": float(product.base_price),
-        "compare_at_price": float(product.compare_at_price) if product.compare_at_price else None,
-        "currency": product.currency,
-        "total_stock": product.total_stock,
-        "made_to_order": product.made_to_order,
-        "made_to_order_timeline": product.made_to_order_timeline,
-        "status": product.status.value,
-        "moderation_status": product.moderation_status.value,
-        "is_featured": product.is_featured,
-        "views_count": product.views_count,
-        "orders_count": product.orders_count,
-        "created_at": product.created_at.isoformat() if product.created_at else None,
-        "updated_at": product.updated_at.isoformat() if product.updated_at else None,
-        "images": [
-            {
-                "id": str(image.id),
-                "image_url": image.image_url,
-                "alt_text": image.alt_text,
-                "is_primary": image.is_primary,
-                "display_order": image.display_order,
-            }
-            for image in images
-        ],
-        "variants": [
-            {
-                "id": str(variant.id),
-                "sku": variant.sku,
-                "size": variant.size,
-                "color": variant.color,
-                "price": float(variant.price),
-                "stock": variant.stock,
-                "is_active": variant.is_active,
-            }
-            for variant in variants
-        ]
-    }
+    return product
 
 
 @router.put("/products/{product_id}")
 async def update_product(
     product_id: UUID,
-    product_data: dict,
+    product_data: AdminProductUpdate,
     current_admin: User = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db)
 ):
@@ -2001,27 +2142,49 @@ async def update_product(
 
     Requires admin role
     """
-    # Get product
+    # Get product and the legacy single-product variant relationships needed for stock sync.
     result = await db.execute(
-        select(Product).where(Product.id == product_id)
+        select(Product)
+        .options(selectinload(Product.variants), selectinload(Product.variations))
+        .where(Product.id == product_id)
     )
     product = result.scalar_one_or_none()
 
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
 
-    # Update fields
-    for field, value in product_data.items():
-        if hasattr(product, field):
-            setattr(product, field, value)
+    changes = product_data.model_dump(exclude_unset=True)
+    old_base_price = product.base_price
+    old_compare_at_price = product.compare_at_price
+    merged_base = changes.get("base_price", product.base_price)
+    merged_compare = changes.get("compare_at_price", product.compare_at_price)
+    if merged_compare is not None and merged_compare < merged_base:
+        raise HTTPException(status_code=422, detail="compare_at_price must be greater than or equal to base_price")
+
+    if "category_id" in changes and changes["category_id"] is not None:
+        if await db.get(Category, changes["category_id"]) is None:
+            raise HTTPException(status_code=422, detail="Category not found")
+
+    for field, value in changes.items():
+        setattr(product, field, value)
+
+    if "base_price" in changes or "compare_at_price" in changes:
+        _sync_inherited_variation_prices(
+            product.variations,
+            product.variants,
+            old_base_price=old_base_price,
+            old_compare_at_price=old_compare_at_price,
+            new_base_price=product.base_price,
+            new_compare_at_price=product.compare_at_price,
+        )
+
+    if "total_stock" in changes:
+        _sync_single_product_variant_inventory(product)
 
     await db.commit()
     await db.refresh(product)
 
-    return {
-        "message": "Product updated successfully",
-        "product_id": str(product.id)
-    }
+    return {"message": "Product updated successfully", "product_id": str(product.id)}
 
 
 @router.get("/products/{product_id}/variants")
@@ -2070,17 +2233,47 @@ async def update_product_variant(
 
     Requires admin role
     """
-    # Get variant
+    try:
+        update_data = ProductVariantUpdate.model_validate(variant_data).model_dump(
+            exclude_unset=True
+        )
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=jsonable_encoder(exc.errors()),
+        ) from exc
+
+    # Get variant and ensure the path product owns it.
     result = await db.execute(
-        select(ProductVariant).where(ProductVariant.id == variant_id)
+        select(ProductVariant).where(
+            ProductVariant.id == variant_id,
+            ProductVariant.product_id == product_id,
+        )
     )
     variant = result.scalar_one_or_none()
 
     if not variant:
         raise HTTPException(status_code=404, detail="Variant not found")
 
+    # Direct edits transfer ownership from inherited parent values back to the
+    # variant. Otherwise a later parent edit would overwrite the admin's value.
+    if "price" in update_data:
+        variant.inherits_price = False
+        variation_result = await db.execute(
+            select(Variation).where(Variation.product_id == product_id)
+        )
+        variations = variation_result.scalars().all()
+        _sync_direct_variant_price_to_inherited_variation(
+            variations,
+            price=update_data["price"],
+            size=update_data.get("size", variant.size),
+            color=update_data.get("color", variant.color),
+        )
+    if "stock" in update_data or "is_available" in update_data:
+        variant.inherits_stock = False
+
     # Update fields
-    for field, value in variant_data.items():
+    for field, value in update_data.items():
         if hasattr(variant, field):
             setattr(variant, field, value)
 

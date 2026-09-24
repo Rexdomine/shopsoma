@@ -10,6 +10,8 @@ interface BulkUploadModalProps {
   onUploaded: (createdCount: number, mode: UploadMode) => void;
 }
 
+const IMAGE_HEADERS = ['image_1_url', 'image_2_url', 'image_3_url', 'image_4_url', 'image_5_url'];
+
 const SINGLE_HEADERS = [
   'title',
   'description',
@@ -57,13 +59,16 @@ const VARIABLE_HEADERS = [
   'variation_sale_price',
 ];
 
+const SAMPLE_IMAGE_1 = 'https://images.unsplash.com/photo-1521572163474-6864f9cf17ab?w=800';
+const SAMPLE_IMAGE_2 = 'https://images.unsplash.com/photo-1515886657613-9f3515b0c78f?w=800';
+
 const SIZE_VALUES = ['XXS', 'XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL'];
 
 const SINGLE_SAMPLE_ROWS = [
   {
     title: 'Classic Linen Shirt',
     description: 'Lightweight linen shirt',
-    category_slug: 'menswear-shirts',
+    category_slug: 'men-tops-shirts',
     currency: 'NGN',
     base_price: '15000',
     compare_at_price: '18000',
@@ -79,6 +84,11 @@ const SINGLE_SAMPLE_ROWS = [
     care_instructions: 'Hand wash only',
     fabric_composition: '100% linen',
     status: 'draft',
+    image_1_url: SAMPLE_IMAGE_1,
+    image_2_url: SAMPLE_IMAGE_2,
+    image_3_url: '',
+    image_4_url: '',
+    image_5_url: '',
   },
 ];
 
@@ -86,7 +96,7 @@ const VARIABLE_SAMPLE_ROWS = [
   {
     product_title: 'Silk Slip Dress',
     description: 'Soft silk slip dress',
-    category_slug: 'womens-dresses',
+    category_slug: 'women-dresses-casual',
     currency: 'USD',
     base_price: '180',
     compare_at_price: '220',
@@ -107,11 +117,16 @@ const VARIABLE_SAMPLE_ROWS = [
     variant_sku: 'SLIP-DRESS-01-EMR-S',
     variation_price: '',
     variation_sale_price: '',
+    image_1_url: SAMPLE_IMAGE_1,
+    image_2_url: SAMPLE_IMAGE_2,
+    image_3_url: '',
+    image_4_url: '',
+    image_5_url: '',
   },
   {
     product_title: 'Silk Slip Dress',
     description: 'Soft silk slip dress',
-    category_slug: 'womens-dresses',
+    category_slug: 'women-dresses-casual',
     currency: 'USD',
     base_price: '180',
     compare_at_price: '220',
@@ -132,6 +147,11 @@ const VARIABLE_SAMPLE_ROWS = [
     variant_sku: 'SLIP-DRESS-01-EMR-M',
     variation_price: '',
     variation_sale_price: '',
+    image_1_url: '',
+    image_2_url: '',
+    image_3_url: '',
+    image_4_url: '',
+    image_5_url: '',
   },
 ];
 
@@ -221,10 +241,10 @@ export default function BulkUploadModal({ isOpen, onClose, onUploaded }: BulkUpl
 
   const handleDownloadSample = () => {
     if (mode === 'single') {
-      const csv = toCsv(SINGLE_HEADERS, SINGLE_SAMPLE_ROWS);
+      const csv = toCsv([...SINGLE_HEADERS, ...IMAGE_HEADERS], SINGLE_SAMPLE_ROWS);
       downloadCsvFile('shopsoma-single-products-sample.csv', csv);
     } else {
-      const csv = toCsv(VARIABLE_HEADERS, VARIABLE_SAMPLE_ROWS);
+      const csv = toCsv([...VARIABLE_HEADERS, ...IMAGE_HEADERS], VARIABLE_SAMPLE_ROWS);
       downloadCsvFile('shopsoma-variable-products-sample.csv', csv);
     }
   };
@@ -258,6 +278,12 @@ export default function BulkUploadModal({ isOpen, onClose, onUploaded }: BulkUpl
         setErrors([detail.message || 'Validation failed.']);
       } else if (typeof detail === 'string') {
         setErrors([detail]);
+      } else if (detail?.message) {
+        setErrors([
+          detail.missing_headers
+            ? `${detail.message}: ${detail.missing_headers.join(', ')}`
+            : detail.message,
+        ]);
       } else {
         setErrors(['Upload failed. Please check your CSV and try again.']);
       }
@@ -270,7 +296,7 @@ export default function BulkUploadModal({ isOpen, onClose, onUploaded }: BulkUpl
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
-      <div className="relative w-full max-w-3xl bg-white rounded-2xl shadow-2xl p-6 m-4">
+      <div className="relative w-full max-w-3xl max-h-[calc(100dvh-2rem)] overflow-y-auto bg-white rounded-2xl shadow-2xl p-6 m-4">
         <div className="flex items-start justify-between gap-4">
           <div>
             <h2 className="text-2xl font-semibold text-gray-900">Bulk Upload Products</h2>
@@ -319,10 +345,12 @@ export default function BulkUploadModal({ isOpen, onClose, onUploaded }: BulkUpl
               <h3 className="text-sm font-semibold text-gray-900 mb-2">CSV Instructions</h3>
               {mode === 'single' ? (
                 <ul className="text-xs text-gray-600 space-y-1 list-disc list-inside">
-                  <li>Use category slug (example: menswear-shirts).</li>
+                  <li>Use category slug (example: men-tops-shirts).</li>
                   <li>Currency must be NGN or USD.</li>
                   <li>Status can be draft, active, inactive, archived.</li>
                   <li>Leave optional fields blank if not needed.</li>
+                  <li>Images are optional. Use up to five public HTTPS direct image URLs in image_1_url through image_5_url; the first nonblank URL is the primary image.</li>
+                  <li>Use hosted image files, not local paths or share-page links. Links remain hosted externally; images are product-level, not variant-specific.</li>
                 </ul>
               ) : (
                 <ul className="text-xs text-gray-600 space-y-1 list-disc list-inside">
@@ -330,6 +358,8 @@ export default function BulkUploadModal({ isOpen, onClose, onUploaded }: BulkUpl
                   <li>Rows with same product_title + category_slug + currency group into one product.</li>
                   <li>Use Size values: {SIZE_VALUES.join(', ')}.</li>
                   <li>variation_price is optional; leave blank to use base_price.</li>
+                  <li>Images are optional and product-level, not variant-specific. Put up to five unique public HTTPS direct image URLs on the first product row; later size rows may leave them blank or repeat them.</li>
+                  <li>Use image_1_url through image_5_url for hosted image files, not local paths or share-page links. Links remain hosted externally; the first nonblank URL is the primary image.</li>
                 </ul>
               )}
               <button
@@ -397,6 +427,7 @@ export default function BulkUploadModal({ isOpen, onClose, onUploaded }: BulkUpl
                 <li>Ensure category_slug matches an existing category.</li>
                 <li>Collection name is optional; leave blank if not used.</li>
                 <li>Upload only CSV files created in UTF-8.</li>
+                <li>Product images must be public HTTPS hosted files (not local paths or share pages); ShopSoma does not upload, download, or rehost them. Replace sample photographs with your own before publishing.</li>
               </ul>
             </div>
           </div>

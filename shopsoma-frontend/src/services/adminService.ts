@@ -1,5 +1,15 @@
 import api from './api';
-import type { User, PaginatedResponse } from '../types';
+import type { User, PaginatedResponse, Product } from '../types';
+
+export interface AdminProductUpdatePayload {
+  title?: string;
+  description?: string;
+  category_id?: string | null;
+  base_price?: number;
+  compare_at_price?: number | null;
+  total_stock?: number;
+  status?: Product['status'];
+}
 
 export interface UserListItem extends User {
   created_at: string;
@@ -56,6 +66,7 @@ export interface VendorListItem {
   store_deleted_at?: string;
   is_featured_storefront?: boolean;
   featured_storefront_image_url?: string | null;
+  activation_resend_eligible: boolean;
 }
 
 export interface VendorListFilters {
@@ -92,6 +103,7 @@ export interface VendorApplication {
   vendor_brand_info_completed?: boolean;
   vendor_payout_info_completed?: boolean;
   activation_email_sent?: boolean;
+  activation_resend_eligible?: boolean;
   created_at: string;
   reviewed_at?: string;
 }
@@ -251,6 +263,11 @@ export const adminService = {
     return response.data;
   },
 
+  async resendVendorActivationForVendor(vendorId: string): Promise<{ message: string; email: string }> {
+    const response = await api.post(`/admin/vendors/${vendorId}/resend-activation`);
+    return response.data;
+  },
+
   // Approve vendor application (uses the existing endpoint from vendor_applications.py)
   async approveVendorApplication(applicationId: string, adminNotes?: string): Promise<VendorApplication> {
     const response = await api.post(`/vendor-applications/${applicationId}/approve`, {
@@ -274,6 +291,16 @@ export const adminService = {
   },
 
   // ==================== PRODUCT MANAGEMENT ====================
+
+  async getProduct(productId: string): Promise<Product> {
+    const response = await api.get(`/admin/products/${productId}`);
+    return response.data;
+  },
+
+  async updateProduct(productId: string, data: AdminProductUpdatePayload): Promise<{ message: string; product_id: string }> {
+    const response = await api.put(`/admin/products/${productId}`, data);
+    return response.data;
+  },
 
   // List all products with pagination and filters
   async listProducts(filters?: {
@@ -302,18 +329,20 @@ export const adminService = {
   },
 
   // Approve a product
-  async approveProduct(productId: string, notes?: string): Promise<any> {
+  async approveProduct(productId: string, expectedUpdatedAt: string, notes?: string): Promise<any> {
     const response = await api.put(`/admin/products/${productId}/approve`, {
-      notes: notes || null
+      notes: notes || null,
+      expected_updated_at: expectedUpdatedAt
     });
     return response.data;
   },
 
   // Reject a product
-  async rejectProduct(productId: string, reason: string, notes?: string): Promise<any> {
+  async rejectProduct(productId: string, reason: string, expectedUpdatedAt: string, notes?: string): Promise<any> {
     const response = await api.put(`/admin/products/${productId}/reject`, {
       reason,
-      notes: notes || null
+      notes: notes || null,
+      expected_updated_at: expectedUpdatedAt
     });
     return response.data;
   },
