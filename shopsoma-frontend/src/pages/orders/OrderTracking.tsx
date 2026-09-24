@@ -114,6 +114,7 @@ export default function OrderTracking() {
 
     const requestGeneration = ++pollingGeneration.current;
     let isPollingEffectActive = true;
+    let latestPollSequence = 0;
     const pollingOrderId = tracking?.order_id;
     // Get JWT token from localStorage (optional for guest users)
     const token = localStorage.getItem(STORAGE_KEYS.ACCESS_TOKEN);
@@ -211,6 +212,7 @@ export default function OrderTracking() {
 
     // Fallback: Poll for updates every 10 seconds if WebSocket isn't connected
     const pollInterval = setInterval(async () => {
+      const pollSequence = ++latestPollSequence;
       if (!websocketService.isConnected()) {
         console.log('[OrderTracking] WebSocket not connected, polling for updates...');
         try {
@@ -219,6 +221,7 @@ export default function OrderTracking() {
           if (
             isPollingEffectActive &&
             requestGeneration === pollingGeneration.current &&
+            pollSequence === latestPollSequence &&
             data.order_id &&
             (data.order_id === orderId || data.order_id === pollingOrderId || !pollingOrderId)
           ) {
@@ -232,6 +235,7 @@ export default function OrderTracking() {
           if (
             isPollingEffectActive &&
             requestGeneration === pollingGeneration.current &&
+            pollSequence === latestPollSequence &&
             [401, 403, 404, 410].includes(status ?? 0)
           ) {
             setTracking(null);

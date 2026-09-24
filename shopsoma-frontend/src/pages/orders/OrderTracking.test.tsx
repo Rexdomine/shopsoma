@@ -97,6 +97,7 @@ describe('OrderTracking', () => {
         history: [],
       };
       const initialTracking = {
+        order_id: '550e8400-e29b-41d4-a716-446655440000',
         order_number: 'SHP-20260915-D791820A',
         tracking_id: 'TRACK-1',
         updated_at: '2026-01-01T00:00:00Z',
