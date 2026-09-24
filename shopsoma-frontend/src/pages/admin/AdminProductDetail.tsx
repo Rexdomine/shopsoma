@@ -38,6 +38,7 @@ export default function AdminProductDetail() {
   const [rejectionReason, setRejectionReason] = useState('');
   const [rejectionNotes, setRejectionNotes] = useState('');
   const [moderationError, setModerationError] = useState<string | null>(null);
+  const [moderationOutcomeUnknown, setModerationOutcomeUnknown] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
 
   const refreshProduct = async () => {
@@ -47,6 +48,19 @@ export default function AdminProductDetail() {
       const data = await adminService.getProduct(id);
       setProduct(data);
       setRefreshError(null);
+      if (moderationOutcomeUnknown && moderationAction) {
+        const expectedStatus = moderationAction === 'approve' ? 'approved' : 'rejected';
+        if (data.moderation_status === expectedStatus) {
+          success(moderationAction === 'approve' ? 'Product approval verified.' : 'Product denial verified.', 'Moderation complete');
+          setModerationAction(null);
+          setApprovalNotes(''); setRejectionReason(''); setRejectionNotes('');
+        } else {
+          setModerationOutcomeUnknown(false);
+          setModerationError('The moderation request was not confirmed. Review the current status before retrying.');
+        }
+      } else {
+        setModerationOutcomeUnknown(false);
+      }
     } catch (err: any) {
       const message = apiErrorMessage(err, 'Failed to refresh product. Please try again.');
       setRefreshError(message);
@@ -102,7 +116,7 @@ export default function AdminProductDetail() {
   }, [id, navigate, error]);
 
   const handleModeration = async () => {
-    if (!product || !moderationAction || product.moderation_status !== 'pending' || moderationBusy.current || isRefreshing || refreshError) return;
+    if (!product || !moderationAction || product.moderation_status !== 'pending' || moderationBusy.current || isRefreshing || refreshError || moderationOutcomeUnknown) return;
     if (moderationAction === 'deny' && rejectionReason.trim().length < 10) {
       setModerationError('Rejection reason must be at least 10 characters');
       return;
@@ -111,6 +125,7 @@ export default function AdminProductDetail() {
     try {
       setIsModerating(true);
       setModerationError(null);
+      setModerationOutcomeUnknown(false);
       if (moderationAction === 'approve') {
         await adminService.approveProduct(product.id, approvalNotes.trim() || undefined);
       } else {
@@ -121,7 +136,31 @@ export default function AdminProductDetail() {
       setApprovalNotes(''); setRejectionReason(''); setRejectionNotes('');
       await refreshProduct();
     } catch (err: any) {
-      setModerationError(apiErrorMessage(err, 'Moderation action failed'));
+      const status = err?.response?.status;
+      const outcomeMayBeCommitted = !err?.response || (typeof status === 'number' && status >= 500);
+      if (!outcomeMayBeCommitted || !product || !moderationAction) {
+        setModerationError(apiErrorMessage(err, 'Moderation action failed'));
+      } else {
+        setIsRefreshing(true);
+        try {
+          const reconciledProduct = await adminService.getProduct(product.id);
+          setProduct(reconciledProduct);
+          setRefreshError(null);
+          const expectedStatus = moderationAction === 'approve' ? 'approved' : 'rejected';
+          if (reconciledProduct.moderation_status === expectedStatus) {
+            success(moderationAction === 'approve' ? 'Product approval verified.' : 'Product denial verified.', 'Moderation complete');
+            setModerationAction(null);
+            setApprovalNotes(''); setRejectionReason(''); setRejectionNotes('');
+          } else {
+            setModerationError('The moderation request was not confirmed. Review the current status before retrying.');
+          }
+        } catch (reconciliationError: any) {
+          setModerationOutcomeUnknown(true);
+          setModerationError(`The moderation outcome could not be confirmed. Refresh the product before retrying. ${apiErrorMessage(reconciliationError, 'Refresh failed')}`);
+        } finally {
+          setIsRefreshing(false);
+        }
+      }
     } finally {
       moderationBusy.current = false;
       setIsModerating(false);
@@ -600,7 +639,8 @@ export default function AdminProductDetail() {
               <label className="block text-sm font-medium">Rejection Notes (Optional)<textarea disabled={isModerating || isRefreshing} aria-label="Rejection Notes (Optional)" value={rejectionNotes} onChange={e => setRejectionNotes(e.target.value)} maxLength={500} rows={3} className="mt-1 w-full rounded border p-2" /></label>
             </>}
             {moderationError && <p role="alert" className="text-sm text-red-700">{moderationError}</p>}
-            <div className="flex justify-end gap-3"><button type="button" onClick={() => { setModerationAction(null); setModerationError(null); }} disabled={isModerating || isRefreshing} className="rounded border px-4 py-2">Cancel</button><button type="button" onClick={handleModeration} disabled={isModerating || isRefreshing} className="rounded bg-blue-600 px-4 py-2 text-white disabled:opacity-50">{isModerating ? 'Processing…' : moderationAction === 'approve' ? 'Approve Product' : 'Deny Product'}</button></div>
+            {moderationOutcomeUnknown && <button type="button" onClick={refreshProduct} disabled={isRefreshing} className="text-sm font-medium underline disabled:opacity-50">{isRefreshing ? 'Refreshing…' : 'Refresh product status'}</button>}
+            <div className="flex justify-end gap-3"><button type="button" onClick={() => { setModerationAction(null); setModerationError(null); }} disabled={isModerating || isRefreshing} className="rounded border px-4 py-2">Cancel</button><button type="button" onClick={handleModeration} disabled={isModerating || isRefreshing || moderationOutcomeUnknown} className="rounded bg-blue-600 px-4 py-2 text-white disabled:opacity-50">{isModerating ? 'Processing…' : moderationOutcomeUnknown ? 'Refresh required' : moderationAction === 'approve' ? 'Approve Product' : 'Deny Product'}</button></div>
           </div>
         </div>
       )}

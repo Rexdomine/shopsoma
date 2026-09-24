@@ -135,6 +135,32 @@ describe('admin product view/edit API boundaries', () => {
     expect(mocks.get).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId('location')).toHaveTextContent('/admin/products/product-1');
   });
+  it.each(['approve', 'deny'] as const)('reconciles a response-less %s failure before allowing another mutation', async action => {
+    mocks.put.mockRejectedValueOnce(new Error('Network disconnected'));
+    mount('view');
+    fireEvent.click(await screen.findByRole('button', { name: action === 'approve' ? 'Approve Product' : 'Deny Product' }));
+    if (action === 'deny') fireEvent.change(screen.getByLabelText('Rejection Reason *'), { target: { value: 'The product does not meet the marketplace requirements.' } });
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: action === 'approve' ? 'Approve Product' : 'Deny Product' }));
+    await waitFor(() => expect(mocks.get).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText('The moderation request was not confirmed. Review the current status before retrying.')).toBeTruthy();
+    expect(mocks.put).toHaveBeenCalledTimes(1);
+    expect(within(screen.getByRole('dialog')).getByRole('button', { name: action === 'approve' ? 'Approve Product' : 'Deny Product' })).not.toBeDisabled();
+  });
+  it('keeps an ambiguous outcome locked until a GET-only reconciliation succeeds', async () => {
+    mocks.put.mockRejectedValueOnce(new Error('Network disconnected'));
+    mocks.get.mockResolvedValueOnce({ data: { ...product } });
+    mocks.get.mockRejectedValueOnce(new Error('Read unavailable'));
+    mount('view');
+    fireEvent.click(await screen.findByRole('button', { name: 'Approve Product' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Approve Product' }));
+    expect(await screen.findByText(/outcome could not be confirmed/i)).toBeTruthy();
+    expect(within(screen.getByRole('dialog')).getByRole('button', { name: 'Refresh required' })).toBeDisabled();
+    mocks.get.mockResolvedValueOnce({ data: { ...product, moderation_status: 'pending' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh product status' }));
+    await waitFor(() => expect(within(screen.getByRole('dialog')).getByRole('button', { name: 'Approve Product' })).not.toBeDisabled());
+    expect(mocks.put).toHaveBeenCalledTimes(1);
+    expect(mocks.get).toHaveBeenCalledTimes(3);
+  });
   it('retries only the GET after successful moderation but failed refresh', async () => {
     mount('view');
     fireEvent.click(await screen.findByRole('button', { name: 'Approve Product' }));
