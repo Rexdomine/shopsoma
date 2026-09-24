@@ -224,6 +224,12 @@ class ProductVariant(Base):
 
     # Pricing & Stock
     price = Column(Numeric(10, 2), nullable=False)
+    # Nullable preserves legacy rows; new variant writes record whether the
+    # generic price follows the parent product price.
+    inherits_price = Column(Boolean, nullable=True)
+    # Nullable preserves legacy rows; only explicitly inherited inventory may
+    # be synchronized from Product.total_stock.
+    inherits_stock = Column(Boolean, nullable=True)
     stock = Column(Integer, default=0, nullable=False, index=True)
     sku = Column(String(100), unique=True, nullable=True, index=True)
 

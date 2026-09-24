@@ -1,9 +1,10 @@
 """
 Admin API endpoints for database initialization and management
 """
-from typing import Optional, List
+from typing import Any, Optional, List
 from uuid import UUID
 from fastapi import APIRouter, HTTPException, Depends, Query, status
+from fastapi.encoders import jsonable_encoder
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, or_, delete, update, and_
 from sqlalchemy.orm import selectinload
@@ -12,7 +13,7 @@ from decimal import Decimal
 from urllib.parse import quote
 import asyncio
 import os
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from app.core.database import get_db
 from app.core.config import settings
@@ -33,9 +34,23 @@ from app.models.setting import Setting
 from app.models.user import User, UserRole
 from app.models.vendor import Vendor, KYCStatus
 from app.models.vendor_application import VendorApplication
+from app.models.category import Category
 from app.schemas.auth import UserResponse, UserUpdate
 from app.schemas.common import PaginatedResponse
-from app.schemas.product import ProductApprovalRequest, ProductRejectionRequest, ProductFeatureUpdate
+from app.schemas.product import (
+    ProductApprovalRequest,
+    ProductRejectionRequest,
+    ProductFeatureUpdate,
+    ProductImageResponse,
+    ProductVariantResponse,
+    ProductVariantUpdate,
+)
+from app.api.v1.products import (
+    PRODUCT_RELATIONSHIPS,
+    _sync_direct_variant_price_to_inherited_variation,
+    _sync_inherited_variation_prices,
+    _sync_single_product_variant_inventory,
+)
 from app.services.vendor_activation_service import (
     activation_eligibility, activation_is_eligible, lock_activation_identity,
 )
@@ -45,6 +60,149 @@ from app.services.test_account_classification import (
 )
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+
+
+class AdminProductVariantResponse(BaseModel):
+    """Output-only variant shape tolerant of historical repair records."""
+
+    id: UUID
+    product_id: UUID
+    size: Optional[str] = None
+    color: Optional[str] = None
+    color_hex: Optional[str] = None
+    price: Decimal = Field(..., decimal_places=2)
+    stock: int
+    sku: Optional[str] = None
+    is_available: bool = True
+    compare_at_price: Optional[Decimal] = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+    @model_validator(mode="after")
+    def normalize_money_precision(self):
+        self.price = self.price.quantize(Decimal("0.01"))
+        if self.compare_at_price is not None:
+            self.compare_at_price = self.compare_at_price.quantize(Decimal("0.01"))
+        return self
+
+
+class AdminSizeStockResponse(BaseModel):
+    """Output-only size stock shape tolerant of importer repair records."""
+
+    id: UUID
+    variation_id: UUID
+    size: Any
+    stock: int
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminVariationResponse(BaseModel):
+    """Output-only variation shape tolerant of historical importer values."""
+
+    id: UUID
+    product_id: UUID
+    title: str
+    type: str = "color"
+    color_hex: Optional[str] = None
+    price: Optional[Decimal] = None
+    sale_price: Optional[Decimal] = None
+    inherits_price: Optional[bool] = None
+    inherits_sale_price: Optional[bool] = None
+    images: Any = None
+    is_active: bool = True
+    created_at: datetime
+    updated_at: datetime
+    size_stocks: List[AdminSizeStockResponse] = []
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminProductResponse(BaseModel):
+    """Output-only product shape tolerant of historical admin-repair rows.
+
+    Unlike the storefront response, this schema intentionally does not inherit
+    ProductBase/ProductResponse validation. Admins must be able to open and
+    repair rows written before current product constraints existed.
+    """
+
+    id: UUID
+    vendor_id: UUID
+    title: str
+    description: Optional[str] = None
+    category_id: Optional[UUID] = None
+    collection_id: Optional[UUID] = None
+    sku: Optional[str] = None
+    base_price: Decimal
+    compare_at_price: Optional[Decimal] = None
+    currency: str
+    total_stock: int
+    status: str
+    is_featured: bool
+    product_type: str
+    made_to_order: bool
+    made_to_order_timeline: Optional[str] = None
+    care_instructions: Optional[str] = None
+    fabric_composition: Optional[str] = None
+    weight_kg: Optional[Decimal] = None
+    length_cm: Optional[Decimal] = None
+    width_cm: Optional[Decimal] = None
+    height_cm: Optional[Decimal] = None
+    meta_title: Optional[str] = None
+    meta_description: Optional[str] = None
+    size_guide: Any = None
+    vendor_name: Optional[str] = None
+    category_name: Optional[str] = None
+    category_parent_name: Optional[str] = None
+    collection_name: Optional[str] = None
+    moderation_status: str
+    moderation_notes: Optional[str] = None
+    views_count: int
+    orders_count: int
+    created_at: datetime
+    updated_at: datetime
+    variants: List[AdminProductVariantResponse] = []
+    variations: List[AdminVariationResponse] = []
+    images: List[ProductImageResponse] = []
+
+    model_config = ConfigDict(from_attributes=True)
+
+    @model_validator(mode="after")
+    def derive_generic_variant_compare_at_price(self):
+        self.base_price = self.base_price.quantize(Decimal("0.01"))
+        if self.compare_at_price is not None:
+            self.compare_at_price = self.compare_at_price.quantize(Decimal("0.01"))
+        if self.compare_at_price is None:
+            return self
+        for variant in self.variants:
+            if variant.size is None and variant.color is None and variant.compare_at_price is None:
+                variant.compare_at_price = self.compare_at_price
+        return self
+
+
+class AdminProductUpdate(BaseModel):
+    """Explicit allow-list for the admin product edit form."""
+    model_config = ConfigDict(extra="forbid")
+
+    title: Optional[str] = Field(None, min_length=3, max_length=255)
+    description: Optional[str] = Field(None, max_length=5000)
+    category_id: Optional[UUID] = None
+    base_price: Optional[Decimal] = Field(None, gt=0, le=Decimal("999999.99"), decimal_places=2)
+    compare_at_price: Optional[Decimal] = Field(None, gt=0, le=Decimal("999999.99"), decimal_places=2)
+    total_stock: Optional[int] = Field(None, ge=0)
+    status: Optional[ProductStatus] = None
+
+
+    @model_validator(mode="after")
+    def reject_null_required_fields(self):
+        for field in ("title", "base_price", "total_stock", "status"):
+            if field in self.model_fields_set and getattr(self, field) is None:
+                raise ValueError(f"{field} cannot be null")
+        return self
 
 
 class FeaturedStorefrontUpdate(BaseModel):
@@ -1991,7 +2149,7 @@ async def delete_product(
         )
 
 
-@router.get("/products/{product_id}")
+@router.get("/products/{product_id}", response_model=AdminProductResponse)
 async def get_product(
     product_id: UUID,
     current_admin: User = Depends(get_current_admin),
@@ -2003,72 +2161,20 @@ async def get_product(
     Requires admin role
     """
     result = await db.execute(
-        select(Product).where(Product.id == product_id)
+        select(Product).options(*PRODUCT_RELATIONSHIPS).where(Product.id == product_id)
     )
     product = result.scalar_one_or_none()
 
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
 
-    # Get product images
-    image_result = await db.execute(
-        select(ProductImage).where(ProductImage.product_id == product_id)
-    )
-    images = image_result.scalars().all()
-
-    # Get product variants
-    variant_result = await db.execute(
-        select(ProductVariant).where(ProductVariant.product_id == product_id)
-    )
-    variants = variant_result.scalars().all()
-
-    return {
-        "id": str(product.id),
-        "title": product.title,
-        "description": product.description,
-        "sku": product.sku,
-        "base_price": float(product.base_price),
-        "compare_at_price": float(product.compare_at_price) if product.compare_at_price else None,
-        "currency": product.currency,
-        "total_stock": product.total_stock,
-        "made_to_order": product.made_to_order,
-        "made_to_order_timeline": product.made_to_order_timeline,
-        "status": product.status.value,
-        "moderation_status": product.moderation_status.value,
-        "is_featured": product.is_featured,
-        "views_count": product.views_count,
-        "orders_count": product.orders_count,
-        "created_at": product.created_at.isoformat() if product.created_at else None,
-        "updated_at": product.updated_at.isoformat() if product.updated_at else None,
-        "images": [
-            {
-                "id": str(image.id),
-                "image_url": image.image_url,
-                "alt_text": image.alt_text,
-                "is_primary": image.is_primary,
-                "display_order": image.display_order,
-            }
-            for image in images
-        ],
-        "variants": [
-            {
-                "id": str(variant.id),
-                "sku": variant.sku,
-                "size": variant.size,
-                "color": variant.color,
-                "price": float(variant.price),
-                "stock": variant.stock,
-                "is_active": variant.is_active,
-            }
-            for variant in variants
-        ]
-    }
+    return product
 
 
 @router.put("/products/{product_id}")
 async def update_product(
     product_id: UUID,
-    product_data: dict,
+    product_data: AdminProductUpdate,
     current_admin: User = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db)
 ):
@@ -2077,27 +2183,49 @@ async def update_product(
 
     Requires admin role
     """
-    # Get product
+    # Get product and the legacy single-product variant relationships needed for stock sync.
     result = await db.execute(
-        select(Product).where(Product.id == product_id)
+        select(Product)
+        .options(selectinload(Product.variants), selectinload(Product.variations))
+        .where(Product.id == product_id)
     )
     product = result.scalar_one_or_none()
 
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
 
-    # Update fields
-    for field, value in product_data.items():
-        if hasattr(product, field):
-            setattr(product, field, value)
+    changes = product_data.model_dump(exclude_unset=True)
+    old_base_price = product.base_price
+    old_compare_at_price = product.compare_at_price
+    merged_base = changes.get("base_price", product.base_price)
+    merged_compare = changes.get("compare_at_price", product.compare_at_price)
+    if merged_compare is not None and merged_compare < merged_base:
+        raise HTTPException(status_code=422, detail="compare_at_price must be greater than or equal to base_price")
+
+    if "category_id" in changes and changes["category_id"] is not None:
+        if await db.get(Category, changes["category_id"]) is None:
+            raise HTTPException(status_code=422, detail="Category not found")
+
+    for field, value in changes.items():
+        setattr(product, field, value)
+
+    if "base_price" in changes or "compare_at_price" in changes:
+        _sync_inherited_variation_prices(
+            product.variations,
+            product.variants,
+            old_base_price=old_base_price,
+            old_compare_at_price=old_compare_at_price,
+            new_base_price=product.base_price,
+            new_compare_at_price=product.compare_at_price,
+        )
+
+    if "total_stock" in changes:
+        _sync_single_product_variant_inventory(product)
 
     await db.commit()
     await db.refresh(product)
 
-    return {
-        "message": "Product updated successfully",
-        "product_id": str(product.id)
-    }
+    return {"message": "Product updated successfully", "product_id": str(product.id)}
 
 
 @router.get("/products/{product_id}/variants")
@@ -2146,17 +2274,47 @@ async def update_product_variant(
 
     Requires admin role
     """
-    # Get variant
+    try:
+        update_data = ProductVariantUpdate.model_validate(variant_data).model_dump(
+            exclude_unset=True
+        )
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=jsonable_encoder(exc.errors()),
+        ) from exc
+
+    # Get variant and ensure the path product owns it.
     result = await db.execute(
-        select(ProductVariant).where(ProductVariant.id == variant_id)
+        select(ProductVariant).where(
+            ProductVariant.id == variant_id,
+            ProductVariant.product_id == product_id,
+        )
     )
     variant = result.scalar_one_or_none()
 
     if not variant:
         raise HTTPException(status_code=404, detail="Variant not found")
 
+    # Direct edits transfer ownership from inherited parent values back to the
+    # variant. Otherwise a later parent edit would overwrite the admin's value.
+    if "price" in update_data:
+        variant.inherits_price = False
+        variation_result = await db.execute(
+            select(Variation).where(Variation.product_id == product_id)
+        )
+        variations = variation_result.scalars().all()
+        _sync_direct_variant_price_to_inherited_variation(
+            variations,
+            price=update_data["price"],
+            size=update_data.get("size", variant.size),
+            color=update_data.get("color", variant.color),
+        )
+    if "stock" in update_data or "is_available" in update_data:
+        variant.inherits_stock = False
+
     # Update fields
-    for field, value in variant_data.items():
+    for field, value in update_data.items():
         if hasattr(variant, field):
             setattr(variant, field, value)
 

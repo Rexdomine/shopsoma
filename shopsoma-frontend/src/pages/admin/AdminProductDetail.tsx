@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Edit2, Loader2, Package, Tag, Trash2 } from 'lucide-react';
 import { ROUTES } from '../../config/constants';
-import { productService } from '../../services/productService';
+import { apiErrorMessage } from '../../utils/apiErrorMessage';
 import { adminService } from '../../services/adminService';
 import type { Product } from '../../types';
 import { useToast } from '../../hooks/useToast';
@@ -26,6 +26,7 @@ export default function AdminProductDetail() {
   const { currentCurrency, setCurrency, exchangeRates } = useCurrencyStore();
   const [product, setProduct] = useState<Product | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
 
@@ -39,15 +40,12 @@ export default function AdminProductDetail() {
 
       try {
         setLoading(true);
-        const data = await productService.getProduct(id);
+        setLoadError(null);
+        const data = await adminService.getProduct(id);
         setProduct(data);
       } catch (err: any) {
         console.error('Failed to load product', err);
-        error(
-          err.response?.data?.detail || 'Failed to load product',
-          'Error'
-        );
-        navigate(ROUTES.ADMIN_PRODUCTS);
+        setLoadError(apiErrorMessage(err, 'Failed to load product. Please try again.'));
       } finally {
         setLoading(false);
       }
@@ -104,6 +102,18 @@ export default function AdminProductDetail() {
           <span>Loading product details...</span>
         </div>
       </div>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <main className="min-h-screen bg-[var(--color-page-bg)] p-8">
+        <h1 className="text-2xl font-semibold">Unable to load product</h1>
+        <p role="alert" className="mt-4 text-red-700">{loadError}</p>
+        <button type="button" onClick={() => navigate(ROUTES.ADMIN_PRODUCTS)} className="mt-6 rounded border px-4 py-2">
+          Back to Products
+        </button>
+      </main>
     );
   }
 

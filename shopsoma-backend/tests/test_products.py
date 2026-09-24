@@ -95,6 +95,145 @@ class TestProductCreate:
         assert data["variants"][1]["size"] == "L"
 
     @pytest.mark.asyncio
+    async def test_create_single_product_axisless_variant_inherits_total_stock(
+        self, client: AsyncClient, vendor_user, db_session
+    ):
+        """The legacy generic row must follow the product stock authority."""
+        from sqlalchemy import select
+        from app.models.product import ProductVariant
+
+        response = await client.post(
+            "/api/v1/products",
+            json={
+                "title": "Legacy Single Stock Product",
+                "base_price": 85.00,
+                "total_stock": 7,
+                "variants": [{"price": 85.00}],
+            },
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 201, response.text
+        variant = (
+            await db_session.execute(
+                select(ProductVariant).where(
+                    ProductVariant.product_id == response.json()["id"]
+                )
+            )
+        ).scalar_one()
+        assert variant.inherits_stock is True
+        assert variant.stock == 7
+        assert variant.is_available is True
+
+    @pytest.mark.asyncio
+    async def test_create_single_product_preserves_explicit_axisless_inventory(
+        self, client: AsyncClient, vendor_user, db_session
+    ):
+        """Explicit axis-less inventory is not treated as an inherited projection."""
+        from sqlalchemy import select
+        from app.models.product import ProductVariant
+
+        response = await client.post(
+            "/api/v1/products",
+            json={
+                "title": "Explicit Generic Inventory Product",
+                "base_price": 85.00,
+                "total_stock": 7,
+                "variants": [{"price": 85.00, "stock": 3, "is_available": False}],
+            },
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 201, response.text
+        variant = (
+            await db_session.execute(
+                select(ProductVariant).where(
+                    ProductVariant.product_id == response.json()["id"]
+                )
+            )
+        ).scalar_one()
+        assert variant.inherits_stock is False
+        assert variant.stock == 3
+        assert variant.is_available is False
+
+    @pytest.mark.asyncio
+    async def test_create_standalone_axisless_variant_inherits_total_stock(
+        self, client: AsyncClient, vendor_user, db_session
+    ):
+        """Omitted inventory uses the product stock authority."""
+        from sqlalchemy import select
+        from app.models.product import Product, ProductVariant
+
+        product_response = await client.post(
+            "/api/v1/products",
+            json={
+                "title": "Standalone Variant Stock Product",
+                "base_price": 85.00,
+                "total_stock": 7,
+            },
+            headers=vendor_user["headers"],
+        )
+        assert product_response.status_code == 201, product_response.text
+
+        response = await client.post(
+            f"/api/v1/products/{product_response.json()['id']}/variants",
+            json={"price": 85.00},
+            headers=vendor_user["headers"],
+        )
+        assert response.status_code == 201, response.text
+
+        variant = (
+            await db_session.execute(
+                select(ProductVariant).where(
+                    ProductVariant.product_id == product_response.json()["id"]
+                )
+            )
+        ).scalar_one()
+        product = await db_session.get(Product, product_response.json()["id"])
+        assert variant.inherits_stock is True
+        assert variant.stock == product.total_stock == 7
+        assert variant.is_available is True
+
+    @pytest.mark.asyncio
+    async def test_create_made_to_order_product_preserves_explicit_variant_inventory(
+        self, client: AsyncClient, vendor_user, db_session
+    ):
+        """Made-to-order normalization applies only to inherited generic rows."""
+        from sqlalchemy import select
+        from app.models.product import ProductVariant
+
+        response = await client.post(
+            "/api/v1/products",
+            json={
+                "title": "Made To Order Sized Product",
+                "base_price": 85.00,
+                "made_to_order": True,
+                "made_to_order_timeline": "Ships in 2-3 weeks",
+                "variants": [
+                    {
+                        "size": "M",
+                        "price": 85.00,
+                        "stock": 9,
+                        "is_available": False,
+                    }
+                ],
+            },
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 201, response.text
+        variant = (
+            await db_session.execute(
+                select(ProductVariant).where(
+                    ProductVariant.product_id == response.json()["id"]
+                )
+            )
+        ).scalar_one()
+        assert variant.inherits_stock is False
+        assert variant.stock == 9
+        assert variant.is_available is False
+
+    @pytest.mark.asyncio
     async def test_create_product_with_numeric_size_variation(self, client: AsyncClient, vendor_user):
         """Numeric UK/EU sizes remain creatable without invalid size-stock enum rows."""
         response = await client.post(
@@ -961,7 +1100,7 @@ class TestProductUpdate:
         variant = ProductVariant(
             id=uuid.uuid4(),
             product_id=product.id,
-            size="M",
+            inherits_stock=True,
             price=80.00,
             stock=0,
             is_available=False,

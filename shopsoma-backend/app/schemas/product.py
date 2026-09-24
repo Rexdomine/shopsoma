@@ -676,6 +676,13 @@ class ProductResponse(ProductBase):
         # variation pricing so persisted legacy variants expose the same
         # effective and compare-at prices as vendor variation responses.
         if self.variants:
+            if not self.variations and self.compare_at_price is not None:
+                for variant in self.variants:
+                    if variant.size is None and variant.color is None:
+                        # ProductVariant has no compare-at column. Derive the
+                        # generic legacy row's display value from the parent so
+                        # a fresh request does not lose the sale metadata.
+                        variant.compare_at_price = self.compare_at_price
             if self.variations:
                 variations_by_title = unique_variations_by_color(self.variations)
                 variations_by_size = unique_variations_by_size(self.variations)

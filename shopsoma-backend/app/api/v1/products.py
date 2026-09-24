@@ -58,7 +58,10 @@ def _variation_inherits_parent_price(
         return marker
     if persisted_value is None:
         return null_value_inherits
-    return persisted_value == legacy_parent_value
+    # A nullable marker plus a stored price is an unknown legacy state. Price
+    # equality alone cannot distinguish an inherited value from an explicit
+    # override, so preserve it rather than overwriting it on a parent edit.
+    return False
 
 
 def _sync_inherited_variation_prices(
@@ -72,6 +75,36 @@ def _sync_inherited_variation_prices(
 ) -> None:
     """Propagate parent price edits without overwriting explicit variation prices."""
     legacy_regular_price = old_compare_at_price or old_base_price
+    legacy_effective_price = (
+        old_base_price
+        if old_compare_at_price is not None and old_base_price < legacy_regular_price
+        else legacy_regular_price
+    )
+
+    # Legacy single-product rows can have one generic ProductVariant without
+    # Variation rows. That row is the effective purchase-price record for
+    # cart/order resolution. Attribute-bearing rows are explicit size/color
+    # prices and must not be overwritten merely because no Variation rows are
+    # present.
+    if not variations:
+        new_regular_price = new_compare_at_price or new_base_price
+        new_effective_price = (
+            new_base_price
+            if new_compare_at_price is not None and new_base_price < new_regular_price
+            else new_regular_price
+        )
+        for legacy_variant in legacy_variants:
+            if legacy_variant.size is not None or legacy_variant.color is not None:
+                continue
+            # Null is an unknown legacy state. The migration backfills existing
+            # generic rows to False because equality cannot distinguish an
+            # explicit price from inherited pricing; never overwrite unknown
+            # legacy data during a later parent edit.
+            if getattr(legacy_variant, "inherits_price", None) is not True:
+                continue
+            legacy_variant.price = new_effective_price
+        return
+
     for variation in variations:
         inherits_regular_price = _variation_inherits_parent_price(
             variation, "inherits_price", variation.price, legacy_regular_price
@@ -298,8 +331,46 @@ def _sync_single_product_variant_inventory(product: Product) -> None:
     is_available = True if product.made_to_order else synced_stock > 0
 
     for variant in product.variants:
-        variant.stock = synced_stock
-        variant.is_available = is_available
+        # A single product may still carry explicit size/color variants even
+        # without Variation rows. Only the axis-less legacy inventory row is
+        # represented by the product-level total_stock field.
+        if variant.size is not None or variant.color is not None:
+            continue
+        if variant.inherits_stock is True:
+            variant.stock = synced_stock
+            variant.is_available = is_available
+
+
+def _sync_direct_variant_price_to_inherited_variation(
+    variations: list[Any],
+    *,
+    price: Any,
+    size: Any,
+    color: Any,
+) -> None:
+    """Make a direct legacy-variant price edit authoritative when inherited."""
+    if price is None:
+        return
+
+    matching_variation = None
+    if color is not None:
+        matching_variation = unique_variations_by_color(variations).get(
+            normalize_color_value(color)
+        )
+    if matching_variation is None and size is not None:
+        matching_variation = unique_variations_by_size(variations).get(
+            normalize_color_value(size)
+        )
+    if matching_variation is None or not (
+        matching_variation.inherits_price is True
+        or matching_variation.inherits_sale_price is True
+    ):
+        return
+
+    matching_variation.price = price
+    matching_variation.sale_price = None
+    matching_variation.inherits_price = False
+    matching_variation.inherits_sale_price = False
 
 
 async def _get_category_by_slug(db: AsyncSession, slug: str) -> Optional[Category]:
@@ -413,15 +484,37 @@ async def create_product(
     # Add variants if provided (legacy system - backward compatibility)
     if product_data.variants:
         for variant_data in product_data.variants:
+            explicit_inventory = bool(
+                {"stock", "is_available"} & variant_data.model_fields_set
+            )
+            inherits_stock = (
+                product.product_type == ProductType.SINGLE
+                and not product_data.variations
+                and variant_data.size is None
+                and variant_data.color is None
+                and not explicit_inventory
+            )
             variant = ProductVariant(
                 product_id=product.id,
                 size=variant_data.size,
+                inherits_price=False,
+                # A generic legacy row on a single product is the compatibility
+                # projection of product.total_stock, not an independent axis.
+                inherits_stock=inherits_stock,
                 color=variant_data.color,
                 color_hex=variant_data.color_hex,
                 price=variant_data.price,
-                stock=variant_data.stock,
+                stock=(
+                    (0 if product.made_to_order else int(product.total_stock or 0))
+                    if inherits_stock
+                    else variant_data.stock
+                ),
                 sku=variant_data.sku,
-                is_available=variant_data.is_available,
+                is_available=(
+                    (True if product.made_to_order else int(product.total_stock or 0) > 0)
+                    if inherits_stock
+                    else variant_data.is_available
+                ),
             )
             db.add(variant)
 
@@ -1238,9 +1331,35 @@ async def create_variant(
             detail=[{"loc": ["body"], "msg": str(exc), "type": "value_error"}],
         ) from exc
 
+    explicit_inventory = bool(
+        {"stock", "is_available"} & variant_data.model_fields_set
+    )
+    inherits_stock = (
+        product.product_type == ProductType.SINGLE
+        and not product.variations
+        and variant_data.size is None
+        and variant_data.color is None
+        and not explicit_inventory
+    )
     variant = ProductVariant(
         product_id=product_id,
-        **variant_data.model_dump()
+        inherits_price=False,
+        inherits_stock=inherits_stock,
+        size=variant_data.size,
+        color=variant_data.color,
+        color_hex=variant_data.color_hex,
+        price=variant_data.price,
+        stock=(
+            (0 if product.made_to_order else int(product.total_stock or 0))
+            if inherits_stock
+            else variant_data.stock
+        ),
+        sku=variant_data.sku,
+        is_available=(
+            (True if product.made_to_order else int(product.total_stock or 0) > 0)
+            if inherits_stock
+            else variant_data.is_available
+        ),
     )
     db.add(variant)
     await db.commit()
@@ -1327,6 +1446,20 @@ async def update_variant(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=[{"loc": ["body"], "msg": str(exc), "type": "value_error"}],
             ) from exc
+
+    # An explicit stock or availability edit transfers inventory ownership from
+    # the parent product back to this variant. Otherwise a later product-level
+    # total_stock edit would overwrite the direct variant edit.
+    if "stock" in update_data or "is_available" in update_data:
+        variant.inherits_stock = False
+    if "price" in update_data:
+        variant.inherits_price = False
+        _sync_direct_variant_price_to_inherited_variation(
+            product.variations,
+            price=update_data["price"],
+            size=update_data.get("size", variant.size),
+            color=update_data.get("color", variant.color),
+        )
 
     for field, value in update_data.items():
         setattr(variant, field, value)
