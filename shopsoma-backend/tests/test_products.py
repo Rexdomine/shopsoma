@@ -1383,7 +1383,8 @@ class TestProductModeration:
         """Test approving a product"""
         moderation_data = {
             "moderation_status": "approved",
-            "moderation_notes": "Looks good!"
+            "moderation_notes": "Looks good!",
+            "expected_updated_at": sample_product.updated_at.isoformat(),
         }
 
         response = await client.patch(
@@ -1407,7 +1408,8 @@ class TestProductModeration:
         """Test rejecting a product"""
         moderation_data = {
             "moderation_status": "rejected",
-            "moderation_notes": "Violates policy"
+            "moderation_notes": "Violates policy",
+            "expected_updated_at": sample_product.updated_at.isoformat(),
         }
 
         response = await client.patch(
@@ -1429,7 +1431,8 @@ class TestProductModeration:
     ):
         """Test that vendors cannot moderate products"""
         moderation_data = {
-            "moderation_status": "approved"
+            "moderation_status": "approved",
+            "expected_updated_at": sample_product.updated_at.isoformat(),
         }
 
         response = await client.patch(

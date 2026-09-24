@@ -30,7 +30,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.sql import func
 
 from app.core.base import Base
-from app.models.product import Product, ProductVariant, SizeStock, Variation
+from app.models.product import Product, ProductImage, ProductVariant, SizeStock, Variation
 
 _UUID = UUID(as_uuid=True)
 _NOW = func.statement_timestamp()
@@ -665,15 +665,37 @@ def _coordinate_orm_stock_payment_writes(session, _flush_context, _instances) ->
     reservations = [row for row in changed if isinstance(row, StockReservation)]
     attempts = [row for row in changed if isinstance(row, PaymentAttempt)]
     memberships = [row for row in changed if isinstance(row, PaymentAttemptReservation)]
+    new_products = {
+        row.id for row in session.new if isinstance(row, Product) and row.id is not None
+    }
     catalog_rows = [
         row
         for row in set(session.dirty).union(session.deleted)
-        if isinstance(row, (Product, ProductVariant, Variation, SizeStock))
+        if isinstance(row, (Product, ProductImage, ProductVariant, Variation, SizeStock))
     ]
+    catalog_rows.extend(
+        row
+        for row in session.new
+        if isinstance(row, (ProductImage, ProductVariant, Variation, SizeStock))
+        and (
+            isinstance(row, SizeStock)
+            or (
+                getattr(row, "product_id", None) is not None
+                and getattr(row, "product_id", None) not in new_products
+            )
+        )
+        and (
+            not isinstance(row, SizeStock)
+            or getattr(row, "variation_id", None) is not None
+        )
+    )
     if not reservations and not attempts and not memberships and not catalog_rows:
         return
 
     for row in (*reservations, *attempts):
+        if row.id is None:
+            row.id = uuid.uuid4()
+    for row in catalog_rows:
         if row.id is None:
             row.id = uuid.uuid4()
 
@@ -749,29 +771,32 @@ def _coordinate_orm_stock_payment_writes(session, _flush_context, _instances) ->
             if value is not None
         }
 
+    parent_product_ids = set()
     for row in catalog_rows:
         if isinstance(row, Product):
             keys.add(("product", row.id))
+        elif isinstance(row, ProductImage):
+            parent_product_ids.add(row.product_id)
+            keys.add(("product", row.product_id))
         elif isinstance(row, ProductVariant):
             keys.add(("product_variant", row.id))
-            keys.update(
-                ("product", value) for value in identity_values(row, "product_id")
-            )
+            parent_product_ids.update(identity_values(row, "product_id"))
+            keys.update(("product", value) for value in identity_values(row, "product_id"))
         elif isinstance(row, Variation):
             keys.add(("variation", row.id))
-            keys.update(
-                ("product", value) for value in identity_values(row, "product_id")
-            )
+            parent_product_ids.update(identity_values(row, "product_id"))
+            keys.update(("product", value) for value in identity_values(row, "product_id"))
         else:
             keys.add(("size_stock", row.id))
             variation_ids = identity_values(row, "variation_id")
             keys.update(("variation", value) for value in variation_ids)
-            product_ids = connection.execute(
-                text(
-                    "SELECT product_id FROM variations WHERE id = ANY(:variation_ids)"
-                ),
-                {"variation_ids": list(variation_ids)},
-            ).scalars()
+            product_ids = list(
+                connection.execute(
+                    text("SELECT product_id FROM variations WHERE id = ANY(:variation_ids)"),
+                    {"variation_ids": list(variation_ids)},
+                ).scalars()
+            )
+            parent_product_ids.update(product_ids)
             keys.update(("product", value) for value in product_ids)
 
     ordered_keys = [
@@ -782,6 +807,11 @@ def _coordinate_orm_stock_payment_writes(session, _flush_context, _instances) ->
         text("SELECT coordinate_stock_payment_write(CAST(:keys AS jsonb))"),
         {"keys": json.dumps(ordered_keys)},
     )
+    if parent_product_ids:
+        connection.execute(
+            text("UPDATE products SET updated_at = statement_timestamp() WHERE id = ANY(:product_ids)"),
+            {"product_ids": list(parent_product_ids)},
+        )
 
 
 STOCK_PAYMENT_TRIGGER_DDLS: tuple[str, ...] = (

@@ -51,6 +51,7 @@ from app.api.v1.products import (
     _sync_inherited_variation_prices,
     _sync_single_product_variant_inventory,
 )
+from app.services.product_moderation import transition_product_moderation
 from app.services.vendor_activation_service import (
     activation_eligibility, activation_is_eligible, lock_activation_identity,
 )
@@ -1911,70 +1912,6 @@ async def _moderation_subject(db: AsyncSession, product_id: UUID):
     return result.first()
 
 
-async def _transition_product_moderation(
-    *,
-    db: AsyncSession,
-    product_id: UUID,
-    admin_id: UUID,
-    target_status: ModerationStatus,
-    moderation_notes: Optional[str],
-    expected_updated_at: datetime,
-):
-    """Atomically allow exactly one pending product moderation transition."""
-    now = datetime.now(timezone.utc)
-    # Product DML is guarded by the existing catalog coordinator trigger. It
-    # also serializes all catalog writers before the status is re-read.
-    await coordinate_catalog_write(db, product_ids=[product_id])
-    locked_status = await db.scalar(
-        select(Product.status).where(Product.id == product_id).with_for_update()
-    )
-    if locked_status is None:
-        raise HTTPException(status_code=404, detail="Product not found")
-    values = {
-        "moderation_status": target_status,
-        "moderated_at": now,
-        "moderated_by": admin_id,
-        "moderation_notes": moderation_notes,
-    }
-    if target_status is ModerationStatus.APPROVED:
-        values["status"] = (
-            ProductStatus.ACTIVE
-            if locked_status is ProductStatus.DRAFT
-            else locked_status
-        )
-    else:
-        values["status"] = ProductStatus.DRAFT
-
-    result = await db.execute(
-        update(Product)
-        .where(
-            Product.id == product_id,
-            Product.moderation_status == ModerationStatus.PENDING,
-            Product.updated_at == expected_updated_at,
-        )
-        .values(**values)
-        .returning(
-            Product.id,
-            Product.title,
-            Product.status,
-            Product.moderation_status,
-            Product.moderated_at,
-            Product.moderated_by,
-        )
-    )
-    transitioned = result.mappings().one_or_none()
-    if transitioned is None:
-        exists = await db.scalar(select(Product.id).where(Product.id == product_id))
-        if exists is None:
-            raise HTTPException(status_code=404, detail="Product not found")
-        raise HTTPException(
-            status_code=409,
-            detail="Product moderation has already been decided",
-        )
-    await db.commit()
-    return transitioned
-
-
 @router.put("/products/{product_id}/approve")
 async def approve_product(
     product_id: UUID,
@@ -1990,7 +1927,7 @@ async def approve_product(
     if not subject:
         raise HTTPException(status_code=404, detail="Product not found")
     product, vendor, user = subject
-    transitioned = await _transition_product_moderation(
+    transitioned = await transition_product_moderation(
         db=db,
         product_id=product_id,
         admin_id=current_admin.id,
@@ -2042,7 +1979,7 @@ async def reject_product(
     moderation_notes = f"REJECTION REASON: {request.reason}"
     if request.notes:
         moderation_notes += f"\n\nADMIN NOTES: {request.notes}"
-    transitioned = await _transition_product_moderation(
+    transitioned = await transition_product_moderation(
         db=db,
         product_id=product_id,
         admin_id=current_admin.id,

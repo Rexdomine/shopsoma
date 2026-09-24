@@ -6,7 +6,7 @@ The admin list links were valid, but the detail/edit pages read through `GET /pr
 
 The pages now use the existing admin-only product endpoints. Load errors remain visible on the requested page; save validation errors retain the form. The admin detail endpoint now uses the shared product response contract with eager-loaded relationships, rather than a hand-built response referencing the nonexistent `ProductVariant.is_active` attribute. The admin update endpoint accepts an explicit validated field allow-list rather than arbitrary mapped attributes. The UI's nonexistent `inventory_quantity` editor was removed; `total_stock` remains.
 
-Delete, Approve and Deny routes/buttons are unchanged. This repair includes the additive Alembic revisions `b8c9d0e1f2a3` and `c9d0e1f2a3b4`: the first adds the nullable `product_variants.inherits_price` marker and conservatively classifies existing generic rows as explicit; the second adds nullable `product_variants.inherits_stock` and intentionally leaves existing rows unknown because axis-less variants may carry explicit inventory. Only rows explicitly marked as inheriting stock are synchronized from `Product.total_stock`. Apply both migrations before deploying code that reads or writes these ORM fields; they are additive and require no product-data backfill. Existing scalar stock editing remains an absolute value update; full concurrency-safe catalog/variant editing is separate work.
+Approve and Deny routes now use the guarded atomic moderation transition and require `expected_updated_at` in their request bodies. This repair includes the additive Alembic revisions `b8c9d0e1f2a3` and `c9d0e1f2a3b4`: the first adds the nullable `product_variants.inherits_price` marker and conservatively classifies existing generic rows as explicit; the second adds nullable `product_variants.inherits_stock` and intentionally leaves existing rows unknown because axis-less variants may carry explicit inventory. Only rows explicitly marked as inheriting stock are synchronized from `Product.total_stock`. Apply both migrations before deploying code that reads or writes these ORM fields; they are additive and require no product-data backfill. Existing scalar stock editing remains an absolute value update; full concurrency-safe catalog/variant editing is separate work.
 
 ## Boundaries and failure behavior
 
@@ -16,7 +16,7 @@ Delete, Approve and Deny routes/buttons are unchanged. This repair includes the 
 - Ordinary edits preserve moderation and featuring; featuring remains available only through the existing dedicated admin action.
 - Required-field nulls, unknown fields, invalid categories and inconsistent compare-at/base prices fail before commit.
 - Product writes commit once. No provider/outbox/queue side effects are introduced. A lost response still requires read-back before an operator retries; no new automatic mutation retry is added.
-- Backend response compatibility must be deployed before (or atomically with) frontend changes. The PUT acknowledgement retains its existing message/product_id shape.
+- Backend response compatibility must be deployed before (or atomically with) frontend changes. The new approve/reject contract requires `expected_updated_at`; deploy the frontend before or atomically with the backend so old browsers do not submit incomplete moderation decisions. The additive migrations must be applied before the backend reads or writes their ORM fields. Rollback requires preserving the migration/runtime contract and avoiding decisions from stale admin screens.
 
 ## Verification
 

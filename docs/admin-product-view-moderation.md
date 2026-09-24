@@ -2,7 +2,7 @@
 
 ## Scope
 
-Approve/Deny controls on the admin product detail page and product list, backed by an atomic server-side pending-to-terminal moderation transition. Reuses `adminService.approveProduct` / `rejectProduct` and the existing authorization and notification workflow. Pricing, inventory, and schema/migrations remain unchanged.
+Approve/Deny controls on the admin product detail page and product list, backed by an atomic server-side pending-to-terminal moderation transition. Reuses `adminService.approveProduct` / `rejectProduct` and the existing authorization and notification workflow. Approve/reject bodies require `expected_updated_at`; the additive migrations are `b8c9d0e1f2a3` and `c9d0e1f2a3b4`.
 
 ## Behavior
 

@@ -1,6 +1,7 @@
 const CHECKOUT_CAPABILITY_PREFIX = 'shopsoma_checkout_capability:';
 
-const capabilityKey = (orderId: string) => `${CHECKOUT_CAPABILITY_PREFIX}${orderId}`;
+const capabilityKey = (orderId: string) =>
+  `${CHECKOUT_CAPABILITY_PREFIX}${orderId.trim().toLocaleUpperCase('en-US')}`;
 
 export const saveCheckoutCapability = (orderId: string, capability?: string | null) => {
   if (!orderId || !capability) return;

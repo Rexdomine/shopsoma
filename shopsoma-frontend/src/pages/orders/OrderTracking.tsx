@@ -61,6 +61,14 @@ export default function OrderTracking() {
   const formatOrderPrice = (amount: number) =>
     formatPriceWithConversion(amount, 'NGN', orderCurrency, exchangeRates);
 
+  // Never let data loaded for the previous route drive the next order's UI.
+  useEffect(() => {
+    setTracking(null);
+    setOrderDetails(null);
+    setShowOrderModal(false);
+    setLoading(true);
+  }, [orderId]);
+
   // Initial load of tracking data
   useEffect(() => {
     if (!orderId) {
@@ -201,7 +209,7 @@ export default function OrderTracking() {
         try {
           const data = await orderService.getOrderTracking(orderId, loadCheckoutCapability(orderId));
           console.log('[OrderTracking] Polling update received:', data);
-          setTracking(data);
+          if (!data.order_id || data.order_id === orderId) setTracking(data);
         } catch (err) {
           console.error('[OrderTracking] Polling error:', err);
           const status = (err as { response?: { status?: number } })?.response?.status;
