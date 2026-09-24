@@ -56,6 +56,7 @@ export default function OrderTracking() {
   const [isConnectedToWebSocket, setIsConnectedToWebSocket] = useState(false);
   const [wsError, setWsError] = useState<string | null>(null);
   const detailRequestGeneration = useRef(0);
+  const pollingGeneration = useRef(0);
   const exchangeRates = useCurrencyStore((state) => state.exchangeRates);
   const resolvedOrderId = tracking?.order_id ?? orderId;
   const orderCurrency = (orderDetails?.currency || 'NGN') as Currency;
@@ -111,6 +112,8 @@ export default function OrderTracking() {
   useEffect(() => {
     if (!orderId) return;
 
+    const requestGeneration = ++pollingGeneration.current;
+    let isPollingEffectActive = true;
     const pollingOrderId = tracking?.order_id;
     // Get JWT token from localStorage (optional for guest users)
     const token = localStorage.getItem(STORAGE_KEYS.ACCESS_TOKEN);
@@ -214,11 +217,14 @@ export default function OrderTracking() {
           const data = await orderService.getOrderTracking(orderId, loadCheckoutCapability(orderId));
           console.log('[OrderTracking] Polling update received:', data);
           if (
-            !data.order_id ||
-            data.order_id === orderId ||
-            data.order_id === pollingOrderId
+            isPollingEffectActive &&
+            requestGeneration === pollingGeneration.current &&
+            data.order_id &&
+            (data.order_id === orderId || data.order_id === pollingOrderId || !pollingOrderId)
           ) {
             setTracking(data);
+            setError(null);
+            setLoading(false);
           }
         } catch (err) {
           console.error('[OrderTracking] Polling error:', err);
@@ -233,6 +239,7 @@ export default function OrderTracking() {
 
     // Cleanup on unmount
     return () => {
+      isPollingEffectActive = false;
       console.log('[OrderTracking] Disconnecting WebSocket and clearing poll interval');
       websocketService.disconnect();
       clearInterval(pollInterval);

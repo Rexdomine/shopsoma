@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import OrderTracking from './OrderTracking';
 
@@ -102,5 +102,38 @@ describe('OrderTracking', () => {
         undefined,
       ),
     );
+  });
+
+  it('recovers order-number tracking after a transient initial failure', async () => {
+    vi.useFakeTimers();
+    try {
+      getOrderTracking
+        .mockRejectedValueOnce({ response: { status: 503 } })
+        .mockResolvedValueOnce({
+          order_id: '550e8400-e29b-41d4-a716-446655440000',
+          order_number: 'SHP-20260915-D791820A',
+          tracking_id: 'TRACK-1',
+          updated_at: '2026-01-01T00:00:00Z',
+          currency: 'NGN',
+          amount: 100,
+          current_status: 'in_transit',
+          history: [],
+        });
+
+      render(<OrderTracking />);
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(screen.getByText('Tracking information is unavailable. Please try again later.')).toBeInTheDocument();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10000);
+      });
+
+      expect(screen.getAllByText('In Transit').length).toBeGreaterThan(0);
+      expect(screen.queryByText('Tracking information is unavailable. Please try again later.')).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
