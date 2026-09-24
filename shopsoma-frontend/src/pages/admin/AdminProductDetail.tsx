@@ -23,20 +23,12 @@ const moderationAmbiguityKey = (productId: string) => `admin-moderation-outcome-
 
 type ModerationCycleProduct = Pick<Product, 'id' | 'title' | 'description'>;
 
-// The vendor update endpoint starts a new moderation cycle only when these
-// content fields change. Keep the ambiguity lock tied to that same boundary;
-// generic updated_at changes (price, stock, category, etc.) are not enough.
-const moderationCycleSignature = (product: Pick<Product, 'title' | 'description'>) => JSON.stringify([
-  product.title,
-  product.description ?? '',
-]);
-
 const hasCurrentModerationAmbiguity = (product: ModerationCycleProduct) => {
   try {
     const marker = sessionStorage.getItem(moderationAmbiguityKey(product.id));
     if (!marker) return false;
     const parsed = JSON.parse(marker) as { cycleSignature?: string };
-    if (parsed.cycleSignature === moderationCycleSignature(product)) return true;
+    if (parsed.cycleSignature) return true;
   } catch {
     // Treat malformed session state as stale and clear it below.
   }
@@ -46,7 +38,9 @@ const hasCurrentModerationAmbiguity = (product: ModerationCycleProduct) => {
 
 const saveModerationAmbiguity = (product: ModerationCycleProduct) => {
   sessionStorage.setItem(moderationAmbiguityKey(product.id), JSON.stringify({
-    cycleSignature: moderationCycleSignature(product),
+    // Admin edits do not expose an authoritative moderation-cycle boundary.
+    // Keep the lock until the server reports a terminal outcome.
+    cycleSignature: `${product.title}\u0000${product.description ?? ''}`,
   }));
 };
 
@@ -76,23 +70,19 @@ export default function AdminProductDetail() {
     productId: string,
     action: 'approve' | 'deny',
     originalCycle: ModerationCycleProduct,
-  ): Promise<{ product: Product | null; cycleChanged: boolean }> => {
+  ): Promise<{ product: Product | null }> => {
     const expectedStatus = action === 'approve' ? 'approved' : 'rejected';
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const data = await adminService.getProduct(productId);
       setProduct(data);
       if (data.moderation_status === expectedStatus || data.moderation_status !== 'pending') {
         sessionStorage.removeItem(moderationAmbiguityKey(productId));
-        return { product: data, cycleChanged: false };
-      }
-      if (moderationCycleSignature(data) !== moderationCycleSignature(originalCycle)) {
-        sessionStorage.removeItem(moderationAmbiguityKey(productId));
-        return { product: data, cycleChanged: true };
+        return { product: data };
       }
       if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 250));
     }
     saveModerationAmbiguity({ id: productId, title: originalCycle.title, description: originalCycle.description });
-    return { product: null, cycleChanged: false };
+    return { product: null };
   };
 
   const refreshProduct = async () => {
@@ -234,11 +224,6 @@ export default function AdminProductDetail() {
           setRefreshError(null);
           if (reconciled.product?.moderation_status === (moderationAction === 'approve' ? 'approved' : 'rejected')) {
             success(moderationAction === 'approve' ? 'Product approval verified.' : 'Product denial verified.', 'Moderation complete');
-            setModerationOutcomeUnknown(false);
-            setModerationError(null);
-            setModerationAction(null);
-            setApprovalNotes(''); setRejectionReason(''); setRejectionNotes('');
-          } else if (reconciled.cycleChanged) {
             setModerationOutcomeUnknown(false);
             setModerationError(null);
             setModerationAction(null);

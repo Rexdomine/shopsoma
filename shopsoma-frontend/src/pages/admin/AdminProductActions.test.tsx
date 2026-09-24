@@ -185,17 +185,17 @@ describe('admin product view/edit API boundaries', () => {
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Approve Product' })).toBeNull());
     expect(screen.queryByText(/previous moderation request could not be confirmed/i)).toBeNull();
   });
-  it('discards an ambiguity lock when reconciliation observes a newer moderation cycle', async () => {
+  it('keeps an ambiguity lock when pending content changes without an authoritative cycle value', async () => {
     mocks.put.mockRejectedValueOnce(new Error('Network disconnected'));
     mount('view');
     await screen.findByRole('heading', { name: product.title });
-    mocks.get.mockResolvedValueOnce({ data: { ...product, title: 'Vendor corrected title', updated_at: '2026-09-24T10:05:00Z' } });
+    mocks.get.mockResolvedValueOnce({ data: { ...product, title: 'Admin corrected title', updated_at: '2026-09-24T10:05:00Z' } });
     fireEvent.click(screen.getByRole('button', { name: 'Approve Product' }));
     fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Approve Product' }));
-    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-    expect(screen.getByRole('button', { name: 'Approve Product' })).not.toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Deny Product' })).not.toBeDisabled();
-    expect(sessionStorage.getItem('admin-moderation-outcome-unknown:product-1')).toBeNull();
+    await waitFor(() => expect(screen.getByText(/still pending/i)).toBeTruthy());
+    expect(screen.getByRole('button', { name: 'Approve Product' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Deny Product' })).toBeDisabled();
+    expect(sessionStorage.getItem('admin-moderation-outcome-unknown:product-1')).not.toBeNull();
   });
   it('keeps an ambiguity lock when only an unrelated product field changes', async () => {
     mocks.put.mockRejectedValueOnce(new Error('Network disconnected'));
