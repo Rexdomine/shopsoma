@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Search, CheckCircle, XCircle, Eye, Package, AlertCircle, Edit2, Trash2 } from 'lucide-react';
 import AdminSidebar from '../../components/admin/AdminSidebar';
@@ -7,6 +7,12 @@ import { ROUTES } from '../../config/constants';
 import CurrencySwitcher from '../../components/common/CurrencySwitcher';
 import { useCurrencyStore } from '../../store/currencyStore';
 import { formatPriceWithConversion } from '../../utils/pricing';
+import {
+  hasCurrentModerationAmbiguity,
+  moderationAmbiguityKey,
+  moderationLockName,
+  saveModerationAmbiguity,
+} from '../../utils/adminModerationCoordination';
 
 interface Product {
   id: string;
@@ -55,6 +61,7 @@ export default function AdminProducts() {
   const [approvalModal, setApprovalModal] = useState<Product | null>(null);
   const [approvalNotes, setApprovalNotes] = useState('');
   const [deleteModal, setDeleteModal] = useState<Product | null>(null);
+  const moderationOwner = useRef(`${Date.now()}-${Math.random().toString(36).slice(2)}`);
 
   const pageSize = 20;
 
@@ -92,16 +99,47 @@ export default function AdminProducts() {
 
   const handleApproveProduct = async () => {
     if (!approvalModal) return;
-
+    const product = approvalModal;
+    const lockKey = moderationAmbiguityKey(product.id);
+    if (hasCurrentModerationAmbiguity(product)) {
+      showMessage('error', 'This product has an unconfirmed moderation request. Refresh the list before retrying.');
+      return;
+    }
+    const lockManager = typeof navigator !== 'undefined' ? navigator.locks : undefined;
+    if (!lockManager) {
+      showMessage('error', 'This browser cannot safely coordinate moderation across admin tabs.');
+      return;
+    }
     try {
-      setActionLoading(approvalModal.id);
-      await adminService.approveProduct(approvalModal.id, approvalNotes || undefined);
-      showMessage('success', `Product "${approvalModal.title}" approved successfully. Vendor has been notified.`);
-      setApprovalModal(null);
-      setApprovalNotes('');
-      loadProducts();
-    } catch (err: any) {
-      showMessage('error', err?.response?.data?.detail || err.message || 'Failed to approve product');
+      setActionLoading(product.id);
+      await lockManager.request(moderationLockName(product.id), { ifAvailable: true }, async lock => {
+        if (!lock) {
+          showMessage('error', 'Another admin tab is processing this product. Refresh the list before retrying.');
+          return;
+        }
+        if (hasCurrentModerationAmbiguity(product)) {
+          showMessage('error', 'This product has an unconfirmed moderation request. Refresh the list before retrying.');
+          return;
+        }
+        saveModerationAmbiguity(product, moderationOwner.current);
+        try {
+          await adminService.approveProduct(product.id, approvalNotes || undefined);
+          localStorage.removeItem(lockKey);
+          showMessage('success', `Product "${product.title}" approved successfully. Vendor has been notified.`);
+          setApprovalModal(null);
+          setApprovalNotes('');
+          await loadProducts();
+        } catch (err: any) {
+          const status = err?.response?.status;
+          const outcomeMayBeCommitted = !err?.response || (typeof status === 'number' && status >= 500);
+          if (outcomeMayBeCommitted) {
+            showMessage('error', 'The moderation outcome could not be confirmed. Refresh the list before retrying.');
+          } else {
+            localStorage.removeItem(lockKey);
+            showMessage('error', err?.response?.data?.detail || err.message || 'Failed to approve product');
+          }
+        }
+      });
     } finally {
       setActionLoading(null);
     }
@@ -112,22 +150,52 @@ export default function AdminProducts() {
       showMessage('error', 'Rejection reason is required');
       return;
     }
-
     if (rejectionReason.length < 10) {
       showMessage('error', 'Rejection reason must be at least 10 characters');
       return;
     }
-
+    const product = rejectModal;
+    const lockKey = moderationAmbiguityKey(product.id);
+    if (hasCurrentModerationAmbiguity(product)) {
+      showMessage('error', 'This product has an unconfirmed moderation request. Refresh the list before retrying.');
+      return;
+    }
+    const lockManager = typeof navigator !== 'undefined' ? navigator.locks : undefined;
+    if (!lockManager) {
+      showMessage('error', 'This browser cannot safely coordinate moderation across admin tabs.');
+      return;
+    }
     try {
-      setActionLoading(rejectModal.id);
-      await adminService.rejectProduct(rejectModal.id, rejectionReason, rejectionNotes || undefined);
-      showMessage('success', `Product "${rejectModal.title}" rejected. Vendor has been notified.`);
-      setRejectModal(null);
-      setRejectionReason('');
-      setRejectionNotes('');
-      loadProducts();
-    } catch (err: any) {
-      showMessage('error', err?.response?.data?.detail || err.message || 'Failed to reject product');
+      setActionLoading(product.id);
+      await lockManager.request(moderationLockName(product.id), { ifAvailable: true }, async lock => {
+        if (!lock) {
+          showMessage('error', 'Another admin tab is processing this product. Refresh the list before retrying.');
+          return;
+        }
+        if (hasCurrentModerationAmbiguity(product)) {
+          showMessage('error', 'This product has an unconfirmed moderation request. Refresh the list before retrying.');
+          return;
+        }
+        saveModerationAmbiguity(product, moderationOwner.current);
+        try {
+          await adminService.rejectProduct(product.id, rejectionReason.trim(), rejectionNotes.trim() || undefined);
+          localStorage.removeItem(lockKey);
+          showMessage('success', `Product "${product.title}" rejected. Vendor has been notified.`);
+          setRejectModal(null);
+          setRejectionReason('');
+          setRejectionNotes('');
+          await loadProducts();
+        } catch (err: any) {
+          const status = err?.response?.status;
+          const outcomeMayBeCommitted = !err?.response || (typeof status === 'number' && status >= 500);
+          if (outcomeMayBeCommitted) {
+            showMessage('error', 'The moderation outcome could not be confirmed. Refresh the list before retrying.');
+          } else {
+            localStorage.removeItem(lockKey);
+            showMessage('error', err?.response?.data?.detail || err.message || 'Failed to reject product');
+          }
+        }
+      });
     } finally {
       setActionLoading(null);
     }

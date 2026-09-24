@@ -3,13 +3,15 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({ get: vi.fn(), put: vi.fn(), lockRequest: vi.fn(), error: vi.fn(), success: vi.fn(), warning: vi.fn(), hideToast: vi.fn(), setCurrency: vi.fn() }));
+const mocks = vi.hoisted(() => ({ get: vi.fn(), put: vi.fn(), lockRequest: vi.fn(), error: vi.fn(), success: vi.fn(), warning: vi.fn(), hideToast: vi.fn(), setCurrency: vi.fn(), fetchExchangeRate: vi.fn() }));
 vi.mock('../../services/api', () => ({ default: { get: mocks.get, put: mocks.put } }));
 vi.mock('../../hooks/useToast', () => ({ useToast: () => ({ toasts: [], error: mocks.error, success: mocks.success, warning: mocks.warning, hideToast: mocks.hideToast }) }));
-vi.mock('../../store/currencyStore', () => ({ useCurrencyStore: () => ({ currentCurrency: 'NGN', exchangeRates: {}, setCurrency: mocks.setCurrency }) }));
+vi.mock('../../store/currencyStore', () => ({ useCurrencyStore: () => ({ currentCurrency: 'NGN', exchangeRates: {}, setCurrency: mocks.setCurrency, fetchExchangeRate: mocks.fetchExchangeRate }) }));
 vi.mock('../../components/common/CurrencySwitcher', () => ({ default: () => null }));
+vi.mock('../../components/admin/AdminSidebar', () => ({ default: () => null }));
 import AdminProductDetail from './AdminProductDetail';
 import AdminProductEdit from './AdminProductEdit';
+import AdminProducts from './AdminProducts';
 
 const product = { id: 'product-1', title: 'Pending linen shirt', description: 'Awaiting review', base_price: 15000, compare_at_price: 18000, currency: 'NGN', total_stock: 8, status: 'draft', moderation_status: 'pending', is_featured: false, category_id: 'category-1', category_name: 'Shirts', vendor_name: 'Test Vendor', created_at: '2026-09-23T10:00:00Z', updated_at: '2026-09-23T10:00:00Z', images: [], variants: [], variations: [], orders_count: 0, views_count: 0 };
 function Location() { return <output data-testid="location">{useLocation().pathname}</output>; }
@@ -24,6 +26,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.get.mockImplementation(async (url: string) => {
     if (url === '/admin/products/product-1') return { data: { ...product } };
+    if (url.startsWith('/admin/products?')) return { data: { items: [{ ...product, sku: 'SKU-1', vendor: { id: 'vendor-1', business_name: 'Test Vendor' }, moderated_at: null, moderation_notes: null }], total: 1, page: 1, page_size: 20, total_pages: 1 } };
     throw { response: { status: 404, data: { detail: 'Product not found' } } };
   });
   mocks.put.mockResolvedValue({ data: { message: 'Product updated successfully', product_id: product.id } });
@@ -303,6 +306,24 @@ describe('admin product view/edit API boundaries', () => {
     await screen.findByRole('heading', { name: product.title });
     expect(screen.queryByRole('button', { name: 'Approve Product' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Deny Product' })).toBeNull();
+  });
+  it('list moderation honors the shared ambiguity marker before issuing a PUT', async () => {
+    render(<MemoryRouter><AdminProducts /></MemoryRouter>);
+    await screen.findByText(product.title);
+    fireEvent.click(screen.getByTitle('Approve Product'));
+    localStorage.setItem('admin-moderation-outcome-unknown:product-1', JSON.stringify({
+      cycleSignature: `${product.title}\\u0000${product.description}`,
+      leaseUntil: Date.now() + 120000,
+      owner: 'detail-tab',
+    }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Approve Product' })[1]);
+    expect(await screen.findByText(/unconfirmed moderation request/i)).toBeTruthy();
+    expect(mocks.put).not.toHaveBeenCalled();
+
+    localStorage.clear();
+    fireEvent.click(screen.getAllByRole('button', { name: 'Approve Product' })[1]);
+    await waitFor(() => expect(mocks.put).toHaveBeenCalledTimes(1));
+    expect(mocks.lockRequest).toHaveBeenCalledWith('shopsoma-admin-moderation:product-1', { ifAvailable: true }, expect.any(Function));
   });
   it('keeps edits and renders structured validation failures after a failed save', async () => {
     mocks.get.mockResolvedValue({ data: { ...product } });

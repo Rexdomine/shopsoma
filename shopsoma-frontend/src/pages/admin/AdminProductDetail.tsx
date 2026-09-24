@@ -10,6 +10,13 @@ import ToastContainer from '../../components/ui/ToastContainer';
 import CurrencySwitcher from '../../components/common/CurrencySwitcher';
 import { useCurrencyStore } from '../../store/currencyStore';
 import { formatPriceWithConversion } from '../../utils/pricing';
+import {
+  hasCurrentModerationAmbiguity,
+  moderationAmbiguityKey,
+  moderationLockName,
+  saveModerationAmbiguity,
+  type ModerationCycleProduct,
+} from '../../utils/adminModerationCoordination';
 
 function formatDate(dateStr: string) {
   const d = new Date(dateStr);
@@ -18,34 +25,6 @@ function formatDate(dateStr: string) {
   const yy = String(d.getFullYear());
   return `${mm}/${dd}/${yy}`;
 }
-
-const moderationAmbiguityKey = (productId: string) => `admin-moderation-outcome-unknown:${productId}`;
-const moderationLeaseMs = 2 * 60 * 1000;
-
-type ModerationCycleProduct = Pick<Product, 'id' | 'title' | 'description'>;
-
-const hasCurrentModerationAmbiguity = (product: ModerationCycleProduct) => {
-  try {
-    const marker = localStorage.getItem(moderationAmbiguityKey(product.id));
-    if (!marker) return false;
-    const parsed = JSON.parse(marker) as { cycleSignature?: string; leaseUntil?: number };
-    if (parsed.cycleSignature && typeof parsed.leaseUntil === 'number' && parsed.leaseUntil > Date.now()) return true;
-  } catch {
-    // Treat malformed persisted state as stale and clear it below.
-  }
-  localStorage.removeItem(moderationAmbiguityKey(product.id));
-  return false;
-};
-
-const saveModerationAmbiguity = (product: ModerationCycleProduct, owner: string) => {
-  localStorage.setItem(moderationAmbiguityKey(product.id), JSON.stringify({
-    // Admin edits do not expose an authoritative moderation-cycle boundary.
-    // Keep the lock until the server reports a terminal outcome.
-    cycleSignature: `${product.title}\\u0000${product.description ?? ''}`,
-    owner,
-    leaseUntil: Date.now() + moderationLeaseMs,
-  }));
-};
 
 export default function AdminProductDetail() {
   const { id } = useParams<{ id: string }>();
@@ -236,7 +215,7 @@ export default function AdminProductDetail() {
         setModerationError('This browser cannot safely coordinate moderation across admin tabs. Use a supported browser and try again.');
         return;
       }
-      await lockManager.request(`shopsoma-admin-moderation:${product.id}`, { ifAvailable: true }, async lock => {
+      await lockManager.request(moderationLockName(product.id), { ifAvailable: true }, async lock => {
         if (!lock) {
           setModerationOutcomeUnknown(true);
           setModerationError('Another admin tab is processing this product. Refresh the product before retrying.');
