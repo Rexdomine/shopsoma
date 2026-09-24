@@ -266,29 +266,30 @@ describe('admin product view/edit API boundaries', () => {
     expect(screen.getByRole('button', { name: 'Approve Product' })).not.toBeDisabled();
     expect(localStorage.getItem('admin-moderation-outcome-unknown:product-1')).toBeNull();
   });
-  it('keeps an ambiguity lock when pending content changes without an authoritative cycle value', async () => {
+  it('requires review when pending content changes before confirmation', async () => {
     mocks.put.mockRejectedValueOnce(new Error('Network disconnected'));
     mount('view');
     await screen.findByRole('heading', { name: product.title });
     mocks.get.mockResolvedValueOnce({ data: { ...product, title: 'Admin corrected title', updated_at: '2026-09-24T10:05:00Z' } });
     fireEvent.click(screen.getByRole('button', { name: 'Approve Product' }));
     fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Approve Product' }));
-    await waitFor(() => expect(screen.getByText(/still pending/i)).toBeTruthy());
-    expect(screen.getByRole('button', { name: 'Approve Product' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Deny Product' })).toBeDisabled();
-    expect(localStorage.getItem('admin-moderation-outcome-unknown:product-1')).not.toBeNull();
+    expect(await screen.findByText(/changed after it was loaded/i)).toBeTruthy();
+    expect(screen.getByRole('dialog')).toBeTruthy();
+    expect(within(screen.getByRole('dialog')).getByRole('button', { name: 'Approve Product' })).not.toBeDisabled();
+    expect(localStorage.getItem('admin-moderation-outcome-unknown:product-1')).toBeNull();
+    expect(mocks.put).not.toHaveBeenCalled();
   });
-  it('keeps an ambiguity lock when only an unrelated product field changes', async () => {
+  it('requires review when an unrelated product field changes before confirmation', async () => {
     mocks.put.mockRejectedValueOnce(new Error('Network disconnected'));
     mount('view');
     await screen.findByRole('heading', { name: product.title });
     mocks.get.mockResolvedValue({ data: { ...product, base_price: product.base_price + 100, updated_at: '2026-09-24T10:06:00Z' } });
     fireEvent.click(screen.getByRole('button', { name: 'Approve Product' }));
     fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Approve Product' }));
-    await waitFor(() => expect(screen.getByText(/still pending/i)).toBeTruthy());
-    expect(screen.getByRole('button', { name: 'Approve Product' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Deny Product' })).toBeDisabled();
-    expect(localStorage.getItem('admin-moderation-outcome-unknown:product-1')).not.toBeNull();
+    expect(await screen.findByText(/changed after it was loaded/i)).toBeTruthy();
+    expect(screen.getByRole('dialog')).toBeTruthy();
+    expect(localStorage.getItem('admin-moderation-outcome-unknown:product-1')).toBeNull();
+    expect(mocks.put).not.toHaveBeenCalled();
   });
   it('retries only the GET after successful moderation but failed refresh', async () => {
     mount('view');
@@ -398,6 +399,26 @@ describe('admin product view/edit API boundaries', () => {
     mocks.get.mockResolvedValueOnce({ data: { ...product, moderation_status: 'approved' } });
     fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Approve Product' }));
     expect(await screen.findByText(/^APPROVED$/)).toBeTruthy();
+    expect(mocks.put).not.toHaveBeenCalled();
+  });
+  it('detail moderation refuses a revision changed after the dialog opened', async () => {
+    mount('view');
+    await screen.findByRole('heading', { name: product.title });
+    fireEvent.click(screen.getByRole('button', { name: 'Approve Product' }));
+    mocks.get.mockResolvedValueOnce({ data: { ...product, title: 'Vendor revised shirt', updated_at: '2026-09-24T10:05:00Z' } });
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Approve Product' }));
+    expect(await screen.findByText(/changed after it was loaded/i)).toBeTruthy();
+    expect(screen.getByRole('dialog')).toBeTruthy();
+    expect(mocks.put).not.toHaveBeenCalled();
+  });
+  it('list moderation refuses a revision changed after the dialog opened', async () => {
+    render(<MemoryRouter><AdminProducts /></MemoryRouter>);
+    await screen.findByText(product.title);
+    fireEvent.click(screen.getByTitle('Approve Product'));
+    mocks.get.mockResolvedValueOnce({ data: { ...product, title: 'Vendor revised shirt', updated_at: '2026-09-24T10:05:00Z' } });
+    fireEvent.click(screen.getAllByRole('button', { name: 'Approve Product' })[1]);
+    expect(await screen.findByText(/changed after the approval dialog opened/i)).toBeTruthy();
+    expect(screen.queryByRole('dialog')).toBeNull();
     expect(mocks.put).not.toHaveBeenCalled();
   });
   it('list denial validates the trimmed reason length before sending the trimmed payload', async () => {

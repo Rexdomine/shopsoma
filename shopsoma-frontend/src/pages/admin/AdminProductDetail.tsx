@@ -242,6 +242,13 @@ export default function AdminProductDetail() {
           setModerationError('This product has already been moderated. The page was refreshed.');
           return;
         }
+        if (latestProduct.updated_at !== product.updated_at) {
+          localStorage.removeItem(lockKey);
+          setProduct(latestProduct);
+          setApprovalNotes(''); setRejectionReason(''); setRejectionNotes('');
+          setModerationError('This product changed after it was loaded. Review the updated product before moderating again.');
+          return;
+        }
         saveModerationAmbiguity(latestProduct, moderationOwner.current);
         try {
           if (moderationAction === 'approve') {

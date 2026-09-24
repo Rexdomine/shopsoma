@@ -147,6 +147,14 @@ export default function AdminProducts() {
         }
         const latest = await confirmPendingModeration(product);
         if (!latest) return;
+        if (latest.updated_at !== product.updated_at) {
+          localStorage.removeItem(lockKey);
+          setApprovalModal(null);
+          setApprovalNotes('');
+          showMessage('error', 'This product changed after the approval dialog opened. The list was refreshed; review the updated product before approving.');
+          await loadProducts();
+          return;
+        }
         saveModerationAmbiguity(latest, moderationOwner.current);
         try {
           await adminService.approveProduct(latest.id, latest.updated_at, approvalNotes || undefined);
@@ -214,6 +222,15 @@ export default function AdminProducts() {
         }
         const latest = await confirmPendingModeration(product);
         if (!latest) return;
+        if (latest.updated_at !== product.updated_at) {
+          localStorage.removeItem(lockKey);
+          setRejectModal(null);
+          setRejectionReason('');
+          setRejectionNotes('');
+          showMessage('error', 'This product changed after the denial dialog opened. The list was refreshed; review the updated product before denying.');
+          await loadProducts();
+          return;
+        }
         saveModerationAmbiguity(latest, moderationOwner.current);
         try {
           await adminService.rejectProduct(latest.id, rejectionReason.trim(), latest.updated_at, rejectionNotes.trim() || undefined);
