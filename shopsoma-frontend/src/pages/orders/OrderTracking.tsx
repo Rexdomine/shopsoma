@@ -115,6 +115,7 @@ export default function OrderTracking() {
     const requestGeneration = ++pollingGeneration.current;
     let isPollingEffectActive = true;
     let latestPollSequence = 0;
+    let latestSettledPollSequence = 0;
     const pollingOrderId = tracking?.order_id;
     // Get JWT token from localStorage (optional for guest users)
     const token = localStorage.getItem(STORAGE_KEYS.ACCESS_TOKEN);
@@ -221,10 +222,11 @@ export default function OrderTracking() {
           if (
             isPollingEffectActive &&
             requestGeneration === pollingGeneration.current &&
-            pollSequence === latestPollSequence &&
+            pollSequence >= latestSettledPollSequence &&
             data.order_id &&
             (data.order_id === orderId || data.order_id === pollingOrderId || !pollingOrderId)
           ) {
+            latestSettledPollSequence = pollSequence;
             setTracking(data);
             setError(null);
             setLoading(false);
@@ -235,9 +237,10 @@ export default function OrderTracking() {
           if (
             isPollingEffectActive &&
             requestGeneration === pollingGeneration.current &&
-            pollSequence === latestPollSequence &&
+            pollSequence >= latestSettledPollSequence &&
             [401, 403, 404, 410].includes(status ?? 0)
           ) {
+            latestSettledPollSequence = pollSequence;
             setTracking(null);
             setError('Tracking information is unavailable. Please try again later.');
           }

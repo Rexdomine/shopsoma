@@ -133,6 +133,55 @@ describe('OrderTracking', () => {
     }
   });
 
+  it('accepts a slow poll after a newer poll has started but not settled', async () => {
+    vi.useFakeTimers();
+    try {
+      let resolveFirstPoll: ((value: unknown) => void) | undefined;
+      const firstPoll = new Promise((resolve) => {
+        resolveFirstPoll = resolve;
+      });
+      const secondPoll = new Promise(() => {});
+      const initialTracking = {
+        order_id: 'order-1',
+        order_number: 'SHP-20260915-D791820A',
+        tracking_id: 'TRACK-1',
+        updated_at: '2026-01-01T00:00:00Z',
+        currency: 'NGN',
+        amount: 100,
+        current_status: 'in_transit',
+        history: [],
+      };
+      getOrderTracking
+        .mockResolvedValueOnce(initialTracking)
+        .mockReturnValueOnce(firstPoll)
+        .mockReturnValueOnce(secondPoll);
+
+      render(<OrderTracking />);
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(20000);
+      });
+      expect(getOrderTracking).toHaveBeenCalledTimes(3);
+
+      await act(async () => {
+        resolveFirstPoll?.({
+          ...initialTracking,
+          current_status: 'delivered',
+          updated_at: '2026-01-01T00:01:00Z',
+        });
+        await Promise.resolve();
+      });
+
+      expect(screen.getAllByText('Delivered').length).toBeGreaterThan(0);
+      expect(screen.queryByText('Tracking information is unavailable. Please try again later.')).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('uses the resolved UUID for order details after tracking by order number', async () => {
     getOrderTracking.mockResolvedValue({
       order_id: '550e8400-e29b-41d4-a716-446655440000',
