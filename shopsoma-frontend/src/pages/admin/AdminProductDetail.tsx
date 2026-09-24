@@ -233,6 +233,8 @@ export default function AdminProductDetail() {
           } else if (reconciled.product) {
             setModerationOutcomeUnknown(false);
             setModerationError('The moderation request was not confirmed. Review the current status before retrying.');
+            setModerationAction(null);
+            setApprovalNotes(''); setRejectionReason(''); setRejectionNotes('');
           } else {
             setModerationError('The moderation request is still pending. Refresh again before retrying.');
           }

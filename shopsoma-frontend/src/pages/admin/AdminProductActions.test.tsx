@@ -166,6 +166,16 @@ describe('admin product view/edit API boundaries', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Refresh product status' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   });
+  it('closes the moderation dialog when direct reconciliation finds the opposite terminal status', async () => {
+    mocks.put.mockRejectedValueOnce(new Error('Network disconnected'));
+    mount('view');
+    fireEvent.click(await screen.findByRole('button', { name: 'Approve Product' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Approve Product' }));
+    mocks.get.mockResolvedValueOnce({ data: { ...product, moderation_status: 'rejected' } });
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(screen.getByText(/^rejected$/i)).toBeTruthy();
+    expect(screen.queryByText(/Product approval verified/i)).toBeNull();
+  });
   it('closes the moderation dialog when reconciliation finds the opposite terminal status', async () => {
     mocks.put.mockRejectedValueOnce(new Error('Network disconnected'));
     mocks.get.mockResolvedValue({ data: { ...product } });
