@@ -29,7 +29,7 @@ beforeEach(() => {
   mocks.put.mockResolvedValue({ data: { message: 'Product updated successfully', product_id: product.id } });
   vi.spyOn(console, 'error').mockImplementation(() => {});
 });
-afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+afterEach(() => { cleanup(); sessionStorage.clear(); vi.restoreAllMocks(); });
 
 describe('admin product view/edit API boundaries', () => {
   it.each(['view', 'edit'] as const)('%s loads a pending product through admin API without bouncing to list', async mode => {
@@ -165,6 +165,20 @@ describe('admin product view/edit API boundaries', () => {
     mocks.get.mockResolvedValueOnce({ data: { ...product, moderation_status: 'approved' } });
     fireEvent.click(screen.getByRole('button', { name: 'Refresh product status' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  });
+  it('preserves the ambiguity lock across a detail-page remount', async () => {
+    mocks.put.mockRejectedValueOnce(new Error('Network disconnected'));
+    mount('view');
+    await screen.findByRole('heading', { name: product.title });
+    mocks.get.mockResolvedValue({ data: { ...product } });
+    fireEvent.click(screen.getByRole('button', { name: 'Approve Product' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Approve Product' }));
+    await waitFor(() => expect(screen.getByText(/still pending/i)).toBeTruthy());
+    cleanup();
+    mount('view');
+    await screen.findByRole('heading', { name: product.title });
+    expect(screen.getByRole('button', { name: 'Approve Product' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Deny Product' })).toBeDisabled();
   });
   it('retries only the GET after successful moderation but failed refresh', async () => {
     mount('view');

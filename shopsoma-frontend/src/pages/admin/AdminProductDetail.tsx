@@ -19,6 +19,8 @@ function formatDate(dateStr: string) {
   return `${mm}/${dd}/${yy}`;
 }
 
+const moderationAmbiguityKey = (productId: string) => `admin-moderation-outcome-unknown:${productId}`;
+
 export default function AdminProductDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -46,9 +48,13 @@ export default function AdminProductDetail() {
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const data = await adminService.getProduct(productId);
       setProduct(data);
-      if (data.moderation_status === expectedStatus || data.moderation_status !== 'pending') return data;
+      if (data.moderation_status === expectedStatus || data.moderation_status !== 'pending') {
+        sessionStorage.removeItem(moderationAmbiguityKey(productId));
+        return data;
+      }
       if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 250));
     }
+    sessionStorage.setItem(moderationAmbiguityKey(productId), '1');
     return null;
   };
 
@@ -59,6 +65,7 @@ export default function AdminProductDetail() {
       const data = await adminService.getProduct(id);
       setProduct(data);
       setRefreshError(null);
+      if (data.moderation_status !== 'pending') sessionStorage.removeItem(moderationAmbiguityKey(data.id));
       if (moderationOutcomeUnknown && moderationAction) {
         const expectedStatus = moderationAction === 'approve' ? 'approved' : 'rejected';
         if (data.moderation_status === expectedStatus) {
@@ -118,6 +125,12 @@ export default function AdminProductDetail() {
         setLoadError(null);
         const data = await adminService.getProduct(id);
         setProduct(data);
+        if (data.moderation_status === 'pending' && sessionStorage.getItem(moderationAmbiguityKey(data.id)) === '1') {
+          setModerationOutcomeUnknown(true);
+          setModerationError('A previous moderation request could not be confirmed. Refresh the product before retrying.');
+        } else if (data.moderation_status !== 'pending') {
+          sessionStorage.removeItem(moderationAmbiguityKey(data.id));
+        }
       } catch (err: any) {
         console.error('Failed to load product', err);
         setLoadError(apiErrorMessage(err, 'Failed to load product. Please try again.'));
@@ -143,8 +156,10 @@ export default function AdminProductDetail() {
       if (moderationAction === 'approve') {
         await adminService.approveProduct(product.id, approvalNotes.trim() || undefined);
       } else {
+        sessionStorage.removeItem(moderationAmbiguityKey(product.id));
         await adminService.rejectProduct(product.id, rejectionReason.trim(), rejectionNotes.trim() || undefined);
       }
+      sessionStorage.removeItem(moderationAmbiguityKey(product.id));
       success(moderationAction === 'approve' ? 'Product approved successfully.' : 'Product denied successfully.', 'Moderation complete');
       setModerationAction(null);
       setApprovalNotes(''); setRejectionReason(''); setRejectionNotes('');
@@ -171,6 +186,7 @@ export default function AdminProductDetail() {
             setModerationError('The moderation request is still pending. Refresh again before retrying.');
           }
         } catch (reconciliationError: any) {
+          sessionStorage.setItem(moderationAmbiguityKey(product.id), '1');
           setModerationOutcomeUnknown(true);
           setModerationError(`The moderation outcome could not be confirmed. Refresh the product before retrying. ${apiErrorMessage(reconciliationError, 'Refresh failed')}`);
         } finally {
@@ -292,8 +308,8 @@ export default function AdminProductDetail() {
               <CurrencySwitcher value={currentCurrency} onChange={setCurrency} />
               {product.moderation_status === 'pending' && !refreshError && (
                 <>
-                  <button type="button" onClick={() => setModerationAction('approve')} disabled={isModerating || isRefreshing} className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50"><CheckCircle className="h-4 w-4" />Approve Product</button>
-                  <button type="button" onClick={() => setModerationAction('deny')} disabled={isModerating || isRefreshing} className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50"><XCircle className="h-4 w-4" />Deny Product</button>
+                  <button type="button" onClick={() => setModerationAction('approve')} disabled={isModerating || isRefreshing || moderationOutcomeUnknown} className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50"><CheckCircle className="h-4 w-4" />Approve Product</button>
+                  <button type="button" onClick={() => setModerationAction('deny')} disabled={isModerating || isRefreshing || moderationOutcomeUnknown} className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50"><XCircle className="h-4 w-4" />Deny Product</button>
                 </>
               )}
               <button
