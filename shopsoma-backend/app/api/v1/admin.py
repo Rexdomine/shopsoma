@@ -1901,81 +1901,123 @@ async def update_product_featured(
     }
 
 
-@router.put("/products/{product_id}/approve")
-async def approve_product(
-    product_id: UUID,
-    request: ProductApprovalRequest,
-    current_admin: User = Depends(get_current_admin),
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Approve a product
-
-    This endpoint approves a product for sale on the platform and sends
-    an email notification to the vendor.
-
-    Requires admin role
-    """
-    from datetime import datetime
-    from app.services.email_service import email_service
-    import logging
-
-    logger = logging.getLogger(__name__)
-
-    # Get product with vendor information
+async def _moderation_subject(db: AsyncSession, product_id: UUID):
     result = await db.execute(
         select(Product, Vendor, User)
         .join(Vendor, Product.vendor_id == Vendor.id)
         .join(User, Vendor.user_id == User.id)
         .where(Product.id == product_id)
     )
-    product_with_vendor = result.first()
+    return result.first()
 
-    if not product_with_vendor:
+
+async def _transition_product_moderation(
+    *,
+    db: AsyncSession,
+    product_id: UUID,
+    admin_id: UUID,
+    target_status: ModerationStatus,
+    moderation_notes: Optional[str],
+):
+    """Atomically allow exactly one pending product moderation transition."""
+    now = datetime.now(timezone.utc)
+    # Product DML is guarded by the existing catalog coordinator trigger. It
+    # also serializes all catalog writers before the status is re-read.
+    await coordinate_catalog_write(db, product_ids=[product_id])
+    locked_status = await db.scalar(
+        select(Product.status).where(Product.id == product_id).with_for_update()
+    )
+    if locked_status is None:
         raise HTTPException(status_code=404, detail="Product not found")
+    values = {
+        "moderation_status": target_status,
+        "moderated_at": now,
+        "moderated_by": admin_id,
+        "moderation_notes": moderation_notes,
+    }
+    if target_status is ModerationStatus.APPROVED:
+        values["status"] = (
+            ProductStatus.ACTIVE
+            if locked_status is ProductStatus.DRAFT
+            else locked_status
+        )
+    else:
+        values["status"] = ProductStatus.DRAFT
 
-    product, vendor, user = product_with_vendor
-
-    # Check if already approved
-    if product.moderation_status == ModerationStatus.APPROVED:
-        raise HTTPException(status_code=400, detail="Product is already approved")
-
-    # Update product status
-    product.moderation_status = ModerationStatus.APPROVED
-    product.moderated_at = datetime.utcnow()
-    product.moderated_by = current_admin.id
-    product.moderation_notes = request.notes
-
-    # Set product to active if it was pending
-    if product.status == ProductStatus.DRAFT:
-        product.status = ProductStatus.ACTIVE
-
+    result = await db.execute(
+        update(Product)
+        .where(
+            Product.id == product_id,
+            Product.moderation_status == ModerationStatus.PENDING,
+        )
+        .values(**values)
+        .returning(
+            Product.id,
+            Product.title,
+            Product.status,
+            Product.moderation_status,
+            Product.moderated_at,
+            Product.moderated_by,
+        )
+    )
+    transitioned = result.mappings().one_or_none()
+    if transitioned is None:
+        exists = await db.scalar(select(Product.id).where(Product.id == product_id))
+        if exists is None:
+            raise HTTPException(status_code=404, detail="Product not found")
+        raise HTTPException(
+            status_code=409,
+            detail="Product moderation has already been decided",
+        )
     await db.commit()
-    await db.refresh(product)
+    return transitioned
 
-    # Send email notification to vendor
+
+@router.put("/products/{product_id}/approve")
+async def approve_product(
+    product_id: UUID,
+    request: ProductApprovalRequest,
+    current_admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Atomically approve a pending product, then notify its vendor."""
+    from app.services.email_service import email_service
+    import logging
+
+    subject = await _moderation_subject(db, product_id)
+    if not subject:
+        raise HTTPException(status_code=404, detail="Product not found")
+    product, vendor, user = subject
+    transitioned = await _transition_product_moderation(
+        db=db,
+        product_id=product_id,
+        admin_id=current_admin.id,
+        target_status=ModerationStatus.APPROVED,
+        moderation_notes=request.notes,
+    )
+
+    logger = logging.getLogger(__name__)
     try:
         await email_service.send_product_approved_email(
             email=user.email,
             vendor_name=user.full_name or vendor.business_name,
-            product_title=product.title,
-            product_id=str(product.id),
-            notes=request.notes
+            product_title=transitioned["title"],
+            product_id=str(product_id),
+            notes=request.notes,
         )
-        logger.info(f"Product approval email sent to {user.email} for product {product.id}")
-    except Exception as e:
-        # Log error but don't fail the approval operation
-        logger.error(f"Failed to send approval email to {user.email}: {e}")
+        logger.info("Product approval email sent to %s for product %s", user.email, product_id)
+    except Exception as exc:
+        logger.error("Failed to send approval email to %s: %s", user.email, exc)
 
     return {
         "message": "Product approved successfully",
-        "product_id": str(product.id),
-        "title": product.title,
-        "moderation_status": product.moderation_status.value,
-        "status": product.status.value,
-        "moderated_at": product.moderated_at.isoformat(),
-        "moderated_by": str(current_admin.id),
-        "email_sent": True
+        "product_id": str(product_id),
+        "title": transitioned["title"],
+        "moderation_status": transitioned["moderation_status"].value,
+        "status": transitioned["status"].value,
+        "moderated_at": transitioned["moderated_at"].isoformat(),
+        "moderated_by": str(transitioned["moderated_by"]),
+        "email_sent": True,
     }
 
 
@@ -1984,75 +2026,51 @@ async def reject_product(
     product_id: UUID,
     request: ProductRejectionRequest,
     current_admin: User = Depends(get_current_admin),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ):
-    """
-    Reject a product
-
-    This endpoint rejects a product from being sold on the platform and sends
-    an email notification to the vendor with the rejection reason.
-
-    Requires admin role
-    """
-    from datetime import datetime
+    """Atomically reject a pending product, then notify its vendor."""
     from app.services.email_service import email_service
     import logging
 
-    logger = logging.getLogger(__name__)
-
-    # Get product with vendor information
-    result = await db.execute(
-        select(Product, Vendor, User)
-        .join(Vendor, Product.vendor_id == Vendor.id)
-        .join(User, Vendor.user_id == User.id)
-        .where(Product.id == product_id)
-    )
-    product_with_vendor = result.first()
-
-    if not product_with_vendor:
+    subject = await _moderation_subject(db, product_id)
+    if not subject:
         raise HTTPException(status_code=404, detail="Product not found")
-
-    product, vendor, user = product_with_vendor
-
-    # Update product status
-    product.moderation_status = ModerationStatus.REJECTED
-    product.moderated_at = datetime.utcnow()
-    product.moderated_by = current_admin.id
-    product.moderation_notes = f"REJECTION REASON: {request.reason}"
+    product, vendor, user = subject
+    moderation_notes = f"REJECTION REASON: {request.reason}"
     if request.notes:
-        product.moderation_notes += f"\n\nADMIN NOTES: {request.notes}"
+        moderation_notes += f"\n\nADMIN NOTES: {request.notes}"
+    transitioned = await _transition_product_moderation(
+        db=db,
+        product_id=product_id,
+        admin_id=current_admin.id,
+        target_status=ModerationStatus.REJECTED,
+        moderation_notes=moderation_notes,
+    )
 
-    # Set product back to draft
-    product.status = ProductStatus.DRAFT
-
-    await db.commit()
-    await db.refresh(product)
-
-    # Send email notification to vendor
+    logger = logging.getLogger(__name__)
     try:
         await email_service.send_product_rejected_email(
             email=user.email,
             vendor_name=user.full_name or vendor.business_name,
-            product_title=product.title,
-            product_id=str(product.id),
+            product_title=transitioned["title"],
+            product_id=str(product_id),
             reason=request.reason,
-            notes=request.notes
+            notes=request.notes,
         )
-        logger.info(f"Product rejection email sent to {user.email} for product {product.id}")
-    except Exception as e:
-        # Log error but don't fail the rejection operation
-        logger.error(f"Failed to send rejection email to {user.email}: {e}")
+        logger.info("Product rejection email sent to %s for product %s", user.email, product_id)
+    except Exception as exc:
+        logger.error("Failed to send rejection email to %s: %s", user.email, exc)
 
     return {
         "message": "Product rejected successfully",
-        "product_id": str(product.id),
-        "title": product.title,
-        "moderation_status": product.moderation_status.value,
-        "status": product.status.value,
-        "moderated_at": product.moderated_at.isoformat(),
-        "moderated_by": str(current_admin.id),
+        "product_id": str(product_id),
+        "title": transitioned["title"],
+        "moderation_status": transitioned["moderation_status"].value,
+        "status": transitioned["status"].value,
+        "moderated_at": transitioned["moderated_at"].isoformat(),
+        "moderated_by": str(transitioned["moderated_by"]),
         "rejection_reason": request.reason,
-        "email_sent": True
+        "email_sent": True,
     }
 
 
