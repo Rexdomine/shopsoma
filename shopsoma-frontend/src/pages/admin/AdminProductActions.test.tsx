@@ -179,6 +179,10 @@ describe('admin product view/edit API boundaries', () => {
     await screen.findByRole('heading', { name: product.title });
     expect(screen.getByRole('button', { name: 'Approve Product' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Deny Product' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Refresh product status' })).toBeTruthy();
+    mocks.get.mockResolvedValueOnce({ data: { ...product, moderation_status: 'approved' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh product status' }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Approve Product' })).toBeNull());
   });
   it('retries only the GET after successful moderation but failed refresh', async () => {
     mount('view');

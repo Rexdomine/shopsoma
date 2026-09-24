@@ -79,6 +79,12 @@ export default function AdminProductDetail() {
           setModerationOutcomeUnknown(true);
           setModerationError('The moderation request is still pending. Refresh again before retrying.');
         }
+      } else if (moderationOutcomeUnknown && data.moderation_status !== 'pending') {
+        sessionStorage.removeItem(moderationAmbiguityKey(data.id));
+        setModerationOutcomeUnknown(false);
+        setModerationError(null);
+      } else if (moderationOutcomeUnknown && data.moderation_status === 'pending') {
+        setModerationError('The moderation request is still pending. Refresh again before retrying.');
       } else {
         setModerationOutcomeUnknown(false);
       }
@@ -153,10 +159,10 @@ export default function AdminProductDetail() {
       setIsModerating(true);
       setModerationError(null);
       setModerationOutcomeUnknown(false);
+      sessionStorage.setItem(moderationAmbiguityKey(product.id), '1');
       if (moderationAction === 'approve') {
         await adminService.approveProduct(product.id, approvalNotes.trim() || undefined);
       } else {
-        sessionStorage.removeItem(moderationAmbiguityKey(product.id));
         await adminService.rejectProduct(product.id, rejectionReason.trim(), rejectionNotes.trim() || undefined);
       }
       sessionStorage.removeItem(moderationAmbiguityKey(product.id));
@@ -168,6 +174,7 @@ export default function AdminProductDetail() {
       const status = err?.response?.status;
       const outcomeMayBeCommitted = !err?.response || (typeof status === 'number' && status >= 500);
       if (!outcomeMayBeCommitted || !product || !moderationAction) {
+        if (product) sessionStorage.removeItem(moderationAmbiguityKey(product.id));
         setModerationError(apiErrorMessage(err, 'Moderation action failed'));
       } else {
         setModerationOutcomeUnknown(true);
@@ -335,6 +342,15 @@ export default function AdminProductDetail() {
             <p>The moderation action succeeded, but the displayed product could not be refreshed. {refreshError}</p>
             <button type="button" disabled={isRefreshing} onClick={refreshProduct} className="mt-2 font-medium underline disabled:opacity-50">
               {isRefreshing ? 'Refreshing…' : 'Refresh product'}
+            </button>
+          </div>
+        )}
+
+        {moderationOutcomeUnknown && !moderationAction && (
+          <div role="alert" className="mb-6 rounded-lg border border-yellow-300 bg-yellow-50 p-4 text-yellow-900">
+            <p>A previous moderation request could not be confirmed. Refresh the product before retrying.</p>
+            <button type="button" disabled={isRefreshing} onClick={refreshProduct} className="mt-2 font-medium underline disabled:opacity-50">
+              {isRefreshing ? 'Refreshing…' : 'Refresh product status'}
             </button>
           </div>
         )}
