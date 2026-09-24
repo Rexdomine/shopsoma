@@ -245,6 +245,7 @@ export default function AdminProductDetail() {
         if (latestProduct.updated_at !== product.updated_at) {
           localStorage.removeItem(lockKey);
           setProduct(latestProduct);
+          setModerationAction(null);
           setApprovalNotes(''); setRejectionReason(''); setRejectionNotes('');
           setModerationError('This product changed after it was loaded. Review the updated product before moderating again.');
           return;
