@@ -325,6 +325,16 @@ describe('admin product view/edit API boundaries', () => {
     await waitFor(() => expect(mocks.put).toHaveBeenCalledTimes(1));
     expect(mocks.lockRequest).toHaveBeenCalledWith('shopsoma-admin-moderation:product-1', { ifAvailable: true }, expect.any(Function));
   });
+  it('list moderation revalidates status inside the lock before issuing a PUT', async () => {
+    render(<MemoryRouter><AdminProducts /></MemoryRouter>);
+    await screen.findByText(product.title);
+    fireEvent.click(screen.getByTitle('Approve Product'));
+    mocks.get.mockResolvedValueOnce({ data: { ...product, moderation_status: 'approved' } });
+    fireEvent.click(screen.getAllByRole('button', { name: 'Approve Product' })[1]);
+    expect(await screen.findByText(/already been moderated/i)).toBeTruthy();
+    expect(mocks.put).not.toHaveBeenCalled();
+    expect(mocks.lockRequest).toHaveBeenCalledWith('shopsoma-admin-moderation:product-1', { ifAvailable: true }, expect.any(Function));
+  });
   it('keeps edits and renders structured validation failures after a failed save', async () => {
     mocks.get.mockResolvedValue({ data: { ...product } });
     mocks.put.mockRejectedValue({ response: { status: 422, data: { detail: [{ loc: ['body', 'category_id'], msg: 'Invalid category', type: 'value_error' }] } } });

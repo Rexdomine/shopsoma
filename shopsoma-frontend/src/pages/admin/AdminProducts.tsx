@@ -97,6 +97,26 @@ export default function AdminProducts() {
     }
   };
 
+  const confirmPendingModeration = async (product: Product) => {
+    try {
+      const latest = await adminService.getProduct(product.id);
+      if (latest.moderation_status !== 'pending') {
+        setApprovalModal(null);
+        setRejectModal(null);
+        setApprovalNotes('');
+        setRejectionReason('');
+        setRejectionNotes('');
+        showMessage('error', 'This product has already been moderated. The list was refreshed.');
+        await loadProducts();
+        return false;
+      }
+      return true;
+    } catch (err: any) {
+      showMessage('error', err?.response?.data?.detail || err.message || 'Unable to verify current moderation status');
+      return false;
+    }
+  };
+
   const handleApproveProduct = async () => {
     if (!approvalModal) return;
     const product = approvalModal;
@@ -121,6 +141,7 @@ export default function AdminProducts() {
           showMessage('error', 'This product has an unconfirmed moderation request. Refresh the list before retrying.');
           return;
         }
+        if (!await confirmPendingModeration(product)) return;
         saveModerationAmbiguity(product, moderationOwner.current);
         try {
           await adminService.approveProduct(product.id, approvalNotes || undefined);
@@ -176,6 +197,7 @@ export default function AdminProducts() {
           showMessage('error', 'This product has an unconfirmed moderation request. Refresh the list before retrying.');
           return;
         }
+        if (!await confirmPendingModeration(product)) return;
         saveModerationAmbiguity(product, moderationOwner.current);
         try {
           await adminService.rejectProduct(product.id, rejectionReason.trim(), rejectionNotes.trim() || undefined);
