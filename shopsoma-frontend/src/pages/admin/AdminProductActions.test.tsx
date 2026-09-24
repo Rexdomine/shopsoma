@@ -135,6 +135,23 @@ describe('admin product view/edit API boundaries', () => {
     expect(mocks.put).not.toHaveBeenCalled();
     expect(mocks.lockRequest).toHaveBeenCalledWith('shopsoma-admin-moderation:product-1', { ifAvailable: true }, expect.any(Function));
   });
+  it('disables cancellation while waiting for the atomic moderation lock', async () => {
+    let releaseLock!: (lock: object | null) => void;
+    mocks.lockRequest.mockImplementationOnce((_name: string, _options: unknown, callback: (lock: object | null) => Promise<unknown>) =>
+      new Promise(resolve => {
+        releaseLock = (lock) => resolve(callback(lock));
+      }));
+    mount('view');
+    fireEvent.click(await screen.findByRole('button', { name: 'Approve Product' }));
+    const dialog = screen.getByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Approve Product' }));
+    await waitFor(() => expect(within(dialog).getByRole('button', { name: 'Cancel' })).toBeDisabled());
+    expect(mocks.put).not.toHaveBeenCalled();
+    releaseLock(null);
+    expect(await screen.findByText(/another admin tab is processing/i)).toBeTruthy();
+    expect(mocks.put).not.toHaveBeenCalled();
+  });
+
   it('renders structured moderation errors and retains notes for retry', async () => {
     mocks.put.mockRejectedValueOnce({ response: { data: { detail: [{ msg: 'Approval not permitted' }] } } });
     mount('view');

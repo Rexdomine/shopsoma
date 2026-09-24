@@ -229,6 +229,7 @@ export default function AdminProductDetail() {
       }
     }
     moderationBusy.current = true;
+    setIsModerating(true);
     try {
       const lockManager = typeof navigator !== 'undefined' ? navigator.locks : undefined;
       if (!lockManager) {
