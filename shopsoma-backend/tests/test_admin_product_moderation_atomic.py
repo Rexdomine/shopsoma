@@ -1,5 +1,6 @@
 import asyncio
 from collections import Counter
+from datetime import datetime, timezone
 from uuid import uuid4
 
 import pytest
@@ -10,6 +11,7 @@ from app.api.v1 import admin as admin_api
 from tests.conftest import TestSessionLocal
 from app.models.product import ModerationStatus, Product, ProductStatus
 from app.schemas.product import ProductApprovalRequest, ProductRejectionRequest
+from app.services.product_moderation import mark_product_content_pending
 
 
 async def _pending_product(db_session, vendor_user):
@@ -43,6 +45,29 @@ async def _call_moderation(action, product_id, admin_user, session):
         admin_user["user"],
         session,
     )
+
+
+@pytest.mark.asyncio
+async def test_vendor_child_write_returns_approved_product_to_pending(
+    db_session, vendor_user, admin_user
+):
+    product = await _pending_product(db_session, vendor_user)
+    product.moderation_status = ModerationStatus.APPROVED
+    product.moderated_at = datetime.now(timezone.utc)
+    product.moderated_by = admin_user["user"].id
+    product.moderation_notes = "Prior decision"
+    await db_session.commit()
+
+    await mark_product_content_pending(db=db_session, product_id=product.id)
+    await db_session.commit()
+
+    async with TestSessionLocal() as verification_session:
+        persisted = await verification_session.scalar(
+            select(Product).where(Product.id == product.id)
+        )
+    assert persisted.moderation_status is ModerationStatus.PENDING
+    assert persisted.moderated_at is None
+    assert persisted.moderated_by is None
 
 
 @pytest.mark.asyncio
