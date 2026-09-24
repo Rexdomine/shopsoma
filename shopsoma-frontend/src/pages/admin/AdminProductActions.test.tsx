@@ -11,7 +11,7 @@ vi.mock('../../components/common/CurrencySwitcher', () => ({ default: () => null
 vi.mock('../../components/admin/AdminSidebar', () => ({ default: () => null }));
 import AdminProductDetail from './AdminProductDetail';
 import AdminProductEdit from './AdminProductEdit';
-import AdminProducts from './AdminProducts';
+import AdminProducts, { sameTimestamp } from './AdminProducts';
 
 const product = { id: 'product-1', title: 'Pending linen shirt', description: 'Awaiting review', base_price: 15000, compare_at_price: 18000, currency: 'NGN', total_stock: 8, status: 'draft', moderation_status: 'pending', is_featured: false, category_id: 'category-1', category_name: 'Shirts', vendor_name: 'Test Vendor', created_at: '2026-09-23T10:00:00Z', updated_at: '2026-09-23T10:00:00Z', images: [], variants: [], variations: [], orders_count: 0, views_count: 0 };
 function Location() { return <output data-testid="location">{useLocation().pathname}</output>; }
@@ -419,6 +419,10 @@ describe('admin product view/edit API boundaries', () => {
     expect(await screen.findByText(/changed after the approval dialog opened/i)).toBeTruthy();
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(mocks.put).not.toHaveBeenCalled();
+  });
+  it('preserves full timestamp precision when comparing moderation revisions', () => {
+    expect(sameTimestamp('2026-09-23T10:00:00.123456Z', '2026-09-23T10:00:00.123457Z')).toBe(false);
+    expect(sameTimestamp('2026-09-23T10:00:00.123456Z', '2026-09-23T10:00:00.123456+00:00')).toBe(true);
   });
   it('list denial validates the trimmed reason length before sending the trimmed payload', async () => {
     render(<MemoryRouter><AdminProducts /></MemoryRouter>);
