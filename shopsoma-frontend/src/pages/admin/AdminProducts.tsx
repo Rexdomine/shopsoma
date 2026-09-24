@@ -41,6 +41,12 @@ interface Product {
   updated_at: string;
 }
 
+const sameTimestamp = (left: string, right: string): boolean => {
+  const leftMillis = Date.parse(left);
+  const rightMillis = Date.parse(right);
+  return Number.isFinite(leftMillis) && leftMillis === rightMillis;
+};
+
 export default function AdminProducts() {
   const navigate = useNavigate();
   const { currentCurrency, setCurrency, exchangeRates, fetchExchangeRate } = useCurrencyStore();
@@ -147,7 +153,7 @@ export default function AdminProducts() {
         }
         const latest = await confirmPendingModeration(product);
         if (!latest) return;
-        if (latest.updated_at !== product.updated_at) {
+        if (!sameTimestamp(latest.updated_at, product.updated_at)) {
           localStorage.removeItem(lockKey);
           setApprovalModal(null);
           setApprovalNotes('');
@@ -222,7 +228,7 @@ export default function AdminProducts() {
         }
         const latest = await confirmPendingModeration(product);
         if (!latest) return;
-        if (latest.updated_at !== product.updated_at) {
+        if (!sameTimestamp(latest.updated_at, product.updated_at)) {
           localStorage.removeItem(lockKey);
           setRejectModal(null);
           setRejectionReason('');

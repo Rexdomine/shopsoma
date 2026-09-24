@@ -46,6 +46,7 @@ fi
 PRODUCT_ID=$(echo $PRODUCTS_RESPONSE | python3 -c "import sys, json; items = json.load(sys.stdin).get('items', []); print(items[0]['id'] if items else '')" 2>/dev/null)
 PRODUCT_TITLE=$(echo $PRODUCTS_RESPONSE | python3 -c "import sys, json; items = json.load(sys.stdin).get('items', []); print(items[0]['title'] if items else '')" 2>/dev/null)
 VENDOR_EMAIL=$(echo $PRODUCTS_RESPONSE | python3 -c "import sys, json; items = json.load(sys.stdin).get('items', []); print(items[0]['vendor']['business_name'] if items and 'vendor' in items[0] else '')" 2>/dev/null)
+EXPECTED_UPDATED_AT=$(echo $PRODUCTS_RESPONSE | python3 -c "import sys, json; items = json.load(sys.stdin).get('items', []); print(items[0]['updated_at'] if items else '')" 2>/dev/null)
 
 echo "Testing with product: $PRODUCT_TITLE (ID: $PRODUCT_ID)"
 echo ""
@@ -56,7 +57,7 @@ echo "This should send an approval email to the vendor..."
 APPROVE_RESPONSE=$(curl -s -w "\n%{http_code}" -X PUT "${BASE_URL}/admin/products/${PRODUCT_ID}/approve" \
   -H "Authorization: Bearer ${TOKEN}" \
   -H "Content-Type: application/json" \
-  -d '{"notes":"Great product! Meets all our guidelines."}')
+  -d "{\"notes\":\"Great product! Meets all our guidelines.\",\"expected_updated_at\":\"${EXPECTED_UPDATED_AT}\"}")
 
 HTTP_CODE=$(echo "$APPROVE_RESPONSE" | tail -n1)
 RESPONSE_BODY=$(echo "$APPROVE_RESPONSE" | head -n -1)
@@ -96,4 +97,4 @@ echo "To test rejection:"
 echo "curl -X PUT \"${BASE_URL}/admin/products/PRODUCT_ID/reject\" \\"
 echo "  -H \"Authorization: Bearer \$TOKEN\" \\"
 echo "  -H \"Content-Type: application/json\" \\"
-echo "  -d '{\"reason\":\"Images do not meet quality standards\",\"notes\":\"Please upload high-resolution images\"}'"
+echo "  -d '{\"reason\":\"Images do not meet quality standards\",\"notes\":\"Please upload high-resolution images\",\"expected_updated_at\":\"PRODUCT_UPDATED_AT\"}'"
