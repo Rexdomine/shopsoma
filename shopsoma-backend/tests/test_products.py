@@ -1378,9 +1378,15 @@ class TestProductModeration:
         self,
         client: AsyncClient,
         admin_user,
-        sample_product
+        sample_product,
+        db_session,
     ):
         """Test approving a product"""
+        from app.models.product import ModerationStatus
+
+        sample_product.moderation_status = ModerationStatus.PENDING
+        await db_session.commit()
+        await db_session.refresh(sample_product)
         moderation_data = {
             "moderation_status": "approved",
             "moderation_notes": "Looks good!",
@@ -1403,9 +1409,15 @@ class TestProductModeration:
         self,
         client: AsyncClient,
         admin_user,
-        sample_product
+        sample_product,
+        db_session,
     ):
         """Test rejecting a product"""
+        from app.models.product import ModerationStatus
+
+        sample_product.moderation_status = ModerationStatus.PENDING
+        await db_session.commit()
+        await db_session.refresh(sample_product)
         moderation_data = {
             "moderation_status": "rejected",
             "moderation_notes": "Violates policy",
