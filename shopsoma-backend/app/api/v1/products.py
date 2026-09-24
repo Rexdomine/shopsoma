@@ -1150,6 +1150,15 @@ async def update_product(
                 ],
             ) from exc
 
+    # Acquire the catalog coordinator before any moderation-relevant parent or
+    # child write. This advances the revision while the write is serialized, so
+    # a moderation decision based on the prior revision cannot approve it.
+    content_rewrite = variations_data is not None or any(
+        field in update_data for field in ["title", "description"]
+    )
+    if content_rewrite:
+        await mark_product_content_pending(db=db, product_id=product_id)
+
     for field, value in update_data.items():
         if field == "status":
             setattr(product, field, ProductStatus(value))
@@ -1210,13 +1219,6 @@ async def update_product(
                         stock=size_data.get("stock", 0),
                     )
                     db.add(size_stock)
-
-    # Reset moderation for parent content and every child variation rewrite.
-    if variations_data is not None or any(field in update_data for field in ["title", "description"]):
-        product.moderation_status = ModerationStatus.PENDING
-        product.moderated_at = None
-        product.moderated_by = None
-        product.moderation_notes = None
 
     if any(field in update_data for field in ["total_stock", "made_to_order"]):
         _sync_single_product_variant_inventory(product)

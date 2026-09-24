@@ -5,6 +5,7 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.product import ModerationStatus
 
 class TestProductCreate:
     """Test product creation endpoint"""
@@ -1013,6 +1014,104 @@ class TestProductUpdate:
         updated_variation = update_response.json()["variations"][0]
         assert float(updated_variation["price"]) == 180.00
         assert float(updated_variation["sale_price"]) == 150.00
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("rewrite_payload", "initial_status"),
+        [
+            ({"title": "Rewritten title"}, ModerationStatus.APPROVED),
+            ({"title": "Rewritten title"}, ModerationStatus.PENDING),
+            ({"description": "Rewritten description"}, ModerationStatus.APPROVED),
+            ({"description": "Rewritten description"}, ModerationStatus.PENDING),
+            (
+                {
+                    "variations": [
+                        {"title": "Blue", "type": "color", "price": 100.00},
+                    ],
+                },
+                ModerationStatus.APPROVED,
+            ),
+            (
+                {
+                    "variations": [
+                        {"title": "Blue", "type": "color", "price": 100.00},
+                    ],
+                },
+                ModerationStatus.PENDING,
+            ),
+        ],
+        ids=[
+            "parent-title-approved",
+            "parent-title-pending",
+            "parent-description-approved",
+            "parent-description-pending",
+            "variation-replacement-approved",
+            "variation-replacement-pending",
+        ],
+    )
+    async def test_content_rewrite_advances_revision_before_stale_moderation(
+        self,
+        client: AsyncClient,
+        vendor_user,
+        admin_user,
+        db_session: AsyncSession,
+        rewrite_payload,
+        initial_status,
+    ):
+        """Every moderation-relevant rewrite invalidates the prior admin revision."""
+        from datetime import datetime, timezone
+        from fastapi import HTTPException
+        from app.api.v1 import admin as admin_api
+        from app.models.product import ModerationStatus, Product
+        from app.schemas.product import ProductApprovalRequest
+        from tests.conftest import TestSessionLocal
+
+        create_response = await client.post(
+            "/api/v1/products",
+            json={
+                "title": "Revision Guard Product",
+                "base_price": 100.00,
+                "product_type": "variable",
+                "variations": [
+                    {"title": "Red", "type": "color", "price": 100.00},
+                ],
+            },
+            headers=vendor_user["headers"],
+        )
+        assert create_response.status_code == 201
+        product_id = create_response.json()["id"]
+
+        product = await db_session.get(Product, product_id)
+        product.moderation_status = initial_status
+        if initial_status is ModerationStatus.APPROVED:
+            product.moderated_at = datetime.now(timezone.utc)
+            product.moderated_by = admin_user["user"].id
+        await db_session.commit()
+        await db_session.refresh(product)
+        expected_updated_at = product.updated_at
+
+        rewrite_response = await client.put(
+            f"/api/v1/products/{product_id}",
+            json=rewrite_payload,
+            headers=vendor_user["headers"],
+        )
+        assert rewrite_response.status_code == 200
+        rewritten = rewrite_response.json()
+        assert rewritten["moderation_status"] == "pending"
+        assert rewritten["updated_at"] != expected_updated_at.isoformat()
+
+        async with TestSessionLocal() as moderation_session:
+            with pytest.raises(HTTPException) as error:
+                await admin_api.approve_product(
+                    product_id,
+                    ProductApprovalRequest(
+                        notes="stale approval",
+                        expected_updated_at=expected_updated_at,
+                    ),
+                    admin_user["user"],
+                    moderation_session,
+                )
+        assert error.value.status_code == 409
 
     @pytest.mark.asyncio
     async def test_variation_rewrite_clears_prior_moderation_metadata(
