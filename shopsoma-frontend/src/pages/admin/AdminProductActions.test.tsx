@@ -185,6 +185,15 @@ describe('admin product view/edit API boundaries', () => {
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Approve Product' })).toBeNull());
     expect(screen.queryByText(/previous moderation request could not be confirmed/i)).toBeNull();
   });
+  it('expires a stale ambiguity lock when the product enters a new moderation cycle', async () => {
+    sessionStorage.setItem('admin-moderation-outcome-unknown:product-1', JSON.stringify({ updatedAt: '2026-09-22T10:00:00Z' }));
+    mocks.get.mockResolvedValue({ data: { ...product, updated_at: '2026-09-24T10:00:00Z' } });
+    mount('view');
+    await screen.findByRole('heading', { name: product.title });
+    expect(screen.getByRole('button', { name: 'Approve Product' })).not.toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Deny Product' })).not.toBeDisabled();
+    expect(sessionStorage.getItem('admin-moderation-outcome-unknown:product-1')).toBeNull();
+  });
   it('retries only the GET after successful moderation but failed refresh', async () => {
     mount('view');
     fireEvent.click(await screen.findByRole('button', { name: 'Approve Product' }));

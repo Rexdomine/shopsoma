@@ -21,6 +21,23 @@ function formatDate(dateStr: string) {
 
 const moderationAmbiguityKey = (productId: string) => `admin-moderation-outcome-unknown:${productId}`;
 
+const hasCurrentModerationAmbiguity = (product: Pick<Product, 'id' | 'updated_at'>) => {
+  try {
+    const marker = sessionStorage.getItem(moderationAmbiguityKey(product.id));
+    if (!marker) return false;
+    const parsed = JSON.parse(marker) as { updatedAt?: string };
+    if (parsed.updatedAt === product.updated_at) return true;
+  } catch {
+    // Treat malformed session state as stale and clear it below.
+  }
+  sessionStorage.removeItem(moderationAmbiguityKey(product.id));
+  return false;
+};
+
+const saveModerationAmbiguity = (product: Pick<Product, 'id' | 'updated_at'>) => {
+  sessionStorage.setItem(moderationAmbiguityKey(product.id), JSON.stringify({ updatedAt: product.updated_at }));
+};
+
 export default function AdminProductDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -45,8 +62,10 @@ export default function AdminProductDetail() {
 
   const reconcileModeration = async (productId: string, action: 'approve' | 'deny') => {
     const expectedStatus = action === 'approve' ? 'approved' : 'rejected';
+    let lastProduct: Product | null = null;
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const data = await adminService.getProduct(productId);
+      lastProduct = data;
       setProduct(data);
       if (data.moderation_status === expectedStatus || data.moderation_status !== 'pending') {
         sessionStorage.removeItem(moderationAmbiguityKey(productId));
@@ -54,7 +73,7 @@ export default function AdminProductDetail() {
       }
       if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 250));
     }
-    sessionStorage.setItem(moderationAmbiguityKey(productId), '1');
+    if (lastProduct) saveModerationAmbiguity(lastProduct);
     return null;
   };
 
@@ -66,7 +85,8 @@ export default function AdminProductDetail() {
       setProduct(data);
       setRefreshError(null);
       if (data.moderation_status !== 'pending') sessionStorage.removeItem(moderationAmbiguityKey(data.id));
-      if (moderationOutcomeUnknown && moderationAction) {
+      const ambiguityIsCurrent = data.moderation_status === 'pending' && hasCurrentModerationAmbiguity(data);
+      if (moderationOutcomeUnknown && moderationAction && ambiguityIsCurrent) {
         const expectedStatus = moderationAction === 'approve' ? 'approved' : 'rejected';
         if (data.moderation_status === expectedStatus) {
           success(moderationAction === 'approve' ? 'Product approval verified.' : 'Product denial verified.', 'Moderation complete');
@@ -81,11 +101,16 @@ export default function AdminProductDetail() {
           setModerationOutcomeUnknown(true);
           setModerationError('The moderation request is still pending. Refresh again before retrying.');
         }
+      } else if (moderationOutcomeUnknown && moderationAction && !ambiguityIsCurrent) {
+        setModerationOutcomeUnknown(false);
+        setModerationError(null);
+        setModerationAction(null);
+        setApprovalNotes(''); setRejectionReason(''); setRejectionNotes('');
       } else if (moderationOutcomeUnknown && data.moderation_status !== 'pending') {
         sessionStorage.removeItem(moderationAmbiguityKey(data.id));
         setModerationOutcomeUnknown(false);
         setModerationError(null);
-      } else if (moderationOutcomeUnknown && data.moderation_status === 'pending') {
+      } else if (moderationOutcomeUnknown && data.moderation_status === 'pending' && ambiguityIsCurrent) {
         setModerationError('The moderation request is still pending. Refresh again before retrying.');
       } else {
         setModerationOutcomeUnknown(false);
@@ -138,7 +163,7 @@ export default function AdminProductDetail() {
         setLoadError(null);
         const data = await adminService.getProduct(id);
         setProduct(data);
-        if (data.moderation_status === 'pending' && sessionStorage.getItem(moderationAmbiguityKey(data.id)) === '1') {
+        if (data.moderation_status === 'pending' && hasCurrentModerationAmbiguity(data)) {
           setModerationOutcomeUnknown(true);
           setModerationError('A previous moderation request could not be confirmed. Refresh the product before retrying.');
         } else if (data.moderation_status !== 'pending') {
@@ -166,7 +191,7 @@ export default function AdminProductDetail() {
       setIsModerating(true);
       setModerationError(null);
       setModerationOutcomeUnknown(false);
-      sessionStorage.setItem(moderationAmbiguityKey(product.id), '1');
+      saveModerationAmbiguity(product);
       if (moderationAction === 'approve') {
         await adminService.approveProduct(product.id, approvalNotes.trim() || undefined);
       } else {
@@ -202,7 +227,7 @@ export default function AdminProductDetail() {
             setModerationError('The moderation request is still pending. Refresh again before retrying.');
           }
         } catch (reconciliationError: any) {
-          sessionStorage.setItem(moderationAmbiguityKey(product.id), '1');
+          saveModerationAmbiguity(product);
           setModerationOutcomeUnknown(true);
           setModerationError(`The moderation outcome could not be confirmed. Refresh the product before retrying. ${apiErrorMessage(reconciliationError, 'Refresh failed')}`);
         } finally {
