@@ -39,6 +39,14 @@ describe('checkoutCapability session bridge', () => {
     expect(loadCheckoutCapability('order-2')).toBe('other-capability');
   });
 
+  it('migrates a capability saved under the legacy unnormalized key', () => {
+    sessionStorage.setItem('shopsoma_checkout_capability:shp-legacy', 'legacy-token');
+
+    expect(loadCheckoutCapability('shp-legacy')).toBe('legacy-token');
+    clearStoredCheckoutCapability('shp-legacy');
+    expect(loadCheckoutCapability('SHP-LEGACY')).toBeUndefined();
+  });
+
   it('uses one case-insensitive key for save, load, and clear', () => {
     saveCheckoutCapability(' shp-2026-ab12 ', 'secret-token');
     expect(loadCheckoutCapability('SHP-2026-AB12')).toBe('secret-token');

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
 import { ROUTES, STORAGE_KEYS } from '../../config/constants';
 import {
@@ -55,6 +55,7 @@ export default function OrderTracking() {
   const [loadingOrder, setLoadingOrder] = useState(false);
   const [isConnectedToWebSocket, setIsConnectedToWebSocket] = useState(false);
   const [wsError, setWsError] = useState<string | null>(null);
+  const detailRequestGeneration = useRef(0);
   const exchangeRates = useCurrencyStore((state) => state.exchangeRates);
   const resolvedOrderId = tracking?.order_id ?? orderId;
   const orderCurrency = (orderDetails?.currency || 'NGN') as Currency;
@@ -63,6 +64,7 @@ export default function OrderTracking() {
 
   // Never let data loaded for the previous route drive the next order's UI.
   useEffect(() => {
+    detailRequestGeneration.current += 1;
     setTracking(null);
     setOrderDetails(null);
     setShowOrderModal(false);
@@ -108,6 +110,7 @@ export default function OrderTracking() {
   useEffect(() => {
     if (!orderId) return;
 
+    const pollingOrderId = tracking?.order_id;
     // Get JWT token from localStorage (optional for guest users)
     const token = localStorage.getItem(STORAGE_KEYS.ACCESS_TOKEN);
 
@@ -209,7 +212,13 @@ export default function OrderTracking() {
         try {
           const data = await orderService.getOrderTracking(orderId, loadCheckoutCapability(orderId));
           console.log('[OrderTracking] Polling update received:', data);
-          if (!data.order_id || data.order_id === orderId) setTracking(data);
+          if (
+            !data.order_id ||
+            data.order_id === orderId ||
+            data.order_id === pollingOrderId
+          ) {
+            setTracking(data);
+          }
         } catch (err) {
           console.error('[OrderTracking] Polling error:', err);
           const status = (err as { response?: { status?: number } })?.response?.status;
@@ -245,19 +254,24 @@ export default function OrderTracking() {
   const handleViewOrderDetails = async () => {
     if (!resolvedOrderId) return;
 
+    const requestGeneration = ++detailRequestGeneration.current;
     setLoadingOrder(true);
     try {
       const order = await checkoutService.getOrder(
         resolvedOrderId,
         loadCheckoutCapability(resolvedOrderId),
       );
-      setOrderDetails(order);
-      setShowOrderModal(true);
+      if (requestGeneration === detailRequestGeneration.current) {
+        setOrderDetails(order);
+        setShowOrderModal(true);
+      }
     } catch (err) {
       console.error('Error loading order details:', err);
       alert('Unable to load order details');
     } finally {
-      setLoadingOrder(false);
+      if (requestGeneration === detailRequestGeneration.current) {
+        setLoadingOrder(false);
+      }
     }
   };
 

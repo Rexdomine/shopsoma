@@ -532,6 +532,9 @@ async def coordinate_catalog_write(
         if subject_id is not None
     }
 
+    parent_product_ids = {
+        subject_id for subject_id in product_ids if subject_id is not None
+    }
     variant_ids = {subject_id for subject_id in product_variant_ids if subject_id}
     if variant_ids:
         rows = (
@@ -551,6 +554,7 @@ async def coordinate_catalog_write(
             raise ValueError(
                 "catalog coordinator product-variant subject no longer exists"
             )
+        parent_product_ids.update(row["product_id"] for row in rows)
         keys.update(("product", row["product_id"]) for row in rows)
 
     requested_variations = {subject_id for subject_id in variation_ids if subject_id}
@@ -569,6 +573,7 @@ async def coordinate_catalog_write(
         )
         if {row["id"] for row in rows} != requested_variations:
             raise ValueError("catalog coordinator variation subject no longer exists")
+        parent_product_ids.update(row["product_id"] for row in rows)
         keys.update(("product", row["product_id"]) for row in rows)
 
     requested_size_stocks = {subject_id for subject_id in size_stock_ids if subject_id}
@@ -609,6 +614,7 @@ async def coordinate_catalog_write(
             and not allow_missing_size_stock_ids
         ):
             raise ValueError("catalog coordinator size-stock subject no longer exists")
+        parent_product_ids.update(row["product_id"] for row in rows)
         keys.update(("variation", row["variation_id"]) for row in rows)
         keys.update(("product", row["product_id"]) for row in rows)
 
@@ -620,6 +626,18 @@ async def coordinate_catalog_write(
         text("SELECT coordinate_stock_payment_write(CAST(:keys AS jsonb))"),
         {"keys": json.dumps(payload)},
     )
+
+    # Core DML does not enter SQLAlchemy's before_flush hook. Keep the product
+    # moderation revision aligned with the detailed inventory rows locked above
+    # so an in-flight checkout/cancellation cannot validate stale review state.
+    if parent_product_ids:
+        await session.execute(
+            text(
+                "UPDATE products SET updated_at = statement_timestamp() "
+                "WHERE id = ANY(:product_ids)"
+            ),
+            {"product_ids": list(parent_product_ids)},
+        )
 
     if allow_missing_size_stock_ids and requested_size_stocks:
         rows = (
