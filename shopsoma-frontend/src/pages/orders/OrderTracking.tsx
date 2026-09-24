@@ -229,7 +229,11 @@ export default function OrderTracking() {
         } catch (err) {
           console.error('[OrderTracking] Polling error:', err);
           const status = (err as { response?: { status?: number } })?.response?.status;
-          if ([401, 403, 404, 410].includes(status ?? 0)) {
+          if (
+            isPollingEffectActive &&
+            requestGeneration === pollingGeneration.current &&
+            [401, 403, 404, 410].includes(status ?? 0)
+          ) {
             setTracking(null);
             setError('Tracking information is unavailable. Please try again later.');
           }

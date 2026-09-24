@@ -79,6 +79,59 @@ describe('OrderTracking', () => {
     expect(screen.queryByText('In Transit')).not.toBeInTheDocument();
   }, 15000);
 
+  it('ignores a stale polling failure after a later poll recovers tracking', async () => {
+    vi.useFakeTimers();
+    try {
+      let rejectFirstPoll: ((reason: unknown) => void) | undefined;
+      const firstPoll = new Promise((_, reject) => {
+        rejectFirstPoll = reject;
+      });
+      const recoveredTracking = {
+        order_id: '550e8400-e29b-41d4-a716-446655440000',
+        order_number: 'SHP-20260915-D791820A',
+        tracking_id: 'TRACK-1',
+        updated_at: '2026-01-01T00:00:00Z',
+        currency: 'NGN',
+        amount: 100,
+        current_status: 'in_transit',
+        history: [],
+      };
+      const initialTracking = {
+        order_number: 'SHP-20260915-D791820A',
+        tracking_id: 'TRACK-1',
+        updated_at: '2026-01-01T00:00:00Z',
+        currency: 'NGN',
+        amount: 100,
+        current_status: 'in_transit',
+        history: [],
+      };
+      getOrderTracking
+        .mockResolvedValueOnce(initialTracking)
+        .mockReturnValueOnce(firstPoll)
+        .mockResolvedValue(recoveredTracking);
+
+      render(<OrderTracking />);
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(20000);
+      });
+      expect(screen.getAllByText('In Transit').length).toBeGreaterThan(0);
+
+      await act(async () => {
+        rejectFirstPoll?.({ response: { status: 404 } });
+        await Promise.resolve();
+      });
+
+      expect(screen.getAllByText('In Transit').length).toBeGreaterThan(0);
+      expect(screen.queryByText('Tracking information is unavailable. Please try again later.')).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('uses the resolved UUID for order details after tracking by order number', async () => {
     getOrderTracking.mockResolvedValue({
       order_id: '550e8400-e29b-41d4-a716-446655440000',
