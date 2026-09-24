@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, CheckCircle, Edit2, Loader2, Package, Tag, Trash2, XCircle } from 'lucide-react';
+import { ArrowLeft, CheckCircle, ChevronLeft, ChevronRight, Edit2, Loader2, Package, Tag, Trash2, X, XCircle } from 'lucide-react';
 import { ROUTES } from '../../config/constants';
 import { apiErrorMessage } from '../../utils/apiErrorMessage';
 import { adminService } from '../../services/adminService';
@@ -49,6 +49,9 @@ export default function AdminProductDetail() {
   const [moderationOutcomeUnknown, setModerationOutcomeUnknown] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
   const [refreshErrorContext, setRefreshErrorContext] = useState<'success' | 'conflict' | null>(null);
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+  const lightboxDialog = useRef<HTMLDivElement>(null);
+  const lightboxOpener = useRef<HTMLElement | null>(null);
 
   const reconcileModeration = async (
     productId: string,
@@ -125,6 +128,31 @@ export default function AdminProductDetail() {
     }
   };
 
+  const lightboxOpen = lightboxIndex !== null;
+
+  useEffect(() => {
+    if (!lightboxOpen) return;
+    const dialog = lightboxDialog.current;
+    const opener = lightboxOpener.current;
+    const images = product?.images || [];
+    const previousOverflow = document.body.style.overflow;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setLightboxIndex(null);
+      else if (event.key === 'ArrowRight' && images.length > 1) setLightboxIndex((current) => current === null ? null : (current + 1) % images.length);
+      else if (event.key === 'ArrowLeft' && images.length > 1) setLightboxIndex((current) => current === null ? null : (current - 1 + images.length) % images.length);
+      else if (event.key === 'Tab') {
+        const controls = Array.from(dialog?.querySelectorAll<HTMLElement>('button:not(:disabled)') || []);
+        if (!controls.length) return;
+        const first = controls[0], last = controls[controls.length - 1];
+        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+      }
+    };
+    document.body.style.overflow = 'hidden';
+    document.addEventListener('keydown', onKeyDown);
+    dialog?.querySelector<HTMLElement>('button')?.focus();
+    return () => { document.body.style.overflow = previousOverflow; document.removeEventListener('keydown', onKeyDown); opener?.focus(); };
+  }, [lightboxOpen, product?.images]);
   useEffect(() => {
     if (!moderationAction) return;
     const opener = document.activeElement as HTMLElement | null;
@@ -468,42 +496,35 @@ export default function AdminProductDetail() {
           <div className="lg:col-span-2 space-y-6">
             {/* Product Image */}
             <div className="bg-white rounded-xl shadow-sm overflow-hidden">
-              <img
-                src={
-                  product.images?.[0]
-                    ? typeof product.images[0] === 'string'
-                      ? product.images[0]
-                      : product.images[0].image_url || product.images[0].thumbnail_url
-                    : '/images/placeholder-product.svg'
-                }
-                alt={product.title}
-                className="w-full h-96 object-cover"
-                onError={(e) => {
-                  const target = e.target as HTMLImageElement;
-                  target.src = '/images/placeholder-product.svg';
-                }}
-              />
-              {product.images && product.images.length > 1 && (
-                <div className="p-4 grid grid-cols-4 gap-2">
-                  {product.images.slice(1, 5).map((img, idx) => (
-                    <img
-                      key={idx}
-                      src={
-                        typeof img === 'string'
-                          ? img
-                          : img.image_url || img.thumbnail_url || '/images/placeholder-product.svg'
-                      }
-                      alt={`${product.title} ${idx + 2}`}
-                      className="w-full h-24 object-cover rounded-lg"
-                      onError={(e) => {
-                        const target = e.target as HTMLImageElement;
-                        target.src = '/images/placeholder-product.svg';
-                      }}
-                    />
-                  ))}
-                </div>
-              )}
+              {(() => {
+                const images = product.images?.length ? product.images : ['/images/placeholder-product.svg'];
+                const imageUrl = (image: typeof images[number]) => typeof image === 'string' ? image : image.image_url || image.thumbnail_url || '/images/placeholder-product.svg';
+                return (
+                  <>
+                    {product.images?.length ? <button type="button" className="block w-full cursor-zoom-in" aria-label={`View ${product.title} image 1`} onClick={(event) => { lightboxOpener.current = event.currentTarget; setLightboxIndex(0); }}>
+                      <img src={imageUrl(images[0])} alt={product.title} className="w-full h-96 object-contain bg-gray-50" onError={(e) => { (e.target as HTMLImageElement).src = '/images/placeholder-product.svg'; }} />
+                    </button> : <div className="block w-full" aria-label={`${product.title} image placeholder`}>
+                      <img src={imageUrl(images[0])} alt={`${product.title} image 1`} className="h-64 w-full rounded-lg object-cover" onError={(e) => { (e.target as HTMLImageElement).src = '/images/placeholder-product.svg'; }} />
+                    </div>}
+                    {images.length > 1 && <div className="p-4 grid grid-cols-4 gap-2">
+                      {images.map((image, idx) => <button type="button" key={idx} aria-label={`View ${product.title} image ${idx + 1}`} onClick={(event) => { lightboxOpener.current = event.currentTarget; setLightboxIndex(idx); }} className="rounded-lg overflow-hidden border border-transparent hover:border-blue-500 focus:border-blue-600 focus:outline-none">
+                        <img src={imageUrl(image)} alt={`${product.title} ${idx + 1}`} className="w-full h-24 object-contain bg-gray-50" onError={(e) => { (e.target as HTMLImageElement).src = '/images/placeholder-product.svg'; }} />
+                      </button>)}
+                    </div>}
+                  </>
+                );
+              })()}
             </div>
+            {lightboxIndex !== null && product.images?.length ? (() => {
+              const image = product.images[lightboxIndex];
+              const imageUrl = typeof image === 'string' ? image : image.image_url || image.thumbnail_url || '/images/placeholder-product.svg';
+              return <div ref={lightboxDialog} role="dialog" aria-modal="true" aria-label="Product image viewer" className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 p-4" onMouseDown={(event) => { if (event.target === event.currentTarget) setLightboxIndex(null); }}>
+                <button type="button" aria-label="Close image viewer" className="absolute right-4 top-4 rounded-full bg-white/10 p-2 text-white hover:bg-white/20" onClick={() => setLightboxIndex(null)}><X className="h-6 w-6" /></button>
+                {product.images.length > 1 && <button type="button" aria-label="Previous image" className="absolute left-4 rounded-full bg-white/10 p-2 text-white hover:bg-white/20" onClick={() => setLightboxIndex((lightboxIndex - 1 + product.images!.length) % product.images!.length)}><ChevronLeft className="h-7 w-7" /></button>}
+                <img src={imageUrl} alt={`${product.title} ${lightboxIndex + 1} enlarged`} className="max-h-[90vh] max-w-[90vw] object-contain" onError={(e) => { (e.target as HTMLImageElement).src = '/images/placeholder-product.svg'; }} />
+                {product.images.length > 1 && <button type="button" aria-label="Next image" className="absolute right-4 rounded-full bg-white/10 p-2 text-white hover:bg-white/20" onClick={() => setLightboxIndex((lightboxIndex + 1) % product.images!.length)}><ChevronRight className="h-7 w-7" /></button>}
+              </div>;
+            })() : null}
 
             {/* Description */}
             <div className="bg-white rounded-xl shadow-sm p-6">

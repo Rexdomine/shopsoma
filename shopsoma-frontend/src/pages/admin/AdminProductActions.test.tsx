@@ -65,6 +65,58 @@ describe('admin product view/edit API boundaries', () => {
     expect(screen.queryByText('Admin product list')).toBeNull();
     expect(screen.getByRole('button', { name: 'Back to Products' })).toBeTruthy();
   });
+  it('opens the product image gallery, supports keyboard navigation, and closes with Escape', async () => {
+    mocks.get.mockResolvedValue({ data: { ...product, images: ['https://cdn.test/one.jpg', 'https://cdn.test/two.jpg', 'https://cdn.test/three.jpg'] } });
+    mount('view');
+    await screen.findByRole('heading', { name: product.title });
+    expect(screen.getAllByRole('button', { name: /View .* image/ })).toHaveLength(4);
+    fireEvent.click(screen.getByRole('button', { name: 'View Pending linen shirt image 2' }));
+    expect(screen.getByRole('dialog', { name: 'Product image viewer' })).toBeTruthy();
+    expect(screen.getByRole('img', { name: 'Pending linen shirt 2 enlarged' })).toHaveAttribute('src', 'https://cdn.test/two.jpg');
+    fireEvent.keyDown(screen.getByRole('dialog', { name: 'Product image viewer' }), { key: 'ArrowRight' });
+    expect(screen.getByRole('img', { name: 'Pending linen shirt 3 enlarged' })).toHaveAttribute('src', 'https://cdn.test/three.jpg');
+    fireEvent.keyDown(screen.getByRole('dialog', { name: 'Product image viewer' }), { key: 'Escape' });
+    expect(screen.queryByRole('dialog', { name: 'Product image viewer' })).toBeNull();
+  });
+
+  it('renders a single image without thumbnail controls', async () => {
+    mocks.get.mockResolvedValue({ data: { ...product, images: ['https://cdn.test/only.jpg'] } });
+    mount('view');
+    await screen.findByRole('heading', { name: product.title });
+    expect(screen.getAllByRole('button', { name: /View .* image/ })).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: 'Previous image' })).toBeNull();
+  });
+
+  it('uses a placeholder and keeps the gallery operable when there are no images', async () => {
+    mocks.get.mockResolvedValue({ data: { ...product, images: [] } });
+    mount('view');
+    await screen.findByRole('heading', { name: product.title });
+    const placeholder = screen.getByRole('img', { name: 'Pending linen shirt image 1' });
+    expect(placeholder).toHaveAttribute('src', '/images/placeholder-product.svg');
+    fireEvent.click(placeholder);
+    expect(screen.queryByRole('dialog', { name: 'Product image viewer' })).toBeNull();
+    expect(document.body.style.overflow).toBe('');
+  });
+
+  it('traps focus, wraps arrows, closes on backdrop, and restores the opener', async () => {
+    mocks.get.mockResolvedValue({ data: { ...product, images: ['one.jpg', 'two.jpg'] } });
+    mount('view');
+    await screen.findByRole('heading', { name: product.title });
+    const opener = screen.getByRole('button', { name: 'View Pending linen shirt image 2' });
+    fireEvent.click(opener);
+    const dialog = screen.getByRole('dialog', { name: 'Product image viewer' });
+    expect(document.activeElement).toHaveAccessibleName('Close image viewer');
+    fireEvent.keyDown(dialog, { key: 'Tab', shiftKey: true });
+    expect(document.activeElement).toHaveAccessibleName('Next image');
+    fireEvent.keyDown(dialog, { key: 'ArrowLeft' });
+    expect(screen.getByRole('img', { name: 'Pending linen shirt 1 enlarged' })).toHaveAttribute('src', 'one.jpg');
+    fireEvent.keyDown(dialog, { key: 'ArrowLeft' });
+    expect(screen.getByRole('img', { name: 'Pending linen shirt 2 enlarged' })).toHaveAttribute('src', 'two.jpg');
+    fireEvent.mouseDown(dialog, { target: dialog });
+    expect(screen.queryByRole('dialog', { name: 'Product image viewer' })).toBeNull();
+    expect(document.activeElement).toBe(opener);
+  });
+
   it('approves a pending detail with optional notes and refreshes in place', async () => {
     mocks.put.mockResolvedValueOnce({ data: { message: 'approved' } });
     mount('view');
