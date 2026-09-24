@@ -5,7 +5,7 @@ from typing import Optional
 from uuid import UUID
 
 from fastapi import HTTPException
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.product import ModerationStatus, Product, ProductStatus
@@ -28,6 +28,7 @@ async def mark_product_content_pending(*, db: AsyncSession, product_id: UUID) ->
             moderated_at=None,
             moderated_by=None,
             moderation_notes=None,
+            updated_at=func.statement_timestamp(),
         )
     )
 

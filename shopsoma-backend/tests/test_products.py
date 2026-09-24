@@ -1373,6 +1373,77 @@ class TestProductVariants:
         assert sample_product.moderation_notes == "Prior decision"
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("payload", [{"stock": 25}, {"is_available": False}])
+    async def test_inventory_only_variant_update_preserves_approved_moderation(
+        self,
+        client: AsyncClient,
+        vendor_user,
+        sample_product,
+        db_session: AsyncSession,
+        payload,
+    ):
+        """Operational inventory edits must not hide an approved product."""
+        from app.models.product import ModerationStatus, ProductVariant
+        import uuid
+
+        variant = ProductVariant(
+            id=uuid.uuid4(),
+            product_id=sample_product.id,
+            size="M",
+            price=85.00,
+            stock=10,
+            is_available=True,
+        )
+        sample_product.moderation_status = ModerationStatus.APPROVED
+        sample_product.moderation_notes = "Prior decision"
+        db_session.add(variant)
+        await db_session.commit()
+
+        response = await client.put(
+            f"/api/v1/products/{sample_product.id}/variants/{variant.id}",
+            json=payload,
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 200
+        await db_session.refresh(sample_product)
+        assert sample_product.moderation_status is ModerationStatus.APPROVED
+        assert sample_product.moderation_notes == "Prior decision"
+
+    @pytest.mark.asyncio
+    async def test_reviewable_variant_update_returns_approved_product_to_pending(
+        self,
+        client: AsyncClient,
+        vendor_user,
+        sample_product,
+        db_session: AsyncSession,
+    ):
+        """Catalog content edits must still create a new moderation revision."""
+        from app.models.product import ModerationStatus, ProductVariant
+        import uuid
+
+        variant = ProductVariant(
+            id=uuid.uuid4(),
+            product_id=sample_product.id,
+            size="M",
+            price=85.00,
+            stock=10,
+        )
+        sample_product.moderation_status = ModerationStatus.APPROVED
+        db_session.add(variant)
+        await db_session.commit()
+
+        response = await client.put(
+            f"/api/v1/products/{sample_product.id}/variants/{variant.id}",
+            json={"price": 90.00},
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 200
+        await db_session.refresh(sample_product)
+        assert sample_product.moderation_status is ModerationStatus.PENDING
+
+    @pytest.mark.asyncio
     async def test_delete_variant(
         self,
         client: AsyncClient,
