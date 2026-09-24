@@ -21,12 +21,22 @@ function formatDate(dateStr: string) {
 
 const moderationAmbiguityKey = (productId: string) => `admin-moderation-outcome-unknown:${productId}`;
 
-const hasCurrentModerationAmbiguity = (product: Pick<Product, 'id' | 'updated_at'>) => {
+type ModerationCycleProduct = Pick<Product, 'id' | 'title' | 'description'>;
+
+// The vendor update endpoint starts a new moderation cycle only when these
+// content fields change. Keep the ambiguity lock tied to that same boundary;
+// generic updated_at changes (price, stock, category, etc.) are not enough.
+const moderationCycleSignature = (product: Pick<Product, 'title' | 'description'>) => JSON.stringify([
+  product.title,
+  product.description ?? '',
+]);
+
+const hasCurrentModerationAmbiguity = (product: ModerationCycleProduct) => {
   try {
     const marker = sessionStorage.getItem(moderationAmbiguityKey(product.id));
     if (!marker) return false;
-    const parsed = JSON.parse(marker) as { updatedAt?: string };
-    if (parsed.updatedAt === product.updated_at) return true;
+    const parsed = JSON.parse(marker) as { cycleSignature?: string };
+    if (parsed.cycleSignature === moderationCycleSignature(product)) return true;
   } catch {
     // Treat malformed session state as stale and clear it below.
   }
@@ -34,8 +44,10 @@ const hasCurrentModerationAmbiguity = (product: Pick<Product, 'id' | 'updated_at
   return false;
 };
 
-const saveModerationAmbiguity = (product: Pick<Product, 'id' | 'updated_at'>) => {
-  sessionStorage.setItem(moderationAmbiguityKey(product.id), JSON.stringify({ updatedAt: product.updated_at }));
+const saveModerationAmbiguity = (product: ModerationCycleProduct) => {
+  sessionStorage.setItem(moderationAmbiguityKey(product.id), JSON.stringify({
+    cycleSignature: moderationCycleSignature(product),
+  }));
 };
 
 export default function AdminProductDetail() {
@@ -63,7 +75,7 @@ export default function AdminProductDetail() {
   const reconcileModeration = async (
     productId: string,
     action: 'approve' | 'deny',
-    originalUpdatedAt: string,
+    originalCycle: ModerationCycleProduct,
   ): Promise<{ product: Product | null; cycleChanged: boolean }> => {
     const expectedStatus = action === 'approve' ? 'approved' : 'rejected';
     for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -73,13 +85,13 @@ export default function AdminProductDetail() {
         sessionStorage.removeItem(moderationAmbiguityKey(productId));
         return { product: data, cycleChanged: false };
       }
-      if (data.updated_at !== originalUpdatedAt) {
+      if (moderationCycleSignature(data) !== moderationCycleSignature(originalCycle)) {
         sessionStorage.removeItem(moderationAmbiguityKey(productId));
         return { product: data, cycleChanged: true };
       }
       if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 250));
     }
-    saveModerationAmbiguity({ id: productId, updated_at: originalUpdatedAt });
+    saveModerationAmbiguity({ id: productId, title: originalCycle.title, description: originalCycle.description });
     return { product: null, cycleChanged: false };
   };
 
@@ -218,7 +230,7 @@ export default function AdminProductDetail() {
         setModerationOutcomeUnknown(true);
         setIsRefreshing(true);
         try {
-          const reconciled = await reconcileModeration(product.id, moderationAction, product.updated_at);
+          const reconciled = await reconcileModeration(product.id, moderationAction, product);
           setRefreshError(null);
           if (reconciled.product?.moderation_status === (moderationAction === 'approve' ? 'approved' : 'rejected')) {
             success(moderationAction === 'approve' ? 'Product approval verified.' : 'Product denial verified.', 'Moderation complete');
