@@ -183,6 +183,7 @@ describe('admin product view/edit API boundaries', () => {
     mocks.get.mockResolvedValueOnce({ data: { ...product, moderation_status: 'approved' } });
     fireEvent.click(screen.getByRole('button', { name: 'Refresh product status' }));
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Approve Product' })).toBeNull());
+    expect(screen.queryByText(/previous moderation request could not be confirmed/i)).toBeNull();
   });
   it('retries only the GET after successful moderation but failed refresh', async () => {
     mount('view');

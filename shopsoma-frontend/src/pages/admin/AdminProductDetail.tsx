@@ -70,6 +70,8 @@ export default function AdminProductDetail() {
         const expectedStatus = moderationAction === 'approve' ? 'approved' : 'rejected';
         if (data.moderation_status === expectedStatus) {
           success(moderationAction === 'approve' ? 'Product approval verified.' : 'Product denial verified.', 'Moderation complete');
+          setModerationOutcomeUnknown(false);
+          setModerationError(null);
           setModerationAction(null);
           setApprovalNotes(''); setRejectionReason(''); setRejectionNotes('');
         } else if (data.moderation_status !== 'pending') {
@@ -90,8 +92,13 @@ export default function AdminProductDetail() {
       }
     } catch (err: any) {
       const message = apiErrorMessage(err, 'Failed to refresh product. Please try again.');
-      setRefreshError(message);
-      error(message, 'Refresh Failed');
+      if (moderationOutcomeUnknown && !moderationAction) {
+        setRefreshError(null);
+        setModerationError(message);
+      } else {
+        setRefreshError(message);
+        error(message, 'Refresh Failed');
+      }
     } finally {
       setIsRefreshing(false);
     }
@@ -184,6 +191,8 @@ export default function AdminProductDetail() {
           setRefreshError(null);
           if (reconciledProduct?.moderation_status === (moderationAction === 'approve' ? 'approved' : 'rejected')) {
             success(moderationAction === 'approve' ? 'Product approval verified.' : 'Product denial verified.', 'Moderation complete');
+            setModerationOutcomeUnknown(false);
+            setModerationError(null);
             setModerationAction(null);
             setApprovalNotes(''); setRejectionReason(''); setRejectionNotes('');
           } else if (reconciledProduct) {
@@ -348,7 +357,7 @@ export default function AdminProductDetail() {
 
         {moderationOutcomeUnknown && !moderationAction && (
           <div role="alert" className="mb-6 rounded-lg border border-yellow-300 bg-yellow-50 p-4 text-yellow-900">
-            <p>A previous moderation request could not be confirmed. Refresh the product before retrying.</p>
+            <p>{moderationError || 'A previous moderation request could not be confirmed. Refresh the product before retrying.'}</p>
             <button type="button" disabled={isRefreshing} onClick={refreshProduct} className="mt-2 font-medium underline disabled:opacity-50">
               {isRefreshing ? 'Refreshing…' : 'Refresh product status'}
             </button>
