@@ -145,6 +145,7 @@ describe('admin product view/edit API boundaries', () => {
     } else {
       expect(screen.queryByRole('dialog', { name: 'Product image viewer' })).toBeNull();
       await waitFor(() => expect(document.body.style.overflow).toBe(''));
+      expect(screen.getByRole('button', { name: 'Back to Products' })).toHaveFocus();
     }
   });
 

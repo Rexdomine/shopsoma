@@ -52,6 +52,7 @@ export default function AdminProductDetail() {
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const lightboxDialog = useRef<HTMLDivElement>(null);
   const lightboxOpener = useRef<HTMLElement | null>(null);
+  const lightboxFocusFallback = useRef<HTMLButtonElement>(null);
 
   const reconcileModeration = async (
     productId: string,
@@ -165,7 +166,14 @@ export default function AdminProductDetail() {
     document.body.style.overflow = 'hidden';
     document.addEventListener('keydown', onKeyDown);
     dialog?.querySelector<HTMLElement>('button')?.focus();
-    return () => { document.body.style.overflow = previousOverflow; document.removeEventListener('keydown', onKeyDown); opener?.focus(); };
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener('keydown', onKeyDown);
+      const focusTarget = opener?.isConnected
+        ? opener
+        : document.querySelector<HTMLElement>('button[aria-label^="View "]') || lightboxFocusFallback.current;
+      focusTarget?.focus();
+    };
   }, [lightboxOpen, product?.images]);
   useEffect(() => {
     if (!moderationAction) return;
@@ -443,6 +451,7 @@ export default function AdminProductDetail() {
         {/* Header */}
         <div className="mb-6">
           <button
+            ref={lightboxFocusFallback}
             onClick={() => navigate(ROUTES.ADMIN_PRODUCTS)}
             className="flex items-center gap-2 text-gray-600 hover:text-gray-900 mb-4"
           >
