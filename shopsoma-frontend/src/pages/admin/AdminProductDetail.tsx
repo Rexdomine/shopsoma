@@ -41,6 +41,17 @@ export default function AdminProductDetail() {
   const [moderationOutcomeUnknown, setModerationOutcomeUnknown] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
 
+  const reconcileModeration = async (productId: string, action: 'approve' | 'deny') => {
+    const expectedStatus = action === 'approve' ? 'approved' : 'rejected';
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const data = await adminService.getProduct(productId);
+      setProduct(data);
+      if (data.moderation_status === expectedStatus || data.moderation_status !== 'pending') return data;
+      if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 250));
+    }
+    return null;
+  };
+
   const refreshProduct = async () => {
     if (!id) return;
     setIsRefreshing(true);
@@ -54,9 +65,12 @@ export default function AdminProductDetail() {
           success(moderationAction === 'approve' ? 'Product approval verified.' : 'Product denial verified.', 'Moderation complete');
           setModerationAction(null);
           setApprovalNotes(''); setRejectionReason(''); setRejectionNotes('');
-        } else {
+        } else if (data.moderation_status !== 'pending') {
           setModerationOutcomeUnknown(false);
           setModerationError('The moderation request was not confirmed. Review the current status before retrying.');
+        } else {
+          setModerationOutcomeUnknown(true);
+          setModerationError('The moderation request is still pending. Refresh again before retrying.');
         }
       } else {
         setModerationOutcomeUnknown(false);
@@ -141,18 +155,20 @@ export default function AdminProductDetail() {
       if (!outcomeMayBeCommitted || !product || !moderationAction) {
         setModerationError(apiErrorMessage(err, 'Moderation action failed'));
       } else {
+        setModerationOutcomeUnknown(true);
         setIsRefreshing(true);
         try {
-          const reconciledProduct = await adminService.getProduct(product.id);
-          setProduct(reconciledProduct);
+          const reconciledProduct = await reconcileModeration(product.id, moderationAction);
           setRefreshError(null);
-          const expectedStatus = moderationAction === 'approve' ? 'approved' : 'rejected';
-          if (reconciledProduct.moderation_status === expectedStatus) {
+          if (reconciledProduct?.moderation_status === (moderationAction === 'approve' ? 'approved' : 'rejected')) {
             success(moderationAction === 'approve' ? 'Product approval verified.' : 'Product denial verified.', 'Moderation complete');
             setModerationAction(null);
             setApprovalNotes(''); setRejectionReason(''); setRejectionNotes('');
-          } else {
+          } else if (reconciledProduct) {
+            setModerationOutcomeUnknown(false);
             setModerationError('The moderation request was not confirmed. Review the current status before retrying.');
+          } else {
+            setModerationError('The moderation request is still pending. Refresh again before retrying.');
           }
         } catch (reconciliationError: any) {
           setModerationOutcomeUnknown(true);
