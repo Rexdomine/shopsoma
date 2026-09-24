@@ -423,6 +423,7 @@ async def test_product_and_variant_deletes_cascade_profiles(db_session, sample_p
     variant_id = variant.id
     sample_product_id = sample_product.id
 
+    await coordinate_catalog_write(db_session, product_variant_ids=[variant_id])
     await db_session.execute(
         delete(ProductVariant).where(ProductVariant.id == variant_id)
     )

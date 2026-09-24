@@ -22,7 +22,10 @@ from app.models.category import Category
 from app.models.collection import Collection
 from app.models.product import Product, ProductVariant, ProductImage, ProductStatus, ProductType, ModerationStatus, Variation, SizeStock, SizeEnum
 from app.models.vendor import Vendor
-from app.services.product_moderation import transition_product_moderation
+from app.services.product_moderation import (
+    mark_product_content_pending,
+    transition_product_moderation,
+)
 from app.schemas.product import (
     ProductCreate,
     ProductUpdate,
@@ -1208,8 +1211,8 @@ async def update_product(
                     )
                     db.add(size_stock)
 
-    # Reset moderation if content changed
-    if any(field in update_data for field in ["title", "description"]):
+    # Reset moderation for parent content and every child variation rewrite.
+    if variations_data is not None or any(field in update_data for field in ["title", "description"]):
         product.moderation_status = ModerationStatus.PENDING
 
     if any(field in update_data for field in ["total_stock", "made_to_order"]):
@@ -1363,6 +1366,7 @@ async def create_variant(
         ),
     )
     db.add(variant)
+    await mark_product_content_pending(db=db, product_id=product_id)
     await db.commit()
     await db.refresh(variant)
 
@@ -1465,6 +1469,7 @@ async def update_variant(
     for field, value in update_data.items():
         setattr(variant, field, value)
 
+    await mark_product_content_pending(db=db, product_id=product_id)
     await db.commit()
     await db.refresh(variant)
 
@@ -1510,6 +1515,7 @@ async def delete_variant(
             detail="Variant not found"
         )
 
+    await mark_product_content_pending(db=db, product_id=product_id)
     await db.delete(variant)
     await db.commit()
 
@@ -1549,6 +1555,7 @@ async def create_image(
         **image_data.model_dump()
     )
     db.add(image)
+    await mark_product_content_pending(db=db, product_id=product_id)
     await db.commit()
     await db.refresh(image)
 
@@ -1594,6 +1601,7 @@ async def delete_image(
             detail="Image not found"
         )
 
+    await mark_product_content_pending(db=db, product_id=product_id)
     await db.delete(image)
     await db.commit()
 

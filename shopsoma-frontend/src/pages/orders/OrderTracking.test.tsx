@@ -2,15 +2,16 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import OrderTracking from './OrderTracking';
 
-const { getOrderTracking, getOrder } = vi.hoisted(() => ({
+const { getOrderTracking, getOrder, routeParams } = vi.hoisted(() => ({
   getOrderTracking: vi.fn(),
   getOrder: vi.fn(),
+  routeParams: { orderId: 'order-1' },
 }));
 
 vi.mock('react-router-dom', () => ({
   Link: ({ children, ...props }: { children: React.ReactNode }) => <a {...props}>{children}</a>,
   useNavigate: () => vi.fn(),
-  useParams: () => ({ orderId: 'order-1' }),
+  useParams: () => routeParams,
 }));
 
 vi.mock('../../services/orderService', () => ({
@@ -40,6 +41,7 @@ vi.mock('../../utils/checkoutCapability', () => ({
 
 describe('OrderTracking', () => {
   beforeEach(() => {
+    routeParams.orderId = 'order-1';
     const storage = { clear: vi.fn(), getItem: vi.fn(() => null), setItem: vi.fn(), removeItem: vi.fn() };
     Object.defineProperty(window, 'localStorage', { configurable: true, value: storage });
     Object.defineProperty(window, 'sessionStorage', { configurable: true, value: storage });
@@ -238,5 +240,25 @@ describe('OrderTracking', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('passes the order number to tracking recovery', async () => {
+    routeParams.orderId = 'SHP-20260915-D791820A';
+    getOrderTracking.mockResolvedValue({
+      order_id: '550e8400-e29b-41d4-a716-446655440000',
+      order_number: 'SHP-20260915-D791820A',
+      tracking_id: 'TRACK-1',
+      updated_at: '2026-01-01T00:00:00Z',
+      currency: 'NGN',
+      amount: 100,
+      current_status: 'in_transit',
+      history: [],
+    });
+
+    render(<OrderTracking />);
+
+    await waitFor(() =>
+      expect(getOrderTracking).toHaveBeenCalledWith('SHP-20260915-D791820A', undefined),
+    );
   });
 });

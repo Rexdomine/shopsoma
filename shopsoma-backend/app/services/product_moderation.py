@@ -12,6 +12,26 @@ from app.models.product import ModerationStatus, Product, ProductStatus
 from app.models.stock_payment_persistence import coordinate_catalog_write
 
 
+async def mark_product_content_pending(*, db: AsyncSession, product_id: UUID) -> None:
+    """Return a product to pending moderation after a vendor child write.
+
+    The coordinator lock is acquired before the moderation update, so a child
+    write that was waiting behind an approval cannot publish unreviewed content
+    under the already-approved parent.
+    """
+    await coordinate_catalog_write(db, product_ids=[product_id])
+    await db.execute(
+        update(Product)
+        .where(Product.id == product_id)
+        .values(
+            moderation_status=ModerationStatus.PENDING,
+            moderated_at=None,
+            moderated_by=None,
+            moderation_notes=None,
+        )
+    )
+
+
 async def transition_product_moderation(
     *,
     db: AsyncSession,
