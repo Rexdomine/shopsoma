@@ -41,10 +41,14 @@ interface Product {
   updated_at: string;
 }
 
-const sameTimestamp = (left: string, right: string): boolean => {
-  const leftMillis = Date.parse(left);
-  const rightMillis = Date.parse(right);
-  return Number.isFinite(leftMillis) && leftMillis === rightMillis;
+const canonicalTimestamp = (value: string): string => value.trim().replace(/\+00:00$/, 'Z');
+
+export const sameTimestamp = (left: string, right: string): boolean => {
+  return (
+    Number.isFinite(Date.parse(left)) &&
+    Number.isFinite(Date.parse(right)) &&
+    canonicalTimestamp(left) === canonicalTimestamp(right)
+  );
 };
 
 export default function AdminProducts() {
