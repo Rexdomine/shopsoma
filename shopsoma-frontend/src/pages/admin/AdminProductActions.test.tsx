@@ -117,6 +117,37 @@ describe('admin product view/edit API boundaries', () => {
     expect(document.activeElement).toBe(opener);
   });
 
+  it.each([
+    { label: 'clamps to the last replacement image', images: ['replacement-one.jpg', 'replacement-two.jpg'], expectedDialog: true },
+    { label: 'closes and unlocks when the replacement list is empty', images: [], expectedDialog: false },
+  ])('reconciles the open gallery after a refresh: $label', async ({ images, expectedDialog }) => {
+    const initialImages = ['one.jpg', 'two.jpg', 'three.jpg'];
+    mocks.get
+      .mockResolvedValueOnce({ data: { ...product, images: initialImages } })
+      .mockResolvedValueOnce({ data: { ...product, images: initialImages } })
+      .mockRejectedValueOnce(new Error('Read temporarily unavailable'))
+      .mockResolvedValueOnce({ data: { ...product, images } });
+    mount('view');
+    await screen.findByRole('heading', { name: product.title });
+    fireEvent.click(screen.getByRole('button', { name: 'View Pending linen shirt image 3' }));
+    expect(screen.getByRole('dialog', { name: 'Product image viewer' })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Approve Product' }));
+    fireEvent.click(within(screen.getByRole('dialog', { name: /Approve Product/i })).getByRole('button', { name: 'Approve Product' }));
+    await screen.findByRole('button', { name: 'Refresh product' });
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh product' }));
+    await waitFor(() => expect(mocks.get).toHaveBeenCalledTimes(4));
+
+    if (expectedDialog) {
+      const dialog = screen.getByRole('dialog', { name: 'Product image viewer' });
+      expect(screen.getByRole('img', { name: 'Pending linen shirt 2 enlarged' })).toHaveAttribute('src', 'replacement-two.jpg');
+      expect(dialog).toBeTruthy();
+    } else {
+      expect(screen.queryByRole('dialog', { name: 'Product image viewer' })).toBeNull();
+      await waitFor(() => expect(document.body.style.overflow).toBe(''));
+    }
+  });
+
   it('approves a pending detail with optional notes and refreshes in place', async () => {
     mocks.put.mockResolvedValueOnce({ data: { message: 'approved' } });
     mount('view');

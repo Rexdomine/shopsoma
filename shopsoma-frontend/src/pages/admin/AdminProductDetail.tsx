@@ -128,7 +128,21 @@ export default function AdminProductDetail() {
     }
   };
 
-  const lightboxOpen = lightboxIndex !== null;
+  const galleryImages = product?.images || [];
+  const safeLightboxIndex = lightboxIndex === null || galleryImages.length === 0
+    ? null
+    : Math.min(lightboxIndex, galleryImages.length - 1);
+  const lightboxOpen = safeLightboxIndex !== null;
+
+  // Refreshes can replace the image list while the viewer is still mounted.
+  // Reconcile the state as well as the render boundary so empty and shorter
+  // lists close or clamp before any stale index can be dereferenced.
+  useEffect(() => {
+    setLightboxIndex(current => {
+      if (current === null || galleryImages.length === 0) return null;
+      return Math.min(current, galleryImages.length - 1);
+    });
+  }, [product?.images]);
 
   useEffect(() => {
     if (!lightboxOpen) return;
@@ -515,14 +529,15 @@ export default function AdminProductDetail() {
                 );
               })()}
             </div>
-            {lightboxIndex !== null && product.images?.length ? (() => {
-              const image = product.images[lightboxIndex];
+            {safeLightboxIndex !== null && galleryImages.length > 0 ? (() => {
+              const image = galleryImages[safeLightboxIndex];
+              if (!image) return null;
               const imageUrl = typeof image === 'string' ? image : image.image_url || image.thumbnail_url || '/images/placeholder-product.svg';
               return <div ref={lightboxDialog} role="dialog" aria-modal="true" aria-label="Product image viewer" className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 p-4" onMouseDown={(event) => { if (event.target === event.currentTarget) setLightboxIndex(null); }}>
                 <button type="button" aria-label="Close image viewer" className="absolute right-4 top-4 rounded-full bg-white/10 p-2 text-white hover:bg-white/20" onClick={() => setLightboxIndex(null)}><X className="h-6 w-6" /></button>
-                {product.images.length > 1 && <button type="button" aria-label="Previous image" className="absolute left-4 rounded-full bg-white/10 p-2 text-white hover:bg-white/20" onClick={() => setLightboxIndex((lightboxIndex - 1 + product.images!.length) % product.images!.length)}><ChevronLeft className="h-7 w-7" /></button>}
-                <img src={imageUrl} alt={`${product.title} ${lightboxIndex + 1} enlarged`} className="max-h-[90vh] max-w-[90vw] object-contain" onError={(e) => { (e.target as HTMLImageElement).src = '/images/placeholder-product.svg'; }} />
-                {product.images.length > 1 && <button type="button" aria-label="Next image" className="absolute right-4 rounded-full bg-white/10 p-2 text-white hover:bg-white/20" onClick={() => setLightboxIndex((lightboxIndex + 1) % product.images!.length)}><ChevronRight className="h-7 w-7" /></button>}
+                {galleryImages.length > 1 && <button type="button" aria-label="Previous image" className="absolute left-4 rounded-full bg-white/10 p-2 text-white hover:bg-white/20" onClick={() => setLightboxIndex((safeLightboxIndex - 1 + galleryImages.length) % galleryImages.length)}><ChevronLeft className="h-7 w-7" /></button>}
+                <img src={imageUrl} alt={`${product.title} ${safeLightboxIndex + 1} enlarged`} className="max-h-[90vh] max-w-[90vw] object-contain" onError={(e) => { (e.target as HTMLImageElement).src = '/images/placeholder-product.svg'; }} />
+                {galleryImages.length > 1 && <button type="button" aria-label="Next image" className="absolute right-4 rounded-full bg-white/10 p-2 text-white hover:bg-white/20" onClick={() => setLightboxIndex((safeLightboxIndex + 1) % galleryImages.length)}><ChevronRight className="h-7 w-7" /></button>}
               </div>;
             })() : null}
 
