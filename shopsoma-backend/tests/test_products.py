@@ -1,6 +1,7 @@
 """
 Unit tests for Product CRUD API endpoints
 """
+import inspect
 import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -1574,6 +1575,13 @@ class TestProductVariants:
 
 class TestProductImages:
     """Test product image endpoints"""
+
+    def test_create_image_claims_catalog_coordinator_before_product_row_lock(self):
+        """Image writes and moderation must use one lock order."""
+        from app.api.v1.products import create_image
+
+        source = inspect.getsource(create_image)
+        assert source.index("coordinate_catalog_write(") < source.index("with_for_update()")
 
     @pytest.mark.asyncio
     async def test_create_image(self, client: AsyncClient, vendor_user, sample_product):

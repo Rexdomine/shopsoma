@@ -22,6 +22,7 @@ from app.models.category import Category
 from app.models.collection import Collection
 from app.models.product import Product, ProductVariant, ProductImage, ProductStatus, ProductType, ModerationStatus, Variation, SizeStock, SizeEnum
 from app.models.vendor import Vendor
+from app.models.stock_payment_persistence import coordinate_catalog_write
 from app.services.product_moderation import (
     mark_product_content_pending,
     transition_product_moderation,
@@ -1553,6 +1554,12 @@ async def create_image(
         select(Vendor.id).where(Vendor.id == vendor.id)
     )
     vendor_id = result.scalar_one_or_none()
+
+    # The moderation transition acquires the catalog coordinator before the
+    # product row. Claim that coordinator first here as well; otherwise this
+    # endpoint can hold the row while waiting on the coordinator and deadlock
+    # with an admin moderation request using the opposite order.
+    await coordinate_catalog_write(db, product_ids=[product_id], lock_only=True)
 
     # Lock the product row before counting so concurrent image additions
     # serialize against the same authoritative cap.
