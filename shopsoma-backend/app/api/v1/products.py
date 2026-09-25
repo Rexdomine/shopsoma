@@ -22,6 +22,7 @@ from app.models.category import Category
 from app.models.collection import Collection
 from app.models.product import Product, ProductVariant, ProductImage, ProductStatus, ProductType, ModerationStatus, Variation, SizeStock, SizeEnum
 from app.models.vendor import Vendor
+from app.models.stock_payment_persistence import coordinate_catalog_write
 from app.services.product_moderation import (
     mark_product_content_pending,
     transition_product_moderation,
@@ -49,6 +50,8 @@ from app.schemas.product import (
 )
 
 router = APIRouter(prefix="/products", tags=["products"])
+
+MAX_PRODUCT_IMAGES = 10
 
 def _variation_inherits_parent_price(
     variation: Variation,
@@ -1552,8 +1555,28 @@ async def create_image(
     )
     vendor_id = result.scalar_one_or_none()
 
+    # Reject requests for another vendor's product before claiming either
+    # catalog lock. The locked recheck below remains authoritative if
+    # ownership changes between this preflight and the write transaction.
+    existing_vendor_id = await db.scalar(
+        select(Product.vendor_id).where(Product.id == product_id)
+    )
+    if existing_vendor_id != vendor_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Product not found"
+        )
+
+    # The moderation transition acquires the catalog coordinator before the
+    # product row. Claim that coordinator first here as well; otherwise this
+    # endpoint can hold the row while waiting on the coordinator and deadlock
+    # with an admin moderation request using the opposite order.
+    await coordinate_catalog_write(db, product_ids=[product_id], lock_only=True)
+
+    # Lock the product row before counting so concurrent image additions
+    # serialize against the same authoritative cap.
     result = await db.execute(
-        select(Product).where(Product.id == product_id)
+        select(Product).where(Product.id == product_id).with_for_update()
     )
     product = result.scalar_one_or_none()
 
@@ -1561,6 +1584,15 @@ async def create_image(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Product not found"
+        )
+
+    image_count = await db.scalar(
+        select(func.count(ProductImage.id)).where(ProductImage.product_id == product_id)
+    )
+    if image_count >= MAX_PRODUCT_IMAGES:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Products can have at most {MAX_PRODUCT_IMAGES} images",
         )
 
     # Create image

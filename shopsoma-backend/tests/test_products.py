@@ -1,6 +1,7 @@
 """
 Unit tests for Product CRUD API endpoints
 """
+import inspect
 import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -1575,6 +1576,14 @@ class TestProductVariants:
 class TestProductImages:
     """Test product image endpoints"""
 
+    def test_create_image_preflights_ownership_before_catalog_locks(self):
+        """Unauthorized image requests do not claim catalog locks."""
+        from app.api.v1.products import create_image
+
+        source = inspect.getsource(create_image)
+        assert source.index("select(Product.vendor_id)") < source.index("coordinate_catalog_write(")
+        assert source.index("coordinate_catalog_write(") < source.index("with_for_update()")
+
     @pytest.mark.asyncio
     async def test_create_image(self, client: AsyncClient, vendor_user, sample_product):
         """Test adding a product image"""
@@ -1595,6 +1604,37 @@ class TestProductImages:
         data = response.json()
         assert data["image_url"] == image_data["image_url"]
         assert data["is_primary"] is True
+
+    @pytest.mark.asyncio
+    async def test_create_image_rejects_when_product_image_cap_is_reached(
+        self, client: AsyncClient, vendor_user, sample_product, db_session: AsyncSession
+    ):
+        """The standalone image endpoint must enforce the same ten-image cap."""
+        from app.api.v1.products import MAX_PRODUCT_IMAGES
+        from app.models.product import ProductImage
+        import uuid
+
+        db_session.add_all([
+            ProductImage(
+                id=uuid.uuid4(),
+                product_id=sample_product.id,
+                image_url=f"https://example.com/{index}.jpg",
+                display_order=index,
+            )
+            for index in range(MAX_PRODUCT_IMAGES)
+        ])
+        await db_session.commit()
+
+        response = await client.post(
+            f"/api/v1/products/{sample_product.id}/images",
+            json={"image_url": "https://example.com/overflow.jpg"},
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 409
+        assert response.json()["detail"] == (
+            f"Products can have at most {MAX_PRODUCT_IMAGES} images"
+        )
 
     @pytest.mark.asyncio
     async def test_delete_image(
