@@ -530,8 +530,8 @@ export default function AdminProductDetail() {
                       <img src={imageUrl(images[0])} alt={`${product.title} image 1`} className="h-64 w-full rounded-lg object-cover" onError={(e) => { (e.target as HTMLImageElement).src = '/images/placeholder-product.svg'; }} />
                     </div>}
                     {images.length > 1 && <div className="p-4 grid grid-cols-4 gap-2">
-                      {images.map((image, idx) => <button type="button" key={idx} aria-label={`View ${product.title} image ${idx + 1}`} onClick={(event) => { lightboxOpener.current = event.currentTarget; setLightboxIndex(idx); }} className="rounded-lg overflow-hidden border border-transparent hover:border-blue-500 focus:border-blue-600 focus:outline-none">
-                        <img src={imageUrl(image)} alt={`${product.title} ${idx + 1}`} className="w-full h-24 object-contain bg-gray-50" onError={(e) => { (e.target as HTMLImageElement).src = '/images/placeholder-product.svg'; }} />
+                      {images.slice(1, 5).map((image, idx) => <button type="button" key={idx + 1} aria-label={`View ${product.title} image ${idx + 2}`} onClick={(event) => { lightboxOpener.current = event.currentTarget; setLightboxIndex(idx + 1); }} className="rounded-lg overflow-hidden border border-transparent hover:border-blue-500 focus:border-blue-600 focus:outline-none">
+                        <img src={typeof image === 'string' ? image : image.thumbnail_url || image.image_url || '/images/placeholder-product.svg'} alt={`${product.title} ${idx + 2}`} className="w-full h-24 object-contain bg-gray-50" onError={(e) => { (e.target as HTMLImageElement).src = '/images/placeholder-product.svg'; }} />
                       </button>)}
                     </div>}
                   </>

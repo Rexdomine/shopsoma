@@ -69,7 +69,7 @@ describe('admin product view/edit API boundaries', () => {
     mocks.get.mockResolvedValue({ data: { ...product, images: ['https://cdn.test/one.jpg', 'https://cdn.test/two.jpg', 'https://cdn.test/three.jpg'] } });
     mount('view');
     await screen.findByRole('heading', { name: product.title });
-    expect(screen.getAllByRole('button', { name: /View .* image/ })).toHaveLength(4);
+    expect(screen.getAllByRole('button', { name: /View .* image/ })).toHaveLength(3);
     fireEvent.click(screen.getByRole('button', { name: 'View Pending linen shirt image 2' }));
     expect(screen.getByRole('dialog', { name: 'Product image viewer' })).toBeTruthy();
     expect(screen.getByRole('img', { name: 'Pending linen shirt 2 enlarged' })).toHaveAttribute('src', 'https://cdn.test/two.jpg');
