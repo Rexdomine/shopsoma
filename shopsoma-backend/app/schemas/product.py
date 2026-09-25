@@ -287,6 +287,7 @@ class ProductImageBase(BaseModel):
     alt_text: Optional[str] = Field(None, max_length=255, description="Alternative text for accessibility")
     display_order: int = Field(default=0, ge=0, description="Display order (0 = first)")
     is_primary: bool = Field(default=False, description="Primary product image")
+    storage_keys: Optional[List[str]] = Field(None, description="Server-owned storage keys")
 
 
 class ProductImageCreate(ProductImageBase):

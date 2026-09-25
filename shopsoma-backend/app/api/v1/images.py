@@ -120,6 +120,7 @@ async def upload_image(
             medium=result.get("medium"),
             large=result.get("large"),
             s3_key=result["s3_key"],
+            storage_keys=list(result.get("_storage_keys") or []),
             uploaded_at=datetime.utcnow(),
         )
     except HTTPException:
@@ -172,6 +173,7 @@ async def upload_images_batch(
                     medium=result.get("medium"),
                     large=result.get("large"),
                     s3_key=result["s3_key"],
+                    storage_keys=list(result.get("_storage_keys") or []),
                     uploaded_at=datetime.utcnow(),
                 )
             )

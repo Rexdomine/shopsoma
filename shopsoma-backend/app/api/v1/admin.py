@@ -2185,6 +2185,9 @@ async def create_admin_product_image(
     elif values.get("is_primary"):
         for image in images:
             image.is_primary = False
+        for index, image in enumerate(images, start=1):
+            image.display_order = index
+        values["display_order"] = 0
     else:
         values["display_order"] = len(images)
     image = ProductImage(product_id=product_id, **values)

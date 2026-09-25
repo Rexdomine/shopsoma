@@ -353,6 +353,7 @@ class ImageService:
         try:
             # Upload original
             original_key = self._get_s3_key(base_filename, folder)
+            results["_storage_keys"].append(original_key)
             compressed_data, format_type = self._compress_and_resize(
                 image_data,
                 target_size=None,  # Keep original size
@@ -373,7 +374,6 @@ class ImageService:
 
             results["original"] = self._get_public_url(original_key)
             results["s3_key"] = original_key
-            results["_storage_keys"].append(original_key)
 
             # Generate and upload variants
             if generate_variants:
@@ -388,6 +388,7 @@ class ImageService:
                         original_filename, size_name
                     )
                     variant_key = self._get_s3_key(variant_filename, folder)
+                    results["_storage_keys"].append(variant_key)
 
                     variant_data, variant_format = self._compress_and_resize(
                         image_data,
@@ -405,7 +406,6 @@ class ImageService:
                     )
 
                     results[size_name] = self._get_public_url(variant_key)
-                    results["_storage_keys"].append(variant_key)
 
             logger.info(f"Successfully uploaded image to S3: {original_key}")
             return results

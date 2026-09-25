@@ -107,6 +107,7 @@ export interface ProductImage {
   alt_text?: string;
   display_order: number;
   is_primary: boolean;
+  storage_keys?: string[];
 }
 
 // Image upload types
@@ -116,6 +117,7 @@ export interface ImageUploadResponse {
   medium?: string;
   large?: string;
   s3_key: string;
+  storage_keys: string[];
   uploaded_at: string;
 }
 
