@@ -261,6 +261,8 @@ class ImageService:
                     generate_variants=generate_variants,
                 )
 
+        except HTTPException:
+            raise
         except Exception as e:
             logger.error(f"Image upload error: {str(e)}")
             raise HTTPException(
@@ -285,18 +287,23 @@ class ImageService:
 
         # Upload original
         original_path = folder_path / base_filename
-        compressed_data, format_type = self._compress_and_resize(
-            image_data, target_size=None, quality=settings.IMAGE_QUALITY
-        )
-
-        with open(original_path, "wb") as f:
-            f.write(compressed_data)
-
         # Generate URL path (relative to uploads directory)
         original_key = f"{folder}/{year_month}/{base_filename}"
+        results["_storage_keys"].append(original_key)
+        try:
+            compressed_data, format_type = self._compress_and_resize(
+                image_data, target_size=None, quality=settings.IMAGE_QUALITY
+            )
+            with open(original_path, "wb") as f:
+                f.write(compressed_data)
+        except Exception as exc:
+            cleanup = await self.delete_images(results["_storage_keys"])
+            error = HTTPException(status_code=500, detail="Failed to upload image")
+            setattr(error, "storage_keys", cleanup.get("failed_keys", results["_storage_keys"]))
+            raise error from exc
+
         results["original"] = f"/uploads/{original_key}"
         results["s3_key"] = original_key
-        results["_storage_keys"].append(original_key)
 
         # Generate and save variants
         if generate_variants:
@@ -311,17 +318,22 @@ class ImageService:
                     original_filename, size_name
                 )
                 variant_path = folder_path / variant_filename
-
-                variant_data, variant_format = self._compress_and_resize(
-                    image_data, target_size=size_tuple, quality=settings.IMAGE_QUALITY
-                )
-
-                with open(variant_path, "wb") as f:
-                    f.write(variant_data)
-
                 variant_key = f"{folder}/{year_month}/{variant_filename}"
-                results[size_name] = f"/uploads/{variant_key}"
                 results["_storage_keys"].append(variant_key)
+
+                try:
+                    variant_data, variant_format = self._compress_and_resize(
+                        image_data, target_size=size_tuple, quality=settings.IMAGE_QUALITY
+                    )
+                    with open(variant_path, "wb") as f:
+                        f.write(variant_data)
+                except Exception as exc:
+                    cleanup = await self.delete_images(results["_storage_keys"])
+                    error = HTTPException(status_code=500, detail="Failed to upload image")
+                    setattr(error, "storage_keys", cleanup.get("failed_keys", results["_storage_keys"]))
+                    raise error from exc
+
+                results[size_name] = f"/uploads/{variant_key}"
 
         logger.info(f"Successfully uploaded image to local storage: {original_key}")
         return results
@@ -398,9 +410,12 @@ class ImageService:
             logger.info(f"Successfully uploaded image to S3: {original_key}")
             return results
 
-        except ClientError as e:
+        except Exception as e:
+            cleanup = await self.delete_images(results["_storage_keys"])
+            error = HTTPException(status_code=500, detail="Failed to upload image to S3")
+            setattr(error, "storage_keys", cleanup.get("failed_keys", results["_storage_keys"]))
             logger.error(f"S3 upload error: {str(e)}")
-            raise HTTPException(status_code=500, detail="Failed to upload image to S3")
+            raise error from e
 
     def _get_public_url(self, s3_key: str) -> str:
         """
@@ -514,7 +529,7 @@ class ImageService:
             Dict with success/failure counts
         """
         if not s3_keys:
-            return {"deleted": 0, "failed": 0}
+            return {"deleted": 0, "failed": 0, "failed_keys": []}
 
         if self.use_local_storage:
             deleted = 0
@@ -536,9 +551,14 @@ class ImageService:
                 except OSError as e:
                     logger.error(f"Failed to delete local image {s3_key}: {str(e)}")
 
-            failed = len(s3_keys) - deleted
+            failed_keys = [key for key, image_path in local_images if image_path is None]
+            failed_keys.extend(
+                key for key, image_path in local_images
+                if image_path is not None and image_path.exists()
+            )
+            failed = len(failed_keys)
             logger.info(f"Batch delete: {deleted} succeeded, {failed} failed")
-            return {"deleted": deleted, "failed": failed}
+            return {"deleted": deleted, "failed": failed, "failed_keys": failed_keys}
 
         objects = [{"Key": key} for key in s3_keys]
 
@@ -548,14 +568,15 @@ class ImageService:
             )
 
             deleted = len(response.get("Deleted", []))
-            failed = len(response.get("Errors", []))
+            failed_keys = [item.get("Key") for item in response.get("Errors", []) if item.get("Key")]
+            failed = len(failed_keys)
 
             logger.info(f"Batch delete: {deleted} succeeded, {failed} failed")
-            return {"deleted": deleted, "failed": failed}
+            return {"deleted": deleted, "failed": failed, "failed_keys": failed_keys}
 
         except ClientError as e:
             logger.error(f"Batch delete error: {str(e)}")
-            return {"deleted": 0, "failed": len(s3_keys)}
+            return {"deleted": 0, "failed": len(s3_keys), "failed_keys": list(s3_keys)}
 
     def get_image_info(self, s3_key: str) -> Optional[dict]:
         """

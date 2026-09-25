@@ -64,6 +64,7 @@ from app.services.test_account_classification import (
 )
 from app.services.shop_edits import SHOP_EDIT_NAMES, SHOP_EDIT_SLUGS, normalize_shop_edit_names
 from app.services.image_service import image_service
+from app.services.product_image_storage import record_storage_cleanup
 
 logger = logging.getLogger(__name__)
 
@@ -2092,6 +2093,10 @@ async def delete_product(
 
     try:
         # Delete associated product images
+        image_rows = list((await db.scalars(
+            select(ProductImage).where(ProductImage.product_id == product_id)
+        )).all())
+        storage_keys = [key for image in image_rows for key in (image.storage_keys or [])]
         await db.execute(
             delete(ProductImage).where(ProductImage.product_id == product_id)
         )
@@ -2104,6 +2109,15 @@ async def delete_product(
         # Delete the product itself
         await db.delete(product)
         await db.commit()
+
+        try:
+            cleanup = await image_service.delete_images(storage_keys)
+            failed_keys = cleanup.get("failed_keys", []) if isinstance(cleanup, dict) else storage_keys
+        except Exception:
+            logger.exception("Product image storage cleanup failed after product deletion")
+            failed_keys = storage_keys
+        if failed_keys:
+            await record_storage_cleanup(db, failed_keys, reason="product_delete", product_id=product_id)
 
         logger.info(f"Admin {current_admin.id} deleted product {product_id} ({product_title})")
 
@@ -2214,7 +2228,11 @@ async def upload_admin_product_image(
                 if key.endswith("_s3_key") and value not in storage_keys
             )
         try:
-            await image_service.delete_images(storage_keys)
+            cleanup = await image_service.delete_images(storage_keys)
+            if isinstance(cleanup, dict) and cleanup.get("failed_keys"):
+                await record_storage_cleanup(
+                    db, cleanup["failed_keys"], reason="upload_compensation", product_id=product_id
+                )
         except Exception:
             logger.exception("Failed to clean up uploaded product image objects")
 
@@ -2235,8 +2253,13 @@ async def upload_admin_product_image(
         # compensated.
         await db.flush()
         await db.refresh(image)
-    except HTTPException:
+    except HTTPException as exc:
         await db.rollback()
+        failed_keys = list(getattr(exc, "storage_keys", []) or [])
+        if failed_keys:
+            await record_storage_cleanup(
+                db, failed_keys, reason="upload_partial_failure", product_id=product_id
+            )
         await cleanup_uploaded_storage()
         raise
     except Exception as exc:
@@ -2288,6 +2311,8 @@ async def update_admin_product_image(
     if make_primary is True:
         for item in images:
             item.is_primary = item.id == image_id
+        if new_order is None:
+            new_order = 0
     elif make_primary is False and image.is_primary:
         replacement = next((item for item in images if item.id != image_id), None)
         if replacement:
@@ -2335,11 +2360,21 @@ async def delete_admin_product_image(
     storage_keys = list(image.storage_keys or [])
     await db.commit()
     try:
-        await image_service.delete_images(storage_keys)
+        cleanup = await image_service.delete_images(storage_keys)
+        failed_keys = cleanup.get("failed_keys", []) if isinstance(cleanup, dict) else storage_keys
+        if failed_keys:
+            await record_storage_cleanup(
+                db, failed_keys, reason="image_delete",
+                product_id=product_id, image_id=image_id
+            )
     except Exception:
         logger.exception(
             "Product image storage cleanup failed after durable row deletion",
             extra={"product_id": str(product_id), "image_id": str(image_id), "storage_keys": storage_keys},
+        )
+        await record_storage_cleanup(
+            db, storage_keys, reason="image_delete",
+            product_id=product_id, image_id=image_id
         )
 
 

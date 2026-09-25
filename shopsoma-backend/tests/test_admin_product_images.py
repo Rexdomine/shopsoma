@@ -253,6 +253,24 @@ async def test_new_primary_clears_old_primary_and_reorders(client, admin_user, s
 
 
 @pytest.mark.asyncio
+async def test_setting_primary_without_order_moves_image_to_first(client, admin_user, sample_product, db_session):
+    first = await _add_image(db_session, sample_product.id, 0, True, "first-only")
+    second = await _add_image(db_session, sample_product.id, 1, False, "second-only")
+    await db_session.commit()
+
+    response = await client.patch(
+        f"/api/v1/admin/products/{sample_product.id}/images/{second.id}",
+        json={"is_primary": True},
+        headers=admin_user["headers"],
+    )
+
+    assert response.status_code == 200
+    await db_session.refresh(first)
+    await db_session.refresh(second)
+    assert (first.is_primary, first.display_order) == (False, 1)
+    assert (second.is_primary, second.display_order) == (True, 0)
+
+@pytest.mark.asyncio
 async def test_delete_primary_falls_back_and_reorders_remaining(client, admin_user, sample_product, db_session):
     first = await _add_image(db_session, sample_product.id, 0, True, "first")
     second = await _add_image(db_session, sample_product.id, 1, False, "second")
@@ -311,6 +329,9 @@ async def test_admin_delete_storage_failure_does_not_restore_deleted_row(
     cleanup.assert_awaited_once_with(["products/original-failure.jpg"])
     assert await db_session.get(ProductImage, image.id) is None
     assert "storage cleanup failed after durable row deletion" in caplog.text
+    from app.models.product import ProductImageStorageCleanup
+    pending = await db_session.scalar(select(ProductImageStorageCleanup))
+    assert pending.storage_keys == ["products/original-failure.jpg"]
 
 
 @pytest.mark.asyncio

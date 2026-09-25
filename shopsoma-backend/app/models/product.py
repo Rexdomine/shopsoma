@@ -290,6 +290,23 @@ class ProductImage(Base):
         return f"<ProductImage {self.product_id}>"
 
 
+class ProductImageStorageCleanup(Base):
+    """Durable queue for storage objects that could not be deleted immediately."""
+
+    __tablename__ = "product_image_storage_cleanups"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    product_id = Column(UUID(as_uuid=True), nullable=True, index=True)
+    image_id = Column(UUID(as_uuid=True), nullable=True, index=True)
+    storage_keys = Column(JSONB, nullable=False)
+    reason = Column(String(100), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    resolved_at = Column(DateTime(timezone=True), nullable=True)
+
+    def __repr__(self):
+        return f"<ProductImageStorageCleanup {self.id}>"
+
+
 class SizeEnum(str, enum.Enum):
     """Size enum"""
 

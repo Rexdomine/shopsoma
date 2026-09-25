@@ -28,6 +28,8 @@ from app.services.product_moderation import (
     mark_product_content_pending,
     transition_product_moderation,
 )
+from app.services.image_service import image_service
+from app.services.product_image_storage import record_storage_cleanup
 from app.schemas.product import (
     ProductCreate,
     ProductUpdate,
@@ -1669,8 +1671,19 @@ async def delete_image(
         )
 
     await mark_product_content_pending(db=db, product_id=product_id)
+    storage_keys = list(image.storage_keys or [])
     await db.delete(image)
     await db.commit()
+    try:
+        cleanup = await image_service.delete_images(storage_keys)
+        failed_keys = cleanup.get("failed_keys", []) if isinstance(cleanup, dict) else storage_keys
+    except Exception:
+        failed_keys = storage_keys
+    if failed_keys:
+        await record_storage_cleanup(
+            db, failed_keys, reason="vendor_image_delete",
+            product_id=product_id, image_id=image_id
+        )
 
 
 # ============================================================================
