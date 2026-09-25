@@ -59,6 +59,7 @@ from app.services.test_account_classification import (
     classify_existing_staging_accounts,
     tag_staging_account,
 )
+from app.services.shop_edits import SHOP_EDIT_SLUGS, normalize_shop_edit_names
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -204,6 +205,11 @@ class AdminProductUpdate(BaseModel):
             if field in self.model_fields_set and getattr(self, field) is None:
                 raise ValueError(f"{field} cannot be null")
         return self
+
+
+class ShopEditsUpdate(BaseModel):
+    """Admin-only replacement set for independent Shop Edits tags."""
+    shop_edits: List[str] = Field(default_factory=list)
 
 
 class FeaturedStorefrontUpdate(BaseModel):
@@ -2106,6 +2112,33 @@ async def delete_product(
             status_code=500,
             detail=f"Failed to delete product: {str(e)}"
         )
+
+
+@router.get("/products/{product_id}/shop-edits")
+async def get_product_shop_edits(product_id: UUID, current_admin: User = Depends(get_current_admin), db: AsyncSession = Depends(get_db)):
+    product = await db.get(Product, product_id)
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    await db.refresh(product, ["shop_edit_categories"])
+    return {"shop_edits": [category.name.lower() for category in product.shop_edit_categories]}
+
+
+@router.put("/products/{product_id}/shop-edits")
+async def update_product_shop_edits(product_id: UUID, payload: ShopEditsUpdate, current_admin: User = Depends(get_current_admin), db: AsyncSession = Depends(get_db)):
+    try:
+        names = normalize_shop_edit_names(payload.shop_edits)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    product = await db.get(Product, product_id)
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    result = await db.execute(select(Category).where(Category.slug.in_([SHOP_EDIT_SLUGS[name] for name in names])))
+    categories = {category.slug: category for category in result.scalars().all()}
+    if len(categories) != len(names):
+        raise HTTPException(status_code=422, detail="Shop Edits categories are not configured")
+    product.shop_edit_categories = [categories[SHOP_EDIT_SLUGS[name]] for name in names]
+    await db.commit()
+    return {"product_id": str(product_id), "shop_edits": names}
 
 
 @router.get("/products/{product_id}", response_model=AdminProductResponse)

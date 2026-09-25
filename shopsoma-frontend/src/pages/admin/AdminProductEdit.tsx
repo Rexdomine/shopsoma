@@ -22,6 +22,8 @@ export default function AdminProductEdit() {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [categoryId, setCategoryId] = useState('');
+  const [shopEdits, setShopEdits] = useState<string[]>([]);
+  const shopEditOptions = ['casual', 'evening', 'party', 'workwear'] as const;
 
   // Form state - Pricing
   const [basePrice, setBasePrice] = useState('');
@@ -51,6 +53,8 @@ export default function AdminProductEdit() {
         setTitle(data.title);
         setDescription(data.description || '');
         setCategoryId(data.category_id || '');
+        const existingShopEdits = await adminService.getProductShopEdits(id);
+        setShopEdits(existingShopEdits);
         setBasePrice(data.base_price.toString());
         setComparePrice(data.compare_at_price?.toString() || '');
         setTotalStock(data.total_stock?.toString() || '0');
@@ -96,9 +100,18 @@ export default function AdminProductEdit() {
       };
 
       await adminService.updateProduct(id, updateData);
+      try {
+        await adminService.updateProductShopEdits(id, shopEdits);
+      } catch (shopEditsError: any) {
+        // The backend currently exposes two resources. Do not report a fully
+        // successful save when the curated association write failed.
+        throw new Error(
+          `Product details were saved, but Shop Edits could not be updated: ${apiErrorMessage(shopEditsError, 'please retry')}`
+        );
+      }
 
       success(
-        'Product has been updated successfully!',
+        'Product details and Shop Edits have been updated successfully!',
         'Product Updated'
       );
 
@@ -219,10 +232,25 @@ export default function AdminProductEdit() {
                   placeholder={product.category_name ? `Current: ${product.category_name}` : 'Paste category UUID'}
                 />
               </div>
+
+              <fieldset>
+                <legend className="block text-sm font-medium text-gray-700 mb-2">Shop Edits</legend>
+                <p className="text-xs text-gray-500 mb-3">Add this product to one or more curated edits without changing its normal category.</p>
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                  {shopEditOptions.map((edit) => (
+                    <label key={edit} className="flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-sm capitalize">
+                      <input
+                        type="checkbox"
+                        checked={shopEdits.includes(edit)}
+                        onChange={(event) => setShopEdits((current) => event.target.checked ? [...current, edit] : current.filter((value) => value !== edit))}
+                      />
+                      {edit}
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
             </div>
           </div>
-
-          {/* Pricing */}
           <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
             <div className="px-6 py-4 border-b border-gray-200">
               <h2 className="text-lg font-semibold text-gray-900">Pricing</h2>

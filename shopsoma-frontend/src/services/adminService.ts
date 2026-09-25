@@ -302,6 +302,15 @@ export const adminService = {
     return response.data;
   },
 
+  async getProductShopEdits(productId: string): Promise<string[]> {
+    const response = await api.get(`/admin/products/${productId}/shop-edits`);
+    return response.data.shop_edits;
+  },
+
+  async updateProductShopEdits(productId: string, shopEdits: string[]): Promise<void> {
+    await api.put(`/admin/products/${productId}/shop-edits`, { shop_edits: shopEdits });
+  },
+
   // List all products with pagination and filters
   async listProducts(filters?: {
     page?: number;

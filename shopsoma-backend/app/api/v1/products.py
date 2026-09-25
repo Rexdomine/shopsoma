@@ -22,6 +22,7 @@ from app.models.category import Category
 from app.models.collection import Collection
 from app.models.product import Product, ProductVariant, ProductImage, ProductStatus, ProductType, ModerationStatus, Variation, SizeStock, SizeEnum
 from app.models.vendor import Vendor
+from app.services.shop_edits import SHOP_EDIT_SLUGS
 from app.models.stock_payment_persistence import coordinate_catalog_write
 from app.services.product_moderation import (
     mark_product_content_pending,
@@ -960,12 +961,23 @@ async def list_products(
 
     # Category filter
     if category_id:
-        filters.append(
-            or_(
-                Product.category_id == category_id,
-                Product.category.has(Category.parent_id == category_id),
+        category_result = await db.execute(select(Category).where(Category.id == category_id))
+        requested_category = category_result.scalar_one_or_none()
+        requested_slug = requested_category.slug if requested_category else None
+        if requested_slug == "shop-edits":
+            # The public landing page requests the parent category, while the
+            # admin associations are stored on its four leaf edit categories.
+            # Include only curated associations; do not broaden normal
+            # category filtering or fall back to Product.category_id here.
+            filters.append(
+                Product.shop_edit_categories.any(
+                    or_(Category.id == category_id, Category.parent_id == category_id)
+                )
             )
-        )
+        elif requested_slug in SHOP_EDIT_SLUGS.values():
+            filters.append(Product.shop_edit_categories.any(Category.id == category_id))
+        else:
+            filters.append(or_(Product.category_id == category_id, Product.category.has(Category.parent_id == category_id)))
 
     # Vendor filter
     if vendor_id:
