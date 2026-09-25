@@ -2309,6 +2309,7 @@ async def update_admin_product_image(
     changes = image_data.model_dump(exclude_unset=True)
     new_order = changes.pop("display_order", None)
     make_primary = changes.pop("is_primary", None)
+    order_target = image
     for key, value in changes.items():
         setattr(image, key, value)
     if make_primary is True:
@@ -2321,9 +2322,11 @@ async def update_admin_product_image(
         if replacement:
             image.is_primary = False
             replacement.is_primary = True
+            order_target = replacement
+            new_order = 0
     if new_order is not None:
-        ordered = [item for item in images if item.id != image_id]
-        ordered.insert(min(new_order, len(ordered)), image)
+        ordered = [item for item in images if item.id != order_target.id]
+        ordered.insert(min(new_order, len(ordered)), order_target)
         for index, item in enumerate(ordered):
             item.display_order = index
     if images:

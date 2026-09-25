@@ -7,6 +7,7 @@ import io
 import math
 import ipaddress
 import re
+from pathlib import PurePosixPath
 from urllib.parse import urlparse
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File
@@ -55,6 +56,27 @@ from app.schemas.product import (
 router = APIRouter(prefix="/products", tags=["products"])
 
 MAX_PRODUCT_IMAGES = 10
+
+
+def _validate_vendor_storage_keys(vendor: Vendor, storage_keys: Optional[List[str]]) -> None:
+    """Accept only keys issued for this vendor's product-image namespace."""
+    if not storage_keys:
+        return
+
+    prefix = f"vendors/{vendor.user_id}/products/"
+    prefix_parts = len(PurePosixPath(prefix.rstrip("/")).parts)
+    for key in storage_keys:
+        path = PurePosixPath(key)
+        if (
+            not key.startswith(prefix)
+            or path.is_absolute()
+            or any(part in {"", ".", ".."} for part in key.split("/"))
+            or len(path.parts) <= prefix_parts
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Image storage key does not belong to vendor",
+            )
 
 def _variation_inherits_parent_price(
     variation: Variation,
@@ -432,6 +454,9 @@ async def create_product(
             detail="Vendor account not approved yet"
         )
 
+    for image_data in product_data.images or []:
+        _validate_vendor_storage_keys(vendor, image_data.storage_keys)
+
     # Create product
     product = Product(
         vendor_id=vendor.id,
@@ -538,6 +563,7 @@ async def create_product(
                 alt_text=image_data.alt_text,
                 display_order=image_data.display_order if image_data.display_order is not None else idx,
                 is_primary=image_data.is_primary,
+                storage_keys=image_data.storage_keys,
             )
             db.add(image)
 
@@ -1608,6 +1634,8 @@ async def create_image(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Product not found"
         )
+
+    _validate_vendor_storage_keys(vendor, image_data.storage_keys)
 
     image_count = await db.scalar(
         select(func.count(ProductImage.id)).where(ProductImage.product_id == product_id)

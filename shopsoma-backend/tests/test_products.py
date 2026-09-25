@@ -549,6 +549,7 @@ class TestProductCreate:
     @pytest.mark.asyncio
     async def test_create_product_with_images(self, client: AsyncClient, vendor_user):
         """Test product creation with images"""
+        storage_key = f"vendors/{vendor_user['user'].id}/products/2026/09/image1.jpg"
         product_data = {
             "title": "Test Product",
             "base_price": 50.00,
@@ -557,7 +558,8 @@ class TestProductCreate:
                     "image_url": "https://example.com/image1.jpg",
                     "alt_text": "Front view",
                     "is_primary": True,
-                    "display_order": 0
+                    "display_order": 0,
+                    "storage_keys": [storage_key],
                 },
                 {
                     "image_url": "https://example.com/image2.jpg",
@@ -577,6 +579,7 @@ class TestProductCreate:
         data = response.json()
         assert len(data["images"]) == 2
         assert data["images"][0]["is_primary"] is True
+        assert data["images"][0]["storage_keys"] == [storage_key]
 
     @pytest.mark.asyncio
     async def test_create_product_invalid_price(self, client: AsyncClient, vendor_user):
@@ -1604,6 +1607,39 @@ class TestProductImages:
         data = response.json()
         assert data["image_url"] == image_data["image_url"]
         assert data["is_primary"] is True
+
+    @pytest.mark.asyncio
+    async def test_create_image_rejects_storage_key_from_another_vendor(
+        self, client: AsyncClient, vendor_user, sample_product
+    ):
+        response = await client.post(
+            f"/api/v1/products/{sample_product.id}/images",
+            json={
+                "image_url": "https://example.com/foreign.jpg",
+                "storage_keys": ["vendors/another-user/products/2026/09/image.jpg"],
+            },
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 403
+        assert response.json()["detail"] == "Image storage key does not belong to vendor"
+
+    @pytest.mark.asyncio
+    async def test_create_image_persists_vendor_storage_keys(
+        self, client: AsyncClient, vendor_user, sample_product, db_session: AsyncSession
+    ):
+        storage_key = f"vendors/{vendor_user['user'].id}/products/2026/09/image.jpg"
+        response = await client.post(
+            f"/api/v1/products/{sample_product.id}/images",
+            json={
+                "image_url": "https://example.com/vendor.jpg",
+                "storage_keys": [storage_key],
+            },
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 201
+        assert response.json()["storage_keys"] == [storage_key]
 
     @pytest.mark.asyncio
     async def test_create_image_rejects_when_product_image_cap_is_reached(
