@@ -17,6 +17,7 @@ export default function AdminProductEdit() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [product, setProduct] = useState<Product | null>(null);
+  const [imageRefreshPending, setImageRefreshPending] = useState(false);
 
   // Form state - Basic Info
   const [title, setTitle] = useState('');
@@ -142,12 +143,23 @@ export default function AdminProductEdit() {
     setProduct(fresh);
   };
 
+  const refreshImagesSafely = async () => {
+    try {
+      await refreshProduct();
+      setImageRefreshPending(false);
+      return true;
+    } catch {
+      setImageRefreshPending(true);
+      return false;
+    }
+  };
+
   const handleImageUpload = async (files: FileList | null) => {
     if (!files || !id) return;
     try {
       for (const file of Array.from(files)) {
         await adminService.uploadProductImage(id, file);
-        await refreshProduct();
+        await refreshImagesSafely();
       }
       success('Product image(s) uploaded');
     } catch (err: any) {
@@ -160,7 +172,11 @@ export default function AdminProductEdit() {
     if (!id) return;
     try {
       await adminService.updateProductImage(id, imageId, changes);
-      await refreshProduct();
+      if (await refreshImagesSafely()) {
+        success('Product image saved');
+      } else {
+        warning('Product image saved, but refresh is pending.');
+      }
     } catch (err: any) {
       error(apiErrorMessage(err, 'Failed to update product image'), 'Image Update Failed');
     }
@@ -170,8 +186,11 @@ export default function AdminProductEdit() {
     if (!id || !window.confirm('Delete this product image?')) return;
     try {
       await adminService.deleteProductImage(id, imageId);
-      await refreshProduct();
-      success('Product image deleted');
+      if (await refreshImagesSafely()) {
+        success('Product image deleted');
+      } else {
+        warning('Product image deleted, but refresh is pending.');
+      }
     } catch (err: any) {
       error(apiErrorMessage(err, 'Failed to delete product image'), 'Delete Failed');
     }
@@ -412,6 +431,12 @@ export default function AdminProductEdit() {
               </label>
             </div>
             <div className="p-6">
+              {imageRefreshPending && (
+                <div role="status" className="mb-4 flex items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                  <span>Image saved; canonical product refresh is pending.</span>
+                  <button type="button" onClick={() => void refreshImagesSafely()} className="font-medium underline" aria-label="Refresh product images">Refresh</button>
+                </div>
+              )}
               {(product.images || []).length === 0 ? (
                 <p className="text-sm text-gray-500">No product images yet. Upload one or more images to create the gallery.</p>
               ) : (
@@ -423,8 +448,8 @@ export default function AdminProductEdit() {
                         <img src={imageUrl} alt={img.alt_text || `Product image ${idx + 1}`} className="aspect-square w-full object-cover" />
                         <div className="p-2 flex flex-wrap gap-1">
                           {img.is_primary ? <span className="text-xs font-medium text-blue-700">Primary</span> : <button type="button" onClick={() => void handleImageUpdate(img.id, { is_primary: true })} className="text-xs text-blue-700 underline" aria-label={`Make image ${idx + 1} primary`}><Star className="inline h-3 w-3" aria-hidden="true" /> Make primary</button>}
-                          <button type="button" disabled={idx === 0} onClick={() => void handleImageUpdate(img.id, { display_order: idx - 1 })} className="text-xs text-gray-700 disabled:opacity-40" aria-label={`Move image ${idx + 1} up`}><ChevronUp className="inline h-4 w-4" aria-hidden="true" /></button>
-                          <button type="button" disabled={idx === (product.images?.length || 1) - 1} onClick={() => void handleImageUpdate(img.id, { display_order: idx + 1 })} className="text-xs text-gray-700 disabled:opacity-40" aria-label={`Move image ${idx + 1} down`}><ChevronDown className="inline h-4 w-4" aria-hidden="true" /></button>
+                          {!img.is_primary && idx > 0 && <button type="button" onClick={() => void handleImageUpdate(img.id, { display_order: idx - 1 })} className="text-xs text-gray-700" aria-label={`Move image ${idx + 1} up`}><ChevronUp className="inline h-4 w-4" aria-hidden="true" /></button>}
+                          {!img.is_primary && idx < (product.images?.length || 1) - 1 && <button type="button" onClick={() => void handleImageUpdate(img.id, { display_order: idx + 1 })} className="text-xs text-gray-700" aria-label={`Move image ${idx + 1} down`}><ChevronDown className="inline h-4 w-4" aria-hidden="true" /></button>}
                           <button type="button" onClick={() => void handleImageDelete(img.id)} className="ml-auto text-xs text-red-700 underline" aria-label={`Delete image ${idx + 1}`}><Trash2 className="inline h-3 w-3" aria-hidden="true" /> Delete</button>
                         </div>
                       </div>

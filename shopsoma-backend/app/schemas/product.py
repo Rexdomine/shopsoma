@@ -281,18 +281,17 @@ class SizeGuide(BaseModel):
 
 
 class ProductImageBase(BaseModel):
-    """Base product image schema"""
+    """Product image fields safe to accept or return through public APIs."""
     image_url: str = Field(..., min_length=1, max_length=2048, description="Image URL")
     thumbnail_url: Optional[str] = Field(None, max_length=2048, description="Thumbnail URL")
     alt_text: Optional[str] = Field(None, max_length=255, description="Alternative text for accessibility")
     display_order: int = Field(default=0, ge=0, description="Display order (0 = first)")
     is_primary: bool = Field(default=False, description="Primary product image")
-    storage_keys: Optional[List[str]] = Field(None, description="Server-owned storage keys")
 
 
 class ProductImageCreate(ProductImageBase):
-    """Schema for creating product image"""
-    pass
+    """Vendor association request; storage keys never appear in responses."""
+    storage_keys: Optional[List[str]] = Field(None, description="Server-owned storage keys")
 
 
 class ProductImageUpdate(BaseModel):

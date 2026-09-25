@@ -27,6 +27,17 @@ Admins need product-gallery controls on the admin product edit page: upload addi
 ## Evidence limits
 No staging/production write or privileged admin session is authorized for discovery. Browser QA will use local/mock or dedicated test fixtures and must not leave production data behind.
 
+## Internal hardening strategy — 2026-09-25
+- The automatic closeout cron is paused while this whole-PR audit runs; no further Codex request may occur until one consolidated internally reviewed candidate is pushed.
+- Canonical candidate at audit start: `e91dd4a5a265f1bc4c1bfc299c0f12aba5098f07`, branch and remote aligned, clean worktree.
+- Audit is two independent lanes: (1) backend storage/DB/authorization/order invariants, and (2) frontend/API-contract/cross-layer parity.
+- Any validated gap must first have a focused failing regression, then a minimal fix, then be included in the final exact-head focused verification matrix.
+- After the two independent audits, the checkout removal remains internally consistent: the retired universal gate is absent from Cart, review, and create; shipping-rate-specific eligibility remains intentionally separate.
+- **Verified blocker: storage ownership/reuse.** Vendor association only rejects a repeated key within the same product, allowing a shared object key to be attached to a second product and later deleted by either lifecycle. Admin JSON creation accepts caller-provided `storage_keys`, allowing arbitrary/reused objects to enter the cleanup path. The remediation must prohibit admin caller-supplied keys and enforce a single globally owned key association through the vendor/legacy path, with a concurrency-safe persistence design.
+- **Verified blocker: recovery gap.** `product_image_storage_cleanups` durably records failed keys but has no consumer/reconciler. The remediation needs an idempotent claimed retry path, explicit resolution semantics, and a scheduled/operational invocation consistent with existing worker patterns. Merely persisting a row is not recovery.
+- **Verified UX defects.** The UI offers reorder controls on the primary image even though the API pins primary at index zero, and update/delete report the mutation as failed if only the read-after-write refresh fails. The UI must either prevent that invalid reorder action and distinguish saved-versus-refresh-pending state, or implement a different coherent primary/order contract.
+- **Risk accepted as deliberately safe legacy behavior:** URL guessing is not permitted for rows predating `storage_keys`; legacy rows cannot be automatically deleted from storage without authoritative keys. This must be documented/reconciled rather than guessed.
+
 ## Variant cleanup remediation
 - `ImageService` upload results now carry private `_storage_keys` metadata containing the original plus every generated variant key for both local and S3/R2 storage; public URL/result fields remain unchanged.
 - Admin upload compensation consumes that explicit list, retains a narrow legacy fallback for older mocked results, and logs cleanup failures without replacing the original persistence exception.

@@ -7,16 +7,17 @@ Open a fresh PR to `develop` that lets an authenticated admin manage a product�
 HEAVY: role-protected product/media persistence with browser upload → API → database → storage boundaries.
 
 ## Current Phase
-in_progress — durable storage-key deletion remediation implemented; backend database gate remains environment-blocked.
+in_progress — internal whole-PR hardening audit before one final Codex re-review.
 
 ## Next Step
-Run the focused backend upload tests against an isolated PostgreSQL cluster when port 55483 is available; frontend regression/typecheck are green.
+Complete the frozen-candidate backend and frontend/cross-layer audits, consolidate only verified defects into a single remediation matrix, then add RED→GREEN regressions before making one bounded update.
 
 ## Milestones
-1. **Preflight/discovery** — in_progress: establish existing upload endpoint/service, admin authorization boundary, image invariants, and regression surfaces.
-2. **Drax implementation** — pending: extend existing image APIs/UI through the smallest admin-authorized path; add RED→GREEN tests.
-3. **NightWing QA** — pending: independent review of authorization, primary/order/delete/upload behavior and regressions.
-4. **PR delivery** — pending: commit, push a fresh PR to `develop`, request exactly one Codex review, reconcile hosted CI/review; Rex alone merges.
+1. **Preflight/discovery** — complete: established existing upload endpoint/service, admin authorization boundary, image invariants, and regression surfaces.
+2. **Implementation and prior review remediation** — complete: admin image lifecycle, durable storage-key persistence/cleanup, and checkout gate removal are committed on the PR branch.
+3. **Whole-PR internal invariant audit** — complete: independently verified material storage-key ownership, cleanup recovery, and frontend state-truth gaps; checkout minimum-gate removal remains internally consistent.
+4. **Consolidated RED→GREEN remediation** — in_progress: first write regressions for verified findings, then minimally fix storage-key ownership/duplicate protection, cleanup recovery, primary-control semantics, and post-mutation refresh truth; rerun the complete focused matrix against isolated PostgreSQL.
+5. **Independent confirmation and PR closeout** — pending: NightWing confirmation on the final public head, then one exact-SHA Codex request and CI reconciliation; Rex alone merges.
 
 ## Acceptance criteria
 - Admin can view every product image, including an empty gallery state.

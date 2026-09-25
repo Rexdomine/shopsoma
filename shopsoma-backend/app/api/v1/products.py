@@ -2,6 +2,7 @@
 Product CRUD API endpoints
 """
 from typing import List, Optional, Dict, Any, Tuple
+from datetime import datetime, timezone
 import csv
 import io
 import math
@@ -30,7 +31,7 @@ from app.services.product_moderation import (
     transition_product_moderation,
 )
 from app.services.image_service import image_service
-from app.services.product_image_storage import record_storage_cleanup
+from app.services.product_image_storage import record_storage_cleanup, lock_and_validate_storage_keys
 from app.schemas.product import (
     ProductCreate,
     ProductUpdate,
@@ -454,8 +455,20 @@ async def create_product(
             detail="Vendor account not approved yet"
         )
 
+    image_storage_keys = []
     for image_data in product_data.images or []:
         _validate_vendor_storage_keys(vendor, image_data.storage_keys)
+        image_storage_keys.extend(image_data.storage_keys or [])
+    if len(image_storage_keys) != len(set(image_storage_keys)):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Image storage keys must be unique",
+        )
+    if image_storage_keys:
+        try:
+            await lock_and_validate_storage_keys(db, image_storage_keys)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
     # Create product
     product = Product(
@@ -1644,22 +1657,10 @@ async def create_image(
             detail="Image storage keys must be unique",
         )
     if storage_keys:
-        reused_key = await db.scalar(
-            select(ProductImage.id)
-            .where(
-                ProductImage.product_id == product_id,
-                or_(*(
-                    ProductImage.storage_keys.contains([key])
-                    for key in storage_keys
-                )),
-            )
-            .limit(1)
-        )
-        if reused_key is not None:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Image storage key is already associated with a product image",
-            )
+        try:
+            await lock_and_validate_storage_keys(db, storage_keys)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
     image_count = await db.scalar(
         select(func.count(ProductImage.id)).where(ProductImage.product_id == product_id)
@@ -1725,17 +1726,24 @@ async def delete_image(
     await mark_product_content_pending(db=db, product_id=product_id)
     storage_keys = list(image.storage_keys or [])
     await db.delete(image)
+    cleanup_record = None
+    if storage_keys:
+        cleanup_record = await record_storage_cleanup(
+            db, storage_keys, reason="vendor_image_delete",
+            product_id=product_id, image_id=image_id, commit=False
+        )
     await db.commit()
     try:
-        cleanup = await image_service.delete_images(storage_keys)
-        failed_keys = cleanup.get("failed_keys", []) if isinstance(cleanup, dict) else storage_keys
+        if storage_keys:
+            cleanup = await image_service.delete_images(storage_keys)
+            failed_keys = cleanup.get("failed_keys", []) if isinstance(cleanup, dict) else storage_keys
+        else:
+            failed_keys = []
     except Exception:
         failed_keys = storage_keys
-    if failed_keys:
-        await record_storage_cleanup(
-            db, failed_keys, reason="vendor_image_delete",
-            product_id=product_id, image_id=image_id
-        )
+    if not failed_keys and cleanup_record is not None:
+        cleanup_record.resolved_at = datetime.now(timezone.utc)
+        await db.commit()
 
 
 # ============================================================================

@@ -4,9 +4,10 @@ Unit tests for Product CRUD API endpoints
 import inspect
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.product import ModerationStatus
+from app.models.product import ModerationStatus, ProductImage
 
 class TestProductCreate:
     """Test product creation endpoint"""
@@ -547,7 +548,7 @@ class TestProductCreate:
         assert "variation size stock" in response.json()["detail"][0]["msg"]
 
     @pytest.mark.asyncio
-    async def test_create_product_with_images(self, client: AsyncClient, vendor_user):
+    async def test_create_product_with_images(self, client: AsyncClient, vendor_user, db_session):
         """Test product creation with images"""
         storage_key = f"vendors/{vendor_user['user'].id}/products/2026/09/image1.jpg"
         product_data = {
@@ -579,7 +580,12 @@ class TestProductCreate:
         data = response.json()
         assert len(data["images"]) == 2
         assert data["images"][0]["is_primary"] is True
-        assert data["images"][0]["storage_keys"] == [storage_key]
+        assert "storage_keys" not in data["images"][0]
+        image = await db_session.scalar(
+            select(ProductImage).where(ProductImage.product_id == data["id"])
+        )
+        assert image is not None
+        assert image.storage_keys == [storage_key]
 
     @pytest.mark.asyncio
     async def test_create_product_invalid_price(self, client: AsyncClient, vendor_user):
@@ -1639,7 +1645,11 @@ class TestProductImages:
         )
 
         assert response.status_code == 201
-        assert response.json()["storage_keys"] == [storage_key]
+        payload = response.json()
+        assert "storage_keys" not in payload
+        persisted = await db_session.get(ProductImage, payload["id"])
+        assert persisted is not None
+        assert persisted.storage_keys == [storage_key]
 
         duplicate = await client.post(
             f"/api/v1/products/{sample_product.id}/images",

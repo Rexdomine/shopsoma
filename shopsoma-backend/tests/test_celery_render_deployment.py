@@ -7,7 +7,10 @@ from app.celery_app import resolve_celery_connection_urls
 from app.core.config import Settings
 
 
-TASK_NAME = "app.tasks.checkout_outbox.dispatch_checkout_outbox"
+TASK_NAMES = {
+    "app.tasks.checkout_outbox.dispatch_checkout_outbox",
+    "app.tasks.product_image_storage_cleanup.reconcile_product_image_storage_cleanup",
+}
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -127,11 +130,11 @@ def test_render_blueprint_wires_canonical_checkout_outbox_consumers() -> None:
 
     from app.celery_app import celery_app
 
-    assert TASK_NAME in celery_app.tasks
+    assert TASK_NAMES <= set(celery_app.tasks)
     scheduled_tasks = {
         entry["task"] for entry in celery_app.conf.beat_schedule.values()
     }
-    assert scheduled_tasks == {TASK_NAME}
+    assert scheduled_tasks == TASK_NAMES
 
     wired_text = " ".join(
         [worker["startCommand"], beat["startCommand"], *scheduled_tasks]

@@ -45,17 +45,37 @@ beforeEach(() => {
 });
 
 describe('admin product image gallery', () => {
-  it('renders existing images and sends primary, move, and confirmed delete mutations', async () => {
+  it('does not expose ordering controls for the primary image', async () => {
     renderPage();
     expect(await screen.findByRole('heading', { name: 'Product Images' })).toBeInTheDocument();
     expect(screen.getByAltText('front')).toBeInTheDocument();
     expect(screen.getByAltText('back')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Make image 2 primary' }));
-    await waitFor(() => expect(mocks.updateProductImage).toHaveBeenCalledWith('product-1', 'image-2', { is_primary: true }));
+    expect(screen.queryByRole('button', { name: 'Move image 1 up' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Move image 1 down' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Move image 2 up' })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: 'Move image 2 down' })).not.toBeInTheDocument();
+  });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Move image 2 up' }));
+  it('reports a saved image mutation when the canonical refresh is pending and can retry it', async () => {
+    mocks.getProduct.mockImplementationOnce(async () => ({ ...product }))
+      .mockImplementationOnce(async () => { throw new Error('refresh unavailable'); })
+      .mockResolvedValue({ ...product });
+    renderPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Move image 2 up' }));
     await waitFor(() => expect(mocks.updateProductImage).toHaveBeenCalledWith('product-1', 'image-2', { display_order: 0 }));
+    expect(await screen.findByRole('status')).toHaveTextContent(/saved/i);
+    expect(screen.getByRole('button', { name: /refresh product images/i })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /refresh product images/i }));
+    await waitFor(() => expect(mocks.getProduct).toHaveBeenCalledTimes(3));
+    expect(screen.queryByRole('button', { name: /refresh product images/i })).not.toBeInTheDocument();
+  });
+
+  it('sends confirmed delete mutations', async () => {
+    renderPage();
+    expect(await screen.findByRole('heading', { name: 'Product Images' })).toBeInTheDocument();
 
     vi.spyOn(window, 'confirm').mockReturnValue(true);
     fireEvent.click(screen.getByRole('button', { name: 'Delete image 2' }));
