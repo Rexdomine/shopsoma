@@ -1576,11 +1576,12 @@ class TestProductVariants:
 class TestProductImages:
     """Test product image endpoints"""
 
-    def test_create_image_claims_catalog_coordinator_before_product_row_lock(self):
-        """Image writes and moderation must use one lock order."""
+    def test_create_image_preflights_ownership_before_catalog_locks(self):
+        """Unauthorized image requests do not claim catalog locks."""
         from app.api.v1.products import create_image
 
         source = inspect.getsource(create_image)
+        assert source.index("select(Product.vendor_id)") < source.index("coordinate_catalog_write(")
         assert source.index("coordinate_catalog_write(") < source.index("with_for_update()")
 
     @pytest.mark.asyncio

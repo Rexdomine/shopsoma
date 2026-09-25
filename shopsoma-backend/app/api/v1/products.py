@@ -1555,6 +1555,18 @@ async def create_image(
     )
     vendor_id = result.scalar_one_or_none()
 
+    # Reject requests for another vendor's product before claiming either
+    # catalog lock. The locked recheck below remains authoritative if
+    # ownership changes between this preflight and the write transaction.
+    existing_vendor_id = await db.scalar(
+        select(Product.vendor_id).where(Product.id == product_id)
+    )
+    if existing_vendor_id != vendor_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Product not found"
+        )
+
     # The moderation transition acquires the catalog coordinator before the
     # product row. Claim that coordinator first here as well; otherwise this
     # endpoint can hold the row while waiting on the coordinator and deadlock
