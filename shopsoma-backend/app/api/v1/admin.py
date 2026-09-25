@@ -2134,6 +2134,7 @@ async def update_product_shop_edits(product_id: UUID, payload: ShopEditsUpdate, 
     product = await db.get(Product, product_id)
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
+    await db.refresh(product, ["shop_edit_categories"])
     result = await db.execute(select(Category).where(Category.slug.in_([SHOP_EDIT_SLUGS[name] for name in names])))
     categories = {category.slug: category for category in result.scalars().all()}
     if len(categories) != len(names):

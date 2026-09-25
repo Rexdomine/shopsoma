@@ -35,6 +35,7 @@ async def test_admin_replaces_and_removes_shop_edits_and_rejects_vendor_access(
     ]
     db_session.add_all([root, *categories])
     await db_session.commit()
+    db_session.expire_all()
     product_url = f"/api/v1/admin/products/{sample_product.id}/shop-edits"
 
     assert (await client.get(product_url, headers=vendor_user["headers"])).status_code == 403
