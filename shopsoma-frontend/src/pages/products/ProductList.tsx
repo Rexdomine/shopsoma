@@ -535,12 +535,16 @@ export default function ProductList({
     }
 
     // Apply category filter
-    if (activeCategory !== 'All' && !categoryNav?.length && !serverFilteredCategory) {
+    if (
+      activeCategory !== 'All' &&
+      !categoryNav?.length &&
+      (!serverFilteredCategory || activeCategory !== presetCategory)
+    ) {
       list = list.filter((product) => matchesCategory(product, activeCategory));
     }
 
     return list;
-  }, [allProducts, searchQuery, activeCategory, categoryNav, serverFilteredCategory]);
+  }, [allProducts, searchQuery, activeCategory, categoryNav, serverFilteredCategory, presetCategory]);
 
   const { colorOptions, colorMeta } = useMemo(() => {
     const metaMap = new Map<
@@ -627,7 +631,11 @@ export default function ProductList({
       });
     }
 
-    if (activeCategory !== 'All' && !categoryNav?.length && !serverFilteredCategory) {
+    if (
+      activeCategory !== 'All' &&
+      !categoryNav?.length &&
+      (!serverFilteredCategory || activeCategory !== presetCategory)
+    ) {
       list = list.filter((product) => matchesCategory(product, activeCategory));
     }
 
@@ -697,7 +705,17 @@ export default function ProductList({
     }
 
     return sorted;
-  }, [allProducts, filters, sortOption, customPriceRange, searchQuery, activeCategory, categoryNav]);
+  }, [
+    allProducts,
+    filters,
+    sortOption,
+    customPriceRange,
+    searchQuery,
+    activeCategory,
+    categoryNav,
+    serverFilteredCategory,
+    presetCategory,
+  ]);
 
   const totalPages = Math.max(1, Math.ceil(filteredProducts.length / PAGE_SIZE));
 
