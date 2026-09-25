@@ -293,6 +293,28 @@ async def test_clearing_primary_moves_replacement_to_first(client, admin_user, s
 
 
 @pytest.mark.asyncio
+async def test_reordering_cannot_place_non_primary_before_primary(client, admin_user, sample_product, db_session):
+    first = await _add_image(db_session, sample_product.id, 0, True, "primary")
+    second = await _add_image(db_session, sample_product.id, 1, False, "second")
+    third = await _add_image(db_session, sample_product.id, 2, False, "third")
+    await db_session.commit()
+
+    response = await client.patch(
+        f"/api/v1/admin/products/{sample_product.id}/images/{third.id}",
+        json={"display_order": 0},
+        headers=admin_user["headers"],
+    )
+
+    assert response.status_code == 200
+    await db_session.refresh(first)
+    await db_session.refresh(second)
+    await db_session.refresh(third)
+    assert (first.is_primary, first.display_order) == (True, 0)
+    assert third.display_order == 1
+    assert second.display_order == 2
+
+
+@pytest.mark.asyncio
 async def test_delete_primary_falls_back_and_reorders_remaining(client, admin_user, sample_product, db_session):
     first = await _add_image(db_session, sample_product.id, 0, True, "first")
     second = await _add_image(db_session, sample_product.id, 1, False, "second")

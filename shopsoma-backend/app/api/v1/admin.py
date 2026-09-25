@@ -2326,6 +2326,10 @@ async def update_admin_product_image(
             new_order = 0
     if new_order is not None:
         ordered = [item for item in images if item.id != order_target.id]
+        if order_target.is_primary:
+            new_order = 0
+        elif any(item.is_primary for item in images):
+            new_order = max(1, new_order)
         ordered.insert(min(new_order, len(ordered)), order_target)
         for index, item in enumerate(ordered):
             item.display_order = index

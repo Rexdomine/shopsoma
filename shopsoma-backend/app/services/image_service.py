@@ -167,6 +167,15 @@ class ImageService:
         year_month = datetime.utcnow().strftime("%Y/%m")
         return f"{folder}/{year_month}/{filename}"
 
+    async def _cleanup_failed_upload(self, storage_keys: List[str]) -> List[str]:
+        """Best-effort compensation that never hides the upload error."""
+        try:
+            cleanup = await self.delete_images(storage_keys)
+        except Exception:
+            logger.exception("Failed to compensate a partial image upload")
+            return list(storage_keys)
+        return list(cleanup.get("failed_keys", storage_keys))
+
     def _compress_and_resize(
         self,
         image_data: bytes,
@@ -297,9 +306,8 @@ class ImageService:
             with open(original_path, "wb") as f:
                 f.write(compressed_data)
         except Exception as exc:
-            cleanup = await self.delete_images(results["_storage_keys"])
             error = HTTPException(status_code=500, detail="Failed to upload image")
-            setattr(error, "storage_keys", cleanup.get("failed_keys", results["_storage_keys"]))
+            setattr(error, "storage_keys", await self._cleanup_failed_upload(results["_storage_keys"]))
             raise error from exc
 
         results["original"] = f"/uploads/{original_key}"
@@ -411,9 +419,8 @@ class ImageService:
             return results
 
         except Exception as e:
-            cleanup = await self.delete_images(results["_storage_keys"])
             error = HTTPException(status_code=500, detail="Failed to upload image to S3")
-            setattr(error, "storage_keys", cleanup.get("failed_keys", results["_storage_keys"]))
+            setattr(error, "storage_keys", await self._cleanup_failed_upload(results["_storage_keys"]))
             logger.error(f"S3 upload error: {str(e)}")
             raise error from e
 
