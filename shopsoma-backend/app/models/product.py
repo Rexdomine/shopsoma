@@ -142,7 +142,7 @@ class Product(Base):
     vendor = relationship("Vendor", back_populates="products")
     category = relationship("Category", back_populates="products")
     shop_edit_categories = relationship(
-        "Category", secondary=product_shop_edit_categories, lazy="selectin"
+        "Category", secondary=product_shop_edit_categories
     )
     collection = relationship("Collection", back_populates="products")
     variants = relationship(

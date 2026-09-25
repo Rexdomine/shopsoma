@@ -7,6 +7,10 @@ from app.models.product import ModerationStatus, Product, ProductStatus
 from app.services.shop_edits import SHOP_EDIT_SLUGS, normalize_shop_edit_names
 
 
+def test_shop_edit_relationship_is_not_eager_by_default():
+    assert Product.shop_edit_categories.property.lazy == "select"
+
+
 def test_shop_edit_names_are_deduplicated_and_stable():
     assert normalize_shop_edit_names(["Party", "casual", "party"]) == ["party", "casual"]
 
