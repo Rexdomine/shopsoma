@@ -150,22 +150,28 @@ describe('ProductList', () => {
     expect(getProductsMock.mock.calls[1][0]).toEqual(expect.objectContaining({ category_id: 'men-id' }));
   });
 
-  it('keeps server-filtered Shop Edits products when their normal category differs', async () => {
+  it.each([
+    ['Casual', 'casual-id', 'casual-product'],
+    ['Evening', 'evening-id', 'evening-product'],
+    ['Party', 'party-id', 'party-product'],
+    ['Workwear', 'workwear-id', 'workwear-product'],
+  ] as const)('keeps %s server-filtered Shop Edit products when their normal category differs', async (presetCategory, categoryId, productId) => {
     getProductsMock.mockResolvedValue({
-      products: [{ id: 'evening-product', category_name: 'Dresses', category_parent_name: 'Women' }],
+      products: [{ id: productId, category_name: 'Dresses', category_parent_name: 'Women' }],
     });
 
     render(
       <MemoryRouter>
         <ProductList
-          presetCategory="Evening"
-          initialParams={{ category_id: 'evening-id' }}
+          presetCategory={presetCategory}
+          initialParams={{ category_id: categoryId }}
           serverFilteredCategory
         />
       </MemoryRouter>,
     );
 
-    await waitFor(() => expect(screen.getAllByTestId('product-evening-product')).not.toHaveLength(0));
+    await waitFor(() => expect(screen.getAllByTestId(`product-${productId}`)).not.toHaveLength(0));
+    expect(getProductsMock).toHaveBeenCalledWith(expect.objectContaining({ category_id: categoryId }));
   });
 
   it('applies a later category refinement on a server-filtered Shop Edits route', async () => {
