@@ -276,6 +276,8 @@ class ProductImage(Base):
     alt_text = Column(String(255), nullable=True)
     display_order = Column(Integer, default=0, nullable=False)
     is_primary = Column(Boolean, default=False, nullable=False)
+    # Exact private keys for server-owned uploads; legacy rows remain NULL.
+    storage_keys = Column(JSONB, nullable=True)
 
     created_at = Column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

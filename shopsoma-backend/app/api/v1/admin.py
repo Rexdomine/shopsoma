@@ -3,7 +3,7 @@ Admin API endpoints for database initialization and management
 """
 from typing import Any, Optional, List
 from uuid import UUID
-from fastapi import APIRouter, HTTPException, Depends, Query, status
+from fastapi import APIRouter, HTTPException, Depends, Query, status, UploadFile, File
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, or_, delete, update, and_
@@ -13,6 +13,7 @@ from decimal import Decimal
 from urllib.parse import quote
 import asyncio
 import os
+import logging
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from app.core.database import get_db
@@ -41,6 +42,8 @@ from app.schemas.product import (
     ProductApprovalRequest,
     ProductRejectionRequest,
     ProductFeatureUpdate,
+    ProductImageCreate,
+    ProductImageUpdate,
     ProductImageResponse,
     ProductVariantResponse,
     ProductVariantUpdate,
@@ -51,7 +54,7 @@ from app.api.v1.products import (
     _sync_inherited_variation_prices,
     _sync_single_product_variant_inventory,
 )
-from app.services.product_moderation import transition_product_moderation
+from app.services.product_moderation import transition_product_moderation, mark_product_content_pending
 from app.services.vendor_activation_service import (
     activation_eligibility, activation_is_eligible, lock_activation_identity,
 )
@@ -60,6 +63,9 @@ from app.services.test_account_classification import (
     tag_staging_account,
 )
 from app.services.shop_edits import SHOP_EDIT_NAMES, SHOP_EDIT_SLUGS, normalize_shop_edit_names
+from app.services.image_service import image_service
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -2142,6 +2148,199 @@ async def update_product_shop_edits(product_id: UUID, payload: ShopEditsUpdate, 
     product.shop_edit_categories = [categories[SHOP_EDIT_SLUGS[name]] for name in names]
     await db.commit()
     return {"product_id": str(product_id), "shop_edits": names}
+
+
+@router.post("/products/{product_id}/images", response_model=ProductImageResponse, status_code=status.HTTP_201_CREATED)
+async def create_admin_product_image(
+    product_id: UUID,
+    image_data: ProductImageCreate,
+    current_admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    await coordinate_catalog_write(db, product_ids=[product_id])
+    product = await db.scalar(select(Product).where(Product.id == product_id))
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    images = list((await db.scalars(select(ProductImage).where(ProductImage.product_id == product_id).order_by(ProductImage.display_order, ProductImage.created_at, ProductImage.id))).all())
+    if len(images) >= 10:
+        raise HTTPException(status_code=409, detail="Products can have at most 10 images")
+    values = image_data.model_dump()
+    if not images:
+        values["display_order"] = 0
+        values["is_primary"] = True
+    elif values.get("is_primary"):
+        for image in images:
+            image.is_primary = False
+    else:
+        values["display_order"] = len(images)
+    image = ProductImage(product_id=product_id, **values)
+    db.add(image)
+    if images and not values.get("is_primary"):
+        primary = next((item for item in images if item.is_primary), images[0])
+        for item in images:
+            item.is_primary = item is primary
+    await mark_product_content_pending(db=db, product_id=product_id)
+    await db.commit()
+    await db.refresh(image)
+    return image
+
+
+@router.post("/products/{product_id}/images/upload", response_model=ProductImageResponse, status_code=status.HTTP_201_CREATED)
+async def upload_admin_product_image(
+    product_id: UUID,
+    file: UploadFile = File(...),
+    current_admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    await coordinate_catalog_write(db, product_ids=[product_id])
+    product = await db.scalar(select(Product).where(Product.id == product_id))
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    images = list((await db.scalars(select(ProductImage).where(ProductImage.product_id == product_id))).all())
+    if len(images) >= 10:
+        raise HTTPException(status_code=409, detail="Products can have at most 10 images")
+
+    uploaded = None
+
+    async def cleanup_uploaded_storage() -> None:
+        if not uploaded:
+            return
+        storage_keys = uploaded.get("_storage_keys")
+        if storage_keys is None:
+            # Backward compatibility for older/mocked upload results only.
+            storage_keys = [uploaded["s3_key"]] if uploaded.get("s3_key") else []
+            storage_keys.extend(
+                value for key, value in uploaded.items()
+                if key.endswith("_s3_key") and value not in storage_keys
+            )
+        try:
+            await image_service.delete_images(storage_keys)
+        except Exception:
+            logger.exception("Failed to clean up uploaded product image objects")
+
+    try:
+        uploaded = await image_service.upload_image(file, folder="products", generate_variants=True)
+        image = ProductImage(
+            product_id=product_id,
+            image_url=uploaded["original"],
+            thumbnail_url=uploaded.get("thumbnail"),
+            display_order=len(images),
+            is_primary=not images,
+            storage_keys=list(uploaded.get("_storage_keys") or []),
+        )
+        db.add(image)
+        await mark_product_content_pending(db=db, product_id=product_id)
+        # Complete all ORM work needed to build the response before commit. If
+        # this fails, the row is still rollback-able and storage can be safely
+        # compensated.
+        await db.flush()
+        await db.refresh(image)
+    except HTTPException:
+        await db.rollback()
+        await cleanup_uploaded_storage()
+        raise
+    except Exception as exc:
+        await db.rollback()
+        await cleanup_uploaded_storage()
+        raise HTTPException(status_code=500, detail="Failed to persist uploaded product image") from exc
+
+    # A commit exception is ambiguous: the database may have durably accepted
+    # the row even when the client/session observed an error. Never delete the
+    # objects in this state, or a persisted row could point at missing files.
+    try:
+        await db.commit()
+    except Exception as exc:
+        await db.rollback()
+        logger.exception(
+            "Ambiguous product image upload commit; preserving storage objects",
+            extra={
+                "product_id": str(product_id),
+                "image_id": str(image.id),
+                "storage_keys": uploaded.get("_storage_keys") if uploaded else None,
+            },
+        )
+        raise HTTPException(status_code=500, detail="Failed to persist uploaded product image") from exc
+
+    return image
+
+
+@router.patch("/products/{product_id}/images/{image_id}", response_model=ProductImageResponse)
+async def update_admin_product_image(
+    product_id: UUID,
+    image_id: UUID,
+    image_data: ProductImageUpdate,
+    current_admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    await coordinate_catalog_write(db, product_ids=[product_id])
+    product = await db.scalar(select(Product).where(Product.id == product_id))
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    images = list((await db.scalars(select(ProductImage).where(ProductImage.product_id == product_id).order_by(ProductImage.display_order, ProductImage.created_at, ProductImage.id))).all())
+    image = next((item for item in images if item.id == image_id), None)
+    if not image:
+        raise HTTPException(status_code=404, detail="Image not found")
+    changes = image_data.model_dump(exclude_unset=True)
+    new_order = changes.pop("display_order", None)
+    make_primary = changes.pop("is_primary", None)
+    for key, value in changes.items():
+        setattr(image, key, value)
+    if make_primary is True:
+        for item in images:
+            item.is_primary = item.id == image_id
+    elif make_primary is False and image.is_primary:
+        replacement = next((item for item in images if item.id != image_id), None)
+        if replacement:
+            image.is_primary = False
+            replacement.is_primary = True
+    if new_order is not None:
+        ordered = [item for item in images if item.id != image_id]
+        ordered.insert(min(new_order, len(ordered)), image)
+        for index, item in enumerate(ordered):
+            item.display_order = index
+    if images:
+        primary = image if image.is_primary else next((item for item in images if item.is_primary), images[0])
+        for item in images:
+            item.is_primary = item is primary
+    await mark_product_content_pending(db=db, product_id=product_id)
+    await db.commit()
+    await db.refresh(image)
+    return image
+
+
+@router.delete("/products/{product_id}/images/{image_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_admin_product_image(
+    product_id: UUID,
+    image_id: UUID,
+    current_admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    await coordinate_catalog_write(db, product_ids=[product_id])
+    product = await db.scalar(select(Product).where(Product.id == product_id))
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    images = list((await db.scalars(select(ProductImage).where(ProductImage.product_id == product_id).order_by(ProductImage.display_order, ProductImage.created_at, ProductImage.id))).all())
+    image = next((item for item in images if item.id == image_id), None)
+    if not image:
+        raise HTTPException(status_code=404, detail="Image not found")
+    remaining = [item for item in images if item.id != image_id]
+    await db.delete(image)
+    if remaining:
+        primary = next((item for item in remaining if item.is_primary), remaining[0])
+        for item in remaining:
+            item.is_primary = item is primary
+        for index, item in enumerate(remaining):
+            item.display_order = index
+    await mark_product_content_pending(db=db, product_id=product_id)
+    storage_keys = list(image.storage_keys or [])
+    await db.commit()
+    try:
+        await image_service.delete_images(storage_keys)
+    except Exception:
+        logger.exception(
+            "Product image storage cleanup failed after durable row deletion",
+            extra={"product_id": str(product_id), "image_id": str(image_id), "storage_keys": storage_keys},
+        )
 
 
 @router.get("/products/{product_id}", response_model=AdminProductResponse)

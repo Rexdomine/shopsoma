@@ -9,7 +9,7 @@ import tempfile
 import uuid
 import hashlib
 import unicodedata
-from typing import Optional, Tuple, List
+from typing import Any, Optional, Tuple, List
 from datetime import datetime
 from pathlib import Path
 from PIL import Image
@@ -276,7 +276,7 @@ class ImageService:
         generate_variants: bool,
     ) -> dict:
         """Upload image to local filesystem"""
-        results = {}
+        results: dict[str, Any] = {"_storage_keys": []}
 
         # Create folder structure
         year_month = datetime.utcnow().strftime("%Y/%m")
@@ -296,6 +296,7 @@ class ImageService:
         original_key = f"{folder}/{year_month}/{base_filename}"
         results["original"] = f"/uploads/{original_key}"
         results["s3_key"] = original_key
+        results["_storage_keys"].append(original_key)
 
         # Generate and save variants
         if generate_variants:
@@ -320,6 +321,7 @@ class ImageService:
 
                 variant_key = f"{folder}/{year_month}/{variant_filename}"
                 results[size_name] = f"/uploads/{variant_key}"
+                results["_storage_keys"].append(variant_key)
 
         logger.info(f"Successfully uploaded image to local storage: {original_key}")
         return results
@@ -334,7 +336,7 @@ class ImageService:
         generate_variants: bool,
     ) -> dict:
         """Upload image to S3"""
-        results = {}
+        results: dict[str, Any] = {"_storage_keys": []}
 
         try:
             # Upload original
@@ -359,6 +361,7 @@ class ImageService:
 
             results["original"] = self._get_public_url(original_key)
             results["s3_key"] = original_key
+            results["_storage_keys"].append(original_key)
 
             # Generate and upload variants
             if generate_variants:
@@ -390,6 +393,7 @@ class ImageService:
                     )
 
                     results[size_name] = self._get_public_url(variant_key)
+                    results["_storage_keys"].append(variant_key)
 
             logger.info(f"Successfully uploaded image to S3: {original_key}")
             return results

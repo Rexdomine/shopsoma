@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Save, Loader2 } from 'lucide-react';
+import { ArrowLeft, Save, Loader2, Upload, Trash2, Star, ChevronUp, ChevronDown } from 'lucide-react';
 import { ROUTES } from '../../config/constants';
 import { apiErrorMessage } from '../../utils/apiErrorMessage';
 import { adminService, type AdminProductUpdatePayload } from '../../services/adminService';
@@ -133,6 +133,47 @@ export default function AdminProductEdit() {
       );
     } finally {
       setSaving(false);
+    }
+  };
+
+  const refreshProduct = async () => {
+    if (!id) return;
+    const fresh = await adminService.getProduct(id);
+    setProduct(fresh);
+  };
+
+  const handleImageUpload = async (files: FileList | null) => {
+    if (!files || !id) return;
+    try {
+      for (const file of Array.from(files)) {
+        await adminService.uploadProductImage(id, file);
+        await refreshProduct();
+      }
+      success('Product image(s) uploaded');
+    } catch (err: any) {
+      error(apiErrorMessage(err, 'Failed to upload product image'), 'Upload Failed');
+      try { await refreshProduct(); } catch { /* retain last truthful state */ }
+    }
+  };
+
+  const handleImageUpdate = async (imageId: string, changes: { is_primary?: boolean; display_order?: number }) => {
+    if (!id) return;
+    try {
+      await adminService.updateProductImage(id, imageId, changes);
+      await refreshProduct();
+    } catch (err: any) {
+      error(apiErrorMessage(err, 'Failed to update product image'), 'Image Update Failed');
+    }
+  };
+
+  const handleImageDelete = async (imageId: string) => {
+    if (!id || !window.confirm('Delete this product image?')) return;
+    try {
+      await adminService.deleteProductImage(id, imageId);
+      await refreshProduct();
+      success('Product image deleted');
+    } catch (err: any) {
+      error(apiErrorMessage(err, 'Failed to delete product image'), 'Delete Failed');
     }
   };
 
@@ -361,39 +402,38 @@ export default function AdminProductEdit() {
             </div>
           </div>
 
-          {/* Product Images Info */}
-          {product.images && product.images.length > 0 && (
-            <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
-              <div className="px-6 py-4 border-b border-gray-200">
-                <h2 className="text-lg font-semibold text-gray-900">Product Images</h2>
-              </div>
-
-              <div className="p-6">
+          {/* Product Images */}
+          <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
+            <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+              <h2 className="text-lg font-semibold text-gray-900">Product Images</h2>
+              <label className="inline-flex items-center gap-2 px-3 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg cursor-pointer hover:bg-blue-700">
+                <Upload className="h-4 w-4" aria-hidden="true" /> Upload images
+                <input type="file" accept="image/*" multiple className="sr-only" aria-label="Upload product images" onChange={(event) => { void handleImageUpload(event.target.files); event.currentTarget.value = ''; }} />
+              </label>
+            </div>
+            <div className="p-6">
+              {(product.images || []).length === 0 ? (
+                <p className="text-sm text-gray-500">No product images yet. Upload one or more images to create the gallery.</p>
+              ) : (
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                  {product.images.map((img, idx) => {
+                  {(product.images || []).map((img, idx) => {
                     const imageUrl = img.image_url || img.thumbnail_url || '/images/placeholder-product.svg';
                     return (
-                    <div key={idx} className="relative aspect-square rounded-lg overflow-hidden border border-gray-200">
-                      <img
-                        src={imageUrl}
-                        alt={`Product ${idx + 1}`}
-                        className="w-full h-full object-cover"
-                      />
-                      {img.is_primary && (
-                        <div className="absolute top-2 left-2 bg-blue-600 text-white text-xs px-2 py-1 rounded">
-                          Primary
+                      <div key={img.id} className="relative rounded-lg overflow-hidden border border-gray-200">
+                        <img src={imageUrl} alt={img.alt_text || `Product image ${idx + 1}`} className="aspect-square w-full object-cover" />
+                        <div className="p-2 flex flex-wrap gap-1">
+                          {img.is_primary ? <span className="text-xs font-medium text-blue-700">Primary</span> : <button type="button" onClick={() => void handleImageUpdate(img.id, { is_primary: true })} className="text-xs text-blue-700 underline" aria-label={`Make image ${idx + 1} primary`}><Star className="inline h-3 w-3" aria-hidden="true" /> Make primary</button>}
+                          <button type="button" disabled={idx === 0} onClick={() => void handleImageUpdate(img.id, { display_order: idx - 1 })} className="text-xs text-gray-700 disabled:opacity-40" aria-label={`Move image ${idx + 1} up`}><ChevronUp className="inline h-4 w-4" aria-hidden="true" /></button>
+                          <button type="button" disabled={idx === (product.images?.length || 1) - 1} onClick={() => void handleImageUpdate(img.id, { display_order: idx + 1 })} className="text-xs text-gray-700 disabled:opacity-40" aria-label={`Move image ${idx + 1} down`}><ChevronDown className="inline h-4 w-4" aria-hidden="true" /></button>
+                          <button type="button" onClick={() => void handleImageDelete(img.id)} className="ml-auto text-xs text-red-700 underline" aria-label={`Delete image ${idx + 1}`}><Trash2 className="inline h-3 w-3" aria-hidden="true" /> Delete</button>
                         </div>
-                      )}
-                    </div>
+                      </div>
                     );
                   })}
                 </div>
-                <p className="text-xs text-gray-500 mt-3">
-                  Note: Image management (upload/delete) requires using the vendor product management interface or contacting the vendor directly.
-                </p>
-              </div>
+              )}
             </div>
-          )}
+          </div>
 
           {/* Moderation Notes */}
           {product.moderation_notes && (

@@ -1,18 +1,46 @@
-# Findings — admin activation resend
-## Context
-Production email URL/CORS mismatch was diagnosed; Rex says configuration fixed. Old emails retain old host. User requests permanent admin resend feature and fresh PR into develop for staging testing after merge.
-## Preflight boundary map
-Admin browser -> authenticated admin API (actor authenticated server-side); API -> PostgreSQL (authoritative vendor/user state, audit, cooldown); API -> existing email service/Brevo (acceptance is not mailbox delivery); vendor email link -> public activation -> OTP verification -> password setup. No production provider calls are authorized during development.
-## State and invariants
-Approved but never setup is eligible. Fully setup uses password recovery, not activation. Inactive does NOT alone imply never setup: admin-deactivated users must not be reactivated via this operation. Resend never approves, activates, changes password, or changes store flags. Map actual fields and lifecycle audit before implementation.
-## Identity, retry, crash windows
-Vendor UUID and linked user/email from DB, authenticated admin actor; browser must not supply destination. Duplicate sends/cooldown must be server-enforced. Reuse existing safe service where possible, document email accepted/DB commit/response loss uncertainty; no exactly-once delivery claims. Before email failure, no false success; provider timeout is ambiguous and UI must not claim definite non-delivery. Prefer sending invitation link without unnecessarily rotating OTP if existing invite architecture permits; implementation must document chosen contract.
-## Time and parity
-Use authoritative UTC clock and lock-safe cooldown. Existing OTP expiry and session expiry remain unchanged. Audit migration vs ORM parity if adding schema. Audit admin resend vs approval/public initiate/resend for eligibility and code invalidation. Email query values must be URL encoded and base URL deployment-configured, not hardcoded to production.
-## Resume verification
-- Exact requirements installed in isolated Python3.12 venv; baseline activation6/6 and critical flake8 pass.
-- Frontend lifecycle tests7/7 pass; build and strict error-level lint pass. Built-UI mocked-API browser QA passed desktop/mobile action journeys.
-- Full Node20 Vitest is not green at either base or candidate: base187pass11fail/198, candidate190pass13fail/203; failures confined to Checkout. Checkout implementation and tests have identical SHA256 across base/candidate. These are inherited timing-sensitive tests; not fixed in this scoped PR, and not a green-suite claim. Hosted frontend gate runs build (not Vitest).
-- Resend uses invitation-only semantics: preserves OTP state, link uses canonical configured origin, existing public initiate handles expired/used/missing OTPs. Password existence and email_verified cannot identify setup completion. Audited user_deactivated plus current account/vendor/store state is the conservative guard.
-## Regressions
-Non-admin forbidden; eligible send; pending/active/suspended/deleted blocked; double-click/concurrent retry/cooldown; provider rejection/ambiguous failure; audit actor/target; encoded + email; UI success/failure/retry and reachable action; vendor follows invite through OTP/password in isolated tests.
+# Findings — admin product image management
+
+## User request
+Admins need product-gallery controls on the admin product edit page: upload additional images, delete images, select a primary image, and reorder the remaining images. A new PR must target `develop`; Rex merges after staging testing.
+
+## Existing implementation
+- `AdminProductEdit.tsx:364-395` renders an image gallery as read-only and explicitly directs admins to vendors.
+- `Product.images` is ordered by `ProductImage.display_order` (`app/models/product.py:154-159`). Public readers generally use `is_primary`, then fall back to the first ordered image.
+- Existing vendor routes in `app/api/v1/products.py` provide image creation/deletion but use `get_completed_vendor` and ownership checks; they cannot be reused unchanged for admins.
+- `ProductImageUpdate` already defines `display_order` and `is_primary`, but no inspected image update route exists yet.
+- Existing create/delete image writes call `mark_product_content_pending`, so image mutation can affect moderation state. This must be preserved deliberately and tested.
+
+## Boundary/invariant ledger
+- Admin authorization must be server-side (`get_current_admin`), never inferred from frontend routing.
+- Every image mutation is product-scoped; an image ID belonging to another product must reject/404.
+- Primary selection must leave exactly one primary image when images remain. Reordering must produce stable non-negative order without relying on UI index alone.
+- Upload result storage must succeed before a ProductImage row is persisted. The existing uploader/storage service is the canonical boundary to reuse.
+- Image deletion must not silently create a stale primary/fallback state.
+- Vendor routes and new admin routes must preserve their distinct authorization contracts while yielding compatible ProductImage data.
+
+## Existing upload and test seams
+- Frontend `productService.uploadImage()` and `uploadImages()` use `/images/upload` and `/images/upload/batch`; this is the existing storage path to reuse, not a new uploader.
+- Existing vendor product-image routes provide add/delete but no update/reorder endpoint. Their ownership guard cannot be used for admins.
+- `ProductImageUpdate` already supports `display_order` and `is_primary`, allowing a focused admin image-update/reorder contract rather than a migration.
+- Existing backend coverage is concentrated in `tests/test_products.py::TestProductImages`; frontend admin page coverage is in `AdminProductActions.test.tsx`.
+
+## Evidence limits
+No staging/production write or privileged admin session is authorized for discovery. Browser QA will use local/mock or dedicated test fixtures and must not leave production data behind.
+
+## Variant cleanup remediation
+- `ImageService` upload results now carry private `_storage_keys` metadata containing the original plus every generated variant key for both local and S3/R2 storage; public URL/result fields remain unchanged.
+- Admin upload compensation consumes that explicit list, retains a narrow legacy fallback for older mocked results, and logs cleanup failures without replacing the original persistence exception.
+- Added regression coverage for DB-commit failure cleanup and direct local-storage metadata coverage. Backend integration execution remains blocked by the unavailable isolated PostgreSQL listener.
+
+## NightWing remediation evidence
+- Added `POST /admin/products/{product_id}/images/upload`; it uses `get_current_admin`, validates product existence and the ten-image cap before calling `image_service`, persists `ProductImage`, marks content pending, and compensates uploaded storage keys if persistence fails.
+- The frontend now uses `adminService.uploadProductImage(productId, file)` directly; vendor-only `/images/upload` remains unchanged.
+- Frontend focused test: `AdminProductEdit.images.test.tsx` — 2 passed.
+- Backend focused integration tests were added but could not collect because the configured PostgreSQL test bootstrap could not connect to `localhost:5432` (connection refused). Python compilation and `git diff --check` passed.
+- TypeScript check was attempted and exited 1 without diagnostics; rerun in a fully configured frontend environment before merge.
+## Storage lifecycle blocker remediation
+- Added nullable PostgreSQL JSONB `product_images.storage_keys` plus Alembic migration `r7s8t9u0v1w2_add_product_image_storage_keys.py`.
+- Admin server-owned uploads persist the complete private `_storage_keys` set (original and every generated variant); the response schema does not expose it.
+- Admin deletion copies exact keys before commit, commits row deletion first, then calls `image_service.delete_images`. Post-commit physical deletion errors are logged with product/image/key diagnostics and do not restore or retry the DB row.
+- Legacy/vendor rows with NULL `storage_keys` are deleted from the database without URL guessing or prefix deletion; their historical storage objects remain a known safe limitation.
+- Added regressions for exact key persistence, exact post-commit deletion, and storage failure leaving the row deleted.
