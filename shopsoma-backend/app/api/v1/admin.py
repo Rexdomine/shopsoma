@@ -2238,6 +2238,12 @@ async def upload_admin_product_image(
                 )
         except Exception:
             logger.exception("Failed to clean up uploaded product image objects")
+            # A storage exception may occur after only part of the cleanup
+            # completed. Preserve the complete attempted set for retry rather
+            # than losing the keys when the image row was never committed.
+            await record_storage_cleanup(
+                db, storage_keys, reason="upload_compensation", product_id=product_id
+            )
 
     try:
         uploaded = await image_service.upload_image(file, folder="products", generate_variants=True)
@@ -2333,6 +2339,7 @@ async def update_admin_product_image(
         ordered.insert(min(new_order, len(ordered)), order_target)
         for index, item in enumerate(ordered):
             item.display_order = index
+        images = ordered
     if images:
         primary = image if image.is_primary else next((item for item in images if item.is_primary), images[0])
         for item in images:

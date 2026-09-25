@@ -135,6 +135,42 @@ async def test_admin_upload_precommit_refresh_failure_cleans_storage_and_rolls_b
 
 
 @pytest.mark.asyncio
+async def test_admin_upload_cleanup_failure_persists_retry_keys(
+    client, admin_user, sample_product, db_session, monkeypatch
+):
+    from unittest.mock import AsyncMock
+    from app.api.v1 import admin as admin_api
+    from app.models.product import ProductImageStorageCleanup
+
+    uploaded = {
+        "original": "/uploads/products/original.jpg",
+        "s3_key": "products/original.jpg",
+        "_storage_keys": ["products/original.jpg", "products/thumb.jpg"],
+    }
+    monkeypatch.setattr(admin_api.image_service, "upload_image", AsyncMock(return_value=uploaded))
+    monkeypatch.setattr(
+        admin_api.image_service,
+        "delete_images",
+        AsyncMock(side_effect=RuntimeError("storage unavailable")),
+    )
+
+    async def fail_refresh(_instance):
+        raise RuntimeError("refresh unavailable")
+
+    monkeypatch.setattr(db_session, "refresh", fail_refresh)
+    response = await client.post(
+        f"/api/v1/admin/products/{sample_product.id}/images/upload",
+        files={"file": ("tiny.png", BytesIO(TINY_PNG), "image/png")},
+        headers=admin_user["headers"],
+    )
+
+    assert response.status_code == 500
+    pending = await db_session.scalar(select(ProductImageStorageCleanup))
+    assert pending.storage_keys == uploaded["_storage_keys"]
+    assert pending.reason == "upload_compensation"
+
+
+@pytest.mark.asyncio
 async def test_admin_multipart_upload_cap_rejects_before_storage(
     client, admin_user, sample_product, db_session, monkeypatch
 ):
@@ -311,6 +347,30 @@ async def test_reordering_cannot_place_non_primary_before_primary(client, admin_
     await db_session.refresh(third)
     assert (first.is_primary, first.display_order) == (True, 0)
     assert third.display_order == 1
+    assert second.display_order == 2
+
+
+@pytest.mark.asyncio
+async def test_reordering_primaryless_gallery_promotes_reordered_first_image(
+    client, admin_user, sample_product, db_session
+):
+    first = await _add_image(db_session, sample_product.id, 0, False, "first")
+    second = await _add_image(db_session, sample_product.id, 1, False, "second")
+    third = await _add_image(db_session, sample_product.id, 2, False, "third")
+    await db_session.commit()
+
+    response = await client.patch(
+        f"/api/v1/admin/products/{sample_product.id}/images/{third.id}",
+        json={"display_order": 0},
+        headers=admin_user["headers"],
+    )
+
+    assert response.status_code == 200
+    await db_session.refresh(first)
+    await db_session.refresh(second)
+    await db_session.refresh(third)
+    assert (third.is_primary, third.display_order) == (True, 0)
+    assert first.display_order == 1
     assert second.display_order == 2
 
 
