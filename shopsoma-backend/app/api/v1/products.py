@@ -50,6 +50,8 @@ from app.schemas.product import (
 
 router = APIRouter(prefix="/products", tags=["products"])
 
+MAX_PRODUCT_IMAGES = 10
+
 def _variation_inherits_parent_price(
     variation: Variation,
     marker_name: str,
@@ -1552,8 +1554,10 @@ async def create_image(
     )
     vendor_id = result.scalar_one_or_none()
 
+    # Lock the product row before counting so concurrent image additions
+    # serialize against the same authoritative cap.
     result = await db.execute(
-        select(Product).where(Product.id == product_id)
+        select(Product).where(Product.id == product_id).with_for_update()
     )
     product = result.scalar_one_or_none()
 
@@ -1561,6 +1565,15 @@ async def create_image(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Product not found"
+        )
+
+    image_count = await db.scalar(
+        select(func.count(ProductImage.id)).where(ProductImage.product_id == product_id)
+    )
+    if image_count >= MAX_PRODUCT_IMAGES:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Products can have at most {MAX_PRODUCT_IMAGES} images",
         )
 
     # Create image
