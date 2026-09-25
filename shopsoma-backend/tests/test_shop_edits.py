@@ -59,11 +59,14 @@ async def test_public_shop_edits_filter_is_curated_visible_and_not_duplicated(
     client, db_session, vendor_user
 ):
     root = Category(id=uuid.uuid4(), name="Shop Edits", slug="shop-edits")
+    occasion_wear = Category(
+        id=uuid.uuid4(), name="Occasion Wear", slug="shop-edits-occasion-wear", parent_id=root.id
+    )
     party = Category(
-        id=uuid.uuid4(), name="Party", slug=SHOP_EDIT_SLUGS["party"], parent_id=root.id
+        id=uuid.uuid4(), name="Party", slug=SHOP_EDIT_SLUGS["party"], parent_id=occasion_wear.id
     )
     normal_category = Category(id=uuid.uuid4(), name="Dresses", slug="dresses")
-    db_session.add_all([root, party, normal_category])
+    db_session.add_all([root, occasion_wear, party, normal_category])
 
     def product(title, *, status=ProductStatus.ACTIVE, moderation=ModerationStatus.APPROVED):
         return Product(

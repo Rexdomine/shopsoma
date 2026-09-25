@@ -12,7 +12,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, or_, and_
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import aliased, selectinload
 
 from app.core.database import get_db
 from app.api.dependencies import get_completed_vendor, get_current_admin
@@ -969,9 +969,18 @@ async def list_products(
             # admin associations are stored on its four leaf edit categories.
             # Include only curated associations; do not broaden normal
             # category filtering or fall back to Product.category_id here.
+            descendants = select(Category.id).where(Category.id == category_id).cte(
+                "shop_edit_descendants", recursive=True
+            )
+            descendant_category = aliased(Category)
+            descendants = descendants.union_all(
+                select(descendant_category.id).where(
+                    descendant_category.parent_id == descendants.c.id
+                )
+            )
             filters.append(
                 Product.shop_edit_categories.any(
-                    or_(Category.id == category_id, Category.parent_id == category_id)
+                    Category.id.in_(select(descendants.c.id))
                 )
             )
         elif requested_slug in SHOP_EDIT_SLUGS.values():
