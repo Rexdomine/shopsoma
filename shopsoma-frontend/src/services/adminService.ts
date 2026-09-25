@@ -9,6 +9,7 @@ export interface AdminProductUpdatePayload {
   compare_at_price?: number | null;
   total_stock?: number;
   status?: Product['status'];
+  shop_edits?: string[];
 }
 
 export interface UserListItem extends User {

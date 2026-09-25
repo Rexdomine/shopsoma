@@ -1,13 +1,13 @@
 """add admin-curated shop edits associations
 
 Revision ID: q3r4s5t6u7v8
-Revises: p2q3r4s5t6u7
+Revises: c9d0e1f2a3b4
 """
 from alembic import op
 import sqlalchemy as sa
 
 revision = "q3r4s5t6u7v8"
-down_revision = "p2q3r4s5t6u7"
+down_revision = "c9d0e1f2a3b4"
 branch_labels = None
 depends_on = None
 

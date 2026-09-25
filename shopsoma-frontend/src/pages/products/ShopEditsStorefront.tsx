@@ -108,6 +108,7 @@ export default function ShopEditsStorefront() {
       presetCategory="Shop Edits"
       initialParams={initialParams}
       categoryNav={subcategories}
+      categoryNavAsTabs
       heroOverride={{
         title: 'Shop Edits: Curated Discoveries',
         body: 'A rotating curation of elevated essentials, seasonal selections and statement finds.',
