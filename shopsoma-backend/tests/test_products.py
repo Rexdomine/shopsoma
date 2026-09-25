@@ -1641,6 +1641,20 @@ class TestProductImages:
         assert response.status_code == 201
         assert response.json()["storage_keys"] == [storage_key]
 
+        duplicate = await client.post(
+            f"/api/v1/products/{sample_product.id}/images",
+            json={
+                "image_url": "https://example.com/vendor-duplicate.jpg",
+                "storage_keys": [storage_key],
+            },
+            headers=vendor_user["headers"],
+        )
+
+        assert duplicate.status_code == 409
+        assert duplicate.json()["detail"] == (
+            "Image storage key is already associated with a product image"
+        )
+
     @pytest.mark.asyncio
     async def test_create_image_rejects_when_product_image_cap_is_reached(
         self, client: AsyncClient, vendor_user, sample_product, db_session: AsyncSession

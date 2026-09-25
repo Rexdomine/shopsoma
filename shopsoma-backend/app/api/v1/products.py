@@ -1637,6 +1637,30 @@ async def create_image(
 
     _validate_vendor_storage_keys(vendor, image_data.storage_keys)
 
+    storage_keys = image_data.storage_keys or []
+    if len(storage_keys) != len(set(storage_keys)):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Image storage keys must be unique",
+        )
+    if storage_keys:
+        reused_key = await db.scalar(
+            select(ProductImage.id)
+            .where(
+                ProductImage.product_id == product_id,
+                or_(*(
+                    ProductImage.storage_keys.contains([key])
+                    for key in storage_keys
+                )),
+            )
+            .limit(1)
+        )
+        if reused_key is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Image storage key is already associated with a product image",
+            )
+
     image_count = await db.scalar(
         select(func.count(ProductImage.id)).where(ProductImage.product_id == product_id)
     )
