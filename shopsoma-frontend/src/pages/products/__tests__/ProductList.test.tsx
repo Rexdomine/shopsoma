@@ -150,6 +150,52 @@ describe('ProductList', () => {
     expect(getProductsMock.mock.calls[1][0]).toEqual(expect.objectContaining({ category_id: 'men-id' }));
   });
 
+  it('keeps server-filtered Shop Edits products when their normal category differs', async () => {
+    getProductsMock.mockResolvedValue({
+      products: [{ id: 'evening-product', category_name: 'Dresses', category_parent_name: 'Women' }],
+    });
+
+    render(
+      <MemoryRouter>
+        <ProductList
+          presetCategory="Evening"
+          initialParams={{ category_id: 'evening-id' }}
+          serverFilteredCategory
+        />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getAllByTestId('product-evening-product')).not.toHaveLength(0));
+  });
+
+  it('applies a later category refinement on a server-filtered Shop Edits route', async () => {
+    getProductsMock.mockResolvedValue({
+      products: [
+        { id: 'dress-product', category_name: 'Dresses' },
+        { id: 'top-product', category_name: 'Tops' },
+      ],
+    });
+
+    render(
+      <MemoryRouter>
+        <ProductList
+          presetCategory="Evening"
+          initialParams={{ category_id: 'evening-id' }}
+          serverFilteredCategory
+        />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getAllByTestId('product-dress-product')).not.toHaveLength(0));
+    expect(screen.getAllByTestId('product-top-product')).not.toHaveLength(0);
+
+    fireEvent.click(screen.getByRole('button', { name: 'REFINE' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Dresses' }));
+
+    expect(screen.getAllByTestId('product-dress-product')).not.toHaveLength(0);
+    expect(screen.queryAllByTestId('product-top-product')).toHaveLength(0);
+  });
+
   it('uses server-curated Shop Edit tabs and resets All Items to the parent request', async () => {
     getProductsMock.mockResolvedValue({
       products: [{ id: 'party-product', category_name: 'Dresses' }],

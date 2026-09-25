@@ -90,6 +90,8 @@ type HeroContent = {
 type ProductListProps = {
   presetCategory?: string;
   initialParams?: ProductListParams;
+  /** The API has already applied the requested category association filter. */
+  serverFilteredCategory?: boolean;
   heroOverride?: HeroContent;
   categoryNav?: Category[];
   categoryNavAsTabs?: boolean;
@@ -127,6 +129,7 @@ const WOMEN_CATEGORY_KEYS = ['women', 'womens', 'womenswear', "women's fashion",
 export default function ProductList({
   presetCategory,
   initialParams,
+  serverFilteredCategory = false,
   heroOverride,
   categoryNav,
   categoryNavAsTabs = false,
@@ -532,12 +535,16 @@ export default function ProductList({
     }
 
     // Apply category filter
-    if (activeCategory !== 'All' && !categoryNav?.length) {
+    if (
+      activeCategory !== 'All' &&
+      !categoryNav?.length &&
+      (!serverFilteredCategory || activeCategory !== presetCategory)
+    ) {
       list = list.filter((product) => matchesCategory(product, activeCategory));
     }
 
     return list;
-  }, [allProducts, searchQuery, activeCategory, categoryNav]);
+  }, [allProducts, searchQuery, activeCategory, categoryNav, serverFilteredCategory, presetCategory]);
 
   const { colorOptions, colorMeta } = useMemo(() => {
     const metaMap = new Map<
@@ -624,7 +631,11 @@ export default function ProductList({
       });
     }
 
-    if (activeCategory !== 'All' && !categoryNav?.length) {
+    if (
+      activeCategory !== 'All' &&
+      !categoryNav?.length &&
+      (!serverFilteredCategory || activeCategory !== presetCategory)
+    ) {
       list = list.filter((product) => matchesCategory(product, activeCategory));
     }
 
@@ -694,7 +705,17 @@ export default function ProductList({
     }
 
     return sorted;
-  }, [allProducts, filters, sortOption, customPriceRange, searchQuery, activeCategory, categoryNav]);
+  }, [
+    allProducts,
+    filters,
+    sortOption,
+    customPriceRange,
+    searchQuery,
+    activeCategory,
+    categoryNav,
+    serverFilteredCategory,
+    presetCategory,
+  ]);
 
   const totalPages = Math.max(1, Math.ceil(filteredProducts.length / PAGE_SIZE));
 

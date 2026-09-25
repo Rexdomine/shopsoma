@@ -17,9 +17,10 @@ vi.mock('../../errors/NotFound', () => ({
   default: () => <div>Not found</div>,
 }));
 vi.mock('../ProductList', () => ({
-  default: ({ presetCategory, heroOverride }: { presetCategory: string; heroOverride?: { body: string } }) => (
+  default: ({ presetCategory, heroOverride, serverFilteredCategory }: { presetCategory: string; heroOverride?: { body: string }; serverFilteredCategory?: boolean }) => (
     <div>
       <div>{presetCategory} products</div>
+      <div data-testid="server-filtered-category">{String(serverFilteredCategory)}</div>
       {heroOverride && <div data-testid="category-hero-copy">{heroOverride.body}</div>}
     </div>
   ),
@@ -82,5 +83,6 @@ describe('CategoryStorefront', () => {
     await waitFor(() => expect(screen.getByTestId('category-hero-copy')).toHaveTextContent(
       'Polished silhouettes and memorable details for dinners, celebrations and nights that call for something more.',
     ));
+    expect(screen.getByTestId('server-filtered-category')).toHaveTextContent('true');
   });
 });
