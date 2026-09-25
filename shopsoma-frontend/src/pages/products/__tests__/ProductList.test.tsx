@@ -184,6 +184,10 @@ describe('ProductList', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /All Items/ }));
     await waitFor(() => expect(getProductsMock).toHaveBeenLastCalledWith(expect.objectContaining({ category_id: 'shop-edits-id' })));
+
+    fireEvent.click(screen.getByRole('button', { name: 'REFINE' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Clear All' }));
+    await waitFor(() => expect(getProductsMock).toHaveBeenLastCalledWith(expect.objectContaining({ category_id: 'shop-edits-id' })));
   });
 
   it('keeps every desktop product visible when no featured vendor is available', async () => {

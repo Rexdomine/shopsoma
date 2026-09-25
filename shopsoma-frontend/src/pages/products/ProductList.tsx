@@ -1138,6 +1138,7 @@ const handleFilterChange = (key: keyof FilterState, value: string) => {
                 type="button"
                 onClick={() => {
                   setFilters({ category: 'All', color: 'All', price: 'all' });
+                  setSelectedCategoryId(null);
                   setCustomPriceInputs({ min: '', max: '' });
                   setCustomPriceRange(null);
                 }}
