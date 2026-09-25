@@ -13,6 +13,8 @@ const CATEGORY_HERO_COPY: Record<string, string> = {
   'shop-edits-occasion-wear-workwear': 'Sharp separates, refined layers and dependable pieces for a wardrobe that works as hard as you do.',
 };
 
+const SHOP_EDITS_CATEGORY_SLUGS = new Set(Object.keys(CATEGORY_HERO_COPY));
+
 export default function CategoryStorefront() {
   const { slug } = useParams<{ slug: string }>();
   const [category, setCategory] = useState<Category | null>(null);
@@ -63,6 +65,7 @@ export default function CategoryStorefront() {
     <ProductList
       presetCategory={category.name}
       initialParams={{ category_id: category.id }}
+      serverFilteredCategory={SHOP_EDITS_CATEGORY_SLUGS.has(category.slug)}
       heroOverride={{
         title: category.name,
         body: CATEGORY_HERO_COPY[category.slug] || category.description || `Explore the ${category.name.toLowerCase()} edit.`,
