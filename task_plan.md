@@ -39,3 +39,20 @@ Run the focused backend upload tests against an isolated PostgreSQL cluster when
 - Use existing services/routes/components where possible; no new production dependency without approval.
 - Preserve normal product category, Shop Edits, moderation, vendor ownership, and public approval visibility behavior.
 - Drax implements one bounded milestone; NightWing is read-only independent QA.
+
+## Follow-up: remove the checkout minimum-order gate
+
+### Scope
+Remove only the universal NGN 60,000 gate from the current PR. Customers must be able to continue from Cart and create/review a positive valid order below that value. No payment, provider, inventory, pricing, discount, tax, or shipping-rate policy is changed.
+
+### Boundary map and invariants
+- Cart browser → checkout navigation: no universal client-side amount gate.
+- Review API and order-create API: no universal global minimum; server-owned product pricing, nonempty-cart, stock, and manual-pricing checks remain.
+- Shipping: configured `min_order_value` and `max_order_value` eligibility remains a separate rule.
+- Payment/provider, reservation, webhook, idempotency, and durable order state behavior remain unchanged.
+
+### Acceptance and verification
+- A valid NGN 50,000 order succeeds through both `/orders/review` and `/orders`.
+- Static regression also confirms no retired identifier/message or Cart preflight remains.
+- Run focused checkout test, adjacent shipping suite, frontend production build, Python compile, and whitespace check on isolated PostgreSQL.
+- Independent NightWing must review the final verified state before commit/push. Rex alone merges; no deploy.
