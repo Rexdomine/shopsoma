@@ -160,7 +160,7 @@ def test_domestic_rate_migration_is_the_single_linear_static_head() -> None:
     head_revision = graph.get_revision(HEAD)
     assert head_revision is not None
     assert head_revision.revision == HEAD
-    assert head_revision.down_revision == "c9d0e1f2a3b4"
+    assert head_revision.down_revision == "r7s8t9u0v1w2"
     featured_vendor_revision = graph.get_revision("n1o2p3q4r5s6")
     assert Path(featured_vendor_revision.path) == FEATURED_VENDOR_MIGRATION
     assert featured_vendor_revision.down_revision == "m0n1o2p3q4r5"
