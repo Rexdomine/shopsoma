@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 
 ROOT = Path(__file__).resolve().parents[1]
-HEAD = "q3r4s5t6u7v8"
+HEAD = "s1t2u3v4w5x6"
 CURRENT_HEAD_PARENT = "l9m0n1o2p3q4"
 FEATURED_VENDOR_MIGRATION = ROOT / "alembic" / "versions" / "n1o2p3q4r5s6_add_admin_featured_storefront_vendor.py"
 PREVIOUS_HEAD = "d5e6f7a8b9c0"
