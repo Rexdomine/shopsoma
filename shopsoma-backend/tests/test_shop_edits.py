@@ -28,6 +28,7 @@ def test_shop_edit_names_reject_unknown_categories():
 async def test_admin_replaces_and_removes_shop_edits_and_rejects_vendor_access(
     client, admin_user, vendor_user, sample_product, db_session
 ):
+    product_id = sample_product.id
     root = Category(id=uuid.uuid4(), name="Shop Edits", slug="shop-edits")
     categories = [
         Category(id=uuid.uuid4(), name=name.title(), slug=slug, parent_id=root.id)
@@ -35,8 +36,8 @@ async def test_admin_replaces_and_removes_shop_edits_and_rejects_vendor_access(
     ]
     db_session.add_all([root, *categories])
     await db_session.commit()
-    db_session.expire_all()
-    product_url = f"/api/v1/admin/products/{sample_product.id}/shop-edits"
+    db_session.expire(sample_product, ["shop_edit_categories"])
+    product_url = f"/api/v1/admin/products/{product_id}/shop-edits"
 
     assert (await client.get(product_url, headers=vendor_user["headers"])).status_code == 403
     assert (await client.put(product_url, json={"shop_edits": ["party"]}, headers=vendor_user["headers"])).status_code == 403
