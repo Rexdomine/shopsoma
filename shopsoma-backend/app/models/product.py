@@ -21,6 +21,7 @@ import uuid
 import enum
 
 from app.core.base import Base
+from app.models.category import product_shop_edit_categories
 
 
 class ProductStatus(str, enum.Enum):
@@ -140,6 +141,9 @@ class Product(Base):
     # Relationships
     vendor = relationship("Vendor", back_populates="products")
     category = relationship("Category", back_populates="products")
+    shop_edit_categories = relationship(
+        "Category", secondary=product_shop_edit_categories
+    )
     collection = relationship("Collection", back_populates="products")
     variants = relationship(
         "ProductVariant", back_populates="product", cascade="all, delete-orphan"

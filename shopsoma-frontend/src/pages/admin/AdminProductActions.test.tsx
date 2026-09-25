@@ -58,6 +58,33 @@ describe('admin product view/edit API boundaries', () => {
     expect(mocks.put.mock.calls[0][1]).toMatchObject({ category_id: 'category-1', compare_at_price: 18000 });
     expect(mocks.put.mock.calls[0][1]).not.toHaveProperty('moderation_status');
   });
+  it('saves Shop Edits with the product update so the form has one atomic write', async () => {
+    mocks.get.mockImplementation(async (url: string) => {
+      if (url === '/admin/products/product-1') return { data: { ...product } };
+      if (url === '/admin/products/product-1/shop-edits') return { data: { shop_edits: ['party'] } };
+      throw { response: { status: 404 } };
+    });
+    mount('edit');
+    const party = await screen.findByRole('checkbox', { name: 'party' });
+    expect(party).toBeChecked();
+    fireEvent.click(screen.getByRole('checkbox', { name: 'casual' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+    await waitFor(() => expect(mocks.put).toHaveBeenCalledWith(
+      '/admin/products/product-1',
+      expect.objectContaining({ shop_edits: ['party', 'casual'] }),
+    ));
+    expect(mocks.put).not.toHaveBeenCalledWith('/admin/products/product-1/shop-edits', expect.anything());
+  });
+  it('keeps normal editing available when Shop Edits cannot be read', async () => {
+    mount('edit');
+    expect(await screen.findByText(/Shop Edits could not be loaded/)).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'casual' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+    await waitFor(() => expect(mocks.put).toHaveBeenCalledWith(
+      '/admin/products/product-1',
+      expect.not.objectContaining({ shop_edits: expect.anything() }),
+    ));
+  });
   it.each(['view', 'edit'] as const)('%s displays a load failure on the current page instead of redirecting', async mode => {
     mocks.get.mockRejectedValue({ response: { status: 403, data: { detail: 'Admin access required' } } });
     mount(mode);

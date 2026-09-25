@@ -12,7 +12,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, or_, and_
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import aliased, selectinload
 
 from app.core.database import get_db
 from app.api.dependencies import get_completed_vendor, get_current_admin
@@ -22,6 +22,7 @@ from app.models.category import Category
 from app.models.collection import Collection
 from app.models.product import Product, ProductVariant, ProductImage, ProductStatus, ProductType, ModerationStatus, Variation, SizeStock, SizeEnum
 from app.models.vendor import Vendor
+from app.services.shop_edits import SHOP_EDIT_SLUGS
 from app.models.stock_payment_persistence import coordinate_catalog_write
 from app.services.product_moderation import (
     mark_product_content_pending,
@@ -960,12 +961,32 @@ async def list_products(
 
     # Category filter
     if category_id:
-        filters.append(
-            or_(
-                Product.category_id == category_id,
-                Product.category.has(Category.parent_id == category_id),
+        category_result = await db.execute(select(Category).where(Category.id == category_id))
+        requested_category = category_result.scalar_one_or_none()
+        requested_slug = requested_category.slug if requested_category else None
+        if requested_slug == "shop-edits":
+            # The public landing page requests the parent category, while the
+            # admin associations are stored on its four leaf edit categories.
+            # Include only curated associations; do not broaden normal
+            # category filtering or fall back to Product.category_id here.
+            descendants = select(Category.id).where(Category.id == category_id).cte(
+                "shop_edit_descendants", recursive=True
             )
-        )
+            descendant_category = aliased(Category)
+            descendants = descendants.union_all(
+                select(descendant_category.id).where(
+                    descendant_category.parent_id == descendants.c.id
+                )
+            )
+            filters.append(
+                Product.shop_edit_categories.any(
+                    Category.id.in_(select(descendants.c.id))
+                )
+            )
+        elif requested_slug in SHOP_EDIT_SLUGS.values():
+            filters.append(Product.shop_edit_categories.any(Category.id == category_id))
+        else:
+            filters.append(or_(Product.category_id == category_id, Product.category.has(Category.parent_id == category_id)))
 
     # Vendor filter
     if vendor_id:

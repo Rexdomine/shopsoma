@@ -22,6 +22,10 @@ export default function AdminProductEdit() {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [categoryId, setCategoryId] = useState('');
+  const [shopEdits, setShopEdits] = useState<string[]>([]);
+  const [shopEditsLoaded, setShopEditsLoaded] = useState(false);
+  const [shopEditsLoadError, setShopEditsLoadError] = useState<string | null>(null);
+  const shopEditOptions = ['casual', 'evening', 'party', 'workwear'] as const;
 
   // Form state - Pricing
   const [basePrice, setBasePrice] = useState('');
@@ -55,6 +59,19 @@ export default function AdminProductEdit() {
         setComparePrice(data.compare_at_price?.toString() || '');
         setTotalStock(data.total_stock?.toString() || '0');
         setStatus(data.status);
+
+        // A curation read failure must not block normal product repairs or
+        // replace an association that was never loaded.
+        try {
+          const existingShopEdits = await adminService.getProductShopEdits(id);
+          setShopEdits(Array.isArray(existingShopEdits) ? existingShopEdits : []);
+          setShopEditsLoaded(true);
+          setShopEditsLoadError(null);
+        } catch (shopEditsError) {
+          console.error('Failed to load product Shop Edits', shopEditsError);
+          setShopEditsLoaded(false);
+          setShopEditsLoadError('Shop Edits could not be loaded. Product details can still be saved unchanged.');
+        }
       } catch (err: any) {
         console.error('Failed to load product', err);
         setLoadError(apiErrorMessage(err, 'Failed to load product. Please try again.'));
@@ -93,12 +110,14 @@ export default function AdminProductEdit() {
         compare_at_price: comparePrice ? parseFloat(comparePrice) : null,
         total_stock: totalStock ? parseInt(totalStock) : 0,
         status,
+        ...(shopEditsLoaded ? { shop_edits: shopEdits } : {}),
       };
 
       await adminService.updateProduct(id, updateData);
-
       success(
-        'Product has been updated successfully!',
+        shopEditsLoaded
+          ? 'Product details and Shop Edits have been updated successfully!'
+          : 'Product details were updated. Shop Edits were left unchanged because they could not be loaded.',
         'Product Updated'
       );
 
@@ -219,10 +238,27 @@ export default function AdminProductEdit() {
                   placeholder={product.category_name ? `Current: ${product.category_name}` : 'Paste category UUID'}
                 />
               </div>
+
+              <fieldset>
+                <legend className="block text-sm font-medium text-gray-700 mb-2">Shop Edits</legend>
+                <p className="text-xs text-gray-500 mb-3">Add this product to one or more curated edits without changing its normal category.</p>
+                {shopEditsLoadError && <p role="status" className="mb-3 text-xs text-amber-700">{shopEditsLoadError}</p>}
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                  {shopEditOptions.map((edit) => (
+                    <label key={edit} className="flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-sm capitalize">
+                      <input
+                        type="checkbox"
+                        checked={shopEdits.includes(edit)}
+                        disabled={!shopEditsLoaded}
+                        onChange={(event) => setShopEdits((current) => event.target.checked ? [...current, edit] : current.filter((value) => value !== edit))}
+                      />
+                      {edit}
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
             </div>
           </div>
-
-          {/* Pricing */}
           <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
             <div className="px-6 py-4 border-b border-gray-200">
               <h2 className="text-lg font-semibold text-gray-900">Pricing</h2>

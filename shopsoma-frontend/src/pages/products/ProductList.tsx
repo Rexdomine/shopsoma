@@ -92,6 +92,7 @@ type ProductListProps = {
   initialParams?: ProductListParams;
   heroOverride?: HeroContent;
   categoryNav?: Category[];
+  categoryNavAsTabs?: boolean;
   childCategoryOverrides?: Record<string, Category[]>;
 };
 
@@ -128,6 +129,7 @@ export default function ProductList({
   initialParams,
   heroOverride,
   categoryNav,
+  categoryNavAsTabs = false,
   childCategoryOverrides,
 }: ProductListProps = {}) {
   const [searchParams] = useSearchParams();
@@ -150,6 +152,7 @@ export default function ProductList({
   const navigate = useNavigate();
   const preferredInterest = usePreferenceStore((state) => state.interest);
   const [curatedFilterApplied, setCuratedFilterApplied] = useState(false);
+  const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(null);
   const [showInterestBanner, setShowInterestBanner] = useState<boolean>(() => {
     if (typeof window === 'undefined') return true;
     const stored = window.localStorage.getItem('shopsoma_pref_interest_banner');
@@ -160,12 +163,10 @@ export default function ProductList({
   const [customPriceRange, setCustomPriceRange] = useState<{ min?: number; max?: number } | null>(null);
   const { favorites, toggleFavorite } = useWishlistActions();
   const activeCategory = filters.category;
-  const showSubcategoryNav = Boolean(categoryNav?.length) && Boolean(presetCategory);
-  const initialParamsKey = useMemo(() => JSON.stringify(initialParams ?? {}), [initialParams]);
-  const stableInitialParams = useMemo(() => {
-    if (!initialParams) return undefined;
-    return { ...initialParams };
-  }, [initialParamsKey, initialParams]);
+  const showSubcategoryNav = Boolean(categoryNav?.length) && Boolean(presetCategory) && !categoryNavAsTabs;
+  const requestParams = useMemo(() => ({ ...(initialParams ?? {}), ...(selectedCategoryId ? { category_id: selectedCategoryId } : {}) }), [initialParams, selectedCategoryId]);
+  const initialParamsKey = useMemo(() => JSON.stringify(requestParams), [requestParams]);
+  const stableInitialParams = useMemo(() => Object.keys(requestParams).length ? { ...requestParams } : undefined, [initialParamsKey, requestParams]);
   const featuredCategory = presetCategory === 'Men' ? 'men' : presetCategory === 'Women' ? 'women' : null;
   const featuredVendor = useMemo(() => {
     if (!featuredCategory || featuredVendors.length === 0) return null;
@@ -332,7 +333,7 @@ export default function ProductList({
   // Update filters when URL params change
   useEffect(() => {
     if (presetCategory) {
-      setFilters((prev) => ({ ...prev, category: presetCategory }));
+      setFilters((prev) => ({ ...prev, category: categoryNavAsTabs ? 'All' : presetCategory }));
     } else {
       setFilters(prev => ({
         ...prev,
@@ -342,7 +343,7 @@ export default function ProductList({
         setCuratedFilterApplied(false);
       }
     }
-  }, [categoryParam, presetCategory]);
+  }, [categoryParam, presetCategory, categoryNavAsTabs]);
 
   // Sync filters.category when preference changes while curated filter is active
   useEffect(() => {
@@ -531,12 +532,12 @@ export default function ProductList({
     }
 
     // Apply category filter
-    if (activeCategory !== 'All') {
+    if (activeCategory !== 'All' && !categoryNav?.length) {
       list = list.filter((product) => matchesCategory(product, activeCategory));
     }
 
     return list;
-  }, [allProducts, searchQuery, activeCategory]);
+  }, [allProducts, searchQuery, activeCategory, categoryNav]);
 
   const { colorOptions, colorMeta } = useMemo(() => {
     const metaMap = new Map<
@@ -623,7 +624,7 @@ export default function ProductList({
       });
     }
 
-    if (activeCategory !== 'All') {
+    if (activeCategory !== 'All' && !categoryNav?.length) {
       list = list.filter((product) => matchesCategory(product, activeCategory));
     }
 
@@ -693,7 +694,7 @@ export default function ProductList({
     }
 
     return sorted;
-  }, [allProducts, filters, sortOption, customPriceRange, searchQuery, activeCategory]);
+  }, [allProducts, filters, sortOption, customPriceRange, searchQuery, activeCategory, categoryNav]);
 
   const totalPages = Math.max(1, Math.ceil(filteredProducts.length / PAGE_SIZE));
 
@@ -714,6 +715,10 @@ export default function ProductList({
         : 'No products found for the selected filters.';
 
 const handleFilterChange = (key: keyof FilterState, value: string) => {
+  if (key === 'category' && categoryNav?.length) {
+    const selectedNavItem = navItems.find((item) => item.name === value);
+    setSelectedCategoryId(selectedNavItem?.id ?? null);
+  }
   if (key === 'price' && value !== 'custom') {
     setCustomPriceInputs({ min: '', max: '' });
     setCustomPriceRange(null);
@@ -861,18 +866,42 @@ const handleFilterChange = (key: keyof FilterState, value: string) => {
           <div className="flex items-end gap-6">
             {/* Left side: Tabs */}
             <div className="flex shrink-0 items-end gap-6">
-              <button
-                type="button"
-                className="text-sm font-ui tracking-wide text-dark border-b-2 border-primary pb-1"
-              >
-                All Items ({filteredProducts.length})
-              </button>
-              <button
-                type="button"
-                className="text-sm font-ui tracking-wide text-gray-500 hover:text-dark pb-1"
-              >
-                Collections
-              </button>
+              {categoryNavAsTabs ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => { setSelectedCategoryId(null); handleFilterChange('category', 'All'); }}
+                    className={`text-sm font-ui tracking-wide pb-1 border-b-2 ${activeCategory === 'All' ? 'text-dark border-primary' : 'text-gray-500 border-transparent hover:text-dark hover:border-gray-300'}`}
+                  >
+                    All Items ({filteredProducts.length})
+                  </button>
+                  {navItems.map((item) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => { setSelectedCategoryId(item.id); handleFilterChange('category', item.name); }}
+                      className={`text-sm font-ui tracking-wide pb-1 border-b-2 ${selectedCategoryId === item.id ? 'text-dark border-primary' : 'text-gray-500 border-transparent hover:text-dark hover:border-gray-300'}`}
+                    >
+                      {item.name}
+                    </button>
+                  ))}
+                </>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    className="text-sm font-ui tracking-wide text-dark border-b-2 border-primary pb-1"
+                  >
+                    All Items ({filteredProducts.length})
+                  </button>
+                  <button
+                    type="button"
+                    className="text-sm font-ui tracking-wide text-gray-500 hover:text-dark pb-1"
+                  >
+                    Collections
+                  </button>
+                </>
+              )}
             </div>
 
             {showSubcategoryNav ? (
@@ -895,7 +924,7 @@ const handleFilterChange = (key: keyof FilterState, value: string) => {
                         type="button"
                         onMouseEnter={() => handleNavEnter(item.id)}
                         onFocus={() => handleNavEnter(item.id)}
-                        onClick={() => handleFilterChange('category', item.name)}
+                        onClick={() => { setSelectedCategoryId(item.id); handleFilterChange('category', item.name); }}
                         className={`text-[11px] font-ui uppercase tracking-[0.25em] pb-1 border-b-2 leading-none transition ${
                           activeCategory === item.name
                             ? 'text-dark border-primary'
@@ -1109,6 +1138,7 @@ const handleFilterChange = (key: keyof FilterState, value: string) => {
                 type="button"
                 onClick={() => {
                   setFilters({ category: 'All', color: 'All', price: 'all' });
+                  setSelectedCategoryId(null);
                   setCustomPriceInputs({ min: '', max: '' });
                   setCustomPriceRange(null);
                 }}

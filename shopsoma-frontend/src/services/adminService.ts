@@ -9,6 +9,7 @@ export interface AdminProductUpdatePayload {
   compare_at_price?: number | null;
   total_stock?: number;
   status?: Product['status'];
+  shop_edits?: string[];
 }
 
 export interface UserListItem extends User {
@@ -300,6 +301,15 @@ export const adminService = {
   async updateProduct(productId: string, data: AdminProductUpdatePayload): Promise<{ message: string; product_id: string }> {
     const response = await api.put(`/admin/products/${productId}`, data);
     return response.data;
+  },
+
+  async getProductShopEdits(productId: string): Promise<string[]> {
+    const response = await api.get(`/admin/products/${productId}/shop-edits`);
+    return response.data.shop_edits;
+  },
+
+  async updateProductShopEdits(productId: string, shopEdits: string[]): Promise<void> {
+    await api.put(`/admin/products/${productId}/shop-edits`, { shop_edits: shopEdits });
   },
 
   // List all products with pagination and filters

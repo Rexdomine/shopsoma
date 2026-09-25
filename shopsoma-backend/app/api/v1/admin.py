@@ -59,6 +59,7 @@ from app.services.test_account_classification import (
     classify_existing_staging_accounts,
     tag_staging_account,
 )
+from app.services.shop_edits import SHOP_EDIT_NAMES, SHOP_EDIT_SLUGS, normalize_shop_edit_names
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -196,6 +197,7 @@ class AdminProductUpdate(BaseModel):
     compare_at_price: Optional[Decimal] = Field(None, gt=0, le=Decimal("999999.99"), decimal_places=2)
     total_stock: Optional[int] = Field(None, ge=0)
     status: Optional[ProductStatus] = None
+    shop_edits: Optional[List[str]] = None
 
 
     @model_validator(mode="after")
@@ -204,6 +206,11 @@ class AdminProductUpdate(BaseModel):
             if field in self.model_fields_set and getattr(self, field) is None:
                 raise ValueError(f"{field} cannot be null")
         return self
+
+
+class ShopEditsUpdate(BaseModel):
+    """Admin-only replacement set for independent Shop Edits tags."""
+    shop_edits: List[str] = Field(default_factory=list)
 
 
 class FeaturedStorefrontUpdate(BaseModel):
@@ -2108,6 +2115,35 @@ async def delete_product(
         )
 
 
+@router.get("/products/{product_id}/shop-edits")
+async def get_product_shop_edits(product_id: UUID, current_admin: User = Depends(get_current_admin), db: AsyncSession = Depends(get_db)):
+    product = await db.get(Product, product_id)
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    await db.refresh(product, ["shop_edit_categories"])
+    assigned_slugs = {category.slug for category in product.shop_edit_categories}
+    return {"shop_edits": [name for name in SHOP_EDIT_NAMES if SHOP_EDIT_SLUGS[name] in assigned_slugs]}
+
+
+@router.put("/products/{product_id}/shop-edits")
+async def update_product_shop_edits(product_id: UUID, payload: ShopEditsUpdate, current_admin: User = Depends(get_current_admin), db: AsyncSession = Depends(get_db)):
+    try:
+        names = normalize_shop_edit_names(payload.shop_edits)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    product = await db.get(Product, product_id)
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    await db.refresh(product, ["shop_edit_categories"])
+    result = await db.execute(select(Category).where(Category.slug.in_([SHOP_EDIT_SLUGS[name] for name in names])))
+    categories = {category.slug: category for category in result.scalars().all()}
+    if len(categories) != len(names):
+        raise HTTPException(status_code=422, detail="Shop Edits categories are not configured")
+    product.shop_edit_categories = [categories[SHOP_EDIT_SLUGS[name]] for name in names]
+    await db.commit()
+    return {"product_id": str(product_id), "shop_edits": names}
+
+
 @router.get("/products/{product_id}", response_model=AdminProductResponse)
 async def get_product(
     product_id: UUID,
@@ -2145,7 +2181,11 @@ async def update_product(
     # Get product and the legacy single-product variant relationships needed for stock sync.
     result = await db.execute(
         select(Product)
-        .options(selectinload(Product.variants), selectinload(Product.variations))
+        .options(
+            selectinload(Product.variants),
+            selectinload(Product.variations),
+            selectinload(Product.shop_edit_categories),
+        )
         .where(Product.id == product_id)
     )
     product = result.scalar_one_or_none()
@@ -2154,6 +2194,23 @@ async def update_product(
         raise HTTPException(status_code=404, detail="Product not found")
 
     changes = product_data.model_dump(exclude_unset=True)
+    shop_edits = changes.pop("shop_edits", None)
+
+    # Validate the complete replacement before changing product fields so a
+    # failed request leaves both the product and curation untouched.
+    shop_edit_categories = None
+    if shop_edits is not None:
+        try:
+            names = normalize_shop_edit_names(shop_edits)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        category_result = await db.execute(
+            select(Category).where(Category.slug.in_([SHOP_EDIT_SLUGS[name] for name in names]))
+        )
+        categories_by_slug = {category.slug: category for category in category_result.scalars().all()}
+        if len(categories_by_slug) != len(names):
+            raise HTTPException(status_code=422, detail="Shop Edits categories are not configured")
+        shop_edit_categories = [categories_by_slug[SHOP_EDIT_SLUGS[name]] for name in names]
     old_base_price = product.base_price
     old_compare_at_price = product.compare_at_price
     merged_base = changes.get("base_price", product.base_price)
@@ -2167,6 +2224,9 @@ async def update_product(
 
     for field, value in changes.items():
         setattr(product, field, value)
+
+    if shop_edit_categories is not None:
+        product.shop_edit_categories = shop_edit_categories
 
     if "base_price" in changes or "compare_at_price" in changes:
         _sync_inherited_variation_prices(
