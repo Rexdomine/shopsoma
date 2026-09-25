@@ -47,7 +47,6 @@ export default function ShopEditsStorefront() {
 
   useEffect(() => {
     let isCurrent = true;
-    let hasResolvedShopEdits = false;
     const loadShopEditsCategories = async () => {
       try {
         const primaryCategories = await categoryService.getPrimaryCategories();
@@ -63,25 +62,32 @@ export default function ShopEditsStorefront() {
           }
           return;
         }
-        hasResolvedShopEdits = true;
-        if (isCurrent) {
-          setShopEditsCategoryId(shopEditsCategory.id);
-        }
 
         const occasionWearCategories = await categoryService.getSubcategories(shopEditsCategory.id);
         const occasionWearCategory = occasionWearCategories.find((category) => matchesOccasionWear(category));
-        const occasionWearChildren = occasionWearCategory
-          ? await categoryService.getSubcategories(occasionWearCategory.id)
-          : [];
+        if (!occasionWearCategory) {
+          if (isCurrent) {
+            setCategoryUnavailable(true);
+          }
+          return;
+        }
+
+        const occasionWearChildren = await categoryService.getSubcategories(occasionWearCategory.id);
+        const tabs = getShopEditsTabs(occasionWearChildren);
+        if (tabs.length !== SHOP_EDITS_TAB_CATEGORIES.length) {
+          if (isCurrent) {
+            setCategoryUnavailable(true);
+          }
+          return;
+        }
 
         if (isCurrent) {
-          setSubcategories(getShopEditsTabs(occasionWearChildren));
+          setShopEditsCategoryId(shopEditsCategory.id);
+          setSubcategories(tabs);
         }
       } catch (error) {
         if (isCurrent) {
-          if (!hasResolvedShopEdits) {
-            setCategoryUnavailable(true);
-          }
+          setCategoryUnavailable(true);
           console.error('Failed to load primary categories for shop edits storefront', error);
         }
       } finally {

@@ -91,4 +91,59 @@ describe('ShopEditsStorefront', () => {
     expect(screen.queryByTestId('shop-edits-tabs')).not.toBeInTheDocument();
     expect(getSubcategoriesMock).not.toHaveBeenCalled();
   });
+
+  it('does not render ProductList when Occasion Wear is not a direct Shop Edits child', async () => {
+    getPrimaryCategoriesMock.mockResolvedValue([
+      category('shop-edits-id', 'Shop Edits', 'shop-edits', 1),
+    ]);
+    getSubcategoriesMock.mockResolvedValue([
+      category('seasonal-id', 'Seasonal', 'shop-edits-seasonal', 1),
+    ]);
+
+    render(<ShopEditsStorefront />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Shop Edits are temporarily unavailable.');
+    expect(screen.queryByTestId('shop-edits-tabs')).not.toBeInTheDocument();
+    expect(getSubcategoriesMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not render ProductList when a nested category lookup fails after Shop Edits resolves', async () => {
+    getPrimaryCategoriesMock.mockResolvedValue([
+      category('shop-edits-id', 'Shop Edits', 'shop-edits', 1),
+    ]);
+    getSubcategoriesMock.mockRejectedValue(new Error('Category request failed'));
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    render(<ShopEditsStorefront />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Shop Edits are temporarily unavailable.');
+    expect(screen.queryByTestId('shop-edits-tabs')).not.toBeInTheDocument();
+    expect(getSubcategoriesMock).toHaveBeenCalledWith('shop-edits-id');
+    consoleError.mockRestore();
+  });
+
+  it('does not render ProductList when any canonical Occasion Wear leaf is missing', async () => {
+    getPrimaryCategoriesMock.mockResolvedValue([
+      category('shop-edits-id', 'Shop Edits', 'shop-edits', 1),
+    ]);
+    getSubcategoriesMock.mockImplementation((parentId: string) => {
+      if (parentId === 'shop-edits-id') {
+        return Promise.resolve([
+          category('occasion-wear-id', 'Occasion Wear', 'shop-edits-occasion-wear', 1),
+        ]);
+      }
+      return Promise.resolve([
+        category('casual-id', 'Casual', 'shop-edits-occasion-wear-casual', 1),
+        category('evening-id', 'Evening', 'shop-edits-occasion-wear-evening', 2),
+        category('party-id', 'Party', 'shop-edits-occasion-wear-party', 3),
+      ]);
+    });
+
+    render(<ShopEditsStorefront />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Shop Edits are temporarily unavailable.');
+    expect(screen.queryByTestId('shop-edits-tabs')).not.toBeInTheDocument();
+    expect(getSubcategoriesMock).toHaveBeenNthCalledWith(1, 'shop-edits-id');
+    expect(getSubcategoriesMock).toHaveBeenNthCalledWith(2, 'occasion-wear-id');
+  });
 });
