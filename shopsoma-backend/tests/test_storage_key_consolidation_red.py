@@ -57,6 +57,24 @@ async def test_product_creation_rejects_storage_key_owned_by_another_product(
 
 
 @pytest.mark.asyncio
+async def test_vendor_rejects_storage_key_reserved_by_unresolved_cleanup(
+    client, vendor_user, sample_product, db_session
+):
+    storage_key = f"vendors/{vendor_user['user'].id}/products/pending-cleanup.jpg"
+    db_session.add(ProductImageStorageCleanup(
+        storage_keys=[storage_key], reason="vendor_image_delete"
+    ))
+    await db_session.commit()
+
+    response = await client.post(
+        f"/api/v1/products/{sample_product.id}/images",
+        json={"image_url": "https://example.com/new.jpg", "storage_keys": [storage_key]},
+        headers=vendor_user["headers"],
+    )
+    assert response.status_code == 409
+
+
+@pytest.mark.asyncio
 async def test_admin_json_image_rejects_client_storage_keys(client, admin_user, sample_product):
     response = await client.post(
         f"/api/v1/admin/products/{sample_product.id}/images",

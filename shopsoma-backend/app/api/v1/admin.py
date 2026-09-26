@@ -2296,19 +2296,43 @@ async def upload_admin_product_image(
         await cleanup_uploaded_storage()
         raise HTTPException(status_code=500, detail="Failed to persist uploaded product image") from exc
 
-    # A commit exception is ambiguous: the database may have durably accepted
-    # the row even when the client/session observed an error. Never delete the
-    # objects in this state, or a persisted row could point at missing files.
+    image_id = image.id
+
+    # A commit exception is ambiguous: after rollback, probe the authoritative
+    # row before deciding whether these upload objects need reconciliation.
     try:
         await db.commit()
     except Exception as exc:
         await db.rollback()
+        persisted_image_id = await db.scalar(
+            select(ProductImage.id).where(ProductImage.id == image_id)
+        )
+        if persisted_image_id is None:
+            # Start a fresh transaction and take the same per-key locks used by
+            # every association path. If another request claimed the key after
+            # this failed commit, it is now authoritative and must be preserved.
+            try:
+                await lock_and_validate_storage_keys(db, storage_keys)
+            except ValueError:
+                logger.warning(
+                    "Product image upload storage was claimed after commit failure; preserving objects",
+                    extra={"product_id": str(product_id), "image_id": str(image_id)},
+                )
+            else:
+                await record_storage_cleanup(
+                    db,
+                    storage_keys,
+                    reason="upload_commit_reconciliation",
+                    product_id=product_id,
+                    image_id=image_id,
+                )
         logger.exception(
-            "Ambiguous product image upload commit; preserving storage objects",
+            "Product image upload commit failed; ownership reconciled",
             extra={
                 "product_id": str(product_id),
-                "image_id": str(image.id),
-                "storage_keys": uploaded.get("_storage_keys") if uploaded else None,
+                "image_id": str(image_id),
+                "storage_keys": storage_keys,
+                "persisted_image": persisted_image_id is not None,
             },
         )
         raise HTTPException(status_code=500, detail="Failed to persist uploaded product image") from exc

@@ -56,6 +56,7 @@ async def test_admin_upload_failure_cleans_every_generated_storage_key(
 ):
     from unittest.mock import AsyncMock
     from app.api.v1 import admin as admin_api
+    from app.models.product import ProductImageStorageCleanup
 
     uploaded = {
         "original": "/uploads/products/original.jpg",
@@ -95,6 +96,44 @@ async def test_admin_upload_failure_cleans_every_generated_storage_key(
     )
     assert image is not None
     assert image.image_url == uploaded["original"]
+    assert await db_session.scalar(select(ProductImageStorageCleanup)) is None
+
+
+@pytest.mark.asyncio
+async def test_admin_upload_definitive_commit_failure_enqueues_ownership_reconciliation(
+    client, admin_user, sample_product, db_session, monkeypatch
+):
+    from unittest.mock import AsyncMock
+    from app.api.v1 import admin as admin_api
+    from app.models.product import ProductImageStorageCleanup
+
+    uploaded = {
+        "original": "/uploads/products/aborted.jpg",
+        "_storage_keys": ["products/aborted.jpg", "products/aborted-thumb.jpg"],
+    }
+    monkeypatch.setattr(admin_api.image_service, "upload_image", AsyncMock(return_value=uploaded))
+    original_commit = db_session.commit
+    commits = 0
+
+    async def fail_only_the_image_commit():
+        nonlocal commits
+        commits += 1
+        if commits == 1:
+            raise RuntimeError("commit aborted before database write")
+        await original_commit()
+
+    monkeypatch.setattr(db_session, "commit", fail_only_the_image_commit)
+    response = await client.post(
+        f"/api/v1/admin/products/{sample_product.id}/images/upload",
+        files={"file": ("tiny.png", BytesIO(TINY_PNG), "image/png")},
+        headers=admin_user["headers"],
+    )
+
+    assert response.status_code == 500
+    pending = await db_session.scalar(select(ProductImageStorageCleanup))
+    assert pending is not None
+    assert pending.storage_keys == uploaded["_storage_keys"]
+    assert pending.reason == "upload_commit_reconciliation"
 
 
 @pytest.mark.asyncio
