@@ -3,7 +3,7 @@ Admin API endpoints for database initialization and management
 """
 from typing import Any, Optional, List
 from uuid import UUID
-from fastapi import APIRouter, HTTPException, Depends, Query, status
+from fastapi import APIRouter, HTTPException, Depends, Query, status, UploadFile, File
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, or_, delete, update, and_
@@ -13,6 +13,7 @@ from decimal import Decimal
 from urllib.parse import quote
 import asyncio
 import os
+import logging
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from app.core.database import get_db
@@ -41,6 +42,8 @@ from app.schemas.product import (
     ProductApprovalRequest,
     ProductRejectionRequest,
     ProductFeatureUpdate,
+    ProductImageCreate,
+    ProductImageUpdate,
     ProductImageResponse,
     ProductVariantResponse,
     ProductVariantUpdate,
@@ -51,7 +54,7 @@ from app.api.v1.products import (
     _sync_inherited_variation_prices,
     _sync_single_product_variant_inventory,
 )
-from app.services.product_moderation import transition_product_moderation
+from app.services.product_moderation import transition_product_moderation, mark_product_content_pending
 from app.services.vendor_activation_service import (
     activation_eligibility, activation_is_eligible, lock_activation_identity,
 )
@@ -60,6 +63,10 @@ from app.services.test_account_classification import (
     tag_staging_account,
 )
 from app.services.shop_edits import SHOP_EDIT_NAMES, SHOP_EDIT_SLUGS, normalize_shop_edit_names
+from app.services.image_service import image_service
+from app.services.product_image_storage import record_storage_cleanup, lock_and_validate_storage_keys
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -2086,6 +2093,16 @@ async def delete_product(
 
     try:
         # Delete associated product images
+        image_rows = list((await db.scalars(
+            select(ProductImage).where(ProductImage.product_id == product_id)
+        )).all())
+        storage_keys = [key for image in image_rows for key in (image.storage_keys or [])]
+        cleanup_record = None
+        if storage_keys:
+            cleanup_record = await record_storage_cleanup(
+                db, storage_keys, reason="product_delete", product_id=product_id,
+                commit=False
+            )
         await db.execute(
             delete(ProductImage).where(ProductImage.product_id == product_id)
         )
@@ -2098,6 +2115,26 @@ async def delete_product(
         # Delete the product itself
         await db.delete(product)
         await db.commit()
+
+        try:
+            if storage_keys:
+                cleanup = await image_service.delete_images(storage_keys)
+                failed_keys = cleanup.get("failed_keys", []) if isinstance(cleanup, dict) else storage_keys
+            else:
+                failed_keys = []
+        except Exception:
+            logger.exception("Product image storage cleanup failed after product deletion")
+            failed_keys = storage_keys
+        if not failed_keys and cleanup_record is not None:
+            cleanup_record.resolved_at = datetime.now(timezone.utc)
+            try:
+                await db.commit()
+            except Exception:
+                await db.rollback()
+                logger.exception(
+                    "Product cleanup resolution bookkeeping failed after storage deletion",
+                    extra={"product_id": str(product_id), "storage_keys": storage_keys},
+                )
 
         logger.info(f"Admin {current_admin.id} deleted product {product_id} ({product_title})")
 
@@ -2142,6 +2179,285 @@ async def update_product_shop_edits(product_id: UUID, payload: ShopEditsUpdate, 
     product.shop_edit_categories = [categories[SHOP_EDIT_SLUGS[name]] for name in names]
     await db.commit()
     return {"product_id": str(product_id), "shop_edits": names}
+
+
+@router.post("/products/{product_id}/images", response_model=ProductImageResponse, status_code=status.HTTP_201_CREATED)
+async def create_admin_product_image(
+    product_id: UUID,
+    image_data: ProductImageCreate,
+    current_admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    await coordinate_catalog_write(db, product_ids=[product_id])
+    if image_data.storage_keys:
+        raise HTTPException(status_code=422, detail="storage_keys are server-managed; use the upload endpoint")
+    product = await db.scalar(select(Product).where(Product.id == product_id))
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    images = list((await db.scalars(select(ProductImage).where(ProductImage.product_id == product_id).order_by(ProductImage.display_order, ProductImage.created_at, ProductImage.id))).all())
+    if len(images) >= 10:
+        raise HTTPException(status_code=409, detail="Products can have at most 10 images")
+    values = image_data.model_dump()
+    if not images:
+        values["display_order"] = 0
+        values["is_primary"] = True
+    elif values.get("is_primary"):
+        for image in images:
+            image.is_primary = False
+        for index, image in enumerate(images, start=1):
+            image.display_order = index
+        values["display_order"] = 0
+    else:
+        values["display_order"] = len(images)
+    image = ProductImage(product_id=product_id, **values)
+    db.add(image)
+    if images and not values.get("is_primary"):
+        primary = next((item for item in images if item.is_primary), images[0])
+        for item in images:
+            item.is_primary = item is primary
+    await mark_product_content_pending(db=db, product_id=product_id)
+    await db.commit()
+    await db.refresh(image)
+    return image
+
+
+@router.post("/products/{product_id}/images/upload", response_model=ProductImageResponse, status_code=status.HTTP_201_CREATED)
+async def upload_admin_product_image(
+    product_id: UUID,
+    file: UploadFile = File(...),
+    current_admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    await coordinate_catalog_write(db, product_ids=[product_id])
+    product = await db.scalar(select(Product).where(Product.id == product_id))
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    images = list((await db.scalars(select(ProductImage).where(ProductImage.product_id == product_id))).all())
+    if len(images) >= 10:
+        raise HTTPException(status_code=409, detail="Products can have at most 10 images")
+
+    uploaded = None
+    ownership_conflict = False
+
+    async def cleanup_uploaded_storage() -> None:
+        if not uploaded:
+            return
+        storage_keys = uploaded.get("_storage_keys")
+        if storage_keys is None:
+            # Backward compatibility for older/mocked upload results only.
+            storage_keys = [uploaded["s3_key"]] if uploaded.get("s3_key") else []
+            storage_keys.extend(
+                value for key, value in uploaded.items()
+                if key.endswith("_s3_key") and value not in storage_keys
+            )
+        try:
+            cleanup = await image_service.delete_images(storage_keys)
+            if isinstance(cleanup, dict) and cleanup.get("failed_keys"):
+                await record_storage_cleanup(
+                    db, cleanup["failed_keys"], reason="upload_compensation", product_id=product_id
+                )
+        except Exception:
+            logger.exception("Failed to clean up uploaded product image objects")
+            # A storage exception may occur after only part of the cleanup
+            # completed. Preserve the complete attempted set for retry rather
+            # than losing the keys when the image row was never committed.
+            await record_storage_cleanup(
+                db, storage_keys, reason="upload_compensation", product_id=product_id
+            )
+
+    try:
+        uploaded = await image_service.upload_image(file, folder="products", generate_variants=True)
+        storage_keys = list(uploaded.get("_storage_keys") or [])
+        try:
+            await lock_and_validate_storage_keys(db, storage_keys)
+        except ValueError as exc:
+            ownership_conflict = True
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        image = ProductImage(
+            product_id=product_id,
+            image_url=uploaded["original"],
+            thumbnail_url=uploaded.get("thumbnail"),
+            display_order=len(images),
+            is_primary=not images,
+            storage_keys=list(uploaded.get("_storage_keys") or []),
+        )
+        db.add(image)
+        await mark_product_content_pending(db=db, product_id=product_id)
+        # Complete all ORM work needed to build the response before commit. If
+        # this fails, the row is still rollback-able and storage can be safely
+        # compensated.
+        await db.flush()
+        await db.refresh(image)
+    except HTTPException as exc:
+        await db.rollback()
+        failed_keys = list(getattr(exc, "storage_keys", []) or [])
+        if failed_keys:
+            await record_storage_cleanup(
+                db, failed_keys, reason="upload_partial_failure", product_id=product_id
+            )
+        if not ownership_conflict:
+            await cleanup_uploaded_storage()
+        raise
+    except Exception as exc:
+        await db.rollback()
+        await cleanup_uploaded_storage()
+        raise HTTPException(status_code=500, detail="Failed to persist uploaded product image") from exc
+
+    image_id = image.id
+
+    # A commit exception is ambiguous: after rollback, probe the authoritative
+    # row before deciding whether these upload objects need reconciliation.
+    try:
+        await db.commit()
+    except Exception as exc:
+        await db.rollback()
+        persisted_image_id = await db.scalar(
+            select(ProductImage.id).where(ProductImage.id == image_id)
+        )
+        if persisted_image_id is None:
+            # Start a fresh transaction and take the same per-key locks used by
+            # every association path. If another request claimed the key after
+            # this failed commit, it is now authoritative and must be preserved.
+            try:
+                await lock_and_validate_storage_keys(db, storage_keys)
+            except ValueError:
+                logger.warning(
+                    "Product image upload storage was claimed after commit failure; preserving objects",
+                    extra={"product_id": str(product_id), "image_id": str(image_id)},
+                )
+            else:
+                await record_storage_cleanup(
+                    db,
+                    storage_keys,
+                    reason="upload_commit_reconciliation",
+                    product_id=product_id,
+                    image_id=image_id,
+                )
+        logger.exception(
+            "Product image upload commit failed; ownership reconciled",
+            extra={
+                "product_id": str(product_id),
+                "image_id": str(image_id),
+                "storage_keys": storage_keys,
+                "persisted_image": persisted_image_id is not None,
+            },
+        )
+        raise HTTPException(status_code=500, detail="Failed to persist uploaded product image") from exc
+
+    return image
+
+
+@router.patch("/products/{product_id}/images/{image_id}", response_model=ProductImageResponse)
+async def update_admin_product_image(
+    product_id: UUID,
+    image_id: UUID,
+    image_data: ProductImageUpdate,
+    current_admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    await coordinate_catalog_write(db, product_ids=[product_id])
+    product = await db.scalar(select(Product).where(Product.id == product_id))
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    images = list((await db.scalars(select(ProductImage).where(ProductImage.product_id == product_id).order_by(ProductImage.display_order, ProductImage.created_at, ProductImage.id))).all())
+    image = next((item for item in images if item.id == image_id), None)
+    if not image:
+        raise HTTPException(status_code=404, detail="Image not found")
+    changes = image_data.model_dump(exclude_unset=True)
+    new_order = changes.pop("display_order", None)
+    make_primary = changes.pop("is_primary", None)
+    order_target = image
+    for key, value in changes.items():
+        setattr(image, key, value)
+    if make_primary is True:
+        for item in images:
+            item.is_primary = item.id == image_id
+        if new_order is None:
+            new_order = 0
+    elif make_primary is False and image.is_primary:
+        replacement = next((item for item in images if item.id != image_id), None)
+        if replacement:
+            image.is_primary = False
+            replacement.is_primary = True
+            order_target = replacement
+            new_order = 0
+    if new_order is not None:
+        ordered = [item for item in images if item.id != order_target.id]
+        if order_target.is_primary:
+            new_order = 0
+        elif any(item.is_primary for item in images):
+            new_order = max(1, new_order)
+        ordered.insert(min(new_order, len(ordered)), order_target)
+        for index, item in enumerate(ordered):
+            item.display_order = index
+        images = ordered
+    if images:
+        primary = image if image.is_primary else next((item for item in images if item.is_primary), images[0])
+        for item in images:
+            item.is_primary = item is primary
+    await mark_product_content_pending(db=db, product_id=product_id)
+    await db.commit()
+    await db.refresh(image)
+    return image
+
+
+@router.delete("/products/{product_id}/images/{image_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_admin_product_image(
+    product_id: UUID,
+    image_id: UUID,
+    current_admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    await coordinate_catalog_write(db, product_ids=[product_id])
+    product = await db.scalar(select(Product).where(Product.id == product_id))
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    images = list((await db.scalars(select(ProductImage).where(ProductImage.product_id == product_id).order_by(ProductImage.display_order, ProductImage.created_at, ProductImage.id))).all())
+    image = next((item for item in images if item.id == image_id), None)
+    if not image:
+        raise HTTPException(status_code=404, detail="Image not found")
+    remaining = [item for item in images if item.id != image_id]
+    await db.delete(image)
+    if remaining:
+        primary = next((item for item in remaining if item.is_primary), remaining[0])
+        for item in remaining:
+            item.is_primary = item is primary
+        for index, item in enumerate(remaining):
+            item.display_order = index
+    await mark_product_content_pending(db=db, product_id=product_id)
+    storage_keys = list(image.storage_keys or [])
+    cleanup_record = None
+    if storage_keys:
+        cleanup_record = await record_storage_cleanup(
+            db, storage_keys, reason="image_delete", product_id=product_id,
+            image_id=image_id, commit=False
+        )
+    await db.commit()
+    try:
+        if storage_keys:
+            cleanup = await image_service.delete_images(storage_keys)
+            failed_keys = cleanup.get("failed_keys", []) if isinstance(cleanup, dict) else storage_keys
+        else:
+            failed_keys = []
+    except Exception:
+        logger.exception(
+            "Product image storage cleanup failed after durable row deletion",
+            extra={"product_id": str(product_id), "image_id": str(image_id), "storage_keys": storage_keys},
+        )
+        failed_keys = storage_keys
+    if not failed_keys and cleanup_record is not None:
+        cleanup_record.resolved_at = datetime.now(timezone.utc)
+        try:
+            await db.commit()
+        except Exception:
+            # Storage deletion is already complete and the deletion transaction
+            # is durable. Leave the cleanup row retryable if this bookkeeping
+            # update cannot be confirmed; reporting a 500 would lie to callers.
+            await db.rollback()
+            logger.exception(
+                "Product image cleanup resolution bookkeeping failed after storage deletion",
+                extra={"product_id": str(product_id), "image_id": str(image_id), "storage_keys": storage_keys},
+            )
 
 
 @router.get("/products/{product_id}", response_model=AdminProductResponse)

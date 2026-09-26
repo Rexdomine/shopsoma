@@ -22,8 +22,6 @@ export default function Cart() {
   const preferredCurrency = usePreferenceStore((state) => state.currency);
   const exchangeRates = useCurrencyStore((state) => state.exchangeRates);
   const { favorites, toggleFavorite } = useWishlistActions();
-  const [toastMessage, setToastMessage] = useState('');
-  const [toastVisible, setToastVisible] = useState(false);
 
   const [recommended, setRecommended] = useState<Product[]>([]);
   const [editingItem, setEditingItem] = useState<{
@@ -41,16 +39,6 @@ export default function Cart() {
     );
   }, 0);
 
-  const subtotalInNgn = cart.items.reduce((sum, item) => {
-    return sum + convertCurrencyWithRates(
-      item.subtotal,
-      item.product.currency || 'NGN',
-      'NGN',
-      exchangeRates
-    );
-  }, 0);
-
-  const minimumOrderInSelectedCurrency = convertCurrencyWithRates(60000, 'NGN', preferredCurrency, exchangeRates);
 
   useEffect(() => {
     const load = async () => {
@@ -103,39 +91,14 @@ export default function Cart() {
     navigate(ROUTES.PRODUCTS);
   };
 
-  const showToast = (message: string) => {
-    setToastMessage(message);
-    setToastVisible(true);
-    setTimeout(() => setToastVisible(false), 3500);
-  };
 
   const handleCheckout = () => {
-    if (subtotalInNgn < 60000) {
-      showToast(`Minimum order is ${formatAmount(minimumOrderInSelectedCurrency, preferredCurrency)} (₦60,000 equivalent). Please add more items before checkout.`);
-      return;
-    }
     navigate(ROUTES.CHECKOUT);
   };
 
   return (
     <Layout>
-      {toastVisible && (
-        <div className="fixed inset-x-0 top-0 z-40">
-          <div className="mx-auto max-w-[1200px] bg-primary text-white px-8 py-4 border-b border-primary-dark flex items-center justify-between">
-            <div>
-              <p className="text-[10px] uppercase tracking-[0.4em] text-white/70">Shopping Bag</p>
-              <p className="text-sm font-semibold tracking-wide">{toastMessage}</p>
-            </div>
-            <button
-              type="button"
-              onClick={() => setToastVisible(false)}
-              className="text-[10px] uppercase tracking-[0.4em] text-white/70 hover:text-white"
-            >
-              Close
-            </button>
-          </div>
-        </div>
-      )}
+
 
       <section className="bg-white py-12 lg:py-16">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">

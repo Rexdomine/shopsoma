@@ -276,6 +276,8 @@ class ProductImage(Base):
     alt_text = Column(String(255), nullable=True)
     display_order = Column(Integer, default=0, nullable=False)
     is_primary = Column(Boolean, default=False, nullable=False)
+    # Exact private keys for server-owned uploads; legacy rows remain NULL.
+    storage_keys = Column(JSONB, nullable=True)
 
     created_at = Column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -286,6 +288,24 @@ class ProductImage(Base):
 
     def __repr__(self):
         return f"<ProductImage {self.product_id}>"
+
+
+class ProductImageStorageCleanup(Base):
+    """Durable queue for storage objects that could not be deleted immediately."""
+
+    __tablename__ = "product_image_storage_cleanups"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    product_id = Column(UUID(as_uuid=True), nullable=True, index=True)
+    image_id = Column(UUID(as_uuid=True), nullable=True, index=True)
+    storage_keys = Column(JSONB, nullable=False)
+    reason = Column(String(100), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    last_attempted_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    resolved_at = Column(DateTime(timezone=True), nullable=True)
+
+    def __repr__(self):
+        return f"<ProductImageStorageCleanup {self.id}>"
 
 
 class SizeEnum(str, enum.Enum):

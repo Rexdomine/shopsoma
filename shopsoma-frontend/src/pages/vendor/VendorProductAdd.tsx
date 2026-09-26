@@ -30,6 +30,7 @@ interface ProductImage {
   uploaded?: boolean;
   imageUrl?: string;
   thumbnailUrl?: string;
+  storageKeys?: string[];
 }
 
 interface ProductVariation {
@@ -452,6 +453,7 @@ export default function VendorProductAdd() {
           tempImage.uploaded = true;
           tempImage.imageUrl = uploadResponse.original;
           tempImage.thumbnailUrl = uploadResponse.thumbnail || uploadResponse.original;
+          tempImage.storageKeys = uploadResponse.storage_keys;
 
           console.log('Image uploaded successfully:', uploadResponse);
         } catch (uploadError: any) {
@@ -620,6 +622,7 @@ export default function VendorProductAdd() {
           tempImage.uploaded = true;
           tempImage.imageUrl = uploadResponse.original;
           tempImage.thumbnailUrl = uploadResponse.thumbnail || uploadResponse.original;
+          tempImage.storageKeys = uploadResponse.storage_keys;
 
           console.log('Variation image uploaded successfully:', uploadResponse);
         } catch (uploadError: any) {
@@ -919,6 +922,7 @@ export default function VendorProductAdd() {
           alt_text: productName.trim() || undefined,
           display_order: index,
           is_primary: index === 0,
+          storage_keys: image.storageKeys,
         })),
       };
 

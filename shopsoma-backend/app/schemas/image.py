@@ -11,6 +11,7 @@ class ImageUploadResponse(BaseModel):
     medium: Optional[str] = Field(None, description="Medium size URL (800x800)")
     large: Optional[str] = Field(None, description="Large size URL (1600x1600)")
     s3_key: str = Field(..., description="S3 storage key")
+    storage_keys: List[str] = Field(default_factory=list, description="All generated storage keys")
     uploaded_at: datetime = Field(default_factory=datetime.utcnow)
 
     class Config:

@@ -18,6 +18,7 @@ from app.schemas.image import (
     ImageInfoResponse,
 )
 from app.services.image_service import image_service
+from app.services.product_image_storage import record_storage_cleanup
 from app.api.dependencies import get_current_user, get_current_vendor
 from app.models.user import User
 from app.models.vendor import Vendor
@@ -93,6 +94,7 @@ async def upload_image(
         default=True, description="Generate thumbnail/medium/large variants"
     ),
     current_user: User = Depends(get_current_vendor),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Upload a single image with automatic compression and resizing
@@ -120,9 +122,13 @@ async def upload_image(
             medium=result.get("medium"),
             large=result.get("large"),
             s3_key=result["s3_key"],
+            storage_keys=list(result.get("_storage_keys") or []),
             uploaded_at=datetime.utcnow(),
         )
-    except HTTPException:
+    except HTTPException as exc:
+        await record_storage_cleanup(
+            db, getattr(exc, "storage_keys", []), reason="vendor_upload_failure"
+        )
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to upload image: {str(e)}")
@@ -136,6 +142,7 @@ async def upload_images_batch(
         default=True, description="Generate variants for each image"
     ),
     current_user: User = Depends(get_current_vendor),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Upload multiple images in a single request
@@ -172,6 +179,7 @@ async def upload_images_batch(
                     medium=result.get("medium"),
                     large=result.get("large"),
                     s3_key=result["s3_key"],
+                    storage_keys=list(result.get("_storage_keys") or []),
                     uploaded_at=datetime.utcnow(),
                 )
             )
@@ -179,6 +187,9 @@ async def upload_images_batch(
 
         except Exception as e:
             failed_count += 1
+            await record_storage_cleanup(
+                db, getattr(e, "storage_keys", []), reason="vendor_upload_failure"
+            )
             # Log error but continue with other files
             print(f"Failed to upload {file.filename}: {str(e)}")
 

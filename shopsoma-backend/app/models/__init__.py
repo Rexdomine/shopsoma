@@ -4,7 +4,7 @@ from app.models.user import User
 from app.models.vendor import Vendor
 from app.models.category import Category
 from app.models.collection import Collection
-from app.models.product import Product, ProductVariant, ProductImage
+from app.models.product import Product, ProductVariant, ProductImage, ProductImageStorageCleanup
 from app.models.address import Address
 from app.models.cart import CartItem, Coupon
 from app.models.order import Order, OrderItem
@@ -113,6 +113,7 @@ __all__ = [
     "Product",
     "ProductVariant",
     "ProductImage",
+    "ProductImageStorageCleanup",
     "Address",
     "CartItem",
     "Coupon",

@@ -2,11 +2,14 @@
 Product CRUD API endpoints
 """
 from typing import List, Optional, Dict, Any, Tuple
+from datetime import datetime, timezone
 import csv
 import io
+import logging
 import math
 import ipaddress
 import re
+from pathlib import PurePosixPath
 from urllib.parse import urlparse
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File
@@ -28,6 +31,8 @@ from app.services.product_moderation import (
     mark_product_content_pending,
     transition_product_moderation,
 )
+from app.services.image_service import image_service
+from app.services.product_image_storage import record_storage_cleanup, lock_and_validate_storage_keys
 from app.schemas.product import (
     ProductCreate,
     ProductUpdate,
@@ -50,9 +55,32 @@ from app.schemas.product import (
     variation_sale_price,
 )
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/products", tags=["products"])
 
 MAX_PRODUCT_IMAGES = 10
+
+
+def _validate_vendor_storage_keys(vendor: Vendor, storage_keys: Optional[List[str]]) -> None:
+    """Accept only keys issued for this vendor's product-image namespace."""
+    if not storage_keys:
+        return
+
+    prefix = f"vendors/{vendor.user_id}/products/"
+    prefix_parts = len(PurePosixPath(prefix.rstrip("/")).parts)
+    for key in storage_keys:
+        path = PurePosixPath(key)
+        if (
+            not key.startswith(prefix)
+            or path.is_absolute()
+            or any(part in {"", ".", ".."} for part in key.split("/"))
+            or len(path.parts) <= prefix_parts
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Image storage key does not belong to vendor",
+            )
 
 def _variation_inherits_parent_price(
     variation: Variation,
@@ -430,6 +458,21 @@ async def create_product(
             detail="Vendor account not approved yet"
         )
 
+    image_storage_keys = []
+    for image_data in product_data.images or []:
+        _validate_vendor_storage_keys(vendor, image_data.storage_keys)
+        image_storage_keys.extend(image_data.storage_keys or [])
+    if len(image_storage_keys) != len(set(image_storage_keys)):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Image storage keys must be unique",
+        )
+    if image_storage_keys:
+        try:
+            await lock_and_validate_storage_keys(db, image_storage_keys)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
     # Create product
     product = Product(
         vendor_id=vendor.id,
@@ -536,6 +579,7 @@ async def create_product(
                 alt_text=image_data.alt_text,
                 display_order=image_data.display_order if image_data.display_order is not None else idx,
                 is_primary=image_data.is_primary,
+                storage_keys=image_data.storage_keys,
             )
             db.add(image)
 
@@ -1607,6 +1651,20 @@ async def create_image(
             detail="Product not found"
         )
 
+    _validate_vendor_storage_keys(vendor, image_data.storage_keys)
+
+    storage_keys = image_data.storage_keys or []
+    if len(storage_keys) != len(set(storage_keys)):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Image storage keys must be unique",
+        )
+    if storage_keys:
+        try:
+            await lock_and_validate_storage_keys(db, storage_keys)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
     image_count = await db.scalar(
         select(func.count(ProductImage.id)).where(ProductImage.product_id == product_id)
     )
@@ -1669,8 +1727,37 @@ async def delete_image(
         )
 
     await mark_product_content_pending(db=db, product_id=product_id)
+    storage_keys = list(image.storage_keys or [])
     await db.delete(image)
+    cleanup_record = None
+    if storage_keys:
+        cleanup_record = await record_storage_cleanup(
+            db, storage_keys, reason="vendor_image_delete",
+            product_id=product_id, image_id=image_id, commit=False
+        )
     await db.commit()
+    try:
+        if storage_keys:
+            cleanup = await image_service.delete_images(storage_keys)
+            failed_keys = cleanup.get("failed_keys", []) if isinstance(cleanup, dict) else storage_keys
+        else:
+            failed_keys = []
+    except Exception:
+        logger.exception(
+            "Vendor product image storage cleanup failed after durable row deletion",
+            extra={"product_id": str(product_id), "image_id": str(image_id), "storage_keys": storage_keys},
+        )
+        failed_keys = storage_keys
+    if not failed_keys and cleanup_record is not None:
+        cleanup_record.resolved_at = datetime.now(timezone.utc)
+        try:
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            logger.exception(
+                "Vendor product image cleanup resolution bookkeeping failed after storage deletion",
+                extra={"product_id": str(product_id), "image_id": str(image_id), "storage_keys": storage_keys},
+            )
 
 
 # ============================================================================

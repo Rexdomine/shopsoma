@@ -4,6 +4,7 @@ from celery import Celery
 
 from app.core.config import Settings, settings
 from app.tasks.checkout_outbox import dispatch_checkout_outbox
+from app.tasks.product_image_storage_cleanup import reconcile_product_image_storage_cleanup
 
 
 def resolve_celery_connection_urls(config: Settings) -> tuple[str, str]:
@@ -44,10 +45,18 @@ celery_app.conf.update(
         "dispatch-checkout-outbox": {
             "task": "app.tasks.checkout_outbox.dispatch_checkout_outbox",
             "schedule": 15.0,
-        }
+        },
+        "reconcile-product-image-storage-cleanups": {
+            "task": "app.tasks.product_image_storage_cleanup.reconcile_product_image_storage_cleanup",
+            "schedule": 60.0,
+        },
     },
 )
 celery_app.task(
     name="app.tasks.checkout_outbox.dispatch_checkout_outbox",
     ignore_result=True,
 )(dispatch_checkout_outbox)
+celery_app.task(
+    name="app.tasks.product_image_storage_cleanup.reconcile_product_image_storage_cleanup",
+    ignore_result=True,
+)(reconcile_product_image_storage_cleanup)
