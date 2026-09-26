@@ -1,7 +1,7 @@
 """
 Product Pydantic schemas for request/response validation
 """
-from typing import Optional, List
+from typing import Annotated, Optional, List
 from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
@@ -291,7 +291,9 @@ class ProductImageBase(BaseModel):
 
 class ProductImageCreate(ProductImageBase):
     """Vendor association request; storage keys never appear in responses."""
-    storage_keys: Optional[List[str]] = Field(None, description="Server-owned storage keys")
+    storage_keys: Optional[List[Annotated[str, Field(min_length=1, max_length=1024)]]] = Field(
+        None, max_length=4, description="Server-owned upload keys (original plus three variants)"
+    )
 
 
 class ProductImageUpdate(BaseModel):

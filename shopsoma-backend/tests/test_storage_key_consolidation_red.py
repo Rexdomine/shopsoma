@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, ANY
 
 import pytest
@@ -75,6 +76,32 @@ async def test_vendor_rejects_storage_key_reserved_by_unresolved_cleanup(
 
 
 @pytest.mark.asyncio
+async def test_vendor_storage_keys_are_bounded_to_upload_variant_output(
+    client, vendor_user, sample_product
+):
+    prefix = f"vendors/{vendor_user['user'].id}/products/"
+    response = await client.post(
+        f"/api/v1/products/{sample_product.id}/images",
+        json={
+            "image_url": "https://example.com/new.jpg",
+            "storage_keys": [f"{prefix}key-{index}.jpg" for index in range(5)],
+        },
+        headers=vendor_user["headers"],
+    )
+    assert response.status_code == 422
+
+    response = await client.post(
+        f"/api/v1/products/{sample_product.id}/images",
+        json={
+            "image_url": "https://example.com/new.jpg",
+            "storage_keys": [prefix + "x" * (1025 - len(prefix))],
+        },
+        headers=vendor_user["headers"],
+    )
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_admin_json_image_rejects_client_storage_keys(client, admin_user, sample_product):
     response = await client.post(
         f"/api/v1/admin/products/{sample_product.id}/images",
@@ -106,6 +133,40 @@ async def test_cleanup_reconciler_retries_exact_keys_and_resolves(
     delete.assert_awaited_once_with(["exact/a", "exact/b"])
     assert persisted is not None
     assert persisted.resolved_at is not None
+
+
+@pytest.mark.asyncio
+async def test_cleanup_reconciler_rotates_persistent_failures_to_allow_newer_rows(
+    db_session, monkeypatch
+):
+    from tests.conftest import TestSessionLocal
+    from app.tasks.product_image_storage_cleanup import reconcile_product_image_storage_cleanups
+
+    now = datetime.now(timezone.utc)
+    stuck = ProductImageStorageCleanup(
+        id=uuid.uuid4(), storage_keys=["exact/stuck"], reason="test",
+        created_at=now - timedelta(days=1),
+    )
+    newer = ProductImageStorageCleanup(
+        id=uuid.uuid4(), storage_keys=["exact/newer"], reason="test", created_at=now
+    )
+    db_session.add_all([stuck, newer])
+    await db_session.commit()
+    newer_id = newer.id
+
+    async def delete(keys):
+        return {"failed_keys": list(keys) if keys == ["exact/stuck"] else []}
+
+    monkeypatch.setattr("app.tasks.product_image_storage_cleanup.image_service.delete_images", delete)
+    first = await reconcile_product_image_storage_cleanups(session_factory=TestSessionLocal, limit=1)
+    second = await reconcile_product_image_storage_cleanups(session_factory=TestSessionLocal, limit=1)
+
+    db_session.expire_all()
+    persisted_newer = await db_session.get(ProductImageStorageCleanup, newer_id)
+    assert first == {"resolved": 0, "remaining": 1}
+    assert second == {"resolved": 1, "remaining": 0}
+    assert persisted_newer is not None
+    assert persisted_newer.resolved_at is not None
 
 
 @pytest.mark.asyncio

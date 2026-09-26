@@ -3,7 +3,7 @@
 import asyncio
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.core.database import AsyncSessionLocal, engine
 from app.models.product import ProductImageStorageCleanup
@@ -16,7 +16,13 @@ async def reconcile_product_image_storage_cleanups(*, session_factory=AsyncSessi
         rows = list((await session.scalars(
             select(ProductImageStorageCleanup)
             .where(ProductImageStorageCleanup.resolved_at.is_(None))
-            .order_by(ProductImageStorageCleanup.created_at, ProductImageStorageCleanup.id)
+            .order_by(
+                func.coalesce(
+                    ProductImageStorageCleanup.last_attempted_at,
+                    ProductImageStorageCleanup.created_at,
+                ),
+                ProductImageStorageCleanup.id,
+            )
             .with_for_update(skip_locked=True).limit(limit)
         )).all())
         for row in rows:
@@ -27,8 +33,10 @@ async def reconcile_product_image_storage_cleanups(*, session_factory=AsyncSessi
                     row.resolved_at = datetime.now(timezone.utc)
                     resolved += 1
                 else:
+                    row.last_attempted_at = datetime.now(timezone.utc)
                     remaining += 1
             except Exception:
+                row.last_attempted_at = datetime.now(timezone.utc)
                 remaining += 1
         await session.commit()
     return {"resolved": resolved, "remaining": remaining}
