@@ -76,6 +76,24 @@ async def test_vendor_rejects_storage_key_reserved_by_unresolved_cleanup(
 
 
 @pytest.mark.asyncio
+async def test_vendor_rejects_storage_key_consumed_by_resolved_cleanup(
+    client, vendor_user, sample_product, db_session
+):
+    storage_key = f"vendors/{vendor_user['user'].id}/products/already-deleted.jpg"
+    db_session.add(ProductImageStorageCleanup(
+        storage_keys=[storage_key], reason="vendor_image_delete", resolved_at=datetime.now(timezone.utc)
+    ))
+    await db_session.commit()
+
+    response = await client.post(
+        f"/api/v1/products/{sample_product.id}/images",
+        json={"image_url": "https://example.com/stale.jpg", "storage_keys": [storage_key]},
+        headers=vendor_user["headers"],
+    )
+    assert response.status_code == 409
+
+
+@pytest.mark.asyncio
 async def test_vendor_storage_keys_are_bounded_to_upload_variant_output(
     client, vendor_user, sample_product
 ):
@@ -167,6 +185,64 @@ async def test_cleanup_reconciler_rotates_persistent_failures_to_allow_newer_row
     assert second == {"resolved": 1, "remaining": 0}
     assert persisted_newer is not None
     assert persisted_newer.resolved_at is not None
+
+
+@pytest.mark.asyncio
+async def test_cleanup_reconciler_logs_exception_and_preserves_retry_state(db_session, monkeypatch, caplog):
+    from tests.conftest import TestSessionLocal
+    from app.tasks.product_image_storage_cleanup import reconcile_product_image_storage_cleanups
+
+    row = ProductImageStorageCleanup(id=uuid.uuid4(), storage_keys=["exact/outage"], reason="test")
+    db_session.add(row)
+    await db_session.commit()
+    row_id = row.id
+    monkeypatch.setattr(
+        "app.tasks.product_image_storage_cleanup.image_service.delete_images",
+        AsyncMock(side_effect=RuntimeError("object storage outage")),
+    )
+
+    result = await reconcile_product_image_storage_cleanups(session_factory=TestSessionLocal)
+    db_session.expire_all()
+    persisted = await db_session.get(ProductImageStorageCleanup, row_id)
+    assert result == {"resolved": 0, "remaining": 1}
+    assert persisted is not None
+    assert persisted.last_attempted_at is not None
+    assert "Product image storage cleanup retry failed" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_vendor_delete_returns_success_when_resolution_bookkeeping_commit_fails(
+    client, vendor_user, sample_product, db_session, monkeypatch, caplog
+):
+    from app.api.v1 import products as products_api
+
+    image = ProductImage(
+        product_id=sample_product.id,
+        image_url="https://cdn.example.com/products/vendor-resolution.jpg",
+        storage_keys=["products/vendor-resolution.jpg"],
+    )
+    db_session.add(image)
+    await db_session.commit()
+    image_id = image.id
+    cleanup = AsyncMock(return_value={"failed_keys": []})
+    monkeypatch.setattr(products_api.image_service, "delete_images", cleanup)
+    original_commit = db_session.commit
+    commits = 0
+
+    async def fail_only_resolution_commit():
+        nonlocal commits
+        commits += 1
+        if commits == 2:
+            raise RuntimeError("cleanup record resolution commit unavailable")
+        await original_commit()
+
+    monkeypatch.setattr(db_session, "commit", fail_only_resolution_commit)
+    response = await client.delete(
+        f"/api/v1/products/{sample_product.id}/images/{image_id}", headers=vendor_user["headers"]
+    )
+    assert response.status_code == 204
+    cleanup.assert_awaited_once_with(["products/vendor-resolution.jpg"])
+    assert "cleanup resolution bookkeeping failed" in caplog.text
 
 
 @pytest.mark.asyncio

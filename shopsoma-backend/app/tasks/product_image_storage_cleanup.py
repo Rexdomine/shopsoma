@@ -1,6 +1,7 @@
 """Reconcile durable product-image storage cleanup records."""
 
 import asyncio
+import logging
 from datetime import datetime, timezone
 
 from sqlalchemy import func, select
@@ -8,6 +9,8 @@ from sqlalchemy import func, select
 from app.core.database import AsyncSessionLocal, engine
 from app.models.product import ProductImageStorageCleanup
 from app.services.image_service import image_service
+
+logger = logging.getLogger(__name__)
 
 
 async def reconcile_product_image_storage_cleanups(*, session_factory=AsyncSessionLocal, limit: int = 100):
@@ -36,6 +39,10 @@ async def reconcile_product_image_storage_cleanups(*, session_factory=AsyncSessi
                     row.last_attempted_at = datetime.now(timezone.utc)
                     remaining += 1
             except Exception:
+                logger.exception(
+                    "Product image storage cleanup retry failed",
+                    extra={"cleanup_id": str(row.id), "storage_keys": row.storage_keys},
+                )
                 row.last_attempted_at = datetime.now(timezone.utc)
                 remaining += 1
         await session.commit()

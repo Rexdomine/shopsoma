@@ -2127,7 +2127,14 @@ async def delete_product(
             failed_keys = storage_keys
         if not failed_keys and cleanup_record is not None:
             cleanup_record.resolved_at = datetime.now(timezone.utc)
-            await db.commit()
+            try:
+                await db.commit()
+            except Exception:
+                await db.rollback()
+                logger.exception(
+                    "Product cleanup resolution bookkeeping failed after storage deletion",
+                    extra={"product_id": str(product_id), "storage_keys": storage_keys},
+                )
 
         logger.info(f"Admin {current_admin.id} deleted product {product_id} ({product_title})")
 
@@ -2440,7 +2447,17 @@ async def delete_admin_product_image(
         failed_keys = storage_keys
     if not failed_keys and cleanup_record is not None:
         cleanup_record.resolved_at = datetime.now(timezone.utc)
-        await db.commit()
+        try:
+            await db.commit()
+        except Exception:
+            # Storage deletion is already complete and the deletion transaction
+            # is durable. Leave the cleanup row retryable if this bookkeeping
+            # update cannot be confirmed; reporting a 500 would lie to callers.
+            await db.rollback()
+            logger.exception(
+                "Product image cleanup resolution bookkeeping failed after storage deletion",
+                extra={"product_id": str(product_id), "image_id": str(image_id), "storage_keys": storage_keys},
+            )
 
 
 @router.get("/products/{product_id}", response_model=AdminProductResponse)

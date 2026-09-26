@@ -451,6 +451,40 @@ async def test_admin_delete_removes_exact_persisted_storage_keys_after_commit(
 
 
 @pytest.mark.asyncio
+async def test_admin_delete_returns_success_when_resolution_bookkeeping_commit_fails(
+    client, admin_user, sample_product, db_session, monkeypatch, caplog
+):
+    from unittest.mock import AsyncMock
+    from app.api.v1 import admin as admin_api
+
+    image = await _add_image(db_session, sample_product.id, 0, True, "resolution-commit")
+    image.storage_keys = ["products/resolution-commit.jpg"]
+    await db_session.commit()
+    image_id = image.id
+    cleanup = AsyncMock(return_value={"failed_keys": []})
+    monkeypatch.setattr(admin_api.image_service, "delete_images", cleanup)
+    original_commit = db_session.commit
+    commits = 0
+
+    async def fail_only_resolution_commit():
+        nonlocal commits
+        commits += 1
+        if commits == 2:
+            raise RuntimeError("cleanup record resolution commit unavailable")
+        await original_commit()
+
+    monkeypatch.setattr(db_session, "commit", fail_only_resolution_commit)
+    response = await client.delete(
+        f"/api/v1/admin/products/{sample_product.id}/images/{image_id}",
+        headers=admin_user["headers"],
+    )
+
+    assert response.status_code == 204
+    cleanup.assert_awaited_once_with(["products/resolution-commit.jpg"])
+    assert "cleanup resolution bookkeeping failed" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_admin_delete_storage_failure_does_not_restore_deleted_row(
     client, admin_user, sample_product, db_session, monkeypatch, caplog
 ):

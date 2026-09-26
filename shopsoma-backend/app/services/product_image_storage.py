@@ -23,16 +23,13 @@ async def lock_and_validate_storage_keys(db: AsyncSession, storage_keys: Sequenc
         )
         if owned is not None:
             raise ValueError("Image storage key is already associated with a product image")
-        pending_cleanup = await db.scalar(
+        consumed_cleanup = await db.scalar(
             select(ProductImageStorageCleanup.id)
-            .where(
-                ProductImageStorageCleanup.resolved_at.is_(None),
-                ProductImageStorageCleanup.storage_keys.contains([key]),
-            )
+            .where(ProductImageStorageCleanup.storage_keys.contains([key]))
             .limit(1)
         )
-        if pending_cleanup is not None:
-            raise ValueError("Image storage key is pending cleanup and cannot be reused")
+        if consumed_cleanup is not None:
+            raise ValueError("Image storage key was previously consumed and cannot be reused")
 
 
 async def record_storage_cleanup(

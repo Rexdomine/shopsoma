@@ -5,6 +5,7 @@ from typing import List, Optional, Dict, Any, Tuple
 from datetime import datetime, timezone
 import csv
 import io
+import logging
 import math
 import ipaddress
 import re
@@ -53,6 +54,8 @@ from app.schemas.product import (
     variation_regular_price,
     variation_sale_price,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/products", tags=["products"])
 
@@ -1740,10 +1743,21 @@ async def delete_image(
         else:
             failed_keys = []
     except Exception:
+        logger.exception(
+            "Vendor product image storage cleanup failed after durable row deletion",
+            extra={"product_id": str(product_id), "image_id": str(image_id), "storage_keys": storage_keys},
+        )
         failed_keys = storage_keys
     if not failed_keys and cleanup_record is not None:
         cleanup_record.resolved_at = datetime.now(timezone.utc)
-        await db.commit()
+        try:
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            logger.exception(
+                "Vendor product image cleanup resolution bookkeeping failed after storage deletion",
+                extra={"product_id": str(product_id), "image_id": str(image_id), "storage_keys": storage_keys},
+            )
 
 
 # ============================================================================
