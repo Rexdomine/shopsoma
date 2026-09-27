@@ -287,9 +287,33 @@ class TestImageEndpoints:
         }
 
     @pytest.mark.asyncio
-    async def test_generate_signed_url(self, client: AsyncClient, vendor_user):
-        """Local storage fails closed instead of pretending to sign a public URL."""
-        request_data = {"s3_key": "products/2025/11/test.jpg", "expiration": 3600}
+    async def test_generate_signed_url_rejects_another_vendor_key_before_storage_access(
+        self, client: AsyncClient, vendor_user
+    ):
+        """A vendor cannot presign another vendor's private object."""
+        request_data = {
+            "s3_key": "vendors/00000000-0000-0000-0000-000000000000/products/private.jpg",
+            "expiration": 3600,
+        }
+
+        response = await client.post(
+            "/api/v1/images/signed-url",
+            json=request_data,
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 403
+        assert response.json()["detail"] == "Image does not belong to vendor"
+
+    @pytest.mark.asyncio
+    async def test_generate_signed_url_for_own_key_reaches_storage_backend(
+        self, client: AsyncClient, vendor_user
+    ):
+        """Ownership validation does not block a vendor's own key."""
+        request_data = {
+            "s3_key": f"vendors/{vendor_user['user'].id}/products/test.jpg",
+            "expiration": 3600,
+        }
 
         response = await client.post(
             "/api/v1/images/signed-url",
@@ -299,6 +323,18 @@ class TestImageEndpoints:
 
         assert response.status_code == 503
         assert response.json()["detail"] == "Signed URLs require object storage"
+
+    @pytest.mark.asyncio
+    async def test_image_info_rejects_another_vendor_key_before_storage_lookup(
+        self, client: AsyncClient, vendor_user
+    ):
+        response = await client.get(
+            "/api/v1/images/vendors/00000000-0000-0000-0000-000000000000/products/private.jpg/info",
+            headers=vendor_user["headers"],
+        )
+
+        assert response.status_code == 403
+        assert response.json()["detail"] == "Image does not belong to vendor"
 
     @pytest.mark.asyncio
     async def test_batch_delete_images_from_local_storage(
@@ -491,6 +527,60 @@ class TestImageEndpoints:
         assert response.status_code == 200
         assert response.json()["success"] is True
         assert not image_path.exists()
+
+    @pytest.mark.asyncio
+    async def test_delete_image_permanently_reserves_deleted_key(
+        self,
+        client: AsyncClient,
+        vendor_user,
+        sample_product,
+        tmp_path,
+        monkeypatch,
+    ):
+        monkeypatch.setattr(image_service, "upload_dir", tmp_path)
+        s3_key = f"vendors/{vendor_user['user'].id}/products/deleted-directly.jpg"
+        image_path = tmp_path / s3_key
+        image_path.parent.mkdir(parents=True)
+        image_path.write_bytes(b"direct-image")
+
+        deleted = await client.delete(f"/api/v1/images/{s3_key}", headers=vendor_user["headers"])
+        assert deleted.status_code == 200
+
+        response = await client.post(
+            f"/api/v1/products/{sample_product.id}/images",
+            json={"image_url": f"/uploads/{s3_key}", "storage_keys": [s3_key]},
+            headers=vendor_user["headers"],
+        )
+        assert response.status_code == 409
+
+    @pytest.mark.asyncio
+    async def test_delete_image_rejects_key_claimed_by_an_active_product_image(
+        self,
+        client: AsyncClient,
+        vendor_user,
+        sample_product,
+        db_session,
+        tmp_path,
+        monkeypatch,
+    ):
+        monkeypatch.setattr(image_service, "upload_dir", tmp_path)
+        s3_key = f"vendors/{vendor_user['user'].id}/products/claimed.jpg"
+        image_path = tmp_path / s3_key
+        image_path.parent.mkdir(parents=True)
+        image_path.write_bytes(b"claimed-image")
+        db_session.add(ProductImage(
+            product_id=sample_product.id,
+            image_url=f"/uploads/{s3_key}",
+            storage_keys=[s3_key],
+        ))
+        await db_session.commit()
+
+        response = await client.delete(
+            f"/api/v1/images/{s3_key}", headers=vendor_user["headers"]
+        )
+
+        assert response.status_code == 409
+        assert image_path.is_file()
 
     @pytest.mark.asyncio
     async def test_delete_image_rejects_another_vendor_key(

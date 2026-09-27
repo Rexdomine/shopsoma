@@ -2232,6 +2232,11 @@ async def upload_admin_product_image(
     product = await db.scalar(select(Product).where(Product.id == product_id))
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
+    vendor_user_id = await db.scalar(
+        select(Vendor.user_id).where(Vendor.id == product.vendor_id)
+    )
+    if vendor_user_id is None:
+        raise HTTPException(status_code=409, detail="Product vendor is not configured")
     images = list((await db.scalars(select(ProductImage).where(ProductImage.product_id == product_id))).all())
     if len(images) >= 10:
         raise HTTPException(status_code=409, detail="Products can have at most 10 images")
@@ -2266,7 +2271,11 @@ async def upload_admin_product_image(
             )
 
     try:
-        uploaded = await image_service.upload_image(file, folder="products", generate_variants=True)
+        uploaded = await image_service.upload_image(
+            file,
+            folder=f"vendors/{vendor_user_id}/products",
+            generate_variants=True,
+        )
         storage_keys = list(uploaded.get("_storage_keys") or [])
         try:
             await lock_and_validate_storage_keys(db, storage_keys)

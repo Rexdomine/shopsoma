@@ -130,6 +130,36 @@ async def test_admin_json_image_rejects_client_storage_keys(client, admin_user, 
 
 
 @pytest.mark.asyncio
+async def test_cleanup_reconciler_persists_claim_before_external_delete(db_session, monkeypatch):
+    """A worker must release DB locks before it waits on object storage."""
+    from tests.conftest import TestSessionLocal
+    from app.tasks.product_image_storage_cleanup import reconcile_product_image_storage_cleanups
+
+    row = ProductImageStorageCleanup(
+        id=uuid.uuid4(), storage_keys=["exact/claimed-before-delete"], reason="test"
+    )
+    db_session.add(row)
+    await db_session.commit()
+    row_id = row.id
+
+    async def delete(_keys):
+        db_session.expire_all()
+        persisted = await db_session.get(ProductImageStorageCleanup, row_id)
+        assert persisted.claimed_at is not None
+        return {"failed_keys": []}
+
+    monkeypatch.setattr("app.tasks.product_image_storage_cleanup.image_service.delete_images", delete)
+    result = await reconcile_product_image_storage_cleanups(session_factory=TestSessionLocal)
+
+    db_session.expire_all()
+    persisted = await db_session.get(ProductImageStorageCleanup, row_id)
+    assert result == {"resolved": 1, "remaining": 0}
+    assert persisted is not None
+    assert persisted.claimed_at is None
+    assert persisted.resolved_at is not None
+
+
+@pytest.mark.asyncio
 async def test_cleanup_reconciler_retries_exact_keys_and_resolves(
     db_session, monkeypatch
 ):

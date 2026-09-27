@@ -12,11 +12,17 @@ from app.models.product import ProductImage, ProductImageStorageCleanup
 logger = logging.getLogger(__name__)
 
 
-async def lock_and_validate_storage_keys(db: AsyncSession, storage_keys: Sequence[str]) -> None:
-    """Serialize ownership checks and reject keys owned by any image."""
+async def lock_storage_keys(db: AsyncSession, storage_keys: Sequence[str]) -> list[str]:
+    """Acquire transaction-scoped locks in canonical order for exact storage identities."""
     keys = sorted(set(key for key in storage_keys if key))
     for key in keys:
         await db.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"), {"key": key})
+    return keys
+
+
+async def lock_and_validate_storage_keys(db: AsyncSession, storage_keys: Sequence[str]) -> None:
+    """Serialize ownership checks and reject keys owned by any image."""
+    keys = await lock_storage_keys(db, storage_keys)
     for key in keys:
         owned = await db.scalar(
             select(ProductImage.id).where(ProductImage.storage_keys.contains([key])).limit(1)

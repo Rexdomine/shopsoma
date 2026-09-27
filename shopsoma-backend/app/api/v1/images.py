@@ -5,6 +5,7 @@ Image upload and management endpoints
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, status, Query
 from typing import List
 from datetime import datetime, timedelta
+import logging
 from pathlib import PurePosixPath
 from urllib.parse import urlparse
 
@@ -18,13 +19,16 @@ from app.schemas.image import (
     ImageInfoResponse,
 )
 from app.services.image_service import image_service
-from app.services.product_image_storage import record_storage_cleanup
+from app.services.product_image_storage import record_storage_cleanup, lock_storage_keys
 from app.api.dependencies import get_current_user, get_current_vendor
-from app.models.user import User
+from app.models.user import User, UserRole
 from app.models.vendor import Vendor
+from app.models.product import ProductImage
 from app.core.database import get_db
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/images", tags=["Images"])
 
@@ -40,17 +44,37 @@ def _vendor_storage_folder(current_user: User, folder: str) -> str:
     return str(PurePosixPath("vendors", str(current_user.id), *requested.parts))
 
 
-def _require_vendor_image_key(current_user: User, s3_key: str) -> None:
+def _validate_storage_key(s3_key: str) -> None:
     raw_parts = s3_key.split("/")
     requested = PurePosixPath(s3_key)
-    parts = requested.parts
-    if requested.is_absolute() or any(part in {"", ".", ".."} for part in raw_parts):
+    if (
+        requested.is_absolute()
+        or "\x00" in s3_key
+        or any(part in {"", ".", ".."} for part in raw_parts)
+    ):
         raise HTTPException(status_code=400, detail="Invalid image key")
+
+
+def _require_vendor_image_key(current_user: User, s3_key: str) -> None:
+    _validate_storage_key(s3_key)
+    requested = PurePosixPath(s3_key)
+    parts = requested.parts
 
     if len(parts) >= 3 and parts[:2] == ("vendors", str(current_user.id)):
         return
 
     raise HTTPException(status_code=403, detail="Image does not belong to vendor")
+
+
+def _require_image_read_access(current_user: User, s3_key: str) -> None:
+    """Private storage inspection is restricted to an owning vendor or admin."""
+    _validate_storage_key(s3_key)
+    if current_user.role == UserRole.ADMIN:
+        return
+    if current_user.role == UserRole.VENDOR:
+        _require_vendor_image_key(current_user, s3_key)
+        return
+    raise HTTPException(status_code=403, detail="Image access requires vendor or admin role")
 
 
 def _is_featured_storefront_image(featured_url: str | None, s3_key: str) -> bool:
@@ -80,6 +104,19 @@ async def _reject_featured_storefront_image_delete(
             status_code=status.HTTP_409_CONFLICT,
             detail="Featured storefront image cannot be deleted while it is in use",
         )
+
+
+async def _reject_product_image_storage_delete(s3_keys: List[str], db: AsyncSession) -> None:
+    """Do not let the generic storage API delete an active product-image object."""
+    for key in s3_keys:
+        image_id = await db.scalar(
+            select(ProductImage.id).where(ProductImage.storage_keys.contains([key])).limit(1)
+        )
+        if image_id is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Image cannot be deleted while it is associated with a product",
+            )
 
 
 @router.post(
@@ -215,6 +252,7 @@ async def generate_signed_url(
 
     **Permissions:** Authenticated users
     """
+    _require_image_read_access(current_user, request.s3_key)
     try:
         url = image_service.generate_presigned_url(
             s3_key=request.s3_key, expiration=request.expiration
@@ -247,11 +285,27 @@ async def delete_image(
     **Permissions:** Vendor only (own images)
     """
     _require_vendor_image_key(current_user, s3_key)
+    await lock_storage_keys(db, [s3_key])
     await _reject_featured_storefront_image_delete(current_user, [s3_key], db)
+    await _reject_product_image_storage_delete([s3_key], db)
+    cleanup_record = await record_storage_cleanup(
+        db, [s3_key], reason="vendor_direct_image_delete"
+    )
+    if cleanup_record is None:
+        raise HTTPException(status_code=500, detail="Failed to record image deletion")
 
     success = await image_service.delete_image(s3_key)
 
     if success:
+        cleanup_record.resolved_at = datetime.utcnow()
+        try:
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            logger.exception(
+                "Direct image cleanup resolution bookkeeping failed after storage deletion",
+                extra={"storage_key": s3_key},
+            )
         return ImageDeleteResponse(
             success=True, message="Image deleted successfully", s3_key=s3_key
         )
@@ -277,12 +331,36 @@ async def delete_images_batch(
         raise HTTPException(
             status_code=400, detail="Maximum 100 images per batch delete"
         )
+    if len(s3_keys) != len(set(s3_keys)):
+        raise HTTPException(status_code=400, detail="Duplicate image keys are not allowed")
 
     for s3_key in s3_keys:
         _require_vendor_image_key(current_user, s3_key)
 
+    await lock_storage_keys(db, s3_keys)
     await _reject_featured_storefront_image_delete(current_user, s3_keys, db)
+    await _reject_product_image_storage_delete(s3_keys, db)
+    cleanup_records = []
+    for s3_key in s3_keys:
+        cleanup_record = await record_storage_cleanup(
+            db, [s3_key], reason="vendor_direct_image_delete", commit=False
+        )
+        if cleanup_record is not None:
+            cleanup_records.append((s3_key, cleanup_record))
+    if cleanup_records:
+        await db.commit()
+
     result = await image_service.delete_images(s3_keys)
+    failed_keys = set(result.get("failed_keys", []))
+    for s3_key, cleanup_record in cleanup_records:
+        if s3_key not in failed_keys:
+            cleanup_record.resolved_at = datetime.utcnow()
+    if cleanup_records and len(failed_keys) < len(s3_keys):
+        try:
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            logger.exception("Direct image batch cleanup resolution bookkeeping failed after storage deletion")
 
     return ImageBatchDeleteResponse(
         deleted=result["deleted"],
@@ -305,6 +383,7 @@ async def get_image_info(s3_key: str, current_user: User = Depends(get_current_u
 
     **Permissions:** Authenticated users
     """
+    _require_image_read_access(current_user, s3_key)
     info = image_service.get_image_info(s3_key)
 
     if not info:

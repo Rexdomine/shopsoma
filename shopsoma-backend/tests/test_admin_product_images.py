@@ -15,7 +15,7 @@ TINY_PNG = (
 
 @pytest.mark.asyncio
 async def test_admin_multipart_upload_persists_product_image(
-    client, admin_user, sample_product, db_session, monkeypatch
+    client, admin_user, vendor_user, sample_product, db_session, monkeypatch
 ):
     from app.api.v1 import admin as admin_api
 
@@ -48,6 +48,10 @@ async def test_admin_multipart_upload_persists_product_image(
     assert image is not None
     assert image.product_id == sample_product.id
     upload.assert_awaited_once()
+    assert upload.await_args.kwargs == {
+        "folder": f"vendors/{vendor_user['user'].id}/products",
+        "generate_variants": True,
+    }
 
 
 @pytest.mark.asyncio
