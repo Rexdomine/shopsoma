@@ -7,7 +7,7 @@ from typing import List
 from datetime import datetime, timedelta
 import logging
 from pathlib import PurePosixPath
-from urllib.parse import urlparse
+
 
 from app.schemas.image import (
     ImageUploadResponse,
@@ -19,7 +19,11 @@ from app.schemas.image import (
     ImageInfoResponse,
 )
 from app.services.image_service import image_service
-from app.services.product_image_storage import record_storage_cleanup, lock_storage_keys
+from app.services.product_image_storage import (
+    _is_featured_storefront_image,
+    lock_storage_keys,
+    record_storage_cleanup,
+)
 from app.api.dependencies import get_current_user, get_current_vendor
 from app.models.user import User, UserRole
 from app.models.vendor import Vendor
@@ -75,21 +79,6 @@ def _require_image_read_access(current_user: User, s3_key: str) -> None:
         _require_vendor_image_key(current_user, s3_key)
         return
     raise HTTPException(status_code=403, detail="Image access requires vendor or admin role")
-
-
-def _is_featured_storefront_image(featured_url: str | None, s3_key: str) -> bool:
-    """Match a persisted featured-image URL to its storage key."""
-    if not featured_url:
-        return False
-
-    storage_prefix = image_service._get_public_url("").rstrip("/") + "/"
-    if featured_url.startswith(storage_prefix):
-        return featured_url.removeprefix(storage_prefix) == s3_key
-
-    path = urlparse(featured_url).path.lstrip("/")
-    if path.startswith("uploads/"):
-        path = path[len("uploads/"):]
-    return path == s3_key
 
 
 async def _reject_featured_storefront_image_delete(

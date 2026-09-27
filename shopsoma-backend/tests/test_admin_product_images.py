@@ -486,6 +486,41 @@ async def test_admin_delete_clears_featured_storefront_reference(
 
 
 @pytest.mark.asyncio
+async def test_admin_delete_clears_production_featured_storefront_reference(
+    client, admin_user, sample_product, db_session, monkeypatch
+):
+    from unittest.mock import AsyncMock
+    from app.api.v1 import admin as admin_api
+    from app.models.vendor import Vendor
+
+    image = await _add_image(db_session, sample_product.id, 0, True, "featured-production")
+    vendor = await db_session.get(Vendor, sample_product.vendor_id)
+    key = f"vendors/{vendor.user_id}/products/featured-production.jpg"
+    image.storage_keys = [key]
+    monkeypatch.setattr(
+        admin_api.image_service,
+        "_get_public_url",
+        lambda storage_key: f"https://cdn.example.test/shop-soma/{storage_key}",
+    )
+    vendor.featured_storefront_image_url = f"https://cdn.example.test/shop-soma/{key}"
+    await db_session.commit()
+    monkeypatch.setattr(
+        admin_api.image_service,
+        "delete_images",
+        AsyncMock(return_value={"failed_keys": []}),
+    )
+
+    response = await client.delete(
+        f"/api/v1/admin/products/{sample_product.id}/images/{image.id}",
+        headers=admin_user["headers"],
+    )
+
+    assert response.status_code == 204
+    await db_session.refresh(sample_product.vendor)
+    assert sample_product.vendor.featured_storefront_image_url is None
+
+
+@pytest.mark.asyncio
 async def test_admin_delete_returns_success_when_resolution_bookkeeping_commit_fails(
     client, admin_user, sample_product, db_session, monkeypatch, caplog
 ):

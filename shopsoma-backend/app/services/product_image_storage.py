@@ -3,33 +3,53 @@
 import logging
 from typing import Optional, Sequence
 from uuid import UUID
+from urllib.parse import urlparse
 
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.product import ProductImage, ProductImageStorageCleanup
 from app.models.vendor import Vendor
+from app.services.image_service import image_service
 
 logger = logging.getLogger(__name__)
+
+
+def _is_featured_storefront_image(featured_url: str | None, storage_key: str) -> bool:
+    """Match a persisted featured-image URL to its exact storage key."""
+    if not featured_url:
+        return False
+
+    storage_prefix = image_service._get_public_url("").rstrip("/") + "/"
+    if featured_url.startswith(storage_prefix):
+        return featured_url.removeprefix(storage_prefix) == storage_key
+
+    path = urlparse(featured_url).path.lstrip("/")
+    if path.startswith("uploads/"):
+        path = path[len("uploads/"):]
+    return path == storage_key
 
 
 async def clear_featured_storefront_references(
     db: AsyncSession, storage_keys: Sequence[str]
 ) -> int:
     """Clear vendor storefront references before deleting backing objects."""
-    urls = {f"/uploads/{key}" for key in storage_keys if key}
-    if not urls:
+    keys = [key for key in storage_keys if key]
+    if not keys:
         return 0
     vendors = list(
         (
             await db.scalars(
-                select(Vendor).where(Vendor.featured_storefront_image_url.in_(urls))
+                select(Vendor).where(Vendor.featured_storefront_image_url.is_not(None))
             )
         ).all()
     )
+    cleared = 0
     for vendor in vendors:
-        vendor.featured_storefront_image_url = None
-    return len(vendors)
+        if any(_is_featured_storefront_image(vendor.featured_storefront_image_url, key) for key in keys):
+            vendor.featured_storefront_image_url = None
+            cleared += 1
+    return cleared
 
 
 async def lock_storage_keys(db: AsyncSession, storage_keys: Sequence[str]) -> list[str]:
