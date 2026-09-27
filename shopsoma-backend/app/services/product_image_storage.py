@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.product import ProductImage, ProductImageStorageCleanup
+from app.models.product import ProductImage, ProductImageStorageCleanup, Variation
 from app.models.vendor import Vendor
 from app.services.image_service import image_service
 
@@ -49,6 +49,34 @@ async def clear_featured_storefront_references(
         if any(_is_featured_storefront_image(vendor.featured_storefront_image_url, key) for key in keys):
             vendor.featured_storefront_image_url = None
             cleared += 1
+    return cleared
+
+
+async def clear_variation_image_references(
+    db: AsyncSession, product_id: UUID, storage_keys: Sequence[str]
+) -> int:
+    """Remove deleted product-image URLs from this product's variation galleries."""
+    keys = {key for key in storage_keys if key}
+    if not keys:
+        return 0
+    variations = list(
+        (
+            await db.scalars(
+                select(Variation).where(Variation.product_id == product_id)
+            )
+        ).all()
+    )
+    cleared = 0
+    for variation in variations:
+        images = list(variation.images or [])
+        remaining = [
+            image_url
+            for image_url in images
+            if storage_key_from_public_url(image_url) not in keys
+        ]
+        if remaining != images:
+            variation.images = remaining
+            cleared += len(images) - len(remaining)
     return cleared
 
 

@@ -66,6 +66,7 @@ from app.services.shop_edits import SHOP_EDIT_NAMES, SHOP_EDIT_SLUGS, normalize_
 from app.services.image_service import image_service
 from app.services.product_image_storage import (
     clear_featured_storefront_references,
+    clear_variation_image_references,
     lock_storage_keys,
     lock_and_validate_storage_keys,
     record_storage_cleanup,
@@ -2446,6 +2447,7 @@ async def delete_admin_product_image(
     if storage_keys:
         await lock_storage_keys(db, storage_keys)
         await clear_featured_storefront_references(db, storage_keys)
+        await clear_variation_image_references(db, product_id, storage_keys)
         cleanup_record = await record_storage_cleanup(
             db, storage_keys, reason="image_delete", product_id=product_id,
             image_id=image_id, commit=False

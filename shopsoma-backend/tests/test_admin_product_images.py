@@ -4,7 +4,7 @@ from io import BytesIO
 import pytest
 from sqlalchemy import select
 
-from app.models.product import ProductImage
+from app.models.product import ProductImage, Variation
 
 
 TINY_PNG = (
@@ -518,6 +518,39 @@ async def test_admin_delete_clears_production_featured_storefront_reference(
     assert response.status_code == 204
     await db_session.refresh(sample_product.vendor)
     assert sample_product.vendor.featured_storefront_image_url is None
+
+
+@pytest.mark.asyncio
+async def test_admin_delete_clears_matching_variation_image_references(
+    client, admin_user, sample_product, db_session, monkeypatch
+):
+    from unittest.mock import AsyncMock
+    from app.api.v1 import admin as admin_api
+
+    image = await _add_image(db_session, sample_product.id, 0, True, "variation-image")
+    key = "vendors/images/variation-image.jpg"
+    image.storage_keys = [key]
+    variation = Variation(
+        product_id=sample_product.id,
+        title="Black",
+        images=[f"/uploads/{key}", "https://example.com/keep.jpg"],
+    )
+    db_session.add(variation)
+    await db_session.commit()
+    monkeypatch.setattr(
+        admin_api.image_service,
+        "delete_images",
+        AsyncMock(return_value={"failed_keys": []}),
+    )
+
+    response = await client.delete(
+        f"/api/v1/admin/products/{sample_product.id}/images/{image.id}",
+        headers=admin_user["headers"],
+    )
+
+    assert response.status_code == 204
+    await db_session.refresh(variation)
+    assert variation.images == ["https://example.com/keep.jpg"]
 
 
 @pytest.mark.asyncio
