@@ -514,6 +514,15 @@ async def create_product(
 
     # Add variations if provided (new system)
     if product_data.variations:
+        variation_image_urls = [
+            image_url
+            for variation_data in product_data.variations
+            for image_url in (variation_data.images or [])
+        ]
+        try:
+            await lock_and_validate_variation_image_urls(db, variation_image_urls)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
         for variation_data in product_data.variations:
             variation = Variation(
                 product_id=product.id,
@@ -1210,6 +1219,10 @@ async def update_product(
             for image_url in (variation_data.get("images") or [])
         ]
         try:
+            # Deletion paths acquire the catalog coordinator before any
+            # storage-key lock. Keep this writer in the same global order to
+            # prevent a catalog/storage lock inversion.
+            await coordinate_catalog_write(db, product_ids=[product_id], lock_only=True)
             await lock_and_validate_variation_image_urls(db, variation_image_urls)
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc

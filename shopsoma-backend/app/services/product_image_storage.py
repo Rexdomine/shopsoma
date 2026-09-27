@@ -147,7 +147,7 @@ async def lock_and_validate_storage_keys(db: AsyncSession, storage_keys: Sequenc
 async def lock_and_validate_variation_image_urls(
     db: AsyncSession, image_urls: Sequence[str | None]
 ) -> None:
-    """Reject variation galleries that restore a key reserved for cleanup."""
+    """Reject variation galleries that restore a key consumed by cleanup."""
     keys = {
         key
         for image_url in image_urls
@@ -157,12 +157,11 @@ async def lock_and_validate_variation_image_urls(
     for key in keys:
         pending_cleanup = await db.scalar(
             select(ProductImageStorageCleanup.id).where(
-                ProductImageStorageCleanup.resolved_at.is_(None),
                 ProductImageStorageCleanup.storage_keys.contains([key]),
             ).limit(1)
         )
         if pending_cleanup is not None:
-            raise ValueError("Image storage key is reserved for pending cleanup")
+            raise ValueError("Image storage key was previously consumed and cannot be reused")
 
 
 async def record_storage_cleanup(

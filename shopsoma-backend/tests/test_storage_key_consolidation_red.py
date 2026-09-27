@@ -451,3 +451,55 @@ async def test_product_update_rejects_variation_url_reserved_by_cleanup(
         headers=vendor_user["headers"],
     )
     assert response.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_product_update_rejects_variation_url_consumed_by_resolved_cleanup(
+    client, vendor_user, sample_product, db_session
+):
+    storage_key = f"vendors/{vendor_user['user'].id}/products/consumed-variation.jpg"
+    db_session.add(ProductImageStorageCleanup(
+        storage_keys=[storage_key],
+        reason="vendor_image_delete",
+        resolved_at=datetime.now(timezone.utc),
+    ))
+    await db_session.commit()
+
+    response = await client.put(
+        f"/api/v1/products/{sample_product.id}",
+        json={
+            "variations": [{
+                "title": "Restored consumed variation",
+                "images": [f"https://cdn.example.com/{storage_key}"],
+            }]
+        },
+        headers=vendor_user["headers"],
+    )
+    assert response.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_product_creation_rejects_variation_url_consumed_by_cleanup(
+    client, vendor_user, db_session
+):
+    storage_key = f"vendors/{vendor_user['user'].id}/products/consumed-create.jpg"
+    db_session.add(ProductImageStorageCleanup(
+        storage_keys=[storage_key],
+        reason="vendor_image_delete",
+        resolved_at=datetime.now(timezone.utc),
+    ))
+    await db_session.commit()
+
+    response = await client.post(
+        "/api/v1/products",
+        json={
+            "title": "New variation product",
+            "base_price": 10,
+            "variations": [{
+                "title": "Consumed image",
+                "images": [f"https://cdn.example.com/{storage_key}"],
+            }],
+        },
+        headers=vendor_user["headers"],
+    )
+    assert response.status_code == 409
