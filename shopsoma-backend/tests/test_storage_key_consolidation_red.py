@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, ANY
 import pytest
 from sqlalchemy import select
 
-from app.models.product import ProductImage, ProductImageStorageCleanup
+from app.models.product import ProductImage, ProductImageStorageCleanup, Variation
 
 
 @pytest.mark.asyncio
@@ -380,6 +380,12 @@ async def test_legacy_null_storage_keys_are_not_guessed_or_deleted(
         storage_keys=None,
     )
     db_session.add(image)
+    variation = Variation(
+        product_id=sample_product.id,
+        title="Legacy variation",
+        images=["https://cdn.example.com/products/legacy.jpg"],
+    )
+    db_session.add(variation)
     await db_session.commit()
     delete = AsyncMock()
     monkeypatch.setattr(admin_api.image_service, "delete_images", delete)
@@ -390,6 +396,8 @@ async def test_legacy_null_storage_keys_are_not_guessed_or_deleted(
     )
     assert response.status_code == 204
     delete.assert_not_awaited()
+    await db_session.refresh(variation)
+    assert variation.images == []
 
 
 @pytest.mark.asyncio
@@ -403,13 +411,43 @@ async def test_vendor_legacy_null_storage_keys_are_not_guessed_or_deleted(
         storage_keys=None,
     )
     db_session.add(image)
+    variation = Variation(
+        product_id=sample_product.id,
+        title="Legacy vendor variation",
+        images=["https://cdn.example.com/products/vendor-legacy.jpg"],
+    )
+    db_session.add(variation)
     await db_session.commit()
     delete = AsyncMock()
     monkeypatch.setattr(products_api.image_service, "delete_images", delete)
-
     response = await client.delete(
         f"/api/v1/products/{sample_product.id}/images/{image.id}",
         headers=vendor_user["headers"],
     )
     assert response.status_code == 204
     delete.assert_not_awaited()
+    await db_session.refresh(variation)
+    assert variation.images == []
+
+
+@pytest.mark.asyncio
+async def test_product_update_rejects_variation_url_reserved_by_cleanup(
+    client, vendor_user, sample_product, db_session
+):
+    storage_key = f"vendors/{vendor_user['user'].id}/products/pending-variation.jpg"
+    db_session.add(ProductImageStorageCleanup(
+        storage_keys=[storage_key], reason="vendor_image_delete"
+    ))
+    await db_session.commit()
+
+    response = await client.put(
+        f"/api/v1/products/{sample_product.id}",
+        json={
+            "variations": [{
+                "title": "Restored stale variation",
+                "images": [f"https://cdn.example.com/{storage_key}"],
+            }]
+        },
+        headers=vendor_user["headers"],
+    )
+    assert response.status_code == 409

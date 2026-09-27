@@ -37,6 +37,7 @@ from app.services.product_image_storage import (
     clear_variation_image_references,
     lock_storage_keys,
     lock_and_validate_storage_keys,
+    lock_and_validate_variation_image_urls,
     record_storage_cleanup,
 )
 from app.schemas.product import (
@@ -1202,6 +1203,17 @@ async def update_product(
     variations_data = update_data.pop("variations", None)
     variations_to_sync = product.variations
 
+    if variations_data is not None:
+        variation_image_urls = [
+            image_url
+            for variation_data in variations_data
+            for image_url in (variation_data.get("images") or [])
+        ]
+        try:
+            await lock_and_validate_variation_image_urls(db, variation_image_urls)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
     # ProductUpdate validates only the incoming variation payload. When an
     # existing product retains legacy variants, include those persisted rows in
     # the same invariant before replacing any variations.
@@ -1740,11 +1752,11 @@ async def delete_image(
     cleanup_record = None
     if storage_keys:
         await clear_featured_storefront_references(db, storage_keys)
-        await clear_variation_image_references(db, product_id, storage_keys)
         cleanup_record = await record_storage_cleanup(
             db, storage_keys, reason="vendor_image_delete",
             product_id=product_id, image_id=image_id, commit=False
         )
+    await clear_variation_image_references(db, product_id, storage_keys, image.image_url)
     await db.commit()
     try:
         if storage_keys:

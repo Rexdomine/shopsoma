@@ -53,10 +53,17 @@ async def clear_featured_storefront_references(
 
 
 async def clear_variation_image_references(
-    db: AsyncSession, product_id: UUID, storage_keys: Sequence[str]
+    db: AsyncSession,
+    product_id: UUID,
+    storage_keys: Sequence[str],
+    image_url: str | None = None,
 ) -> int:
     """Remove deleted product-image URLs from this product's variation galleries."""
     keys = {key for key in storage_keys if key}
+    if image_url:
+        legacy_key = storage_key_from_public_url(image_url)
+        if legacy_key:
+            keys.add(legacy_key)
     if not keys:
         return 0
     variations = list(
@@ -135,6 +142,27 @@ async def lock_and_validate_storage_keys(db: AsyncSession, storage_keys: Sequenc
         )
         if consumed_cleanup is not None:
             raise ValueError("Image storage key was previously consumed and cannot be reused")
+
+
+async def lock_and_validate_variation_image_urls(
+    db: AsyncSession, image_urls: Sequence[str | None]
+) -> None:
+    """Reject variation galleries that restore a key reserved for cleanup."""
+    keys = {
+        key
+        for image_url in image_urls
+        if (key := storage_key_from_public_url(image_url))
+    }
+    await lock_storage_keys(db, list(keys))
+    for key in keys:
+        pending_cleanup = await db.scalar(
+            select(ProductImageStorageCleanup.id).where(
+                ProductImageStorageCleanup.resolved_at.is_(None),
+                ProductImageStorageCleanup.storage_keys.contains([key]),
+            ).limit(1)
+        )
+        if pending_cleanup is not None:
+            raise ValueError("Image storage key is reserved for pending cleanup")
 
 
 async def record_storage_cleanup(

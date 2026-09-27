@@ -2447,11 +2447,11 @@ async def delete_admin_product_image(
     if storage_keys:
         await lock_storage_keys(db, storage_keys)
         await clear_featured_storefront_references(db, storage_keys)
-        await clear_variation_image_references(db, product_id, storage_keys)
         cleanup_record = await record_storage_cleanup(
             db, storage_keys, reason="image_delete", product_id=product_id,
             image_id=image_id, commit=False
         )
+    await clear_variation_image_references(db, product_id, storage_keys, image.image_url)
     await db.commit()
     try:
         if storage_keys:
