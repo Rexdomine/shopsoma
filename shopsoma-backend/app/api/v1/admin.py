@@ -64,7 +64,11 @@ from app.services.test_account_classification import (
 )
 from app.services.shop_edits import SHOP_EDIT_NAMES, SHOP_EDIT_SLUGS, normalize_shop_edit_names
 from app.services.image_service import image_service
-from app.services.product_image_storage import record_storage_cleanup, lock_and_validate_storage_keys
+from app.services.product_image_storage import (
+    clear_featured_storefront_references,
+    lock_and_validate_storage_keys,
+    record_storage_cleanup,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -2099,6 +2103,7 @@ async def delete_product(
         storage_keys = [key for image in image_rows for key in (image.storage_keys or [])]
         cleanup_record = None
         if storage_keys:
+            await clear_featured_storefront_references(db, storage_keys)
             cleanup_record = await record_storage_cleanup(
                 db, storage_keys, reason="product_delete", product_id=product_id,
                 commit=False
@@ -2437,6 +2442,7 @@ async def delete_admin_product_image(
     storage_keys = list(image.storage_keys or [])
     cleanup_record = None
     if storage_keys:
+        await clear_featured_storefront_references(db, storage_keys)
         cleanup_record = await record_storage_cleanup(
             db, storage_keys, reason="image_delete", product_id=product_id,
             image_id=image_id, commit=False

@@ -32,7 +32,11 @@ from app.services.product_moderation import (
     transition_product_moderation,
 )
 from app.services.image_service import image_service
-from app.services.product_image_storage import record_storage_cleanup, lock_and_validate_storage_keys
+from app.services.product_image_storage import (
+    clear_featured_storefront_references,
+    lock_and_validate_storage_keys,
+    record_storage_cleanup,
+)
 from app.schemas.product import (
     ProductCreate,
     ProductUpdate,
@@ -1731,6 +1735,7 @@ async def delete_image(
     await db.delete(image)
     cleanup_record = None
     if storage_keys:
+        await clear_featured_storefront_references(db, storage_keys)
         cleanup_record = await record_storage_cleanup(
             db, storage_keys, reason="vendor_image_delete",
             product_id=product_id, image_id=image_id, commit=False

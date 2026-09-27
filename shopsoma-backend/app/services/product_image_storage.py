@@ -8,8 +8,28 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.product import ProductImage, ProductImageStorageCleanup
+from app.models.vendor import Vendor
 
 logger = logging.getLogger(__name__)
+
+
+async def clear_featured_storefront_references(
+    db: AsyncSession, storage_keys: Sequence[str]
+) -> int:
+    """Clear vendor storefront references before deleting backing objects."""
+    urls = {f"/uploads/{key}" for key in storage_keys if key}
+    if not urls:
+        return 0
+    vendors = list(
+        (
+            await db.scalars(
+                select(Vendor).where(Vendor.featured_storefront_image_url.in_(urls))
+            )
+        ).all()
+    )
+    for vendor in vendors:
+        vendor.featured_storefront_image_url = None
+    return len(vendors)
 
 
 async def lock_storage_keys(db: AsyncSession, storage_keys: Sequence[str]) -> list[str]:
