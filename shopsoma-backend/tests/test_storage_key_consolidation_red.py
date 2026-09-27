@@ -266,6 +266,27 @@ async def test_cleanup_retry_clears_new_featured_reference_before_delete(
 
 
 @pytest.mark.asyncio
+async def test_featured_storefront_assignment_is_rejected_while_cleanup_holds_key(
+    client, vendor_user, db_session, monkeypatch
+):
+    from app.api.v1 import vendors as vendors_api
+
+    storage_key = f"vendors/{vendor_user['user'].id}/products/locked-featured.jpg"
+    db_session.add(ProductImageStorageCleanup(storage_keys=[storage_key], reason="test"))
+    await db_session.commit()
+    monkeypatch.setattr(vendors_api, "_require_vendor_owned_uploaded_image", AsyncMock())
+
+    response = await client.put(
+        "/api/v1/vendor/onboarding/brand-info",
+        json={"featured_storefront_image_url": f"/uploads/{storage_key}"},
+        headers=vendor_user["headers"],
+    )
+
+    assert response.status_code == 409
+    assert "reserved for pending cleanup" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
 async def test_vendor_delete_returns_success_when_resolution_bookkeeping_commit_fails(
     client, vendor_user, sample_product, db_session, monkeypatch, caplog
 ):

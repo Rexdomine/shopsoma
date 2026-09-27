@@ -41,6 +41,7 @@ from app.services.email_service import email_service
 from app.services.commission import get_default_commission_rate
 from app.services.vendor_onboarding import reconcile_vendor_onboarding
 from app.services.image_service import image_service
+from app.services.product_image_storage import lock_and_validate_featured_storefront_key
 
 router = APIRouter(prefix="/vendor", tags=["Vendors"])
 logger = logging.getLogger(__name__)
@@ -223,6 +224,12 @@ async def save_brand_info(
         await _require_vendor_owned_uploaded_image(
             brand_info.featured_storefront_image_url, vendor
         )
+        try:
+            await lock_and_validate_featured_storefront_key(
+                db, brand_info.featured_storefront_image_url
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
     # Update vendor with brand info
     vendor.business_phone = brand_info.business_phone

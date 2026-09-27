@@ -52,6 +52,37 @@ async def clear_featured_storefront_references(
     return cleared
 
 
+def storage_key_from_public_url(featured_url: str | None) -> str | None:
+    """Return the storage key represented by a local or production public URL."""
+    if not featured_url:
+        return None
+    storage_prefix = image_service._get_public_url("").rstrip("/") + "/"
+    if featured_url.startswith(storage_prefix):
+        return featured_url.removeprefix(storage_prefix)
+    path = urlparse(featured_url).path.lstrip("/")
+    if path.startswith("uploads/"):
+        path = path[len("uploads/"):]
+    return path or None
+
+
+async def lock_and_validate_featured_storefront_key(
+    db: AsyncSession, featured_url: str | None
+) -> None:
+    """Reserve a featured key and reject it while cleanup still owns it."""
+    key = storage_key_from_public_url(featured_url)
+    if not key:
+        return
+    await lock_storage_keys(db, [key])
+    pending_cleanup = await db.scalar(
+        select(ProductImageStorageCleanup.id).where(
+            ProductImageStorageCleanup.resolved_at.is_(None),
+            ProductImageStorageCleanup.storage_keys.contains([key]),
+        ).limit(1)
+    )
+    if pending_cleanup is not None:
+        raise ValueError("Image storage key is reserved for pending cleanup")
+
+
 async def lock_storage_keys(db: AsyncSession, storage_keys: Sequence[str]) -> list[str]:
     """Acquire transaction-scoped locks in canonical order for exact storage identities."""
     keys = sorted(set(key for key in storage_keys if key))
