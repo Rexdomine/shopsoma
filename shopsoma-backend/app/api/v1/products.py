@@ -34,6 +34,7 @@ from app.services.product_moderation import (
 from app.services.image_service import image_service
 from app.services.product_image_storage import (
     clear_featured_storefront_references,
+    lock_storage_keys,
     lock_and_validate_storage_keys,
     record_storage_cleanup,
 )
@@ -1732,6 +1733,8 @@ async def delete_image(
 
     await mark_product_content_pending(db=db, product_id=product_id)
     storage_keys = list(image.storage_keys or [])
+    if storage_keys:
+        await lock_storage_keys(db, storage_keys)
     await db.delete(image)
     cleanup_record = None
     if storage_keys:
