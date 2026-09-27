@@ -241,6 +241,31 @@ async def test_cleanup_reconciler_logs_exception_and_preserves_retry_state(db_se
 
 
 @pytest.mark.asyncio
+async def test_cleanup_retry_clears_new_featured_reference_before_delete(
+    db_session, vendor_user, monkeypatch
+):
+    from tests.conftest import TestSessionLocal
+    from app.tasks.product_image_storage_cleanup import reconcile_product_image_storage_cleanups
+
+    storage_key = f"vendors/{vendor_user['user'].id}/products/retry-featured.jpg"
+    vendor_user["vendor"].featured_storefront_image_url = f"/uploads/{storage_key}"
+    row = ProductImageStorageCleanup(id=uuid.uuid4(), storage_keys=[storage_key], reason="test")
+    db_session.add(row)
+    await db_session.commit()
+
+    async def delete(keys):
+        async with TestSessionLocal() as observer:
+            vendor = await observer.get(type(vendor_user["vendor"]), vendor_user["vendor"].id)
+            assert vendor.featured_storefront_image_url is None
+        return {"failed_keys": []}
+
+    monkeypatch.setattr("app.tasks.product_image_storage_cleanup.image_service.delete_images", delete)
+    result = await reconcile_product_image_storage_cleanups(session_factory=TestSessionLocal)
+
+    assert result == {"resolved": 1, "remaining": 0}
+
+
+@pytest.mark.asyncio
 async def test_vendor_delete_returns_success_when_resolution_bookkeeping_commit_fails(
     client, vendor_user, sample_product, db_session, monkeypatch, caplog
 ):

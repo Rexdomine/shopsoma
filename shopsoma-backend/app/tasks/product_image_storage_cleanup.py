@@ -9,6 +9,7 @@ from sqlalchemy import func, or_, select
 from app.core.database import AsyncSessionLocal, engine
 from app.models.product import ProductImageStorageCleanup
 from app.services.image_service import image_service
+from app.services.product_image_storage import clear_featured_storefront_references
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +52,12 @@ async def reconcile_product_image_storage_cleanups(*, session_factory=AsyncSessi
     for row_id, storage_keys in claimed_rows:
         failed_keys = storage_keys
         try:
+            # Recheck the durable storefront reference immediately before crossing
+            # the storage boundary. A vendor may have selected this object after
+            # the original deletion attempt failed.
+            async with session_factory() as session:
+                await clear_featured_storefront_references(session, storage_keys)
+                await session.commit()
             result = await image_service.delete_images(storage_keys)
             failed_keys = result.get("failed_keys", storage_keys) if isinstance(result, dict) else storage_keys
         except Exception:
