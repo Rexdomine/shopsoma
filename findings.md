@@ -49,6 +49,15 @@ No staging/production write or privileged admin session is authorized for discov
 - Frontend focused test: `AdminProductEdit.images.test.tsx` — 2 passed.
 - Backend focused integration tests were added but could not collect because the configured PostgreSQL test bootstrap could not connect to `localhost:5432` (connection refused). Python compilation and `git diff --check` passed.
 - TypeScript check was attempted and exited 1 without diagnostics; rerun in a fully configured frontend environment before merge.
+## Consolidated recovery audit — frozen head `ad7eb802771ea2e56d4e7ee0fb190b8c3433a9d7`
+- The prior internal audit was incomplete: it tracked known findings but did not enumerate every image writer, deleter, cleanup transition, URL/reference consumer, and lock-order path.
+- Required matrix lanes are now explicit: admin upload/create/update/delete/product-delete; vendor upload/create/update/delete/product-delete; cleanup claim/delete/bookkeeping; featured-storefront assignment/read/delete; variation image create/update/delete/read; product/cart/wishlist/public gallery consumers; local/CDN URL normalization; unresolved/resolved cleanup-key reservation; and catalog/storage lock ordering.
+- Frozen candidate is clean and SHA-aligned locally/remotely at `ad7eb802771ea2e56d4e7ee0fb190b8c3433a9d7`. Mutating cron is paused; no new Codex request is authorized until one consolidated batch is verified.
+
+- **Verified reset lifecycle defect fixed in consolidated batch:** `/admin/reset-products` now requires `get_current_admin`, collects exact persisted storage keys, coordinates catalog/storage locks, clears featured references, records retryable cleanup before commit, deletes known objects after commit, and preserves failed cleanup state. RED→GREEN regressions cover unauthenticated access and cleanup/reference behavior.
+- **Verified frontend parity gaps fixed in consolidated batch:** Cart, add/edit variant modals, vendor product view, admin product detail, and collection consumers now use shared URL normalization/primary-order selection where applicable; admin image-create typing no longer permits rejected `storage_keys`.
+- **Deferred by evidence boundary:** variation upload storage-key schema expansion and abandoned-upload garbage collection were not changed; the current URL-derived cleanup contract is covered, and adding a new storage schema/GC policy would broaden scope beyond the verified defects.
+
 ## Storage lifecycle blocker remediation
 - Added nullable PostgreSQL JSONB `product_images.storage_keys` plus Alembic migration `r7s8t9u0v1w2_add_product_image_storage_keys.py`.
 - Admin server-owned uploads persist the complete private `_storage_keys` set (original and every generated variant); the response schema does not expose it.

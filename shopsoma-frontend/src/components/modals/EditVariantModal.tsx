@@ -3,6 +3,7 @@ import { X } from 'lucide-react';
 import type { Product, ProductVariant } from '../../types';
 import { IMAGE_CONFIG } from '../../config/constants';
 import { hasSolidColorHex } from '../../utils/colorDisplay';
+import { getProductImageSource } from '../../utils/productImages';
 
 interface EditVariantModalProps {
   open: boolean;
@@ -91,7 +92,7 @@ export default function EditVariantModal({
           <div className="flex items-start gap-4">
             <div className="w-20 h-24 overflow-hidden bg-[#f5f7f8] border border-gray-200">
               <img
-                src={product.images?.[0]?.image_url ?? IMAGE_CONFIG.PLACEHOLDER}
+                src={getProductImageSource(product)?.src || IMAGE_CONFIG.PLACEHOLDER}
                 alt={product.title}
                 className="w-full h-full object-cover"
                 onError={(event) => {

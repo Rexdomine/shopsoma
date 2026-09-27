@@ -486,6 +486,44 @@ async def test_admin_delete_clears_featured_storefront_reference(
 
 
 @pytest.mark.asyncio
+async def test_reset_products_requires_admin_authentication(client):
+    response = await client.delete("/api/v1/admin/reset-products")
+    assert response.status_code in {401, 403}
+
+
+@pytest.mark.asyncio
+async def test_reset_products_cleans_storage_and_references(
+    client, admin_user, sample_product, db_session, monkeypatch
+):
+    from unittest.mock import AsyncMock
+    from app.api.v1 import admin as admin_api
+    from app.models.product import ProductImageStorageCleanup, Variation
+    from app.models.vendor import Vendor
+
+    key = f"vendors/{sample_product.vendor.user_id}/products/reset-image.jpg"
+    image = await _add_image(db_session, sample_product.id, 0, True, "/uploads/" + key)
+    image.storage_keys = [key]
+    vendor = await db_session.get(Vendor, sample_product.vendor_id)
+    vendor.featured_storefront_image_url = "/uploads/" + key
+    variation = Variation(product_id=sample_product.id, title="Reset", images=["/uploads/" + key])
+    db_session.add(variation)
+    await db_session.commit()
+
+    delete_images = AsyncMock(return_value={"failed_keys": []})
+    monkeypatch.setattr(admin_api.image_service, "delete_images", delete_images)
+
+    response = await client.delete("/api/v1/admin/reset-products", headers=admin_user["headers"])
+
+    assert response.status_code == 200
+    assert delete_images.await_count == 1
+    assert delete_images.await_args is not None
+    assert key in delete_images.await_args.args[0]
+    assert await db_session.scalar(select(ProductImageStorageCleanup.id)) is not None
+    refreshed_vendor = await db_session.get(Vendor, vendor.id)
+    assert refreshed_vendor.featured_storefront_image_url is None
+
+
+@pytest.mark.asyncio
 async def test_admin_delete_clears_production_featured_storefront_reference(
     client, admin_user, sample_product, db_session, monkeypatch
 ):

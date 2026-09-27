@@ -7,10 +7,10 @@ Open a fresh PR to `develop` that lets an authenticated admin manage a product�
 HEAVY: role-protected product/media persistence with browser upload → API → database → storage boundaries.
 
 ## Current Phase
-in_progress — internal whole-PR hardening audit before one final Codex re-review.
+in_progress — consolidated whole-PR invariant audit on frozen head `ad7eb802771ea2e56d4e7ee0fb190b8c3433a9d7`.
 
 ## Next Step
-Complete the frozen-candidate backend and frontend/cross-layer audits, consolidate only verified defects into a single remediation matrix, then add RED→GREEN regressions before making one bounded update.
+Complete the writer/deleter/reference/lock matrix across admin, vendor, cleanup, featured-storefront, variation, product, cart, wishlist, and public gallery paths; then write RED regressions for the complete verified batch before any production edit or new Codex request.
 
 ## Milestones
 1. **Preflight/discovery** — complete: established existing upload endpoint/service, admin authorization boundary, image invariants, and regression surfaces.

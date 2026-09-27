@@ -10,6 +10,7 @@ import ToastContainer from '../../components/ui/ToastContainer';
 import CurrencySwitcher from '../../components/common/CurrencySwitcher';
 import { useCurrencyStore } from '../../store/currencyStore';
 import { formatPriceWithConversion } from '../../utils/pricing';
+import { normalizeProductImageUrl } from '../../utils/productImages';
 import {
   hasCurrentModerationAmbiguity,
   moderationAmbiguityKey,
@@ -520,8 +521,15 @@ export default function AdminProductDetail() {
             {/* Product Image */}
             <div className="bg-white rounded-xl shadow-sm overflow-hidden">
               {(() => {
-                const images = product.images?.length ? product.images : ['/images/placeholder-product.svg'];
-                const imageUrl = (image: typeof images[number]) => typeof image === 'string' ? image : image.image_url || image.thumbnail_url || '/images/placeholder-product.svg';
+                const images = product.images?.length
+                  ? [...product.images].sort((a, b) => {
+                      if (a.is_primary !== b.is_primary) return a.is_primary ? -1 : 1;
+                      return (a.display_order ?? 0) - (b.display_order ?? 0);
+                    })
+                  : ['/images/placeholder-product.svg'];
+                const imageUrl = (image: typeof images[number]) => normalizeProductImageUrl(
+                  typeof image === 'string' ? image : image.image_url || image.thumbnail_url || '/images/placeholder-product.svg',
+                );
                 return (
                   <>
                     {product.images?.length ? <button type="button" className="block w-full cursor-zoom-in" aria-label={`View ${product.title} image 1`} onClick={(event) => { lightboxOpener.current = event.currentTarget; setLightboxIndex(0); }}>

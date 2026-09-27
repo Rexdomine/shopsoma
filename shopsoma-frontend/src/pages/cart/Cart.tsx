@@ -12,6 +12,7 @@ import EditVariantModal from '../../components/modals/EditVariantModal';
 import { usePreferenceStore } from '../../store/preferenceStore';
 import { useCurrencyStore } from '../../store/currencyStore';
 import { convertCurrencyWithRates, formatAmount, formatPriceWithConversion, type Currency } from '../../utils/pricing';
+import { getProductImageSource } from '../../utils/productImages';
 
 export default function Cart() {
   const navigate = useNavigate();
@@ -126,7 +127,7 @@ export default function Cart() {
           <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-10">
             <div className="space-y-6">
               {cart.items.map((item) => {
-                const thumbnail = item.product.images?.[0]?.image_url ?? IMAGE_CONFIG.PLACEHOLDER;
+                const thumbnail = getProductImageSource(item.product)?.src || IMAGE_CONFIG.PLACEHOLDER;
                 const brand = item.product.vendor_name ?? 'Shopsoma Collective';
                 const category = item.product.category_name ?? '';
 

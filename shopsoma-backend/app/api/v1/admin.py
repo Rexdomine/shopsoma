@@ -457,24 +457,80 @@ async def database_status(db: AsyncSession = Depends(get_db)):
 
 
 @router.delete("/reset-products")
-async def reset_products(db: AsyncSession = Depends(get_db)):
-    """
-    Delete all products, variants, and images (for testing)
-    """
+async def reset_products(
+    current_admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete all products and reconcile their known image storage safely."""
     try:
-        # This test-only, unbounded reset intentionally fails closed when any
-        # Lane 2A-4B stock/payment subject exists; it has no safe bounded key set.
-        # Delete in correct order due to foreign keys
-        await db.execute("DELETE FROM product_images")
-        await db.execute("DELETE FROM product_variants")
-        await db.execute("DELETE FROM products")
+        products = list((await db.scalars(select(Product))).all())
+        product_ids = [product.id for product in products]
+        variant_ids = list(
+            (
+                await db.scalars(
+                    select(ProductVariant.id).where(ProductVariant.product_id.in_(product_ids))
+                )
+            ).all()
+        ) if product_ids else []
+        variation_ids = list(
+            (
+                await db.scalars(
+                    select(Variation.id).where(Variation.product_id.in_(product_ids))
+                )
+            ).all()
+        ) if product_ids else []
+        size_stock_ids = list(
+            (
+                await db.scalars(
+                    select(SizeStock.id).where(SizeStock.variation_id.in_(variation_ids))
+                )
+            ).all()
+        ) if variation_ids else []
+        await coordinate_catalog_write(
+            db,
+            product_ids=product_ids,
+            variation_ids=variation_ids,
+            product_variant_ids=variant_ids,
+            size_stock_ids=size_stock_ids,
+        )
+
+        image_rows = list((await db.scalars(select(ProductImage))).all())
+        storage_keys = list(dict.fromkeys(
+            key for image in image_rows for key in (image.storage_keys or []) if key
+        ))
+        cleanup_record = None
+        if storage_keys:
+            await lock_storage_keys(db, storage_keys)
+            await clear_featured_storefront_references(db, storage_keys)
+            cleanup_record = await record_storage_cleanup(
+                db, storage_keys, reason="admin_reset_products", commit=False
+            )
+
+        await db.execute(delete(ProductImage))
+        await db.execute(delete(ProductVariant))
+        await db.execute(delete(Product).where(Product.id.in_(product_ids))) if product_ids else None
         await db.commit()
+
+        failed_keys = []
+        if storage_keys:
+            try:
+                cleanup = await image_service.delete_images(storage_keys)
+                failed_keys = cleanup.get("failed_keys", storage_keys) if isinstance(cleanup, dict) else storage_keys
+            except Exception:
+                logger.exception("Admin reset product image storage cleanup failed")
+                failed_keys = storage_keys
+        if not failed_keys and cleanup_record is not None:
+            cleanup_record.resolved_at = datetime.now(timezone.utc)
+            try:
+                await db.commit()
+            except Exception:
+                await db.rollback()
+                logger.exception("Admin reset cleanup resolution bookkeeping failed")
 
         return {
             "status": "success",
-            "message": "All products, variants, and images deleted"
+            "message": "All products, variants, and images deleted",
         }
-
     except Exception as e:
         await db.rollback()
         raise HTTPException(status_code=500, detail=f"Reset failed: {str(e)}")

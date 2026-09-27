@@ -11,6 +11,7 @@ import ToastContainer from '../../components/ui/ToastContainer';
 import CurrencySwitcher from '../../components/common/CurrencySwitcher';
 import { useCurrencyStore } from '../../store/currencyStore';
 import { formatPriceWithConversion } from '../../utils/pricing';
+import { getProductImageSources, normalizeProductImageUrl } from '../../utils/productImages';
 
 type VendorSidebarPrimary = 'dashboard' | 'orders' | 'products' | 'collections' | 'marketing' | 'analytics' | 'earnings' | 'settings';
 
@@ -229,12 +230,12 @@ export default function VendorProductView() {
                 </div>
                 <div className="p-6">
                   <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
-                    {product.images && product.images.length > 0 ? (
-                      product.images.map((img, index) => (
+                    {getProductImageSources(product).length > 0 ? (
+                      getProductImageSources(product).map((source, index) => (
                         <div key={index} className="aspect-square rounded-lg overflow-hidden border border-gray-200">
                           <img
-                            src={img.thumbnail_url || img.image_url}
-                            alt={img.alt_text || `Product image ${index + 1}`}
+                            src={source.src || normalizeProductImageUrl('/images/placeholder-product.svg')}
+                            alt={`Product image ${index + 1}`}
                             className="w-full h-full object-cover"
                           />
                         </div>

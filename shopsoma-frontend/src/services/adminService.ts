@@ -303,7 +303,7 @@ export const adminService = {
     return response.data;
   },
 
-  async createProductImage(productId: string, data: Omit<ProductImage, 'id' | 'product_id'>): Promise<ProductImage> {
+  async createProductImage(productId: string, data: Omit<ProductImage, 'id' | 'product_id' | 'storage_keys'>): Promise<ProductImage> {
     const response = await api.post(`/admin/products/${productId}/images`, data);
     return response.data;
   },
