@@ -55,19 +55,31 @@ async def reconcile_product_image_storage_cleanups(*, session_factory=AsyncSessi
     for row_id, storage_keys in claimed_rows:
         failed_keys = storage_keys
         async with session_factory() as session:
+            clear_committed = False
             try:
-                # Hold the exact-key lock through both the reference clear and
-                # external deletion. Storefront assignment takes the same lock
-                # and rejects unresolved cleanup reservations.
+                # Commit the reference clear before crossing the external
+                # storage boundary. Storefront assignment takes the same lock
+                # and checks object existence only after this durable clear.
                 await lock_storage_keys(session, storage_keys)
                 await clear_featured_storefront_references(session, storage_keys)
-                result = await image_service.delete_images(storage_keys)
-                failed_keys = result.get("failed_keys", storage_keys) if isinstance(result, dict) else storage_keys
+                await session.commit()
+                clear_committed = True
             except Exception:
+                await session.rollback()
                 logger.exception(
-                    "Product image storage cleanup retry failed",
+                    "Product image storage cleanup pre-delete step failed",
                     extra={"cleanup_id": str(row_id), "storage_keys": storage_keys},
                 )
+
+            if clear_committed:
+                try:
+                    result = await image_service.delete_images(storage_keys)
+                    failed_keys = result.get("failed_keys", storage_keys) if isinstance(result, dict) else storage_keys
+                except Exception:
+                    logger.exception(
+                        "Product image storage cleanup retry failed",
+                        extra={"cleanup_id": str(row_id), "storage_keys": storage_keys},
+                    )
 
             row = await session.get(ProductImageStorageCleanup, row_id, with_for_update=True)
             if row is None or row.resolved_at is not None or row.claimed_at != claimed_at:

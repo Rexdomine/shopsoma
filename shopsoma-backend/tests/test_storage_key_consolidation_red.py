@@ -278,7 +278,16 @@ async def test_featured_storefront_assignment_is_rejected_while_cleanup_holds_ke
 
     response = await client.put(
         "/api/v1/vendor/onboarding/brand-info",
-        json={"featured_storefront_image_url": f"/uploads/{storage_key}"},
+        json={
+            "business_phone": "+2348000000000",
+            "business_description": "Editorial womenswear.",
+            "shipping_address": "12 Fashion Avenue, Lagos",
+            "returning_address": "12 Fashion Avenue, Lagos",
+            "open_days": ["MON"],
+            "open_hour": "09:00",
+            "close_hour": "17:00",
+            "featured_storefront_image_url": f"/uploads/{storage_key}",
+        },
         headers=vendor_user["headers"],
     )
 
