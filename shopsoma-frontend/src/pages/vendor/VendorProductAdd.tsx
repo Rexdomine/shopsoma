@@ -123,6 +123,7 @@ export default function VendorProductAdd() {
   const [salesPrice, setSalesPrice] = useState('');
   const [productDescription, setProductDescription] = useState('');
   const [materials, setMaterials] = useState('');
+  const [customMaterial, setCustomMaterial] = useState('');
   const [collectionId, setCollectionId] = useState('');
   const [colorMode, setColorMode] = useState<ColorMode>('solid');
   const [colorLabel, setColorLabel] = useState('');
@@ -194,7 +195,7 @@ export default function VendorProductAdd() {
   const [showCollectionDropdown, setShowCollectionDropdown] = useState(false);
   const [showSizingDropdown, setShowSizingDropdown] = useState(false);
 
-  const materialOptions = ['Leather', 'Cotton', 'Wire', 'Silk', 'Wool', 'Polyester', 'Denim'];
+  const materialOptions = ['Leather', 'Cotton', 'Wire', 'Silk', 'Wool', 'Polyester', 'Denim', 'Others'];
   const colorModeOptions: Array<{ value: ColorMode; label: string }> = [
     { value: 'solid', label: 'Solid Color' },
     { value: 'multi', label: 'Multi-color / Pattern' },
@@ -770,6 +771,11 @@ export default function VendorProductAdd() {
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
 
+    if (materials === 'Others' && !customMaterial.trim()) {
+      warning('Please enter a custom material', 'Missing info');
+      return;
+    }
+
     if (!productName.trim()) {
       warning('Product name is required', 'Missing info');
       return;
@@ -911,7 +917,7 @@ export default function VendorProductAdd() {
         made_to_order: madeToOrder,
         made_to_order_timeline: estimatedProductionTime.trim() || undefined,
         care_instructions: productCare || undefined,
-        fabric_composition: materials || undefined,
+        fabric_composition: (materials === 'Others' ? customMaterial.trim() : materials) || undefined,
         weight_kg: Number(weightKg),
         length_cm: Number(lengthCm),
         width_cm: Number(widthCm),
@@ -1434,6 +1440,23 @@ export default function VendorProductAdd() {
                         </div>
                       )}
                     </div>
+                    {materials === 'Others' && (
+                      <div className="mt-3">
+                        <label htmlFor="custom-material" className="block text-sm font-medium text-gray-700 mb-2">
+                          Custom material *
+                        </label>
+                        <input
+                          id="custom-material"
+                          type="text"
+                          value={customMaterial}
+                          onChange={(event) => setCustomMaterial(event.target.value)}
+                          maxLength={5000}
+                          required
+                          placeholder="E.g., Linen or 70% cotton, 30% hemp"
+                          className="w-full rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
+                        />
+                      </div>
+                    )}
                   </div>
 
                   <div className="rounded-xl border border-[#105E53]/15 bg-[#105E53]/5 p-4">
