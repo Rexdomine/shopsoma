@@ -301,6 +301,37 @@ async def db_session() -> AsyncGenerator[AsyncSession, None]:
 
 
 @pytest.fixture
+def enable_stripe(db_session: AsyncSession):
+    """Persist Stripe opt-in when a provider-parameterized test requests it."""
+    from app.models.app_setting import AppSetting
+
+    async def enable():
+        db_session.add(
+            AppSetting(key="stripe_enabled", value="true", value_type="boolean")
+        )
+        await db_session.commit()
+
+    return enable
+
+
+@pytest.fixture
+async def enabled_stripe(enable_stripe):
+    """Opt in to new Stripe attempts only for tests requiring that feature."""
+    await enable_stripe()
+
+
+@pytest.fixture
+async def enabled_usd(db_session: AsyncSession):
+    """Opt in to USD checkout without changing the default-off test baseline."""
+    from app.models.app_setting import AppSetting
+
+    db_session.add(
+        AppSetting(key="usd_switching_enabled", value="true", value_type="boolean")
+    )
+    await db_session.commit()
+
+
+@pytest.fixture
 def fixture_reset_database() -> Callable[[], Awaitable[None]]:
     return _truncate_user_tables
 

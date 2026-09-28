@@ -268,3 +268,12 @@ export const setDefaultManualShippingRate = async (id: string): Promise<ManualSh
   (await api.post<ManualShippingRate>(`/shipping-rates/${id}/set-default`)).data;
 export const previewManualShippingRates = async (data: { country: string; state: string; order_value: number }): Promise<{ available_rates: ManualShippingRate[] }> =>
   (await api.post('/shipping-rates/calculate', data)).data;
+
+export interface CommerceFeatures {
+  stripe_enabled: boolean;
+  usd_switching_enabled: boolean;
+}
+export const getCommerceFeatures = async (): Promise<CommerceFeatures> =>
+  (await api.get<CommerceFeatures>('/settings/public/commerce-features')).data;
+export const updateCommerceFeatures = async (flags: CommerceFeatures): Promise<CommerceFeatures> =>
+  (await api.put<CommerceFeatures>('/settings/admin/commerce-features', flags)).data;

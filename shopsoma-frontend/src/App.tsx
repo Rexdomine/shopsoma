@@ -7,13 +7,18 @@ import { usePreferenceStore } from './store/preferenceStore';
 import './App.css';
 
 function App() {
-  const { currentCurrency, setCurrency, fetchExchangeRate } = useCurrencyStore();
+  const { currentCurrency, setCurrency, fetchExchangeRate, fetchCommerceFeatures } = useCurrencyStore();
   const preferredCurrency = usePreferenceStore((state) => state.currency);
 
   // Fetch exchange rate on app initialization
   useEffect(() => {
     fetchExchangeRate();
-  }, [fetchExchangeRate]);
+    void fetchCommerceFeatures();
+    const refresh = () => void fetchCommerceFeatures();
+    window.addEventListener('focus', refresh);
+    const timer = window.setInterval(refresh, 60_000);
+    return () => { window.removeEventListener('focus', refresh); window.clearInterval(timer); };
+  }, [fetchExchangeRate, fetchCommerceFeatures]);
 
   useEffect(() => {
     if (preferredCurrency !== currentCurrency) {

@@ -114,6 +114,7 @@ async def _unattempted_route_subject(db_session, vendor_user, customer_user):
     return graph, quote, option, selection, reservation
 
 
+@pytest.mark.usefixtures("enabled_usd")
 @pytest.mark.asyncio
 async def test_production_initialize_rejects_enforced_usd_paystack_before_provider_or_session_truth(
     client, db_session, vendor_user, customer_user, monkeypatch
@@ -218,8 +219,11 @@ async def test_production_initialize_rejects_enforced_usd_paystack_before_provid
 @pytest.mark.asyncio
 @pytest.mark.parametrize("provider", ["stripe", "paystack"])
 async def test_production_initialize_creates_authoritative_attempt_before_provider(
+    enable_stripe,
     db_session, vendor_user, customer_user, monkeypatch, provider
 ) -> None:
+    if provider == "stripe":
+        await enable_stripe()
     graph, quote, option, selection, reservation = await _unattempted_route_subject(
         db_session, vendor_user, customer_user
     )
@@ -371,6 +375,7 @@ async def test_initialization_anchors_selection_to_smallest_reservation_in_full_
     assert memberships == {oldest_reservation.id, anchor_reservation.id}
 
 
+@pytest.mark.usefixtures("enabled_stripe")
 @pytest.mark.asyncio
 async def test_created_attempt_replay_does_not_duplicate_attempt_or_membership(
     db_session, vendor_user, customer_user, monkeypatch
@@ -829,12 +834,15 @@ async def test_bridge_initialization_legally_starts_attempt_then_finalizes(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("provider", ["stripe", "paystack"])
 async def test_initialization_retry_returns_persisted_provider_session(
+    enable_stripe,
     db_session,
     vendor_user,
     customer_user,
     monkeypatch,
     provider,
 ) -> None:
+    if provider == "stripe":
+        await enable_stripe()
     stock = _load_stock_helpers()
     graph, intent, quote, option, selection, sku = await stock._checkout_subject(
         db_session, vendor_user, customer_user
@@ -1070,6 +1078,7 @@ async def _pending_route_attempt(db_session, vendor_user, customer_user, provide
     return graph, attempt
 
 
+@pytest.mark.usefixtures("enabled_stripe")
 @pytest.mark.asyncio
 async def test_stripe_customer_accept_then_local_loss_retries_idempotently(
     db_session, vendor_user, customer_user, monkeypatch
@@ -1158,6 +1167,7 @@ async def test_stripe_customer_accept_then_local_loss_retries_idempotently(
     )
 
 
+@pytest.mark.usefixtures("enabled_stripe")
 @pytest.mark.asyncio
 async def test_stripe_intent_accept_then_payment_commit_loss_reconciles_canonically(
     db_session, vendor_user, customer_user, monkeypatch
@@ -2346,6 +2356,7 @@ async def _terminal_route_attempt(
 @pytest.mark.parametrize("provider", ["stripe", "paystack"])
 @pytest.mark.parametrize("terminal_state", ["failed", "expired"])
 async def test_production_initialize_creates_terminal_attempt_successor_before_provider(
+    enable_stripe,
     db_session,
     vendor_user,
     customer_user,
@@ -2353,6 +2364,8 @@ async def test_production_initialize_creates_terminal_attempt_successor_before_p
     provider,
     terminal_state,
 ) -> None:
+    if provider == "stripe":
+        await enable_stripe()
     graph, predecessor = await _terminal_route_attempt(
         db_session,
         vendor_user,

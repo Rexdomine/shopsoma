@@ -45,6 +45,7 @@ def test_payment_initialization_response_exposes_server_provider_truth(currency)
     assert response.provider_payload == {"access_code": "server-access"}
 
 
+@pytest.mark.usefixtures("enabled_stripe")
 @pytest.mark.asyncio
 async def test_authenticated_order_estimate_selection_reservation_mock_payment_returns_exact_truth(
     client, db_session, vendor_user, customer_user, monkeypatch
@@ -208,6 +209,7 @@ async def test_enforced_guest_payment_requires_active_order_scoped_capability_wi
     assert forbidden_calls == 0
 
 
+@pytest.mark.usefixtures("enabled_stripe")
 @pytest.mark.asyncio
 async def test_enforced_guest_capability_initializes_from_server_truth(
     client, db_session, vendor_user, monkeypatch
@@ -250,8 +252,11 @@ async def test_enforced_guest_capability_initializes_from_server_truth(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("provider", ["stripe", "paystack"])
 async def test_guest_made_to_order_only_initializes_once_without_reservations(
+    enable_stripe,
     client, db_session, vendor_user, monkeypatch, provider
 ):
+    if provider == "stripe":
+        await enable_stripe()
     order, capability, email = await create_enforced_guest_checkout(
         client,
         db_session,
@@ -483,6 +488,7 @@ async def _create_select_initialize_usd_route_journey(
     assert await db_session.scalar(select(func.count(Order.id))) == before_orders + 1
 
 
+@pytest.mark.usefixtures("enabled_usd", "enabled_stripe")
 @pytest.mark.asyncio
 async def test_authenticated_usd_production_route_journey_is_canonical_and_idempotent(
     client, db_session, vendor_user, customer_user, monkeypatch
@@ -497,6 +503,7 @@ async def test_authenticated_usd_production_route_journey_is_canonical_and_idemp
     )
 
 
+@pytest.mark.usefixtures("enabled_usd", "enabled_stripe")
 @pytest.mark.asyncio
 async def test_guest_usd_production_route_journey_uses_order_scoped_header_and_is_idempotent(
     client, db_session, vendor_user, customer_user, monkeypatch

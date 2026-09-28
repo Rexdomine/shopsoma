@@ -4,7 +4,7 @@
  */
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { getExchangeRate } from '../services/settingsService';
+import { getCommerceFeatures, type CommerceFeatures, getExchangeRate } from '../services/settingsService';
 import { usePreferenceStore } from './preferenceStore';
 
 export type Currency = 'NGN' | 'USD';
@@ -17,6 +17,10 @@ interface ExchangeRates {
 
 interface CurrencyState {
   currentCurrency: Currency;
+  commerceFeatures: CommerceFeatures;
+  commerceFeaturesLoaded: boolean;
+  fetchCommerceFeatures: () => Promise<void>;
+  applyCommerceFeatures: (flags: CommerceFeatures) => void;
   exchangeRates: ExchangeRates;
   isLoadingRates: boolean;
 
@@ -38,15 +42,42 @@ const DEFAULT_EXCHANGE_RATES: ExchangeRates = {
   lastUpdated: new Date().toISOString(),
 };
 
+// Orders refreshes and invalidates in-flight reads when an admin save is applied.
+// Runtime-only: never hydrate request ordering from browser storage.
+let commerceFeaturesRevision = 0;
+
 export const useCurrencyStore = create<CurrencyState>()(
   persist(
     (set, get) => ({
       currentCurrency: 'NGN',
+      commerceFeatures: { stripe_enabled: false, usd_switching_enabled: false },
+      commerceFeaturesLoaded: false,
+      applyCommerceFeatures: (flags) => {
+        commerceFeaturesRevision += 1;
+        const safe = {
+          stripe_enabled: flags.stripe_enabled === true,
+          usd_switching_enabled: flags.usd_switching_enabled === true,
+        };
+        const preferred = usePreferenceStore.getState().pendingCurrency ?? usePreferenceStore.getState().currency;
+        set({ commerceFeatures: safe, commerceFeaturesLoaded: true });
+        get().setCurrency(safe.usd_switching_enabled ? preferred : 'NGN');
+      },
+      fetchCommerceFeatures: async () => {
+        const revision = ++commerceFeaturesRevision;
+        try {
+          const flags = await getCommerceFeatures();
+          if (revision === commerceFeaturesRevision) get().applyCommerceFeatures(flags);
+        } catch {
+          if (revision === commerceFeaturesRevision) {
+            get().applyCommerceFeatures({ stripe_enabled: false, usd_switching_enabled: false });
+          }
+        }
+      },
       exchangeRates: DEFAULT_EXCHANGE_RATES,
       isLoadingRates: false,
 
       setCurrency: (currency: Currency) => {
-        set({ currentCurrency: currency });
+        set({ currentCurrency: get().commerceFeatures.usd_switching_enabled ? currency : 'NGN' });
         try {
           usePreferenceStore.getState().setCurrency(currency);
         } catch (error) {
@@ -58,9 +89,7 @@ export const useCurrencyStore = create<CurrencyState>()(
       },
 
       toggleCurrency: () => {
-        set((state) => ({
-          currentCurrency: state.currentCurrency === 'NGN' ? 'USD' : 'NGN',
-        }));
+        get().setCurrency(get().currentCurrency === 'NGN' ? 'USD' : 'NGN');
       },
 
       updateExchangeRates: (rates: Partial<ExchangeRates>) => {
@@ -133,6 +162,8 @@ export const useCurrencyStore = create<CurrencyState>()(
     }),
     {
       name: 'shopsoma-currency',
+      // Flags are never persisted; saved USD cannot bypass the initial closed gate.
+      merge: (persisted, current) => ({ ...current, exchangeRates: (persisted as Partial<CurrencyState>)?.exchangeRates ?? current.exchangeRates, currentCurrency: 'NGN' }),
       partialize: (state) => ({
         currentCurrency: state.currentCurrency,
         exchangeRates: state.exchangeRates,

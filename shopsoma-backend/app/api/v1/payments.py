@@ -12,6 +12,7 @@ from uuid import UUID
 from decimal import Decimal
 import httpx
 
+from app.services.commerce_features import get_commerce_features
 from app.core.config import settings
 from app.core.database import get_db
 from app.models.user import User
@@ -127,13 +128,17 @@ async def _initialize_stripe_payment(
     payment_data: PaymentInitializeRequest, order: Order, db: AsyncSession
 ) -> PaymentInitializeResponse:
     """Initialize Stripe payment using Payment Intents"""
+    stripe_enabled = (await get_commerce_features(db)).stripe_enabled
     try:
         truth = await payment_initialization_truth(
             db,
             order=order,
             provider="stripe",
             capabilities=domestic_shipping_capabilities(settings),
+            allow_new_attempt=stripe_enabled,
         )
+        if not stripe_enabled and not truth.bridge_applied:
+            raise HTTPException(status_code=403, detail="Stripe payments are currently disabled")
         if truth.bridge_applied:
             # Every Stripe SDK boundary follows the committed attempt fence.
             await db.commit()

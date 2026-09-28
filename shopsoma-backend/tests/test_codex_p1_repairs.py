@@ -117,6 +117,7 @@ async def test_paid_made_to_order_cancellation_does_not_restore_stock(
     assert persisted_product.total_stock == stock_before
 
 
+@pytest.mark.usefixtures("enabled_stripe")
 @pytest.mark.asyncio
 @pytest.mark.parametrize("unresolved_state", ["call_started", "abandoned_unknown"])
 async def test_enforced_cancellation_rejects_unresolved_attempt_and_late_success_finalizes_once(
@@ -299,6 +300,7 @@ async def test_authenticated_legacy_cancellation_keeps_physical_stock_restoratio
     assert product.total_stock == stock_before
 
 
+@pytest.mark.usefixtures("enabled_usd")
 @pytest.mark.asyncio
 async def test_usd_estimate_converts_ngn_rate_and_threshold_before_persistence(
     client, db_session, vendor_user, customer_user, monkeypatch
@@ -387,6 +389,7 @@ async def test_ngn_estimate_keeps_ngn_rate_without_conversion(
     assert option.amount == Decimal("1500.00")
 
 
+@pytest.mark.usefixtures("enabled_usd")
 @pytest.mark.asyncio
 @pytest.mark.parametrize("configured_value", [None, "", "0", "-1", "NaN", "Infinity"])
 async def test_usd_estimate_fails_closed_without_valid_authoritative_fx(
@@ -536,6 +539,7 @@ async def _fail_initialized_stripe_payment(client, monkeypatch, attempt):
     assert response.status_code == 200, response.text
 
 
+@pytest.mark.usefixtures("enabled_stripe")
 @pytest.mark.asyncio
 async def test_failed_payment_retry_re_reserves_exact_stock_once_before_provider(
     client, db_session, vendor_user, customer_user, monkeypatch
@@ -629,6 +633,7 @@ async def test_failed_payment_retry_re_reserves_exact_stock_once_before_provider
     ) == ["pi_retry_released", "pi_retry_success"]
 
 
+@pytest.mark.usefixtures("enabled_stripe")
 @pytest.mark.asyncio
 async def test_failed_payment_retry_with_insufficient_stock_rolls_back_before_provider(
     client, db_session, vendor_user, customer_user, monkeypatch

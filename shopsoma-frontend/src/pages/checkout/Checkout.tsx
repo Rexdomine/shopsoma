@@ -81,7 +81,9 @@ export default function Checkout() {
   const navigate = useNavigate();
   const location = useLocation();
   const { user, isAuthenticated } = useAuth();
-  const { currency, setCurrency } = usePreferenceStore();
+  const { currency: preferredCurrency, setCurrency } = usePreferenceStore();
+  const commerceFeatures = useCurrencyStore((state) => state.commerceFeatures);
+  const currency = commerceFeatures.usd_switching_enabled ? preferredCurrency : 'NGN';
   const exchangeRates = useCurrencyStore((state) => state.exchangeRates);
 
   const [step, setStep] = useState<Step>('email');
@@ -202,16 +204,16 @@ export default function Checkout() {
   // Filter payment options based on the committed order currency once an
   // order/estimate exists; the preference remains selectable before that.
   const paymentOptions = ALL_PAYMENT_OPTIONS.filter(option =>
-    option.supportedCurrencies.includes(displayCurrency)
+    option.supportedCurrencies.includes(displayCurrency) && (option.id !== 'stripe' || commerceFeatures.stripe_enabled)
   );
 
   // Auto-select first available payment method when currency changes
   useEffect(() => {
     const currentMethodSupported = paymentOptions.some(option => option.id === paymentMethod);
-    if (!currentMethodSupported && paymentOptions.length > 0) {
+    if (!currentPaymentGateway && !currentMethodSupported && paymentOptions.length > 0) {
       setPaymentMethod(paymentOptions[0].id);
     }
-  }, [displayCurrency, paymentMethod, paymentOptions]);
+  }, [displayCurrency, paymentMethod, paymentOptions, currentPaymentGateway]);
 
   // Loading states
   const [isLoadingAddresses, setIsLoadingAddresses] = useState(false);
@@ -684,6 +686,17 @@ export default function Checkout() {
   };
 
   const initializeOrderPayment = async (order: Order, capability?: string) => {
+    const existingPayment = currentOrderId === order.id && currentPaymentGateway;
+    const gateway = existingPayment || paymentMethod;
+    if (!commerceFeatures.stripe_enabled && existingPayment === 'stripe' && stripeClientSecret) {
+      setPaymentRetryAvailable(false);
+      setShowStripePaymentModal(true);
+      return;
+    }
+    if (gateway === 'stripe' && !commerceFeatures.stripe_enabled && !existingPayment) {
+      alert('Stripe payments are currently disabled. Choose another payment method.');
+      return;
+    }
     setPaymentRetryAvailable(false);
     setIsCreatingOrder(true);
     try {
@@ -691,7 +704,7 @@ export default function Checkout() {
       const paymentData = await paymentService.initializePayment({
         order_id: order.id,
         email: email || 'guest@shopsoma.com',
-        payment_gateway: paymentMethod,
+        payment_gateway: gateway,
         // Legacy orders were priced before the current preference could change;
         // payment initialization must use the server-committed currency.
         ...(enforced ? {} : { currency: order.currency }),
@@ -987,7 +1000,7 @@ export default function Checkout() {
   );
   const hasSelectedAddress = !!selectedAddressId;
   const hasSelectedShipping = !!selectedShippingRateId;
-  const canPurchase = step === 'payment' && hasEmail && hasSelectedAddress && (secureShipping || (hasSelectedShipping && orderReview)) && !enforcedOrder;
+  const canPurchase = paymentOptions.length > 0 && step === 'payment' && hasEmail && hasSelectedAddress && (secureShipping || (hasSelectedShipping && orderReview)) && !enforcedOrder;
 
   const selectedShippingRate = shippingRates.find(rate => rate.id === selectedShippingRateId);
   const shippingRateInSelectedCurrency = selectedShippingRate
@@ -1105,7 +1118,7 @@ export default function Checkout() {
           </div>
           <div className="flex items-center justify-end gap-4">
             {/* Currency Switcher */}
-            <div className="flex items-center gap-2 border border-gray-300 rounded-sm px-3 py-1.5">
+            {commerceFeatures.usd_switching_enabled && <div className="flex items-center gap-2 border border-gray-300 rounded-sm px-3 py-1.5">
               <button
                 onClick={() => void changeCheckoutCurrency('NGN')}
                 disabled={isCreatingOrder || isSwitchingCurrency || Boolean(currentPaymentGateway) || showStripePaymentModal}
@@ -1129,7 +1142,7 @@ export default function Checkout() {
               >
                 USD
               </button>
-            </div>
+            </div>}
             <span className="text-sm text-gray-700">Secure Checkout</span>
           </div>
         </div>
@@ -1658,7 +1671,8 @@ export default function Checkout() {
                           </button>
                         </div>
                       )}
-                      {ALL_PAYMENT_OPTIONS.map((option) => {
+                      {paymentOptions.length === 0 && !currentPaymentGateway && <p role="alert" className="text-sm text-amber-800">No payment method is available for {displayCurrency}. Choose NGN to pay with Paystack.</p>}
+                      {ALL_PAYMENT_OPTIONS.filter(option => option.id !== 'stripe' || commerceFeatures.stripe_enabled).map((option) => {
                         const isSupported = option.supportedCurrencies.includes(displayCurrency);
                         return (
                           <label

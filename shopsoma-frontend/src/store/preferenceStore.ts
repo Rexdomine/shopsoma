@@ -1,3 +1,4 @@
+import { useCurrencyStore } from './currencyStore';
 import { create } from 'zustand';
 import type { Currency } from '../utils/pricing';
 
@@ -10,11 +11,8 @@ const CATEGORIES_KEY = 'shopsoma_pref_categories';
 
 const isBrowser = typeof window !== 'undefined';
 
-const readStoredCurrency = (): Currency => {
-  if (!isBrowser) return 'NGN';
-  const value = window.localStorage.getItem(CURRENCY_KEY);
-  return value === 'USD' ? 'USD' : 'NGN';
-};
+const readStoredCurrency = (): Currency =>
+  isBrowser && window.localStorage.getItem(CURRENCY_KEY) === 'USD' ? 'USD' : 'NGN';
 
 const readStoredInterest = (): InterestValue => {
   if (!isBrowser) return null;
@@ -46,6 +44,7 @@ const writeStoredList = (key: string, values: string[]) => {
 
 interface PreferenceState {
   currency: Currency;
+  pendingCurrency: Currency | null;
   interest: InterestValue;
   designers: string[];
   categories: string[];
@@ -57,15 +56,19 @@ interface PreferenceState {
 }
 
 export const usePreferenceStore = create<PreferenceState>((set) => ({
-  currency: readStoredCurrency(),
+  currency: 'NGN',
+  pendingCurrency: readStoredCurrency(),
   interest: readStoredInterest(),
   designers: readStoredList(DESIGNERS_KEY),
   categories: readStoredList(CATEGORIES_KEY),
   setCurrency: (currency) => {
+    const { commerceFeatures, commerceFeaturesLoaded } = useCurrencyStore.getState();
+    const pendingCurrency = commerceFeaturesLoaded ? null : currency;
+    currency = commerceFeatures.usd_switching_enabled ? currency : 'NGN';
     if (isBrowser) {
-      window.localStorage.setItem(CURRENCY_KEY, currency);
+      window.localStorage.setItem(CURRENCY_KEY, pendingCurrency ?? currency);
     }
-    set({ currency });
+    set({ currency, pendingCurrency });
   },
   setInterest: (interest) => {
     if (isBrowser) {
@@ -94,6 +97,7 @@ export const usePreferenceStore = create<PreferenceState>((set) => ({
     }
     set({
       currency: 'NGN',
+      pendingCurrency: null,
       interest: null,
       designers: [],
       categories: [],

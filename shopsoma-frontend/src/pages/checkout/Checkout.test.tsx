@@ -25,7 +25,7 @@ const mocks = vi.hoisted(() => ({
     user: { id: 'customer-1', email: 'buyer@example.com', full_name: 'Buyer', phone_number: '08012345678' },
   },
   preference: { currency: 'NGN', setCurrency: vi.fn() },
-  currencyState: { exchangeRates: { NGN: 1, USD: 0.000625 } },
+  currencyState: { commerceFeatures: { stripe_enabled: true, usd_switching_enabled: true }, exchangeRates: { NGN: 1, USD: 0.000625 } },
   cartState: {
     cart: {
       items: [{
@@ -511,6 +511,8 @@ describe('Checkout M5 sequencing and recovery', () => {
 
   beforeEach(() => {
     vi.resetAllMocks();
+    mocks.currencyState.commerceFeatures = { stripe_enabled: true, usd_switching_enabled: true };
+    mocks.preference.currency = 'NGN';
     mocks.auth.isAuthenticated = true;
     mocks.cartState.cart.items[0].variant.id = 'default-product-1';
     sessionStorage.clear();
@@ -537,6 +539,40 @@ describe('Checkout M5 sequencing and recovery', () => {
       amount: '62500.00', amount_minor: 6250000, currency: 'NGN',
       provider_payload: { client_secret: 'secret', payment_intent_id: 'pi-1' },
     });
+  });
+
+  it.each([[false, false], [false, true], [true, false], [true, true]])('renders independent Stripe=%s and USD=%s controls', async (stripe, usd) => {
+    mocks.currencyState.commerceFeatures = { stripe_enabled: stripe, usd_switching_enabled: usd };
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
+    expect(Boolean(screen.queryByRole('button', { name: 'USD' }))).toBe(usd);
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    await screen.findByText('Standard');
+    const buttons = screen.getAllByRole('button', { name: 'Continue' });
+    fireEvent.click(buttons[buttons.length - 1]);
+    await waitFor(() => expect(mocks.reviewOrder).toHaveBeenCalled());
+    expect(Boolean(screen.queryByText('Stripe'))).toBe(stripe);
+    expect(screen.getByText('Paystack')).toBeInTheDocument();
+  });
+
+  it('uses NGN for a stale USD preference in new review and order requests', async () => {
+    mocks.preference.currency = 'USD';
+    mocks.currencyState.commerceFeatures = { stripe_enabled: true, usd_switching_enabled: false };
+    await reachPaymentStep();
+    expect(mocks.reviewOrder).toHaveBeenCalledWith(expect.objectContaining({ currency: 'NGN' }));
+    expect(mocks.createOrder).toHaveBeenCalledWith(expect.objectContaining({ currency: 'NGN' }));
+  });
+
+  it('reopens the original Stripe intent after Stripe is disabled without new initialization', async () => {
+    await openEnforcedGuestStripe('test-capability');
+    mocks.currencyState.commerceFeatures = { stripe_enabled: false, usd_switching_enabled: false };
+    fireEvent.click(screen.getByRole('button', { name: 'Close payment' }));
+    const retry = await screen.findByRole('button', { name: 'Retry payment' });
+    const calls = mocks.initializePayment.mock.calls.length;
+    fireEvent.click(retry);
+    await screen.findByText('Stripe form');
+    expect(mocks.initializePayment).toHaveBeenCalledTimes(calls);
+    expect(screen.queryByText('Stripe')).not.toBeInTheDocument();
   });
 
   it('lets an authenticated customer edit the selected checkout address in place', async () => {

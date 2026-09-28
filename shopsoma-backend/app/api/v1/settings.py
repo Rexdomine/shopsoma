@@ -37,11 +37,15 @@ from app.schemas.app_setting import (
     FeaturedRotationSettings,
     FeaturedRotationSettingsUpdate,
     DatabaseSyncResponse,
+    CommerceFeatures,
+    CommerceFeaturesUpdate,
     ComingSoonSettings,
     ComingSoonSettingsUpdate,
 )
 from app.api.dependencies import require_admin
 from app.services.commission import COMMISSION_SETTING_KEY, DEFAULT_COMMISSION_RATE, normalize_commission_rate
+
+from app.services.commerce_features import get_commerce_features
 
 from app.services.shipping.provider_settings import shipping_provider_settings
 
@@ -695,3 +699,20 @@ async def sync_render_database(
         message="Render database synced to local database.",
         duration_seconds=duration,
     )
+
+
+@router.get("/public/commerce-features", response_model=CommerceFeatures)
+async def public_commerce_features(db: AsyncSession = Depends(get_db)):
+    return await get_commerce_features(db)
+
+
+@router.put("/admin/commerce-features", response_model=CommerceFeatures)
+async def update_commerce_features(
+    payload: CommerceFeaturesUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    for key, enabled in payload.model_dump().items():
+        await update_app_setting_value(db, key, str(enabled).lower(), commit=False)
+    await db.commit()
+    return await get_commerce_features(db)

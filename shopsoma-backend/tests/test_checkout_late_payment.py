@@ -51,6 +51,7 @@ class _AuthenticatedStripeWebhookRequest:
         return b'{"authenticated":true}'
 
 
+@pytest.mark.usefixtures("enabled_stripe")
 @pytest.mark.asyncio
 async def test_stripe_webhook_preserves_distinct_provider_object_and_attempt_reference(
     client, db_session, vendor_user, customer_user, monkeypatch
@@ -96,6 +97,7 @@ async def test_stripe_webhook_preserves_distinct_provider_object_and_attempt_ref
     assert persisted_attempt.state == "verified"
 
 
+@pytest.mark.usefixtures("enabled_stripe")
 @pytest.mark.asyncio
 async def test_late_success_after_definitive_failure_is_paid_without_oversell(
     client, db_session, vendor_user, customer_user, monkeypatch
@@ -175,6 +177,7 @@ async def test_late_success_after_definitive_failure_is_paid_without_oversell(
     ]
 
 
+@pytest.mark.usefixtures("enabled_stripe")
 @pytest.mark.asyncio
 async def test_cancel_after_late_paid_released_reservation_does_not_restore_stock(
     client, db_session, vendor_user, customer_user, monkeypatch
@@ -256,6 +259,7 @@ async def test_cancel_after_late_paid_released_reservation_does_not_restore_stoc
     assert product.total_stock == initial_stock
 
 
+@pytest.mark.usefixtures("enabled_stripe")
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mapping_present", [True, False])
 async def test_late_predecessor_success_resolves_exact_attempt_without_mutating_successor(
@@ -496,6 +500,7 @@ async def test_late_predecessor_success_resolves_exact_attempt_without_mutating_
     )
 
 
+@pytest.mark.usefixtures("enabled_stripe")
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "mismatch",
@@ -670,6 +675,7 @@ async def test_late_predecessor_success_rejects_corrupt_existing_mapping_without
     )
 
 
+@pytest.mark.usefixtures("enabled_stripe")
 @pytest.mark.asyncio
 async def test_failed_predecessor_redelivery_replays_failed_terminal_state_after_successor_init(
     client,
@@ -768,6 +774,7 @@ async def test_failed_predecessor_redelivery_replays_failed_terminal_state_after
     assert persisted_predecessor_payment.status == TransactionStatus.FAILED
 
 
+@pytest.mark.usefixtures("enabled_stripe")
 @pytest.mark.asyncio
 async def test_failed_predecessor_redelivery_does_not_downgrade_paid_order(
     client,
