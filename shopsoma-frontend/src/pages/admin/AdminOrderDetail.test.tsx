@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -70,6 +70,7 @@ vi.mock('../../services/adminOrderService', () => ({
 }));
 
 import AdminOrderDetail from './AdminOrderDetail';
+import DhlShipmentOperations from '../../components/admin/DhlShipmentOperations';
 import type { OrderDetail, ShadowQuoteResult, DhlOperationBooking } from '../../services/adminOrderService';
 
 const baseOrder = (): OrderDetail => ({
@@ -234,7 +235,7 @@ describe('AdminOrderDetail DHL mutation safety', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(mocks.createDhlBooking).not.toHaveBeenCalled();
     fireEvent.click(create);
-    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /^(Create DHL shipment|Record DHL handoff|Refresh DHL tracking)$/ }));
     fireEvent.click(create);
     expect(mocks.createDhlBooking).toHaveBeenCalledTimes(1);
     expect(mocks.createDhlBooking).toHaveBeenCalledWith('order-1', {
@@ -248,7 +249,7 @@ describe('AdminOrderDetail DHL mutation safety', () => {
     mocks.createDhlBooking.mockRejectedValue(new Error('PRIVATE PROVIDER PAYLOAD'));
     const first = renderPage();
     fireEvent.click(await screen.findByRole('button', { name: 'Create DHL shipment' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /^(Create DHL shipment|Record DHL handoff|Refresh DHL tracking)$/ }));
     await screen.findByText(/Operation could not be confirmed/);
     expect(screen.queryByText(/PRIVATE PROVIDER/)).not.toBeInTheDocument();
     first.unmount(); renderPage();
@@ -276,7 +277,7 @@ describe('AdminOrderDetail DHL mutation safety', () => {
     renderPage();
     fireEvent.click(await screen.findByRole('button', { name: 'Refresh DHL tracking' }));
     expect(mocks.refreshDhlTracking).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /^(Create DHL shipment|Record DHL handoff|Refresh DHL tracking)$/ }));
     await screen.findByText('DHL tracking refreshed.');
     expect(mocks.refreshDhlTracking).toHaveBeenCalledWith('order-1', { booking_id: 'booking-1', idempotency_key: expect.any(String) });
     expect(localStorage.length).toBe(0);
@@ -312,7 +313,7 @@ describe('AdminOrderDetail DHL mutation safety', () => {
     expect(screen.getByText(/URLs and absolute paths are not accepted/)).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('Private evidence reference'), { target: { value: 'custody/evidence-1' } });
     fireEvent.click(screen.getByRole('button', { name: 'Record DHL handoff' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /^(Create DHL shipment|Record DHL handoff|Refresh DHL tracking)$/ }));
     await screen.findByText('Hub-to-DHL handoff recorded.');
     expect(mocks.recordDhlHandoff).toHaveBeenCalledWith('order-1', 'booking-1', {
       occurred_at: new Date('2026-09-28T10:00').toISOString(), counterparty: 'DHL collection',
@@ -330,7 +331,7 @@ describe('AdminOrderDetail DHL mutation safety', () => {
     mocks.createDhlBooking.mockResolvedValue({ booking_id: 'booking-1', result_kind: 'booked' });
     renderPage();
     fireEvent.click(await screen.findByRole('button', { name: 'Create DHL shipment' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /^(Create DHL shipment|Record DHL handoff|Refresh DHL tracking)$/ }));
     await screen.findByText(/DHL shipment created/);
     expect(localStorage.length).toBe(0);
     expect(screen.getByRole('button', { name: 'Create DHL shipment' })).toBeDisabled();
@@ -341,7 +342,7 @@ describe('AdminOrderDetail DHL mutation safety', () => {
     const storage = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('quota'); });
     renderPage();
     fireEvent.click(await screen.findByRole('button', { name: 'Create DHL shipment' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /^(Create DHL shipment|Record DHL handoff|Refresh DHL tracking)$/ }));
     await screen.findByText(/Operation could not be confirmed/);
     expect(mocks.createDhlBooking).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: 'Create DHL shipment' })).toBeDisabled();
@@ -359,4 +360,80 @@ describe('AdminOrderDetail DHL mutation safety', () => {
     expect(screen.getByRole('button', { name: 'Download DHL label' })).toBeEnabled();
   });
 
+});
+
+describe('DHL correction regressions', () => {
+  beforeEach(() => { vi.clearAllMocks(); localStorage.clear(); });
+  const fill = (suffix: string) => {
+    fireEvent.change(screen.getByLabelText(/Collection time/), { target: { value: '2026-09-28T10:00' } });
+    fireEvent.change(screen.getByLabelText('Counterparty'), { target: { value: 'Collector ' + suffix } });
+    fireEvent.change(screen.getByLabelText('Private evidence reference'), { target: { value: 'custody/' + suffix } });
+    fireEvent.change(screen.getByLabelText('Evidence SHA-256'), { target: { value: suffix.repeat(64) } });
+  };
+  it('isolates A/B drafts, rejects empty B submission and sends only B evidence', async () => {
+    const order = operationsOrder();
+    order.dhl_operations!.bookings = [recordedBooking(), { ...recordedBooking(), booking_id: 'booking-2' }];
+    mocks.getOrderDetail.mockResolvedValue(order);
+    mocks.recordDhlHandoff.mockResolvedValue({});
+    renderPage();
+    const selector = await screen.findByLabelText('Shipment record');
+    fireEvent.change(selector, { target: { value: 'booking-1' } }); fill('a');
+    fireEvent.change(selector, { target: { value: 'booking-2' } });
+    for (const label of [/Collection time/, 'Counterparty', 'Private evidence reference', 'Evidence SHA-256']) {
+      expect(screen.getByLabelText(label)).toHaveValue('');
+    }
+    fireEvent.submit(screen.getByRole('button', { name: 'Record DHL handoff' }).closest('form')!);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    fill('b');
+    fireEvent.change(selector, { target: { value: 'booking-1' } });
+    expect(screen.getByLabelText('Counterparty')).toHaveValue('Collector a');
+    fireEvent.change(selector, { target: { value: 'booking-2' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Record DHL handoff' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /Confirm|Record DHL handoff/ }));
+    await waitFor(() => expect(mocks.recordDhlHandoff).toHaveBeenCalledWith('order-1', 'booking-2', {
+      occurred_at: new Date('2026-09-28T10:00').toISOString(), counterparty: 'Collector b',
+      evidence_ref: 'custody/b', evidence_sha256: 'b'.repeat(64), idempotency_key: expect.any(String),
+    }));
+    await screen.findByText('Hub-to-DHL handoff recorded.');
+    expect(localStorage.length).toBe(0);
+    expect(sessionStorage.length).toBe(0);
+  });
+
+  it.each(['removed', 'recorded', 'ineligible'])('invalidates handoff confirmation when booking becomes %s', (change) => {
+    const order = operationsOrder(); order.dhl_operations!.bookings = [recordedBooking()];
+    const view = render(<DhlShipmentOperations order={order} onOrderChange={vi.fn()} />);
+    fill('a'); fireEvent.click(screen.getByRole('button', { name: 'Record DHL handoff' }));
+    const fresh = structuredClone(order);
+    if (change === 'removed') fresh.dhl_operations!.bookings = [{ ...recordedBooking(), booking_id: 'booking-2' }];
+    if (change === 'recorded') fresh.dhl_operations!.bookings[0].handoff_recorded_at = '2026-09-28T10:00:00Z';
+    if (change === 'ineligible') fresh.dhl_operations!.bookings[0].reconciliation_state = 'required';
+    view.rerender(<DhlShipmentOperations order={fresh} onOrderChange={vi.fn()} />);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.getByText(/Shipment records changed/)).toBeInTheDocument();
+    expect(mocks.recordDhlHandoff).not.toHaveBeenCalled();
+    expect(localStorage.length).toBe(0);
+  });
+
+  it.each(['Create DHL shipment', 'Record DHL handoff', 'Refresh DHL tracking'])('contains focus and restores %s on Escape/cancel', async (name) => {
+    const order = operationsOrder(); order.dhl_operations!.bookings = [recordedBooking()];
+    mocks.getOrderDetail.mockResolvedValue(order); renderPage();
+    const trigger = await screen.findByRole('button', { name });
+    if (name === 'Record DHL handoff') fill('a');
+    trigger.focus(); fireEvent.click(trigger);
+    const dialog = screen.getByRole('dialog');
+    const cancel = within(dialog).getByRole('button', { name: 'Cancel' });
+    const action = within(dialog).getByRole('button', { name: /Confirm|^Create DHL shipment$|^Record DHL handoff$|^Refresh DHL tracking$/ });
+    expect(cancel).toHaveFocus();
+    expect(trigger.closest('[inert]')).not.toBeNull();
+    trigger.focus(); expect(cancel).toHaveFocus();
+    fireEvent.keyDown(cancel, { key: 'Tab', shiftKey: true }); expect(action).toHaveFocus();
+    fireEvent.keyDown(action, { key: 'Tab' }); expect(cancel).toHaveFocus();
+    expect(trigger.closest('[inert]')).not.toBeNull();
+    trigger.focus(); expect(cancel).toHaveFocus();
+    fireEvent.keyDown(cancel, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument(); expect(trigger).toHaveFocus();
+    fireEvent.click(trigger); fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancel' }));
+    expect(trigger).toHaveFocus();
+    expect(mocks.createDhlBooking).not.toHaveBeenCalled(); expect(mocks.recordDhlHandoff).not.toHaveBeenCalled();
+  });
 });
