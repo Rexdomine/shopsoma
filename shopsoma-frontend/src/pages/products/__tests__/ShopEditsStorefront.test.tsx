@@ -21,11 +21,13 @@ vi.mock('../../../components/common/Loading', () => ({
 }));
 
 vi.mock('../ProductList', () => ({
-  default: ({ categoryNav, initialParams }: {
+  default: ({ categoryNav, initialParams, heroOverride }: {
     categoryNav: { name: string }[];
     initialParams?: { category_id: string };
+    heroOverride: { imageUrl: string; imagePositionClassName?: string };
   }) => (
     <div data-testid="shop-edits-tabs" data-category-id={initialParams?.category_id}>
+      <img alt="Shop Edits hero" src={heroOverride.imageUrl} className={heroOverride.imagePositionClassName} />
       {categoryNav.map((category) => category.name).join('|')}
     </div>
   ),
@@ -79,6 +81,9 @@ describe('ShopEditsStorefront', () => {
     expect(getSubcategoriesMock).toHaveBeenNthCalledWith(2, 'occasion-wear-id');
     expect(getSubcategoriesMock).toHaveBeenCalledTimes(2);
     expect(getAllCategoriesMock).not.toHaveBeenCalled();
+    const hero = screen.getByRole('img', { name: 'Shop Edits hero' });
+    expect(hero).toHaveAttribute('src', '/images/hero/shop-edits-2088.jpg');
+    expect(hero).toHaveClass('object-center', 'sm:object-top');
   });
 
   it('does not fall back to an unscoped product list when Shop Edits is missing', async () => {

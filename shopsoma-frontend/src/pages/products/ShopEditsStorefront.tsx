@@ -126,6 +126,7 @@ export default function ShopEditsStorefront() {
         title: 'Shop Edits: Curated Discoveries',
         body: 'A rotating curation of elevated essentials, seasonal selections and statement finds.',
         imageUrl: '/images/hero/shop-edits-2088.jpg',
+        imagePositionClassName: 'object-center sm:object-top',
         ctaLabel: 'Shop all edits',
       }}
     />
