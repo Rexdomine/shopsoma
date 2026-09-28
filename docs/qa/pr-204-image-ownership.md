@@ -1,6 +1,6 @@
 # PR #204 image ownership verification
 
-Scope: bind variation galleries to their product, bind vendor image association to a server-issued upload, and correct the obsolete reset preflight assertion. PR targets `develop`; merge and deployment remain reviewer decisions.
+Scope: bind variation galleries to their product, bind vendor image association to a server-issued upload, correct the obsolete reset preflight assertion, and preserve products created outside the reset snapshot. PR targets `develop`; merge and deployment remain reviewer decisions.
 
 ## Local setup or run commands
 
@@ -21,10 +21,11 @@ For a local browser preview, apply migrations to a disposable application databa
 3. Delete a valid variation image as vendor and admin; check variation references and physical local files.
 4. Check legacy external images, public moderation gating, anonymous/customer rejection, foreign vendor namespaces, admin URL immutability, and both CSV import modes.
 5. Check upload-record persistence failure and catalog reset preflight failure.
+6. Start a reset with an empty and a populated catalog, then commit a new product after its snapshot: the new product, images, variants, variation sizes, featured reference and storage must survive.
 
 ## Expected local result
 
-Valid same-product galleries remain editable. Invalid references return 409 without creating an image row or deleting either upload. Owned admin image URL changes return 422; primary/order/alt-text edits still work. Deletion clears the owning variation gallery and leaves unrelated uploads intact. Pending products remain hidden publicly. Reset preflight failure preserves rows and storage.
+Valid same-product galleries remain editable. Invalid references return 409 without creating an image row or deleting either upload. All admin image original/thumbnail URL changes, including legacy rows, return 422; primary/order/alt-text edits still work. Deletion clears the owning variation gallery and leaves unrelated uploads intact. Pending products remain hidden publicly. Reset preflight failure preserves rows and storage.
 
 ## Staging test steps
 
@@ -32,7 +33,7 @@ After reviewers authorize merge and staging deployment:
 
 1. Apply migration `v5w6x7y8z9a0` before rolling out the new backend to every instance. Do not keep old upload writers active alongside new association validators.
 2. Create a single product and a variable product through the vendor form with fresh uploads. Reload vendor detail/edit and verify persistence.
-3. As admin, upload, reorder, select primary and delete an image. Confirm moderation returns to pending. Reapprove through the existing workflow.
+3. As admin, upload, reorder, select primary and delete an image. Check that changing a legacy image URL through the API is rejected and its existing variation remains vendor-editable. Confirm moderation returns to pending. Reapprove through the existing workflow.
 4. Verify cards/lists, product detail, selected-color galleries, hover images, cart/wishlist, vendor/admin dashboards, and featured storefront with the changed item and a previously working item.
 5. Repeat malformed image/variation requests from the local matrix against staging using synthetic products. Verify no unrelated uploaded object is deleted.
 
@@ -42,6 +43,8 @@ Fresh vendor and admin uploads work with the configured object store/CDN. Image 
 
 ## Regression checks and operating notes
 
+- Admin image URLs are immutable for owned and legacy rows; replace images through upload/delete. Unchanged URLs can still accompany metadata updates.
+- Reset affects the product IDs captured at its start; products created afterward are intentionally preserved. An empty snapshot retains the existing coordinator rejection (500) without deleting anything.
 - Existing associated images need no backfill. Legacy external images remain supported; their URLs are never used to guess deletion keys.
 - Unassociated uploads created before this migration have no trusted upload record and must be uploaded again. New managed uploads cannot be associated without their complete server-issued keys.
 - CSV import supports external image URLs; managed upload URLs must use the upload/association workflow.

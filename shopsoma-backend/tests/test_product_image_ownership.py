@@ -339,3 +339,136 @@ async def test_keyless_managed_url_aliases_are_rejected(
         "associate",
     )
     assert response.status_code == 409, response.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["image_url", "thumbnail_url"])
+async def test_legacy_image_url_patch_preserves_editable_variation_gallery(
+    client, admin_user, vendor_user, sample_product, db_session, field
+):
+    original = "https://legacy.example.test/original.jpg"
+    thumbnail = "https://legacy.example.test/thumb.jpg"
+    image = ProductImage(
+        product_id=sample_product.id, image_url=original,
+        thumbnail_url=thumbnail, is_primary=True,
+    )
+    variation = Variation(product_id=sample_product.id, title="Red", images=[original])
+    db_session.add_all([image, variation])
+    await db_session.commit()
+
+    response = await client.patch(
+        f"/api/v1/admin/products/{sample_product.id}/images/{image.id}",
+        headers=admin_user["headers"],
+        json={field: "https://legacy.example.test/replacement.jpg"},
+    )
+    assert response.status_code == 422, response.text
+    await db_session.refresh(image)
+    await db_session.refresh(variation)
+    assert image.image_url == original
+    assert image.thumbnail_url == thumbnail
+    assert variation.images == [original]
+    assert image.storage_keys is None
+
+    # Sending unchanged URLs with metadata remains compatible.
+    response = await client.patch(
+        f"/api/v1/admin/products/{sample_product.id}/images/{image.id}",
+        headers=admin_user["headers"],
+        json={"image_url": original, "thumbnail_url": thumbnail, "alt_text": "Red"},
+    )
+    assert response.status_code == 200, response.text
+    response = await client.put(
+        f"/api/v1/products/{sample_product.id}",
+        headers=vendor_user["headers"],
+        json={"variations": [{"id": str(variation.id), "title": "Red", "images": [original]}]},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["variations"][0]["images"] == [original]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("initially_empty", [False, True])
+async def test_reset_preserves_product_created_after_catalog_snapshot(
+    client, admin_user, vendor_user, db_session, monkeypatch, tmp_path, initially_empty
+):
+    from app.api.v1 import admin as admin_api
+    from app.models.product import (
+        ProductImageStorageCleanup, ProductVariant, SizeEnum, SizeStock,
+    )
+    from app.models.vendor import Vendor
+    from tests.conftest import TestSessionLocal
+
+    monkeypatch.setattr(image_service, "use_local_storage", True)
+    monkeypatch.setattr(image_service, "upload_dir", tmp_path)
+    vendor_id = vendor_user["vendor"].id
+    old_key = "vendors/reset/products/old.jpg"
+    late_key = "vendors/reset/products/late.jpg"
+    for key in (old_key, late_key):
+        path = tmp_path / key
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"synthetic image")
+    old_id = None
+    if not initially_empty:
+        old = Product(vendor_id=vendor_id, title="Snapshot product", base_price=10)
+        db_session.add(old)
+        await db_session.flush()
+        old_id = old.id
+        db_session.add(ProductImage(
+            product_id=old_id, image_url="/uploads/" + old_key, storage_keys=[old_key],
+        ))
+        await db_session.commit()
+
+    coordinate = admin_api.coordinate_catalog_write
+    late_ids = {}
+
+    async def create_after_snapshot(db, **kwargs):
+        assert kwargs["product_ids"] == ([] if initially_empty else [old_id])
+        # A separate committed transaction deterministically reproduces the
+        # concurrent-create window after reset has chosen its coordinated IDs.
+        async with TestSessionLocal() as other:
+            product = Product(vendor_id=vendor_id, title="Concurrent product", base_price=20)
+            other.add(product)
+            await other.flush()
+            image = ProductImage(
+                product_id=product.id, image_url="/uploads/" + late_key,
+                storage_keys=[late_key],
+            )
+            variant = ProductVariant(product_id=product.id, price=20, stock=3)
+            variation = Variation(
+                product_id=product.id, title="Blue", images=[image.image_url],
+            )
+            other.add_all([image, variant, variation])
+            await other.flush()
+            size = SizeStock(variation_id=variation.id, size=SizeEnum.M, stock=3)
+            other.add(size)
+            vendor = await other.get(Vendor, vendor_id)
+            vendor.featured_storefront_image_url = image.image_url
+            await other.commit()
+            late_ids.update({
+                Product: product.id, ProductImage: image.id, ProductVariant: variant.id,
+                Variation: variation.id, SizeStock: size.id,
+            })
+        await coordinate(db, **kwargs)
+
+    monkeypatch.setattr(admin_api, "coordinate_catalog_write", create_after_snapshot)
+    response = await client.delete(
+        "/api/v1/admin/reset-products", headers=admin_user["headers"],
+    )
+    # Preserve the existing empty-key coordinator fail-closed behavior.
+    assert response.status_code == (500 if initially_empty else 200), response.text
+    for model, row_id in late_ids.items():
+        assert await db_session.scalar(select(model.id).where(model.id == row_id)) == row_id
+    assert (tmp_path / late_key).exists()
+    featured = await db_session.scalar(
+        select(Vendor.featured_storefront_image_url).where(Vendor.id == vendor_id)
+    )
+    assert featured == "/uploads/" + late_key
+    cleanup_keys = list((await db_session.scalars(
+        select(ProductImageStorageCleanup.storage_keys)
+    )).all())
+    assert all(late_key not in keys for keys in cleanup_keys)
+    if old_id:
+        assert await db_session.scalar(select(Product.id).where(Product.id == old_id)) is None
+        assert not (tmp_path / old_key).exists()
+        assert any(old_key in keys for keys in cleanup_keys)
+    else:
+        assert cleanup_keys == []

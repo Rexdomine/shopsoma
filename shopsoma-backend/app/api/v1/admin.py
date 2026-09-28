@@ -495,7 +495,9 @@ async def reset_products(
             size_stock_ids=size_stock_ids,
         )
 
-        image_rows = list((await db.scalars(select(ProductImage))).all())
+        image_rows = list((await db.scalars(
+            select(ProductImage).where(ProductImage.product_id.in_(product_ids))
+        )).all())
         storage_keys = list(dict.fromkeys(
             key for image in image_rows for key in (image.storage_keys or []) if key
         ))
@@ -507,8 +509,8 @@ async def reset_products(
                 db, storage_keys, reason="admin_reset_products", commit=False
             )
 
-        await db.execute(delete(ProductImage))
-        await db.execute(delete(ProductVariant))
+        await db.execute(delete(ProductImage).where(ProductImage.product_id.in_(product_ids)))
+        await db.execute(delete(ProductVariant).where(ProductVariant.product_id.in_(product_ids)))
         await db.execute(delete(Product).where(Product.id.in_(product_ids))) if product_ids else None
         await db.commit()
 
@@ -2444,15 +2446,7 @@ async def update_admin_product_image(
     changes = image_data.model_dump(exclude_unset=True)
     if any(name in changes and changes[name] != getattr(image, name)
            for name in ("image_url", "thumbnail_url")):
-        if image.storage_keys:
-            raise HTTPException(status_code=422, detail="Uploaded image URLs are immutable; use the upload endpoint")
-        try:
-            await validate_image_upload(
-                db, changes.get("image_url", image.image_url),
-                changes.get("thumbnail_url", image.thumbnail_url), None,
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        raise HTTPException(status_code=422, detail="Image URLs are immutable; use the upload endpoint")
     new_order = changes.pop("display_order", None)
     make_primary = changes.pop("is_primary", None)
     order_target = image
