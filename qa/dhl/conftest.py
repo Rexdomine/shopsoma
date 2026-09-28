@@ -1,4 +1,4 @@
-"""Test-only overrides; no fixture HTTP endpoints or browser API interception."""
+"""Test-only overrides; no fixture HTTP endpoints."""
 
 import asyncio
 import json
@@ -9,7 +9,6 @@ from pathlib import Path
 import httpx
 import pytest
 import uvicorn
-from playwright.async_api import async_playwright
 
 pytest_plugins = ["tests.conftest"]
 EVIDENCE = Path("/evidence")
@@ -177,45 +176,6 @@ async def runtime(db_session, admin_user, vendor_user, customer_user, provider):
 
 
 @pytest.fixture
-async def browser(runtime, request):
-    async with async_playwright() as playwright:
-        browser = await playwright.chromium.launch(headless=True)
-        probe = await browser.new_page()
-        try:
-            await probe.goto("http://1.1.1.1", timeout=2000)
-        except Exception as exc:
-            # A timeout alone is not proof; OS-level preflight is mandatory too.
-            if (
-                "ERR_INTERNET_DISCONNECTED" not in str(exc)
-                and "ERR_ADDRESS_UNREACHABLE" not in str(exc)
-                and "ERR_NETWORK_UNREACHABLE" not in str(exc)
-            ):
-                raise RuntimeError("Browser egress denial not demonstrated") from None
-        else:
-            raise RuntimeError("Browser external connection succeeded")
-        finally:
-            await probe.close()
-        (EVIDENCE / "browser-containment.json").write_text(
-            json.dumps({"external_navigation_denied": True})
-        )
-        yield browser
-        # Screenshots only: raw Playwright traces/HAR contain auth tokens, labels
-        # and private handoff payloads. Never produce/upload those files.
-        for context_index, context in enumerate(browser.contexts):
-            for index, page in enumerate(context.pages):
-                if not page.is_closed():
-                    await page.screenshot(
-                        path=str(
-                            EVIDENCE
-                            / f"{request.node.name}-{context_index}-{index}.png"
-                        ),
-                        full_page=True,
-                        mask=[page.locator("input")],
-                    )
-        await browser.close()
-
-
-@pytest.fixture
 async def make_subject(db_session, vendor_user, customer_user, runtime):
     from app.models.package_custody import OutboundShipmentIntent
     from tests.test_dhl_phase4_booking import PHASE4
@@ -250,7 +210,7 @@ async def make_subject(db_session, vendor_user, customer_user, runtime):
                     destination_postal_code=intent.destination_postal_code,
                     destination_country_code="NG",
                     source_command="prepare_outbound",
-                    idempotency_key=f"browser-intent-{extra.id}",
+                    idempotency_key=f"http-intent-{extra.id}",
                     created_by_id=graph["operator_id"],
                     outbound_state="staged",
                 )
@@ -292,7 +252,7 @@ def pytest_sessionfinish(session, exitstatus):
             {"name": TEST_DATABASE_NAME},
         )
     engine.dispose()
-    (EVIDENCE / "browser-database-teardown.json").write_text(
+    (EVIDENCE / "http-database-teardown.json").write_text(
         json.dumps({"owned_database_absent": remains == 0})
     )
     if remains:

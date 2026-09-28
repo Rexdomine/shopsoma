@@ -8,9 +8,7 @@ import signal
 import subprocess
 import sys
 import tempfile
-import time
 from pathlib import Path
-from urllib.request import urlopen
 
 from containment import verify
 from sanitize import sanitize_reports
@@ -127,51 +125,21 @@ def main():
                 timeout=480,
             )
         )
-        if built:
-            log = open("/tmp/frontend-server.log", "w")
-            server = subprocess.Popen(
+        checks.append(
+            command(
+                "http-integration-tests",
                 [
-                    "node",
-                    "node_modules/vite/bin/vite.js",
-                    "preview",
-                    "--host",
-                    "127.0.0.1",
-                    "--port",
-                    "5173",
-                    "--strictPort",
+                    "python",
+                    "-m",
+                    "pytest",
+                    "-c",
+                    "/harness/pytest.ini",
+                    "/harness/test_http.py",
+                    "--junitxml=/tmp/dhl-reports/http.xml",
                 ],
-                cwd=FRONTEND,
-                stdout=log,
-                stderr=subprocess.STDOUT,
-                start_new_session=True,
+                timeout=480,
             )
-            children.append(server)
-            for _ in range(100):
-                if server.poll() is not None:
-                    raise RuntimeError("Frontend terminated during startup")
-                try:
-                    with urlopen("http://127.0.0.1:5173", timeout=1) as response:
-                        if response.status == 200:
-                            break
-                except OSError:
-                    time.sleep(0.1)
-            else:
-                raise RuntimeError("Frontend startup deadline exceeded")
-            checks.append(
-                command(
-                    "browser-tests",
-                    [
-                        "python",
-                        "-m",
-                        "pytest",
-                        "-c",
-                        "/harness/pytest.ini",
-                        "/harness/test_browser.py",
-                        "--junitxml=/tmp/dhl-reports/browser.xml",
-                    ],
-                    timeout=480,
-                )
-            )
+        )
         return 0 if all(checks) else 1
     finally:
         stopped = True

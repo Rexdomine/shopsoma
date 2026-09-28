@@ -1,4 +1,4 @@
-name: Isolated DHL QA
+name: Isolated DHL integration QA
 
 on:
   pull_request:

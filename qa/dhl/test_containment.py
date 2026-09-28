@@ -42,12 +42,12 @@ class ContainmentTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "report.xml"
             path.write_text(
-                '<testsuite failures="1"><testcase name="handoff"><failure message="private-token">tests/test_browser.py:42 private-label</failure><system-out>private-body</system-out></testcase></testsuite>'
+                '<testsuite failures="1"><testcase name="handoff"><failure message="private-token">tests/test_http.py:42 private-label</failure><system-out>private-body</system-out></testcase></testsuite>'
             )
             sanitize_reports(directory)
             report = path.read_text()
             self.assertNotIn("private-", report)
-            self.assertIn("tests/test_browser.py:42", report)
+            self.assertIn("tests/test_http.py:42", report)
             self.assertIn('failures="1"', report)
 
 
