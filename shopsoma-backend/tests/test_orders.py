@@ -310,6 +310,7 @@ async def test_create_order_with_size_stock_variant_updates_stock(
     assert size_stock.stock == 4
 
 
+@pytest.mark.usefixtures("enabled_usd")
 @pytest.mark.asyncio
 async def test_review_order_converts_mixed_currency_items_to_checkout_currency(
     client: AsyncClient,
@@ -385,6 +386,7 @@ async def test_review_order_converts_mixed_currency_items_to_checkout_currency(
     assert float(payload["summary"]["subtotal"]) > 300
 
 
+@pytest.mark.usefixtures("enabled_usd")
 @pytest.mark.asyncio
 async def test_create_order_persists_item_currency(
     client: AsyncClient,

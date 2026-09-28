@@ -153,8 +153,11 @@ async def create_mixed_enforced_checkout(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("provider", ["stripe", "paystack"])
 async def test_real_initialization_routes_bind_m3_truth_and_ignore_client_currency(
+    enable_stripe,
     client, db_session, vendor_user, customer_user, monkeypatch, provider
 ):
+    if provider == "stripe":
+        await enable_stripe()
     order, _ = await create_enforced_checkout(
         client, db_session, vendor_user, customer_user, monkeypatch
     )
@@ -297,6 +300,7 @@ async def test_incomplete_m3_coverage_blocks_provider_before_call(
     )
 
 
+@pytest.mark.usefixtures("enabled_stripe")
 @pytest.mark.asyncio
 async def test_gate_off_does_not_strand_existing_enforced_attempt(
     client, db_session, vendor_user, customer_user, monkeypatch
@@ -346,8 +350,11 @@ async def test_gate_off_does_not_strand_existing_enforced_attempt(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("provider", ["stripe", "paystack"])
 async def test_authenticated_made_to_order_only_initializes_without_reservations(
+    enable_stripe,
     client, db_session, vendor_user, customer_user, monkeypatch, provider
 ):
+    if provider == "stripe":
+        await enable_stripe()
     order, _ = await create_enforced_checkout(
         client,
         db_session,
@@ -430,6 +437,7 @@ async def test_authenticated_made_to_order_only_initializes_without_reservations
     )
 
 
+@pytest.mark.usefixtures("enabled_stripe")
 @pytest.mark.asyncio
 async def test_mixed_order_initializes_with_exact_stock_coverage_membership(
     client, db_session, vendor_user, customer_user, monkeypatch
