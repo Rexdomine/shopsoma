@@ -5,6 +5,8 @@ Supports both local file storage (development) and S3 (production)
 """
 
 import io
+import asyncio
+import shutil
 import tempfile
 import uuid
 import hashlib
@@ -442,6 +444,73 @@ class ImageService:
         else:
             # Use standard S3 URL
             return f"https://{settings.S3_BUCKET_NAME}.s3.{settings.AWS_REGION}.amazonaws.com/{s3_key}"
+
+    def public_url_for_key(self, key: str) -> str:
+        """URL for a trusted exact key in the active storage backend."""
+        return f"/uploads/{key}" if self.use_local_storage else self._get_public_url(key)
+
+    async def copy_image_key(
+        self, source_key: str, destination_key: str, *, key_mapping: dict[str, str]
+    ) -> None:
+        """Copy a server-authorized key; never fetch arbitrary URLs.
+
+        The caller reserves all destination keys before IO and records attempted
+        keys before invoking this method, including acknowledgement failures.
+        """
+        if source_key == destination_key:
+            raise ValueError("Image copies require a fresh destination")
+        await asyncio.to_thread(
+            self._copy_image_key, source_key, destination_key, key_mapping
+        )
+
+    def _copy_image_key(
+        self, source_key: str, destination_key: str, key_mapping: dict[str, str]
+    ) -> None:
+        if self.use_local_storage:
+            source = self._resolve_local_image_path(source_key)
+            destination = self._resolve_local_image_path(destination_key)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            with source.open("rb") as reader, destination.open("xb") as writer:
+                shutil.copyfileobj(reader, writer)
+            return
+
+        # A dedicated client bounds copy retries without changing upload clients.
+        client = self._get_copy_client()
+        info = client.head_object(Bucket=self.bucket_name, Key=source_key)
+        metadata = dict(info.get("Metadata", {}))
+        if "original-key" in metadata:
+            original = metadata["original-key"]
+            if original not in key_mapping:
+                raise ValueError("Derivative metadata does not match the source gallery")
+            metadata["original-key"] = key_mapping[original]
+        headers = {
+            field: info[field] for field in (
+                "ContentType", "CacheControl", "ContentDisposition",
+                "ContentEncoding", "ContentLanguage", "Expires",
+            ) if field in info
+        }
+        client.copy_object(
+            Bucket=self.bucket_name, Key=destination_key,
+            CopySource={"Bucket": self.bucket_name, "Key": source_key},
+            MetadataDirective="REPLACE", Metadata=metadata, **headers,
+        )
+
+    def _get_copy_client(self):
+        # Cached independently; credentials/endpoints use the existing config.
+        if not hasattr(self, "_copy_client"):
+            kwargs = {
+                "aws_access_key_id": settings.AWS_ACCESS_KEY_ID,
+                "aws_secret_access_key": settings.AWS_SECRET_ACCESS_KEY,
+                "config": BotoConfig(
+                    signature_version="s3v4", region_name=settings.AWS_REGION,
+                    connect_timeout=5, read_timeout=15,
+                    retries={"mode": "standard", "total_max_attempts": 2},
+                ),
+            }
+            if settings.S3_ENDPOINT_URL:
+                kwargs["endpoint_url"] = settings.S3_ENDPOINT_URL
+            self._copy_client = boto3.client("s3", **kwargs)
+        return self._copy_client
 
     def generate_presigned_url(self, s3_key: str, expiration: int = 3600) -> str:
         """

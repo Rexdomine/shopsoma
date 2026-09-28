@@ -101,3 +101,118 @@ python -m pytest tests/test_phase_2a_migration_graph.py tests/test_checkout_prer
 For a database-free service/graph check, use `python -m pytest --noconftest` and select only service unit tests or graph test node IDs; set synthetic `SECRET_KEY`, `DATABASE_URL`, `USE_LOCAL_STORAGE=true` and a disposable `LOCAL_UPLOAD_DIR`. Do not interpret this as running database fixtures or migration upgrade/downgrade cycles.
 
 QA order: run the focused local commands; inject a variant-generation error plus cleanup failure and verify retry-key retention; expect the original 500 with exact attempted keys and one linear migration head. After an authorized staging rollout, repeat a failed upload with controlled storage failure and observe cleanup-ledger retry completion. Recheck successful vendor/admin uploads, legacy image deletion, same-product variations and all existing preview surfaces. Browser/staging and managed-storage fault injection remain unverified.
+
+## Ownership-safe Duplicate batch (2026-09-28)
+
+The accepted REX-26 design resolves the open Duplicate finding above. The backend
+now owns `POST /products/{product_id}/duplicate`: approved/completed vendors may
+duplicate their own product into an unfeatured, pending-moderation draft. The
+shared graph builder preserves normal create validation. No new database
+migration, environment variable, or private response field is introduced.
+
+Managed originals, thumbnails and all persisted derivatives receive independent
+UUID keys. Gallery order, alt text, primary flags, variation URL order, currency,
+product type and variation size inventory are preserved. Single-product stock
+resets to zero; made-to-order products preserve their timeline and zero inventory.
+SKU/history/moderation decisions are not copied. External legacy URLs remain
+external references without storage IO; inconsistent or keyless managed sources
+require repair/re-upload.
+
+### Local setup/run commands
+
+Use Python 3.11, `requirements.txt`, disposable PostgreSQL 17 and synthetic
+`SECRET_KEY`/`DATABASE_URL` settings; set `USE_LOCAL_STORAGE=true` and a disposable
+`LOCAL_UPLOAD_DIR`. Test fixtures create/drop a separate process-specific database.
+
+```sh
+# shopsoma-backend/
+python -m pytest tests/test_product_duplication.py tests/test_image_copy.py tests/test_product_image_ownership.py tests/test_admin_product_images.py tests/test_stock_payment_lock_coordinator.py tests/test_products.py tests/test_image_service_cleanup_metadata.py -q
+ruff check app/services/product_creation.py app/services/product_duplication.py app/services/image_service.py app/api/v1/products.py tests/test_product_duplication.py tests/test_image_copy.py --select E9,F63,F7,F82
+# shopsoma-frontend/
+npm test -- src/pages/vendor/VendorProductDuplicate.test.tsx src/services/__tests__/productDuplicate.test.ts src/tests/productImageConsumers.test.tsx src/utils/productImages.test.ts
+npx tsc -b
+```
+
+For Product/NightWing's reproducible preview, migrate a **separate disposable
+application database** with `alembic upgrade head`, run the backend with
+`uvicorn app.main:app --reload`, and run the frontend with `npm run dev` using its
+local API URL setting. Use synthetic approved/completed vendor, customer and admin
+accounts. This is a setup handoff, not a deployed preview or browser-verification
+claim.
+
+### Local test steps
+
+1. Duplicate single, USD variable, NGN and made-to-order products from both list
+   and detail buttons. Verify immediate pending state, one request for repeated
+   clicks, edit navigation and subsequent editing of copied variation galleries.
+2. Duplicate a 10-image gallery with four objects per image. Compare bytes, order,
+   alt text, primary flag, variation gallery mapping and distinct source/copy keys.
+   Check null thumbnails and thumbnails equal to originals.
+3. Delete a source image, then separately delete a copied image. Verify the other
+   product's files survive. Confirm the duplicate remains absent from public detail.
+4. Reject missing/foreign products, anonymous/customer/admin callers and
+   unapproved/incomplete vendors before copying. Reject malformed galleries,
+   mixed URLs, shared keys, cleanup tombstones and keyless managed images.
+5. Inject copy failure/acknowledgement loss, graph/serialization failure,
+   commit failures before/after durability, unavailable recovery DB and cleanup
+   recording failure. Exercise cleanup worker retries and a concurrent source
+   catalog writer.
+
+### Expected local result
+
+A complete private draft with independent files, or an explicit failure without a
+partial product graph. Durable commits retain their files and can return their
+saved result after a lost acknowledgement. Authoritatively absent writes reserve
+only attempted, unowned, never-consumed destination keys in the existing cleanup
+ledger. Unknown outcomes retain objects for reconciliation. Source files and
+unrelated ownership remain intact. Both controls show reconciliation advice after
+network/server uncertainty and never automatically retry the POST.
+
+### Staging test steps
+
+After separately authorized merge/deployment, ship backend endpoint before the
+new frontend caller. Retain all earlier PR ownership migration requirements.
+NightWing should repeat the matrix using the configured storage provider/CDN,
+verify copy permissions and derivative metadata, and measure 10-image latency
+before agreeing a client timeout. Validate real image loading and both Duplicate
+buttons, then source/copy deletion, edits and all independent rendering surfaces
+listed above. Use controlled synthetic data for failure drills.
+
+### Expected staging result
+
+Originals/thumbnails persist after reload, correct variations/sizes/currency
+remain editable, one product's image deletion leaves the other intact, and pending
+duplicates remain private. Provider permissions and latency meet the agreed
+release criteria. No staging/provider performance result is claimed by local tests.
+
+### Regression checks and operating limits
+
+- Ordinary create/edit/upload, admin image operations, moderation, catalog
+  coordination and cleanup worker remain covered. No order/payment/payout writes
+  or historical currency conversion are added.
+- Source and destination catalog locks precede sorted storage locks. Source edits
+  and deletes wait during copying. At most 40 objects are copied; provider IO uses
+  a separate client with 5-second connect, 15-second read and two total attempts.
+  Copy orchestration stops starting new objects after a 120-second budget.
+- Existing 10-second frontend timeout is preserved. Slow provider outcomes can
+  therefore be uncertain; refresh the product list before retrying. Automatic
+  retries (including auth retry for this POST) are disabled. Intentional later
+  requests create separate drafts; no exactly-once claim.
+- Process crashes/cancellation during external IO can leave unowned objects.
+  Restricted logs include source/destination correlation IDs and counts. Retain
+  unknown objects for operator reconciliation; never delete by age or guessed URL.
+  Cleanup waits for the existing durable cleanup worker.
+- Roll back endpoint/caller together or disable Duplicate; never remove ownership
+  guards to restore the former URL-only caller.
+- DOM/API tests do not establish rendered-browser, provider, staging, specialist
+  security or independent QA approval. StarLord coordinates Product/NightWing;
+  NightWing owns the next manual Codex request.
+
+Local evidence for this batch: 187 backend regressions passed in 156.65 seconds;
+the final duplication-only rerun passed all 32 tests after adding explicit admin
+and cleanup-ownership boundaries. Maximum local gallery (40 small objects)
+completed in 0.217 seconds, measured inside the HTTP regression; this is not a
+provider latency estimate. The four focused frontend files passed 21 tests; the
+corrected service test and TypeScript check were rerun successfully. New Python
+modules/tests passed full F/E9 lint; all changed runtime files passed focused
+E9/F63/F7/F82 lint. Latest pushed-head CI remains a separate gate.

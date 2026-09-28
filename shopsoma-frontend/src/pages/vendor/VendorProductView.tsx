@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { ArrowLeft, Edit2, Loader2, Shirt, Package, DollarSign, Tag, Calendar, Eye, Trash2, Copy } from 'lucide-react';
 import VendorSidebar from '../../components/vendor/VendorSidebar';
@@ -33,6 +33,8 @@ export default function VendorProductView() {
   const [loading, setLoading] = useState(true);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isDuplicating, setIsDuplicating] = useState(false);
+  const duplicatePending = useRef(false);
   const navigationState = location.state as {
     returnTo?: string;
     returnLabel?: string;
@@ -115,24 +117,25 @@ export default function VendorProductView() {
 
   const handleDuplicate = async () => {
     if (!product) return;
-
+    if (duplicatePending.current) return;
+    duplicatePending.current = true;
+    setIsDuplicating(true);
     try {
       const duplicated = await productService.duplicateProduct(product.id);
-      success(
-        'Product duplicated successfully. Redirecting to edit...',
-        'Product Duplicated'
-      );
-
-      // Navigate to edit the duplicated product
-      setTimeout(() => {
-        navigate(`${ROUTES.VENDOR_PRODUCTS}/${duplicated.id}/edit`);
-      }, 1500);
+      success('Product duplicated successfully.', 'Product Duplicated');
+      navigate(`${ROUTES.VENDOR_PRODUCTS}/${duplicated.id}/edit`);
     } catch (err: any) {
-      console.error('Failed to duplicate product', err);
+      const status = err.response?.status;
+      const detail = err.response?.data?.detail;
       error(
-        err.response?.data?.detail || 'Failed to duplicate product',
+        status && status < 500
+          ? (typeof detail === 'string' ? detail : detail?.message) || 'Failed to duplicate product'
+          : 'Duplication outcome is uncertain. Refresh your product list before trying again.',
         'Duplication Failed'
       );
+    } finally {
+      duplicatePending.current = false;
+      setIsDuplicating(false);
     }
   };
 
@@ -518,6 +521,8 @@ export default function VendorProductView() {
                   <button
                     type="button"
                     onClick={handleDuplicate}
+                    disabled={isDuplicating}
+                    aria-busy={isDuplicating}
                     className="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-gray-300 bg-white text-gray-700 px-4 py-2.5 text-sm font-medium hover:bg-gray-50 transition"
                   >
                     <Copy className="h-4 w-4" />
