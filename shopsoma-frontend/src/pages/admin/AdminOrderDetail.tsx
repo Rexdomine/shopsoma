@@ -5,6 +5,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import AdminSidebar from '../../components/admin/AdminSidebar';
+import DhlShipmentOperations from '../../components/admin/DhlShipmentOperations';
 import { useToast } from '../../hooks/useToast';
 import CurrencySwitcher from '../../components/common/CurrencySwitcher';
 import { useCurrencyStore } from '../../store/currencyStore';
@@ -403,6 +404,8 @@ export default function AdminOrderDetail() {
             )}
           </div>
         </div>
+
+        <div className="mb-6"><DhlShipmentOperations key={order.id} order={order} onOrderChange={setOrder} disabled={updating || runningShadowQuote} /></div>
 
         {/* Main Content */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

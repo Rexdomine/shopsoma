@@ -3,7 +3,7 @@ import re
 
 from datetime import UTC, datetime, date
 from decimal import Decimal
-from typing import List, Optional
+from typing import Literal, List, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -180,6 +180,51 @@ class ReadyPackageInfo(BaseModel):
         from_attributes = True
 
 
+DHLSelectionBlocker = Literal[
+    "order_cancelled", "package_not_ready", "custody_handed_off", "active_seal_missing",
+    "active_intent_missing", "selected_dhl_quote_missing", "active_booking_exists",
+    "reconciliation_required", "expired_claim_requires_recovery", "inconsistent_persisted_state",
+]
+
+
+class DHLOperationPackage(BaseModel):
+    package_id: UUID
+    package_version: int
+    origin_hub_id: UUID
+    package_state: Literal["packing", "sealed", "ready"]
+    ready_at: Optional[datetime]
+    seal_id: Optional[UUID]
+    intent_id: Optional[UUID]
+    active_booking_id: Optional[UUID]
+    selection_eligible: bool
+    selection_blockers: List[DHLSelectionBlocker]
+
+
+class DHLOperationBooking(BaseModel):
+    booking_id: UUID
+    intent_id: UUID
+    package_id: UUID
+    package_version: int
+    seal_id: UUID
+    origin_hub_id: UUID
+    created_at: datetime
+    classification: Literal["pending", "success", "failure", "unknown"]
+    outbound_state: str
+    tracking_number: Optional[str]
+    label_available: bool
+    handoff_recorded_at: Optional[datetime]
+    last_tracking_refresh_at: Optional[datetime]
+    reconciliation_state: Literal["not_required", "in_progress", "required", "expired_claim_requires_recovery", "resolved", "inconsistent"]
+    reconciliation_resolution: Optional[Literal["confirm_success", "confirm_failure"]]
+    reconciliation_recorded_at: Optional[datetime]
+
+
+class DHLOperations(BaseModel):
+    read_at: datetime
+    packages: List[DHLOperationPackage]
+    bookings: List[DHLOperationBooking]
+
+
 class OrderListItem(BaseModel):
     """Order in list view"""
     id: UUID
@@ -240,6 +285,7 @@ class OrderDetail(BaseModel):
     items: List[OrderItemDetail]
     pickups: List[PickupInfo]
     ready_packages: List[ReadyPackageInfo] = Field(default_factory=list)
+    dhl_operations: DHLOperations
 
     class Config:
         from_attributes = True
