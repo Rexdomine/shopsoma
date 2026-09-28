@@ -67,7 +67,7 @@ jobs:
           docker build -f harness/qa/dhl/Dockerfile -t "dhl-qa:$GITHUB_RUN_ID" .
       - name: Run contained tests (one worker)
         run: |
-          docker run --name "dhl-qa-$GITHUB_RUN_ID" --network none \
+          docker run --init --name "dhl-qa-$GITHUB_RUN_ID" --network none \
             --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 \
             --shm-size 1g --cpus 2 --memory 8g "dhl-qa:$GITHUB_RUN_ID"
       - name: Collect evidence and remove owned container

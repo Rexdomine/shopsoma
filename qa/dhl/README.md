@@ -27,7 +27,7 @@ against the recorded pins before building, exactly as the workflow does.
 ```sh
 cp harness/qa/dhl/dockerignore .dockerignore
 docker build -f harness/qa/dhl/Dockerfile -t dhl-qa:local .
-docker run --name dhl-qa-local --network none --cap-drop ALL \
+docker run --init --name dhl-qa-local --network none --cap-drop ALL \
   --security-opt no-new-privileges --pids-limit 512 --shm-size 1g \
   --cpus 2 --memory 8g dhl-qa:local
 # Even after a failed run:
@@ -115,3 +115,13 @@ This CI harness by itself does not unblock feature QA or authorize live use.
   tests. The socket-path correction was included at `85df77460bec7257593de8326937ceffee6e3c3d`.
   Browser-capable run `36482294123` was cancelled to enforce the narrowed scope.
   That historical revision preserves the removed work; it is not browser acceptance.
+
+- Run `36483388480` at `84ea530d3c29384385042637a2c0568a8bb82b45`
+  proved containment and owned database/cluster/container cleanup. JUnit reports
+  23 frontend and 136 backend tests passed; HTTP reports one passed, six failed
+  and one teardown error. Lint/build exited zero, but frontend process-group
+  teardown failed. These are partial results, not integration acceptance.
+- Follow-up fixes relocate the sandbox fixed-URL comparison only in the test
+  fixture to the same loopback URL used by the deterministic client, remove a
+  nonexistent intent constructor field, and use Docker `--init` to reap orphaned
+  children. Production guards and strict process cleanup remain unchanged.

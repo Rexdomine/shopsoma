@@ -125,7 +125,7 @@ def provider(monkeypatch, external_effects):
 
 
 @pytest.fixture
-async def runtime(db_session, admin_user, vendor_user, customer_user, provider):
+async def runtime(db_session, admin_user, vendor_user, customer_user, provider, monkeypatch):
     from app.main import app
     from app.core.database import get_db
     from app.api.v1.admin_orders import get_app_settings
@@ -140,6 +140,11 @@ async def runtime(db_session, admin_user, vendor_user, customer_user, provider):
 
     settings = _settings_stub()
     settings.dhl_base_url = "http://127.0.0.1:9"
+    # Relocate only the test adapter's fixed endpoint. Retain cohort and all
+    # business guards; the deterministic transport never opens a socket.
+    from app.services.dhl import shipments
+
+    monkeypatch.setattr(shipments, "MYDHL_TEST_BASE_URL", settings.dhl_base_url)
     # Reset only test-owned in-memory counters between independent fixtures;
     # actual rate limits remain active within each scenario.
     from app.middleware.rate_limit import RateLimitMiddleware
@@ -214,7 +219,6 @@ async def make_subject(db_session, vendor_user, customer_user, runtime):
                     source_command="prepare_outbound",
                     idempotency_key=f"http-intent-{extra.id}",
                     created_by_id=graph["operator_id"],
-                    outbound_state="staged",
                 )
                 db_session.add(extra_intent)
                 await db_session.flush()
