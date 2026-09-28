@@ -7,7 +7,7 @@ from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.product import ModerationStatus, ProductImage
+from app.models.product import ModerationStatus, ProductImage, ProductImageUpload
 
 class TestProductCreate:
     """Test product creation endpoint"""
@@ -551,12 +551,14 @@ class TestProductCreate:
     async def test_create_product_with_images(self, client: AsyncClient, vendor_user, db_session):
         """Test product creation with images"""
         storage_key = f"vendors/{vendor_user['user'].id}/products/2026/09/image1.jpg"
+        db_session.add(ProductImageUpload(image_url=f"/uploads/{storage_key}", storage_keys=[storage_key]))
+        await db_session.commit()
         product_data = {
             "title": "Test Product",
             "base_price": 50.00,
             "images": [
                 {
-                    "image_url": "https://example.com/image1.jpg",
+                    "image_url": f"/uploads/{storage_key}",
                     "alt_text": "Front view",
                     "is_primary": True,
                     "display_order": 0,
@@ -1635,10 +1637,12 @@ class TestProductImages:
         self, client: AsyncClient, vendor_user, sample_product, db_session: AsyncSession
     ):
         storage_key = f"vendors/{vendor_user['user'].id}/products/2026/09/image.jpg"
+        db_session.add(ProductImageUpload(image_url=f"/uploads/{storage_key}", storage_keys=[storage_key]))
+        await db_session.commit()
         response = await client.post(
             f"/api/v1/products/{sample_product.id}/images",
             json={
-                "image_url": "https://example.com/vendor.jpg",
+                "image_url": f"/uploads/{storage_key}",
                 "storage_keys": [storage_key],
             },
             headers=vendor_user["headers"],

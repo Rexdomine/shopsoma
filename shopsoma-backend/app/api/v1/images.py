@@ -23,6 +23,7 @@ from app.services.product_image_storage import (
     _is_featured_storefront_image,
     lock_storage_keys,
     record_storage_cleanup,
+    record_image_upload,
 )
 from app.api.dependencies import get_current_user, get_current_vendor
 from app.models.user import User, UserRole
@@ -142,6 +143,9 @@ async def upload_image(
             generate_variants=generate_variants,
         )
 
+        if folder == "products" or folder.startswith("products/"):
+            await record_image_upload(db, result)
+
         return ImageUploadResponse(
             original=result["original"],
             thumbnail=result.get("thumbnail"),
@@ -197,6 +201,9 @@ async def upload_images_batch(
                 folder=storage_folder,
                 generate_variants=generate_variants,
             )
+
+            if folder == "products" or folder.startswith("products/"):
+                await record_image_upload(db, result)
 
             uploaded_images.append(
                 ImageUploadResponse(

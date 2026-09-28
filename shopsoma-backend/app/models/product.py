@@ -290,6 +290,17 @@ class ProductImage(Base):
         return f"<ProductImage {self.product_id}>"
 
 
+class ProductImageUpload(Base):
+    """Server-issued upload identity, retained independently of product deletion."""
+
+    __tablename__ = "product_image_uploads"
+
+    image_url = Column(Text, primary_key=True)
+    thumbnail_url = Column(Text, nullable=True)
+    storage_keys = Column(JSONB, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
 class ProductImageStorageCleanup(Base):
     """Durable queue for storage objects that could not be deleted immediately."""
 

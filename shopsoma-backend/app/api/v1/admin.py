@@ -69,6 +69,7 @@ from app.services.product_image_storage import (
     clear_variation_image_references,
     lock_storage_keys,
     lock_and_validate_storage_keys,
+    validate_image_upload,
     record_storage_cleanup,
 )
 
@@ -2261,6 +2262,10 @@ async def create_admin_product_image(
     images = list((await db.scalars(select(ProductImage).where(ProductImage.product_id == product_id).order_by(ProductImage.display_order, ProductImage.created_at, ProductImage.id))).all())
     if len(images) >= 10:
         raise HTTPException(status_code=409, detail="Products can have at most 10 images")
+    try:
+        await validate_image_upload(db, image_data.image_url, image_data.thumbnail_url, None)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     values = image_data.model_dump()
     if not images:
         values["display_order"] = 0
@@ -2437,6 +2442,17 @@ async def update_admin_product_image(
     if not image:
         raise HTTPException(status_code=404, detail="Image not found")
     changes = image_data.model_dump(exclude_unset=True)
+    if any(name in changes and changes[name] != getattr(image, name)
+           for name in ("image_url", "thumbnail_url")):
+        if image.storage_keys:
+            raise HTTPException(status_code=422, detail="Uploaded image URLs are immutable; use the upload endpoint")
+        try:
+            await validate_image_upload(
+                db, changes.get("image_url", image.image_url),
+                changes.get("thumbnail_url", image.thumbnail_url), None,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
     new_order = changes.pop("display_order", None)
     make_primary = changes.pop("is_primary", None)
     order_target = image

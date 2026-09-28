@@ -220,3 +220,15 @@ def test_csv_image_urls_preserve_valid_strings(url):
     errors = []
     assert _parse_image_urls({"image_1_url": url}, 2, errors) == [url]
     assert errors == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["single", "variable"])
+async def test_csv_cannot_copy_managed_upload_as_keyless_image(
+    client, vendor_user, db_session, image_category, mode
+):
+    url = f"https://cdn.example.com/vendors/{vendor_user['user'].id}/products/upload.jpg"
+    response = await upload(client, vendor_user, mode, [product_row(mode, image_1_url=url)])
+    assert response.status_code == 422, response.text
+    assert "server-issued storage keys" in str(response.json()["detail"])
+    assert await db_session.scalar(select(ProductImage.id)) is None

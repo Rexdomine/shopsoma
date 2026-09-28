@@ -38,6 +38,7 @@ from app.services.product_image_storage import (
     lock_storage_keys,
     lock_and_validate_storage_keys,
     lock_and_validate_variation_image_urls,
+    validate_image_upload,
     record_storage_cleanup,
 )
 from app.schemas.product import (
@@ -480,6 +481,14 @@ async def create_product(
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
+    for image_data in product_data.images or []:
+        try:
+            await validate_image_upload(
+                db, image_data.image_url, image_data.thumbnail_url, image_data.storage_keys
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
     # Create product
     product = Product(
         vendor_id=vendor.id,
@@ -520,7 +529,10 @@ async def create_product(
             for image_url in (variation_data.images or [])
         ]
         try:
-            await lock_and_validate_variation_image_urls(db, variation_image_urls)
+            await lock_and_validate_variation_image_urls(
+                db, variation_image_urls,
+                new_image_urls=[image.image_url for image in product_data.images or []],
+            )
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
         for variation_data in product_data.variations:
@@ -643,6 +655,11 @@ async def bulk_upload_single_products(
     for row_index, row in enumerate(reader, start=2):
         row_errors: List[Dict[str, Any]] = []
         image_urls = _parse_image_urls(row, row_index, row_errors)
+        for image_url in image_urls:
+            try:
+                await validate_image_upload(db, image_url, image_url, None)
+            except ValueError as exc:
+                row_errors.append({"row": row_index, "field": "images", "message": str(exc)})
         title = (row.get("title") or "").strip()
         category_slug = (row.get("category_slug") or "").strip()
         currency = (row.get("currency") or "NGN").strip().upper()
@@ -773,6 +790,11 @@ async def bulk_upload_variable_products(
     for row_index, row in enumerate(reader, start=2):
         row_errors: List[Dict[str, Any]] = []
         row_image_urls = _parse_image_urls(row, row_index, row_errors)
+        for image_url in row_image_urls:
+            try:
+                await validate_image_upload(db, image_url, image_url, None)
+            except ValueError as exc:
+                row_errors.append({"row": row_index, "field": "images", "message": str(exc)})
         title = (row.get("product_title") or "").strip()
         category_slug = (row.get("category_slug") or "").strip()
         currency = (row.get("currency") or "NGN").strip().upper()
@@ -1223,7 +1245,9 @@ async def update_product(
             # storage-key lock. Keep this writer in the same global order to
             # prevent a catalog/storage lock inversion.
             await coordinate_catalog_write(db, product_ids=[product_id], lock_only=True)
-            await lock_and_validate_variation_image_urls(db, variation_image_urls)
+            await lock_and_validate_variation_image_urls(
+                db, variation_image_urls, product_id=product_id
+            )
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
@@ -1695,6 +1719,13 @@ async def create_image(
             await lock_and_validate_storage_keys(db, storage_keys)
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    try:
+        await validate_image_upload(
+            db, image_data.image_url, image_data.thumbnail_url, image_data.storage_keys
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
     image_count = await db.scalar(
         select(func.count(ProductImage.id)).where(ProductImage.product_id == product_id)
