@@ -76,6 +76,8 @@ export default function EditVariantModal({
 
   if (!open) return null;
 
+  const imageSource = getProductImageSource(product);
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-8">
       <div className="relative w-full max-w-[500px] bg-white shadow-2xl overflow-hidden border border-gray-100">
@@ -92,11 +94,18 @@ export default function EditVariantModal({
           <div className="flex items-start gap-4">
             <div className="w-20 h-24 overflow-hidden bg-[#f5f7f8] border border-gray-200">
               <img
-                src={getProductImageSource(product)?.src || IMAGE_CONFIG.PLACEHOLDER}
+                key={`${imageSource?.src}:${imageSource?.fallbackSrc}`}
+                src={imageSource?.src || IMAGE_CONFIG.PLACEHOLDER}
                 alt={product.title}
                 className="w-full h-full object-cover"
                 onError={(event) => {
-                  event.currentTarget.src = IMAGE_CONFIG.PLACEHOLDER;
+                  const image = event.currentTarget;
+                  if (imageSource?.fallbackSrc && image.dataset.fallbackApplied !== 'true') {
+                    image.dataset.fallbackApplied = 'true';
+                    image.src = imageSource.fallbackSrc;
+                  } else if (image.getAttribute('src') !== IMAGE_CONFIG.PLACEHOLDER) {
+                    image.src = IMAGE_CONFIG.PLACEHOLDER;
+                  }
                 }}
               />
             </div>

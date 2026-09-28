@@ -41,7 +41,7 @@ export default function AddToBagModal({
     : stockCount > 0
       ? `In Stock (${stockCount} available)`
       : 'Out of Stock';
-  const thumbnail = getProductImageSource(product)?.src || IMAGE_CONFIG.PLACEHOLDER;
+  const imageSource = getProductImageSource(product);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-8">
@@ -58,11 +58,18 @@ export default function AddToBagModal({
           <div className="flex items-start gap-3">
             <div className="w-16 h-20 overflow-hidden bg-[#f5f7f8] border border-gray-200 flex-shrink-0">
               <img
-                src={thumbnail}
+                key={`${imageSource?.src}:${imageSource?.fallbackSrc}`}
+                src={imageSource?.src || IMAGE_CONFIG.PLACEHOLDER}
                 alt={product.title}
                 className="w-full h-full object-cover"
                 onError={(event) => {
-                  event.currentTarget.src = IMAGE_CONFIG.PLACEHOLDER;
+                  const image = event.currentTarget;
+                  if (imageSource?.fallbackSrc && image.dataset.fallbackApplied !== 'true') {
+                    image.dataset.fallbackApplied = 'true';
+                    image.src = imageSource.fallbackSrc;
+                  } else if (image.getAttribute('src') !== IMAGE_CONFIG.PLACEHOLDER) {
+                    image.src = IMAGE_CONFIG.PLACEHOLDER;
+                  }
                 }}
               />
             </div>

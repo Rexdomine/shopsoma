@@ -165,6 +165,16 @@ export default function VendorProductView() {
     );
   };
 
+  // Variation URLs can repeat product originals (whose previews use thumbnails).
+  const seenImageUrls = new Set<string>();
+  const galleryImages = getProductImageSources(product).filter((source) => {
+    const duplicate = seenImageUrls.has(source.src)
+      || Boolean(source.fallbackSrc && seenImageUrls.has(source.fallbackSrc));
+    seenImageUrls.add(source.src);
+    if (source.fallbackSrc) seenImageUrls.add(source.fallbackSrc);
+    return !duplicate;
+  });
+
   const inventoryCount = product.total_stock ?? product.inventory_quantity ?? 0;
   const fulfillmentLabel = product.made_to_order
     ? product.made_to_order_timeline
@@ -230,8 +240,8 @@ export default function VendorProductView() {
                 </div>
                 <div className="p-6">
                   <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
-                    {getProductImageSources(product).length > 0 ? (
-                      getProductImageSources(product).map((source, index) => (
+                    {galleryImages.length > 0 ? (
+                      galleryImages.map((source, index) => (
                         <div key={index} className="aspect-square rounded-lg overflow-hidden border border-gray-200">
                           <img
                             src={source.src || normalizeProductImageUrl('/images/placeholder-product.svg')}

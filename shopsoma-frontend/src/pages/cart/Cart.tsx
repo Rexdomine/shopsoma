@@ -127,7 +127,7 @@ export default function Cart() {
           <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-10">
             <div className="space-y-6">
               {cart.items.map((item) => {
-                const thumbnail = getProductImageSource(item.product)?.src || IMAGE_CONFIG.PLACEHOLDER;
+                const imageSource = getProductImageSource(item.product);
                 const brand = item.product.vendor_name ?? 'Shopsoma Collective';
                 const category = item.product.category_name ?? '';
 
@@ -137,11 +137,18 @@ export default function Cart() {
                     <div className="flex flex-col sm:flex-row gap-6">
                       <div className="w-36 h-36 bg-[#f5f7f8] overflow-hidden border border-gray-200">
                         <img
-                          src={thumbnail}
+                          key={`${imageSource?.src}:${imageSource?.fallbackSrc}`}
+                          src={imageSource?.src || IMAGE_CONFIG.PLACEHOLDER}
                           alt={item.product.title}
                           className="w-full h-full object-cover"
                           onError={(event) => {
-                            event.currentTarget.src = IMAGE_CONFIG.PLACEHOLDER;
+                            const image = event.currentTarget;
+                            if (imageSource?.fallbackSrc && image.dataset.fallbackApplied !== 'true') {
+                              image.dataset.fallbackApplied = 'true';
+                              image.src = imageSource.fallbackSrc;
+                            } else if (image.getAttribute('src') !== IMAGE_CONFIG.PLACEHOLDER) {
+                              image.src = IMAGE_CONFIG.PLACEHOLDER;
+                            }
                           }}
                         />
                       </div>
