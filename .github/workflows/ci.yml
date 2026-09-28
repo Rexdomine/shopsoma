@@ -99,6 +99,9 @@ jobs:
         run: npx tsc --noEmit || echo "Type checking completed"
         continue-on-error: true
 
+      - name: Test product image uploads
+        run: npm test -- src/services/__tests__/adminProductUpload.test.ts src/pages/admin/AdminProductEdit.images.test.tsx --maxWorkers=1 --minWorkers=1
+
       - name: Build frontend
         run: npm run build
         env:
