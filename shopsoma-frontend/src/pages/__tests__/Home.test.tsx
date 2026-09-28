@@ -70,7 +70,7 @@ describe('Home', () => {
     expect(hero).toHaveAttribute('aria-roledescription', 'carousel');
     expect(screen.getByRole('img', { name: /campaign look 1/i })).toBeInTheDocument();
     expect(screen.queryByRole('img', { name: /campaign look 3/i })).not.toBeInTheDocument();
-    expect(screen.getByText('A considered edit of contemporary fashion for every moment')).toBeInTheDocument();
+    expect(screen.getByText('A curated selection of contemporary designs for every moment')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /pause automatic campaign slideshow/i })).not.toBeInTheDocument();
     expect(screen.queryByText(/1 \/ 3/)).not.toBeInTheDocument();
   });

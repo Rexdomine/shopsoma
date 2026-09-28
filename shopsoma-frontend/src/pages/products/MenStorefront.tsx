@@ -98,7 +98,7 @@ export default function MenStorefront() {
       categoryNav={subcategories}
       heroOverride={{
         title: 'Menswear for the modern man',
-        body: 'Easy tailoring, confident silhouettes and everyday staples, selected for the modern man.',
+        body: 'Discover easy tailoring, bold silhouettes and everyday staples, curated for the modern man.',
         imageUrl: MEN_HERO_IMAGE_URL,
         mobileImageUrl: MEN_HERO_MOBILE_IMAGE_URL,
         imagePositionClassName: 'object-[40%_25%] max-sm:object-[25%_40%]',
