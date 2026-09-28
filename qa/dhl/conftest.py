@@ -69,6 +69,8 @@ def external_effects(monkeypatch):
 
     monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", local_only)
     yield state
+    if state["expect_email_failure"]:
+        assert "email failed before delivery" in state["attempts"]
     assert not [
         attempt
         for attempt in state["attempts"]

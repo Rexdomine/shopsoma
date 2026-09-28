@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 
 from containment import verify
 from sanitize import sanitize_reports
+from run import stop_group
 
 
 class ContainmentTests(unittest.TestCase):
@@ -37,6 +38,22 @@ class ContainmentTests(unittest.TestCase):
         for code in (errno.ETIMEDOUT, errno.ECONNREFUSED):
             with self.subTest(code=code), self.assertRaises(RuntimeError):
                 self.probe(OSError(code, "insufficient proof"))
+
+    def test_exited_leader_does_not_skip_living_descendants(self):
+        process = MagicMock(pid=123)
+        process.poll.return_value = 0
+        with patch(
+            "run.os.killpg", side_effect=[None, None, ProcessLookupError]
+        ) as kill:
+            self.assertTrue(stop_group(process))
+        self.assertEqual(kill.call_args_list[1].args[0], 123)
+        self.assertEqual(kill.call_count, 3)
+        process.wait.assert_called_once()
+
+    def test_forced_group_termination_fails_gate(self):
+        process = MagicMock(pid=123)
+        with patch("run.os.killpg"), patch("run.time.monotonic", side_effect=[0, 11]):
+            self.assertFalse(stop_group(process))
 
     def test_reports_remove_private_payloads_but_keep_outcomes(self):
         with tempfile.TemporaryDirectory() as directory:

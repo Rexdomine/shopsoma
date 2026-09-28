@@ -8,6 +8,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 from containment import verify
@@ -21,6 +22,39 @@ results = {}
 children = []
 
 
+def stop_group(process):
+    """Reap owned descendants even when their process-group leader has exited."""
+
+    def alive():
+        try:
+            os.killpg(process.pid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+
+    if not alive():
+        process.wait(timeout=1)
+        return True
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        process.poll()  # Reap the leader so it cannot remain a zombie.
+        if not alive():
+            process.wait(timeout=1)
+            return True
+        time.sleep(0.1)
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    process.wait(timeout=5)
+    # Forced termination fails the gate even when eventual cleanup succeeds.
+    return False
+
+
 def command(name, args, cwd=BACKEND, timeout=300):
     # Logs stay inside the disposable container; upload only status and redacted reports.
     with open(f"/tmp/{name}.log", "w") as log:
@@ -31,11 +65,11 @@ def command(name, args, cwd=BACKEND, timeout=300):
         try:
             code = process.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
-            os.killpg(process.pid, signal.SIGTERM)
-            code = process.wait(timeout=10)
-            results[name] = {"exit": code, "timeout": True}
+            stop_group(process)
+            results[name] = {"exit": process.returncode, "timeout": True}
             raise RuntimeError(f"{name} exceeded its bound")
-    results[name] = {"exit": code}
+    group_stopped = stop_group(process)
+    results[name] = {"exit": code, "process_group_stopped": group_stopped}
     if code and name in ("initdb", "postgres-start", "database"):
         # Bootstrap precedes application data and credentials. These logs hold
         # only init/start diagnostics for this disposable cluster.
@@ -44,7 +78,7 @@ def command(name, args, cwd=BACKEND, timeout=300):
             diagnostics += Path("/tmp/postgres.log").read_text()
         (EVIDENCE / "bootstrap-error.txt").write_text(diagnostics)
     (EVIDENCE / "checks.json").write_text(json.dumps(results, indent=2))
-    return code == 0
+    return code == 0 and group_stopped
 
 
 def stop(_signum, _frame):
@@ -144,14 +178,7 @@ def main():
     finally:
         stopped = True
         for process in reversed(children):
-            if process.poll() is None:
-                os.killpg(process.pid, signal.SIGTERM)
-                try:
-                    process.wait(timeout=10)
-                except subprocess.TimeoutExpired:
-                    os.killpg(process.pid, signal.SIGKILL)
-                    process.wait(timeout=5)
-                    stopped = False
+            stopped = stop_group(process) and stopped
         if started:
             stopped = (
                 command(
