@@ -14,6 +14,41 @@ TINY_PNG = (
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("body", [{}, {"json": {"file": {}}}])
+async def test_admin_upload_requires_multipart_file(client, admin_user, sample_product, body):
+    response = await client.post(
+        f"/api/v1/admin/products/{sample_product.id}/images/upload",
+        headers=admin_user["headers"], **body,
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"] == [
+        {"type": "missing", "loc": ["body", "file"], "msg": "Field required", "input": None}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_admin_upload_rejects_invalid_file_type(client, admin_user, sample_product):
+    response = await client.post(
+        f"/api/v1/admin/products/{sample_product.id}/images/upload",
+        headers=admin_user["headers"],
+        files={"file": ("invalid.txt", b"not an image", "text/plain")},
+    )
+    assert response.status_code == 400
+    assert "Invalid image type" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("role", ["customer", "vendor", "anonymous"])
+async def test_admin_upload_rejects_non_admin(client, sample_product, customer_user, vendor_user, role):
+    headers = {"customer": customer_user["headers"], "vendor": vendor_user["headers"], "anonymous": {}}[role]
+    response = await client.post(
+        f"/api/v1/admin/products/{sample_product.id}/images/upload",
+        headers=headers, files={"file": ("tiny.png", BytesIO(TINY_PNG), "image/png")},
+    )
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
 async def test_admin_multipart_upload_persists_product_image(
     client, admin_user, vendor_user, sample_product, db_session, monkeypatch
 ):

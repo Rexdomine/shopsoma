@@ -112,4 +112,39 @@ describe('admin product image gallery', () => {
     await waitFor(() => expect(mocks.uploadProductImage).toHaveBeenCalledWith('product-1', file));
     expect(mocks.createProductImage).not.toHaveBeenCalled();
   });
+  it.each([
+    ['single', false], ['single', true], ['variable', false], ['variable', true],
+  ] as const)('refreshes multiple uploads and preserves the gallery after save/reload for %s (existing=%s)', async (productType, existing) => {
+    const initialImages = existing ? product.images : [];
+    const uploadedImages = ['front-upload', 'back-upload'].map((id, index) => ({
+      id, image_url: `https://example.com/${id}.png`, thumbnail_url: null,
+      alt_text: id, display_order: initialImages.length + index, is_primary: !existing && index === 0,
+    }));
+    mocks.getProduct.mockResolvedValue({ ...product, product_type: productType, images: initialImages });
+    let uploaded = 0;
+    mocks.uploadProductImage.mockImplementation(async () => {
+      uploaded += 1;
+      mocks.getProduct.mockResolvedValue({
+        ...product, product_type: productType, images: [...initialImages, ...uploadedImages.slice(0, uploaded)],
+      });
+      return uploadedImages[uploaded - 1];
+    });
+    mocks.updateProduct.mockResolvedValue({ message: 'Updated', product_id: product.id });
+    const view = renderPage();
+    await screen.findByRole('heading', { name: 'Product Images' });
+    const files = ['front.png', 'back.png'].map(name => new File(['image'], name, { type: 'image/png' }));
+    fireEvent.change(screen.getByLabelText('Upload product images'), { target: { files } });
+    expect(await screen.findByAltText('back-upload')).toBeInTheDocument();
+    expect(screen.getByAltText('front-upload')).toBeInTheDocument();
+    expect(mocks.uploadProductImage).toHaveBeenNthCalledWith(1, product.id, files[0]);
+    expect(mocks.uploadProductImage).toHaveBeenNthCalledWith(2, product.id, files[1]);
+    fireEvent.click(screen.getByRole('button', { name: /Save Changes/ }));
+    await waitFor(() => expect(mocks.updateProduct).toHaveBeenCalled());
+    expect(mocks.updateProduct.mock.calls[0][1]).not.toHaveProperty('images');
+    view.unmount();
+    renderPage();
+    expect(await screen.findByAltText('back-upload')).toBeInTheDocument();
+    if (existing) expect(screen.getByAltText('front')).toBeInTheDocument();
+  });
+
 });
