@@ -130,7 +130,16 @@ export default function AdminProductDetail() {
     }
   };
 
-  const galleryImages = product?.images || [];
+  const galleryImages = [...(product?.images || [])].sort((a, b) => {
+    if (a.is_primary !== b.is_primary) return a.is_primary ? -1 : 1;
+    return (a.display_order ?? 0) - (b.display_order ?? 0);
+  });
+  const galleryImageUrl = (image: typeof galleryImages[number] | string, thumbnail = false) => {
+    const url = typeof image === 'string' ? image : thumbnail
+      ? image.thumbnail_url || image.image_url
+      : image.image_url || image.thumbnail_url;
+    return normalizeProductImageUrl(url) || '/images/placeholder-product.svg';
+  };
   const safeLightboxIndex = lightboxIndex === null || galleryImages.length === 0
     ? null
     : Math.min(lightboxIndex, galleryImages.length - 1);
@@ -521,25 +530,17 @@ export default function AdminProductDetail() {
             {/* Product Image */}
             <div className="bg-white rounded-xl shadow-sm overflow-hidden">
               {(() => {
-                const images = product.images?.length
-                  ? [...product.images].sort((a, b) => {
-                      if (a.is_primary !== b.is_primary) return a.is_primary ? -1 : 1;
-                      return (a.display_order ?? 0) - (b.display_order ?? 0);
-                    })
-                  : ['/images/placeholder-product.svg'];
-                const imageUrl = (image: typeof images[number]) => normalizeProductImageUrl(
-                  typeof image === 'string' ? image : image.image_url || image.thumbnail_url || '/images/placeholder-product.svg',
-                );
+                const images = galleryImages.length ? galleryImages : [''];
                 return (
                   <>
                     {product.images?.length ? <button type="button" className="block w-full cursor-zoom-in" aria-label={`View ${product.title} image 1`} onClick={(event) => { lightboxOpener.current = event.currentTarget; setLightboxIndex(0); }}>
-                      <img src={imageUrl(images[0])} alt={product.title} className="w-full h-96 object-contain bg-gray-50" onError={(e) => { (e.target as HTMLImageElement).src = '/images/placeholder-product.svg'; }} />
+                      <img src={galleryImageUrl(images[0])} alt={product.title} className="w-full h-96 object-contain bg-gray-50" onError={(e) => { (e.target as HTMLImageElement).src = '/images/placeholder-product.svg'; }} />
                     </button> : <div className="block w-full" aria-label={`${product.title} image placeholder`}>
-                      <img src={imageUrl(images[0])} alt={`${product.title} image 1`} className="h-64 w-full rounded-lg object-cover" onError={(e) => { (e.target as HTMLImageElement).src = '/images/placeholder-product.svg'; }} />
+                      <img src={galleryImageUrl(images[0])} alt={`${product.title} image 1`} className="h-64 w-full rounded-lg object-cover" onError={(e) => { (e.target as HTMLImageElement).src = '/images/placeholder-product.svg'; }} />
                     </div>}
                     {images.length > 1 && <div className="p-4 grid grid-cols-4 gap-2">
                       {images.slice(1, 5).map((image, idx) => <button type="button" key={idx + 1} aria-label={`View ${product.title} image ${idx + 2}`} onClick={(event) => { lightboxOpener.current = event.currentTarget; setLightboxIndex(idx + 1); }} className="rounded-lg overflow-hidden border border-transparent hover:border-blue-500 focus:border-blue-600 focus:outline-none">
-                        <img src={typeof image === 'string' ? image : image.thumbnail_url || image.image_url || '/images/placeholder-product.svg'} alt={`${product.title} ${idx + 2}`} className="w-full h-24 object-contain bg-gray-50" onError={(e) => { (e.target as HTMLImageElement).src = '/images/placeholder-product.svg'; }} />
+                        <img src={galleryImageUrl(image, true)} alt={`${product.title} ${idx + 2}`} className="w-full h-24 object-contain bg-gray-50" onError={(e) => { (e.target as HTMLImageElement).src = '/images/placeholder-product.svg'; }} />
                       </button>)}
                     </div>}
                   </>
@@ -549,7 +550,7 @@ export default function AdminProductDetail() {
             {safeLightboxIndex !== null && galleryImages.length > 0 ? (() => {
               const image = galleryImages[safeLightboxIndex];
               if (!image) return null;
-              const imageUrl = typeof image === 'string' ? image : image.image_url || image.thumbnail_url || '/images/placeholder-product.svg';
+              const imageUrl = galleryImageUrl(image);
               return <div ref={lightboxDialog} role="dialog" aria-modal="true" aria-label="Product image viewer" className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 p-4" onMouseDown={(event) => { if (event.target === event.currentTarget) setLightboxIndex(null); }}>
                 <button type="button" aria-label="Close image viewer" className="absolute right-4 top-4 rounded-full bg-white/10 p-2 text-white hover:bg-white/20" onClick={() => setLightboxIndex(null)}><X className="h-6 w-6" /></button>
                 {galleryImages.length > 1 && <button type="button" aria-label="Previous image" className="absolute left-4 rounded-full bg-white/10 p-2 text-white hover:bg-white/20" onClick={() => setLightboxIndex((safeLightboxIndex - 1 + galleryImages.length) % galleryImages.length)}><ChevronLeft className="h-7 w-7" /></button>}

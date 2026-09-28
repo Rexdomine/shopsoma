@@ -1,6 +1,6 @@
 # PR #204 image ownership verification
 
-Scope: bind variation galleries to their product, bind vendor image association to a server-issued upload, correct the obsolete reset preflight assertion, preserve products created outside the reset snapshot, reconcile failed upload identities, and normalize admin editor preview URLs. PR targets `develop`; merge and deployment remain reviewer decisions.
+Scope: bind variation galleries to their product, bind vendor image association to a server-issued upload, correct the obsolete reset preflight assertion, preserve products created outside the reset snapshot, reconcile failed upload identities, and normalize admin editor/detail preview URLs and keep detail thumbnails/lightbox in one order. PR targets `develop`; merge and deployment remain reviewer decisions.
 
 ## Local setup or run commands
 
@@ -19,7 +19,7 @@ For the upload-reconciliation/editor follow-up, run:
 python -m pytest tests/test_product_image_ownership.py tests/test_admin_product_images.py tests/test_images.py -q
 # shopsoma-frontend/
 npm ci --no-audit --no-fund
-npm test -- src/pages/admin/AdminProductEdit.images.test.tsx src/utils/productImages.test.ts --maxWorkers=1 --minWorkers=1
+npm test -- src/pages/admin/AdminProductActions.test.tsx src/pages/admin/AdminProductEdit.images.test.tsx src/utils/productImages.test.ts --maxWorkers=1 --minWorkers=1
 npx tsc -b
 ```
 
@@ -33,7 +33,8 @@ For a local browser preview, apply migrations to a disposable application databa
 4. Check legacy external images, public moderation gating, anonymous/customer rejection, foreign vendor namespaces, admin URL immutability, and both CSV import modes.
 5. Check single and batch upload-record commit failures both before persistence and after a durable commit whose acknowledgement is lost. Missing identities must reserve all uploaded keys in the cleanup ledger; durable identities must preserve objects without a cleanup row. Check catalog reset preflight failure.
 6. In the admin editor, check a fresh local upload returned as `/uploads/...`, an existing absolute CDN URL, a thumbnail-only row and a missing-image placeholder. With Vite and the API on separate origins, image requests must use the API origin while the placeholder stays on Vite.
-7. Start a reset with an empty and a populated catalog, then commit a new product after its snapshot: the new product, images, variants, variation sizes, featured reference and storage must survive.
+7. In admin detail, use an API gallery whose primary row appears later and whose display order differs from response order. Open the main image and each thumbnail, navigate both directions with controls/keyboard, and confirm the enlarged image matches. Check local original/thumbnail URLs, a thumbnail-only row, an existing absolute CDN URL, and an empty image row; placeholders stay on the frontend origin.
+8. Start a reset with an empty and a populated catalog, then commit a new product after its snapshot: the new product, images, variants, variation sizes, featured reference and storage must survive.
 
 ## Expected local result
 
@@ -68,4 +69,4 @@ Fresh vendor and admin uploads work with the configured object store/CDN. Image 
 
 ## Follow-up verification boundary
 
-The editor regression uses rendered DOM assertions in jsdom; it does not prove browser image loading. The issue has no realized managed preview workspace at this verification run. Product/NightWing must execute the local preview steps and staging surface matrix above before acceptance. No shared image helper or other rendering surface changed in this follow-up.
+The editor regression uses rendered DOM assertions in jsdom; it does not prove browser image loading. The issue has no realized managed preview workspace at this verification run. Product/NightWing must execute the local preview steps and staging surface matrix above before acceptance. The detail page now shares one ordered array between its main image, thumbnails and lightbox; all three normalize persisted URLs before applying the frontend placeholder. No shared image helper changed. Focused admin actions/editor/image utility suites: 55 passed; TypeScript and diff checks passed. Backend code is unchanged by this gallery follow-up; the prior 100-pass PostgreSQL evidence remains applicable, with latest-head CI still required.
