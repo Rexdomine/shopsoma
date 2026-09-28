@@ -96,6 +96,7 @@ async def verify_stripe(client, monkeypatch, attempt):
     )
 
 
+@pytest.mark.usefixtures("enabled_stripe")
 @pytest.mark.asyncio
 async def test_duplicate_verified_callback_consumes_stock_and_writes_one_outbox(
     client, db_session, vendor_user, customer_user, monkeypatch

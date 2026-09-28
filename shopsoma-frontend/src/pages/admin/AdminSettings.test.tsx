@@ -11,6 +11,8 @@ vi.mock('../../components/admin/AdminSidebar', () => ({ default: () => null }));
 vi.mock('../../hooks/useCurrency', () => ({ useCurrency: () => ({ fetchExchangeRate: vi.fn() }) }));
 vi.mock('../../services/settingsService', () => ({
   ...mocks,
+  getCommerceFeatures: vi.fn(async () => ({ stripe_enabled: false, usd_switching_enabled: false })),
+  updateCommerceFeatures: vi.fn(),
   getExchangeRate: vi.fn(async () => ({ rate: 1600 })),
   getShippingProviderSettings: vi.fn(async () => ({ provider: 'manual', readiness: { manual: true, shipbubble: false, dhl: false } })),
   getPayoutHoldSettings: vi.fn(async () => ({ hold_days: 14 })),

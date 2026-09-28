@@ -221,6 +221,7 @@ async def payment_initialization_truth(
     order: Order,
     provider: str,
     capabilities: DomesticShippingCapabilities,
+    allow_new_attempt: bool = True,
 ) -> PaymentInitializationTruth:
     """Choose legacy totals or legally start a gated immutable bridge attempt."""
     legacy_amount, legacy_currency = authoritative_gateway_amount(
@@ -232,7 +233,9 @@ async def payment_initialization_truth(
             False, legacy_amount, legacy_currency, None, None, None
         )
 
-    attempt = await _ensure_bridge_attempt(session, order=order, provider=provider)
+    attempt = await _ensure_bridge_attempt(
+        session, order=order, provider=provider, allow_new_attempt=allow_new_attempt
+    )
     if attempt is None:
         # Genuine legacy orders without selected quote/reservation truth remain on
         # the established checkout path and are never reinterpreted.
@@ -254,6 +257,8 @@ async def payment_initialization_truth(
             attempt.id,
             provider == "stripe",
         )
+    if not allow_new_attempt:
+        raise PaymentBridgeError("New payments through this provider are disabled")
     if attempt.state != "pending":
         raise PaymentBridgeError("payment attempt is not ready for initialization")
     await session.execute(
@@ -276,7 +281,7 @@ async def payment_initialization_truth(
 
 
 async def _ensure_bridge_attempt(
-    session: AsyncSession, *, order: Order, provider: str
+    session: AsyncSession, *, order: Order, provider: str, allow_new_attempt: bool = True
 ) -> PaymentAttempt | None:
     """Create or replay the one quote-bound attempt before any provider boundary."""
     locked_order = await session.scalar(
@@ -305,6 +310,9 @@ async def _ensure_bridge_attempt(
             await session.flush()
         elif attempt.state not in {"failed", "expired"}:
             return attempt
+
+    if not allow_new_attempt:
+        raise PaymentBridgeError("New payments through this provider are disabled")
 
     if locked_order.workflow_cohort == "domestic_checkout_v1":
         return await _ensure_domestic_bridge_attempt(

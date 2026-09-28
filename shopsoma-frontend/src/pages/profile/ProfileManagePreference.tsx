@@ -1,3 +1,4 @@
+import { useCurrencyStore } from '../../store/currencyStore';
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Layout from '../../components/layout/Layout';
@@ -10,6 +11,7 @@ import { usePreferenceStore } from '../../store/preferenceStore';
 export default function ProfileManagePreference() {
   const navigate = useNavigate();
   const [interest, setInterest] = useState<'womenswear' | 'menswear' | 'neither' | null>(null);
+  const usdEnabled = useCurrencyStore(state => state.commerceFeatures.usd_switching_enabled);
   const [currency, setCurrency] = useState<Currency>('NGN');
   const [language, setLanguage] = useState('English');
   const [designerSearch, setDesignerSearch] = useState('');
@@ -170,7 +172,7 @@ export default function ProfileManagePreference() {
       await updatePreferences({
         interest: interestToSave as any,
         preferredLanguage: language,
-        preferredCurrency: currency,
+        preferredCurrency: usdEnabled ? currency : 'NGN',
         favoriteDesigners: designers,
         favoriteCategories: categories,
       });
@@ -275,7 +277,7 @@ export default function ProfileManagePreference() {
                       { label: 'Spanish', value: 'Spanish' },
                     ]}
                   />
-                  <DropdownField
+                  {usdEnabled && <DropdownField
                     label="Preferred Currency"
                     value={currency}
                     onChange={handleCurrencyChange}
@@ -283,7 +285,7 @@ export default function ProfileManagePreference() {
                       { label: 'NGN - Nigerian Naira', value: 'NGN' },
                       { label: 'USD - United States Dollar', value: 'USD' },
                     ]}
-                  />
+                  />}
                 </div>
               </div>
 
