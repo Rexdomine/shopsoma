@@ -114,3 +114,10 @@ This CI harness by itself does not unblock feature QA or authorize live use.
   source/browser pins do not imply bit-for-bit system reproducibility.
 - Local services were not started by the authoring heartbeat. Full execution
   evidence must come from the authorized GitHub job and independent review.
+
+Initial run `36481744854` at harness `c79f2d9ee39a0192d9020100917e354d58eabc03`
+passed exact-SHA assertions, image build, loopback-only containment and IPv4/IPv6
+no-route probes, then failed PostgreSQL startup before feature tests. Owned
+cluster/container teardown passed. The follow-up explicitly binds PostgreSQL's
+Unix socket inside its owned temporary cluster directory and retains bootstrap
+diagnostics. This is red evidence, not browser acceptance.

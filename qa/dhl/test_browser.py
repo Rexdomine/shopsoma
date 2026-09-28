@@ -58,8 +58,8 @@ def financial(data):
     fields = (
         "subtotal",
         "shipping_cost",
-        "tax",
-        "discount",
+        "tax_amount",
+        "discount_amount",
         "total_amount",
         "currency",
         "payment_status",
@@ -74,8 +74,8 @@ def financial(data):
         "currency",
     )
     return (
-        {key: data.get(key) for key in fields},
-        [{key: item.get(key) for key in item_fields} for item in data["items"]],
+        {key: data[key] for key in fields},
+        [{key: item[key] for key in item_fields} for item in data["items"]],
     )
 
 

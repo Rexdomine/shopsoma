@@ -3,6 +3,7 @@
 import json
 import os
 import secrets
+import shutil
 import signal
 import subprocess
 import sys
@@ -15,6 +16,7 @@ from containment import verify
 from sanitize import sanitize_reports
 
 EVIDENCE = Path("/evidence")
+REPORTS = Path("/tmp/dhl-reports")
 BACKEND = Path("/target/shopsoma-backend")
 FRONTEND = Path("/target/shopsoma-frontend")
 results = {}
@@ -36,6 +38,13 @@ def command(name, args, cwd=BACKEND, timeout=300):
             results[name] = {"exit": code, "timeout": True}
             raise RuntimeError(f"{name} exceeded its bound")
     results[name] = {"exit": code}
+    if code and name in ("initdb", "postgres-start", "database"):
+        # Bootstrap precedes application data and credentials. These logs hold
+        # only init/start diagnostics for this disposable cluster.
+        diagnostics = Path(f"/tmp/{name}.log").read_text()
+        if name == "postgres-start" and Path("/tmp/postgres.log").exists():
+            diagnostics += Path("/tmp/postgres.log").read_text()
+        (EVIDENCE / "bootstrap-error.txt").write_text(diagnostics)
     (EVIDENCE / "checks.json").write_text(json.dumps(results, indent=2))
     return code == 0
 
@@ -49,6 +58,7 @@ def main():
     signal.signal(signal.SIGINT, stop)
     signal.signal(signal.SIGALRM, stop)
     signal.alarm(1200)
+    REPORTS.mkdir()
     # Before database creation, frontend build, importing application, or feature tests.
     (EVIDENCE / "containment.json").write_text(json.dumps(verify(), indent=2))
     os.environ["SECRET_KEY"] = secrets.token_hex(32)
@@ -71,7 +81,7 @@ def main():
                 "-l",
                 "/tmp/postgres.log",
                 "-o",
-                "-h 127.0.0.1 -p 5432",
+                f"-h 127.0.0.1 -p 5432 -k {cluster.name}",
                 "-w",
                 "start",
             ],
@@ -92,7 +102,7 @@ def main():
                     "--maxWorkers=1",
                     "--minWorkers=1",
                     "--reporter=junit",
-                    "--outputFile=/evidence/frontend.xml",
+                    "--outputFile=/tmp/dhl-reports/frontend.xml",
                 ],
                 FRONTEND,
             )
@@ -111,7 +121,7 @@ def main():
                     "tests/test_dhl_operations.py",
                     "tests/test_dhl_phase4_booking.py",
                     "tests/test_dhl_phase4_static_contracts.py",
-                    "--junitxml=/evidence/backend.xml",
+                    "--junitxml=/tmp/dhl-reports/backend.xml",
                     "--tb=short",
                 ],
                 timeout=480,
@@ -157,7 +167,7 @@ def main():
                         "-c",
                         "/harness/pytest.ini",
                         "/harness/test_browser.py",
-                        "--junitxml=/evidence/browser.xml",
+                        "--junitxml=/tmp/dhl-reports/browser.xml",
                     ],
                     timeout=480,
                 )
@@ -192,7 +202,11 @@ def main():
                 }
             )
         )
-        sanitize_reports(EVIDENCE)
+        # Raw reports never enter the upload directory, even after a crash or
+        # interrupted teardown. Publish only after successful sanitization.
+        sanitize_reports(REPORTS)
+        for report in REPORTS.glob("*.xml"):
+            shutil.copyfile(report, EVIDENCE / report.name)
         if not stopped:
             raise RuntimeError("Teardown required forced termination")
 
