@@ -107,7 +107,7 @@ const DEFAULT_HERO: HeroContent = {
 
 const MEN_HERO: HeroContent = {
   title: 'Menswear for the modern man',
-  body: 'Easy tailoring, confident silhouettes and everyday staples, selected for the modern man.',
+  body: 'Discover easy tailoring, bold silhouettes and everyday staples, curated for the modern man.',
   imageUrl: MEN_HERO_IMAGE_URL,
   mobileImageUrl: MEN_HERO_MOBILE_IMAGE_URL,
   imagePositionClassName: 'object-[40%_25%] max-sm:object-[25%_40%]',
@@ -116,7 +116,7 @@ const MEN_HERO: HeroContent = {
 
 const WOMEN_HERO: HeroContent = {
   title: 'Womenswear for every style',
-  body: 'Explore ShopSoma’s hand-picked selection, from quiet essentials to pieces that make an entrance.',
+  body: 'Explore SHOPSOMA’s hand-picked selections for every style',
   imageUrl: WOMEN_HERO_IMAGE_URL,
   mobileImageUrl: WOMEN_HERO_MOBILE_IMAGE_URL,
   imagePositionClassName: 'object-[40%_0%] max-sm:object-[36%_42%]',

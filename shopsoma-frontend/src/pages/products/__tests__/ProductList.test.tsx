@@ -57,6 +57,35 @@ describe('ProductList', () => {
     window.sessionStorage.clear();
   });
 
+  it('applies the responsive hero position override to the cover image', async () => {
+    const { container } = render(
+      <MemoryRouter>
+        <ProductList heroOverride={{
+          title: 'Shop Edits: Curated Discoveries',
+          body: 'A rotating curation of elevated essentials, seasonal selections and statement finds.',
+          imageUrl: '/images/hero/shop-edits-2088.jpg',
+          imagePositionClassName: 'object-center sm:object-top',
+        }} />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(getProductsMock).toHaveBeenCalled());
+    expect(container.querySelector('picture img')).toHaveClass('object-cover', 'object-center', 'sm:object-top');
+  });
+
+  it.each([
+    [undefined, 'object-center'],
+    ['Men', 'object-[40%_25%] max-sm:object-[25%_40%]'],
+    ['Women', 'object-[40%_0%] max-sm:object-[36%_42%]'],
+  ])('preserves the existing %s hero positioning without an override', async (presetCategory, position) => {
+    const { container } = render(<MemoryRouter><ProductList presetCategory={presetCategory} /></MemoryRouter>);
+
+    await waitFor(() => expect(getProductsMock).toHaveBeenCalled());
+    const hero = container.querySelector('picture img');
+    expect(hero).toHaveClass('object-cover', ...position.split(' '));
+    expect(hero).not.toHaveClass('sm:object-top');
+  });
+
   it('renders the first category page before background pages finish loading', async () => {
     let resolveSecondPage: ((value: { products: never[] }) => void) | undefined;
     const secondPage = new Promise<{ products: never[] }>((resolve) => {
