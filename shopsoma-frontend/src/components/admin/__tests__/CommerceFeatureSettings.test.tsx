@@ -1,5 +1,7 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { useCurrencyStore } from '../../../store/currencyStore';
+import { usePreferenceStore } from '../../../store/preferenceStore';
 import CommerceFeatureSettings from '../CommerceFeatureSettings';
 import { getCommerceFeatures, updateCommerceFeatures } from '../../../services/settingsService';
 vi.mock('../../../services/settingsService', () => ({ getCommerceFeatures: vi.fn(), updateCommerceFeatures: vi.fn() }));
@@ -41,4 +43,28 @@ it('does not claim a failed save succeeded', async () => {
   await screen.findByRole('alert');
   expect(screen.getByLabelText('Stripe payments enabled')).not.toBeChecked();
   expect(screen.getByLabelText('Stripe payments enabled')).toBeDisabled();
+});
+
+it('keeps a completed admin save authoritative when a background refresh finishes later', async () => {
+  const enabled = { stripe_enabled: true, usd_switching_enabled: true };
+  useCurrencyStore.getState().applyCommerceFeatures(enabled);
+  useCurrencyStore.getState().setCurrency('USD');
+  let resolveRead!: (flags: typeof enabled) => void;
+  vi.mocked(getCommerceFeatures).mockReturnValueOnce(new Promise(resolve => { resolveRead = resolve; }));
+  const refresh = useCurrencyStore.getState().fetchCommerceFeatures();
+  vi.mocked(getCommerceFeatures).mockResolvedValueOnce(enabled);
+  render(<CommerceFeatureSettings />);
+  const usd = screen.getByLabelText('USD currency switching enabled');
+  await waitFor(() => expect(usd).toBeEnabled());
+  const saved = { stripe_enabled: true, usd_switching_enabled: false };
+  vi.mocked(updateCommerceFeatures).mockResolvedValueOnce(saved);
+  fireEvent.click(usd);
+  await screen.findByText('Payment and currency settings saved.');
+  resolveRead(enabled);
+  await refresh;
+  expect(usd).not.toBeChecked();
+  expect(useCurrencyStore.getState().commerceFeatures).toEqual(saved);
+  expect(useCurrencyStore.getState().currentCurrency).toBe('NGN');
+  expect(usePreferenceStore.getState().currency).toBe('NGN');
+  expect(localStorage.getItem('shopsoma_pref_currency')).toBe('NGN');
 });

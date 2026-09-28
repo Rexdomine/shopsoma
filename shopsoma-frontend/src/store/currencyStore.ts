@@ -42,6 +42,10 @@ const DEFAULT_EXCHANGE_RATES: ExchangeRates = {
   lastUpdated: new Date().toISOString(),
 };
 
+// Orders refreshes and invalidates in-flight reads when an admin save is applied.
+// Runtime-only: never hydrate request ordering from browser storage.
+let commerceFeaturesRevision = 0;
+
 export const useCurrencyStore = create<CurrencyState>()(
   persist(
     (set, get) => ({
@@ -49,6 +53,7 @@ export const useCurrencyStore = create<CurrencyState>()(
       commerceFeatures: { stripe_enabled: false, usd_switching_enabled: false },
       commerceFeaturesLoaded: false,
       applyCommerceFeatures: (flags) => {
+        commerceFeaturesRevision += 1;
         const safe = {
           stripe_enabled: flags.stripe_enabled === true,
           usd_switching_enabled: flags.usd_switching_enabled === true,
@@ -58,10 +63,14 @@ export const useCurrencyStore = create<CurrencyState>()(
         get().setCurrency(safe.usd_switching_enabled ? preferred : 'NGN');
       },
       fetchCommerceFeatures: async () => {
+        const revision = ++commerceFeaturesRevision;
         try {
-          get().applyCommerceFeatures(await getCommerceFeatures());
+          const flags = await getCommerceFeatures();
+          if (revision === commerceFeaturesRevision) get().applyCommerceFeatures(flags);
         } catch {
-          get().applyCommerceFeatures({ stripe_enabled: false, usd_switching_enabled: false });
+          if (revision === commerceFeaturesRevision) {
+            get().applyCommerceFeatures({ stripe_enabled: false, usd_switching_enabled: false });
+          }
         }
       },
       exchangeRates: DEFAULT_EXCHANGE_RATES,
