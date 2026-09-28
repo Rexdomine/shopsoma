@@ -2,11 +2,14 @@
 Product CRUD API endpoints
 """
 from typing import List, Optional, Dict, Any, Tuple
+from datetime import datetime, timezone
 import csv
 import io
+import logging
 import math
 import ipaddress
 import re
+from pathlib import PurePosixPath
 from urllib.parse import urlparse
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File
@@ -27,6 +30,18 @@ from app.models.stock_payment_persistence import coordinate_catalog_write
 from app.services.product_moderation import (
     mark_product_content_pending,
     transition_product_moderation,
+)
+from app.services.image_service import image_service
+from app.services.product_creation import build_product_graph, PRODUCT_RELATIONSHIPS
+from app.services.product_duplication import duplicate_vendor_product
+from app.services.product_image_storage import (
+    clear_featured_storefront_references,
+    clear_variation_image_references,
+    lock_storage_keys,
+    lock_and_validate_storage_keys,
+    lock_and_validate_variation_image_urls,
+    validate_image_upload,
+    record_storage_cleanup,
 )
 from app.schemas.product import (
     ProductCreate,
@@ -50,9 +65,32 @@ from app.schemas.product import (
     variation_sale_price,
 )
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/products", tags=["products"])
 
 MAX_PRODUCT_IMAGES = 10
+
+
+def _validate_vendor_storage_keys(vendor: Vendor, storage_keys: Optional[List[str]]) -> None:
+    """Accept only keys issued for this vendor's product-image namespace."""
+    if not storage_keys:
+        return
+
+    prefix = f"vendors/{vendor.user_id}/products/"
+    prefix_parts = len(PurePosixPath(prefix.rstrip("/")).parts)
+    for key in storage_keys:
+        path = PurePosixPath(key)
+        if (
+            not key.startswith(prefix)
+            or path.is_absolute()
+            or any(part in {"", ".", ".."} for part in key.split("/"))
+            or len(path.parts) <= prefix_parts
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Image storage key does not belong to vendor",
+            )
 
 def _variation_inherits_parent_price(
     variation: Variation,
@@ -177,15 +215,6 @@ def _sync_inherited_variation_prices(
                     ),
                 )
 
-
-PRODUCT_RELATIONSHIPS = (
-    selectinload(Product.variants),
-    selectinload(Product.variations).selectinload(Variation.size_stocks),
-    selectinload(Product.images),
-    selectinload(Product.vendor),
-    selectinload(Product.category).selectinload(Category.parent),
-    selectinload(Product.collection),
-)
 
 BULK_SINGLE_HEADERS = [
     "title",
@@ -430,114 +459,30 @@ async def create_product(
             detail="Vendor account not approved yet"
         )
 
-    # Create product
-    product = Product(
-        vendor_id=vendor.id,
-        title=product_data.title,
-        description=product_data.description,
-        category_id=product_data.category_id,
-        collection_id=product_data.collection_id,
-        sku=product_data.sku,
-        base_price=product_data.base_price,
-        compare_at_price=product_data.compare_at_price,
-        currency=product_data.currency,
-        total_stock=product_data.total_stock,
-        status=ProductStatus(product_data.status),
-        is_featured=product_data.is_featured,
-        product_type=ProductType(product_data.product_type),
-        made_to_order=product_data.made_to_order,
-        made_to_order_timeline=product_data.made_to_order_timeline,
-        care_instructions=product_data.care_instructions,
-        fabric_composition=product_data.fabric_composition,
-        weight_kg=product_data.weight_kg,
-        length_cm=product_data.length_cm,
-        width_cm=product_data.width_cm,
-        height_cm=product_data.height_cm,
-        meta_title=product_data.meta_title,
-        meta_description=product_data.meta_description,
-        size_guide=product_data.size_guide.model_dump() if product_data.size_guide else None,
-        moderation_status=ModerationStatus.PENDING,
-    )
+    image_storage_keys = []
+    for image_data in product_data.images or []:
+        _validate_vendor_storage_keys(vendor, image_data.storage_keys)
+        image_storage_keys.extend(image_data.storage_keys or [])
+    if len(image_storage_keys) != len(set(image_storage_keys)):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Image storage keys must be unique",
+        )
+    if image_storage_keys:
+        try:
+            await lock_and_validate_storage_keys(db, image_storage_keys)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
-    db.add(product)
-    await db.flush()  # Get product ID
+    for image_data in product_data.images or []:
+        try:
+            await validate_image_upload(
+                db, image_data.image_url, image_data.thumbnail_url, image_data.storage_keys
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
-    # Add variations if provided (new system)
-    if product_data.variations:
-        for variation_data in product_data.variations:
-            variation = Variation(
-                product_id=product.id,
-                title=variation_data.title,
-                type=variation_data.type,
-                color_hex=variation_data.color_hex,
-                price=variation_data.price,
-                sale_price=variation_data.sale_price,
-                inherits_price=variation_data.inherits_price,
-                inherits_sale_price=variation_data.inherits_sale_price,
-                images=variation_data.images,
-                is_active=variation_data.is_active,
-            )
-            db.add(variation)
-            await db.flush()  # Get variation ID
-
-            # Add size stocks for this variation
-            for size_data in variation_data.sizes:
-                size_stock = SizeStock(
-                    variation_id=variation.id,
-                    size=SizeEnum(size_data.size),
-                    stock=size_data.stock,
-                )
-                db.add(size_stock)
-
-    # Add variants if provided (legacy system - backward compatibility)
-    if product_data.variants:
-        for variant_data in product_data.variants:
-            explicit_inventory = bool(
-                {"stock", "is_available"} & variant_data.model_fields_set
-            )
-            inherits_stock = (
-                product.product_type == ProductType.SINGLE
-                and not product_data.variations
-                and variant_data.size is None
-                and variant_data.color is None
-                and not explicit_inventory
-            )
-            variant = ProductVariant(
-                product_id=product.id,
-                size=variant_data.size,
-                inherits_price=False,
-                # A generic legacy row on a single product is the compatibility
-                # projection of product.total_stock, not an independent axis.
-                inherits_stock=inherits_stock,
-                color=variant_data.color,
-                color_hex=variant_data.color_hex,
-                price=variant_data.price,
-                stock=(
-                    (0 if product.made_to_order else int(product.total_stock or 0))
-                    if inherits_stock
-                    else variant_data.stock
-                ),
-                sku=variant_data.sku,
-                is_available=(
-                    (True if product.made_to_order else int(product.total_stock or 0) > 0)
-                    if inherits_stock
-                    else variant_data.is_available
-                ),
-            )
-            db.add(variant)
-
-    # Add images if provided
-    if product_data.images:
-        for idx, image_data in enumerate(product_data.images):
-            image = ProductImage(
-                product_id=product.id,
-                image_url=image_data.image_url,
-                thumbnail_url=image_data.thumbnail_url,
-                alt_text=image_data.alt_text,
-                display_order=image_data.display_order if image_data.display_order is not None else idx,
-                is_primary=image_data.is_primary,
-            )
-            db.add(image)
+    product = await build_product_graph(db, product_data, vendor.id)
 
     await db.commit()
     await db.refresh(product)
@@ -551,6 +496,18 @@ async def create_product(
     product = result.scalar_one()
 
     return product
+
+
+@router.post("/{product_id}/duplicate", response_model=ProductResponse, status_code=status.HTTP_201_CREATED)
+async def duplicate_product(
+    product_id: UUID,
+    vendor: Vendor = Depends(get_completed_vendor),
+    db: AsyncSession = Depends(get_db),
+):
+    """Create a private draft with independent, server-owned image copies."""
+    if not vendor or not vendor.approved:
+        raise HTTPException(status_code=403, detail="Vendor account not approved yet")
+    return await duplicate_vendor_product(db, vendor, product_id)
 
 
 @router.post("/bulk-upload/single", status_code=status.HTTP_201_CREATED)
@@ -583,6 +540,11 @@ async def bulk_upload_single_products(
     for row_index, row in enumerate(reader, start=2):
         row_errors: List[Dict[str, Any]] = []
         image_urls = _parse_image_urls(row, row_index, row_errors)
+        for image_url in image_urls:
+            try:
+                await validate_image_upload(db, image_url, image_url, None)
+            except ValueError as exc:
+                row_errors.append({"row": row_index, "field": "images", "message": str(exc)})
         title = (row.get("title") or "").strip()
         category_slug = (row.get("category_slug") or "").strip()
         currency = (row.get("currency") or "NGN").strip().upper()
@@ -713,6 +675,11 @@ async def bulk_upload_variable_products(
     for row_index, row in enumerate(reader, start=2):
         row_errors: List[Dict[str, Any]] = []
         row_image_urls = _parse_image_urls(row, row_index, row_errors)
+        for image_url in row_image_urls:
+            try:
+                await validate_image_upload(db, image_url, image_url, None)
+            except ValueError as exc:
+                row_errors.append({"row": row_index, "field": "images", "message": str(exc)})
         title = (row.get("product_title") or "").strip()
         category_slug = (row.get("category_slug") or "").strip()
         currency = (row.get("currency") or "NGN").strip().upper()
@@ -1151,6 +1118,23 @@ async def update_product(
     # Handle variations separately for sync logic
     variations_data = update_data.pop("variations", None)
     variations_to_sync = product.variations
+
+    if variations_data is not None:
+        variation_image_urls = [
+            image_url
+            for variation_data in variations_data
+            for image_url in (variation_data.get("images") or [])
+        ]
+        try:
+            # Deletion paths acquire the catalog coordinator before any
+            # storage-key lock. Keep this writer in the same global order to
+            # prevent a catalog/storage lock inversion.
+            await coordinate_catalog_write(db, product_ids=[product_id], lock_only=True)
+            await lock_and_validate_variation_image_urls(
+                db, variation_image_urls, product_id=product_id
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
     # ProductUpdate validates only the incoming variation payload. When an
     # existing product retains legacy variants, include those persisted rows in
@@ -1607,6 +1591,27 @@ async def create_image(
             detail="Product not found"
         )
 
+    _validate_vendor_storage_keys(vendor, image_data.storage_keys)
+
+    storage_keys = image_data.storage_keys or []
+    if len(storage_keys) != len(set(storage_keys)):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Image storage keys must be unique",
+        )
+    if storage_keys:
+        try:
+            await lock_and_validate_storage_keys(db, storage_keys)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    try:
+        await validate_image_upload(
+            db, image_data.image_url, image_data.thumbnail_url, image_data.storage_keys
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
     image_count = await db.scalar(
         select(func.count(ProductImage.id)).where(ProductImage.product_id == product_id)
     )
@@ -1669,8 +1674,41 @@ async def delete_image(
         )
 
     await mark_product_content_pending(db=db, product_id=product_id)
+    storage_keys = list(image.storage_keys or [])
+    if storage_keys:
+        await lock_storage_keys(db, storage_keys)
     await db.delete(image)
+    cleanup_record = None
+    if storage_keys:
+        await clear_featured_storefront_references(db, storage_keys)
+        cleanup_record = await record_storage_cleanup(
+            db, storage_keys, reason="vendor_image_delete",
+            product_id=product_id, image_id=image_id, commit=False
+        )
+    await clear_variation_image_references(db, product_id, storage_keys, image.image_url)
     await db.commit()
+    try:
+        if storage_keys:
+            cleanup = await image_service.delete_images(storage_keys)
+            failed_keys = cleanup.get("failed_keys", []) if isinstance(cleanup, dict) else storage_keys
+        else:
+            failed_keys = []
+    except Exception:
+        logger.exception(
+            "Vendor product image storage cleanup failed after durable row deletion",
+            extra={"product_id": str(product_id), "image_id": str(image_id), "storage_keys": storage_keys},
+        )
+        failed_keys = storage_keys
+    if not failed_keys and cleanup_record is not None:
+        cleanup_record.resolved_at = datetime.now(timezone.utc)
+        try:
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            logger.exception(
+                "Vendor product image cleanup resolution bookkeeping failed after storage deletion",
+                extra={"product_id": str(product_id), "image_id": str(image_id), "storage_keys": storage_keys},
+            )
 
 
 # ============================================================================

@@ -5,6 +5,7 @@ import VendorSidebar from '../../components/vendor/VendorSidebar';
 import { productService } from '../../services/productService';
 import { useVendor } from '../../context/VendorContext';
 import { collectionService } from '../../services/collectionService';
+import { normalizeProductImageUrl } from '../../utils/productImages';
 import CurrencySwitcher from '../../components/common/CurrencySwitcher';
 import { useCurrencyStore } from '../../store/currencyStore';
 import { useToast } from '../../hooks/useToast';
@@ -124,7 +125,7 @@ export default function VendorCollections() {
           is_active: collection.is_active,
           dateCreated: new Date(collection.created_at).toLocaleDateString('en-GB'),
           productsAvailable: collection.products_available || 0,
-          imageUrl: collection.banner_image_url || collection.thumbnails?.[0] || '',
+          imageUrl: normalizeProductImageUrl(collection.banner_image_url || collection.thumbnails?.[0] || ''),
           thumbnails: collection.thumbnails || [],
           };
         });

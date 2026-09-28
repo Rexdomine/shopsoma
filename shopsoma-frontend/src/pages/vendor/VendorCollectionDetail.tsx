@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import VendorSidebar from '../../components/vendor/VendorSidebar';
 import { collectionService } from '../../services/collectionService';
+import { normalizeProductImageUrl } from '../../utils/productImages';
 import { productService } from '../../services/productService';
 import { useVendor } from '../../context/VendorContext';
 import { useToast } from '../../hooks/useToast';
@@ -107,7 +108,7 @@ export default function VendorCollectionDetail() {
       made_to_order: product.made_to_order,
       made_to_order_timeline: product.made_to_order_timeline,
       created_at: product.created_at,
-      image_url: primaryImage?.thumbnail_url || primaryImage?.image_url || null,
+      image_url: normalizeProductImageUrl(primaryImage?.thumbnail_url || primaryImage?.image_url || null),
       collection_name: product.collection_name || null,
     };
   };
@@ -128,7 +129,7 @@ export default function VendorCollectionDetail() {
       try {
         const detail = await collectionService.getCollection(id);
         setCollection(detail);
-        setHeroImage(detail.banner_image_url || detail.thumbnails?.[0] || fallbackImage);
+        setHeroImage(normalizeProductImageUrl(detail.banner_image_url || detail.thumbnails?.[0] || fallbackImage));
         setEditName(detail.name);
         setEditDescription(detail.description || '');
       } catch (error) {
@@ -220,11 +221,11 @@ export default function VendorCollectionDetail() {
         prev
           ? {
               ...prev,
-              banner_image_url: updated.banner_image_url,
+              banner_image_url: normalizeProductImageUrl(updated.banner_image_url),
             }
           : prev
       );
-      setHeroImage(upload.original);
+      setHeroImage(normalizeProductImageUrl(upload.original));
       success('Banner image updated.');
       setShowBannerModal(false);
     } catch (error) {

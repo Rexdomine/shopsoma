@@ -41,13 +41,14 @@ from app.services.email_service import email_service
 from app.services.commission import get_default_commission_rate
 from app.services.vendor_onboarding import reconcile_vendor_onboarding
 from app.services.image_service import image_service
+from app.services.product_image_storage import lock_and_validate_featured_storefront_key
 
 router = APIRouter(prefix="/vendor", tags=["Vendors"])
 logger = logging.getLogger(__name__)
 
 
 async def _require_vendor_owned_uploaded_image(
-    image_url: str, vendor: Vendor
+    image_url: str, vendor: Vendor, db: AsyncSession
 ) -> None:
     """Accept only an existing image returned by this vendor's upload namespace."""
     expected_key_prefix = f"vendors/{vendor.user_id}/"
@@ -81,6 +82,14 @@ async def _require_vendor_owned_uploaded_image(
             status_code=403,
             detail="Featured storefront image does not belong to this vendor",
         )
+
+    # Serialize the storage existence check with cleanup retries. A cleanup
+    # worker commits its storefront-reference clear before deleting the object;
+    # checking only after this lock prevents re-saving a URL for that object.
+    try:
+        await lock_and_validate_featured_storefront_key(db, image_url)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
     image_info = await asyncio.to_thread(image_service.get_image_info, image_key)
     if not image_info:
@@ -221,8 +230,14 @@ async def save_brand_info(
 
     if brand_info.featured_storefront_image_url is not None:
         await _require_vendor_owned_uploaded_image(
-            brand_info.featured_storefront_image_url, vendor
+            brand_info.featured_storefront_image_url, vendor, db
         )
+        try:
+            await lock_and_validate_featured_storefront_key(
+                db, brand_info.featured_storefront_image_url
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
     # Update vendor with brand info
     vendor.business_phone = brand_info.business_phone

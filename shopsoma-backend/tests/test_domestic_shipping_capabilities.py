@@ -6,15 +6,29 @@ from app.core.config import Settings
 from app.services.shipping.capabilities import domestic_shipping_capabilities
 
 
+# The app import loads the nearest dotenv file before this module runs.  Freeze
+# every rollout-related input here so these unit contracts are independent of
+# an operator's local DHL configuration.
 BASE_SETTINGS = {
     "SECRET_KEY": "unit-test-secret",
-    "DATABASE_URL": "postgresql://unit:password@localhost:5432/shopsoma_unit",
+    "DATABASE_URL": "postgresql://unit:***@localhost:5432/shopsoma_unit",
+    "DHL_ENABLED": False,
+    "DHL_ENVIRONMENT": "sandbox",
+    "DHL_API_USERNAME": "",
+    "DHL_API_PASSWORD": "",
+    "DHL_EXPORT_ACCOUNT_NUMBER": "",
+    "DHL_IMPORT_ACCOUNT_NUMBER": "",
+    "DHL_DOMESTIC_WORKFLOW_ENABLED": False,
+    "DHL_DOMESTIC_QUOTE_ENFORCEMENT_ENABLED": False,
+    "DHL_DOMESTIC_PROVIDER_CALLS_ENABLED": False,
+    "DHL_DOMESTIC_CHECKOUT_ENABLED": False,
+    "DHL_DOMESTIC_SANDBOX_COHORT_IDS": "",
     "_env_file": None,
 }
 
 
 def make_settings(**overrides) -> Settings:
-    return Settings(**BASE_SETTINGS, **overrides)
+    return Settings(**(BASE_SETTINGS | overrides))
 
 
 def test_all_domestic_shipping_capabilities_are_false_by_default() -> None:

@@ -362,5 +362,10 @@ def test_core_catalog_writers_use_explicit_preflight_or_document_fail_closed() -
     assert orders_source.count("await coordinate_catalog_write(") >= 2
     assert _imports_catalog_write_coordinator(admin_source)
     assert admin_source.count("await coordinate_catalog_write(") >= 2
-    assert "unbounded reset intentionally fails closed" in admin_source
+    from app.api.v1.admin import reset_products
+    import inspect
+
+    reset_source = inspect.getsource(reset_products)
+    assert "await coordinate_catalog_write(" in reset_source
+    assert reset_source.index("await coordinate_catalog_write(") < reset_source.index("await db.execute(delete(")
     assert "coordinator intentionally fails closed" in seed_source

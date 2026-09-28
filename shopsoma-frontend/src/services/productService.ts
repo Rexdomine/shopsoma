@@ -182,52 +182,9 @@ export const productService = {
 
   // Duplicate product (vendor only)
   async duplicateProduct(productId: string): Promise<Product> {
-    // Fetch the original product
-    const original = await this.getVendorProduct(productId);
-
-    // Create a copy with modified title and reset certain fields
-    const duplicateData: Partial<Product> = {
-      title: `${original.title} (Copy)`,
-      description: original.description,
-      base_price: original.base_price,
-      compare_at_price: original.compare_at_price,
-      category_id: original.category_id,
-      collection_id: original.collection_id,
-      fabric_composition: original.fabric_composition,
-      weight_kg: original.weight_kg,
-      length_cm: original.length_cm,
-      width_cm: original.width_cm,
-      height_cm: original.height_cm,
-      status: 'draft' as const,
-      is_featured: false,
-      // Copy variations if they exist
-      variations: original.variations?.map(v => ({
-        title: v.title,
-        type: v.type,
-        color_hex: v.color_hex,
-        price: v.price,
-        sale_price: v.sale_price,
-        inherits_price: v.inherits_price,
-        inherits_sale_price: v.inherits_sale_price,
-        images: v.images,
-        is_active: v.is_active,
-        size_stocks: v.size_stocks.map(ss => ({
-          size: ss.size,
-          stock: ss.stock,
-        })),
-      })),
-      // Copy images if they exist (remove id and product_id)
-      images: original.images?.map(img => ({
-        image_url: img.image_url,
-        thumbnail_url: img.thumbnail_url,
-        alt_text: img.alt_text,
-        display_order: img.display_order,
-        is_primary: img.is_primary,
-      })) as any,
-    };
-
-    // Create the duplicate
-    const response = await api.post('/products', duplicateData);
+    // No automatic POST retry: a lost response can still represent a saved draft.
+    const config = { timeout: 10000, _retry: true };
+    const response = await api.post(`/products/${productId}/duplicate`, undefined, config);
     return response.data;
   },
 

@@ -5,11 +5,13 @@ Supports both local file storage (development) and S3 (production)
 """
 
 import io
+import asyncio
+import shutil
 import tempfile
 import uuid
 import hashlib
 import unicodedata
-from typing import Optional, Tuple, List
+from typing import Any, Optional, Tuple, List
 from datetime import datetime
 from pathlib import Path
 from PIL import Image
@@ -167,6 +169,15 @@ class ImageService:
         year_month = datetime.utcnow().strftime("%Y/%m")
         return f"{folder}/{year_month}/{filename}"
 
+    async def _cleanup_failed_upload(self, storage_keys: List[str]) -> List[str]:
+        """Best-effort compensation that never hides the upload error."""
+        try:
+            cleanup = await self.delete_images(storage_keys)
+        except Exception:
+            logger.exception("Failed to compensate a partial image upload")
+            return list(storage_keys)
+        return list(cleanup.get("failed_keys", storage_keys))
+
     def _compress_and_resize(
         self,
         image_data: bytes,
@@ -261,6 +272,8 @@ class ImageService:
                     generate_variants=generate_variants,
                 )
 
+        except HTTPException:
+            raise
         except Exception as e:
             logger.error(f"Image upload error: {str(e)}")
             raise HTTPException(
@@ -276,7 +289,7 @@ class ImageService:
         generate_variants: bool,
     ) -> dict:
         """Upload image to local filesystem"""
-        results = {}
+        results: dict[str, Any] = {"_storage_keys": []}
 
         # Create folder structure
         year_month = datetime.utcnow().strftime("%Y/%m")
@@ -285,15 +298,20 @@ class ImageService:
 
         # Upload original
         original_path = folder_path / base_filename
-        compressed_data, format_type = self._compress_and_resize(
-            image_data, target_size=None, quality=settings.IMAGE_QUALITY
-        )
-
-        with open(original_path, "wb") as f:
-            f.write(compressed_data)
-
         # Generate URL path (relative to uploads directory)
         original_key = f"{folder}/{year_month}/{base_filename}"
+        results["_storage_keys"].append(original_key)
+        try:
+            compressed_data, format_type = self._compress_and_resize(
+                image_data, target_size=None, quality=settings.IMAGE_QUALITY
+            )
+            with open(original_path, "wb") as f:
+                f.write(compressed_data)
+        except Exception as exc:
+            error = HTTPException(status_code=500, detail="Failed to upload image")
+            setattr(error, "storage_keys", await self._cleanup_failed_upload(results["_storage_keys"]))
+            raise error from exc
+
         results["original"] = f"/uploads/{original_key}"
         results["s3_key"] = original_key
 
@@ -310,15 +328,20 @@ class ImageService:
                     original_filename, size_name
                 )
                 variant_path = folder_path / variant_filename
-
-                variant_data, variant_format = self._compress_and_resize(
-                    image_data, target_size=size_tuple, quality=settings.IMAGE_QUALITY
-                )
-
-                with open(variant_path, "wb") as f:
-                    f.write(variant_data)
-
                 variant_key = f"{folder}/{year_month}/{variant_filename}"
+                results["_storage_keys"].append(variant_key)
+
+                try:
+                    variant_data, variant_format = self._compress_and_resize(
+                        image_data, target_size=size_tuple, quality=settings.IMAGE_QUALITY
+                    )
+                    with open(variant_path, "wb") as f:
+                        f.write(variant_data)
+                except Exception as exc:
+                    error = HTTPException(status_code=500, detail="Failed to upload image")
+                    setattr(error, "storage_keys", await self._cleanup_failed_upload(results["_storage_keys"]))
+                    raise error from exc
+
                 results[size_name] = f"/uploads/{variant_key}"
 
         logger.info(f"Successfully uploaded image to local storage: {original_key}")
@@ -334,11 +357,12 @@ class ImageService:
         generate_variants: bool,
     ) -> dict:
         """Upload image to S3"""
-        results = {}
+        results: dict[str, Any] = {"_storage_keys": []}
 
         try:
             # Upload original
             original_key = self._get_s3_key(base_filename, folder)
+            results["_storage_keys"].append(original_key)
             compressed_data, format_type = self._compress_and_resize(
                 image_data,
                 target_size=None,  # Keep original size
@@ -373,6 +397,7 @@ class ImageService:
                         original_filename, size_name
                     )
                     variant_key = self._get_s3_key(variant_filename, folder)
+                    results["_storage_keys"].append(variant_key)
 
                     variant_data, variant_format = self._compress_and_resize(
                         image_data,
@@ -394,9 +419,11 @@ class ImageService:
             logger.info(f"Successfully uploaded image to S3: {original_key}")
             return results
 
-        except ClientError as e:
+        except Exception as e:
+            error = HTTPException(status_code=500, detail="Failed to upload image to S3")
+            setattr(error, "storage_keys", await self._cleanup_failed_upload(results["_storage_keys"]))
             logger.error(f"S3 upload error: {str(e)}")
-            raise HTTPException(status_code=500, detail="Failed to upload image to S3")
+            raise error from e
 
     def _get_public_url(self, s3_key: str) -> str:
         """
@@ -417,6 +444,73 @@ class ImageService:
         else:
             # Use standard S3 URL
             return f"https://{settings.S3_BUCKET_NAME}.s3.{settings.AWS_REGION}.amazonaws.com/{s3_key}"
+
+    def public_url_for_key(self, key: str) -> str:
+        """URL for a trusted exact key in the active storage backend."""
+        return f"/uploads/{key}" if self.use_local_storage else self._get_public_url(key)
+
+    async def copy_image_key(
+        self, source_key: str, destination_key: str, *, key_mapping: dict[str, str]
+    ) -> None:
+        """Copy a server-authorized key; never fetch arbitrary URLs.
+
+        The caller reserves all destination keys before IO and records attempted
+        keys before invoking this method, including acknowledgement failures.
+        """
+        if source_key == destination_key:
+            raise ValueError("Image copies require a fresh destination")
+        await asyncio.to_thread(
+            self._copy_image_key, source_key, destination_key, key_mapping
+        )
+
+    def _copy_image_key(
+        self, source_key: str, destination_key: str, key_mapping: dict[str, str]
+    ) -> None:
+        if self.use_local_storage:
+            source = self._resolve_local_image_path(source_key)
+            destination = self._resolve_local_image_path(destination_key)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            with source.open("rb") as reader, destination.open("xb") as writer:
+                shutil.copyfileobj(reader, writer)
+            return
+
+        # A dedicated client bounds copy retries without changing upload clients.
+        client = self._get_copy_client()
+        info = client.head_object(Bucket=self.bucket_name, Key=source_key)
+        metadata = dict(info.get("Metadata", {}))
+        if "original-key" in metadata:
+            original = metadata["original-key"]
+            if original not in key_mapping:
+                raise ValueError("Derivative metadata does not match the source gallery")
+            metadata["original-key"] = key_mapping[original]
+        headers = {
+            field: info[field] for field in (
+                "ContentType", "CacheControl", "ContentDisposition",
+                "ContentEncoding", "ContentLanguage", "Expires",
+            ) if field in info
+        }
+        client.copy_object(
+            Bucket=self.bucket_name, Key=destination_key,
+            CopySource={"Bucket": self.bucket_name, "Key": source_key},
+            MetadataDirective="REPLACE", Metadata=metadata, **headers,
+        )
+
+    def _get_copy_client(self):
+        # Cached independently; credentials/endpoints use the existing config.
+        if not hasattr(self, "_copy_client"):
+            kwargs = {
+                "aws_access_key_id": settings.AWS_ACCESS_KEY_ID,
+                "aws_secret_access_key": settings.AWS_SECRET_ACCESS_KEY,
+                "config": BotoConfig(
+                    signature_version="s3v4", region_name=settings.AWS_REGION,
+                    connect_timeout=5, read_timeout=15,
+                    retries={"mode": "standard", "total_max_attempts": 2},
+                ),
+            }
+            if settings.S3_ENDPOINT_URL:
+                kwargs["endpoint_url"] = settings.S3_ENDPOINT_URL
+            self._copy_client = boto3.client("s3", **kwargs)
+        return self._copy_client
 
     def generate_presigned_url(self, s3_key: str, expiration: int = 3600) -> str:
         """
@@ -510,7 +604,7 @@ class ImageService:
             Dict with success/failure counts
         """
         if not s3_keys:
-            return {"deleted": 0, "failed": 0}
+            return {"deleted": 0, "failed": 0, "failed_keys": []}
 
         if self.use_local_storage:
             deleted = 0
@@ -532,9 +626,14 @@ class ImageService:
                 except OSError as e:
                     logger.error(f"Failed to delete local image {s3_key}: {str(e)}")
 
-            failed = len(s3_keys) - deleted
+            failed_keys = [key for key, image_path in local_images if image_path is None]
+            failed_keys.extend(
+                key for key, image_path in local_images
+                if image_path is not None and image_path.exists()
+            )
+            failed = len(failed_keys)
             logger.info(f"Batch delete: {deleted} succeeded, {failed} failed")
-            return {"deleted": deleted, "failed": failed}
+            return {"deleted": deleted, "failed": failed, "failed_keys": failed_keys}
 
         objects = [{"Key": key} for key in s3_keys]
 
@@ -544,14 +643,15 @@ class ImageService:
             )
 
             deleted = len(response.get("Deleted", []))
-            failed = len(response.get("Errors", []))
+            failed_keys = [item.get("Key") for item in response.get("Errors", []) if item.get("Key")]
+            failed = len(failed_keys)
 
             logger.info(f"Batch delete: {deleted} succeeded, {failed} failed")
-            return {"deleted": deleted, "failed": failed}
+            return {"deleted": deleted, "failed": failed, "failed_keys": failed_keys}
 
         except ClientError as e:
             logger.error(f"Batch delete error: {str(e)}")
-            return {"deleted": 0, "failed": len(s3_keys)}
+            return {"deleted": 0, "failed": len(s3_keys), "failed_keys": list(s3_keys)}
 
     def get_image_info(self, s3_key: str) -> Optional[dict]:
         """
