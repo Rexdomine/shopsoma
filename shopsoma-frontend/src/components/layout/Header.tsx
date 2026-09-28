@@ -15,7 +15,7 @@ export default function Header() {
   const cart = useCartStore((state) => state.cart);
   const itemCount = cart.summary.itemCount;
   const { isAuthenticated, user } = useAuth();
-  const { currentCurrency, setCurrency } = useCurrencyStore();
+  const { currentCurrency, setCurrency, commerceFeatures } = useCurrencyStore();
   const setPreferredCurrency = usePreferenceStore((state) => state.setCurrency);
   const currencyDropdownRef = useRef<HTMLDivElement>(null);
 
@@ -123,7 +123,7 @@ export default function Header() {
 
           <div className="flex items-center justify-end gap-2 sm:gap-4 text-sm font-ui flex-1">
             {/* Currency Switcher */}
-            <div className="hidden sm:block relative" ref={currencyDropdownRef}>
+            {commerceFeatures.usd_switching_enabled && <div className="hidden sm:block relative" ref={currencyDropdownRef}>
               <button
                 onClick={() => setCurrencyDropdownOpen(!currencyDropdownOpen)}
                 className="inline-flex items-center gap-1 text-primary hover:text-primary-dark transition-colors"
@@ -156,7 +156,7 @@ export default function Header() {
                   </button>
                 </div>
               )}
-            </div>
+            </div>}
 
             <Link to={ROUTES.PROFILE_WISHLIST || ROUTES.PROFILE} className="hidden sm:inline-flex p-1.5 hover:text-primary-dark" aria-label="Wishlist">
               <Bookmark className="w-5 h-5" />

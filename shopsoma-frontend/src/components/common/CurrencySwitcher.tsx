@@ -1,4 +1,4 @@
-import type { Currency } from '../../store/currencyStore';
+import { useCurrencyStore, type Currency } from '../../store/currencyStore';
 
 const CURRENCIES: Currency[] = ['NGN', 'USD'];
 
@@ -15,6 +15,8 @@ export default function CurrencySwitcher({
   label = 'Currency',
   className,
 }: CurrencySwitcherProps) {
+  const enabled = useCurrencyStore((state) => state.commerceFeatures.usd_switching_enabled);
+  if (!enabled) return null;
   return (
     <div className={`flex items-center gap-2 ${className || ''}`}>
       <span className="text-sm text-gray-600">{label}:</span>

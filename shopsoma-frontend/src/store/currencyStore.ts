@@ -4,7 +4,7 @@
  */
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { getExchangeRate } from '../services/settingsService';
+import { getCommerceFeatures, type CommerceFeatures, getExchangeRate } from '../services/settingsService';
 import { usePreferenceStore } from './preferenceStore';
 
 export type Currency = 'NGN' | 'USD';
@@ -17,6 +17,10 @@ interface ExchangeRates {
 
 interface CurrencyState {
   currentCurrency: Currency;
+  commerceFeatures: CommerceFeatures;
+  commerceFeaturesLoaded: boolean;
+  fetchCommerceFeatures: () => Promise<void>;
+  applyCommerceFeatures: (flags: CommerceFeatures) => void;
   exchangeRates: ExchangeRates;
   isLoadingRates: boolean;
 
@@ -42,11 +46,29 @@ export const useCurrencyStore = create<CurrencyState>()(
   persist(
     (set, get) => ({
       currentCurrency: 'NGN',
+      commerceFeatures: { stripe_enabled: false, usd_switching_enabled: false },
+      commerceFeaturesLoaded: false,
+      applyCommerceFeatures: (flags) => {
+        const safe = {
+          stripe_enabled: flags.stripe_enabled === true,
+          usd_switching_enabled: flags.usd_switching_enabled === true,
+        };
+        const preferred = usePreferenceStore.getState().pendingCurrency ?? usePreferenceStore.getState().currency;
+        set({ commerceFeatures: safe, commerceFeaturesLoaded: true });
+        get().setCurrency(safe.usd_switching_enabled ? preferred : 'NGN');
+      },
+      fetchCommerceFeatures: async () => {
+        try {
+          get().applyCommerceFeatures(await getCommerceFeatures());
+        } catch {
+          get().applyCommerceFeatures({ stripe_enabled: false, usd_switching_enabled: false });
+        }
+      },
       exchangeRates: DEFAULT_EXCHANGE_RATES,
       isLoadingRates: false,
 
       setCurrency: (currency: Currency) => {
-        set({ currentCurrency: currency });
+        set({ currentCurrency: get().commerceFeatures.usd_switching_enabled ? currency : 'NGN' });
         try {
           usePreferenceStore.getState().setCurrency(currency);
         } catch (error) {
@@ -58,9 +80,7 @@ export const useCurrencyStore = create<CurrencyState>()(
       },
 
       toggleCurrency: () => {
-        set((state) => ({
-          currentCurrency: state.currentCurrency === 'NGN' ? 'USD' : 'NGN',
-        }));
+        get().setCurrency(get().currentCurrency === 'NGN' ? 'USD' : 'NGN');
       },
 
       updateExchangeRates: (rates: Partial<ExchangeRates>) => {
@@ -133,6 +153,8 @@ export const useCurrencyStore = create<CurrencyState>()(
     }),
     {
       name: 'shopsoma-currency',
+      // Flags are never persisted; saved USD cannot bypass the initial closed gate.
+      merge: (persisted, current) => ({ ...current, exchangeRates: (persisted as Partial<CurrencyState>)?.exchangeRates ?? current.exchangeRates, currentCurrency: 'NGN' }),
       partialize: (state) => ({
         currentCurrency: state.currentCurrency,
         exchangeRates: state.exchangeRates,

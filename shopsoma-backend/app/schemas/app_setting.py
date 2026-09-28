@@ -113,3 +113,14 @@ class ComingSoonSettingsUpdate(BaseModel):
     enabled: bool
     launch_at: Optional[datetime] = None
     image_url: Optional[str] = Field(default=None, max_length=500)
+
+
+class CommerceFeatures(BaseModel):
+    """Safe public flags; missing settings are disabled for rollout."""
+    stripe_enabled: bool = False
+    usd_switching_enabled: bool = False
+
+
+class CommerceFeaturesUpdate(BaseModel):
+    stripe_enabled: bool = Field(strict=True)
+    usd_switching_enabled: bool = Field(strict=True)

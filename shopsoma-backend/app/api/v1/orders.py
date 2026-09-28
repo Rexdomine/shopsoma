@@ -1,5 +1,7 @@
 """Order management endpoints"""
 
+from app.services.commerce_features import shopping_currency
+
 from typing import Optional, List, Dict
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Header
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -528,7 +530,7 @@ async def review_order(
     For guest checkout, provide guest_address instead of shipping_address_id.
     """
     # Validate shipping address
-    checkout_currency = _normalize_currency(review_data.currency)
+    checkout_currency = await shopping_currency(db, _normalize_currency(review_data.currency))
     usd_to_ngn_rate = await _get_usd_to_ngn_rate(db)
     shipping_address = None
     guest_shipping_state = None
@@ -754,7 +756,7 @@ async def create_order(
     Works for both authenticated users and guest checkout.
     For guest checkout, provide guest_address and customer_email.
     """
-    checkout_currency = _normalize_currency(order_data.currency)
+    checkout_currency = await shopping_currency(db, _normalize_currency(order_data.currency))
     usd_to_ngn_rate = await _get_usd_to_ngn_rate(db)
 
     # Handle shipping address - either from ID or create from guest data
