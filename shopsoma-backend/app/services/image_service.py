@@ -336,9 +336,8 @@ class ImageService:
                     with open(variant_path, "wb") as f:
                         f.write(variant_data)
                 except Exception as exc:
-                    cleanup = await self.delete_images(results["_storage_keys"])
                     error = HTTPException(status_code=500, detail="Failed to upload image")
-                    setattr(error, "storage_keys", cleanup.get("failed_keys", results["_storage_keys"]))
+                    setattr(error, "storage_keys", await self._cleanup_failed_upload(results["_storage_keys"]))
                     raise error from exc
 
                 results[size_name] = f"/uploads/{variant_key}"

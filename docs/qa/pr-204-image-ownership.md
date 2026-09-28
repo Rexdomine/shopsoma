@@ -80,3 +80,24 @@ The editor regression uses rendered DOM assertions in jsdom; it does not prove b
 - Staging steps: create a variable product with shared images, reload vendor detail, verify one tile per image. In cart and both modals block a thumbnail request in browser developer tools; verify the original loads, then block both URLs and verify the local placeholder. Repeat with a previously working single product.
 - Expected staging result: actual images load from the API/CDN origin, no duplicate vendor tiles, and no recurring placeholder requests. Regression checks: admin main/thumbnail/lightbox ordering, cards/hover, detail selections, wishlist and storefront matrix above.
 - These are synthetic DOM regressions, not real browser/network evidence. Product/NightWing must still run the reproducible browser/staging checks through StarLord.
+
+
+## Whole-PR inspection follow-up (2026-09-28)
+
+The consolidated review and open findings live on the implementation issue in document `whole-pr-review`. No further manual Codex request is authorized; NightWing owns the next request after independent review.
+
+- Fixed local variant-upload compensation: if cleanup itself raises, retain every attempted exact key on the original HTTP error for durable retry. Regression covers thumbnail, medium and large failure stages with both partial cleanup results and cleanup exceptions. Local RED: 3 failed / 4 passed; GREEN: 7 passed.
+- Advanced six migration test head expectations to `v5w6x7y8z9a0`, preserving the parent chain and existing safeguards. Five database-independent graph tests reproduced failures and then passed. The domestic-rate test imports full application fixtures and remains for PostgreSQL CI.
+- This heartbeat runtime has no PostgreSQL server or full backend environment. Isolated Python dependencies allowed the real image-service unit tests and Alembic graph tests to execute; this is not a new PostgreSQL lifecycle run. Earlier PostgreSQL evidence remains historical, not verification of this new head.
+- Open caller regression: vendor Duplicate copies managed image URLs without keys; ownership validation correctly rejects those requests. Groot/StarLord must settle ownership-safe copying versus a changed draft UX before implementation closes. Never fix this by reusing keys or weakening validation.
+
+Focused commands with normal repository dependencies (`shopsoma-backend/`):
+
+```sh
+python -m pytest tests/test_image_service_cleanup_metadata.py -q
+python -m pytest tests/test_phase_2a_migration_graph.py tests/test_checkout_prerequisite_migration.py tests/test_customer_shipping_quote_migration.py tests/test_domestic_rate_migration.py tests/test_lane_3c_migration.py tests/test_lane_3d_migration.py -q
+```
+
+For a database-free service/graph check, use `python -m pytest --noconftest` and select only service unit tests or graph test node IDs; set synthetic `SECRET_KEY`, `DATABASE_URL`, `USE_LOCAL_STORAGE=true` and a disposable `LOCAL_UPLOAD_DIR`. Do not interpret this as running database fixtures or migration upgrade/downgrade cycles.
+
+QA order: run the focused local commands; inject a variant-generation error plus cleanup failure and verify retry-key retention; expect the original 500 with exact attempted keys and one linear migration head. After an authorized staging rollout, repeat a failed upload with controlled storage failure and observe cleanup-ledger retry completion. Recheck successful vendor/admin uploads, legacy image deletion, same-product variations and all existing preview surfaces. Browser/staging and managed-storage fault injection remain unverified.
