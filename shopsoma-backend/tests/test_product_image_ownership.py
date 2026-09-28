@@ -502,3 +502,93 @@ async def test_reset_preserves_product_created_after_catalog_snapshot(
         assert any(old_key in keys for keys in cleanup_keys)
     else:
         assert cleanup_keys == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("role", ["vendor", "admin"])
+@pytest.mark.parametrize("other_url", [
+    "https://legacy-b.example/catalog/dress.jpg",
+    "https://legacy-a.example/catalog/dress.jpg?version=2",
+    "https://legacy-a.example/catalog/shirt.jpg",
+])
+async def test_legacy_delete_preserves_distinct_image_after_reload(
+    client, vendor_user, admin_user, sample_product, db_session, monkeypatch,
+    role, other_url,
+):
+    original = "https://legacy-a.example/catalog/dress.jpg"
+    deleted = ProductImage(product_id=sample_product.id, image_url=original)
+    retained = ProductImage(product_id=sample_product.id, image_url=other_url)
+    variation = Variation(
+        product_id=sample_product.id, title="Red", images=[original, other_url]
+    )
+    other_product = Product(
+        vendor_id=sample_product.vendor_id, title="Other", base_price=10,
+    )
+    db_session.add(other_product)
+    await db_session.flush()
+    other_variation = Variation(
+        product_id=other_product.id, title="Blue", images=[original, other_url]
+    )
+    db_session.add_all([deleted, retained, variation, other_variation])
+    await db_session.commit()
+    product_id, deleted_id, retained_id = sample_product.id, deleted.id, retained.id
+    variation_id, other_variation_id = variation.id, other_variation.id
+    delete_storage = AsyncMock()
+    monkeypatch.setattr(image_service, "delete_images", delete_storage)
+    prefix = "/api/v1/admin/products" if role == "admin" else "/api/v1/products"
+    headers = admin_user["headers"] if role == "admin" else vendor_user["headers"]
+    url = f"{prefix}/{product_id}/images/{deleted_id}"
+
+    response = await client.delete(url, headers=headers)
+    assert response.status_code == 204, response.text
+    # A fresh session proves the endpoint committed both gallery changes.
+    from tests.conftest import TestSessionLocal
+    async with TestSessionLocal() as reloaded:
+        assert await reloaded.get(ProductImage, deleted_id) is None
+        assert (await reloaded.get(ProductImage, retained_id)).image_url == other_url
+        assert (await reloaded.get(Variation, variation_id)).images == [other_url]
+        assert (await reloaded.get(Variation, other_variation_id)).images == [original, other_url]
+    response = await client.delete(url, headers=headers)
+    assert response.status_code == 404
+    async with TestSessionLocal() as reloaded:
+        assert (await reloaded.get(ProductImage, retained_id)).image_url == other_url
+        assert (await reloaded.get(Variation, variation_id)).images == [other_url]
+    delete_storage.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("role", ["vendor", "admin"])
+@pytest.mark.parametrize("public_prefix", ["/uploads/", "https://cdn.example.test/media/"])
+async def test_managed_delete_clears_aliases_but_preserves_external_identity(
+    client, vendor_user, admin_user, sample_product, db_session, monkeypatch,
+    role, public_prefix,
+):
+    monkeypatch.setattr(image_service, "_get_public_url", lambda key: "https://cdn.example.test/media/" + key)
+    keys = ["products/dress.jpg", "products/dress-thumb.jpg"]
+    original = public_prefix + keys[0]
+    external = "https://legacy.example/uploads/products/dress.jpg"
+    deleted = ProductImage(product_id=sample_product.id, image_url=original, storage_keys=keys)
+    retained = ProductImage(product_id=sample_product.id, image_url=external)
+    variation = Variation(product_id=sample_product.id, title="Red", images=[
+        original, "/uploads/" + keys[1],
+        "https://cdn.example.test/media/" + keys[0] + "?cache=1", external,
+    ])
+    db_session.add_all([deleted, retained, variation])
+    await db_session.commit()
+    product_id, deleted_id, retained_id, variation_id = sample_product.id, deleted.id, retained.id, variation.id
+    # Failed object deletion must leave retry bookkeeping without losing unrelated references.
+    delete_storage = AsyncMock(side_effect=RuntimeError("synthetic storage failure"))
+    monkeypatch.setattr(image_service, "delete_images", delete_storage)
+    prefix = "/api/v1/admin/products" if role == "admin" else "/api/v1/products"
+    headers = admin_user["headers"] if role == "admin" else vendor_user["headers"]
+    response = await client.delete(f"{prefix}/{product_id}/images/{deleted_id}", headers=headers)
+    assert response.status_code == 204, response.text
+    from tests.conftest import TestSessionLocal
+    async with TestSessionLocal() as reloaded:
+        assert await reloaded.get(ProductImage, deleted_id) is None
+        assert (await reloaded.get(ProductImage, retained_id)).image_url == external
+        assert (await reloaded.get(Variation, variation_id)).images == [external]
+        pending = await reloaded.scalar(select(ProductImageStorageCleanup))
+        assert pending.storage_keys == keys
+        assert pending.resolved_at is None
+    delete_storage.assert_awaited_once_with(keys)

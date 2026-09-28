@@ -216,3 +216,66 @@ provider latency estimate. The four focused frontend files passed 21 tests; the
 corrected service test and TypeScript check were rerun successfully. New Python
 modules/tests passed full F/E9 lint; all changed runtime files passed focused
 E9/F63/F7/F82 lint. Latest pushed-head CI remains a separate gate.
+
+## Legacy URL identity repair (NW-1)
+
+The variation cleanup matcher now compares external legacy URLs exactly, including
+host and query. Only `/uploads/` paths and URLs below the configured storage
+public prefix participate in storage-key equivalence. The shared URL parser,
+upload validation, Duplicate logic, API contracts and database schema are unchanged.
+
+### Local setup or run commands
+
+Use `requirements.txt` in a disposable Python environment and PostgreSQL. From
+`shopsoma-backend/`, set synthetic `SECRET_KEY`, `DATABASE_URL` for that disposable
+instance, `USE_LOCAL_STORAGE=true`, and a disposable `LOCAL_UPLOAD_DIR`, then run:
+
+```sh
+python -m pytest tests/test_product_image_ownership.py tests/test_admin_product_images.py tests/test_product_duplication.py tests/test_storage_key_consolidation_red.py -q
+ruff check app/services/product_image_storage.py tests/test_product_image_ownership.py --select E9,F63,F7,F82
+```
+
+From `shopsoma-frontend/`:
+
+```sh
+npm test -- src/pages/admin/AdminProductActions.test.tsx src/pages/admin/AdminProductEdit.images.test.tsx src/tests/productImageConsumers.test.tsx src/utils/productImages.test.ts --maxWorkers=1 --minWorkers=1
+```
+
+### Local test steps
+
+As both admin and vendor, delete image A from a synthetic product with variations
+referencing A and B. Repeat with B differing only by external host, only by query,
+and by path. Query through a fresh database session, then retry the delete.
+Repeat for managed local/CDN images with original/thumbnail aliases and an
+unrelated external URL sharing the object path. Simulate object cleanup failure.
+
+### Expected local result
+
+Only A's row and references disappear; B survives commit/reload. Other products'
+variations remain unchanged. A repeated delete returns 404 without further data
+loss. Managed aliases are removed; external references remain. Failed storage
+cleanup retains a pending record containing the exact managed keys.
+
+### Staging test steps
+
+After separately authorized deployment, repeat that role/URL matrix using
+synthetic fixtures and the configured CDN. Reload admin/vendor galleries and
+selected variation views. Check actual image requests, keyboard navigation and
+mobile layout. Recheck the broken item and a previously working item on cards,
+detail/selected gallery, hover, dashboards, featured sections, cart and wishlist.
+
+### Expected staging result
+
+Unrelated images still load after reload across each independent render path;
+only deleted managed aliases disappear. Pending moderation continues to hide the
+changed product publicly. No external object is deleted by guessed storage keys.
+
+### Regression checks and limits
+
+Retain exact legacy deletion, same-product bounds, original/thumbnail cleanup,
+cleanup retry, role enforcement, moderation, single/variable create/edit and
+Duplicate ownership. PostgreSQL/API and DOM tests do not prove rendered browser,
+provider latency or staging behavior. Independent repaired-head review and actual
+browser evidence remain separate gates. Keep all prior migration/writer-drain,
+backend-before-frontend, provider-copy and ambiguous-outcome rollout limitations.
+No merge, deployment or fresh Codex request is authorized by this repair.

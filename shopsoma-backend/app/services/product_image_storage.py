@@ -60,12 +60,20 @@ async def clear_variation_image_references(
     image_url: str | None = None,
 ) -> int:
     """Remove deleted product-image URLs from this product's variation galleries."""
+    storage_prefix = image_service._get_public_url("").rstrip("/") + "/"
+
+    def managed_key(url: str | None) -> str | None:
+        # Arbitrary external URLs retain their full identity (host and query).
+        # Only our configured storage origin or relative local uploads may alias
+        # a persisted key; do not broaden the parser used by other validators.
+        if url and (url.startswith("/uploads/") or url.startswith(storage_prefix)):
+            return storage_key_from_public_url(url)
+        return None
+
     keys = {key for key in storage_keys if key}
-    if image_url:
-        legacy_key = storage_key_from_public_url(image_url)
-        if legacy_key:
-            keys.add(legacy_key)
-    if not keys:
+    if image_url and (key := managed_key(image_url)):
+        keys.add(key)
+    if not keys and not image_url:
         return 0
     variations = list(
         (
@@ -78,9 +86,9 @@ async def clear_variation_image_references(
     for variation in variations:
         images = list(variation.images or [])
         remaining = [
-            image_url
-            for image_url in images
-            if storage_key_from_public_url(image_url) not in keys
+            url
+            for url in images
+            if url != image_url and managed_key(url) not in keys
         ]
         if remaining != images:
             variation.images = remaining
