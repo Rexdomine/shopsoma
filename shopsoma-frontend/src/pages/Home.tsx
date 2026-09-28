@@ -369,9 +369,9 @@ function Hero() {
       <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-[#105E53]/[0.82] via-[#105E53]/[0.30] to-transparent" />
       <div className="relative z-10 flex w-full flex-col items-start px-5 pb-7 sm:px-10 sm:pb-10 lg:px-16 lg:pb-14">
         <div className="max-w-xl text-white">
-          <p className="mb-3 text-[10px] font-ui font-semibold uppercase tracking-[0.32em] text-white/75">ShopSoma presents</p>
+          <p className="mb-3 text-[10px] font-ui font-semibold uppercase tracking-[0.32em] text-white/75">SHOPSOMA PRESENTS</p>
           <h1 className="font-serif text-3xl font-normal leading-tight sm:text-4xl lg:text-5xl" style={{ fontFamily: 'var(--font-serif)', textShadow: '0 2px 12px rgba(0,0,0,0.35)' }}>
-            A considered edit of contemporary fashion for every moment
+            A curated selection of contemporary designs for every moment
           </h1>
           <div className="mt-5 flex flex-wrap items-center gap-x-7 gap-y-3">
             <Link to="/men" className="pointer-events-auto border-b border-white pb-1 text-xs font-ui uppercase tracking-[0.2em] text-white transition-opacity hover:opacity-75">Shop Men</Link>
@@ -567,17 +567,6 @@ function EditorialSection() {
   return (
     <section className="py-16 bg-[var(--color-page-bg)]">
       <div className="max-w-4xl mx-auto px-4 sm:px-8 lg:px-12 text-center space-y-10 sm:space-y-12">
-        <p
-          className="text-sm sm:text-base font-serif leading-relaxed"
-          style={{
-            fontFamily: 'var(--font-serif)',
-            color: '#1E5053',
-            lineHeight: '1.8'
-          }}
-        >
-          Kilentar’s Autumn/Winter 2026 collection brings pattern, movement and a confident ease to the season. Discover expressive pieces for late dinners, open doors and the moments worth dressing for.
-        </p>
-
         {/* Editorial Image Section */}
         <div className="space-y-6">
           <div className="space-y-2">
@@ -588,7 +577,7 @@ function EditorialSection() {
                 color: '#1E5053'
               }}
             >
-              Kilentar: Avant Premier
+              SHOPSOMA’S PLAY ON PRINT
             </h4>
             <p
               className="text-sm sm:text-base font-serif"
@@ -597,7 +586,7 @@ function EditorialSection() {
                 color: '#1E5053'
               }}
             >
-              Autumn/Winter 2026
+              Discover stripes, graphic motifs and bold patterns curated for the contemporary man and woman
             </p>
           </div>
 
