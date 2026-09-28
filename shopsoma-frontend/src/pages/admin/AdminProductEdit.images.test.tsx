@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import AdminProductEdit from './AdminProductEdit';
+import { API_BASE_URL } from '../../config/constants';
 
 const mocks = vi.hoisted(() => ({
   getProduct: vi.fn(),
@@ -45,6 +46,24 @@ beforeEach(() => {
 });
 
 describe('admin product image gallery', () => {
+  it('resolves local uploads against the API origin while preserving external images and the placeholder', async () => {
+    mocks.getProduct.mockResolvedValue({
+      ...product,
+      images: [
+        { ...product.images[0], image_url: '/uploads/vendors/test/products/front.jpg' },
+        product.images[1],
+        { ...product.images[0], id: 'thumbnail', image_url: '', thumbnail_url: '/uploads/thumb.jpg', alt_text: 'thumbnail' },
+        { ...product.images[0], id: 'missing', image_url: '', alt_text: 'missing' },
+      ],
+    });
+    renderPage();
+    const apiOrigin = API_BASE_URL.replace(/\/api\/v\d+\/?$/, '');
+    expect(await screen.findByAltText('front')).toHaveAttribute('src', apiOrigin + '/uploads/vendors/test/products/front.jpg');
+    expect(screen.getByAltText('back')).toHaveAttribute('src', 'https://example.com/two.jpg');
+    expect(screen.getByAltText('thumbnail')).toHaveAttribute('src', apiOrigin + '/uploads/thumb.jpg');
+    expect(screen.getByAltText('missing')).toHaveAttribute('src', '/images/placeholder-product.svg');
+  });
+
   it('does not expose ordering controls for the primary image', async () => {
     renderPage();
     expect(await screen.findByRole('heading', { name: 'Product Images' })).toBeInTheDocument();

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Save, Loader2, Upload, Trash2, Star, ChevronUp, ChevronDown } from 'lucide-react';
 import { ROUTES } from '../../config/constants';
+import { normalizeProductImageUrl } from '../../utils/productImages';
 import { apiErrorMessage } from '../../utils/apiErrorMessage';
 import { adminService, type AdminProductUpdatePayload } from '../../services/adminService';
 import { useToast } from '../../hooks/useToast';
@@ -442,7 +443,7 @@ export default function AdminProductEdit() {
               ) : (
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                   {(product.images || []).map((img, idx) => {
-                    const imageUrl = img.image_url || img.thumbnail_url || '/images/placeholder-product.svg';
+                    const imageUrl = normalizeProductImageUrl(img.image_url) || normalizeProductImageUrl(img.thumbnail_url) || '/images/placeholder-product.svg';
                     return (
                       <div key={img.id} className="relative rounded-lg overflow-hidden border border-gray-200">
                         <img src={imageUrl} alt={img.alt_text || `Product image ${idx + 1}`} className="aspect-square w-full object-cover" />

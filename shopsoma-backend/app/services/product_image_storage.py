@@ -158,9 +158,21 @@ async def record_image_upload(db: AsyncSession, uploaded: dict) -> None:
     try:
         await db.commit()
     except Exception:
-        # A lost commit acknowledgement must not trigger deletion of an upload
-        # whose identity may already be durable. The client receives no success.
+        # A lost acknowledgement may still mean the identity is durable.
+        # Probe after rollback; only reserve cleanup when no identity survived.
         await db.rollback()
+        persisted_upload = await db.get(ProductImageUpload, uploaded["original"])
+        if persisted_upload is None:
+            keys = list(uploaded.get("_storage_keys") or [])
+            try:
+                await lock_and_validate_storage_keys(db, keys)
+            except ValueError:
+                # An association or existing cleanup now owns these objects.
+                logger.warning("Upload storage already claimed after identity commit failure")
+            else:
+                await record_storage_cleanup(
+                    db, keys, reason="upload_identity_commit_reconciliation"
+                )
         raise
 
 

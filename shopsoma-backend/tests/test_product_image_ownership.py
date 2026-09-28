@@ -7,7 +7,7 @@ import pytest
 from PIL import Image
 from sqlalchemy import select
 
-from app.models.product import Product, ProductImage, ProductImageUpload, Variation
+from app.models.product import Product, ProductImage, ProductImageUpload, ProductImageStorageCleanup, Variation
 from app.services.image_service import image_service
 
 
@@ -300,23 +300,53 @@ async def test_deleting_owned_image_clears_same_product_variation(
 
 
 @pytest.mark.asyncio
-async def test_upload_record_failure_does_not_return_upload_success(
-    client, vendor_user, db_session, tmp_path, monkeypatch
+@pytest.mark.parametrize("batch", [False, True])
+@pytest.mark.parametrize("durable", [False, True])
+async def test_upload_identity_commit_failure_reconciles_only_missing_identity(
+    client, vendor_user, db_session, tmp_path, monkeypatch, batch, durable
 ):
     monkeypatch.setattr(image_service, "use_local_storage", True)
     monkeypatch.setattr(image_service, "upload_dir", tmp_path)
     data = io.BytesIO()
     Image.new("RGB", (16, 16), "red").save(data, format="PNG")
-    monkeypatch.setattr(
-        db_session, "commit", AsyncMock(side_effect=RuntimeError("record unavailable"))
-    )
+    real_commit = db_session.commit
+    calls = 0
+
+    async def fail_first_commit():
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            if durable:
+                await real_commit()
+            raise RuntimeError("lost commit acknowledgement")
+        await real_commit()
+
+    monkeypatch.setattr(db_session, "commit", fail_first_commit)
     response = await client.post(
-        "/api/v1/images/upload",
+        "/api/v1/images/upload/batch" if batch else "/api/v1/images/upload",
         headers=vendor_user["headers"],
-        files={"file": ("a.png", data.getvalue(), "image/png")},
+        files={"files" if batch else "file": ("a.png", data.getvalue(), "image/png")},
     )
-    assert response.status_code == 500
-    assert await db_session.scalar(select(ProductImageUpload.image_url)) is None
+    if batch:
+        assert response.status_code == 200
+        assert response.json()["failed"] == 1
+        assert response.json()["images"] == []
+    else:
+        assert response.status_code == 500
+    upload = await db_session.scalar(select(ProductImageUpload))
+    cleanup = await db_session.scalar(select(ProductImageStorageCleanup))
+    stored_keys = {str(path.relative_to(tmp_path)) for path in tmp_path.rglob("*") if path.is_file()}
+    assert stored_keys
+    if durable:
+        assert upload is not None
+        assert set(upload.storage_keys) == stored_keys
+        assert cleanup is None
+    else:
+        assert upload is None
+        assert cleanup is not None
+        assert set(cleanup.storage_keys) == stored_keys
+        assert cleanup.reason == "upload_identity_commit_reconciliation"
+        assert cleanup.resolved_at is None
 
 
 @pytest.mark.asyncio
