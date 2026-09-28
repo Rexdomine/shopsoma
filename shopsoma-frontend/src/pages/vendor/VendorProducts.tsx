@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, useRef } from 'react';
 import type { SyntheticEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ROUTES } from '../../config/constants';
@@ -38,6 +38,8 @@ export default function VendorProducts() {
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [productToDelete, setProductToDelete] = useState<Product | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isDuplicating, setIsDuplicating] = useState(false);
+  const duplicatePending = useRef(false);
   const [bulkUploadOpen, setBulkUploadOpen] = useState(false);
   const [failedImageProductIds, setFailedImageProductIds] = useState<Set<string>>(() => new Set());
 
@@ -222,23 +224,25 @@ export default function VendorProducts() {
   };
 
   const handleDuplicate = async (product: Product) => {
+    if (duplicatePending.current) return;
+    duplicatePending.current = true;
+    setIsDuplicating(true);
     try {
       const duplicated = await productService.duplicateProduct(product.id);
-      success(
-        'Product duplicated successfully. Redirecting to edit...',
-        'Product Duplicated'
-      );
-
-      // Navigate to edit the duplicated product
-      setTimeout(() => {
-        navigate(`${ROUTES.VENDOR_PRODUCTS}/${duplicated.id}/edit`);
-      }, 1500);
+      success('Product duplicated successfully.', 'Product Duplicated');
+      navigate(`${ROUTES.VENDOR_PRODUCTS}/${duplicated.id}/edit`);
     } catch (err: any) {
-      console.error('Failed to duplicate product', err);
+      const status = err.response?.status;
+      const detail = err.response?.data?.detail;
       error(
-        err.response?.data?.detail || 'Failed to duplicate product',
+        status && status < 500
+          ? (typeof detail === 'string' ? detail : detail?.message) || 'Failed to duplicate product'
+          : 'Duplication outcome is uncertain. Refresh your product list before trying again.',
         'Duplication Failed'
       );
+    } finally {
+      duplicatePending.current = false;
+      setIsDuplicating(false);
     }
   };
 
@@ -452,6 +456,8 @@ export default function VendorProducts() {
                                   aria-label="Duplicate"
                                   title="Duplicate product"
                                   onClick={() => handleDuplicate(product)}
+                                  disabled={isDuplicating}
+                                  aria-busy={isDuplicating}
                                 >
                                   <Copy className="h-4 w-4" />
                                 </button>
@@ -556,6 +562,8 @@ export default function VendorProducts() {
                               aria-label="Duplicate"
                               title="Duplicate product"
                               onClick={() => handleDuplicate(product)}
+                                  disabled={isDuplicating}
+                                  aria-busy={isDuplicating}
                             >
                               <Copy className="h-4 w-4" />
                             </button>

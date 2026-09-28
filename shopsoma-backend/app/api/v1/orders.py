@@ -79,7 +79,6 @@ from app.services.shipping.capabilities import domestic_shipping_capabilities
 from app.services.checkout.reservations import release_active_order_reservations
 
 router = APIRouter(prefix="/orders", tags=["Orders"])
-MIN_ORDER_AMOUNT_NGN = Decimal("60000.00")
 logger = logging.getLogger(__name__)
 SUPPORTED_ORDER_CURRENCIES = {"NGN", "USD"}
 
@@ -248,12 +247,6 @@ def _convert_currency(
         )
 
     return amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-
-
-def _minimum_order_amount_for_currency(
-    currency: str, usd_to_ngn_rate: Decimal
-) -> Decimal:
-    return _convert_currency(MIN_ORDER_AMOUNT_NGN, "NGN", currency, usd_to_ngn_rate)
 
 
 def _resolve_product_image_url(
@@ -661,16 +654,6 @@ async def review_order(
             }
         )
 
-    # Minimum order enforcement
-    minimum_order_amount = _minimum_order_amount_for_currency(
-        checkout_currency, usd_to_ngn_rate
-    )
-    if subtotal < minimum_order_amount:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Minimum order amount is {checkout_currency} {minimum_order_amount} equivalent. Please add more items before checkout.",
-        )
-
     await require_manual_order_pricing(db)
 
     # Calculate shipping
@@ -986,15 +969,6 @@ async def create_order(
             stock_updates.append(
                 {"source": stock_source, "id": stock_id, "quantity": item_data.quantity}
             )
-
-    minimum_order_amount = _minimum_order_amount_for_currency(
-        checkout_currency, usd_to_ngn_rate
-    )
-    if subtotal < minimum_order_amount:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Minimum order amount is {checkout_currency} {minimum_order_amount} equivalent. Please add more items before checkout.",
-        )
 
     if not enforced_checkout:
         await require_manual_order_pricing(db)

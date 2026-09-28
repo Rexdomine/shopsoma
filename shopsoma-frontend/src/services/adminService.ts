@@ -1,5 +1,5 @@
 import api from './api';
-import type { User, PaginatedResponse, Product } from '../types';
+import type { User, PaginatedResponse, Product, ProductImage } from '../types';
 
 export interface AdminProductUpdatePayload {
   title?: string;
@@ -9,6 +9,7 @@ export interface AdminProductUpdatePayload {
   compare_at_price?: number | null;
   total_stock?: number;
   status?: Product['status'];
+  shop_edits?: string[];
 }
 
 export interface UserListItem extends User {
@@ -300,6 +301,38 @@ export const adminService = {
   async updateProduct(productId: string, data: AdminProductUpdatePayload): Promise<{ message: string; product_id: string }> {
     const response = await api.put(`/admin/products/${productId}`, data);
     return response.data;
+  },
+
+  async createProductImage(productId: string, data: Omit<ProductImage, 'id' | 'product_id' | 'storage_keys'>): Promise<ProductImage> {
+    const response = await api.post(`/admin/products/${productId}/images`, data);
+    return response.data;
+  },
+
+  async uploadProductImage(productId: string, file: File): Promise<ProductImage> {
+    const formData = new FormData();
+    formData.append('file', file);
+    const response = await api.post(`/admin/products/${productId}/images/upload`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+    return response.data;
+  },
+
+  async updateProductImage(productId: string, imageId: string, data: Partial<ProductImage>): Promise<ProductImage> {
+    const response = await api.patch(`/admin/products/${productId}/images/${imageId}`, data);
+    return response.data;
+  },
+
+  async deleteProductImage(productId: string, imageId: string): Promise<void> {
+    await api.delete(`/admin/products/${productId}/images/${imageId}`);
+  },
+
+  async getProductShopEdits(productId: string): Promise<string[]> {
+    const response = await api.get(`/admin/products/${productId}/shop-edits`);
+    return response.data.shop_edits;
+  },
+
+  async updateProductShopEdits(productId: string, shopEdits: string[]): Promise<void> {
+    await api.put(`/admin/products/${productId}/shop-edits`, { shop_edits: shopEdits });
   },
 
   // List all products with pagination and filters

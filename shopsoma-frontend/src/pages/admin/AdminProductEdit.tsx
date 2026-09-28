@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Save, Loader2 } from 'lucide-react';
+import { ArrowLeft, Save, Loader2, Upload, Trash2, Star, ChevronUp, ChevronDown } from 'lucide-react';
 import { ROUTES } from '../../config/constants';
+import { normalizeProductImageUrl } from '../../utils/productImages';
 import { apiErrorMessage } from '../../utils/apiErrorMessage';
 import { adminService, type AdminProductUpdatePayload } from '../../services/adminService';
 import { useToast } from '../../hooks/useToast';
@@ -17,11 +18,16 @@ export default function AdminProductEdit() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [product, setProduct] = useState<Product | null>(null);
+  const [imageRefreshPending, setImageRefreshPending] = useState(false);
 
   // Form state - Basic Info
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [categoryId, setCategoryId] = useState('');
+  const [shopEdits, setShopEdits] = useState<string[]>([]);
+  const [shopEditsLoaded, setShopEditsLoaded] = useState(false);
+  const [shopEditsLoadError, setShopEditsLoadError] = useState<string | null>(null);
+  const shopEditOptions = ['casual', 'evening', 'party', 'workwear'] as const;
 
   // Form state - Pricing
   const [basePrice, setBasePrice] = useState('');
@@ -55,6 +61,19 @@ export default function AdminProductEdit() {
         setComparePrice(data.compare_at_price?.toString() || '');
         setTotalStock(data.total_stock?.toString() || '0');
         setStatus(data.status);
+
+        // A curation read failure must not block normal product repairs or
+        // replace an association that was never loaded.
+        try {
+          const existingShopEdits = await adminService.getProductShopEdits(id);
+          setShopEdits(Array.isArray(existingShopEdits) ? existingShopEdits : []);
+          setShopEditsLoaded(true);
+          setShopEditsLoadError(null);
+        } catch (shopEditsError) {
+          console.error('Failed to load product Shop Edits', shopEditsError);
+          setShopEditsLoaded(false);
+          setShopEditsLoadError('Shop Edits could not be loaded. Product details can still be saved unchanged.');
+        }
       } catch (err: any) {
         console.error('Failed to load product', err);
         setLoadError(apiErrorMessage(err, 'Failed to load product. Please try again.'));
@@ -93,12 +112,14 @@ export default function AdminProductEdit() {
         compare_at_price: comparePrice ? parseFloat(comparePrice) : null,
         total_stock: totalStock ? parseInt(totalStock) : 0,
         status,
+        ...(shopEditsLoaded ? { shop_edits: shopEdits } : {}),
       };
 
       await adminService.updateProduct(id, updateData);
-
       success(
-        'Product has been updated successfully!',
+        shopEditsLoaded
+          ? 'Product details and Shop Edits have been updated successfully!'
+          : 'Product details were updated. Shop Edits were left unchanged because they could not be loaded.',
         'Product Updated'
       );
 
@@ -114,6 +135,65 @@ export default function AdminProductEdit() {
       );
     } finally {
       setSaving(false);
+    }
+  };
+
+  const refreshProduct = async () => {
+    if (!id) return;
+    const fresh = await adminService.getProduct(id);
+    setProduct(fresh);
+  };
+
+  const refreshImagesSafely = async () => {
+    try {
+      await refreshProduct();
+      setImageRefreshPending(false);
+      return true;
+    } catch {
+      setImageRefreshPending(true);
+      return false;
+    }
+  };
+
+  const handleImageUpload = async (files: FileList | null) => {
+    if (!files || !id) return;
+    try {
+      for (const file of Array.from(files)) {
+        await adminService.uploadProductImage(id, file);
+        await refreshImagesSafely();
+      }
+      success('Product image(s) uploaded');
+    } catch (err: any) {
+      error(apiErrorMessage(err, 'Failed to upload product image'), 'Upload Failed');
+      try { await refreshProduct(); } catch { /* retain last truthful state */ }
+    }
+  };
+
+  const handleImageUpdate = async (imageId: string, changes: { is_primary?: boolean; display_order?: number }) => {
+    if (!id) return;
+    try {
+      await adminService.updateProductImage(id, imageId, changes);
+      if (await refreshImagesSafely()) {
+        success('Product image saved');
+      } else {
+        warning('Product image saved, but refresh is pending.');
+      }
+    } catch (err: any) {
+      error(apiErrorMessage(err, 'Failed to update product image'), 'Image Update Failed');
+    }
+  };
+
+  const handleImageDelete = async (imageId: string) => {
+    if (!id || !window.confirm('Delete this product image?')) return;
+    try {
+      await adminService.deleteProductImage(id, imageId);
+      if (await refreshImagesSafely()) {
+        success('Product image deleted');
+      } else {
+        warning('Product image deleted, but refresh is pending.');
+      }
+    } catch (err: any) {
+      error(apiErrorMessage(err, 'Failed to delete product image'), 'Delete Failed');
     }
   };
 
@@ -219,10 +299,27 @@ export default function AdminProductEdit() {
                   placeholder={product.category_name ? `Current: ${product.category_name}` : 'Paste category UUID'}
                 />
               </div>
+
+              <fieldset>
+                <legend className="block text-sm font-medium text-gray-700 mb-2">Shop Edits</legend>
+                <p className="text-xs text-gray-500 mb-3">Add this product to one or more curated edits without changing its normal category.</p>
+                {shopEditsLoadError && <p role="status" className="mb-3 text-xs text-amber-700">{shopEditsLoadError}</p>}
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                  {shopEditOptions.map((edit) => (
+                    <label key={edit} className="flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-sm capitalize">
+                      <input
+                        type="checkbox"
+                        checked={shopEdits.includes(edit)}
+                        disabled={!shopEditsLoaded}
+                        onChange={(event) => setShopEdits((current) => event.target.checked ? [...current, edit] : current.filter((value) => value !== edit))}
+                      />
+                      {edit}
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
             </div>
           </div>
-
-          {/* Pricing */}
           <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
             <div className="px-6 py-4 border-b border-gray-200">
               <h2 className="text-lg font-semibold text-gray-900">Pricing</h2>
@@ -325,39 +422,44 @@ export default function AdminProductEdit() {
             </div>
           </div>
 
-          {/* Product Images Info */}
-          {product.images && product.images.length > 0 && (
-            <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
-              <div className="px-6 py-4 border-b border-gray-200">
-                <h2 className="text-lg font-semibold text-gray-900">Product Images</h2>
-              </div>
-
-              <div className="p-6">
+          {/* Product Images */}
+          <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
+            <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+              <h2 className="text-lg font-semibold text-gray-900">Product Images</h2>
+              <label className="inline-flex items-center gap-2 px-3 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg cursor-pointer hover:bg-blue-700">
+                <Upload className="h-4 w-4" aria-hidden="true" /> Upload images
+                <input type="file" accept="image/*" multiple className="sr-only" aria-label="Upload product images" onChange={(event) => { void handleImageUpload(event.target.files); event.currentTarget.value = ''; }} />
+              </label>
+            </div>
+            <div className="p-6">
+              {imageRefreshPending && (
+                <div role="status" className="mb-4 flex items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                  <span>Image saved; canonical product refresh is pending.</span>
+                  <button type="button" onClick={() => void refreshImagesSafely()} className="font-medium underline" aria-label="Refresh product images">Refresh</button>
+                </div>
+              )}
+              {(product.images || []).length === 0 ? (
+                <p className="text-sm text-gray-500">No product images yet. Upload one or more images to create the gallery.</p>
+              ) : (
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                  {product.images.map((img, idx) => {
-                    const imageUrl = img.image_url || img.thumbnail_url || '/images/placeholder-product.svg';
+                  {(product.images || []).map((img, idx) => {
+                    const imageUrl = normalizeProductImageUrl(img.image_url) || normalizeProductImageUrl(img.thumbnail_url) || '/images/placeholder-product.svg';
                     return (
-                    <div key={idx} className="relative aspect-square rounded-lg overflow-hidden border border-gray-200">
-                      <img
-                        src={imageUrl}
-                        alt={`Product ${idx + 1}`}
-                        className="w-full h-full object-cover"
-                      />
-                      {img.is_primary && (
-                        <div className="absolute top-2 left-2 bg-blue-600 text-white text-xs px-2 py-1 rounded">
-                          Primary
+                      <div key={img.id} className="relative rounded-lg overflow-hidden border border-gray-200">
+                        <img src={imageUrl} alt={img.alt_text || `Product image ${idx + 1}`} className="aspect-square w-full object-cover" />
+                        <div className="p-2 flex flex-wrap gap-1">
+                          {img.is_primary ? <span className="text-xs font-medium text-blue-700">Primary</span> : <button type="button" onClick={() => void handleImageUpdate(img.id, { is_primary: true })} className="text-xs text-blue-700 underline" aria-label={`Make image ${idx + 1} primary`}><Star className="inline h-3 w-3" aria-hidden="true" /> Make primary</button>}
+                          {!img.is_primary && idx > 0 && <button type="button" onClick={() => void handleImageUpdate(img.id, { display_order: idx - 1 })} className="text-xs text-gray-700" aria-label={`Move image ${idx + 1} up`}><ChevronUp className="inline h-4 w-4" aria-hidden="true" /></button>}
+                          {!img.is_primary && idx < (product.images?.length || 1) - 1 && <button type="button" onClick={() => void handleImageUpdate(img.id, { display_order: idx + 1 })} className="text-xs text-gray-700" aria-label={`Move image ${idx + 1} down`}><ChevronDown className="inline h-4 w-4" aria-hidden="true" /></button>}
+                          <button type="button" onClick={() => void handleImageDelete(img.id)} className="ml-auto text-xs text-red-700 underline" aria-label={`Delete image ${idx + 1}`}><Trash2 className="inline h-3 w-3" aria-hidden="true" /> Delete</button>
                         </div>
-                      )}
-                    </div>
+                      </div>
                     );
                   })}
                 </div>
-                <p className="text-xs text-gray-500 mt-3">
-                  Note: Image management (upload/delete) requires using the vendor product management interface or contacting the vendor directly.
-                </p>
-              </div>
+              )}
             </div>
-          )}
+          </div>
 
           {/* Moderation Notes */}
           {product.moderation_notes && (

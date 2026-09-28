@@ -226,8 +226,9 @@ async def seed_categories():
                             "display_order": 2,
                             "children": [
                                 {"name": "Casual", "slug": "shop-edits-occasion-wear-casual", "description": "Casual edits", "display_order": 1},
-                                {"name": "Workwear", "slug": "shop-edits-occasion-wear-workwear", "description": "Workwear edits", "display_order": 2},
+                                {"name": "Evening", "slug": "shop-edits-occasion-wear-evening", "description": "Evening edits", "display_order": 2},
                                 {"name": "Party", "slug": "shop-edits-occasion-wear-party", "description": "Party edits", "display_order": 3},
+                                {"name": "Workwear", "slug": "shop-edits-occasion-wear-workwear", "description": "Workwear edits", "display_order": 4},
                             ],
                         },
                         {

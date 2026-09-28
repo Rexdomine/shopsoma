@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { ArrowLeft, Edit2, Loader2, Shirt, Package, DollarSign, Tag, Calendar, Eye, Trash2, Copy } from 'lucide-react';
 import VendorSidebar from '../../components/vendor/VendorSidebar';
@@ -11,6 +11,7 @@ import ToastContainer from '../../components/ui/ToastContainer';
 import CurrencySwitcher from '../../components/common/CurrencySwitcher';
 import { useCurrencyStore } from '../../store/currencyStore';
 import { formatPriceWithConversion } from '../../utils/pricing';
+import { getProductImageSources, normalizeProductImageUrl } from '../../utils/productImages';
 
 type VendorSidebarPrimary = 'dashboard' | 'orders' | 'products' | 'collections' | 'marketing' | 'analytics' | 'earnings' | 'settings';
 
@@ -32,6 +33,8 @@ export default function VendorProductView() {
   const [loading, setLoading] = useState(true);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isDuplicating, setIsDuplicating] = useState(false);
+  const duplicatePending = useRef(false);
   const navigationState = location.state as {
     returnTo?: string;
     returnLabel?: string;
@@ -114,24 +117,25 @@ export default function VendorProductView() {
 
   const handleDuplicate = async () => {
     if (!product) return;
-
+    if (duplicatePending.current) return;
+    duplicatePending.current = true;
+    setIsDuplicating(true);
     try {
       const duplicated = await productService.duplicateProduct(product.id);
-      success(
-        'Product duplicated successfully. Redirecting to edit...',
-        'Product Duplicated'
-      );
-
-      // Navigate to edit the duplicated product
-      setTimeout(() => {
-        navigate(`${ROUTES.VENDOR_PRODUCTS}/${duplicated.id}/edit`);
-      }, 1500);
+      success('Product duplicated successfully.', 'Product Duplicated');
+      navigate(`${ROUTES.VENDOR_PRODUCTS}/${duplicated.id}/edit`);
     } catch (err: any) {
-      console.error('Failed to duplicate product', err);
+      const status = err.response?.status;
+      const detail = err.response?.data?.detail;
       error(
-        err.response?.data?.detail || 'Failed to duplicate product',
+        status && status < 500
+          ? (typeof detail === 'string' ? detail : detail?.message) || 'Failed to duplicate product'
+          : 'Duplication outcome is uncertain. Refresh your product list before trying again.',
         'Duplication Failed'
       );
+    } finally {
+      duplicatePending.current = false;
+      setIsDuplicating(false);
     }
   };
 
@@ -163,6 +167,16 @@ export default function VendorProductView() {
       exchangeRates
     );
   };
+
+  // Variation URLs can repeat product originals (whose previews use thumbnails).
+  const seenImageUrls = new Set<string>();
+  const galleryImages = getProductImageSources(product).filter((source) => {
+    const duplicate = seenImageUrls.has(source.src)
+      || Boolean(source.fallbackSrc && seenImageUrls.has(source.fallbackSrc));
+    seenImageUrls.add(source.src);
+    if (source.fallbackSrc) seenImageUrls.add(source.fallbackSrc);
+    return !duplicate;
+  });
 
   const inventoryCount = product.total_stock ?? product.inventory_quantity ?? 0;
   const fulfillmentLabel = product.made_to_order
@@ -229,12 +243,12 @@ export default function VendorProductView() {
                 </div>
                 <div className="p-6">
                   <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
-                    {product.images && product.images.length > 0 ? (
-                      product.images.map((img, index) => (
+                    {galleryImages.length > 0 ? (
+                      galleryImages.map((source, index) => (
                         <div key={index} className="aspect-square rounded-lg overflow-hidden border border-gray-200">
                           <img
-                            src={img.thumbnail_url || img.image_url}
-                            alt={img.alt_text || `Product image ${index + 1}`}
+                            src={source.src || normalizeProductImageUrl('/images/placeholder-product.svg')}
+                            alt={`Product image ${index + 1}`}
                             className="w-full h-full object-cover"
                           />
                         </div>
@@ -507,6 +521,8 @@ export default function VendorProductView() {
                   <button
                     type="button"
                     onClick={handleDuplicate}
+                    disabled={isDuplicating}
+                    aria-busy={isDuplicating}
                     className="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-gray-300 bg-white text-gray-700 px-4 py-2.5 text-sm font-medium hover:bg-gray-50 transition"
                   >
                     <Copy className="h-4 w-4" />

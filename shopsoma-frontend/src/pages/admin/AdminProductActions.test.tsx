@@ -10,6 +10,7 @@ vi.mock('../../store/currencyStore', () => ({ useCurrencyStore: () => ({ current
 vi.mock('../../components/common/CurrencySwitcher', () => ({ default: () => null }));
 vi.mock('../../components/admin/AdminSidebar', () => ({ default: () => null }));
 import AdminProductDetail from './AdminProductDetail';
+import { API_BASE_URL } from '../../config/constants';
 import AdminProductEdit from './AdminProductEdit';
 import AdminProducts, { sameTimestamp } from './AdminProducts';
 
@@ -58,6 +59,33 @@ describe('admin product view/edit API boundaries', () => {
     expect(mocks.put.mock.calls[0][1]).toMatchObject({ category_id: 'category-1', compare_at_price: 18000 });
     expect(mocks.put.mock.calls[0][1]).not.toHaveProperty('moderation_status');
   });
+  it('saves Shop Edits with the product update so the form has one atomic write', async () => {
+    mocks.get.mockImplementation(async (url: string) => {
+      if (url === '/admin/products/product-1') return { data: { ...product } };
+      if (url === '/admin/products/product-1/shop-edits') return { data: { shop_edits: ['party'] } };
+      throw { response: { status: 404 } };
+    });
+    mount('edit');
+    const party = await screen.findByRole('checkbox', { name: 'party' });
+    expect(party).toBeChecked();
+    fireEvent.click(screen.getByRole('checkbox', { name: 'casual' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+    await waitFor(() => expect(mocks.put).toHaveBeenCalledWith(
+      '/admin/products/product-1',
+      expect.objectContaining({ shop_edits: ['party', 'casual'] }),
+    ));
+    expect(mocks.put).not.toHaveBeenCalledWith('/admin/products/product-1/shop-edits', expect.anything());
+  });
+  it('keeps normal editing available when Shop Edits cannot be read', async () => {
+    mount('edit');
+    expect(await screen.findByText(/Shop Edits could not be loaded/)).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'casual' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+    await waitFor(() => expect(mocks.put).toHaveBeenCalledWith(
+      '/admin/products/product-1',
+      expect.not.objectContaining({ shop_edits: expect.anything() }),
+    ));
+  });
   it.each(['view', 'edit'] as const)('%s displays a load failure on the current page instead of redirecting', async mode => {
     mocks.get.mockRejectedValue({ response: { status: 403, data: { detail: 'Admin access required' } } });
     mount(mode);
@@ -77,6 +105,38 @@ describe('admin product view/edit API boundaries', () => {
     expect(screen.getByRole('img', { name: 'Pending linen shirt 3 enlarged' })).toHaveAttribute('src', 'https://cdn.test/three.jpg');
     fireEvent.keyDown(screen.getByRole('dialog', { name: 'Product image viewer' }), { key: 'Escape' });
     expect(screen.queryByRole('dialog', { name: 'Product image viewer' })).toBeNull();
+  });
+
+  it('uses the same ordered, normalized images for the main view, thumbnails and lightbox', async () => {
+    const images = [
+      { id: 'last', image_url: 'https://cdn.test/last.jpg', display_order: 9, is_primary: false },
+      { id: 'middle', image_url: '/uploads/middle.jpg', thumbnail_url: '/uploads/middle-thumb.jpg', display_order: 2, is_primary: false },
+      { id: 'primary', image_url: '/uploads/primary.jpg', display_order: 8, is_primary: true },
+      { id: 'thumb-only', image_url: '', thumbnail_url: '/uploads/only-thumb.jpg', display_order: 3, is_primary: false },
+      { id: 'missing', image_url: '', display_order: 10, is_primary: false },
+    ];
+    mocks.get.mockResolvedValue({ data: { ...product, images } });
+    mount('view');
+    await screen.findByRole('heading', { name: product.title });
+    const origin = API_BASE_URL.replace(/\/api\/v\d+\/?$/, '');
+    const originals = [origin + '/uploads/primary.jpg', origin + '/uploads/middle.jpg', origin + '/uploads/only-thumb.jpg', 'https://cdn.test/last.jpg', '/images/placeholder-product.svg'];
+    const previews = [...originals];
+    previews[1] = origin + '/uploads/middle-thumb.jpg';
+    for (let index = 0; index < originals.length; index += 1) {
+      const button = screen.getByRole('button', { name: `View ${product.title} image ${index + 1}` });
+      expect(within(button).getByRole('img')).toHaveAttribute('src', previews[index]);
+      fireEvent.click(button);
+      expect(screen.getByRole('img', { name: `${product.title} ${index + 1} enlarged` })).toHaveAttribute('src', originals[index]);
+      fireEvent.click(screen.getByRole('button', { name: 'Next image' }));
+      const next = (index + 1) % originals.length;
+      expect(screen.getByRole('img', { name: `${product.title} ${next + 1} enlarged` })).toHaveAttribute('src', originals[next]);
+      fireEvent.keyDown(screen.getByRole('dialog', { name: 'Product image viewer' }), { key: 'ArrowLeft' });
+      expect(screen.getByRole('img', { name: `${product.title} ${index + 1} enlarged` })).toHaveAttribute('src', originals[index]);
+      fireEvent.click(screen.getByRole('button', { name: 'Close image viewer' }));
+    }
+    expect(images.map(image => image.id)).toEqual(['last', 'middle', 'primary', 'thumb-only', 'missing']);
+    fireEvent.error(screen.getByRole('img', { name: product.title }));
+    expect(screen.getByRole('img', { name: product.title })).toHaveAttribute('src', '/images/placeholder-product.svg');
   });
 
   it('renders a single image without thumbnail controls', async () => {
