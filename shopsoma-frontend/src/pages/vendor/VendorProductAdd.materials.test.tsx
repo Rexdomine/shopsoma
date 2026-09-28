@@ -33,8 +33,8 @@ async function mount() {
   return result;
 }
 function selectMaterial(value: string, current = 'Select materials') {
-  fireEvent.click(screen.getByRole('button', { name: current, exact: true }));
-  fireEvent.click(screen.getByRole('button', { name: value, exact: true }));
+  fireEvent.click(screen.getByRole('button', { name: current }));
+  fireEvent.click(screen.getByRole('button', { name: value }));
 }
 function submit(container: HTMLElement) { fireEvent.submit(container.querySelector('form')!); }
 async function fillProduct(container: HTMLElement, mode: 'single' | 'variable') {
@@ -46,7 +46,7 @@ async function fillProduct(container: HTMLElement, mode: 'single' | 'variable') 
   }
   if (mode === 'single') {
     fireEvent.change(screen.getByPlaceholderText('E.g., Black'), { target: { value: 'Black' } });
-    fireEvent.click(screen.getByRole('button', { name: 'M', exact: true }));
+    fireEvent.click(screen.getByRole('button', { name: 'M' }));
   } else {
     fireEvent.click(screen.getByRole('button', { name: 'Variable Product' }));
     fireEvent.click(screen.getByRole('button', { name: 'Add Variation' }));
