@@ -210,6 +210,9 @@ async def test_admin_order_detail_includes_currency_fields(
     assert payload["shipping_address"]["street_address"] == "12 River Trent Close"
     assert payload["items"][0]["currency"] == "USD"
     assert payload["items"][0]["unit_price"] == "300.00"
+    assert payload["dhl_operations"]["packages"] == []
+    assert payload["dhl_operations"]["bookings"] == []
+    assert payload["dhl_operations"]["read_at"]
 
 
 @pytest.mark.asyncio
@@ -452,3 +455,20 @@ async def test_admin_order_detail_excludes_handed_off_ready_packages(
     assert response.status_code == 200
     payload = response.json()
     assert payload["ready_packages"] == []
+
+    operations = payload["dhl_operations"]
+    projected = next(p for p in operations["packages"] if p["package_id"] == str(package.id))
+    assert projected["seal_id"] == str(seal.id)
+    assert projected["intent_id"] == str(_intent.id)
+    assert projected["origin_hub_id"] == str(graph["hub"].id)
+    assert projected["selection_eligible"] is False
+    assert "custody_handed_off" in projected["selection_blockers"]
+
+
+@pytest.mark.asyncio
+async def test_dhl_projection_is_admin_only(client, customer_user, vendor_user):
+    order_id = uuid.uuid4()
+    for headers in ({}, customer_user["headers"], vendor_user["headers"]):
+        response = await client.get(f"/api/v1/admin/orders/{order_id}", headers=headers)
+        assert response.status_code in (401, 403)
+        assert "dhl_operations" not in response.json()
