@@ -99,7 +99,7 @@ class VendorPayoutInfoUpdate(BaseModel):
     """Update vendor payout info during onboarding"""
     tin: Optional[str] = None  # Tax ID Number
     account_type: str = Field(..., min_length=1)  # "Checking", "Savings"
-    bank_name: str = Field(..., min_length=1)
+    bank_name: str = Field(..., min_length=1, max_length=100)
     account_number: str = Field(..., min_length=1)
     account_holder: str = Field(..., min_length=1)
 

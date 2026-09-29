@@ -2,7 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Optional
 from uuid import UUID
 
@@ -16,7 +16,7 @@ router = APIRouter(prefix="/vendor/payment-methods", tags=["Vendor Payment Metho
 class PaymentMethodCreate(BaseModel):
     """Request to create a new payment method"""
     account_type: Optional[str] = None
-    bank_name: str
+    bank_name: str = Field(..., max_length=100)
     account_number: str
     account_holder: str
     tin: Optional[str] = None
