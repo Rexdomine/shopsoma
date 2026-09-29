@@ -1,4 +1,3 @@
-Paperclip: GitHub access unavailable: The managed GitHub identity is incomplete. Continuing without GitHub credentials.
 import { useEffect, useMemo, useState, useRef, type SVGProps } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Bookmark, Minus, Plus, X } from 'lucide-react';
