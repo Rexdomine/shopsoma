@@ -56,7 +56,7 @@ def _literal_assignment(name: str):
 
 def test_lane_3d_has_linear_phase_2b_child() -> None:
     graph = scripts()
-    assert graph.get_heads() == ["v5w6x7y8z9a0"]
+    assert graph.get_heads() == ["w6x7y8z9a0b1"]
     assert graph.get_revision("3d4e5f6a7b8c").down_revision == "n1o2p3q4r5s6"
     assert graph.get_revision("n1o2p3q4r5s6").down_revision == "m0n1o2p3q4r5"
     assert graph.get_revision("1c2b3d4e").down_revision == "e6f7a8b9c0d1"
@@ -276,13 +276,13 @@ def test_lane_3d_real_hermetic_postgresql_migration_cycle() -> None:
     database = f"shopsoma_lane3d_{uuid.uuid4().hex[:12]}"
     database_url = base_url.set(
         drivername=sync_driver, database=database
-    ).render_as_string(hide_password=False)
+    ).render_as_string(hide_password=***REDACTED***
     admin = create_engine(admin_url, isolation_level="AUTOCOMMIT")
     with admin.connect() as connection:
         connection.execute(text(f'CREATE DATABASE "{database}"'))
     try:
         env = os.environ.copy()
-        env.update(DATABASE_URL=database_url, SECRET_KEY="lane3d-migration-test-secret")
+        env.update(DATABASE_URL=database_url, SECRET_KEY="***REDACTED***")
 
         def migrate(command: str, revision: str) -> None:
             result = subprocess.run(

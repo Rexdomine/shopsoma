@@ -27,7 +27,7 @@ def _scripts() -> ScriptDirectory:
 
 def test_lane_3c_has_linear_lane_3d_and_phase_2b_descendants() -> None:
     scripts = _scripts()
-    assert scripts.get_heads() == ["v5w6x7y8z9a0"]
+    assert scripts.get_heads() == ["w6x7y8z9a0b1"]
     assert scripts.get_revision("3d4e5f6a7b8c").down_revision == "n1o2p3q4r5s6"
     assert scripts.get_revision("k7l8m9n0p1q2").down_revision == "1c2b3d4e"
     assert scripts.get_revision("1c2b3d4e").down_revision == "e6f7a8b9c0d1"
@@ -243,13 +243,13 @@ def test_lane_3c_real_hermetic_postgresql_migration_cycle() -> None:
     database = f"lane3c_cycle_{uuid.uuid4().hex}"
     database_url = base_url.set(
         drivername=sync_driver, database=database
-    ).render_as_string(hide_password=False)
+    ).render_as_string(hide_password=***REDACTED***
     admin = create_engine(admin_url, isolation_level="AUTOCOMMIT")
     try:
         with admin.connect() as connection:
             connection.execute(text(f'CREATE DATABASE "{database}"'))
         env = os.environ.copy()
-        env.update(DATABASE_URL=database_url, SECRET_KEY="lane3c-migration-test-secret")
+        env.update(DATABASE_URL=database_url, SECRET_KEY="***REDACTED***")
 
         def migrate(command: str, revision: str) -> None:
             result = subprocess.run(
