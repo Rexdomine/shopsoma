@@ -1,3 +1,4 @@
+Paperclip: GitHub access unavailable: The managed GitHub identity is incomplete. Continuing without GitHub credentials.
 import { useEffect, useMemo, useState, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { ROUTES } from '../../config/constants';
@@ -105,6 +106,7 @@ export default function BrandInfoSettings() {
   const [autoTimeline, setAutoTimeline] = useState('');
   const [accountType, setAccountType] = useState('');
   const [bankName, setBankName] = useState('');
+  const [otherBankName, setOtherBankName] = useState('');
   const [accountNumber, setAccountNumber] = useState('');
   const [accountHolder, setAccountHolder] = useState('');
   const [paymentMethodsList, setPaymentMethodsList] = useState<PaymentMethod[]>([]);
@@ -150,6 +152,7 @@ export default function BrandInfoSettings() {
     { label: 'Guaranty Trust Bank (GTBank)', value: 'Guaranty Trust Bank' },
     { label: 'Keystone Bank', value: 'Keystone Bank' },
     { label: 'Polaris Bank', value: 'Polaris Bank' },
+    { label: 'Providus Bank', value: 'Providus Bank' },
     { label: 'Stanbic IBTC Bank', value: 'Stanbic IBTC Bank' },
     { label: 'Standard Chartered', value: 'Standard Chartered' },
     { label: 'Sterling Bank', value: 'Sterling Bank' },
@@ -158,6 +161,7 @@ export default function BrandInfoSettings() {
     { label: 'Unity Bank', value: 'Unity Bank' },
     { label: 'Wema Bank', value: 'Wema Bank' },
     { label: 'Zenith Bank', value: 'Zenith Bank' },
+    { label: 'Other', value: 'Other' },
   ], []);
 
   // Fetch payment methods
@@ -367,11 +371,13 @@ export default function BrandInfoSettings() {
     setSaving(true);
     setMessage(null);
     try {
+      const resolvedBankName = bankName === 'Other' ? otherBankName.trim() : bankName;
+
       // Create payment method via new API
-      if (bankName && accountNumber && accountHolder) {
+      if (resolvedBankName && accountNumber && accountHolder) {
         const paymentMethodData: PaymentMethodCreate = {
           account_type: accountType || undefined,
-          bank_name: bankName,
+          bank_name: resolvedBankName,
           account_number: accountNumber,
           account_holder: accountHolder,
           tin: tin || undefined,
@@ -386,6 +392,7 @@ export default function BrandInfoSettings() {
         // Clear form
         setAccountType('');
         setBankName('');
+        setOtherBankName('');
         setAccountNumber('');
         setAccountHolder('');
         setTin('');
@@ -395,7 +402,7 @@ export default function BrandInfoSettings() {
       const payoutData: PayoutInfoData = {
         tin: tin || undefined,
         account_type: accountType,
-        bank_name: bankName || 'N/A',
+        bank_name: resolvedBankName || 'N/A',
         account_number: accountNumber || '0000000000',
         account_holder: accountHolder || 'N/A',
       };
@@ -935,12 +942,28 @@ export default function BrandInfoSettings() {
                               <label className="text-sm font-ui text-gray-700">Bank Name</label>
                               <CustomSelect
                                 value={bankName}
-                                onChange={setBankName}
+                                onChange={(value) => {
+                                  setBankName(value);
+                                  if (value !== 'Other') setOtherBankName('');
+                                }}
                                 options={nigerianBanks}
                                 placeholder="Select bank"
                               />
                             </div>
                           </div>
+
+                          {bankName === 'Other' && (
+                            <div className="space-y-2">
+                              <label className="text-sm font-ui text-gray-700">Bank Name</label>
+                              <input
+                                type="text"
+                                value={otherBankName}
+                                onChange={(e) => setOtherBankName(e.target.value)}
+                                placeholder="Enter your bank name"
+                                className="w-full border border-gray-200 rounded-xl px-4 py-3 bg-white text-gray-700 focus:outline-none focus:border-[#105E53]"
+                              />
+                            </div>
+                          )}
 
                           <div className="space-y-2">
                             <label className="text-sm font-ui text-gray-700">Account Number</label>
@@ -969,7 +992,7 @@ export default function BrandInfoSettings() {
 
                           <button
                             type="submit"
-                            disabled={saving || !bankName || !accountNumber || !accountHolder}
+                            disabled={saving || !bankName || (bankName === 'Other' && !otherBankName.trim()) || !accountNumber || !accountHolder}
                             className="w-full py-3 rounded-full bg-[#105E53] text-white font-ui text-sm tracking-[0.08em] hover:bg-[#0c4c45] transition disabled:opacity-60 disabled:cursor-not-allowed"
                           >
                             {saving ? 'Adding…' : 'Add Payment Method'}
