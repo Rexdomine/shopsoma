@@ -1,4 +1,3 @@
-Paperclip: GitHub access unavailable: The managed GitHub identity is incomplete. Continuing without GitHub credentials.
 import { useEffect, useMemo, useState, useRef, type SVGProps } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Bookmark, Minus, Plus, X } from 'lucide-react';
@@ -117,7 +116,7 @@ export default function ProductDetail() {
         loadRelatedProducts(data.vendor_id, data.id);
 
         // Check if product is in wishlist (only if user is logged in)
-        const token = localStorage.getItem(STORAGE_KEYS.ACCESS_TOKEN);
+        const token = ***REDACTED***
         if (token) {
           checkWishlistStatus(data.id);
         }
@@ -463,7 +462,7 @@ export default function ProductDetail() {
     if (!product) return;
 
     // Check if user is logged in
-    const token = localStorage.getItem(STORAGE_KEYS.ACCESS_TOKEN);
+    const token = ***REDACTED***
     console.log('Token exists:', !!token);
 
     if (!token) {
@@ -513,8 +512,8 @@ export default function ProductDetail() {
     try {
       if (navigator.share) {
         await navigator.share(shareData);
-      } else if (navigator.clipboard && navigator.clipboard.writeText) {
-        await navigator.clipboard.writeText(shareUrl);
+      } else if (navigator.clipboard && ***REDACTED***) {
+        await ***REDACTED***(shareUrl);
         alert('Product link copied to clipboard');
       } else {
         alert('Sharing is not supported in this browser.');

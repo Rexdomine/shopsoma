@@ -1,4 +1,3 @@
-Paperclip: GitHub access unavailable: The managed GitHub identity is incomplete. Continuing without GitHub credentials.
 import { API_BASE_URL } from '../config/constants';
 import type { Product } from '../types';
 

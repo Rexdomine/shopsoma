@@ -1,4 +1,3 @@
-Paperclip: GitHub access unavailable: The managed GitHub identity is incomplete. Continuing without GitHub credentials.
 import { beforeEach, describe, expect, it } from 'vitest';
 import { getProductImageSource, getProductImageSources, normalizeProductImageUrl } from './productImages';
 import type { Product } from '../types';
