@@ -6,6 +6,8 @@ export interface ProductImageSource {
   fallbackSrc?: string;
 }
 
+export type ProductImageQuality = 'thumbnail' | 'high';
+
 export function normalizeProductImageUrl(url?: string | null) {
   const value = url?.trim();
   if (!value || value === 'undefined' || value === 'null') {
@@ -21,7 +23,10 @@ export function normalizeProductImageUrl(url?: string | null) {
   return value;
 }
 
-export function getProductImageSources(product: Product): ProductImageSource[] {
+export function getProductImageSources(
+  product: Product,
+  quality: ProductImageQuality = 'thumbnail',
+): ProductImageSource[] {
   const productSources: ProductImageSource[] = [...(product.images ?? [])]
     .sort((a, b) => {
       if (a.is_primary !== b.is_primary) {
@@ -35,9 +40,12 @@ export function getProductImageSources(product: Product): ProductImageSource[] {
       if (!thumbnail && !original) {
         return sources;
       }
+      const useHighQuality = quality === 'high';
       sources.push({
-        src: thumbnail || original,
-        fallbackSrc: thumbnail && original && thumbnail !== original ? original : undefined,
+        src: (useHighQuality ? original || thumbnail : thumbnail || original),
+        fallbackSrc: useHighQuality
+          ? original && thumbnail && original !== thumbnail ? thumbnail : undefined
+          : thumbnail && original && thumbnail !== original ? original : undefined,
       });
       return sources;
     }, []);
@@ -51,6 +59,9 @@ export function getProductImageSources(product: Product): ProductImageSource[] {
   return [...productSources, ...variationSources];
 }
 
-export function getProductImageSource(product: Product): ProductImageSource | null {
-  return getProductImageSources(product)[0] ?? null;
+export function getProductImageSource(
+  product: Product,
+  quality: ProductImageQuality = 'thumbnail',
+): ProductImageSource | null {
+  return getProductImageSources(product, quality)[0] ?? null;
 }
