@@ -16,8 +16,8 @@ import type { Currency } from '../../store/currencyStore';
 // US Sizing: Letter sizes (XXS-XXXL)
 // UK Sizing: Numeric sizes (4-22)
 // EU Sizing: Numeric sizes (32-50)
-type SizeOption = 'XXXL' | 'XXL' | 'XL' | 'L' | 'M' | 'S' | 'XS' | 'XXS' | '4' | '6' | '8' | '10' | '12' | '14' | '16' | '18' | '20' | '22' | '32' | '34' | '36' | '38' | '40' | '42' | '44' | '46' | '48' | '50';
-type SizingSystem = 'US Sizing' | 'UK Sizing' | 'EU Sizing';
+type SizeOption = 'One/Size' | 'XXXL' | 'XXL' | 'XL' | 'L' | 'M' | 'S' | 'XS' | 'XXS' | '4' | '6' | '8' | '10' | '12' | '14' | '16' | '18' | '20' | '22' | '32' | '34' | '36' | '38' | '40' | '42' | '44' | '46' | '48' | '50';
+type SizingSystem = 'One/Size' | 'US Sizing' | 'UK Sizing' | 'EU Sizing';
 type VariationMode = 'Size' | 'Color';
 
 const SIZE_STOCK_OPTIONS = new Set<SizeOption>(['XXXL', 'XXL', 'XL', 'L', 'M', 'S', 'XS', 'XXS']);
@@ -204,12 +204,13 @@ export default function VendorProductAdd() {
 
   // E-commerce standard size mappings
   const SIZE_MAPPINGS: Record<SizingSystem, SizeOption[]> = {
+    'One/Size': ['One/Size'],
     'US Sizing': ['XXS', 'XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL'],
     'UK Sizing': ['4', '6', '8', '10', '12', '14', '16', '18', '20', '22'],
     'EU Sizing': ['32', '34', '36', '38', '40', '42', '44', '46', '48', '50']
   };
 
-  const sizingSystems: SizingSystem[] = ['US Sizing', 'UK Sizing', 'EU Sizing'];
+  const sizingSystems: SizingSystem[] = ['One/Size', 'US Sizing', 'UK Sizing', 'EU Sizing'];
 
   // Available sizes based on selected sizing system
   const availableSizes = SIZE_MAPPINGS[sizingSystem];
@@ -1654,6 +1655,7 @@ export default function VendorProductAdd() {
                                 type="button"
                                 onClick={() => {
                                   setSizingSystem(system);
+                                  setSelectedSizes(system === 'One/Size' ? ['One/Size'] : []);
                                   setShowSizingDropdown(false);
                                 }}
                                 className="w-full px-4 py-3 text-left text-sm text-gray-700 hover:bg-gray-50"
@@ -1668,24 +1670,30 @@ export default function VendorProductAdd() {
 
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-3">
-                        Select Available Sizes *
+                        Select Available Sizes {sizingSystem !== 'One/Size' && '*'}
                       </label>
-                      <div className="flex flex-wrap gap-2">
-                        {availableSizes.map((size) => (
-                          <button
-                            key={size}
-                            type="button"
-                            className={`px-4 py-2 border rounded-lg text-sm font-medium transition ${
-                              selectedSizes.includes(size)
-                                ? 'bg-[#105E53] text-white border-[#105E53]'
-                                : 'border-gray-300 hover:border-[#105E53] hover:bg-[#105E53]/5'
-                            }`}
-                            onClick={() => toggleSize(size)}
-                          >
-                            {size}
-                          </button>
-                        ))}
-                      </div>
+                      {sizingSystem === 'One/Size' ? (
+                        <p className="rounded-lg border border-[#105E53]/20 bg-[#105E53]/5 px-4 py-3 text-sm font-medium text-[#105E53]">
+                          One/Size selected — no additional size selection is needed.
+                        </p>
+                      ) : (
+                        <div className="flex flex-wrap gap-2">
+                          {availableSizes.map((size) => (
+                            <button
+                              key={size}
+                              type="button"
+                              className={`px-4 py-2 border rounded-lg text-sm font-medium transition ${
+                                selectedSizes.includes(size)
+                                  ? 'bg-[#105E53] text-white border-[#105E53]'
+                                  : 'border-gray-300 hover:border-[#105E53] hover:bg-[#105E53]/5'
+                              }`}
+                              onClick={() => toggleSize(size)}
+                            >
+                              {size}
+                            </button>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -2157,7 +2165,7 @@ export default function VendorProductAdd() {
                                   type="button"
                                   onClick={() => {
                                     setVariationSizingSystem(system);
-                                    setVariationSelectedSizes([]);
+                                    setVariationSelectedSizes(system === 'One/Size' ? ['One/Size'] : []);
                                     setVariationSizeStock({} as Record<SizeOption, string>);
                                     setShowSizingDropdown(false);
                                   }}
@@ -2174,25 +2182,31 @@ export default function VendorProductAdd() {
                       {/* Select Available Sizes */}
                       <div>
                         <label className="block text-sm font-medium text-gray-700 mb-3">
-                          Select Available Sizes *
+                          Select Available Sizes {variationSizingSystem !== 'One/Size' && '*'}
                         </label>
-                        <div className="flex flex-wrap gap-2">
-                          {SIZE_MAPPINGS[variationSizingSystem].map((size) => (
-                            <button
-                              key={size}
-                              type="button"
-                              disabled={variationType === 'Color'}
-                              className={`px-4 py-2 border rounded-lg text-sm font-medium transition ${
-                                variationSelectedSizes.includes(size)
-                                  ? 'bg-[#105E53] text-white border-[#105E53]'
-                                  : 'border-gray-300 hover:border-[#105E53] hover:bg-[#105E53]/5'
-                              } disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:border-gray-300 disabled:hover:bg-transparent`}
-                              onClick={() => toggleVariationSize(size)}
-                            >
-                              {size}
-                            </button>
-                          ))}
-                        </div>
+                        {variationSizingSystem === 'One/Size' ? (
+                          <p className="rounded-lg border border-[#105E53]/20 bg-[#105E53]/5 px-4 py-3 text-sm font-medium text-[#105E53]">
+                            One/Size selected — no additional size selection is needed.
+                          </p>
+                        ) : (
+                          <div className="flex flex-wrap gap-2">
+                            {SIZE_MAPPINGS[variationSizingSystem].map((size) => (
+                              <button
+                                key={size}
+                                type="button"
+                                disabled={variationType === 'Color'}
+                                className={`px-4 py-2 border rounded-lg text-sm font-medium transition ${
+                                  variationSelectedSizes.includes(size)
+                                    ? 'bg-[#105E53] text-white border-[#105E53]'
+                                    : 'border-gray-300 hover:border-[#105E53] hover:bg-[#105E53]/5'
+                                } disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:border-gray-300 disabled:hover:bg-transparent`}
+                                onClick={() => toggleVariationSize(size)}
+                              >
+                                {size}
+                              </button>
+                            ))}
+                          </div>
+                        )}
                       </div>
 
                       {/* Stock for each size */}
@@ -2200,22 +2214,26 @@ export default function VendorProductAdd() {
                         <label className="block text-sm font-medium text-gray-700 mb-3">
                           Stock per Size
                         </label>
-                        <div className="grid grid-cols-4 gap-3">
-                          {SIZE_MAPPINGS[variationSizingSystem].map((size) => (
-                            <div key={size}>
-                              <label className="block text-xs text-gray-500 mb-1">{size}</label>
-                              <input
-                                type="number"
-                                min="0"
-                                placeholder="0"
-                                value={variationSizeStock[size] || ''}
-                                onChange={(e) => handleVariationStockChange(size, e.target.value)}
-                                disabled={variationType === 'Color' || madeToOrder}
-                                className="w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20 disabled:opacity-50 disabled:cursor-not-allowed"
-                              />
-                            </div>
-                          ))}
-                        </div>
+                        {variationSizingSystem === 'One/Size' ? (
+                          <p className="text-xs text-gray-500">Use the product stock amount for this one-size variation.</p>
+                        ) : (
+                          <div className="grid grid-cols-4 gap-3">
+                            {SIZE_MAPPINGS[variationSizingSystem].map((size) => (
+                              <div key={size}>
+                                <label className="block text-xs text-gray-500 mb-1">{size}</label>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  placeholder="0"
+                                  value={variationSizeStock[size] || ''}
+                                  onChange={(e) => handleVariationStockChange(size, e.target.value)}
+                                  disabled={variationType === 'Color' || madeToOrder}
+                                  className="w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                                />
+                              </div>
+                            ))}
+                          </div>
+                        )}
                         {madeToOrder && (
                           <p className="mt-2 text-xs text-gray-500">
                             Size-level inventory is disabled for made-to-order products.
@@ -2380,7 +2398,3 @@ export default function VendorProductAdd() {
         isOpen={showCollectionModal}
         onClose={() => setShowCollectionModal(false)}
         onCollectionCreated={handleCollectionCreated}
-      />
-    </div>
-  );
-}
