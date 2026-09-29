@@ -10,6 +10,8 @@ import { useVendor } from '../../context/VendorContext';
 import { useAuth } from '../../context/AuthContext';
 import { normalizeProductImageUrl } from '../../utils/productImages';
 
+const BANK_NAME_MAX_LENGTH = 100;
+
 type Contact = { phone: string; email: string };
 type Address = { country: string; address: string };
 type SelectOption = { label: string; value: string };
@@ -371,6 +373,11 @@ export default function BrandInfoSettings() {
     setMessage(null);
     try {
       const resolvedBankName = bankName === 'Other' ? otherBankName.trim() : bankName;
+
+      if (resolvedBankName.length > BANK_NAME_MAX_LENGTH) {
+        setMessage('Bank name must be 100 characters or fewer.');
+        return;
+      }
 
       // Create payment method via new API
       if (resolvedBankName && accountNumber && accountHolder) {
@@ -957,6 +964,7 @@ export default function BrandInfoSettings() {
                               <input
                                 type="text"
                                 value={otherBankName}
+                                maxLength={BANK_NAME_MAX_LENGTH}
                                 onChange={(e) => setOtherBankName(e.target.value)}
                                 placeholder="Enter your bank name"
                                 className="w-full border border-gray-200 rounded-xl px-4 py-3 bg-white text-gray-700 focus:outline-none focus:border-[#105E53]"
