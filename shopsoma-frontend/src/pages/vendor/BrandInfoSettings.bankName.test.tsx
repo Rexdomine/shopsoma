@@ -20,7 +20,7 @@ vi.mock('../../services/vendorService', () => ({ vendorService: { savePayoutInfo
 async function openForm(bank = 'Other') {
   render(<MemoryRouter initialEntries={[ROUTES.VENDOR_PAYOUT_INFO]}><BrandInfoSettings /></MemoryRouter>);
   fireEvent.click(await screen.findByRole('button', { name: 'Select bank' }));
-  fireEvent.click(screen.getByRole('button', { name: bank, exact: true }));
+  fireEvent.click(screen.getByRole('button', { name: bank }));
   fireEvent.change(screen.getByPlaceholderText('Enter your account number'), { target: { value: '1234567890' } });
   fireEvent.change(screen.getByPlaceholderText('Account holder name'), { target: { value: 'Test Vendor' } });
 }
