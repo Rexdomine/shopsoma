@@ -1,3 +1,4 @@
+Paperclip: GitHub access unavailable: The managed GitHub identity is incomplete. Continuing without GitHub credentials.
 import { useEffect, useMemo, useState, useRef, type SVGProps } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Bookmark, Minus, Plus, X } from 'lucide-react';
@@ -96,7 +97,7 @@ export default function ProductDetail() {
         setLoading(true);
         const data = await productService.getProduct(id);
         setProduct(data);
-        setSelectedImage(getProductImageSources(data)[0]?.src ?? null);
+        setSelectedImage(getProductImageSources(data, 'high')[0]?.src ?? null);
 
         // Reset selections when product changes
         setSelectedColor(null);
@@ -138,7 +139,7 @@ export default function ProductDetail() {
 
     if (!product || !normalizedColor) {
       // If no color selected, use default product images
-      const defaultImage = product ? getProductImageSources(product)[0]?.src : null;
+      const defaultImage = product ? getProductImageSources(product, 'high')[0]?.src : null;
       if (defaultImage) {
         setSelectedImage(defaultImage);
       }
@@ -160,7 +161,7 @@ export default function ProductDetail() {
       }
     } else {
       // Fallback to product's default images if variation has no images
-      const defaultImage = getProductImageSources(product)[0]?.src;
+      const defaultImage = getProductImageSources(product, 'high')[0]?.src;
       if (defaultImage) {
         setSelectedImage(defaultImage);
       }
@@ -547,7 +548,7 @@ export default function ProductDetail() {
   const getDisplayImages = (): GalleryImage[] => {
     if (!product) return [];
 
-    return getProductImageSources(product).map((image, index) => ({
+    return getProductImageSources(product, 'high').map((image, index) => ({
       id: `${product.id}-gallery-${index}-${image.src}`,
       src: image.src,
       fallbackSrc: image.fallbackSrc,

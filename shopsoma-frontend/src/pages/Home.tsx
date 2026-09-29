@@ -1,3 +1,4 @@
+Paperclip: GitHub access unavailable: The managed GitHub identity is incomplete. Continuing without GitHub credentials.
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import Layout from '../components/layout/Layout';
@@ -388,7 +389,7 @@ type FeaturedCollabProps = {
 };
 
 function FeaturedCollab({ product }: FeaturedCollabProps) {
-  const image = getProductImageSource(product);
+  const image = getProductImageSource(product, 'high');
   const imageUrl = image?.src || IMAGE_CONFIG.PLACEHOLDER;
   const title = product.title;
   const description = product.description || '';
@@ -680,7 +681,7 @@ export default function Home() {
   }, [featuredProducts, rotationMinutes]);
 
   const featuredProduct = featuredProducts[featuredIndex];
-  const featuredImage = featuredProduct ? getProductImageSource(featuredProduct) : null;
+  const featuredImage = featuredProduct ? getProductImageSource(featuredProduct, 'high') : null;
   const featuredImageUrl = featuredImage?.src || '';
   const showFeaturedSkeleton =
     featuredLoading ||

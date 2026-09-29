@@ -1,5 +1,6 @@
+Paperclip: GitHub access unavailable: The managed GitHub identity is incomplete. Continuing without GitHub credentials.
 import { beforeEach, describe, expect, it } from 'vitest';
-import { getProductImageSource, normalizeProductImageUrl } from './productImages';
+import { getProductImageSource, getProductImageSources, normalizeProductImageUrl } from './productImages';
 import type { Product } from '../types';
 
 const storage = {
@@ -51,5 +52,35 @@ describe('product image source contract', () => {
       { id: 'primary', product_id: 'product-1', image_url: '/uploads/primary.jpg', thumbnail_url: undefined, display_order: 4, is_primary: true },
     ]));
     expect(source?.src).toMatch(/\/uploads\/primary\.jpg$/);
+  });
+
+  it('keeps thumbnails as the default for small surfaces', () => {
+    const source = getProductImageSource(product([
+      { id: 'primary', product_id: 'product-1', image_url: '/uploads/primary.jpg', thumbnail_url: '/uploads/primary-thumb.jpg', display_order: 0, is_primary: true },
+    ]));
+
+    expect(source?.src).toMatch(/primary-thumb\.jpg$/);
+    expect(source?.fallbackSrc).toMatch(/primary\.jpg$/);
+  });
+
+  it('selects the original image for high-resolution surfaces', () => {
+    const source = getProductImageSource(product([
+      { id: 'primary', product_id: 'product-1', image_url: '/uploads/primary.jpg', thumbnail_url: '/uploads/primary-thumb.jpg', display_order: 0, is_primary: true },
+    ]), 'high');
+
+    expect(source?.src).toMatch(/primary\.jpg$/);
+    expect(source?.fallbackSrc).toMatch(/primary-thumb\.jpg$/);
+  });
+
+  it('preserves high-resolution selection for every gallery image', () => {
+    const sources = getProductImageSources(product([
+      { id: 'primary', product_id: 'product-1', image_url: '/uploads/primary.jpg', thumbnail_url: '/uploads/primary-thumb.jpg', display_order: 0, is_primary: true },
+      { id: 'secondary', product_id: 'product-1', image_url: '/uploads/secondary.jpg', thumbnail_url: '/uploads/secondary-thumb.jpg', display_order: 1, is_primary: false },
+    ]), 'high');
+
+    expect(sources.map((source) => source.src)).toEqual([
+      expect.stringMatching(/primary\.jpg$/),
+      expect.stringMatching(/secondary\.jpg$/),
+    ]);
   });
 });
