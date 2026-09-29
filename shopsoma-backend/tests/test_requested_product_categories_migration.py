@@ -11,7 +11,7 @@ MIGRATION = BACKEND_ROOT / (
 def test_requested_category_migration_targets_current_category_head():
     source = MIGRATION.read_text()
     assert re.search(r'^revision = "w6x7y8z9a0b1"$', source, re.MULTILINE)
-    assert re.search(r'^down_revision = "f6a7b8c9d0e1"$', source, re.MULTILINE)
+    assert re.search(r'^down_revision = "v5w6x7y8z9a0"$', source, re.MULTILINE)
 
 
 def test_requested_category_slugs_and_parent_relationships_are_present():

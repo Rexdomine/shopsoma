@@ -1,7 +1,7 @@
 """add requested product category hierarchy
 
 Revision ID: w6x7y8z9a0b1
-Revises: f6a7b8c9d0e1
+Revises: v5w6x7y8z9a0
 Create Date: 2026-09-29 00:00:00.000000
 """
 
@@ -11,7 +11,7 @@ import uuid
 
 
 revision = "w6x7y8z9a0b1"
-down_revision = "f6a7b8c9d0e1"
+down_revision = "v5w6x7y8z9a0"
 branch_labels = None
 depends_on = None
 
