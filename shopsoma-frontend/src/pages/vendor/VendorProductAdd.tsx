@@ -2398,3 +2398,7 @@ export default function VendorProductAdd() {
         isOpen={showCollectionModal}
         onClose={() => setShowCollectionModal(false)}
         onCollectionCreated={handleCollectionCreated}
+      />
+    </div>
+  );
+}
