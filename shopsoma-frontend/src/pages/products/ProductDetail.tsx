@@ -116,8 +116,7 @@ export default function ProductDetail() {
         loadRelatedProducts(data.vendor_id, data.id);
 
         // Check if product is in wishlist (only if user is logged in)
-        const token = ***REDACTED***
-        if (token) {
+        const token = ***REDACTED***        if (token) {
           checkWishlistStatus(data.id);
         }
       } catch (err) {
@@ -462,8 +461,7 @@ export default function ProductDetail() {
     if (!product) return;
 
     // Check if user is logged in
-    const token = ***REDACTED***
-    console.log('Token exists:', !!token);
+    const token = ***REDACTED***    console.log('Token exists:', !!token);
 
     if (!token) {
       // Redirect to login page
