@@ -87,7 +87,10 @@ def upgrade():
 
     # The original schema made names globally unique. Slugs are the stable
     # identifier, while the same display name can be valid in separate trees.
-    op.drop_constraint("categories_name_key", "categories", type_="unique")
+    # The downgrade intentionally leaves this constraint absent because the
+    # requested hierarchy contains duplicate display names under separate
+    # parents. Make re-upgrades safe after that downgrade path.
+    op.execute("ALTER TABLE categories DROP CONSTRAINT IF EXISTS categories_name_key")
 
     men_id = _find_category(conn, "Men", "men", None)
     women_id = _find_category(conn, "Women", "women", None)

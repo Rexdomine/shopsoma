@@ -35,3 +35,8 @@ def test_category_model_allows_duplicate_display_names():
     source = (BACKEND_ROOT / "app/models/category.py").read_text()
     assert 'name = Column(String(100), nullable=False)' in source
     assert 'name = Column(String(100), unique=True' not in source
+
+
+def test_requested_category_migration_can_reupgrade_after_downgrade():
+    source = MIGRATION.read_text()
+    assert "DROP CONSTRAINT IF EXISTS categories_name_key" in source
