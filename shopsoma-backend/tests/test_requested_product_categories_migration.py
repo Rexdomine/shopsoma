@@ -18,6 +18,7 @@ def test_requested_category_slugs_and_parent_relationships_are_present():
     source = MIGRATION.read_text()
     for slug in (
         "men-activewear-accessories",
+        "women-activewear-accessories",
         "men-sets",
         "men-sets-trouser-sets",
         "women-sets",

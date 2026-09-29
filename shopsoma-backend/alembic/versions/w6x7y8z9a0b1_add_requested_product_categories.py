@@ -107,6 +107,16 @@ def upgrade():
             3,
         )
 
+    women_activewear_id = _find_category(conn, "Women's Activewear", "women-activewear", women_id)
+    if women_activewear_id:
+        _ensure_category(
+            conn,
+            "Activewear Accessories",
+            "women-activewear-accessories",
+            women_activewear_id,
+            3,
+        )
+
     mens_sets_id = _ensure_category(conn, "Men's Sets", "men-sets", men_id, 4)
     _ensure_category(conn, "Trouser Sets", "men-sets-trouser-sets", mens_sets_id, 1)
 
