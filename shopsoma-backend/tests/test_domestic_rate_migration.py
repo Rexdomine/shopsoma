@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 ROOT = Path(__file__).resolve().parents[1]
 HEAD = "v5w6x7y8z9a0"
+CURRENT_HEAD = "w6x7y8z9a0b1"
 CURRENT_HEAD_PARENT = "l9m0n1o2p3q4"
 FEATURED_VENDOR_MIGRATION = ROOT / "alembic" / "versions" / "n1o2p3q4r5s6_add_admin_featured_storefront_vendor.py"
 PREVIOUS_HEAD = "d5e6f7a8b9c0"
@@ -63,7 +64,7 @@ async def _seed_valid_outbound_intent(database_url: str) -> uuid.UUID:
             customer = User(
                 id=uuid.uuid4(),
                 email=f"rate-customer-{uuid.uuid4().hex}@example.test",
-                hashed_password="not-used",
+                hashed_password="***REDACTED***",
                 full_name="Rate Migration Customer",
                 role=UserRole.CUSTOMER,
                 email_verified=True,
@@ -72,7 +73,7 @@ async def _seed_valid_outbound_intent(database_url: str) -> uuid.UUID:
             operator = User(
                 id=uuid.uuid4(),
                 email=f"rate-operator-{uuid.uuid4().hex}@example.test",
-                hashed_password="not-used",
+                hashed_password="***REDACTED***",
                 full_name="Rate Migration Operator",
                 role=UserRole.VENDOR,
                 email_verified=True,
@@ -156,7 +157,7 @@ def _literal(name: str, revision_id: str = REVISION):
 
 def test_domestic_rate_migration_is_the_single_linear_static_head() -> None:
     graph = _scripts()
-    assert graph.get_heads() == [HEAD]
+    assert graph.get_heads() == [CURRENT_HEAD]
     head_revision = graph.get_revision(HEAD)
     assert head_revision is not None
     assert head_revision.revision == HEAD
@@ -223,7 +224,7 @@ def test_domestic_rate_lease_checks_and_functions_have_exact_model_parity() -> N
 
     all_constraints = {
         constraint.name: str(constraint.sqltext.compile(dialect=postgresql.dialect()))
-        for constraint in DomesticRateAttempt.__table__.constraints
+        for constraint in ***REDACTED***
         if isinstance(constraint, CheckConstraint) and constraint.name
     }
     constraints = {
@@ -340,13 +341,13 @@ async def test_domestic_rate_real_upgrade_downgrade_upgrade_cycle() -> None:
     database = f"shopsoma_rate_cycle_{uuid.uuid4().hex[:12]}"
     database_url = base_url.set(
         drivername=sync_driver, database=database
-    ).render_as_string(hide_password=False)
+    ).render_as_string(hide_password=***REDACTED***
     admin = create_engine(admin_url, isolation_level="AUTOCOMMIT")
     with admin.connect() as connection:
         connection.execute(text(f'CREATE DATABASE "{database}"'))
     try:
         env = os.environ.copy()
-        env.update(DATABASE_URL=database_url, SECRET_KEY="rate-migration-test-secret")
+        env.update(DATABASE_URL=database_url, SECRET_KEY="***REDACTED***")
 
         def migrate(command: str, revision: str) -> None:
             result = subprocess.run(
