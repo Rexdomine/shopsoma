@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException, Depends, Query, status, UploadFile
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, or_, delete, update, and_
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import selectinload, aliased
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from urllib.parse import quote
@@ -1885,7 +1885,16 @@ async def list_all_products(
         filters.append(Product.vendor_id == vendor_id)
 
     if category_id is not None:
-        filters.append(Product.category_id == category_id)
+        descendants = select(Category.id).where(Category.id == category_id).cte(
+            "admin_category_descendants", recursive=True
+        )
+        descendant_category = aliased(Category)
+        descendants = descendants.union_all(
+            select(descendant_category.id).where(
+                descendant_category.parent_id == descendants.c.id
+            )
+        )
+        filters.append(Product.category_id.in_(select(descendants.c.id)))
 
     if is_featured is not None:
         filters.append(Product.is_featured == is_featured)

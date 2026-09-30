@@ -454,7 +454,6 @@ async def list_vendor_products(
     """List the current vendor's products, including pending moderation items."""
     filters = [
         Product.vendor_id == vendor.id,
-        Product.status != ProductStatus.ARCHIVED,
     ]
 
     if search:
@@ -467,6 +466,8 @@ async def list_vendor_products(
 
     if status:
         filters.append(Product.status == ProductStatus(status))
+    else:
+        filters.append(Product.status != ProductStatus.ARCHIVED)
 
     query = (
         select(Product)

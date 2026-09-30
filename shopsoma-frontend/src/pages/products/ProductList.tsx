@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, ArrowRight, ChevronDown, X } from 'lucide-react';
 import Layout from '../../components/layout/Layout';
 import Loading from '../../components/common/Loading';
@@ -400,7 +400,7 @@ export default function ProductList({
   const [childCategoryMap, setChildCategoryMap] = useState<Record<string, Category[]>>({});
   const [featuredHoverProduct, setFeaturedHoverProduct] = useState<Product | null>(null);
   const hoverCloseRef = useRef<number | null>(null);
-  const featuredHoverImage = featuredHoverProduct ? getProductImageSource(featuredHoverProduct) : null;
+  const featuredHoverImage = featuredHoverProduct ? getProductImageSource(featuredHoverProduct, 'high') : null;
 
   const hoveredNavItem = useMemo(
     () => navItems.find((item) => item.id === hoveredNavId) || null,
@@ -1031,26 +1031,32 @@ const handleFilterChange = (key: keyof FilterState, value: string) => {
                 <div className="bg-transparent">
                   {featuredHoverProduct ? (
                     <>
-                      <div className="aspect-[4/5] bg-gray-100 overflow-hidden mb-3">
+                      <Link
+                        to={`/products/${featuredHoverProduct.id}`}
+                        className="block aspect-[4/5] bg-gray-100 overflow-hidden mb-3 group/spotlight cursor-pointer"
+                      >
                         <img
                           src={featuredHoverImage?.src || IMAGE_CONFIG.PLACEHOLDER}
                           alt={featuredHoverProduct.title}
-                          className="w-full h-full object-cover"
+                          className="w-full h-full object-cover transition-transform duration-300 group-hover/spotlight:scale-105"
                           onError={(event) => handleSpotlightImageError(event, featuredHoverImage?.fallbackSrc)}
                         />
-                      </div>
+                      </Link>
                       <p className="text-xs font-ui uppercase tracking-[0.3em] text-gray-400 mb-2">
                         Spotlight
                       </p>
-                      <h3 className="text-sm font-semibold text-dark mb-3 line-clamp-2">
+                      <Link
+                        to={`/products/${featuredHoverProduct.id}`}
+                        className="block text-sm font-semibold text-dark mb-3 line-clamp-2 hover:text-primary transition"
+                      >
                         {featuredHoverProduct.title}
-                      </h3>
-                      <button
-                        type="button"
+                      </Link>
+                      <Link
+                        to={`/products/${featuredHoverProduct.id}`}
                         className="inline-flex items-center gap-2 text-xs font-ui uppercase tracking-[0.25em] text-primary border-b border-primary/40 hover:text-dark hover:border-dark transition"
                       >
                         Shop now
-                      </button>
+                      </Link>
                     </>
                   ) : (
                     <div className="flex items-center justify-center text-sm text-gray-500 h-full">
