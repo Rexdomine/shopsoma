@@ -224,7 +224,7 @@ def test_domestic_rate_lease_checks_and_functions_have_exact_model_parity() -> N
 
     all_constraints = {
         constraint.name: str(constraint.sqltext.compile(dialect=postgresql.dialect()))
-        for constraint in ***REDACTED***
+        for constraint in DomesticRateAttempt.__table__.constraints
         if isinstance(constraint, CheckConstraint) and constraint.name
     }
     constraints = {
@@ -341,7 +341,7 @@ async def test_domestic_rate_real_upgrade_downgrade_upgrade_cycle() -> None:
     database = f"shopsoma_rate_cycle_{uuid.uuid4().hex[:12]}"
     database_url = base_url.set(
         drivername=sync_driver, database=database
-    ).render_as_string(hide_password=***REDACTED***
+    ).render_as_string(hide_password=True)
     admin = create_engine(admin_url, isolation_level="AUTOCOMMIT")
     with admin.connect() as connection:
         connection.execute(text(f'CREATE DATABASE "{database}"'))
