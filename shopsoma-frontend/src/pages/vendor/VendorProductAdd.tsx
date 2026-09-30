@@ -1461,8 +1461,13 @@ export default function VendorProductAdd() {
                   </div>
 
                   <div className="rounded-xl border border-[#105E53]/15 bg-[#105E53]/5 p-4">
-                    <p className="text-sm font-semibold text-[#105E53]">Shipping parcel details</p>
-                    <p className="mt-1 text-xs text-gray-500">Enter packed measurements for DHL rates: weight in kilograms and dimensions in centimetres.</p>
+                    <div className="flex items-center justify-between">
+                      <p className="text-sm font-semibold text-[#105E53]">Shipping parcel details</p>
+                      <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-amber-100 text-amber-800 border border-amber-200">
+                        DHL Coming Soon
+                      </span>
+                    </div>
+                    <p className="mt-1 text-xs text-gray-500">Enter packed measurements for automated shipping rates (DHL integration is coming soon): weight in kilograms and dimensions in centimetres.</p>
                     <div className="mt-3 grid grid-cols-2 gap-4">
                       {[
                         ['Weight (kg)', weightKg, setWeightKg],

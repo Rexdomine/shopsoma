@@ -164,7 +164,16 @@ export default function DhlShipmentOperations({ order, onOrderChange, disabled =
   }
 
   return <section className="bg-white rounded-lg shadow p-6 space-y-4" aria-labelledby="dhl-operations-title">
-    <h2 ref={heading} tabIndex={-1} id="dhl-operations-title" className="text-lg font-semibold">DHL Shipment Operations</h2>
+    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-100 pb-3">
+      <h2 ref={heading} tabIndex={-1} id="dhl-operations-title" className="text-lg font-semibold text-gray-900">DHL Shipment Operations</h2>
+      <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-800 border border-amber-300">
+        Coming Soon
+      </span>
+    </div>
+    <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+      <p className="font-medium">Notice: DHL automated shipping integration is coming soon.</p>
+      <p className="text-xs text-amber-700 mt-0.5">Automated courier booking and live label generation are in development. Standard fulfillment operations remain active.</p>
+    </div>
     <p>DHL pickup booking is unavailable. Record handoff only after actual collection from the ShopSoma hub.</p>
     {!facts ? <p role="status">Shipment operations are unavailable until backend shipment facts can be loaded.</p> : <>
       <label className="block">Ready hub package
