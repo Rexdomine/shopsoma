@@ -31,7 +31,7 @@ REVISIONS = (
 MILESTONE_FOUR_REVISION = "b3c4d5e6f7a8"
 FREE_SHIPPING_REVISION = "c4d5e6f7a8b9"
 PREVIOUS_HEAD_REVISION = "e6f7a8b9c0d1"
-CURRENT_HEAD_REVISION = "w6x7y8z9a0b1"
+CURRENT_HEAD_REVISION = "v5w6x7y8z9a0"
 
 
 def _script():
@@ -58,7 +58,7 @@ def test_milestone_two_revisions_are_sequential_from_current_head() -> None:
     previous_head = script.get_revision(PREVIOUS_HEAD_REVISION)
     assert previous_head.down_revision == "d5e6f7a8b9c0"
     assert script.get_revision("d5e6f7a8b9c0").down_revision == FREE_SHIPPING_REVISION
-    assert script.get_current_head() == CURRENT_HEAD_REVISION
+    assert script.get_current_head() == "w6x7y8z9a0b1"
 
 
 def test_expand_validate_contract_and_safe_downgrade_are_frozen() -> None:
@@ -142,7 +142,7 @@ def disposable_m2_database():
         connection.execute(text(f'CREATE DATABASE "{database_name}"'))
     try:
         yield (
-            app_url.set(database=database_name).render_as_string(hide_password=False),
+            app_url.set(database=database_name).render_as_string(hide_password=***REDACTED***
             sync_url.set(database=database_name),
         )
     finally:
@@ -1532,11 +1532,11 @@ def test_finding5_domestic_payment_attempt_allows_pending_to_call_started(
             ids,
         )
         connection.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
-        lease_token = uuid.uuid4()
+        lease_token = ***REDACTED***
         connection.execute(
             text(
                 "UPDATE payment_attempts SET state='call_started',"
-                "lease_token=:lease,row_version=row_version+1 WHERE id=:attempt"
+                "lease_token=***REDACTED*** WHERE id=:attempt"
             ),
             {**ids, "lease": lease_token},
         )
@@ -1674,7 +1674,7 @@ def test_finding5_every_domestic_payment_attempt_forward_transition(
                         "WITH anchor AS (SELECT clock_timestamp() AS now_at) "
                         "UPDATE payment_attempts SET created_at=anchor.now_at-interval '2 hours',"
                         "expires_at=anchor.now_at-interval '90 minutes',"
-                        "authorization_deadline_at=anchor.now_at-interval '75 minutes' "
+                        "authorization_deadline_at=***REDACTED*** '75 minutes' "
                         "FROM anchor WHERE id=:attempt"
                     ),
                     ids,
@@ -1687,7 +1687,7 @@ def test_finding5_every_domestic_payment_attempt_forward_transition(
                 )
                 connection.execute(
                     text(
-                        "UPDATE payment_attempts SET state='call_started',lease_token=:lease,"
+                        "UPDATE payment_attempts SET state='call_started',lease_token=***REDACTED***"
                         "call_started_at=clock_timestamp()-interval '2 hours',"
                         f"claim_expires_at=clock_timestamp(){claim_delta},row_version=2 "
                         "WHERE id=:attempt"
@@ -1736,7 +1736,7 @@ def test_finding5_every_domestic_payment_attempt_forward_transition(
         connection.execute(
             text(
                 "UPDATE payment_attempts SET state=:state,terminal_evidence_id=:evidence,"
-                "lease_token=CASE WHEN :state='call_started' THEN :lease ELSE lease_token END,"
+                "lease_token=***REDACTED*** WHEN :state='call_started' THEN :lease ELSE lease_token END,"
                 "row_version=row_version+1 WHERE id=:attempt"
             ),
             {**ids, "state": target_state, "evidence": evidence, "lease": lease},
@@ -1822,7 +1822,7 @@ def _finding5_arrange_call_started(connection, ids):
     )
     connection.execute(
         text(
-            "UPDATE payment_attempts SET state='call_started',lease_token=:lease,"
+            "UPDATE payment_attempts SET state='call_started',lease_token=***REDACTED***"
             "row_version=row_version+1 WHERE id=:attempt"
         ),
         {**ids, "lease": lease},
@@ -3886,7 +3886,7 @@ def test_finding4_postgresql_capability_and_claim_matrix(
             ("order_id=:value", other["order"]),
             ("original_customer_id=:value", other["customer"]),
             ("scope=:value", "read_order"),
-            ("token_digest=decode(:value,'hex')", "f" * 64),
+            ("token_digest=***REDACTED***'hex')", "f" * 64),
             ("pepper_key_version=:value", 2),
             ("expires_at=:value", "2099-01-01T00:00:00+00:00"),
             ("created_at=:value", "2020-01-01T00:00:00+00:00"),
