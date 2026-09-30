@@ -393,13 +393,18 @@ export default function AdminOrderDetail() {
                     Process Refund
                   </button>
                 )}
-                <button
-                  onClick={handleRunShadowQuote}
-                  disabled={runningShadowQuote || updating || order.ready_packages.length === 0}
-                  className="px-4 py-2 border border-[#105E53] text-[#105E53] rounded-lg hover:bg-[#f1f8f6] disabled:opacity-50"
-                >
-                  {runningShadowQuote ? 'Running Shadow Quote...' : 'Run DHL Sandbox Shadow Quote'}
-                </button>
+                <div className="inline-flex items-center gap-2">
+                  <button
+                    onClick={handleRunShadowQuote}
+                    disabled={runningShadowQuote || updating || order.ready_packages.length === 0}
+                    className="px-4 py-2 border border-[#105E53] text-[#105E53] rounded-lg hover:bg-[#f1f8f6] disabled:opacity-50"
+                  >
+                    {runningShadowQuote ? 'Running Shadow Quote...' : 'Run DHL Sandbox Shadow Quote'}
+                  </button>
+                  <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-semibold bg-amber-100 text-amber-800 border border-amber-200">
+                    Coming Soon
+                  </span>
+                </div>
               </>
             )}
           </div>
@@ -709,8 +714,11 @@ export default function AdminOrderDetail() {
                     <div className={containerClass}>
                       <div className="flex items-center justify-between gap-3">
                         <div>
-                          <div className={labelClass}>
-                            DHL Sandbox Shadow Quote
+                          <div className={`${labelClass} flex items-center gap-2`}>
+                            <span>DHL Sandbox Shadow Quote</span>
+                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-100 text-amber-800 border border-amber-200">
+                              Coming Soon
+                            </span>
                           </div>
                           <div className={bodyClass}>
                             {shadowQuoteResult.result_kind} · {shadowQuoteResult.offers_count} offer(s)
