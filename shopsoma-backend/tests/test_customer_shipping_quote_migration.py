@@ -15,6 +15,7 @@ from sqlalchemy.engine import make_url
 
 REVISION = "e8c0a2d4f6b8"
 HEAD = "v5w6x7y8z9a0"
+CURRENT_HEAD = "w6x7y8z9a0b1"
 FEATURED_IMAGE_PARENT = "l9m0n1o2p3q4"
 CURRENT_HEAD_PARENT = "k7l8m9n0p1q2"
 PREVIOUS_HEAD = "d5e6f7a8b9c0"
@@ -130,13 +131,13 @@ def test_customer_quote_migration_parent_head_parent_head_real_postgresql() -> N
     database = f"shopsoma_quote_cycle_{uuid.uuid4().hex[:12]}"
     database_url = base_url.set(
         drivername=sync_driver, database=database
-    ).render_as_string(hide_password=False)
+    ).render_as_string(hide_password=***REDACTED***)
     admin = create_engine(admin_url, isolation_level="AUTOCOMMIT")
     with admin.connect() as connection:
         connection.execute(text(f'CREATE DATABASE "{database}"'))
 
     env = os.environ.copy()
-    env.update(DATABASE_URL=database_url, SECRET_KEY="quote-migration-test-secret")
+    env.update(DATABASE_URL=database_url, SECRET_KEY="***REDACTED***")
 
     def migrate(operation: str, revision: str) -> None:
         result = subprocess.run(
@@ -168,7 +169,7 @@ def test_customer_quote_migration_parent_head_parent_head_real_postgresql() -> N
                 )
                 assert (
                     connection.scalar(text("SELECT version_num FROM alembic_version"))
-                    == HEAD
+                    == CURRENT_HEAD
                 )
                 quote_trigger_count = connection.scalar(
                     text(
