@@ -131,7 +131,7 @@ def test_customer_quote_migration_parent_head_parent_head_real_postgresql() -> N
     database = f"shopsoma_quote_cycle_{uuid.uuid4().hex[:12]}"
     database_url = base_url.set(
         drivername=sync_driver, database=database
-    ).render_as_string(hide_password=***REDACTED***)
+    ).render_as_string(hide_password=True)
     admin = create_engine(admin_url, isolation_level="AUTOCOMMIT")
     with admin.connect() as connection:
         connection.execute(text(f'CREATE DATABASE "{database}"'))
