@@ -5,6 +5,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import AdminSidebar from '../../components/admin/AdminSidebar';
+import DhlShipmentOperations from '../../components/admin/DhlShipmentOperations';
 import { useToast } from '../../hooks/useToast';
 import CurrencySwitcher from '../../components/common/CurrencySwitcher';
 import { useCurrencyStore } from '../../store/currencyStore';
@@ -392,17 +393,24 @@ export default function AdminOrderDetail() {
                     Process Refund
                   </button>
                 )}
-                <button
-                  onClick={handleRunShadowQuote}
-                  disabled={runningShadowQuote || updating || order.ready_packages.length === 0}
-                  className="px-4 py-2 border border-[#105E53] text-[#105E53] rounded-lg hover:bg-[#f1f8f6] disabled:opacity-50"
-                >
-                  {runningShadowQuote ? 'Running Shadow Quote...' : 'Run DHL Sandbox Shadow Quote'}
-                </button>
+                <div className="inline-flex items-center gap-2">
+                  <button
+                    onClick={handleRunShadowQuote}
+                    disabled={runningShadowQuote || updating || order.ready_packages.length === 0}
+                    className="px-4 py-2 border border-[#105E53] text-[#105E53] rounded-lg hover:bg-[#f1f8f6] disabled:opacity-50"
+                  >
+                    {runningShadowQuote ? 'Running Shadow Quote...' : 'Run DHL Sandbox Shadow Quote'}
+                  </button>
+                  <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-semibold bg-amber-100 text-amber-800 border border-amber-200">
+                    Coming Soon
+                  </span>
+                </div>
               </>
             )}
           </div>
         </div>
+
+        <div className="mb-6"><DhlShipmentOperations key={order.id} order={order} onOrderChange={setOrder} disabled={updating || runningShadowQuote} /></div>
 
         {/* Main Content */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -706,8 +714,11 @@ export default function AdminOrderDetail() {
                     <div className={containerClass}>
                       <div className="flex items-center justify-between gap-3">
                         <div>
-                          <div className={labelClass}>
-                            DHL Sandbox Shadow Quote
+                          <div className={`${labelClass} flex items-center gap-2`}>
+                            <span>DHL Sandbox Shadow Quote</span>
+                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-100 text-amber-800 border border-amber-200">
+                              Coming Soon
+                            </span>
                           </div>
                           <div className={bodyClass}>
                             {shadowQuoteResult.result_kind} · {shadowQuoteResult.offers_count} offer(s)

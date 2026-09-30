@@ -58,6 +58,8 @@ jobs:
       - name: Run tests
         env:
           DATABASE_URL: postgresql+asyncpg://test_user:test_password@localhost:5432/shopsoma_test
+          POSTGRES_PASSWORD: test_password
+          PGPASSWORD: test_password
           SECRET_KEY: test-secret-key-for-ci
           ALGORITHM: HS256
           ACCESS_TOKEN_EXPIRE_MINUTES: 30

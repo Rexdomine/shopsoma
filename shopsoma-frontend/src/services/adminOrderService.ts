@@ -140,6 +140,7 @@ export interface OrderDetail {
   items: OrderItemDetail[];
   pickups: PickupInfo[];
   ready_packages: ReadyPackageInfo[];
+  dhl_operations?: DhlOperations;
 }
 
 export interface OrderStats {
@@ -397,3 +398,135 @@ export const downloadCSV = (blob: Blob, filename: string = 'orders.csv') => {
   document.body.removeChild(link);
   window.URL.revokeObjectURL(url);
 };
+
+/** Persisted shipment facts must come from the backend, never browser defaults. */
+export interface DhlBookingRequest {
+  intent_id: string;
+  package_id: string;
+  package_version: number;
+  seal_id: string;
+  idempotency_key: string;
+}
+
+export interface DhlBookingResult {
+  booking_id: string;
+  order_id: string;
+  intent_id: string;
+  result_kind: 'booked' | 'failure' | 'unknown' | 'pending';
+  outbound_state: string;
+  provider_reference: string | null;
+  tracking_number: string | null;
+  label_media_type: string | null;
+  label_sha256: string | null;
+  booked_at: string | null;
+  note: string | null;
+  replayed: boolean;
+}
+
+export interface DhlHandoffRequest {
+  occurred_at: string;
+  idempotency_key: string;
+  counterparty: string;
+  evidence_ref: string;
+  evidence_sha256: string;
+}
+
+export interface DhlHandoffResult {
+  booking_id: string;
+  outbound_state: string;
+  occurred_at: string;
+  custody_event_id: string;
+}
+
+export interface DhlTrackingRefreshRequest {
+  booking_id: string;
+  idempotency_key: string;
+}
+
+export interface DhlTrackingRefreshResult {
+  booking_id: string;
+  tracking_number: string;
+  outbound_state: string;
+  customer_status: string;
+  observations_recorded: number;
+  refreshed_at: string;
+}
+
+/** No automatic operation retry: a lost booking response can hide a shipment. */
+export const createDhlBooking = async (
+  orderId: string,
+  data: DhlBookingRequest
+): Promise<DhlBookingResult> => {
+  const response = await api.post<DhlBookingResult>(
+    `/admin/orders/${orderId}/dhl/bookings`, data, { timeout: 30000 }
+  );
+  return response.data;
+};
+
+export const getDhlLabel = async (orderId: string, bookingId: string): Promise<Blob> => {
+  const response = await api.get<Blob>(
+    `/admin/orders/${orderId}/dhl/bookings/${bookingId}/label`,
+    { responseType: 'blob', timeout: 30000 }
+  );
+  return response.data;
+};
+
+/** Private handoff evidence is sent only to the protected API, never logged here. */
+export const recordDhlHandoff = async (
+  orderId: string,
+  bookingId: string,
+  data: DhlHandoffRequest
+): Promise<DhlHandoffResult> => {
+  const response = await api.post<DhlHandoffResult>(
+    `/admin/orders/${orderId}/dhl/bookings/${bookingId}/handoff`, data, { timeout: 30000 }
+  );
+  return response.data;
+};
+
+export const refreshDhlTracking = async (
+  orderId: string,
+  data: DhlTrackingRefreshRequest
+): Promise<DhlTrackingRefreshResult> => {
+  const response = await api.post<DhlTrackingRefreshResult>(
+    `/admin/orders/${orderId}/dhl/tracking-refresh`, data, { timeout: 30000 }
+  );
+  return response.data;
+};
+
+export type DhlReconciliationState = 'not_required' | 'in_progress' | 'required' | 'expired_claim_requires_recovery' | 'resolved' | 'inconsistent';
+export type DhlSelectionBlocker = 'order_cancelled' | 'package_not_ready' | 'custody_handed_off' | 'active_seal_missing' | 'active_intent_missing' | 'selected_dhl_quote_missing' | 'active_booking_exists' | 'reconciliation_required' | 'expired_claim_requires_recovery' | 'inconsistent_persisted_state';
+export interface DhlOperationPackage {
+  package_id: string;
+  package_version: number;
+  origin_hub_id: string;
+  package_state: 'packing' | 'sealed' | 'ready';
+  ready_at: string | null;
+  seal_id: string | null;
+  intent_id: string | null;
+  active_booking_id: string | null;
+  selection_eligible: boolean;
+  selection_blockers: DhlSelectionBlocker[];
+}
+export interface DhlOperationBooking {
+  booking_id: string;
+  intent_id: string;
+  package_id: string;
+  package_version: number;
+  seal_id: string;
+  origin_hub_id: string;
+  created_at: string;
+  classification: 'pending' | 'success' | 'failure' | 'unknown';
+  outbound_state: string;
+  tracking_number: string | null;
+  label_available: boolean;
+  handoff_recorded_at: string | null;
+  last_tracking_refresh_at: string | null;
+  reconciliation_state: DhlReconciliationState;
+  reconciliation_resolution: 'confirm_success' | 'confirm_failure' | null;
+  reconciliation_recorded_at: string | null;
+}
+export interface DhlOperations {
+  read_at: string;
+  packages: DhlOperationPackage[];
+  bookings: DhlOperationBooking[];
+}

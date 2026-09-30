@@ -159,8 +159,8 @@ export default function Checkout() {
   };
   const selectedAddressNeedsPostalCode = dhlDomesticShipping && !isValidDhlPostalCode(selectedAddress?.postal_code);
   const selectedAddressPostalCodeGuidance = selectedAddress?.postal_code?.trim()
-    ? 'Update the selected delivery address with a postal code of 12 characters or fewer before continuing with DHL delivery.'
-    : 'Add a postal code to the selected delivery address before continuing with DHL delivery.';
+    ? 'Update the selected delivery address with a postal code of 12 characters or fewer before continuing with DHL delivery (coming soon).'
+    : 'Add a postal code to the selected delivery address before continuing with DHL delivery (coming soon).';
 
   // Shipping state
   const [shippingRates, setShippingRates] = useState<ShippingRate[]>([]);
@@ -1405,7 +1405,14 @@ export default function Checkout() {
                                   placeholder="100001"
                                   required={postalCodeRequired}
                                 />
-                                {postalCodeRequired && <p className="mt-1 text-xs text-gray-500">Required for DHL delivery estimates.</p>}
+                                {postalCodeRequired && (
+                                  <p className="mt-1 text-xs text-gray-500 flex items-center gap-1.5">
+                                    <span>Required for DHL delivery estimates.</span>
+                                    <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-100 text-amber-800 border border-amber-200">
+                                      Coming Soon
+                                    </span>
+                                  </p>
+                                )}
                               </div>
                               <div className="pt-2">
                                 <label className="inline-flex items-center gap-2 text-sm text-gray-600 cursor-pointer">
@@ -1558,7 +1565,14 @@ export default function Checkout() {
                             📦
                           </div>
                           <div className="flex-1">
-                            <p className="text-sm font-semibold text-gray-800">{rate.name}</p>
+                            <div className="flex items-center gap-2">
+                              <p className="text-sm font-semibold text-gray-800">{rate.name}</p>
+                              {(rate.name?.toLowerCase().includes('dhl') || rate.description?.toLowerCase().includes('dhl')) && (
+                                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-100 text-amber-800 border border-amber-200">
+                                  Coming Soon
+                                </span>
+                              )}
+                            </div>
                             <p className="text-xs text-gray-500">
                               {rate.description} ({rate.min_delivery_days} - {rate.max_delivery_days} business days)
                             </p>

@@ -59,6 +59,7 @@ from app.services.admin_shadow_quote import (
     ShadowQuoteConflictError,
     ShadowQuoteError,
 )
+from app.services.dhl.operations import load_dhl_operations
 from app.services.dhl.shipments import (
     BookingCommand,
     BookingReconciliationCommand,
@@ -591,6 +592,7 @@ async def get_order_detail(
             )
             for pickup in order.pickups
         ],
+        dhl_operations=await load_dhl_operations(db, order_id=order.id),
         ready_packages=[
             ReadyPackageInfo(
                 id=package.id,

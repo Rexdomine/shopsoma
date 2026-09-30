@@ -840,6 +840,69 @@ class TestProductList:
         assert "Men's Shirt" in product_titles
         assert "Women's Dress" not in product_titles
 
+    @pytest.mark.asyncio
+    async def test_list_products_with_grandchild_category_filter(
+        self,
+        client: AsyncClient,
+        db_session: AsyncSession,
+        vendor_user,
+    ):
+        """Test category filter includes products in grandchild categories (e.g., Men -> Tops -> T-Shirts)."""
+        from app.models.category import Category
+        from app.models.product import Product, ProductStatus, ModerationStatus
+        import uuid
+
+        root_men = Category(
+            id=uuid.uuid4(),
+            name=f"Men-{uuid.uuid4().hex[:6]}",
+            slug=f"men-{uuid.uuid4().hex[:6]}",
+        )
+        sub_tops = Category(
+            id=uuid.uuid4(),
+            name=f"Tops-{uuid.uuid4().hex[:6]}",
+            slug=f"tops-{uuid.uuid4().hex[:6]}",
+            parent_id=root_men.id,
+        )
+        child_tshirts = Category(
+            id=uuid.uuid4(),
+            name=f"T-Shirts-{uuid.uuid4().hex[:6]}",
+            slug=f"tshirts-{uuid.uuid4().hex[:6]}",
+            parent_id=sub_tops.id,
+        )
+        db_session.add_all([root_men, sub_tops, child_tshirts])
+
+        tshirt_product = Product(
+            id=uuid.uuid4(),
+            vendor_id=vendor_user["vendor"].id,
+            title="Men's Vintage Graphic T-Shirt",
+            description="Premium cotton graphic tee",
+            base_price=45.00,
+            total_stock=20,
+            status=ProductStatus.ACTIVE,
+            moderation_status=ModerationStatus.APPROVED,
+            category_id=child_tshirts.id,
+        )
+        db_session.add(tshirt_product)
+        await db_session.commit()
+
+        # 1. Querying root category (Men) should include the T-shirt
+        resp_root = await client.get(f"/api/v1/products?category_id={root_men.id}")
+        assert resp_root.status_code == 200
+        titles_root = [p["title"] for p in resp_root.json()["products"]]
+        assert "Men's Vintage Graphic T-Shirt" in titles_root
+
+        # 2. Querying root category with search term should include the T-shirt
+        resp_search = await client.get(f"/api/v1/products?category_id={root_men.id}&search=Graphic")
+        assert resp_search.status_code == 200
+        titles_search = [p["title"] for p in resp_search.json()["products"]]
+        assert "Men's Vintage Graphic T-Shirt" in titles_search
+
+        # 3. Querying intermediate category (Tops) should include the T-shirt
+        resp_sub = await client.get(f"/api/v1/products?category_id={sub_tops.id}")
+        assert resp_sub.status_code == 200
+        titles_sub = [p["title"] for p in resp_sub.json()["products"]]
+        assert "Men's Vintage Graphic T-Shirt" in titles_sub
+
 
 class TestProductRetrieve:
     """Test get single product endpoint"""
