@@ -56,7 +56,7 @@ def test_customer_quote_revision_is_single_linear_head_and_owns_explicit_ddl() -
     config = Config(str(root / "alembic.ini"))
     config.set_main_option("script_location", str(root / "alembic"))
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == ["w6x7y8z9a0b1"]
+    assert script.get_heads() == [HEAD]
     assert script.get_revision(HEAD).down_revision == "u4v5w6x7y8z9"
     assert script.get_revision("n1o2p3q4r5s6").down_revision == "m0n1o2p3q4r5"
     assert script.get_revision(FEATURED_IMAGE_PARENT).down_revision == CURRENT_HEAD_PARENT
@@ -130,7 +130,7 @@ def test_customer_quote_migration_parent_head_parent_head_real_postgresql() -> N
     database = f"shopsoma_quote_cycle_{uuid.uuid4().hex[:12]}"
     database_url = base_url.set(
         drivername=sync_driver, database=database
-    ).render_as_string(hide_password=False
+    ).render_as_string(hide_password=***REDACTED***
     admin = create_engine(admin_url, isolation_level="AUTOCOMMIT")
     with admin.connect() as connection:
         connection.execute(text(f'CREATE DATABASE "{database}"'))
