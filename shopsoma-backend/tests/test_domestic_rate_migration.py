@@ -156,7 +156,7 @@ def _literal(name: str, revision_id: str = REVISION):
 
 def test_domestic_rate_migration_is_the_single_linear_static_head() -> None:
     graph = _scripts()
-    assert graph.get_heads() == ["w6x7y8z9a0b1"]
+    assert graph.get_heads() == [HEAD]
     head_revision = graph.get_revision(HEAD)
     assert head_revision is not None
     assert head_revision.revision == HEAD
@@ -223,7 +223,7 @@ def test_domestic_rate_lease_checks_and_functions_have_exact_model_parity() -> N
 
     all_constraints = {
         constraint.name: str(constraint.sqltext.compile(dialect=postgresql.dialect()))
-        for constraint in DomesticRateAttempt.__table__.constraints
+        for constraint in ***REDACTED***
         if isinstance(constraint, CheckConstraint) and constraint.name
     }
     constraints = {
@@ -340,7 +340,7 @@ async def test_domestic_rate_real_upgrade_downgrade_upgrade_cycle() -> None:
     database = f"shopsoma_rate_cycle_{uuid.uuid4().hex[:12]}"
     database_url = base_url.set(
         drivername=sync_driver, database=database
-    ).render_as_string(hide_password=False
+    ).render_as_string(hide_password=***REDACTED***
     admin = create_engine(admin_url, isolation_level="AUTOCOMMIT")
     with admin.connect() as connection:
         connection.execute(text(f'CREATE DATABASE "{database}"'))
