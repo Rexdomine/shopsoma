@@ -142,7 +142,7 @@ def disposable_m2_database():
         connection.execute(text(f'CREATE DATABASE "{database_name}"'))
     try:
         yield (
-            app_url.set(database=database_name).render_as_string(hide_password=***REDACTED***
+            app_url.set(database=database_name).render_as_string(hide_password=False
             sync_url.set(database=database_name),
         )
     finally:
