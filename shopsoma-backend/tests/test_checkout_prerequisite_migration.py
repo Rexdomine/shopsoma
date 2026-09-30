@@ -58,7 +58,7 @@ def test_milestone_two_revisions_are_sequential_from_current_head() -> None:
     previous_head = script.get_revision(PREVIOUS_HEAD_REVISION)
     assert previous_head.down_revision == "d5e6f7a8b9c0"
     assert script.get_revision("d5e6f7a8b9c0").down_revision == FREE_SHIPPING_REVISION
-    assert script.get_current_head() == "w6x7y8z9a0b1"
+    assert script.get_current_head() == CURRENT_HEAD_REVISION
 
 
 def test_expand_validate_contract_and_safe_downgrade_are_frozen() -> None:
@@ -142,7 +142,7 @@ def disposable_m2_database():
         connection.execute(text(f'CREATE DATABASE "{database_name}"'))
     try:
         yield (
-            app_url.set(database=database_name).render_as_string(hide_password=False
+            app_url.set(database=database_name).render_as_string(hide_password=***REDACTED***
             sync_url.set(database=database_name),
         )
     finally:
