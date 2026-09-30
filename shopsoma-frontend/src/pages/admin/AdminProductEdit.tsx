@@ -415,7 +415,7 @@ export default function AdminProductEdit() {
                 </p>
 
                 {categoriesLoadError && (
-                  <p role="status" className="text-xs text-amber-700">{categoriesLoadError}</p>
+                  <p className="text-xs text-amber-700">{categoriesLoadError}</p>
                 )}
 
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
