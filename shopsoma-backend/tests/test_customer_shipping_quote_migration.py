@@ -15,6 +15,7 @@ from sqlalchemy.engine import make_url
 
 REVISION = "e8c0a2d4f6b8"
 HEAD = "v5w6x7y8z9a0"
+CURRENT_HEAD = "w6x7y8z9a0b1"
 FEATURED_IMAGE_PARENT = "l9m0n1o2p3q4"
 CURRENT_HEAD_PARENT = "k7l8m9n0p1q2"
 PREVIOUS_HEAD = "d5e6f7a8b9c0"
@@ -56,7 +57,7 @@ def test_customer_quote_revision_is_single_linear_head_and_owns_explicit_ddl() -
     config = Config(str(root / "alembic.ini"))
     config.set_main_option("script_location", str(root / "alembic"))
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == [HEAD]
+    assert script.get_heads() == [CURRENT_HEAD]
     assert script.get_revision(HEAD).down_revision == "u4v5w6x7y8z9"
     assert script.get_revision("n1o2p3q4r5s6").down_revision == "m0n1o2p3q4r5"
     assert script.get_revision(FEATURED_IMAGE_PARENT).down_revision == CURRENT_HEAD_PARENT
@@ -168,7 +169,7 @@ def test_customer_quote_migration_parent_head_parent_head_real_postgresql() -> N
                 )
                 assert (
                     connection.scalar(text("SELECT version_num FROM alembic_version"))
-                    == HEAD
+                    == CURRENT_HEAD
                 )
                 quote_trigger_count = connection.scalar(
                     text(

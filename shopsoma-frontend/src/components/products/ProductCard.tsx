@@ -25,7 +25,7 @@ export default function ProductCard({
   const { currentCurrency, exchangeRates } = useCurrencyStore();
 
   const placeholderImage = IMAGE_CONFIG.PLACEHOLDER;
-  const productImages = getProductImageSources(product);
+  const productImages = getProductImageSources(product, 'high');
   const primaryImage = productImages[0] ?? { src: placeholderImage };
   const secondaryImage = productImages[1] ?? primaryImage;
 

@@ -41,7 +41,7 @@ function HomeProductCard({
 }: HomeProductCardProps) {
   const [isHovered, setIsHovered] = useState(false);
   const { currentCurrency, exchangeRates } = useCurrency();
-  const productImages = getProductImageSources(product);
+  const productImages = getProductImageSources(product, 'high');
   const primaryImage = productImages[0] ?? { src: IMAGE_CONFIG.PLACEHOLDER };
   const secondaryImage = productImages[1] ?? primaryImage;
   const vendor = product.vendor_name || 'Shopsoma';

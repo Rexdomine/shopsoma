@@ -913,10 +913,13 @@ async def list_products(
 
     # Apply filters
     filters = [
-        Product.status == ProductStatus.ACTIVE,
         Product.moderation_status == ModerationStatus.APPROVED,
         customer_visible_vendor_product_filter(),
     ]
+    if status:
+        filters.append(Product.status == ProductStatus(status))
+    else:
+        filters.append(Product.status == ProductStatus.ACTIVE)
 
     # Search
     if search:
@@ -953,15 +956,20 @@ async def list_products(
         elif requested_slug in SHOP_EDIT_SLUGS.values():
             filters.append(Product.shop_edit_categories.any(Category.id == category_id))
         else:
-            filters.append(or_(Product.category_id == category_id, Product.category.has(Category.parent_id == category_id)))
+            descendants = select(Category.id).where(Category.id == category_id).cte(
+                "category_descendants", recursive=True
+            )
+            descendant_category = aliased(Category)
+            descendants = descendants.union_all(
+                select(descendant_category.id).where(
+                    descendant_category.parent_id == descendants.c.id
+                )
+            )
+            filters.append(Product.category_id.in_(select(descendants.c.id)))
 
     # Vendor filter
     if vendor_id:
         filters.append(Product.vendor_id == vendor_id)
-
-    # Status filter
-    if status:
-        filters.append(Product.status == ProductStatus(status))
 
     # Price range
     if min_price is not None:

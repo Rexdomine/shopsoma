@@ -1,13 +1,44 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Save, Loader2, Upload, Trash2, Star, ChevronUp, ChevronDown } from 'lucide-react';
 import { ROUTES } from '../../config/constants';
 import { normalizeProductImageUrl } from '../../utils/productImages';
 import { apiErrorMessage } from '../../utils/apiErrorMessage';
 import { adminService, type AdminProductUpdatePayload } from '../../services/adminService';
+import { categoryService } from '../../services/categoryService';
 import { useToast } from '../../hooks/useToast';
 import ToastContainer from '../../components/ui/ToastContainer';
-import type { Product } from '../../types';
+import type { Category, Product } from '../../types';
+
+function resolveCategoryLineage(
+  targetId: string,
+  allCategories: Category[]
+): { primaryId: string; subId: string; childId: string; found: boolean } {
+  const byId = new Map(allCategories.map((c) => [c.id, c]));
+  const target = byId.get(targetId);
+  if (!target) return { primaryId: '', subId: '', childId: '', found: false };
+
+  if (!target.parent_id) {
+    return { primaryId: target.id, subId: '', childId: '', found: true };
+  }
+
+  const parent = byId.get(target.parent_id);
+  if (!parent) {
+    return { primaryId: target.id, subId: '', childId: '', found: true };
+  }
+
+  if (!parent.parent_id) {
+    return { primaryId: parent.id, subId: target.id, childId: '', found: true };
+  }
+
+  const grandParent = byId.get(parent.parent_id);
+  return {
+    primaryId: grandParent ? grandParent.id : parent.parent_id,
+    subId: parent.id,
+    childId: target.id,
+    found: true,
+  };
+}
 
 export default function AdminProductEdit() {
   const { id } = useParams<{ id: string }>();
@@ -28,6 +59,88 @@ export default function AdminProductEdit() {
   const [shopEditsLoaded, setShopEditsLoaded] = useState(false);
   const [shopEditsLoadError, setShopEditsLoadError] = useState<string | null>(null);
   const shopEditOptions = ['casual', 'evening', 'party', 'workwear'] as const;
+
+  // Form state - Category Selection
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [loadingCategories, setLoadingCategories] = useState(false);
+  const [categoriesLoadError, setCategoriesLoadError] = useState<string | null>(null);
+  const [primaryCategoryId, setPrimaryCategoryId] = useState('');
+  const [subcategoryId, setSubcategoryId] = useState('');
+  const [childCategoryId, setChildCategoryId] = useState('');
+  const [showManualCategoryId, setShowManualCategoryId] = useState(false);
+
+  const primaryCategories = useMemo(
+    () => categories.filter((c) => !c.parent_id),
+    [categories]
+  );
+
+  const subcategories = useMemo(
+    () => (primaryCategoryId ? categories.filter((c) => c.parent_id === primaryCategoryId) : []),
+    [categories, primaryCategoryId]
+  );
+
+  const childCategories = useMemo(
+    () => (subcategoryId ? categories.filter((c) => c.parent_id === subcategoryId) : []),
+    [categories, subcategoryId]
+  );
+
+  useEffect(() => {
+    let isMounted = true;
+    const fetchCategories = async () => {
+      try {
+        setLoadingCategories(true);
+        setCategoriesLoadError(null);
+        const data = await categoryService.getAllCategories();
+        if (isMounted) {
+          setCategories(Array.isArray(data) ? data : []);
+        }
+      } catch (catErr) {
+        console.error('Failed to load categories', catErr);
+        if (isMounted) {
+          setCategoriesLoadError('Could not load categories list');
+        }
+      } finally {
+        if (isMounted) {
+          setLoadingCategories(false);
+        }
+      }
+    };
+
+    fetchCategories();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!product || categories.length === 0) return;
+    if (product.category_id) {
+      const lineage = resolveCategoryLineage(product.category_id, categories);
+      if (lineage.found) {
+        setPrimaryCategoryId(lineage.primaryId);
+        setSubcategoryId(lineage.subId);
+        setChildCategoryId(lineage.childId);
+      }
+    }
+  }, [product?.id, product?.category_id, categories]);
+
+  const handlePrimaryCategoryChange = (newPrimaryId: string) => {
+    setPrimaryCategoryId(newPrimaryId);
+    setSubcategoryId('');
+    setChildCategoryId('');
+    setCategoryId(newPrimaryId);
+  };
+
+  const handleSubcategoryChange = (newSubId: string) => {
+    setSubcategoryId(newSubId);
+    setChildCategoryId('');
+    setCategoryId(newSubId || primaryCategoryId);
+  };
+
+  const handleChildCategoryChange = (newChildId: string) => {
+    setChildCategoryId(newChildId);
+    setCategoryId(newChildId || subcategoryId || primaryCategoryId);
+  };
 
   // Form state - Pricing
   const [basePrice, setBasePrice] = useState('');
@@ -285,19 +398,135 @@ export default function AdminProductEdit() {
                 />
               </div>
 
-              {/* Category */}
-              <div>
-                <label htmlFor="categoryId" className="block text-sm font-medium text-gray-700 mb-2">
-                  Category ID
-                </label>
-                <input
-                  id="categoryId"
-                  type="text"
-                  value={categoryId}
-                  onChange={(e) => setCategoryId(e.target.value)}
-                  className="w-full rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
-                  placeholder={product.category_name ? `Current: ${product.category_name}` : 'Paste category UUID'}
-                />
+              {/* Category & Subcategory Selection */}
+              <div className="space-y-4 rounded-lg border border-gray-200 bg-gray-50/50 p-4">
+                <div className="flex items-center justify-between">
+                  <label className="block text-sm font-semibold text-gray-900">
+                    Category & Subcategory
+                  </label>
+                  {product.category_name && (
+                    <span className="text-xs text-gray-500">
+                      Current: <span className="font-medium text-gray-700">{product.category_name}</span>
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs text-gray-500">
+                  Assign or correct product classification across primary categories and subcategories.
+                </p>
+
+                {categoriesLoadError && (
+                  <p className="text-xs text-amber-700">{categoriesLoadError}</p>
+                )}
+
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {/* Primary Category */}
+                  <div>
+                    <label htmlFor="primaryCategory" className="block text-xs font-medium text-gray-700 mb-1">
+                      Primary Category
+                    </label>
+                    <select
+                      id="primaryCategory"
+                      aria-label="Primary Category"
+                      value={primaryCategoryId}
+                      onChange={(e) => handlePrimaryCategoryChange(e.target.value)}
+                      disabled={loadingCategories}
+                      className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+                    >
+                      <option value="">None / Unassigned</option>
+                      {primaryCategories.map((cat) => (
+                        <option key={cat.id} value={cat.id}>
+                          {cat.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Subcategory */}
+                  <div>
+                    <label htmlFor="subcategory" className="block text-xs font-medium text-gray-700 mb-1">
+                      Subcategory
+                    </label>
+                    <select
+                      id="subcategory"
+                      aria-label="Subcategory"
+                      value={subcategoryId}
+                      onChange={(e) => handleSubcategoryChange(e.target.value)}
+                      disabled={!primaryCategoryId || subcategories.length === 0}
+                      className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 disabled:bg-gray-100 disabled:text-gray-400"
+                    >
+                      <option value="">
+                        {!primaryCategoryId
+                          ? 'Select primary first'
+                          : subcategories.length === 0
+                          ? 'No subcategories'
+                          : 'Select subcategory (optional)'}
+                      </option>
+                      {subcategories.map((sub) => (
+                        <option key={sub.id} value={sub.id}>
+                          {sub.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Child Category */}
+                  {(childCategories.length > 0 || childCategoryId) && (
+                    <div>
+                      <label htmlFor="childCategory" className="block text-xs font-medium text-gray-700 mb-1">
+                        Child Category
+                      </label>
+                      <select
+                        id="childCategory"
+                        aria-label="Child Category"
+                        value={childCategoryId}
+                        onChange={(e) => handleChildCategoryChange(e.target.value)}
+                        disabled={!subcategoryId || childCategories.length === 0}
+                        className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 disabled:bg-gray-100 disabled:text-gray-400"
+                      >
+                        <option value="">
+                          {childCategories.length === 0 ? 'No child categories' : 'Select child category (optional)'}
+                        </option>
+                        {childCategories.map((child) => (
+                          <option key={child.id} value={child.id}>
+                            {child.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex items-center justify-between pt-1">
+                  <div className="text-xs text-gray-600">
+                    <span className="font-medium text-gray-700">Selected Category ID: </span>
+                    <span className="font-mono bg-white px-2 py-0.5 rounded border border-gray-200">
+                      {categoryId || 'None'}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowManualCategoryId(!showManualCategoryId)}
+                    className="text-xs text-blue-600 hover:text-blue-800 underline"
+                  >
+                    {showManualCategoryId ? 'Hide manual ID' : 'Edit ID manually'}
+                  </button>
+                </div>
+
+                {showManualCategoryId && (
+                  <div>
+                    <label htmlFor="categoryId" className="block text-xs font-medium text-gray-700 mb-1">
+                      Direct Category ID (UUID)
+                    </label>
+                    <input
+                      id="categoryId"
+                      type="text"
+                      value={categoryId}
+                      onChange={(e) => setCategoryId(e.target.value)}
+                      className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 font-mono"
+                      placeholder="Paste category UUID directly"
+                    />
+                  </div>
+                )}
               </div>
 
               <fieldset>
