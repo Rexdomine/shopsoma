@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
-        extra="ignore",
+        extra="forbid",
     )
 
     # Application Settings
@@ -36,6 +36,10 @@ class Settings(BaseSettings):
     DATABASE_ECHO: bool = False
     ASYNC_DATABASE_URL: Optional[str] = None
     RENDER_DATABASE_URL: str = ""
+    POSTGRES_PASSWORD: Optional[str] = None
+    POSTGRES_USER: Optional[str] = None
+    POSTGRES_DB: Optional[str] = None
+    PGPASSWORD: Optional[str] = None
 
     # Redis Settings
     REDIS_HOST: str = "localhost"
