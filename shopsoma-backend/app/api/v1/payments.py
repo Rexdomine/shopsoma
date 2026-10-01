@@ -16,7 +16,7 @@ from app.services.commerce_features import get_commerce_features
 from app.core.config import settings
 from app.core.database import get_db
 from app.models.user import User
-from app.models.order import Order, PaymentStatus
+from app.models.order import Order, OrderItem, PaymentStatus
 from app.models.payment import Payment, PaymentGateway, TransactionStatus
 from app.models.stock_payment_persistence import PaymentAttempt
 from app.schemas.payment import (
@@ -43,6 +43,10 @@ from app.services.payments.fulfilment_bridge import (
 from app.services.shipping.capabilities import domestic_shipping_capabilities
 from app.services.checkout.capabilities import authorize_checkout_actor
 from sqlalchemy.orm import selectinload
+from datetime import datetime, timezone
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/payments", tags=["Payments"])
 
@@ -50,6 +54,97 @@ router = APIRouter(prefix="/payments", tags=["Payments"])
 PAYSTACK_SECRET_KEY = settings.PAYSTACK_SECRET_KEY
 PAYSTACK_BASE_URL = "https://api.paystack.co"
 stripe.api_key = settings.STRIPE_SECRET_KEY
+
+
+async def send_order_confirmation_after_payment(db: AsyncSession, order_id: UUID) -> bool:
+    """Send order confirmation email after payment is verified and committed."""
+    try:
+        order_query = (
+            select(Order)
+            .options(
+                selectinload(Order.items).selectinload(OrderItem.product),
+                selectinload(Order.shipping_address),
+                selectinload(Order.customer),
+            )
+            .where(Order.id == order_id)
+        )
+        result = await db.execute(order_query)
+        order = result.scalar_one_or_none()
+        if not order or not order.customer or not order.customer.email:
+            return False
+
+        email_items = []
+        for item in order.items:
+            mto = False
+            mto_timeline = None
+            if item.product:
+                mto = bool(item.product.made_to_order)
+                mto_timeline = item.product.made_to_order_timeline
+            elif item.inventory_policy == "made_to_order":
+                mto = True
+
+            email_items.append(
+                {
+                    "product_name": item.product_title,
+                    "quantity": item.quantity,
+                    "price": float(item.unit_price),
+                    "currency": item.currency,
+                    "subtotal": float(item.subtotal),
+                    "size": (
+                        item.variant_details.get("size")
+                        if item.variant_details
+                        else None
+                    ),
+                    "color": (
+                        item.variant_details.get("color")
+                        if item.variant_details
+                        else None
+                    ),
+                    "made_to_order": mto,
+                    "made_to_order_timeline": mto_timeline,
+                    "inventory_policy": item.inventory_policy,
+                }
+            )
+
+        shipping_addr_dict = {}
+        if order.shipping_address:
+            shipping_addr_dict = {
+                "full_name": order.shipping_address.full_name,
+                "address_line_1": order.shipping_address.address_line1,
+                "address_line_2": order.shipping_address.address_line2,
+                "city": order.shipping_address.city,
+                "state": order.shipping_address.state,
+                "postal_code": order.shipping_address.postal_code,
+                "country": order.shipping_address.country,
+                "phone_number": order.shipping_address.phone_number,
+            }
+
+        customer_name = order.customer.full_name or order.customer.email
+        sent = await email_service.send_order_confirmation_email(
+            email=order.customer.email,
+            name=customer_name,
+            order_number=order.order_number,
+            order_date=order.created_at or datetime.now(timezone.utc),
+            items=email_items,
+            subtotal=float(order.subtotal),
+            shipping=float(order.shipping_cost),
+            tax=float(order.tax_amount),
+            total=float(order.total_amount),
+            shipping_address=shipping_addr_dict,
+            payment_status="PAID",
+        )
+        logger.info(
+            "[Order Confirmation Email] Sent to %s for order %s: %s",
+            order.customer.email,
+            order.order_number,
+            sent,
+        )
+        return sent
+    except Exception as exc:
+        logger.error(
+            f"[Order Confirmation Email] Failed for order {order_id}: {exc}"
+        )
+        return False
 
 
 @router.post("/initialize", response_model=PaymentInitializeResponse)
@@ -960,6 +1055,7 @@ async def _verify_stripe_payment(
                 )
             except Exception as e:
                 print(f"Failed to send payment receipt email: {e}")
+            await send_order_confirmation_after_payment(db, order.id)
             await send_account_claim_email_if_guest(claim_customer)
 
         return PaymentVerifyResponse(
@@ -1140,6 +1236,7 @@ async def _verify_paystack_payment(
                     )
                 except Exception as e:
                     print(f"Failed to send payment receipt email: {e}")
+                await send_order_confirmation_after_payment(db, order.id)
                 await send_account_claim_email_if_guest(claim_customer)
 
             return PaymentVerifyResponse(
@@ -1244,6 +1341,7 @@ async def paystack_webhook(
             )
             await db.commit()
             if completed_order and completed_order.customer and not result.replay:
+                await send_order_confirmation_after_payment(db, completed_order.id)
                 await send_account_claim_email_if_guest(completed_order.customer)
         except PaymentRecoveryUnavailable as error:
             await db.rollback()
@@ -1378,6 +1476,7 @@ async def stripe_webhook(
             )
             await db.commit()
             if completed_order and completed_order.customer and not result.replay:
+                await send_order_confirmation_after_payment(db, completed_order.id)
                 await send_account_claim_email_if_guest(completed_order.customer)
 
         # Cancellation is definitive; payment_failed can still be retryable.

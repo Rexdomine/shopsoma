@@ -3662,17 +3662,24 @@ async def update_order_status(
     order.admin_notes = notes
     await db.commit()
 
-    # Send email notification
-    try:
-        await email_service.send_order_status_update_email(
-            email=user.email,
-            customer_name=user.full_name,
-            order_number=order.order_number,
-            status=status,
-            notes=notes
-        )
-    except Exception as e:
-        logger.error(f"Error sending order status update email: {e}")
+    # Send email notification only for customer-relevant milestones
+    if status in {
+        FulfillmentStatus.OUT_FOR_DELIVERY.value,
+        FulfillmentStatus.DELIVERED.value,
+        FulfillmentStatus.DELIVERY_FAILED.value,
+        FulfillmentStatus.RETURNED.value,
+        FulfillmentStatus.CANCELLED.value,
+    }:
+        try:
+            await email_service.send_order_status_update_email(
+                email=user.email,
+                customer_name=user.full_name,
+                order_number=order.order_number,
+                status=status,
+                notes=notes
+            )
+        except Exception as e:
+            logger.error(f"Error sending order status update email: {e}")
 
     return {
         "message": "Order status updated",

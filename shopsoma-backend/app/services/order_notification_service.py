@@ -99,12 +99,12 @@ CUSTOMER_STATUS_MESSAGES = {
     FulfillmentStatus.PICKED_UP: {
         "title": "Order Dispatched",
         "message": "Your order has been dispatched and is on its way to you.",
-        "send_email": True,
+        "send_email": False,
     },
     FulfillmentStatus.IN_TRANSIT: {
         "title": "In Transit",
         "message": "Your order is in transit and will arrive soon.",
-        "send_email": True,
+        "send_email": False,
     },
     FulfillmentStatus.OUT_FOR_DELIVERY: {
         "title": "Out for Delivery",

@@ -268,19 +268,25 @@ class EmailService:
         template_params: Optional[Dict[str, Any]] = None
     ) -> bool:
         # Check if email service is enabled
-        if not self.enabled or self.api_instance is None:
+        api_key = getattr(settings, "BREVO_API_KEY", "") or ""
+        if not self.enabled or self.api_instance is None or not api_key:
             logger.warning(
                 f"Email send skipped (to: {to_email}, subject: '{subject}'): "
                 f"Brevo enabled={self.enabled}, api_instance={'configured' if self.api_instance else 'None'}, "
-                f"BREVO_API_KEY={'set' if settings.BREVO_API_KEY else 'NOT SET'}"
+                f"BREVO_API_KEY={'set' if api_key else 'NOT SET'}"
             )
             return False
 
         try:
+            sender = self.sender or {}
+            sender_name = sender.get("name") or getattr(settings, "BREVO_SENDER_NAME", None) or "Shopsoma"
+            sender_email = sender.get("email") or getattr(settings, "BREVO_SENDER_EMAIL", None) or "noreply@shopsoma.com"
+            active_sender = {"name": sender_name, "email": sender_email}
+
             logger.info(f"Sending email to {to_email} (name: {to_name}), subject: '{subject}'")
             send_smtp_email = brevo_python.SendSmtpEmail(
                 to=[{"email": to_email, "name": to_name}],
-                sender=self.sender,
+                sender=active_sender,
                 subject=subject,
                 html_content=html_content
             )
@@ -334,6 +340,24 @@ class EmailService:
                 if isinstance(details_dict, dict):
                     variant_details = " · ".join(f"{k}: {v}" for k, v in details_dict.items() if v)
 
+            is_made_to_order = bool(
+                item.get("made_to_order")
+                or item.get("inventory_policy") == "made_to_order"
+                or item.get("order_type") in ("made_to_order", "MADE_TO_ORDER")
+            )
+            mto_timeline = item.get("made_to_order_timeline") or item.get("estimated_production_days")
+            if is_made_to_order:
+                if mto_timeline:
+                    if isinstance(mto_timeline, (int, float)) or (isinstance(mto_timeline, str) and str(mto_timeline).isdigit()):
+                        timeline_str = f"Estimated production: {mto_timeline} days"
+                    else:
+                        timeline_str = f"Estimated production: {mto_timeline}"
+                else:
+                    timeline_str = "Estimated production: 7–14 business days"
+                readiness_badge = f'<div style="margin-top:6px;"><span style="display:inline-block;padding:2px 8px;border-radius:4px;background:#FEF3C7;color:#92400E;font-size:11px;font-weight:600;">Made-to-Order · {html.escape(str(timeline_str))}</span></div>'
+            else:
+                readiness_badge = '<div style="margin-top:6px;"><span style="display:inline-block;padding:2px 8px;border-radius:4px;background:#ECFDF5;color:#065F46;font-size:11px;font-weight:600;">Ready-to-Wear · Ships within 24–48 hours</span></div>'
+
             # Use a div with background color as placeholder if no real image
             image_cell = ""
             if image and image.startswith("http"):
@@ -349,7 +373,8 @@ class EmailService:
                 </td>
                 <td style="padding:12px;border-bottom:1px solid {BRAND_BORDER};">
                     <strong>{name}</strong><br/>
-                    {"<span style='color:#6B7280;font-size:12px;'>" + variant_details + "</span>" if variant_details else ""}
+                    {"<span style='color:#6B7280;font-size:12px;'>" + variant_details + "</span><br/>" if variant_details else ""}
+                    {readiness_badge}
                 </td>
                 <td style="padding:12px;border-bottom:1px solid {BRAND_BORDER};text-align:center;">{item.get('quantity',1)}</td>
                 <td style="padding:12px;border-bottom:1px solid {BRAND_BORDER};text-align:right;">{self._format_amount(item.get('price',0), currency)}</td>
@@ -473,6 +498,47 @@ class EmailService:
             )
         )
 
+        has_mto = any(
+            item.get("made_to_order")
+            or item.get("inventory_policy") == "made_to_order"
+            or item.get("order_type") in ("made_to_order", "MADE_TO_ORDER")
+            for item in items
+        )
+        has_rtw = any(
+            not (
+                item.get("made_to_order")
+                or item.get("inventory_policy") == "made_to_order"
+                or item.get("order_type") in ("made_to_order", "MADE_TO_ORDER")
+            )
+            for item in items
+        )
+
+        fulfillment_notice = ""
+        if normalized_payment_status not in ("FAILED", "PENDING"):
+            if has_mto and has_rtw:
+                notice_text = (
+                    "Your order contains both <strong>Ready-to-Wear</strong> and <strong>Made-to-Order</strong> items. "
+                    "Ready-to-Wear pieces will be processed and dispatched within <strong>24 to 48 hours</strong>. "
+                    "Made-to-Order items will be handcrafted by our designers according to the timeline indicated below."
+                )
+            elif has_mto:
+                notice_text = (
+                    "Your order contains <strong>Made-to-Order</strong> item(s). "
+                    "Our artisans are crafting your custom pieces according to the estimated processing timeline indicated below. "
+                    "You will receive an update as soon as your order is out for delivery."
+                )
+            else:
+                notice_text = (
+                    "All items in your order are <strong>Ready-to-Wear</strong> and will be processed and prepared for delivery within <strong>24 to 48 hours</strong>."
+                )
+
+            fulfillment_notice = f"""
+        <div style="margin:20px 0;padding:16px;border:1px solid {BRAND_BORDER};border-left:4px solid {BRAND_PRIMARY};border-radius:8px;background:{BRAND_LIGHT};">
+            <p style="margin:0 0 4px;font-weight:600;font-size:13px;color:{BRAND_PRIMARY};text-transform:uppercase;letter-spacing:0.05em;">📦 Processing & Delivery Timeline</p>
+            <p style="margin:0;font-size:13px;color:#4B5563;line-height:1.5;">{notice_text}</p>
+        </div>
+        """
+
         body_html = f"""
         <p style="font-size:16px;">Hi {name or 'there'},</p>
         <p>{intro}</p>
@@ -481,6 +547,7 @@ class EmailService:
             <p style="margin:4px 0;"><strong>Order Date:</strong> {order_date.strftime('%d %B %Y · %I:%M %p')}</p>
             <p style="margin:4px 0 0;"><strong>Payment Status:</strong> {status_label}</p>
         </div>
+        {fulfillment_notice}
         <table style="width:100%;border-collapse:collapse;margin-bottom:24px;">
             <thead>
                 <tr style="background:{BRAND_LIGHT};text-transform:uppercase;font-size:12px;letter-spacing:0.15em;color:#6B7280;">

@@ -149,10 +149,10 @@ export default function OrderSuccess() {
   if (error || !order) {
     return (
       <div className="min-h-screen bg-white flex flex-col">
-        <div className="px-8 py-6">
+        <div className="px-4 sm:px-8 py-4 sm:py-6">
           <Link
             to={ROUTES.HOME}
-            className="text-4xl text-primary"
+            className="text-3xl sm:text-4xl text-primary leading-none"
             style={{ fontFamily: 'Lao MN, var(--font-display, serif)' }}
             aria-label="Shopsoma home"
           >
@@ -187,10 +187,10 @@ export default function OrderSuccess() {
 
   return (
     <div className="min-h-screen bg-white flex flex-col">
-      <div className="px-8 py-6">
+      <div className="px-4 sm:px-8 py-4 sm:py-6">
         <Link
           to={ROUTES.HOME}
-          className="text-4xl text-primary"
+          className="text-3xl sm:text-4xl text-primary leading-none"
           style={{ fontFamily: 'Lao MN, var(--font-display, serif)' }}
           aria-label="Shopsoma home"
         >
@@ -198,22 +198,22 @@ export default function OrderSuccess() {
         </Link>
       </div>
 
-      <div className="flex-1 flex flex-col items-center justify-center px-4 py-12">
-        <div className="w-full max-w-2xl space-y-8">
+      <div className="flex-1 flex flex-col items-center justify-center px-4 py-8 sm:py-12">
+        <div className="w-full max-w-2xl space-y-6 sm:space-y-8">
           {/* Status Icon and Message */}
           <div className="text-center space-y-4">
-            <div className={`text-6xl ${status.iconColor}`}>{status.icon}</div>
+            <div className={`text-5xl sm:text-6xl ${status.iconColor}`}>{status.icon}</div>
             <div className="space-y-2">
-              <p className="text-sm font-semibold text-gray-500 uppercase tracking-[0.3em]">
+              <p className="text-xs sm:text-sm font-semibold text-gray-500 uppercase tracking-[0.3em]">
                 {status.subtitle}
               </p>
-              <h1 className="text-2xl font-semibold text-dark">{status.title}</h1>
-              <p className="text-sm text-gray-500">{status.message}</p>
+              <h1 className="text-xl sm:text-2xl font-semibold text-dark">{status.title}</h1>
+              <p className="text-xs sm:text-sm text-gray-500">{status.message}</p>
             </div>
           </div>
 
           {/* Order Details Card */}
-          <div className="bg-gray-50 border border-gray-200 rounded-sm p-6 space-y-4">
+          <div className="bg-gray-50 border border-gray-200 rounded-sm p-4 sm:p-6 space-y-4">
             <h2 className="text-sm font-semibold text-gray-700 uppercase tracking-[0.2em]">
               Order Summary
             </h2>
