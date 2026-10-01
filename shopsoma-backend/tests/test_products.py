@@ -742,6 +742,12 @@ class TestProductList:
         assert data["total"] >= 1
         assert "Test" in data["products"][0]["title"]
 
+        # Search by vendor business name
+        vendor_name = sample_product.vendor.business_name
+        response_vendor = await client.get(f"/api/v1/products?search={vendor_name}")
+        assert response_vendor.status_code == 200
+        assert response_vendor.json()["total"] >= 1
+
     @pytest.mark.asyncio
     async def test_list_products_with_price_filter(self, client: AsyncClient, sample_product):
         """Test price filtering"""

@@ -136,7 +136,7 @@ export default function ProductList({
   childCategoryOverrides,
 }: ProductListProps = {}) {
   const [searchParams] = useSearchParams();
-  const searchQuery = searchParams.get('q') || '';
+  const searchQuery = (searchParams.get('q') || searchParams.get('search') || '').trim();
   const categoryParam = searchParams.get('category') || '';
 
   const [allProducts, setAllProducts] = useState<Product[]>([]);
@@ -167,7 +167,14 @@ export default function ProductList({
   const { favorites, toggleFavorite } = useWishlistActions();
   const activeCategory = filters.category;
   const showSubcategoryNav = Boolean(categoryNav?.length) && Boolean(presetCategory) && !categoryNavAsTabs;
-  const requestParams = useMemo(() => ({ ...(initialParams ?? {}), ...(selectedCategoryId ? { category_id: selectedCategoryId } : {}) }), [initialParams, selectedCategoryId]);
+  const requestParams = useMemo(
+    () => ({
+      ...(initialParams ?? {}),
+      ...(selectedCategoryId ? { category_id: selectedCategoryId } : {}),
+      ...(searchQuery ? { search: searchQuery } : {}),
+    }),
+    [initialParams, selectedCategoryId, searchQuery]
+  );
   const initialParamsKey = useMemo(() => JSON.stringify(requestParams), [requestParams]);
   const stableInitialParams = useMemo(() => Object.keys(requestParams).length ? { ...requestParams } : undefined, [initialParamsKey, requestParams]);
   const featuredCategory = presetCategory === 'Men' ? 'men' : presetCategory === 'Women' ? 'women' : null;
@@ -277,9 +284,9 @@ export default function ProductList({
         let products = response.products || [];
         setAllProducts(products);
         setError(null);
-        // The first page is usable immediately; additional category pages are background enrichment.
+        // The first page is usable immediately; additional catalog/category pages are background enrichment.
         setLoading(false);
-        if (stableInitialParams?.category_id && response.total_pages > 1) {
+        if (response.total_pages > 1) {
           for (let nextPage = 2; nextPage <= response.total_pages; nextPage += 1) {
             if (cancelled) return;
             try {
@@ -526,11 +533,14 @@ export default function ProductList({
     // Apply search query filter
     if (searchQuery.trim()) {
       const query = searchQuery.toLowerCase().trim();
+      const terms = query.split(/\s+/).filter(Boolean);
       list = list.filter((product) => {
-        const titleMatch = product.title?.toLowerCase().includes(query);
-        const descriptionMatch = product.description?.toLowerCase().includes(query);
-        const categoryMatch = product.category_name?.toLowerCase().includes(query);
-        return titleMatch || descriptionMatch || categoryMatch;
+        const title = product.title?.toLowerCase() || '';
+        const description = product.description?.toLowerCase() || '';
+        const category = product.category_name?.toLowerCase() || '';
+        const vendor = product.vendor_name?.toLowerCase() || '';
+        const combined = `${title} ${description} ${category} ${vendor}`;
+        return terms.every((term) => combined.includes(term));
       });
     }
 
@@ -623,11 +633,14 @@ export default function ProductList({
     // Apply search query filter
     if (searchQuery.trim()) {
       const query = searchQuery.toLowerCase().trim();
+      const terms = query.split(/\s+/).filter(Boolean);
       list = list.filter((product) => {
-        const titleMatch = product.title?.toLowerCase().includes(query);
-        const descriptionMatch = product.description?.toLowerCase().includes(query);
-        const categoryMatch = product.category_name?.toLowerCase().includes(query);
-        return titleMatch || descriptionMatch || categoryMatch;
+        const title = product.title?.toLowerCase() || '';
+        const description = product.description?.toLowerCase() || '';
+        const category = product.category_name?.toLowerCase() || '';
+        const vendor = product.vendor_name?.toLowerCase() || '';
+        const combined = `${title} ${description} ${category} ${vendor}`;
+        return terms.every((term) => combined.includes(term));
       });
     }
 

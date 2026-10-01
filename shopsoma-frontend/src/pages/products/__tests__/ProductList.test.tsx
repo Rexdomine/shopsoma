@@ -311,4 +311,23 @@ describe('ProductList', () => {
       'http://localhost:8000/uploads/featured.jpg',
     );
   });
+
+  it('passes URL search query to productService.getProducts and renders matching products', async () => {
+    getProductsMock.mockResolvedValue({
+      products: [{ id: 'ejii-tshirt-1', title: 'EJII T-SHIRT', category_name: 'Men', base_price: 30000 }],
+      total: 1,
+      total_pages: 1,
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/products?q=EJII+T-SHIRT']}>
+        <ProductList />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => expect(getProductsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ search: 'EJII T-SHIRT' })
+    ));
+    await waitFor(() => expect(screen.getAllByTestId('product-ejii-tshirt-1')).not.toHaveLength(0));
+  });
 });

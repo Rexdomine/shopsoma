@@ -1867,13 +1867,17 @@ async def list_all_products(
     filters = []
 
     if search:
-        search_term = f"%{search}%"
-        filters.append(
-            or_(
-                Product.title.ilike(search_term),
-                Product.sku.ilike(search_term)
-            )
-        )
+        search_terms = [t.strip() for t in search.split() if t.strip()]
+        if search_terms:
+            term_filters = []
+            for term in search_terms:
+                term_filter = or_(
+                    Product.title.ilike(f"%{term}%"),
+                    Product.sku.ilike(f"%{term}%"),
+                    Product.vendor.has(Vendor.business_name.ilike(f"%{term}%")),
+                )
+                term_filters.append(term_filter)
+            filters.append(and_(*term_filters))
 
     if status is not None:
         filters.append(Product.status == status)
