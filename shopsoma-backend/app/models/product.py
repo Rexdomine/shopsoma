@@ -403,7 +403,10 @@ class SizeStock(Base):
     )
 
     # Size and stock
-    size = Column(SQLEnum(SizeEnum), nullable=False)
+    size = Column(
+        SQLEnum(SizeEnum, name="sizeenum", values_callable=lambda x: [e.value for e in x]),
+        nullable=False,
+    )
     stock = Column(Integer, default=0, nullable=False)
 
     created_at = Column(
