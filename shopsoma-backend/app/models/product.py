@@ -331,6 +331,7 @@ class SizeEnum(str, enum.Enum):
     XL = "XL"
     XXL = "XXL"
     XXXL = "XXXL"
+    ONE_SIZE = "One/Size"
 
 
 class Variation(Base):
