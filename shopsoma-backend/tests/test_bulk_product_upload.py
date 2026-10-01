@@ -301,3 +301,90 @@ async def test_bulk_upload_variable_rejects_product_sku_reused_by_multiple_produ
     errors = response.json()["detail"]["errors"]
     assert sum(error["field"] == "product_sku" for error in errors) == 2
     assert all("multiple products" in error["message"] for error in errors if error["field"] == "product_sku")
+
+
+@pytest.mark.asyncio
+async def test_bulk_upload_variable_products_accepts_one_size(client: AsyncClient, vendor_user, db_session):
+    from app.models.category import Category
+    from app.models.product import Product, SizeStock, SizeEnum, Variation
+    from sqlalchemy import select
+
+    category = Category(name="Accessories", slug="accessories-socks")
+    db_session.add(category)
+    await db_session.commit()
+
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=[
+        "product_title", "description", "category_slug", "currency", "base_price",
+        "compare_at_price", "product_sku", "collection_name", "made_to_order",
+        "made_to_order_timeline", "care_instructions", "fabric_composition",
+        "color_name", "color_hex", "size", "stock", "variant_sku",
+        "variation_price", "variation_sale_price",
+    ])
+    writer.writeheader()
+    writer.writerow({
+        "product_title": "Grip Socks",
+        "description": "Athletic grip socks",
+        "category_slug": "accessories-socks",
+        "currency": "NGN",
+        "base_price": "5000",
+        "compare_at_price": "",
+        "product_sku": "GRIP-SOCKS-01",
+        "collection_name": "",
+        "made_to_order": "false",
+        "made_to_order_timeline": "",
+        "care_instructions": "Machine wash cold",
+        "fabric_composition": "Cotton blend",
+        "color_name": "Black",
+        "color_hex": "#000000",
+        "size": "One/Size",
+        "stock": "25",
+        "variant_sku": "GRIP-SOCKS-BLK-OS",
+        "variation_price": "",
+        "variation_sale_price": "",
+    })
+    writer.writerow({
+        "product_title": "Grip Socks",
+        "description": "Athletic grip socks",
+        "category_slug": "accessories-socks",
+        "currency": "NGN",
+        "base_price": "5000",
+        "compare_at_price": "",
+        "product_sku": "GRIP-SOCKS-01",
+        "collection_name": "",
+        "made_to_order": "false",
+        "made_to_order_timeline": "",
+        "care_instructions": "Machine wash cold",
+        "fabric_composition": "Cotton blend",
+        "color_name": "White",
+        "color_hex": "#FFFFFF",
+        "size": "one size",  # Tests case & space normalization
+        "stock": "15",
+        "variant_sku": "GRIP-SOCKS-WHT-OS",
+        "variation_price": "",
+        "variation_sale_price": "",
+    })
+
+    response = await client.post(
+        "/api/v1/products/bulk-upload/variable",
+        files={"file": ("socks.csv", output.getvalue(), "text/csv")},
+        headers=vendor_user["headers"],
+    )
+    assert response.status_code == 201
+    assert response.json()["created_count"] == 1
+
+    prod_result = await db_session.execute(
+        Product.__table__.select().where(Product.title == "Grip Socks")
+    )
+    prod = prod_result.first()
+    assert prod is not None
+
+    stocks_result = await db_session.execute(
+        select(SizeStock).join(Variation).where(Variation.product_id == prod.id)
+    )
+    stocks = stocks_result.scalars().all()
+    assert len(stocks) == 2
+    for s in stocks:
+        assert s.size == SizeEnum.ONE_SIZE
+        assert s.size.value == "One/Size"
+

@@ -20,7 +20,7 @@ type SizeOption = 'One/Size' | 'XXXL' | 'XXL' | 'XL' | 'L' | 'M' | 'S' | 'XS' | 
 type SizingSystem = 'One/Size' | 'US Sizing' | 'UK Sizing' | 'EU Sizing';
 type VariationMode = 'Size' | 'Color';
 
-const SIZE_STOCK_OPTIONS = new Set<SizeOption>(['XXXL', 'XXL', 'XL', 'L', 'M', 'S', 'XS', 'XXS']);
+const SIZE_STOCK_OPTIONS = new Set<SizeOption>(['XXXL', 'XXL', 'XL', 'L', 'M', 'S', 'XS', 'XXS', 'One/Size']);
 type ColorMode = 'solid' | 'multi' | 'none';
 
 interface ProductImage {
