@@ -671,6 +671,14 @@ async def bulk_upload_variable_products(
     sku_groups: Dict[str, set[str]] = {}
     grouped_skus: Dict[str, Dict[str, List[int]]] = {}
     allowed_sizes = {size.value for size in SizeEnum}
+    canonical_size_map = {size.value.upper(): size.value for size in SizeEnum}
+    canonical_size_map.update({
+        "ONE/SIZE": "One/Size",
+        "ONE SIZE": "One/Size",
+        "ONESIZE": "One/Size",
+        "ONE-SIZE": "One/Size",
+        "OS": "One/Size",
+    })
 
     for row_index, row in enumerate(reader, start=2):
         row_errors: List[Dict[str, Any]] = []
@@ -691,7 +699,8 @@ async def bulk_upload_variable_products(
         height_cm = _parse_positive_decimal(row.get("height_cm"), "height_cm", row_index, row_errors)
         color_name = (row.get("color_name") or "").strip()
         color_hex = (row.get("color_hex") or "").strip() or None
-        size = (row.get("size") or "").strip()
+        raw_size = (row.get("size") or "").strip()
+        size = canonical_size_map.get(raw_size.upper(), raw_size)
         stock = _parse_int(row.get("stock"), "stock", row_index, row_errors)
         variation_price = _parse_decimal(row.get("variation_price"), "variation_price", row_index, row_errors)
         variation_sale_price = _parse_decimal(row.get("variation_sale_price"), "variation_sale_price", row_index, row_errors)
@@ -708,10 +717,10 @@ async def bulk_upload_variable_products(
             row_errors.append({"row": row_index, "field": "color_name", "message": "Color name is required"})
         if not size:
             row_errors.append({"row": row_index, "field": "size", "message": "Size is required"})
+        elif size not in allowed_sizes:
+            row_errors.append({"row": row_index, "field": "size", "message": "Invalid size value"})
         if stock is None:
             row_errors.append({"row": row_index, "field": "stock", "message": "Stock is required"})
-        if size and size not in allowed_sizes:
-            row_errors.append({"row": row_index, "field": "size", "message": "Invalid size value"})
 
         category = None
         if category_slug:

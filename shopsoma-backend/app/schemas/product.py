@@ -328,8 +328,8 @@ class SizeStockBase(BaseModel):
     """
     size: str = Field(
         ...,
-        pattern="^(XXS|XS|S|M|L|XL|XXL|XXXL|4|6|8|10|12|14|16|18|20|22|32|34|36|38|40|42|44|46|48|50)$",
-        description="Size (US/UK/EU sizing)"
+        pattern="^(XXS|XS|S|M|L|XL|XXL|XXXL|One/Size|4|6|8|10|12|14|16|18|20|22|32|34|36|38|40|42|44|46|48|50)$",
+        description="Size (US/UK/EU sizing or One/Size)"
     )
     stock: int = Field(default=0, ge=0, description="Stock quantity")
 

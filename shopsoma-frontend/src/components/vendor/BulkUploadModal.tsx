@@ -62,7 +62,7 @@ const VARIABLE_HEADERS = [
 const SAMPLE_IMAGE_1 = 'https://images.unsplash.com/photo-1521572163474-6864f9cf17ab?w=800';
 const SAMPLE_IMAGE_2 = 'https://images.unsplash.com/photo-1515886657613-9f3515b0c78f?w=800';
 
-const SIZE_VALUES = ['XXS', 'XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL'];
+const SIZE_VALUES = ['XXS', 'XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL', 'One/Size'];
 
 const SINGLE_SAMPLE_ROWS = [
   {
