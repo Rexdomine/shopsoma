@@ -923,11 +923,17 @@ async def list_products(
 
     # Search
     if search:
-        search_filter = or_(
-            Product.title.ilike(f"%{search}%"),
-            Product.description.ilike(f"%{search}%")
-        )
-        filters.append(search_filter)
+        search_terms = [t.strip() for t in search.split() if t.strip()]
+        if search_terms:
+            term_filters = []
+            for term in search_terms:
+                term_filter = or_(
+                    Product.title.ilike(f"%{term}%"),
+                    Product.description.ilike(f"%{term}%"),
+                    Product.vendor.has(Vendor.business_name.ilike(f"%{term}%")),
+                )
+                term_filters.append(term_filter)
+            filters.append(and_(*term_filters))
 
     # Category filter
     if category_id:
