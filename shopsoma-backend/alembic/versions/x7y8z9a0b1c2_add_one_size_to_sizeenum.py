@@ -16,6 +16,7 @@ depends_on = None
 def upgrade():
     with op.get_context().autocommit_block():
         op.execute("ALTER TYPE sizeenum ADD VALUE IF NOT EXISTS 'One/Size'")
+        op.execute("ALTER TYPE sizeenum ADD VALUE IF NOT EXISTS 'ONE_SIZE'")
 
 
 def downgrade():
