@@ -3676,7 +3676,8 @@ async def update_order_status(
                 customer_name=user.full_name,
                 order_number=order.order_number,
                 status=status,
-                notes=notes
+                tracking_number=order.tracking_number,
+                notes=notes,
             )
         except Exception as e:
             logger.error(f"Error sending order status update email: {e}")
