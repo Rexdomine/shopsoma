@@ -84,7 +84,7 @@ CUSTOMER_STATUS_MESSAGES = {
     FulfillmentStatus.ORDER_RECEIVED: {
         "title": "Order Confirmed",
         "message": "Your order has been confirmed and is being processed.",
-        "send_email": True,
+        "send_email": False,
     },
     FulfillmentStatus.PREPARING_FOR_PICKUP: {
         "title": "Order Being Prepared",
@@ -188,6 +188,11 @@ class OrderNotificationService:
         pickup_details: Optional[Dict[str, Any]] = None
     ) -> bool:
         """Send notification to all vendors involved in the order"""
+        if isinstance(new_status, str):
+            try:
+                new_status = FulfillmentStatus(new_status)
+            except ValueError:
+                pass
 
         status_config = VENDOR_STATUS_MESSAGES.get(new_status)
         if not status_config or not status_config["send_email"]:
@@ -247,16 +252,22 @@ class OrderNotificationService:
         pickup_details: Optional[Dict[str, Any]] = None
     ) -> bool:
         """Send notification to customer"""
+        if isinstance(new_status, str):
+            try:
+                new_status = FulfillmentStatus(new_status)
+            except ValueError:
+                pass
 
-        logger.info(f"🔔 _notify_customer called for order {order.order_number}, status: {new_status.value}")
+        status_val = getattr(new_status, "value", str(new_status))
+        logger.info(f"🔔 _notify_customer called for order {order.order_number}, status: {status_val}")
 
         status_config = CUSTOMER_STATUS_MESSAGES.get(new_status)
         if not status_config:
-            logger.warning(f"❌ No status config found for status: {new_status.value}")
+            logger.warning(f"❌ No status config found for status: {status_val}")
             return False
 
         if not status_config["send_email"]:
-            logger.info(f"⏭️  Customer email sending disabled for status: {new_status.value}")
+            logger.info(f"⏭️  Customer email sending disabled for status: {status_val}")
             return False
 
         logger.info(f"✅ Customer email enabled for status: {new_status.value} - '{status_config['title']}'")

@@ -14,7 +14,7 @@ from urllib.parse import urlparse
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, or_, and_
+from sqlalchemy import select, func, or_, and_, update
 from sqlalchemy.orm import aliased, selectinload
 
 from app.core.database import get_db
@@ -1644,6 +1644,13 @@ async def create_image(
             detail=f"Products can have at most {MAX_PRODUCT_IMAGES} images",
         )
 
+    if image_data.is_primary:
+        await db.execute(
+            update(ProductImage)
+            .where(ProductImage.product_id == product_id)
+            .values(is_primary=False)
+        )
+
     # Create image
     image = ProductImage(
         product_id=product_id,
@@ -1654,6 +1661,100 @@ async def create_image(
     await db.commit()
     await db.refresh(image)
 
+    return image
+
+
+@router.post("/{product_id}/images/{image_id}/primary", response_model=ProductImageResponse)
+@router.patch("/{product_id}/images/{image_id}", response_model=ProductImageResponse)
+@router.put("/{product_id}/images/{image_id}", response_model=ProductImageResponse)
+async def update_image(
+    product_id: UUID,
+    image_id: UUID,
+    image_data: Optional[ProductImageUpdate] = None,
+    vendor: Vendor = Depends(get_completed_vendor),
+    db: AsyncSession = Depends(get_db),
+):
+    """Update a product image (e.g. set as primary or change display order)"""
+    result = await db.execute(
+        select(Vendor.id).where(Vendor.id == vendor.id)
+    )
+    vendor_id = result.scalar_one_or_none()
+
+    result = await db.execute(
+        select(Product).where(Product.id == product_id)
+    )
+    product = result.scalar_one_or_none()
+
+    if not product or product.vendor_id != vendor_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Product not found"
+        )
+
+    images = list(
+        (
+            await db.scalars(
+                select(ProductImage)
+                .where(ProductImage.product_id == product_id)
+                .order_by(ProductImage.display_order, ProductImage.created_at, ProductImage.id)
+            )
+        ).all()
+    )
+    image = next((item for item in images if item.id == image_id), None)
+    if not image:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Image not found"
+        )
+
+    changes = image_data.model_dump(exclude_unset=True) if image_data else {}
+    if any(
+        name in changes and changes[name] != getattr(image, name)
+        for name in ("image_url", "thumbnail_url")
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Image URLs are immutable; use the upload endpoint",
+        )
+
+    new_order = changes.pop("display_order", None)
+    make_primary = True if image_data is None else changes.pop("is_primary", None)
+    order_target = image
+    for key, value in changes.items():
+        setattr(image, key, value)
+
+    if make_primary is True:
+        for item in images:
+            item.is_primary = item.id == image_id
+        if new_order is None:
+            new_order = 0
+    elif make_primary is False and image.is_primary:
+        replacement = next((item for item in images if item.id != image_id), None)
+        if replacement:
+            image.is_primary = False
+            replacement.is_primary = True
+            order_target = replacement
+            new_order = 0
+
+    if new_order is not None:
+        ordered = [item for item in images if item.id != order_target.id]
+        if order_target.is_primary:
+            new_order = 0
+        elif any(item.is_primary for item in images):
+            new_order = max(1, new_order)
+        ordered.insert(min(new_order, len(ordered)), order_target)
+        for index, item in enumerate(ordered):
+            item.display_order = index
+        images = ordered
+
+    if images:
+        primary = image if image.is_primary else next((item for item in images if item.is_primary), images[0])
+        for item in images:
+            item.is_primary = item is primary
+
+    await mark_product_content_pending(db=db, product_id=product_id)
+    await db.commit()
+    await db.refresh(image)
     return image
 
 
@@ -1696,11 +1797,25 @@ async def delete_image(
             detail="Image not found"
         )
 
+    was_primary = image.is_primary
     await mark_product_content_pending(db=db, product_id=product_id)
     storage_keys = list(image.storage_keys or [])
     if storage_keys:
         await lock_storage_keys(db, storage_keys)
     await db.delete(image)
+    if was_primary:
+        remaining_images = list(
+            (
+                await db.scalars(
+                    select(ProductImage)
+                    .where(and_(ProductImage.product_id == product_id, ProductImage.id != image_id))
+                    .order_by(ProductImage.display_order, ProductImage.created_at, ProductImage.id)
+                )
+            ).all()
+        )
+        for idx, rem_img in enumerate(remaining_images):
+            rem_img.is_primary = idx == 0
+            rem_img.display_order = idx
     cleanup_record = None
     if storage_keys:
         await clear_featured_storefront_references(db, storage_keys)

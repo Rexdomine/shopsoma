@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Trash2, ChevronDown, Upload, X, Plus, Edit2, Check } from 'lucide-react';
+import { ArrowLeft, Trash2, ChevronDown, Upload, X, Plus, Edit2, Check, Star } from 'lucide-react';
 import VendorSidebar from '../../components/vendor/VendorSidebar';
 import CollectionModal from '../../components/vendor/CollectionModal';
 import ToastContainer from '../../components/ui/ToastContainer';
@@ -164,6 +164,7 @@ export default function VendorProductAdd() {
   const [currentVariation] = useState('1');
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [primaryImageId, setPrimaryImageId] = useState<string | null>(null);
 
   // Detailed Variations (for the modal)
   const [detailedVariations, setDetailedVariations] = useState<DetailedVariation[]>([]);
@@ -185,6 +186,7 @@ export default function VendorProductAdd() {
   const [variationSelectedSizes, setVariationSelectedSizes] = useState<SizeOption[]>([]);
   const [variationSizeStock, setVariationSizeStock] = useState<Record<SizeOption, string>>({} as Record<SizeOption, string>);
   const [variationImages, setVariationImages] = useState<ProductImage[]>([]);
+  const [variationPrimaryImageId, setVariationPrimaryImageId] = useState<string | null>(null);
   const variationFileInputRef = useRef<HTMLInputElement>(null);
 
   // Dropdowns
@@ -313,6 +315,7 @@ export default function VendorProductAdd() {
       setVariationSelectedSizes(editingVariation.selectedSizes);
       setVariationSizeStock(editingVariation.sizeStock);
       setVariationImages(editingVariation.images);
+      setVariationPrimaryImageId(editingVariation.images[0]?.id || null);
     } else {
       // Reset form for new variation
       setVariationName('');
@@ -329,6 +332,7 @@ export default function VendorProductAdd() {
       setVariationSelectedSizes([]);
       setVariationSizeStock({} as Record<SizeOption, string>);
       setVariationImages([]);
+      setVariationPrimaryImageId(null);
     }
   }, [editingVariation, showVariationModal]);
 
@@ -485,6 +489,10 @@ export default function VendorProductAdd() {
           ? { ...v, images: [...v.images, ...newImages] }
           : v
       ));
+
+      if (!primaryImageId && newImages.length > 0) {
+        setPrimaryImageId(newImages[0].id);
+      }
     } finally {
       setIsUploading(false);
       setUploadProgress(0);
@@ -505,9 +513,14 @@ export default function VendorProductAdd() {
       URL.revokeObjectURL(imageToRemove.preview);
     }
 
+    const remainingImages = (currentVar?.images || []).filter(img => img.id !== imageId);
+    if (primaryImageId === imageId) {
+      setPrimaryImageId(remainingImages[0]?.id ?? null);
+    }
+
     setVariations(variations.map(v =>
       v.id === currentVariation
-        ? { ...v, images: v.images.filter(img => img.id !== imageId) }
+        ? { ...v, images: remainingImages }
         : v
     ));
   };
@@ -648,6 +661,9 @@ export default function VendorProductAdd() {
 
       // Add images to variation images
       setVariationImages([...variationImages, ...newImages]);
+      if (!variationPrimaryImageId && newImages.length > 0) {
+        setVariationPrimaryImageId(newImages[0].id);
+      }
 
       success(`${newImages.length} image(s) uploaded for variation`, 'Upload Complete');
     } catch (err: any) {
@@ -670,7 +686,11 @@ export default function VendorProductAdd() {
       URL.revokeObjectURL(imageToRemove.preview);
     }
 
-    setVariationImages(variationImages.filter(img => img.id !== imageId));
+    const remainingImages = variationImages.filter(img => img.id !== imageId);
+    if (variationPrimaryImageId === imageId) {
+      setVariationPrimaryImageId(remainingImages[0]?.id ?? null);
+    }
+    setVariationImages(remainingImages);
   };
 
   // Validate and save variation
@@ -741,6 +761,13 @@ export default function VendorProductAdd() {
       return;
     }
 
+    const effectiveVariationPrimaryId = variationPrimaryImageId || variationImages[0]?.id;
+    const orderedVariationImages = [...variationImages].sort((a, b) => {
+      if (a.id === effectiveVariationPrimaryId) return -1;
+      if (b.id === effectiveVariationPrimaryId) return 1;
+      return 0;
+    });
+
     const newVariation: DetailedVariation = {
       id: editingVariation ? editingVariation.id : Date.now().toString(),
       name: variationType === 'Color' ? getResolvedColorLabel(variationColorMode, variationColorLabel) : variationName,
@@ -755,7 +782,7 @@ export default function VendorProductAdd() {
       sizingSystem: variationSizingSystem,
       selectedSizes: variationSelectedSizes,
       sizeStock: variationSizeStock,
-      images: variationImages,
+      images: orderedVariationImages,
     };
 
     if (editingVariation) {
@@ -903,6 +930,13 @@ export default function VendorProductAdd() {
               ).values()
             );
 
+      const effectivePrimaryId = primaryImageId || uploadedImages[0]?.id;
+      const orderedUploadedImages = [...uploadedImages].sort((a, b) => {
+        if (a.id === effectivePrimaryId) return -1;
+        if (b.id === effectivePrimaryId) return 1;
+        return 0;
+      });
+
       const payload: CreateProductPayload = {
         title: productName.trim(),
         description: productDescription.trim(),
@@ -923,12 +957,12 @@ export default function VendorProductAdd() {
         length_cm: Number(lengthCm),
         width_cm: Number(widthCm),
         height_cm: Number(heightCm),
-        images: uploadedImages.map((image, index) => ({
+        images: orderedUploadedImages.map((image, index) => ({
           image_url: image.imageUrl!,
           thumbnail_url: image.thumbnailUrl,
           alt_text: productName.trim() || undefined,
           display_order: index,
-          is_primary: index === 0,
+          is_primary: image.id === effectivePrimaryId,
           storage_keys: image.storageKeys,
         })),
       };
@@ -1767,7 +1801,11 @@ export default function VendorProductAdd() {
                     </div>
 
                     <ProductImageFramePreview
-                      imageSrc={productType === 'single' ? currentVarImages[0]?.preview : undefined}
+                      imageSrc={
+                        productType === 'single'
+                          ? (currentVarImages.find((img) => img.id === primaryImageId) || currentVarImages[0])?.preview
+                          : undefined
+                      }
                       alt="Product page image preview"
                     />
                   </div>
@@ -1787,41 +1825,76 @@ export default function VendorProductAdd() {
                     {productType === 'single' && currentVarImages.length > 0 && (
                       <div className="rounded-3xl border border-gray-200 bg-gray-50/70 p-3">
                         <div className="mb-3 flex items-center justify-between px-1">
-                          <p className="text-sm font-medium text-gray-900">Uploaded gallery</p>
-                          <p className="text-xs text-gray-500">{currentVarImages.length} image{currentVarImages.length === 1 ? '' : 's'}</p>
+                          <div>
+                            <p className="text-sm font-medium text-gray-900">Uploaded gallery</p>
+                            <p className="text-xs text-gray-500">
+                              Click any picture or use "Set Primary" to choose the storefront cover image.
+                            </p>
+                          </div>
+                          <p className="text-xs font-medium text-[#105E53]">{currentVarImages.length} image{currentVarImages.length === 1 ? '' : 's'}</p>
                         </div>
                         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4">
-                          {currentVarImages.map((image, index) => (
-                            <div key={image.id} className="relative group aspect-square overflow-hidden rounded-2xl bg-white shadow-sm">
-                              <img
-                                src={image.preview}
-                                alt="Product"
-                                className="w-full h-full object-cover transition duration-300 group-hover:scale-105"
-                              />
-                              {!image.uploaded && (
-                                <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
-                                  <div className="w-6 h-6 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                                </div>
-                              )}
-                              {index === 0 && image.uploaded && (
-                                <div className="absolute left-2 top-2 rounded-full bg-white/95 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#105E53] shadow-sm">
-                                  Cover
-                                </div>
-                              )}
-                              {image.uploaded && (
-                                <div className="absolute right-2 top-2 p-1 bg-green-500 rounded-full shadow-sm">
-                                  <Check className="h-3 w-3 text-white" />
-                                </div>
-                              )}
-                              <button
-                                type="button"
-                                onClick={() => removeImage(image.id)}
-                                className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition flex items-center justify-center"
+                          {currentVarImages.map((image) => {
+                            const isPrimary = image.id === (primaryImageId || currentVarImages[0]?.id);
+                            return (
+                              <div
+                                key={image.id}
+                                onClick={() => setPrimaryImageId(image.id)}
+                                className={`relative group aspect-square overflow-hidden rounded-2xl bg-white shadow-sm cursor-pointer transition ${
+                                  isPrimary ? 'ring-2 ring-[#105E53] ring-offset-2' : 'hover:ring-1 hover:ring-gray-300'
+                                }`}
                               >
-                                <Trash2 className="h-5 w-5 text-white" />
-                              </button>
-                            </div>
-                          ))}
+                                <img
+                                  src={image.preview}
+                                  alt="Product"
+                                  className="w-full h-full object-cover transition duration-300 group-hover:scale-105"
+                                />
+                                {!image.uploaded && (
+                                  <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
+                                    <div className="w-6 h-6 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                                  </div>
+                                )}
+                                {isPrimary && image.uploaded && (
+                                  <div className="absolute left-2 top-2 rounded-full bg-[#105E53] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-white shadow-sm flex items-center gap-1 z-10">
+                                    <Star className="w-3 h-3 fill-current" />
+                                    Primary
+                                  </div>
+                                )}
+                                {!isPrimary && image.uploaded && (
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setPrimaryImageId(image.id);
+                                    }}
+                                    className="absolute left-2 top-2 rounded-full bg-white/95 hover:bg-white px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-700 hover:text-[#105E53] shadow-md opacity-0 group-hover:opacity-100 transition flex items-center gap-1 z-10"
+                                    title="Set as primary product picture"
+                                    aria-label="Set as primary"
+                                  >
+                                    <Star className="w-3 h-3 text-gray-400 group-hover:text-[#105E53]" />
+                                    Set Primary
+                                  </button>
+                                )}
+                                {image.uploaded && !isPrimary && (
+                                  <div className="absolute right-2 top-2 p-1 bg-green-500 rounded-full shadow-sm group-hover:opacity-0 transition">
+                                    <Check className="h-3 w-3 text-white" />
+                                  </div>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    removeImage(image.id);
+                                  }}
+                                  className="absolute right-2 top-2 p-1.5 bg-red-600/90 text-white rounded-full hover:bg-red-700 shadow-md opacity-0 group-hover:opacity-100 transition z-10"
+                                  title="Remove image"
+                                  aria-label="Remove image"
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </button>
+                              </div>
+                            );
+                          })}
                         </div>
                       </div>
                     )}
@@ -2276,7 +2349,9 @@ export default function VendorProductAdd() {
                             </p>
                           </div>
                           <ProductImageFramePreview
-                            imageSrc={variationImages[0]?.preview}
+                            imageSrc={
+                              (variationImages.find((img) => img.id === variationPrimaryImageId) || variationImages[0])?.preview
+                            }
                             alt="Variation product page image preview"
                             compact
                           />
@@ -2296,41 +2371,76 @@ export default function VendorProductAdd() {
                         {variationImages.length > 0 && (
                           <div className="mb-4 rounded-3xl border border-gray-200 bg-gray-50/70 p-3">
                             <div className="mb-3 flex items-center justify-between px-1">
-                              <p className="text-sm font-medium text-gray-900">Variation gallery</p>
-                              <p className="text-xs text-gray-500">{variationImages.length} image{variationImages.length === 1 ? '' : 's'}</p>
+                              <div>
+                                <p className="text-sm font-medium text-gray-900">Variation gallery</p>
+                                <p className="text-xs text-gray-500">
+                                  Click any picture or use "Set Primary" to choose this variation's cover image.
+                                </p>
+                              </div>
+                              <p className="text-xs font-medium text-[#105E53]">{variationImages.length} image{variationImages.length === 1 ? '' : 's'}</p>
                             </div>
                             <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-                              {variationImages.map((image, index) => (
-                                <div key={image.id} className="relative group aspect-square overflow-hidden rounded-2xl bg-white shadow-sm">
-                                  <img
-                                    src={image.preview}
-                                    alt="Variation"
-                                    className="w-full h-full object-cover transition duration-300 group-hover:scale-105"
-                                  />
-                                  {!image.uploaded && (
-                                    <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
-                                      <div className="w-6 h-6 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                                    </div>
-                                  )}
-                                  {index === 0 && image.uploaded && (
-                                    <div className="absolute left-2 top-2 rounded-full bg-white/95 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#105E53] shadow-sm">
-                                      Cover
-                                    </div>
-                                  )}
-                                  {image.uploaded && (
-                                    <div className="absolute right-2 top-2 p-1 bg-green-500 rounded-full shadow-sm">
-                                      <Check className="h-3 w-3 text-white" />
-                                    </div>
-                                  )}
-                                  <button
-                                    type="button"
-                                    onClick={() => removeVariationImage(image.id)}
-                                    className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition flex items-center justify-center"
+                              {variationImages.map((image) => {
+                                const isPrimary = image.id === (variationPrimaryImageId || variationImages[0]?.id);
+                                return (
+                                  <div
+                                    key={image.id}
+                                    onClick={() => setVariationPrimaryImageId(image.id)}
+                                    className={`relative group aspect-square overflow-hidden rounded-2xl bg-white shadow-sm cursor-pointer transition ${
+                                      isPrimary ? 'ring-2 ring-[#105E53] ring-offset-2' : 'hover:ring-1 hover:ring-gray-300'
+                                    }`}
                                   >
-                                    <Trash2 className="h-5 w-5 text-white" />
-                                  </button>
-                                </div>
-                              ))}
+                                    <img
+                                      src={image.preview}
+                                      alt="Variation"
+                                      className="w-full h-full object-cover transition duration-300 group-hover:scale-105"
+                                    />
+                                    {!image.uploaded && (
+                                      <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
+                                        <div className="w-6 h-6 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                                      </div>
+                                    )}
+                                    {isPrimary && image.uploaded && (
+                                      <div className="absolute left-2 top-2 rounded-full bg-[#105E53] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-white shadow-sm flex items-center gap-1 z-10">
+                                        <Star className="w-3 h-3 fill-current" />
+                                        Primary
+                                      </div>
+                                    )}
+                                    {!isPrimary && image.uploaded && (
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setVariationPrimaryImageId(image.id);
+                                        }}
+                                        className="absolute left-2 top-2 rounded-full bg-white/95 hover:bg-white px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-700 hover:text-[#105E53] shadow-md opacity-0 group-hover:opacity-100 transition flex items-center gap-1 z-10"
+                                        title="Set as primary variation picture"
+                                        aria-label="Set as primary"
+                                      >
+                                        <Star className="w-3 h-3 text-gray-400 group-hover:text-[#105E53]" />
+                                        Set Primary
+                                      </button>
+                                    )}
+                                    {image.uploaded && !isPrimary && (
+                                      <div className="absolute right-2 top-2 p-1 bg-green-500 rounded-full shadow-sm group-hover:opacity-0 transition">
+                                        <Check className="h-3 w-3 text-white" />
+                                      </div>
+                                    )}
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        removeVariationImage(image.id);
+                                      }}
+                                      className="absolute right-2 top-2 p-1.5 bg-red-600/90 text-white rounded-full hover:bg-red-700 shadow-md opacity-0 group-hover:opacity-100 transition z-10"
+                                      title="Remove image"
+                                      aria-label="Remove image"
+                                    >
+                                      <Trash2 className="h-3.5 w-3.5" />
+                                    </button>
+                                  </div>
+                                );
+                              })}
                             </div>
                           </div>
                         )}

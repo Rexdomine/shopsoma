@@ -326,7 +326,7 @@ class EmailService:
         html_content = self._wrap_email("Welcome", body_html, "Your curated Shopsoma experience begins now.")
         return await self.send_email(email, name, subject, html_content)
 
-    def _build_items_table(self, items: List[dict]) -> str:
+    def _build_items_table(self, items: List[dict], estimated_delivery_date: Optional[Any] = None) -> str:
         rows = ""
         for item in items:
             image_url = item.get("image_url") or item.get("image") or item.get("thumbnail")
@@ -348,15 +348,30 @@ class EmailService:
             mto_timeline = item.get("made_to_order_timeline") or item.get("estimated_production_days")
             if is_made_to_order:
                 if mto_timeline:
-                    if isinstance(mto_timeline, (int, float)) or (isinstance(mto_timeline, str) and str(mto_timeline).isdigit()):
-                        timeline_str = f"Estimated production: {mto_timeline} days"
+                    mto_clean = str(mto_timeline).strip()
+                    if mto_clean.lower().startswith("ships in "):
+                        timeline_str = mto_clean[9:].strip()
+                    elif mto_clean.lower().startswith("ready to ship in "):
+                        timeline_str = mto_clean[17:].strip()
+                    elif mto_clean.isdigit():
+                        timeline_str = f"{mto_clean} days"
                     else:
-                        timeline_str = f"Estimated production: {mto_timeline}"
+                        timeline_str = mto_clean
                 else:
-                    timeline_str = "Estimated production: 7–14 business days"
-                readiness_badge = f'<div style="margin-top:6px;"><span style="display:inline-block;padding:2px 8px;border-radius:4px;background:#FEF3C7;color:#92400E;font-size:11px;font-weight:600;">Made-to-Order · {html.escape(str(timeline_str))}</span></div>'
+                    timeline_str = "7–14 business days"
+                readiness_badge = f'<div style="margin-top:6px;"><span style="display:inline-block;padding:2px 8px;border-radius:4px;background:#FEF3C7;color:#92400E;font-size:11px;font-weight:600;">Made-to-Order · Item is being made — Ready to ship in {html.escape(str(timeline_str))}</span></div>'
             else:
-                readiness_badge = '<div style="margin-top:6px;"><span style="display:inline-block;padding:2px 8px;border-radius:4px;background:#ECFDF5;color:#065F46;font-size:11px;font-weight:600;">Ready-to-Wear · Ships within 24–48 hours</span></div>'
+                item_delivery = item.get("estimated_delivery")
+                if item_delivery:
+                    delivery_str = str(item_delivery)
+                elif estimated_delivery_date:
+                    if hasattr(estimated_delivery_date, "strftime"):
+                        delivery_str = estimated_delivery_date.strftime('%B %d, %Y')
+                    else:
+                        delivery_str = str(estimated_delivery_date)
+                else:
+                    delivery_str = "2–4 business days"
+                readiness_badge = f'<div style="margin-top:6px;"><span style="display:inline-block;padding:2px 8px;border-radius:4px;background:#ECFDF5;color:#065F46;font-size:11px;font-weight:600;">Ready-to-Wear · Ships in 24–48 hrs · Delivery: {html.escape(delivery_str)}</span></div>'
 
             # Use a div with background color as placeholder if no real image
             image_cell = ""
@@ -450,6 +465,7 @@ class EmailService:
         total: float,
         shipping_address: Dict[str, str],
         payment_status: Optional[str] = None,
+        estimated_delivery_date: Optional[Any] = None,
     ) -> bool:
         normalized_payment_status = (payment_status or "PAID").upper()
         if normalized_payment_status == "FAILED":
@@ -479,7 +495,7 @@ class EmailService:
             intro = "Thank you for placing your order with Shopsoma. Our artisans and logistics partners are preparing your pieces."
             status_label = "Payment confirmed"
             closing = "You can track your order anytime from your Shopsoma profile. Thank you for choosing African luxury."
-        items_table = self._build_items_table(items)
+        items_table = self._build_items_table(items, estimated_delivery_date=estimated_delivery_date)
         pricing_summary = self._build_pricing_summary(items, subtotal, shipping, tax, total)
         def _addr(key: str):
             return shipping_address.get(key) or shipping_address.get(key.replace('_', ''))
@@ -517,25 +533,22 @@ class EmailService:
         if normalized_payment_status not in ("FAILED", "PENDING"):
             if has_mto and has_rtw:
                 notice_text = (
-                    "Your order contains both <strong>Ready-to-Wear</strong> and <strong>Made-to-Order</strong> items. "
-                    "Ready-to-Wear pieces will be processed and dispatched within <strong>24 to 48 hours</strong>. "
-                    "Made-to-Order items will be handcrafted by our designers according to the timeline indicated below."
+                    "<p style='margin:0 0 6px;'><strong>⚡ Ready-to-Wear Items:</strong> Prepared and dispatched within <strong>24 to 48 hours</strong>. Estimated delivery: <strong>2–4 business days</strong>.</p>"
+                    "<p style='margin:0;'><strong>🔨 Made-to-Order Items:</strong> Your custom pieces are currently being made by our designers. Each item is being made and will be ready to ship in the estimated days indicated in the order details below.</p>"
                 )
             elif has_mto:
                 notice_text = (
-                    "Your order contains <strong>Made-to-Order</strong> item(s). "
-                    "Our artisans are crafting your custom pieces according to the estimated processing timeline indicated below. "
-                    "You will receive an update as soon as your order is out for delivery."
+                    "<p style='margin:0;'><strong>🔨 Made-to-Order:</strong> Your items are custom-crafted by our designers. Each item is currently being made and will be ready to ship in the estimated days indicated in the order details below. You will receive an email update as soon as your order is out for delivery.</p>"
                 )
             else:
                 notice_text = (
-                    "All items in your order are <strong>Ready-to-Wear</strong> and will be processed and prepared for delivery within <strong>24 to 48 hours</strong>."
+                    "<p style='margin:0;'><strong>⚡ Ready-to-Wear:</strong> All items in your order are ready-to-wear and will be prepared and dispatched within <strong>24 to 48 hours</strong>. Estimated delivery: <strong>2–4 business days</strong>.</p>"
                 )
 
             fulfillment_notice = f"""
         <div style="margin:20px 0;padding:16px;border:1px solid {BRAND_BORDER};border-left:4px solid {BRAND_PRIMARY};border-radius:8px;background:{BRAND_LIGHT};">
-            <p style="margin:0 0 4px;font-weight:600;font-size:13px;color:{BRAND_PRIMARY};text-transform:uppercase;letter-spacing:0.05em;">📦 Processing & Delivery Timeline</p>
-            <p style="margin:0;font-size:13px;color:#4B5563;line-height:1.5;">{notice_text}</p>
+            <p style="margin:0 0 6px;font-weight:600;font-size:13px;color:{BRAND_PRIMARY};text-transform:uppercase;letter-spacing:0.05em;">📦 Production & Delivery Timeline</p>
+            <div style="font-size:13px;color:#4B5563;line-height:1.5;">{notice_text}</div>
         </div>
         """
 
@@ -884,24 +897,48 @@ class EmailService:
         name: str,
         order_number: str,
         status: str,
-        tracking_number: Optional[str] = None
+        tracking_number: Optional[str] = None,
+        notes: Optional[str] = None,
     ) -> bool:
+        # Customer notifications are strictly limited to customer-facing milestones
+        allowed_customer_statuses = {
+            "out_for_delivery",
+            "delivered",
+            "delivery_failed",
+            "returned",
+            "cancelled",
+        }
+        status_key = status.lower()
+        if status_key not in allowed_customer_statuses:
+            logger.info(
+                f"[EmailService] Skipping status update email for non-milestone status: {status} (order: {order_number})"
+            )
+            return False
+
         subject = f"Order Update · {order_number}"
         status_messages = {
+            "out_for_delivery": "Your order is out for delivery and will arrive today.",
+            "delivered": "Your order has been delivered! We hope you love your new pieces. Thank you for shopping with us.",
+            "delivery_failed": "We could not deliver your order on this attempt. Our logistics team will retry delivery or contact you shortly.",
+            "returned": "Your order has been returned. A refund will be processed according to our policy.",
+            "cancelled": "Your order has been cancelled. Refunds (if applicable) will be processed shortly.",
+            # Fallbacks
             "processing": "We're perfecting your order. Expect a shipping update soon.",
-            "shipped": f"Your order is en route. Tracking number: <strong>{tracking_number}</strong>",
-            "delivered": "Delivered! We hope you love your new pieces.",
-            "cancelled": "Your order has been cancelled. Refunds (if applicable) will be processed shortly."
+            "shipped": f"Your order is en route.{f' Tracking number: <strong>{tracking_number}</strong>' if tracking_number else ''}",
         }
-        message = status_messages.get(status.lower(), "Your order status has been updated.")
+        message = status_messages.get(
+            status_key,
+            f"Your order status has been updated to {status.replace('_', ' ').title()}."
+        )
 
         body_html = f"""
         <p style="font-size:16px;">Hi {name or 'there'},</p>
         <p>{message}</p>
         <div style="border:1px solid {BRAND_BORDER};border-radius:10px;padding:20px;margin:24px 0;">
             <p style="margin:0 0 6px;"><strong>Order:</strong> {order_number}</p>
-            <p style="margin:0;color:#6B7280;">Status: {status.title()}</p>
+            <p style="margin:0;color:#6B7280;">Status: {status.replace('_', ' ').title()}</p>
             {f'<p style="margin:6px 0 0;color:#6B7280;">Tracking: {tracking_number}</p>' if tracking_number else ''}
+            {f'<p style="margin:6px 0 0;color:#4B5563;font-size:13px;"><em>Note: {notes}</em></p>' if notes else ''}
         </div>
         <p style="text-align:center;margin-top:32px;">
             <a href="https://shopsoma.com/profile/orders" style="display:inline-block;padding:12px 24px;border:1px solid {BRAND_PRIMARY};color:{BRAND_PRIMARY};text-decoration:none;border-radius:999px;font-weight:600;">

@@ -206,6 +206,27 @@ export const productService = {
     await api.delete(`/products/${productId}/images/${imageId}`);
   },
 
+  // Set product image as primary (vendor only)
+  async setPrimaryProductImage(
+    productId: string,
+    imageId: string
+  ): Promise<ProductImage> {
+    const response = await api.put(`/products/${productId}/images/${imageId}`, {
+      is_primary: true,
+    });
+    return response.data;
+  },
+
+  // Update product image (vendor only)
+  async updateProductImage(
+    productId: string,
+    imageId: string,
+    imageData: Partial<CreateProductImagePayload>
+  ): Promise<ProductImage> {
+    const response = await api.put(`/products/${productId}/images/${imageId}`, imageData);
+    return response.data;
+  },
+
   // Upload single image
   async uploadImage(
     file: File,

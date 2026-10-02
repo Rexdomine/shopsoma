@@ -132,6 +132,7 @@ async def send_order_confirmation_after_payment(db: AsyncSession, order_id: UUID
             total=float(order.total_amount),
             shipping_address=shipping_addr_dict,
             payment_status="PAID",
+            estimated_delivery_date=order.estimated_delivery_date,
         )
         logger.info(
             "[Order Confirmation Email] Sent to %s for order %s: %s",

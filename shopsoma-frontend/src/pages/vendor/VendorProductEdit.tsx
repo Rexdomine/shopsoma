@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Save, Loader2, Trash2, Upload, Image as ImageIcon, ShieldAlert } from 'lucide-react';
+import { ArrowLeft, Save, Loader2, Trash2, Upload, Image as ImageIcon, ShieldAlert, Star } from 'lucide-react';
 import VendorSidebar from '../../components/vendor/VendorSidebar';
 import { ROUTES } from '../../config/constants';
 import { productService } from '../../services/productService';
@@ -20,6 +20,7 @@ export default function VendorProductEdit() {
   const [images, setImages] = useState<ProductImage[]>([]);
   const [isUploadingImage, setIsUploadingImage] = useState(false);
   const [deletingImageId, setDeletingImageId] = useState<string | null>(null);
+  const [settingPrimaryId, setSettingPrimaryId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Form state
@@ -86,12 +87,39 @@ export default function VendorProductEdit() {
 
   const isApproved = product?.moderation_status === 'approved';
 
+  const handleSetPrimary = async (imageId: string) => {
+    if (!id || isApproved || settingPrimaryId) return;
+    try {
+      setSettingPrimaryId(imageId);
+      await productService.setPrimaryProductImage(id, imageId);
+      setImages((prev) =>
+        prev.map((img) => ({
+          ...img,
+          is_primary: img.id === imageId,
+        }))
+      );
+      success('Primary image updated');
+    } catch (err: any) {
+      console.error('Failed to set primary image', err);
+      error(err.response?.data?.detail || 'Failed to set primary image', 'Update Failed');
+    } finally {
+      setSettingPrimaryId(null);
+    }
+  };
+
   const handleDeleteImage = async (imageId: string) => {
     if (!id || isApproved) return;
     try {
       setDeletingImageId(imageId);
       await productService.deleteProductImage(id, imageId);
-      setImages((prev) => prev.filter((img) => img.id !== imageId));
+      setImages((prev) => {
+        const remaining = prev.filter((img) => img.id !== imageId);
+        const hadPrimary = prev.some((img) => img.id === imageId && img.is_primary);
+        if (hadPrimary && remaining.length > 0 && !remaining.some((img) => img.is_primary)) {
+          return remaining.map((img, idx) => ({ ...img, is_primary: idx === 0 }));
+        }
+        return remaining;
+      });
       success('Image removed successfully');
     } catch (err: any) {
       console.error('Failed to delete image', err);
@@ -471,7 +499,7 @@ export default function VendorProductEdit() {
                   <p className="text-xs text-gray-500 mt-0.5">
                     {isApproved
                       ? 'Product approved by administrator. Images are locked.'
-                      : 'Designers can edit, delete, and upload images before admin accepts the product.'}
+                      : 'Designers can choose a primary image, delete, and upload images before admin accepts the product.'}
                   </p>
                 </div>
                 {!isApproved && (
@@ -519,41 +547,77 @@ export default function VendorProductEdit() {
 
                 {images.length > 0 ? (
                   <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
-                    {images.map((img, index) => (
-                      <div
-                        key={img.id || index}
-                        className="group relative aspect-square rounded-lg overflow-hidden border border-gray-200 bg-gray-50"
-                      >
-                        <img
-                          src={normalizeProductImageUrl(img.thumbnail_url || img.image_url)}
-                          alt={`Product ${index + 1}`}
-                          className="w-full h-full object-cover"
-                        />
-                        {img.is_primary && (
-                          <span className="absolute top-2 left-2 px-2 py-0.5 text-[10px] font-semibold bg-[#105E53] text-white rounded">
-                            Primary
-                          </span>
-                        )}
-                        {!isApproved && (
-                          <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                            <button
-                              type="button"
-                              onClick={() => handleDeleteImage(img.id)}
-                              disabled={deletingImageId === img.id}
-                              className="p-2 bg-red-600 text-white rounded-full hover:bg-red-700 transition shadow-md disabled:opacity-50"
-                              title="Delete image"
-                              aria-label="Delete image"
-                            >
-                              {deletingImageId === img.id ? (
-                                <Loader2 className="h-4 w-4 animate-spin" />
-                              ) : (
-                                <Trash2 className="h-4 w-4" />
+                    {images.map((img, index) => {
+                      const isPrimary = Boolean(img.is_primary);
+                      return (
+                        <div
+                          key={img.id || index}
+                          onClick={() => {
+                            if (!isApproved && !isPrimary && img.id) {
+                              handleSetPrimary(img.id);
+                            }
+                          }}
+                          className={`group relative aspect-square rounded-lg overflow-hidden border bg-gray-50 transition ${
+                            isPrimary
+                              ? 'border-[#105E53] ring-2 ring-[#105E53] shadow-sm'
+                              : 'border-gray-200 hover:border-gray-300 cursor-pointer'
+                          }`}
+                        >
+                          <img
+                            src={normalizeProductImageUrl(img.thumbnail_url || img.image_url)}
+                            alt={`Product ${index + 1}`}
+                            className="w-full h-full object-cover transition duration-300 group-hover:scale-105"
+                          />
+                          {isPrimary && (
+                            <span className="absolute top-2 left-2 z-10 inline-flex items-center gap-1 rounded-full bg-[#105E53] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-white shadow-sm">
+                              <Star className="w-3 h-3 fill-current" />
+                              Primary
+                            </span>
+                          )}
+                          {!isApproved && (
+                            <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2 z-10">
+                              {!isPrimary && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleSetPrimary(img.id);
+                                  }}
+                                  disabled={settingPrimaryId === img.id || deletingImageId === img.id}
+                                  className="px-2.5 py-1.5 bg-white text-gray-800 text-xs font-medium rounded-lg shadow-md hover:bg-gray-100 transition flex items-center gap-1.5 disabled:opacity-50"
+                                  title="Set as primary image"
+                                  aria-label="Set as primary image"
+                                >
+                                  {settingPrimaryId === img.id ? (
+                                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                  ) : (
+                                    <Star className="h-3.5 w-3.5 text-amber-500 fill-amber-500" />
+                                  )}
+                                  <span>Set Primary</span>
+                                </button>
                               )}
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                    ))}
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleDeleteImage(img.id);
+                                }}
+                                disabled={deletingImageId === img.id || settingPrimaryId === img.id}
+                                className="p-2 bg-red-600 text-white rounded-full hover:bg-red-700 transition shadow-md disabled:opacity-50"
+                                title="Delete image"
+                                aria-label="Delete image"
+                              >
+                                {deletingImageId === img.id ? (
+                                  <Loader2 className="h-4 w-4 animate-spin" />
+                                ) : (
+                                  <Trash2 className="h-4 w-4" />
+                                )}
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 ) : (
                   <div className="py-8 text-center text-gray-500">
