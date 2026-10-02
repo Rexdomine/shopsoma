@@ -238,8 +238,25 @@ export default function VendorProductView() {
             <div className="lg:col-span-2 space-y-6">
               {/* Product Image */}
               <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-                <div className="px-6 py-4 border-b border-gray-200">
-                  <h2 className="text-lg font-semibold text-gray-900">Product Images</h2>
+                <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+                  <div>
+                    <h2 className="text-lg font-semibold text-gray-900">Product Images</h2>
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      {product.moderation_status === 'approved'
+                        ? 'Images are locked for approved products'
+                        : 'Editable before admin approval'}
+                    </p>
+                  </div>
+                  {product.moderation_status !== 'approved' && (
+                    <button
+                      type="button"
+                      onClick={() => navigate(`${ROUTES.VENDOR_PRODUCTS}/${product.id}/edit`)}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[#105E53] border border-[#105E53] rounded-lg hover:bg-[#105E53]/5 transition"
+                    >
+                      <Edit2 className="h-3.5 w-3.5" />
+                      Edit Images
+                    </button>
+                  )}
                 </div>
                 <div className="p-6">
                   <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">

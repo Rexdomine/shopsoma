@@ -1,12 +1,13 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Save, Loader2 } from 'lucide-react';
+import { ArrowLeft, Save, Loader2, Trash2, Upload, Image as ImageIcon, ShieldAlert } from 'lucide-react';
 import VendorSidebar from '../../components/vendor/VendorSidebar';
 import { ROUTES } from '../../config/constants';
 import { productService } from '../../services/productService';
 import { useToast } from '../../hooks/useToast';
 import ToastContainer from '../../components/ui/ToastContainer';
-import type { Product } from '../../types';
+import type { Product, ProductImage } from '../../types';
+import { normalizeProductImageUrl } from '../../utils/productImages';
 
 export default function VendorProductEdit() {
   const { id } = useParams<{ id: string }>();
@@ -16,6 +17,10 @@ export default function VendorProductEdit() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [product, setProduct] = useState<Product | null>(null);
+  const [images, setImages] = useState<ProductImage[]>([]);
+  const [isUploadingImage, setIsUploadingImage] = useState(false);
+  const [deletingImageId, setDeletingImageId] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Form state
   const [title, setTitle] = useState('');
@@ -57,6 +62,7 @@ export default function VendorProductEdit() {
         setLengthCm(data.length_cm?.toString() || '');
         setWidthCm(data.width_cm?.toString() || '');
         setHeightCm(data.height_cm?.toString() || '');
+        setImages(data.images || []);
       } catch (err: any) {
         console.error('Failed to load product', err);
         error(
@@ -77,6 +83,65 @@ export default function VendorProductEdit() {
       setStock('');
     }
   }, [madeToOrder]);
+
+  const isApproved = product?.moderation_status === 'approved';
+
+  const handleDeleteImage = async (imageId: string) => {
+    if (!id || isApproved) return;
+    try {
+      setDeletingImageId(imageId);
+      await productService.deleteProductImage(id, imageId);
+      setImages((prev) => prev.filter((img) => img.id !== imageId));
+      success('Image removed successfully');
+    } catch (err: any) {
+      console.error('Failed to delete image', err);
+      error(err.response?.data?.detail || 'Failed to delete image', 'Delete Failed');
+    } finally {
+      setDeletingImageId(null);
+    }
+  };
+
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0 || !id || isApproved) return;
+
+    const allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+    const invalidFiles = Array.from(files).filter((file) => !allowedTypes.includes(file.type));
+    if (invalidFiles.length > 0) {
+      warning('Please upload JPG, PNG, WebP, or GIF images only.');
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
+
+    if (images.length + files.length > 10) {
+      warning('A maximum of 10 images are allowed per product.');
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
+
+    setIsUploadingImage(true);
+    try {
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const uploadRes = await productService.uploadImage(file, 'products', true);
+        const newImage = await productService.addProductImage(id, {
+          image_url: uploadRes.original,
+          thumbnail_url: uploadRes.thumbnail || uploadRes.original,
+          storage_keys: uploadRes.storage_keys,
+          display_order: images.length + i,
+          is_primary: images.length === 0 && i === 0,
+        });
+        setImages((prev) => [...prev, newImage]);
+      }
+      success('Image(s) uploaded successfully');
+    } catch (err: any) {
+      console.error('Failed to upload image', err);
+      error(err.response?.data?.detail || 'Failed to upload image', 'Upload Failed');
+    } finally {
+      setIsUploadingImage(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -392,10 +457,115 @@ export default function VendorProductEdit() {
                 {/* Info Note */}
                 <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
                   <p className="text-sm text-blue-800">
-                    <strong>Note:</strong> This is a simplified editing interface. For advanced edits (images, variations, categories),
-                    please create a new product or contact support.
+                    <strong>Note:</strong> Product images can be deleted and reuploaded before the admin accepts your product. For variations or category changes, please contact support.
                   </p>
                 </div>
+              </div>
+            </div>
+
+            {/* Product Images Card */}
+            <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden mt-6">
+              <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+                <div>
+                  <h2 className="text-lg font-semibold text-gray-900">Product Images</h2>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    {isApproved
+                      ? 'Product approved by administrator. Images are locked.'
+                      : 'Designers can edit, delete, and upload images before admin accepts the product.'}
+                  </p>
+                </div>
+                {!isApproved && (
+                  <div>
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp,image/gif"
+                      multiple
+                      className="hidden"
+                      onChange={handleImageUpload}
+                      disabled={isUploadingImage || images.length >= 10}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={isUploadingImage || images.length >= 10}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-[#105E53] rounded-lg hover:bg-[#0c4c45] transition disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {isUploadingImage ? (
+                        <>
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          Uploading...
+                        </>
+                      ) : (
+                        <>
+                          <Upload className="h-3.5 w-3.5" />
+                          Upload Images
+                        </>
+                      )}
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              <div className="p-6">
+                {isApproved && (
+                  <div className="mb-4 bg-amber-50 border border-amber-200 rounded-lg p-3.5 flex items-start gap-2.5">
+                    <ShieldAlert className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
+                    <p className="text-xs text-amber-800">
+                      <strong>Images are locked:</strong> This product has already been approved by the admin. Images cannot be modified after approval. If you need to make changes, please contact support.
+                    </p>
+                  </div>
+                )}
+
+                {images.length > 0 ? (
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
+                    {images.map((img, index) => (
+                      <div
+                        key={img.id || index}
+                        className="group relative aspect-square rounded-lg overflow-hidden border border-gray-200 bg-gray-50"
+                      >
+                        <img
+                          src={normalizeProductImageUrl(img.thumbnail_url || img.image_url)}
+                          alt={`Product ${index + 1}`}
+                          className="w-full h-full object-cover"
+                        />
+                        {img.is_primary && (
+                          <span className="absolute top-2 left-2 px-2 py-0.5 text-[10px] font-semibold bg-[#105E53] text-white rounded">
+                            Primary
+                          </span>
+                        )}
+                        {!isApproved && (
+                          <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteImage(img.id)}
+                              disabled={deletingImageId === img.id}
+                              className="p-2 bg-red-600 text-white rounded-full hover:bg-red-700 transition shadow-md disabled:opacity-50"
+                              title="Delete image"
+                              aria-label="Delete image"
+                            >
+                              {deletingImageId === img.id ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                              ) : (
+                                <Trash2 className="h-4 w-4" />
+                              )}
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="py-8 text-center text-gray-500">
+                    <ImageIcon className="h-10 w-10 mx-auto text-gray-300 mb-2" />
+                    <p className="text-sm">No images uploaded for this product.</p>
+                    {!isApproved && (
+                      <p className="text-xs text-gray-400 mt-1">
+                        Click "Upload Images" above to add product pictures.
+                      </p>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
 

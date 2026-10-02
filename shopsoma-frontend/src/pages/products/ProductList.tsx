@@ -224,9 +224,13 @@ export default function ProductList({
 
   const categoryMatchesPreset = (categoryValue: string, preset: string) => {
     const normalized = normalize(categoryValue);
+    const normalizedPreset = normalize(preset);
     if (preset === 'Men') return MEN_CATEGORY_KEYS.some((key) => normalized === key);
     if (preset === 'Women') return WOMEN_CATEGORY_KEYS.some((key) => normalized === key);
-    return normalized === normalize(preset);
+    if (normalized === normalizedPreset) return true;
+    if (normalized === `${normalizedPreset}s` || `${normalized}s` === normalizedPreset) return true;
+    if (normalized === `${normalizedPreset}es` || `${normalized}es` === normalizedPreset) return true;
+    return false;
   };
 
   const matchesCategory = (product: Product, category: string) => {
@@ -247,10 +251,17 @@ export default function ProductList({
     return description.startsWith(`${normalize(category)} -`);
   };
 
-  const navigateToCategory = (categoryName: string) => {
-    const params = new URLSearchParams();
-    params.set('category', categoryName);
-    navigate(`${ROUTES.PRODUCTS}?${params.toString()}`);
+  const handleChildCategoryClick = (child: Category) => {
+    if (categoryNav?.length || presetCategory) {
+      setSelectedCategoryId(child.id);
+      handleFilterChange('category', child.name, child.id);
+      setHoveredNavId(null);
+      setPage(1);
+    } else {
+      const params = new URLSearchParams();
+      params.set('category', child.name);
+      navigate(`${ROUTES.PRODUCTS}?${params.toString()}`);
+    }
   };
 
   useEffect(() => {
@@ -748,10 +759,14 @@ export default function ProductList({
         ? 'No womenswear products available yet. Please check back soon.'
         : 'No products found for the selected filters.';
 
-const handleFilterChange = (key: keyof FilterState, value: string) => {
+const handleFilterChange = (key: keyof FilterState, value: string, categoryId?: string | null) => {
   if (key === 'category' && categoryNav?.length) {
-    const selectedNavItem = navItems.find((item) => item.name === value);
-    setSelectedCategoryId(selectedNavItem?.id ?? null);
+    if (categoryId !== undefined) {
+      setSelectedCategoryId(categoryId);
+    } else {
+      const selectedNavItem = navItems.find((item) => item.name === value);
+      setSelectedCategoryId(selectedNavItem?.id ?? null);
+    }
   }
   if (key === 'price' && value !== 'custom') {
     setCustomPriceInputs({ min: '', max: '' });
@@ -924,7 +939,12 @@ const handleFilterChange = (key: keyof FilterState, value: string) => {
                 <>
                   <button
                     type="button"
-                    className="text-sm font-ui tracking-wide text-dark border-b-2 border-primary pb-1"
+                    onClick={() => { setSelectedCategoryId(null); handleFilterChange('category', 'All'); }}
+                    className={`text-sm font-ui tracking-wide pb-1 border-b-2 transition ${
+                      !selectedCategoryId && (activeCategory === 'All' || activeCategory === presetCategory)
+                        ? 'text-dark border-primary'
+                        : 'text-gray-500 border-transparent hover:text-dark hover:border-gray-300'
+                    }`}
                   >
                     All Items ({filteredProducts.length})
                   </button>
@@ -952,22 +972,28 @@ const handleFilterChange = (key: keyof FilterState, value: string) => {
                     ref={navScrollRef}
                     onScroll={() => setNavHasScrolled(true)}
                   >
-                    {navItems.map((item) => (
-                      <button
-                        key={item.id}
-                        type="button"
-                        onMouseEnter={() => handleNavEnter(item.id)}
-                        onFocus={() => handleNavEnter(item.id)}
-                        onClick={() => { setSelectedCategoryId(item.id); handleFilterChange('category', item.name); }}
-                        className={`text-[11px] font-ui uppercase tracking-[0.25em] pb-1 border-b-2 leading-none transition ${
-                          activeCategory === item.name
-                            ? 'text-dark border-primary'
-                            : 'text-gray-500 border-transparent hover:text-dark hover:border-gray-300'
-                        }`}
-                      >
-                        {item.name}
-                      </button>
-                    ))}
+                    {navItems.map((item) => {
+                      const isItemActive =
+                        activeCategory === item.name ||
+                        selectedCategoryId === item.id ||
+                        Boolean(childCategoryMap[item.id]?.some((c) => c.id === selectedCategoryId || c.name === activeCategory));
+                      return (
+                        <button
+                          key={item.id}
+                          type="button"
+                          onMouseEnter={() => handleNavEnter(item.id)}
+                          onFocus={() => handleNavEnter(item.id)}
+                          onClick={() => { setSelectedCategoryId(item.id); handleFilterChange('category', item.name, item.id); }}
+                          className={`text-[11px] font-ui uppercase tracking-[0.25em] pb-1 border-b-2 leading-none transition ${
+                            isItemActive
+                              ? 'text-dark border-primary'
+                              : 'text-gray-500 border-transparent hover:text-dark hover:border-gray-300'
+                          }`}
+                        >
+                          {item.name}
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
                 {navIsOverflowing && (
@@ -1026,8 +1052,12 @@ const handleFilterChange = (key: keyof FilterState, value: string) => {
                               <button
                                 key={child.id}
                                 type="button"
-                                onClick={() => navigateToCategory(child.name)}
-                                className="text-left text-sm text-gray-700 hover:text-dark transition"
+                                onClick={() => handleChildCategoryClick(child)}
+                                className={`text-left text-sm transition ${
+                                  selectedCategoryId === child.id || activeCategory === child.name
+                                    ? 'font-semibold text-primary'
+                                    : 'text-gray-700 hover:text-dark'
+                                }`}
                               >
                                 {child.name}
                               </button>

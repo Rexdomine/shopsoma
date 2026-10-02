@@ -1347,7 +1347,7 @@ async def create_order(
     order_query = (
         select(Order)
         .options(
-            selectinload(Order.items),
+            selectinload(Order.items).selectinload(OrderItem.product),
             selectinload(Order.shipping_address),
             selectinload(Order.billing_address),
             selectinload(Order.customer),
@@ -1363,6 +1363,14 @@ async def create_order(
         # Prepare items for email
         email_items = []
         for item in loaded_order.items:
+            mto = False
+            mto_timeline = None
+            if item.product:
+                mto = bool(item.product.made_to_order)
+                mto_timeline = item.product.made_to_order_timeline
+            elif item.inventory_policy == "made_to_order":
+                mto = True
+
             email_items.append(
                 {
                     "product_name": item.product_title,
@@ -1380,6 +1388,9 @@ async def create_order(
                         if item.variant_details
                         else None
                     ),
+                    "made_to_order": mto,
+                    "made_to_order_timeline": mto_timeline,
+                    "inventory_policy": item.inventory_policy,
                 }
             )
 
@@ -1395,19 +1406,22 @@ async def create_order(
             "phone_number": loaded_order.shipping_address.phone_number,
         }
 
-        await email_service.send_order_confirmation_email(
-            email=loaded_order.customer.email,
-            name=loaded_order.customer.full_name,
-            order_number=loaded_order.order_number,
-            order_date=loaded_order.created_at,
-            items=email_items,
-            subtotal=float(loaded_order.subtotal),
-            shipping=float(loaded_order.shipping_cost),
-            tax=float(loaded_order.tax_amount),
-            total=float(loaded_order.total_amount),
-            shipping_address=shipping_addr_dict,
-            payment_status=loaded_order.payment_status.value,
-        )
+        # Only send order confirmation email to customer if payment is already confirmed.
+        # Customers must not receive a premature "payment incomplete" email during checkout.
+        if loaded_order.payment_status == PaymentStatus.PAID:
+            await email_service.send_order_confirmation_email(
+                email=loaded_order.customer.email,
+                name=loaded_order.customer.full_name,
+                order_number=loaded_order.order_number,
+                order_date=loaded_order.created_at,
+                items=email_items,
+                subtotal=float(loaded_order.subtotal),
+                shipping=float(loaded_order.shipping_cost),
+                tax=float(loaded_order.tax_amount),
+                total=float(loaded_order.total_amount),
+                shipping_address=shipping_addr_dict,
+                payment_status=loaded_order.payment_status.value,
+            )
 
         # Send admin notification email to all admins
         admin_result = await db.execute(
