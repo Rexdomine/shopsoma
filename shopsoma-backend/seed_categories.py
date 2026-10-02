@@ -84,6 +84,7 @@ async def seed_categories():
                             "display_order": 6,
                             "children": [
                                 {"name": "Hoodies", "slug": "men-outerwear-hoodies", "description": "Hoodies", "display_order": 1},
+                                {"name": "Jackets", "slug": "men-outerwear-jackets", "description": "Men's jackets", "display_order": 2},
                             ],
                         },
                     ]
@@ -103,6 +104,8 @@ async def seed_categories():
                                 {"name": "Women's T-Shirts", "slug": "women-tops-t-shirts", "description": "Women's t-shirts", "display_order": 1},
                                 {"name": "Women's Shirts", "slug": "women-tops-shirts", "description": "Women's shirts", "display_order": 2},
                                 {"name": "Women's Blouses", "slug": "women-tops-blouses", "description": "Women's blouses", "display_order": 3},
+                                {"name": "Bodysuit", "slug": "women-tops-bodysuit", "description": "Bodysuit", "display_order": 4},
+                                {"name": "Tank Tops", "slug": "women-tops-tank-tops", "description": "Tank tops", "display_order": 5},
                             ],
                         },
                         {
@@ -114,6 +117,7 @@ async def seed_categories():
                                 {"name": "Casual Dresses", "slug": "women-dresses-casual", "description": "Casual dresses", "display_order": 1},
                                 {"name": "Party Dresses", "slug": "women-dresses-party", "description": "Party dresses", "display_order": 2},
                                 {"name": "Formal Dresses", "slug": "women-dresses-formal", "description": "Formal dresses", "display_order": 3},
+                                {"name": "Beach Dresses", "slug": "women-dresses-beach-dresses", "description": "Beach dresses", "display_order": 4},
                             ],
                         },
                         {
@@ -125,6 +129,7 @@ async def seed_categories():
                                 {"name": "Women's Jeans", "slug": "women-bottoms-jeans", "description": "Women's jeans", "display_order": 1},
                                 {"name": "Women's Skirts", "slug": "women-bottoms-skirts", "description": "Women's skirts", "display_order": 2},
                                 {"name": "Women's Trousers", "slug": "women-bottoms-trousers", "description": "Women's trousers", "display_order": 3},
+                                {"name": "Shorts", "slug": "women-bottoms-shorts", "description": "Women's shorts", "display_order": 4},
                             ],
                         },
                         {

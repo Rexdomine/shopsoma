@@ -43,7 +43,7 @@ export default function PublicDocument({ documentKey }: { documentKey: FooterDoc
     {isTrack && <form onSubmit={submit} className="mt-10 max-w-xl space-y-3 rounded border border-[#1E5053] p-5" aria-label="Track your order">
       <label htmlFor="order-number" className="block text-sm font-ui">Enter your order ID or order number below to see the latest status of your order</label>
       <p id="order-id-help" className="text-sm">Use the full order ID or customer-facing order number from your confirmation or tracking link. You will need access to that order through your account or the original checkout session. You can also <a href={ROUTES.PROFILE_ORDERS} className="underline">view your account orders</a>.</p>
-      <div className="flex gap-2"><input id="order-number" aria-describedby="order-id-help" placeholder="Order ID or order number" value={orderId} onChange={(e) => setOrderId(e.target.value)} className="min-w-0 flex-1 border border-[#1E5053] px-3 py-2" /><button className="bg-[#1E5053] px-4 py-2 text-sm text-white" type="submit">Track order</button></div>
+      <div className="flex flex-col sm:flex-row gap-2"><input id="order-number" aria-describedby="order-id-help" placeholder="Order ID or order number" value={orderId} onChange={(e) => setOrderId(e.target.value)} className="min-w-0 flex-1 border border-[#1E5053] px-3 py-2" /><button className="bg-[#1E5053] px-4 py-2 text-sm text-white shrink-0" type="submit">Track order</button></div>
       {error && <p role="alert" className="text-sm text-red-700">{error}</p>}
     </form>}
     {documentKey === 'partner' && <a href={ROUTES.VENDOR_SIGNUP} className="mt-8 inline-flex border border-[#1E5053] px-6 py-3 text-xs font-ui uppercase tracking-[0.2em]">Apply to become a ShopSoma partner</a>}

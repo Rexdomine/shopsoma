@@ -304,11 +304,11 @@ export default function OrderTracking() {
 
   return (
     <div className="min-h-screen bg-white flex flex-col">
-      <div className="px-8 py-6 flex items-center justify-between">
-        <div className="flex items-center gap-4">
+      <div className="px-4 sm:px-8 py-4 sm:py-6 flex items-center justify-between">
+        <div className="flex items-center gap-3 sm:gap-4">
           <Link
             to={ROUTES.HOME}
-            className="text-4xl text-primary"
+            className="text-3xl sm:text-4xl text-primary leading-none"
             style={{ fontFamily: 'Lao MN, var(--font-display, serif)' }}
             aria-label="Shopsoma home"
           >
@@ -316,33 +316,35 @@ export default function OrderTracking() {
           </Link>
           <button
             onClick={() => navigate(-1)}
-            className="text-sm text-gray-600 hover:text-primary transition flex items-center gap-1"
+            className="text-xs sm:text-sm text-gray-600 hover:text-primary transition flex items-center gap-1 py-1"
           >
             <span>←</span>
             <span>Back</span>
           </button>
         </div>
-        <span className="text-xs uppercase tracking-[0.3em] text-gray-500">Track My Order</span>
+        <span className="text-[10px] sm:text-xs uppercase tracking-[0.2em] sm:tracking-[0.3em] text-gray-500 font-medium">
+          Track My Order
+        </span>
       </div>
 
-      <div className="flex-1 px-4 sm:px-8 pb-16">
-        <div className="max-w-5xl mx-auto space-y-8">
+      <div className="flex-1 px-3 sm:px-8 pb-12 sm:pb-16">
+        <div className="max-w-5xl mx-auto space-y-4 sm:space-y-8">
           {error && (
             <div className="rounded-sm bg-amber-50 border border-amber-200 text-amber-700 text-sm px-4 py-2">
               {error}
             </div>
           )}
 
-          <div className="rounded-sm border border-gray-100 bg-gray-50 px-6 py-5">
-            <div className="flex items-center justify-between">
-              <p className="text-sm font-semibold text-gray-800">
+          <div className="rounded-sm border border-gray-100 bg-gray-50 px-4 sm:px-6 py-3.5 sm:py-5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 sm:gap-4">
+              <p className="text-xs sm:text-sm font-semibold text-gray-800 break-words">
                 Tracking ID{' '}
-                <span className="text-primary">
+                <span className="text-primary font-mono ml-1">
                   {tracking?.tracking_id || 'Loading...'}
                 </span>
               </p>
               {isConnectedToWebSocket && !wsError && (
-                <div className="flex items-center gap-2 text-xs text-emerald-600">
+                <div className="flex items-center gap-2 text-xs text-emerald-600 shrink-0">
                   <span className="relative flex h-2 w-2">
                     <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
                     <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
@@ -351,7 +353,7 @@ export default function OrderTracking() {
                 </div>
               )}
               {wsError && (
-                <div className="flex items-center gap-2 text-xs text-amber-600">
+                <div className="flex items-center gap-2 text-xs text-amber-600 shrink-0">
                   <span className="relative flex h-2 w-2">
                     <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
                   </span>
@@ -361,7 +363,7 @@ export default function OrderTracking() {
             </div>
           </div>
 
-          <div className="bg-white border border-gray-100 rounded-sm px-6 py-8 shadow-sm space-y-8">
+          <div className="bg-white border border-gray-100 rounded-sm p-4 sm:p-8 shadow-sm space-y-6 sm:space-y-8">
             {loading ? (
               <div className="text-center text-sm text-gray-500">Fetching latest tracking updates...</div>
             ) : tracking ? (
@@ -369,7 +371,7 @@ export default function OrderTracking() {
                 {/* Terminal State Alert Banner */}
                 {isTerminalState && tracking && (
                   <div
-                    className={`rounded-sm px-6 py-4 border-2 ${
+                    className={`rounded-sm p-4 sm:px-6 sm:py-4 border-2 ${
                       tracking.current_status === 'cancelled'
                         ? 'bg-gray-50 border-gray-300 text-gray-700'
                         : tracking.current_status === 'returned'
@@ -377,8 +379,8 @@ export default function OrderTracking() {
                         : 'bg-red-50 border-red-300 text-red-700'
                     }`}
                   >
-                    <div className="flex items-center gap-3">
-                      <span className="text-2xl">
+                    <div className="flex items-start sm:items-center gap-3">
+                      <span className="text-2xl shrink-0">
                         {tracking.current_status === 'cancelled' && '❌'}
                         {tracking.current_status === 'returned' && '↩️'}
                         {tracking.current_status === 'delivery_failed' && '⚠️'}
@@ -387,7 +389,7 @@ export default function OrderTracking() {
                         <p className="font-semibold text-sm">
                           {TERMINAL_STATES[tracking.current_status]?.label || 'Status Update'}
                         </p>
-                        <p className="text-xs mt-1">
+                        <p className="text-xs mt-1 text-gray-600">
                           {tracking.current_status === 'cancelled' && 'This order has been cancelled.'}
                           {tracking.current_status === 'returned' && 'This order has been returned.'}
                           {tracking.current_status === 'delivery_failed' && 'Delivery attempt was unsuccessful. We will contact you shortly.'}
@@ -399,91 +401,124 @@ export default function OrderTracking() {
 
                 <div className="space-y-6">
                   <div className="flex flex-col gap-6">
-                    <div className="flex items-center justify-between">
-                      {STATUS_STEPS.map((step, index) => {
-                        const isActive = index <= activeIndex;
-                        return (
-                          <div key={step.key} className="flex-1 flex flex-col items-center text-center">
-                            <div className="flex items-center w-full">
-                              {index > 0 && (
+                    <div className="overflow-x-auto pb-2 -mx-2 px-2 sm:mx-0 sm:px-0 sm:overflow-visible sm:pb-0">
+                      <div className="flex items-center justify-between min-w-[280px]">
+                        {STATUS_STEPS.map((step, index) => {
+                          const isActive = index <= activeIndex;
+                          const isCurrent = index === activeIndex;
+                          return (
+                            <div key={step.key} className="flex-1 flex flex-col items-center text-center">
+                              <div className="flex items-center w-full">
+                                {index > 0 && (
+                                  <span
+                                    className={`flex-1 h-0.5 sm:h-px ${
+                                      index <= activeIndex ? 'bg-primary' : 'bg-gray-200'
+                                    }`}
+                                  />
+                                )}
                                 <span
-                                  className={`flex-1 h-px ${
-                                    index <= activeIndex ? 'bg-primary' : 'bg-gray-200'
-                                  }`}
-                                />
-                              )}
-                              <span
-                                className={`w-9 h-9 rounded-full border-2 flex items-center justify-center ${
-                                  isActive ? 'border-primary bg-primary/10 text-primary' : 'border-gray-200 text-gray-400'
+                                  className={`w-7 h-7 sm:w-9 sm:h-9 rounded-full border-2 flex items-center justify-center shrink-0 transition-colors ${
+                                    isActive
+                                      ? 'border-primary bg-primary/10 text-primary'
+                                      : 'border-gray-200 text-gray-400'
+                                  } ${isCurrent ? 'ring-2 ring-primary/20' : ''}`}
+                                >
+                                  <span className="text-[11px] sm:text-xs font-semibold">{index + 1}</span>
+                                </span>
+                                {index < STATUS_STEPS.length - 1 && (
+                                  <span
+                                    className={`flex-1 h-0.5 sm:h-px ${
+                                      index < activeIndex ? 'bg-primary' : 'bg-gray-200'
+                                    }`}
+                                  />
+                                )}
+                              </div>
+                              <p
+                                className={`mt-1.5 sm:mt-2 text-[10px] sm:text-xs leading-tight px-0.5 sm:px-1 max-w-[62px] sm:max-w-none break-words sm:break-normal ${
+                                  isCurrent
+                                    ? 'text-primary font-semibold'
+                                    : isActive
+                                    ? 'text-gray-800 font-medium'
+                                    : 'text-gray-500'
                                 }`}
                               >
-                                <span className="text-xs font-semibold">{index + 1}</span>
-                              </span>
-                              {index < STATUS_STEPS.length - 1 && (
-                                <span
-                                  className={`flex-1 h-px ${
-                                    index < activeIndex ? 'bg-primary' : 'bg-gray-200'
-                                  }`}
-                                />
-                              )}
+                                {step.label}
+                              </p>
                             </div>
-                            <p className="mt-2 text-xs text-gray-600 leading-tight">{step.label}</p>
-                          </div>
-                        );
-                      })}
+                          );
+                        })}
+                      </div>
                     </div>
                   </div>
                 </div>
 
-                <div className="space-y-2">
-                  <p className="text-xs uppercase tracking-[0.2em] text-gray-400">Last Updated Date</p>
-                  <p className="text-sm text-gray-700">
+                <div className="space-y-1 sm:space-y-2">
+                  <p className="text-[10px] sm:text-xs uppercase tracking-[0.2em] text-gray-400 font-medium">
+                    Last Updated Date
+                  </p>
+                  <p className="text-xs sm:text-sm text-gray-700 font-medium">
                     {tracking ? formatDisplayDate(tracking.updated_at) : '—'}
                   </p>
                 </div>
 
                 <div className="space-y-3">
-                  <p className="text-xs uppercase tracking-[0.2em] text-gray-400">Tracking Details</p>
+                  <p className="text-[10px] sm:text-xs uppercase tracking-[0.2em] text-gray-400 font-medium">
+                    Tracking Details
+                  </p>
                   <div className="overflow-x-auto">
                     <table className="w-full text-left text-sm">
-                      <thead>
+                      <thead className="hidden sm:table-header-group">
                         <tr className="bg-gray-50 text-gray-500 uppercase text-xs tracking-[0.2em]">
-                          <th className="py-3 px-4 font-medium">S/N</th>
-                          <th className="py-3 px-4 font-medium">Order ID</th>
-                          <th className="py-3 px-4 font-medium">Tracking No.</th>
-                          <th className="py-3 px-4 font-medium">Date</th>
-                          <th className="py-3 px-4 font-medium">Amount</th>
-                          <th className="py-3 px-4 font-medium">Status</th>
+                          <th className="py-3 px-4 font-medium whitespace-nowrap">S/N</th>
+                          <th className="py-3 px-4 font-medium whitespace-nowrap">Order ID</th>
+                          <th className="py-3 px-4 font-medium whitespace-nowrap">Tracking No.</th>
+                          <th className="py-3 px-4 font-medium whitespace-nowrap">Date</th>
+                          <th className="py-3 px-4 font-medium whitespace-nowrap">Amount</th>
+                          <th className="py-3 px-4 font-medium whitespace-nowrap">Status</th>
                         </tr>
                       </thead>
-                      <tbody>
-                        <tr className="border-b border-gray-100">
-                          <td className="py-3 px-4 text-gray-700">1.</td>
-                          <td className="py-3 px-4">
+                      <tbody className="block sm:table-row-group">
+                        <tr className="block sm:table-row rounded-lg sm:rounded-none border border-gray-100 sm:border-b sm:border-gray-100 bg-gray-50/50 sm:bg-transparent p-4 sm:p-0 space-y-2.5 sm:space-y-0">
+                          <td className="flex items-center justify-between sm:table-cell py-1.5 sm:py-3 px-0 sm:px-4 text-gray-700 border-b border-gray-200/40 sm:border-0">
+                            <span className="text-xs uppercase tracking-wider text-gray-400 font-medium sm:hidden">S/N</span>
+                            <span className="text-xs sm:text-sm">1.</span>
+                          </td>
+                          <td className="flex items-center justify-between sm:table-cell py-1.5 sm:py-3 px-0 sm:px-4 border-b border-gray-200/40 sm:border-0">
+                            <span className="text-xs uppercase tracking-wider text-gray-400 font-medium sm:hidden">Order ID</span>
                             <button
                               onClick={handleViewOrderDetails}
                               disabled={loadingOrder}
-                              className="text-primary hover:underline font-semibold disabled:opacity-50"
+                              className="text-primary hover:underline font-semibold disabled:opacity-50 text-right sm:text-left text-xs sm:text-sm break-all sm:break-normal"
                             >
                               {tracking?.order_number || orderId}
                             </button>
                           </td>
-                          <td className="py-3 px-4 text-gray-700">{tracking?.tracking_id || '—'}</td>
-                          <td className="py-3 px-4 text-gray-700">
-                            {tracking
-                              ? formatDisplayDate(tracking.history?.[0]?.occurred_at || tracking.updated_at)
-                              : '—'}
+                          <td className="flex items-center justify-between sm:table-cell py-1.5 sm:py-3 px-0 sm:px-4 text-gray-700 border-b border-gray-200/40 sm:border-0">
+                            <span className="text-xs uppercase tracking-wider text-gray-400 font-medium sm:hidden">Tracking No.</span>
+                            <span className="font-mono text-xs sm:text-sm text-gray-800 break-all">{tracking?.tracking_id || '—'}</span>
                           </td>
-                          <td className="py-3 px-4 text-gray-700">
-                            {tracking
-                              ? new Intl.NumberFormat('en-NG', {
-                                  style: 'currency',
-                                  currency: tracking.currency || 'NGN',
-                                  maximumFractionDigits: 0,
-                                }).format(tracking.amount || 0)
-                              : '—'}
+                          <td className="flex items-center justify-between sm:table-cell py-1.5 sm:py-3 px-0 sm:px-4 text-gray-700 border-b border-gray-200/40 sm:border-0">
+                            <span className="text-xs uppercase tracking-wider text-gray-400 font-medium sm:hidden">Date</span>
+                            <span className="text-xs sm:text-sm">
+                              {tracking
+                                ? formatDisplayDate(tracking.history?.[0]?.occurred_at || tracking.updated_at)
+                                : '—'}
+                            </span>
                           </td>
-                          <td className="py-3 px-4">
+                          <td className="flex items-center justify-between sm:table-cell py-1.5 sm:py-3 px-0 sm:px-4 text-gray-700 border-b border-gray-200/40 sm:border-0">
+                            <span className="text-xs uppercase tracking-wider text-gray-400 font-medium sm:hidden">Amount</span>
+                            <span className="font-semibold sm:font-normal text-xs sm:text-sm text-gray-900">
+                              {tracking
+                                ? new Intl.NumberFormat('en-NG', {
+                                    style: 'currency',
+                                    currency: tracking.currency || 'NGN',
+                                    maximumFractionDigits: 0,
+                                  }).format(tracking.amount || 0)
+                                : '—'}
+                            </span>
+                          </td>
+                          <td className="flex items-center justify-between sm:table-cell py-1.5 sm:py-3 px-0 sm:px-4">
+                            <span className="text-xs uppercase tracking-wider text-gray-400 font-medium sm:hidden">Status</span>
                             <span
                               className={`inline-flex px-3 py-1 rounded-full text-xs font-semibold ${
                                 isTerminalState
@@ -523,28 +558,29 @@ export default function OrderTracking() {
 
       {/* Order Details Modal */}
       {showOrderModal && orderDetails && (
-        <div className="fixed inset-0 bg-black/30 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-sm max-w-2xl w-full max-h-[90vh] overflow-y-auto shadow-xl">
-            <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between">
-              <h2 className="text-lg font-semibold text-dark">Order Details</h2>
+        <div className="fixed inset-0 bg-black/30 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 z-50">
+          <div className="bg-white rounded-sm sm:rounded-md max-w-2xl w-full max-h-[90vh] overflow-y-auto shadow-xl">
+            <div className="sticky top-0 bg-white border-b border-gray-200 px-4 sm:px-6 py-3.5 sm:py-4 flex items-center justify-between z-10">
+              <h2 className="text-base sm:text-lg font-semibold text-dark">Order Details</h2>
               <button
                 onClick={() => setShowOrderModal(false)}
-                className="text-gray-400 hover:text-gray-600 text-2xl"
+                className="text-gray-400 hover:text-gray-600 text-2xl leading-none p-1"
+                aria-label="Close modal"
               >
                 ×
               </button>
             </div>
 
-            <div className="p-6 space-y-6">
+            <div className="p-4 sm:p-6 space-y-5 sm:space-y-6">
               {/* Order Info */}
-              <div className="space-y-2">
-                <div className="flex justify-between text-sm">
-                  <span className="text-gray-600">Order Number:</span>
-                  <span className="font-semibold">{orderDetails.order_number}</span>
+              <div className="space-y-2 bg-gray-50/70 p-3 sm:p-4 rounded-sm border border-gray-100">
+                <div className="flex flex-col sm:flex-row sm:justify-between text-xs sm:text-sm gap-0.5 sm:gap-2">
+                  <span className="text-gray-500">Order Number:</span>
+                  <span className="font-semibold break-all text-dark">{orderDetails.order_number}</span>
                 </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-gray-600">Order Date:</span>
-                  <span className="font-semibold">
+                <div className="flex flex-col sm:flex-row sm:justify-between text-xs sm:text-sm gap-0.5 sm:gap-2">
+                  <span className="text-gray-500">Order Date:</span>
+                  <span className="font-semibold text-dark">
                     {new Date(orderDetails.created_at).toLocaleDateString('en-US', {
                       year: 'numeric',
                       month: 'long',
@@ -552,8 +588,8 @@ export default function OrderTracking() {
                     })}
                   </span>
                 </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-gray-600">Payment Status:</span>
+                <div className="flex flex-col sm:flex-row sm:justify-between text-xs sm:text-sm gap-0.5 sm:gap-2">
+                  <span className="text-gray-500">Payment Status:</span>
                   <span className={`font-semibold uppercase ${
                     orderDetails.payment_status === 'paid'
                       ? 'text-green-600'
@@ -568,39 +604,39 @@ export default function OrderTracking() {
 
               {/* Order Items */}
               <div>
-                <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-[0.2em] mb-3">
+                <h3 className="text-xs sm:text-sm font-semibold text-gray-700 uppercase tracking-[0.2em] mb-3">
                   Items ({orderDetails.items?.length || 0})
                 </h3>
                 <div className="space-y-3">
                   {orderDetails.items?.map((item: any, index: number) => (
-                    <div key={index} className="flex gap-3 border-b border-gray-100 pb-3">
+                    <div key={index} className="flex gap-3 border-b border-gray-100 pb-3 items-start">
                       {/* Product Image */}
                       {item.product_image_url && (
-                        <div className="flex-shrink-0">
+                        <div className="shrink-0">
                           <img
                             src={item.product_image_url}
                             alt={item.product_title}
-                            className="w-16 h-16 object-cover rounded-sm border border-gray-200"
+                            className="w-14 h-14 sm:w-16 sm:h-16 object-cover rounded-sm border border-gray-200"
                           />
                         </div>
                       )}
 
                       {/* Product Details */}
                       <div className="flex-1 min-w-0">
-                        <p className="font-medium text-sm">{item.product_title}</p>
+                        <p className="font-medium text-xs sm:text-sm line-clamp-2">{item.product_title}</p>
                         {item.variant_details && (
-                          <p className="text-xs text-gray-500 mt-1">
+                          <p className="text-[11px] sm:text-xs text-gray-500 mt-0.5">
                             {item.variant_details.size && `Size: ${item.variant_details.size}`}
                             {item.variant_details.color && ` • Color: ${item.variant_details.color}`}
                           </p>
                         )}
-                        <p className="text-xs text-gray-500 mt-1">Qty: {item.quantity}</p>
+                        <p className="text-[11px] sm:text-xs text-gray-500 mt-0.5">Qty: {item.quantity}</p>
                       </div>
 
                       {/* Price */}
-                      <div className="text-right flex-shrink-0">
-                        <p className="font-semibold text-sm">{formatOrderPrice(item.subtotal)}</p>
-                        <p className="text-xs text-gray-500">{formatOrderPrice(item.unit_price)} each</p>
+                      <div className="text-right shrink-0">
+                        <p className="font-semibold text-xs sm:text-sm">{formatOrderPrice(item.subtotal)}</p>
+                        <p className="text-[10px] sm:text-xs text-gray-500">{formatOrderPrice(item.unit_price)} each</p>
                       </div>
                     </div>
                   ))}
@@ -609,25 +645,25 @@ export default function OrderTracking() {
 
               {/* Order Summary */}
               <div className="border-t border-gray-200 pt-4 space-y-2">
-                <div className="flex justify-between text-sm">
+                <div className="flex justify-between text-xs sm:text-sm">
                   <span className="text-gray-600">Subtotal:</span>
-                  <span>{formatOrderPrice(orderDetails.subtotal)}</span>
+                  <span className="font-medium">{formatOrderPrice(orderDetails.subtotal)}</span>
                 </div>
-                <div className="flex justify-between text-sm">
+                <div className="flex justify-between text-xs sm:text-sm">
                   <span className="text-gray-600">Shipping:</span>
-                  <span>{formatOrderPrice(orderDetails.shipping_cost)}</span>
+                  <span className="font-medium">{formatOrderPrice(orderDetails.shipping_cost)}</span>
                 </div>
-                <div className="flex justify-between text-sm">
+                <div className="flex justify-between text-xs sm:text-sm">
                   <span className="text-gray-600">Tax:</span>
-                  <span>{formatOrderPrice(orderDetails.tax_amount)}</span>
+                  <span className="font-medium">{formatOrderPrice(orderDetails.tax_amount)}</span>
                 </div>
                 {orderDetails.discount_amount > 0 && (
-                  <div className="flex justify-between text-sm text-green-600">
+                  <div className="flex justify-between text-xs sm:text-sm text-green-600">
                     <span>Discount:</span>
                     <span>-{formatOrderPrice(orderDetails.discount_amount)}</span>
                   </div>
                 )}
-                <div className="flex justify-between text-base font-bold border-t border-gray-200 pt-2 mt-2">
+                <div className="flex justify-between text-sm sm:text-base font-bold border-t border-gray-200 pt-2 mt-2">
                   <span>Total:</span>
                   <span>{formatOrderPrice(orderDetails.total_amount)}</span>
                 </div>
@@ -636,7 +672,7 @@ export default function OrderTracking() {
               {/* Close Button */}
               <button
                 onClick={() => setShowOrderModal(false)}
-                className="w-full rounded-sm bg-gray-100 text-gray-700 font-semibold py-3 text-sm hover:bg-gray-200 transition"
+                className="w-full rounded-sm bg-gray-100 text-gray-700 font-semibold py-2.5 sm:py-3 text-xs sm:text-sm hover:bg-gray-200 transition"
               >
                 Close
               </button>

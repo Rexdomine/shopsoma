@@ -412,3 +412,82 @@ async def test_send_vendor_payout_failed_email(monkeypatch):
     assert result is True
     assert calls[0]["to_email"] == "vendor@example.com"
     assert calls[0]["subject"] == "Payout Failed"
+
+
+@pytest.mark.asyncio
+async def test_send_order_confirmation_email_made_to_order_and_ready_to_wear_timelines(monkeypatch):
+    service = EmailService()
+    calls = _capture_email(monkeypatch, service)
+
+    items = [
+        {
+            "product_name": "Custom Tailored Agbada",
+            "quantity": 1,
+            "price": 120000,
+            "currency": "NGN",
+            "subtotal": 120000,
+            "made_to_order": True,
+            "made_to_order_timeline": "10-14 business days",
+        },
+        {
+            "product_name": "Classic White Linen Shirt",
+            "quantity": 2,
+            "price": 35000,
+            "currency": "NGN",
+            "subtotal": 70000,
+            "made_to_order": False,
+        },
+    ]
+
+    result = await service.send_order_confirmation_email(
+        email="chioma@example.com",
+        name="Chioma",
+        order_number="SHP-CHIOMA-001",
+        order_date=datetime(2026, 10, 1, 14, 30),
+        items=items,
+        subtotal=190000,
+        shipping=5000,
+        tax=14250,
+        total=209250,
+        shipping_address={
+            "full_name": "Chioma Adeleke",
+            "address_line_1": "14 Admiralty Way",
+            "city": "Lekki Phase 1",
+            "state": "Lagos",
+            "country": "Nigeria",
+            "phone_number": "08012345678",
+        },
+        payment_status="PAID",
+    )
+
+    assert result is True
+    assert len(calls) == 1
+    assert calls[0]["to_email"] == "chioma@example.com"
+    assert calls[0]["subject"] == "Order Confirmation · SHP-CHIOMA-001"
+    html = calls[0]["html_content"]
+
+    # Check Made-to-Order badge and custom timeline
+    assert "Made-to-Order · Estimated production: 10-14 business days" in html
+    # Check Ready-to-Wear badge and timeline
+    assert "Ready-to-Wear · Ships within 24–48 hours" in html
+    # Check processing and fulfillment overview box
+    assert "Processing &amp; Delivery Timeline" in html or "Processing & Delivery Timeline" in html
+    assert "24 to 48 hours" in html
+    assert "Payment Status:</strong> Payment confirmed" in html
+
+
+def test_customer_status_notifications_suppressed_for_pickup_and_transit():
+    from app.services.order_notification_service import CUSTOMER_STATUS_MESSAGES, VENDOR_STATUS_MESSAGES
+    from app.models.order import FulfillmentStatus
+
+    # Customer notifications for pickup and in-transit must be suppressed (no spam before out for delivery)
+    assert CUSTOMER_STATUS_MESSAGES[FulfillmentStatus.PICKED_UP]["send_email"] is False
+    assert CUSTOMER_STATUS_MESSAGES[FulfillmentStatus.IN_TRANSIT]["send_email"] is False
+
+    # Out for delivery and delivered must notify the customer
+    assert CUSTOMER_STATUS_MESSAGES[FulfillmentStatus.OUT_FOR_DELIVERY]["send_email"] is True
+    assert CUSTOMER_STATUS_MESSAGES[FulfillmentStatus.DELIVERED]["send_email"] is True
+
+    # Vendor still gets informed when rider picks up from their store
+    assert VENDOR_STATUS_MESSAGES[FulfillmentStatus.PICKED_UP]["send_email"] is True
+

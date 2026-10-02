@@ -1,5 +1,5 @@
 import api from './api';
-import type { Product, ImageUploadResponse, ImageBatchUploadResponse } from '../types';
+import type { Product, ProductImage, ImageUploadResponse, ImageBatchUploadResponse } from '../types';
 
 export interface CreateProductImagePayload {
   image_url: string;
@@ -7,6 +7,7 @@ export interface CreateProductImagePayload {
   alt_text?: string;
   display_order?: number;
   is_primary?: boolean;
+  storage_keys?: string[];
 }
 
 export interface CreateProductVariantPayload {
@@ -186,6 +187,23 @@ export const productService = {
     const config = { timeout: 10000, _retry: true };
     const response = await api.post(`/products/${productId}/duplicate`, undefined, config);
     return response.data;
+  },
+
+  // Add image to product (vendor only)
+  async addProductImage(
+    productId: string,
+    imageData: CreateProductImagePayload
+  ): Promise<ProductImage> {
+    const response = await api.post(`/products/${productId}/images`, imageData);
+    return response.data;
+  },
+
+  // Delete product image (vendor only)
+  async deleteProductImage(
+    productId: string,
+    imageId: string
+  ): Promise<void> {
+    await api.delete(`/products/${productId}/images/${imageId}`);
   },
 
   // Upload single image

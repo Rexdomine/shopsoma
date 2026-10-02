@@ -330,4 +330,90 @@ describe('ProductList', () => {
     ));
     await waitFor(() => expect(screen.getAllByTestId('product-ejii-tshirt-1')).not.toHaveLength(0));
   });
+
+  it('keeps the user on the storefront page when clicking a child category like Earrings', async () => {
+    getProductsMock.mockResolvedValue({
+      products: [{ id: 'earring-prod-1', title: 'Gold Earrings', category_name: 'Earrings' }],
+      total: 1,
+      total_pages: 1,
+    });
+
+    const categoryNav = [
+      { id: 'acc-id', name: 'Accessories', slug: 'accessories', is_active: true, display_order: 1, created_at: '', updated_at: '' },
+    ];
+    const childCategoryOverrides = {
+      'acc-id': [
+        { id: 'earrings-id', name: 'Earrings', slug: 'women-accessories-earrings', is_active: true, display_order: 1, created_at: '', updated_at: '' },
+      ],
+    };
+
+    render(
+      <MemoryRouter initialEntries={['/women']}>
+        <ProductList
+          presetCategory="Women"
+          initialParams={{ category_id: 'women-id' }}
+          categoryNav={categoryNav}
+          childCategoryOverrides={childCategoryOverrides}
+        />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Accessories' })).toBeInTheDocument());
+
+    // Hover or enter Accessories to reveal child categories
+    fireEvent.mouseEnter(screen.getByRole('button', { name: 'Accessories' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Earrings' })).toBeInTheDocument());
+
+    // Click child category Earrings
+    fireEvent.click(screen.getByRole('button', { name: 'Earrings' }));
+
+    // Should refetch products for the child category ID without navigating away
+    await waitFor(() => expect(getProductsMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ category_id: 'earrings-id' })
+    ));
+    expect(screen.getByRole('button', { name: 'Accessories' })).toBeInTheDocument();
+  });
+
+  it('keeps the user on the storefront page when clicking a child category like Trousers on Bottoms', async () => {
+    getProductsMock.mockResolvedValue({
+      products: [{ id: 'trouser-prod-1', title: 'Linen Trousers', category_name: 'Trousers' }],
+      total: 1,
+      total_pages: 1,
+    });
+
+    const categoryNav = [
+      { id: 'bottoms-id', name: 'Bottoms', slug: 'bottoms', is_active: true, display_order: 1, created_at: '', updated_at: '' },
+    ];
+    const childCategoryOverrides = {
+      'bottoms-id': [
+        { id: 'trousers-id', name: 'Trousers', slug: 'women-bottoms-trousers', is_active: true, display_order: 1, created_at: '', updated_at: '' },
+      ],
+    };
+
+    render(
+      <MemoryRouter initialEntries={['/women']}>
+        <ProductList
+          presetCategory="Women"
+          initialParams={{ category_id: 'women-id' }}
+          categoryNav={categoryNav}
+          childCategoryOverrides={childCategoryOverrides}
+        />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Bottoms' })).toBeInTheDocument());
+
+    // Hover or enter Bottoms to reveal child categories
+    fireEvent.mouseEnter(screen.getByRole('button', { name: 'Bottoms' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Trousers' })).toBeInTheDocument());
+
+    // Click child category Trousers
+    fireEvent.click(screen.getByRole('button', { name: 'Trousers' }));
+
+    // Should refetch products for the child category ID without navigating away
+    await waitFor(() => expect(getProductsMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ category_id: 'trousers-id' })
+    ));
+    expect(screen.getByRole('button', { name: 'Bottoms' })).toBeInTheDocument();
+  });
 });
