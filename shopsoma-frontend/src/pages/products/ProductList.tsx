@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, ArrowRight, ChevronDown, X } from 'lucide-react';
+import { ArrowLeft, ArrowRight, ChevronDown, ChevronLeft, ChevronRight, X } from 'lucide-react';
 import Layout from '../../components/layout/Layout';
 import Loading from '../../components/common/Loading';
 import type { Category, Product } from '../../types';
@@ -126,6 +126,14 @@ const WOMEN_HERO: HeroContent = {
 const MEN_CATEGORY_KEYS = ['men', 'mens', 'menswear', "men's fashion", 'mens fashion', "men's wear", 'mens wear'];
 const WOMEN_CATEGORY_KEYS = ['women', 'womens', 'womenswear', "women's fashion", 'womens fashion', "women's wear", 'womens wear'];
 
+const getProductPrice = (p: Product): number => {
+  const isSingle = !p.variations || p.variations.length === 0;
+  if (isSingle && p.base_price != null) {
+    return Number(p.base_price);
+  }
+  return Number(p.variants?.[0]?.price ?? p.base_price ?? 0);
+};
+
 export default function ProductList({
   presetCategory,
   initialParams,
@@ -135,16 +143,19 @@ export default function ProductList({
   categoryNavAsTabs = false,
   childCategoryOverrides,
 }: ProductListProps = {}) {
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const searchQuery = (searchParams.get('q') || searchParams.get('search') || '').trim();
   const categoryParam = searchParams.get('category') || '';
+  const pageParam = parseInt(searchParams.get('page') || '1', 10);
+  const pageFromUrl = Number.isInteger(pageParam) && pageParam > 0 ? pageParam : 1;
 
   const [allProducts, setAllProducts] = useState<Product[]>([]);
   const [featuredVendors, setFeaturedVendors] = useState<FeaturedStorefrontVendor[]>([]);
   const [featuredRotationMinutes, setFeaturedRotationMinutes] = useState(10);
   const [featuredRotationTick, setFeaturedRotationTick] = useState(0);
-  const [page, setPage] = useState(1);
+  const [page, setPage] = useState(pageFromUrl);
   const [loading, setLoading] = useState(true);
+  const [isEnriching, setIsEnriching] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [filterMenuOpen, setFilterMenuOpen] = useState(false);
   const [filters, setFilters] = useState<FilterState>({
@@ -152,6 +163,37 @@ export default function ProductList({
     color: 'All',
     price: 'all',
   });
+
+  useEffect(() => {
+    setPage(pageFromUrl);
+  }, [pageFromUrl]);
+
+  const handlePageChange = useCallback(
+    (newPageOrUpdater: number | ((prev: number) => number), options?: { replace?: boolean }) => {
+      setPage((prevPage) => {
+        const next = typeof newPageOrUpdater === 'function' ? newPageOrUpdater(prevPage) : newPageOrUpdater;
+        return Math.max(1, next);
+      });
+
+      setSearchParams(
+        (prevParams) => {
+          const currentPage = parseInt(prevParams.get('page') || '1', 10);
+          const current = Number.isInteger(currentPage) && currentPage > 0 ? currentPage : 1;
+          const next = typeof newPageOrUpdater === 'function' ? newPageOrUpdater(current) : newPageOrUpdater;
+          const validNext = Math.max(1, next);
+          const nextParams = new URLSearchParams(prevParams);
+          if (validNext > 1) {
+            nextParams.set('page', String(validNext));
+          } else {
+            nextParams.delete('page');
+          }
+          return nextParams;
+        },
+        { replace: options?.replace ?? false }
+      );
+    },
+    [setSearchParams]
+  );
   const navigate = useNavigate();
   const preferredInterest = usePreferenceStore((state) => state.interest);
   const [curatedFilterApplied, setCuratedFilterApplied] = useState(false);
@@ -256,7 +298,7 @@ export default function ProductList({
       setSelectedCategoryId(child.id);
       handleFilterChange('category', child.name, child.id);
       setHoveredNavId(null);
-      setPage(1);
+      handlePageChange(1);
     } else {
       const params = new URLSearchParams();
       params.set('category', child.name);
@@ -283,7 +325,7 @@ export default function ProductList({
       try {
         if (cancelled) return;
         setLoading(true);
-        setPage(1);
+        setIsEnriching(false);
         const response = await productService.getProducts({
           page: 1,
           page_size: 60,
@@ -298,6 +340,7 @@ export default function ProductList({
         // The first page is usable immediately; additional catalog/category pages are background enrichment.
         setLoading(false);
         if (response.total_pages > 1) {
+          setIsEnriching(true);
           for (let nextPage = 2; nextPage <= response.total_pages; nextPage += 1) {
             if (cancelled) return;
             try {
@@ -315,6 +358,9 @@ export default function ProductList({
               if (cancelled) return;
               break;
             }
+          }
+          if (!cancelled) {
+            setIsEnriching(false);
           }
         }
         if (cancelled) return;
@@ -338,6 +384,7 @@ export default function ProductList({
       } finally {
         if (!cancelled) {
           setLoading(false);
+          setIsEnriching(false);
         }
       }
     };
@@ -347,6 +394,14 @@ export default function ProductList({
       cancelled = true;
     };
   }, [initialParamsKey, stableInitialParams]);
+
+  const prevParamsKeyRef = useRef(initialParamsKey);
+  useEffect(() => {
+    if (prevParamsKeyRef.current !== initialParamsKey) {
+      prevParamsKeyRef.current = initialParamsKey;
+      handlePageChange(1);
+    }
+  }, [initialParamsKey, handlePageChange]);
 
   // Derive interest category from preference
   const interestCategory = preferredInterest === 'menswear' ? 'Men' : preferredInterest === 'womenswear' ? 'Women' : null;
@@ -394,14 +449,14 @@ export default function ProductList({
       return [...categoryNav]
         .filter((category) => category.is_active && category.name)
         .sort((a, b) => a.display_order - b.display_order)
-        .map((category) => ({ id: category.id, name: category.name }));
+        .map((category) => ({ id: category.id, name: category.name, slug: category.slug }));
     }
 
     const unique = new Set<string>();
     allProducts.forEach((product) => {
       if (product.category_name) unique.add(product.category_name);
     });
-    return Array.from(unique).map((name) => ({ id: name, name }));
+    return Array.from(unique).map((name) => ({ id: name, name, slug: '' }));
   }, [allProducts, categoryNav]);
 
   const categories = useMemo(
@@ -410,8 +465,8 @@ export default function ProductList({
   );
 
   const [hoveredNavId, setHoveredNavId] = useState<string | null>(null);
-  const [navHasScrolled, setNavHasScrolled] = useState(false);
-  const [navIsOverflowing, setNavIsOverflowing] = useState(false);
+  const [canScrollLeft, setCanScrollLeft] = useState(false);
+  const [canScrollRight, setCanScrollRight] = useState(false);
   const navHoverRef = useRef<HTMLDivElement | null>(null);
   const hoverPanelRef = useRef<HTMLDivElement | null>(null);
   const navScrollRef = useRef<HTMLDivElement | null>(null);
@@ -425,16 +480,46 @@ export default function ProductList({
     [navItems, hoveredNavId]
   );
 
+  const getItemChildren = (item: { id: string; name: string; slug?: string }) => {
+    if (childCategoryOverrides?.[item.id]?.length) {
+      return childCategoryOverrides[item.id];
+    }
+    if (item.slug && childCategoryOverrides?.[item.slug]?.length) {
+      return childCategoryOverrides[item.slug];
+    }
+    if (childCategoryOverrides?.[item.name]?.length) {
+      return childCategoryOverrides[item.name];
+    }
+    if (childCategoryOverrides) {
+      const normNavName = normalize(item.name);
+      const normNavSlug = normalize(item.slug || '');
+      for (const [key, list] of Object.entries(childCategoryOverrides)) {
+        const normKey = normalize(key);
+        if ((normKey === normNavName || (normNavSlug && normKey === normNavSlug)) && list.length) {
+          return list;
+        }
+      }
+    }
+    return childCategoryMap[item.id] || [];
+  };
+
   const hoveredChildCategories = useMemo(() => {
     if (!hoveredNavId) return [];
-    const override = childCategoryOverrides?.[hoveredNavId];
-    if (override?.length) return override;
+    if (hoveredNavItem) {
+      const children = getItemChildren(hoveredNavItem);
+      if (children.length) return children;
+    }
+    if (childCategoryOverrides?.[hoveredNavId]?.length) {
+      return childCategoryOverrides[hoveredNavId];
+    }
     return childCategoryMap[hoveredNavId] || [];
-  }, [hoveredNavId, childCategoryOverrides, childCategoryMap]);
+  }, [hoveredNavId, hoveredNavItem, childCategoryOverrides, childCategoryMap]);
+
   const hoveredChildColumns = useMemo(() => {
     if (!hoveredChildCategories.length) return [];
-    const columns = 3;
-    const perColumn = Math.ceil(hoveredChildCategories.length / columns);
+    const count = hoveredChildCategories.length;
+    const columns = count > 8 ? 4 : count > 5 ? 3 : count > 2 ? 2 : 1;
+    const perColumn = Math.ceil(count / columns);
     return Array.from({ length: columns }, (_, index) =>
       hoveredChildCategories.slice(index * perColumn, index * perColumn + perColumn)
     ).filter((group) => group.length);
@@ -455,7 +540,14 @@ export default function ProductList({
   };
 
   useEffect(() => {
-    if (!hoveredNavId || childCategoryMap[hoveredNavId] || childCategoryOverrides?.[hoveredNavId]) return;
+    if (!hoveredNavId) return;
+
+    const hasOverride = Boolean(
+      childCategoryOverrides?.[hoveredNavId]?.length ||
+      (hoveredNavItem?.slug && childCategoryOverrides?.[hoveredNavItem.slug]?.length) ||
+      (hoveredNavItem?.name && childCategoryOverrides?.[hoveredNavItem.name]?.length)
+    );
+    if (hasOverride || childCategoryMap[hoveredNavId]) return;
 
     const loadChildren = async () => {
       try {
@@ -467,7 +559,7 @@ export default function ProductList({
     };
 
     loadChildren();
-  }, [hoveredNavId, childCategoryMap]);
+  }, [hoveredNavId, hoveredNavItem, childCategoryOverrides, childCategoryMap]);
 
   useEffect(() => {
     if (!hoveredNavItem) {
@@ -523,19 +615,36 @@ export default function ProductList({
     };
   }, [hoveredNavId]);
 
-  useEffect(() => {
-    const updateOverflowState = () => {
-      if (!navScrollRef.current) return;
-      const { scrollWidth, clientWidth } = navScrollRef.current;
-      setNavIsOverflowing(scrollWidth > clientWidth + 4);
-    };
+  const updateNavScrollState = () => {
+    if (!navScrollRef.current) return;
+    const { scrollLeft, scrollWidth, clientWidth } = navScrollRef.current;
+    setCanScrollLeft(scrollLeft > 4);
+    setCanScrollRight(scrollLeft < scrollWidth - clientWidth - 4);
+  };
 
-    updateOverflowState();
-    window.addEventListener('resize', updateOverflowState);
+  useEffect(() => {
+    updateNavScrollState();
+    const scrollContainer = navScrollRef.current;
+    if (scrollContainer) {
+      scrollContainer.addEventListener('scroll', updateNavScrollState);
+    }
+    window.addEventListener('resize', updateNavScrollState);
     return () => {
-      window.removeEventListener('resize', updateOverflowState);
+      if (scrollContainer) {
+        scrollContainer.removeEventListener('scroll', updateNavScrollState);
+      }
+      window.removeEventListener('resize', updateNavScrollState);
     };
   }, [navItems.length, showSubcategoryNav]);
+
+  const handleNavScroll = (direction: 'left' | 'right') => {
+    if (!navScrollRef.current) return;
+    const scrollOffset = Math.max(180, Math.floor(navScrollRef.current.clientWidth * 0.6));
+    navScrollRef.current.scrollBy({
+      left: direction === 'left' ? -scrollOffset : scrollOffset,
+      behavior: 'smooth',
+    });
+  };
 
   // Get products filtered by search and category (but not color/price) for building filter options
   const searchAndCategoryFilteredProducts = useMemo(() => {
@@ -624,7 +733,7 @@ export default function ProductList({
     });
 
     searchAndCategoryFilteredProducts.forEach((product) => {
-      const price = Number(product.variants?.[0]?.price ?? product.base_price ?? 0);
+      const price = getProductPrice(product);
       priceRanges.forEach((range) => {
         if (range.value === 'all') return;
         const minMatch = range.min !== undefined ? price >= range.min : true;
@@ -675,7 +784,7 @@ export default function ProductList({
 
     if (filters.price === 'custom' && customPriceRange) {
       list = list.filter((product) => {
-        const price = Number(product.variants?.[0]?.price ?? product.base_price ?? 0);
+        const price = getProductPrice(product);
         if (customPriceRange.min !== undefined && price < customPriceRange.min) {
           return false;
         }
@@ -686,7 +795,7 @@ export default function ProductList({
       });
     } else if (filters.price !== 'all') {
       list = list.filter((product) => {
-        const price = Number(product.variants?.[0]?.price ?? product.base_price ?? 0);
+        const price = getProductPrice(product);
         switch (filters.price) {
           case '0-50000':
             return price < 50000;
@@ -712,16 +821,12 @@ export default function ProductList({
         break;
       case 'price-asc':
         sorted.sort((a, b) => {
-          const priceA = Number(a.variants?.[0]?.price ?? a.base_price ?? 0);
-          const priceB = Number(b.variants?.[0]?.price ?? b.base_price ?? 0);
-          return priceA - priceB;
+          return getProductPrice(a) - getProductPrice(b);
         });
         break;
       case 'price-desc':
         sorted.sort((a, b) => {
-          const priceA = Number(a.variants?.[0]?.price ?? a.base_price ?? 0);
-          const priceB = Number(b.variants?.[0]?.price ?? b.base_price ?? 0);
-          return priceB - priceA;
+          return getProductPrice(b) - getProductPrice(a);
         });
         break;
       default:
@@ -744,8 +849,12 @@ export default function ProductList({
   const totalPages = Math.max(1, Math.ceil(filteredProducts.length / PAGE_SIZE));
 
   useEffect(() => {
-    setPage((prev) => Math.min(prev, totalPages));
-  }, [totalPages]);
+    if (!loading && !isEnriching && allProducts.length > 0) {
+      if (page > totalPages) {
+        handlePageChange(totalPages, { replace: true });
+      }
+    }
+  }, [totalPages, loading, isEnriching, allProducts.length, page, handlePageChange]);
 
   const paginatedProducts = useMemo(() => {
     const start = (page - 1) * PAGE_SIZE;
@@ -776,7 +885,7 @@ const handleFilterChange = (key: keyof FilterState, value: string, categoryId?: 
     setCuratedFilterApplied(false);
   }
   setFilters((prev) => ({ ...prev, [key]: value }));
-  setPage(1);
+  handlePageChange(1);
 };
 
   const parsePriceInput = (value: string): number | undefined => {
@@ -794,7 +903,7 @@ const handleFilterChange = (key: keyof FilterState, value: string, categoryId?: 
     if (minValue === undefined && maxValue === undefined) {
       setCustomPriceRange(null);
       setFilters((prev) => ({ ...prev, price: 'all' }));
-      setPage(1);
+      handlePageChange(1);
       return;
     }
 
@@ -812,7 +921,7 @@ const handleFilterChange = (key: keyof FilterState, value: string, categoryId?: 
       max: rangeMax,
     });
     setFilters((prev) => ({ ...prev, price: 'custom' }));
-    setPage(1);
+    handlePageChange(1);
   };
 
   const paginationItems = useMemo(() => {
@@ -886,22 +995,22 @@ const handleFilterChange = (key: keyof FilterState, value: string, categoryId?: 
         <div className="absolute inset-0 bg-black/20" />
 
         {/* Overlay content - Left positioned */}
-        <div className="relative z-10 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 w-full pb-12 lg:pb-16">
+        <div className="relative z-10 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 w-full pb-8 sm:pb-12 lg:pb-16">
           <div className="max-w-md">
             <h1
-              className="text-3xl lg:text-4xl font-display text-white mb-4"
+              className="text-2xl sm:text-3xl lg:text-4xl font-display text-white mb-3 sm:mb-4 break-words"
               style={{ textShadow: '0 2px 8px rgba(0,0,0,0.4)' }}
             >
               {heroContent.title}
             </h1>
             <p
-              className="text-sm font-serif text-white/95 leading-relaxed mb-6"
+              className="text-xs sm:text-sm font-serif text-white/95 leading-relaxed mb-4 sm:mb-6 break-words"
               style={{ textShadow: '0 1px 4px rgba(0,0,0,0.3)' }}
             >
               {heroContent.body}
             </p>
             <button
-              className="inline-block px-6 py-2.5 bg-white/10 backdrop-blur-sm border border-white text-white text-xs font-ui uppercase tracking-[0.2em] hover:bg-white hover:text-dark transition-all"
+              className="inline-block px-5 sm:px-6 py-2 sm:py-2.5 bg-white/10 backdrop-blur-sm border border-white text-white text-[11px] sm:text-xs font-ui uppercase tracking-[0.2em] hover:bg-white hover:text-dark transition-all max-w-full truncate"
             >
               {heroContent.ctaLabel || 'Learn More'}
             </button>
@@ -910,17 +1019,17 @@ const handleFilterChange = (key: keyof FilterState, value: string, categoryId?: 
       </section>
 
       {/* Filter Bar + Search Row */}
-      <section className="bg-[var(--color-page-bg)] border-b border-gray-200">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-          <div className="flex items-end gap-6">
+      <section className="bg-[var(--color-page-bg)] border-b border-gray-200 w-full overflow-hidden">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3 sm:py-6">
+          <div className="flex flex-wrap items-center justify-between gap-y-3 gap-x-3 sm:gap-x-6">
             {/* Left side: Tabs */}
-            <div className="flex shrink-0 items-end gap-6">
+            <div className="order-1 flex items-center gap-3 sm:gap-6 min-w-0 flex-wrap sm:flex-nowrap">
               {categoryNavAsTabs ? (
                 <>
                   <button
                     type="button"
                     onClick={() => { setSelectedCategoryId(null); handleFilterChange('category', 'All'); }}
-                    className={`text-sm font-ui tracking-wide pb-1 border-b-2 ${activeCategory === 'All' ? 'text-dark border-primary' : 'text-gray-500 border-transparent hover:text-dark hover:border-gray-300'}`}
+                    className={`text-xs sm:text-sm font-ui tracking-wide pb-1 border-b-2 whitespace-nowrap ${activeCategory === 'All' ? 'text-dark border-primary' : 'text-gray-500 border-transparent hover:text-dark hover:border-gray-300'}`}
                   >
                     All Items ({filteredProducts.length})
                   </button>
@@ -929,7 +1038,7 @@ const handleFilterChange = (key: keyof FilterState, value: string, categoryId?: 
                       key={item.id}
                       type="button"
                       onClick={() => { setSelectedCategoryId(item.id); handleFilterChange('category', item.name); }}
-                      className={`text-sm font-ui tracking-wide pb-1 border-b-2 ${selectedCategoryId === item.id ? 'text-dark border-primary' : 'text-gray-500 border-transparent hover:text-dark hover:border-gray-300'}`}
+                      className={`text-xs sm:text-sm font-ui tracking-wide pb-1 border-b-2 whitespace-nowrap ${selectedCategoryId === item.id ? 'text-dark border-primary' : 'text-gray-500 border-transparent hover:text-dark hover:border-gray-300'}`}
                     >
                       {item.name}
                     </button>
@@ -940,7 +1049,7 @@ const handleFilterChange = (key: keyof FilterState, value: string, categoryId?: 
                   <button
                     type="button"
                     onClick={() => { setSelectedCategoryId(null); handleFilterChange('category', 'All'); }}
-                    className={`text-sm font-ui tracking-wide pb-1 border-b-2 transition ${
+                    className={`text-xs sm:text-sm font-ui tracking-wide pb-1 border-b-2 transition whitespace-nowrap ${
                       !selectedCategoryId && (activeCategory === 'All' || activeCategory === presetCategory)
                         ? 'text-dark border-primary'
                         : 'text-gray-500 border-transparent hover:text-dark hover:border-gray-300'
@@ -950,7 +1059,7 @@ const handleFilterChange = (key: keyof FilterState, value: string, categoryId?: 
                   </button>
                   <button
                     type="button"
-                    className="text-sm font-ui tracking-wide text-gray-500 hover:text-dark pb-1"
+                    className="text-xs sm:text-sm font-ui tracking-wide text-gray-500 hover:text-dark pb-1 whitespace-nowrap"
                   >
                     Collections
                   </button>
@@ -958,25 +1067,56 @@ const handleFilterChange = (key: keyof FilterState, value: string, categoryId?: 
               )}
             </div>
 
-            {showSubcategoryNav ? (
+            {/* Single REFINE button: Top-right on mobile (order-2), Right side on desktop (order-3) */}
+            <div className={`order-2 lg:order-3 shrink-0 ${showSubcategoryNav ? 'ml-auto lg:ml-0' : 'ml-auto'}`}>
+              <button
+                type="button"
+                onClick={() => setFilterMenuOpen(true)}
+                className="px-4 sm:px-6 py-1.5 sm:py-2.5 border border-gray-300 text-[11px] sm:text-xs font-ui uppercase tracking-[0.2em] text-dark hover:border-primary hover:text-primary transition whitespace-nowrap"
+              >
+                REFINE
+              </button>
+            </div>
+
+            {showSubcategoryNav && (
               <div
                 ref={navHoverRef}
-                className="flex min-w-0 flex-1 items-end gap-4"
+                className="order-3 lg:order-2 flex min-w-0 w-full lg:w-auto lg:flex-1 items-end gap-2 sm:gap-4 overflow-hidden"
                 onMouseLeave={handleNavLeave}
               >
-                <div className="relative min-w-0 flex-1 self-end">
-                  <div className="pointer-events-none absolute -left-3 top-1/2 h-9 w-10 -translate-y-1/2 bg-gradient-to-r from-[var(--color-page-bg)] via-[var(--color-page-bg)]/80 to-transparent" />
-                  <div className="pointer-events-none absolute -right-3 top-1/2 h-9 w-10 -translate-y-1/2 bg-gradient-to-l from-[var(--color-page-bg)] via-[var(--color-page-bg)]/80 to-transparent" />
+                <div className="relative min-w-0 w-full flex-1 self-end py-1 overflow-hidden">
+                  {/* Left scroll chevron */}
+                  {canScrollLeft && (
+                    <button
+                      type="button"
+                      onClick={() => handleNavScroll('left')}
+                      className="absolute left-0 top-1/2 -translate-y-1/2 z-20 flex h-7 w-7 items-center justify-center rounded-full bg-white/95 shadow-md border border-gray-200 text-gray-700 hover:text-primary hover:border-primary/50 transition-all duration-200"
+                      aria-label="Scroll categories left"
+                    >
+                      <ChevronLeft className="w-4 h-4" />
+                    </button>
+                  )}
+
+                  {/* Left edge gradient */}
                   <div
-                    className="flex items-end gap-6 overflow-x-auto whitespace-nowrap pb-1 pr-1 scrollbar-hide"
+                    className={`pointer-events-none absolute -left-1 top-0 bottom-0 w-8 sm:w-10 bg-gradient-to-r from-[var(--color-page-bg,#fcfbf9)] via-[var(--color-page-bg,#fcfbf9)]/90 to-transparent z-10 transition-opacity duration-200 ${
+                      canScrollLeft ? 'opacity-100' : 'opacity-0'
+                    }`}
+                  />
+
+                  {/* Category tabs horizontal scroll list */}
+                  <div
+                    className="flex items-end gap-5 sm:gap-6 overflow-x-auto whitespace-nowrap pb-1.5 scrollbar-hide scroll-smooth px-1"
                     ref={navScrollRef}
-                    onScroll={() => setNavHasScrolled(true)}
+                    onScroll={updateNavScrollState}
+                    style={{ WebkitOverflowScrolling: 'touch' }}
                   >
                     {navItems.map((item) => {
+                      const itemChildren = getItemChildren(item);
                       const isItemActive =
                         activeCategory === item.name ||
                         selectedCategoryId === item.id ||
-                        Boolean(childCategoryMap[item.id]?.some((c) => c.id === selectedCategoryId || c.name === activeCategory));
+                        Boolean(itemChildren.some((c) => c.id === selectedCategoryId || c.name === activeCategory));
                       return (
                         <button
                           key={item.id}
@@ -984,7 +1124,7 @@ const handleFilterChange = (key: keyof FilterState, value: string, categoryId?: 
                           onMouseEnter={() => handleNavEnter(item.id)}
                           onFocus={() => handleNavEnter(item.id)}
                           onClick={() => { setSelectedCategoryId(item.id); handleFilterChange('category', item.name, item.id); }}
-                          className={`text-[11px] font-ui uppercase tracking-[0.25em] pb-1 border-b-2 leading-none transition ${
+                          className={`text-[11px] font-ui uppercase tracking-[0.22em] sm:tracking-[0.25em] pb-1 border-b-2 leading-none transition whitespace-nowrap shrink-0 py-1 ${
                             isItemActive
                               ? 'text-dark border-primary'
                               : 'text-gray-500 border-transparent hover:text-dark hover:border-gray-300'
@@ -995,34 +1135,26 @@ const handleFilterChange = (key: keyof FilterState, value: string, categoryId?: 
                       );
                     })}
                   </div>
-                </div>
-                {navIsOverflowing && (
+
+                  {/* Right edge gradient */}
                   <div
-                    className={`hidden lg:inline-flex shrink-0 items-center gap-3 rounded-full border border-primary/20 bg-[#f8fbfa] px-5 py-2.5 text-[10px] font-ui uppercase tracking-[0.34em] text-primary shadow-[0_4px_14px_rgba(16,94,83,0.12)] transition-all duration-300 ${
-                      navHasScrolled ? 'opacity-0 translate-x-2 pointer-events-none' : 'opacity-100 translate-x-0'
+                    className={`pointer-events-none absolute -right-1 top-0 bottom-0 w-8 sm:w-10 bg-gradient-to-l from-[var(--color-page-bg,#fcfbf9)] via-[var(--color-page-bg,#fcfbf9)]/90 to-transparent z-10 transition-opacity duration-200 ${
+                      canScrollRight ? 'opacity-100' : 'opacity-0'
                     }`}
-                  >
-                    <span className="block h-[4px] w-8 rounded-full bg-primary/65" />
-                    <span>Scroll</span>
-                  </div>
-                )}
-                <button
-                  type="button"
-                  onClick={() => setFilterMenuOpen(true)}
-                  className="shrink-0 px-6 py-2.5 border border-gray-300 text-xs font-ui uppercase tracking-[0.2em] text-dark hover:border-primary hover:text-primary transition whitespace-nowrap"
-                >
-                  REFINE
-                </button>
-              </div>
-            ) : (
-              <div className="flex items-center ml-auto">
-                <button
-                  type="button"
-                  onClick={() => setFilterMenuOpen(true)}
-                  className="px-6 py-2 border border-gray-300 text-xs font-ui uppercase tracking-[0.2em] text-dark hover:border-primary hover:text-primary transition whitespace-nowrap"
-                >
-                  REFINE
-                </button>
+                  />
+
+                  {/* Right scroll chevron */}
+                  {canScrollRight && (
+                    <button
+                      type="button"
+                      onClick={() => handleNavScroll('right')}
+                      className="absolute right-0 top-1/2 -translate-y-1/2 z-20 flex h-7 w-7 items-center justify-center rounded-full bg-white/95 shadow-md border border-gray-200 text-gray-700 hover:text-primary hover:border-primary/50 transition-all duration-200"
+                      aria-label="Scroll categories right"
+                    >
+                      <ChevronRight className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
               </div>
             )}
           </div>
@@ -1041,11 +1173,21 @@ const handleFilterChange = (key: keyof FilterState, value: string, categoryId?: 
                     </p>
                   </div>
                   {hoveredChildColumns.length ? (
-                    <div className="grid grid-cols-1 sm:grid-cols-4 gap-5">
+                    <div
+                      className={`grid gap-5 ${
+                        hoveredChildColumns.length === 1
+                          ? 'grid-cols-1 max-w-xs'
+                          : hoveredChildColumns.length === 2
+                            ? 'grid-cols-1 sm:grid-cols-2'
+                            : hoveredChildColumns.length === 3
+                              ? 'grid-cols-1 sm:grid-cols-3'
+                              : 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-4'
+                      }`}
+                    >
                       {hoveredChildColumns.map((column, columnIndex) => (
                         <div
                           key={`column-${columnIndex}`}
-                          className={columnIndex === 0 ? '' : 'border-l border-gray-100 pl-6'}
+                          className={columnIndex === 0 ? '' : 'sm:border-l sm:border-gray-100 sm:pl-6'}
                         >
                           <div className="flex flex-col gap-2.5">
                             {column.map((child) => (
@@ -1067,7 +1209,22 @@ const handleFilterChange = (key: keyof FilterState, value: string, categoryId?: 
                       ))}
                     </div>
                   ) : (
-                    <p className="text-sm text-gray-500">No child categories yet.</p>
+                    <div className="py-4">
+                      <p className="text-sm text-gray-500 mb-3">
+                        Explore our curated selection of {hoveredNavItem.name.toLowerCase()}.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedCategoryId(hoveredNavItem.id);
+                          handleFilterChange('category', hoveredNavItem.name, hoveredNavItem.id);
+                          setHoveredNavId(null);
+                        }}
+                        className="text-xs font-ui uppercase tracking-[0.2em] text-primary border-b border-primary/40 hover:text-dark hover:border-dark transition"
+                      >
+                        Shop All {hoveredNavItem.name}
+                      </button>
+                    </div>
                   )}
                 </div>
 
@@ -1299,7 +1456,7 @@ const handleFilterChange = (key: keyof FilterState, value: string, categoryId?: 
                 </div>
               )}
 
-              {loading ? (
+              {loading || (isEnriching && paginatedProducts.length === 0) ? (
                 <div className="py-20">
                   <Loading fullScreen={false} message="Preparing the catalog..." />
                 </div>
@@ -1324,7 +1481,7 @@ const handleFilterChange = (key: keyof FilterState, value: string, categoryId?: 
                           imageUrl={SPOTLIGHT_VENDOR.imageUrl}
                           productCount={SPOTLIGHT_VENDOR.productCount}
                         />}
-                        <div className="grid grid-cols-2 gap-x-4 gap-y-8">
+                        <div className="grid grid-cols-2 gap-x-3 sm:gap-x-4 gap-y-6 sm:gap-y-8">
                           {(() => {
                             const mobileItems = paginatedProducts.slice(0, 12).reduce<
                               Array<
@@ -1342,7 +1499,7 @@ const handleFilterChange = (key: keyof FilterState, value: string, categoryId?: 
                             return mobileItems.map((item) => {
                               if (item.type === 'vendor') {
                                 return (
-                                  <div key={item.key} className="col-span-2">
+                                  <div key={item.key} className="col-span-2 min-w-0">
                                     {featuredVendor && <VendorShowcaseCard
                                       vendorId={SPOTLIGHT_VENDOR.id}
                                       vendorName={SPOTLIGHT_VENDOR.name}
@@ -1354,7 +1511,7 @@ const handleFilterChange = (key: keyof FilterState, value: string, categoryId?: 
                               }
                               const isFavorite = favorites.has(item.product.id);
                               return (
-                                <div key={item.product.id} className="col-span-1">
+                                <div key={item.product.id} className="col-span-1 min-w-0">
                                   <ProductCard
                                     product={item.product}
                                     onToggleFavorite={toggleFavorite}
@@ -1483,16 +1640,17 @@ const handleFilterChange = (key: keyof FilterState, value: string, categoryId?: 
                     </>
                   ) : (
                     /* Other pages: Regular 4-column grid, 4 rows = 12 products */
-                    <div className="grid grid-cols-2 lg:grid-cols-4 gap-x-6 gap-y-10">
+                    <div className="grid grid-cols-2 lg:grid-cols-4 gap-x-3 sm:gap-x-6 gap-y-6 sm:gap-y-10">
                       {paginatedProducts.map((product) => {
                         const isFavorite = favorites.has(product.id);
                         return (
-                          <ProductCard
-                            key={product.id}
-                            product={product}
-                            onToggleFavorite={toggleFavorite}
-                            isFavorite={isFavorite}
-                          />
+                          <div key={product.id} className="min-w-0">
+                            <ProductCard
+                              product={product}
+                              onToggleFavorite={toggleFavorite}
+                              isFavorite={isFavorite}
+                            />
+                          </div>
                         );
                       })}
                     </div>
@@ -1501,7 +1659,10 @@ const handleFilterChange = (key: keyof FilterState, value: string, categoryId?: 
                   <div className="flex items-center justify-center gap-3 pt-10">
                     <button
                       type="button"
-                      onClick={() => setPage((prev) => Math.max(1, prev - 1))}
+                      onClick={() => {
+                        handlePageChange((prev) => Math.max(1, prev - 1));
+                        try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch { /* noop */ }
+                      }}
                       className="w-10 h-10 border border-gray-200 flex items-center justify-center text-gray-500 hover:border-primary hover:text-primary transition"
                       disabled={page === 1}
                     >
@@ -1512,7 +1673,10 @@ const handleFilterChange = (key: keyof FilterState, value: string, categoryId?: 
                         <button
                           key={item}
                           type="button"
-                          onClick={() => setPage(item)}
+                          onClick={() => {
+                            handlePageChange(item);
+                            try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch { /* noop */ }
+                          }}
                           className={`w-10 h-10 border text-sm font-semibold transition ${
                             page === item
                               ? 'border-primary bg-primary text-white'
@@ -1529,7 +1693,10 @@ const handleFilterChange = (key: keyof FilterState, value: string, categoryId?: 
                     )}
                     <button
                       type="button"
-                      onClick={() => setPage((prev) => Math.min(totalPages, prev + 1))}
+                      onClick={() => {
+                        handlePageChange((prev) => Math.min(totalPages, prev + 1));
+                        try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch { /* noop */ }
+                      }}
                       className="w-10 h-10 border border-gray-200 flex items-center justify-center text-gray-500 hover:border-primary hover:text-primary transition"
                       disabled={page === totalPages}
                     >

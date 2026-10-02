@@ -363,26 +363,26 @@ export default function VendorOrderDetail() {
   const primaryPickup = order.items[0]?.pickup || null;
 
   return (
-    <div className="flex min-h-screen bg-[var(--color-page-bg)]">
+    <div className="flex flex-col md:flex-row min-h-screen bg-[var(--color-page-bg)] w-full overflow-x-hidden">
       <VendorSidebar activePrimary={activePrimary} />
 
-      <div className="flex-1">
-        <div className="px-8 py-8 space-y-8">
+      <main className="flex-1 min-w-0 p-4 sm:p-6 lg:p-8">
+        <div className="space-y-6 sm:space-y-8">
           {/* Header */}
-          <div className="flex flex-wrap items-start justify-between gap-6">
+          <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
             <div className="flex items-start gap-4">
               <button
                 type="button"
                 onClick={() => navigate(returnTo)}
-                className="h-11 w-11 rounded-full border border-gray-200 bg-white flex items-center justify-center hover:bg-gray-100 transition"
+                className="h-11 w-11 rounded-full border border-gray-200 bg-white flex items-center justify-center hover:bg-gray-100 transition shrink-0"
                 aria-label={returnLabel}
               >
                 <ArrowLeft className="w-4 h-4 text-gray-700" />
               </button>
-              <div>
+              <div className="min-w-0">
                 <p className="text-sm text-gray-500">Order Management</p>
-                <h1 className="text-2xl font-semibold text-gray-900 mt-1">Order {order.order_number}</h1>
-                <div className="flex flex-wrap items-center gap-4 mt-2 text-sm text-gray-600">
+                <h1 className="text-xl sm:text-2xl font-semibold text-gray-900 mt-1 truncate">Order {order.order_number}</h1>
+                <div className="flex flex-wrap items-center gap-3 sm:gap-4 mt-2 text-sm text-gray-600">
                   <span>Ordered: {new Date(order.created_at).toLocaleDateString()}</span>
                   <span className="flex items-center gap-2">
                     Order Status:
@@ -572,50 +572,52 @@ export default function VendorOrderDetail() {
                 {order.items.map((item) => {
                   const variantSummary = getVariantSummary(item.variant_details);
                   return (
-                    <div key={item.id} className="py-4 flex items-center gap-4">
-                    {/* Product Image or Placeholder */}
-                    <div className="h-16 w-16 rounded-xl bg-gray-100 border border-gray-200 overflow-hidden flex-shrink-0">
-                      {item.product_image_url ? (
-                        <img
-                          src={item.product_image_url}
-                          alt={item.product_title}
-                          className="h-full w-full object-cover"
-                          onError={(e) => {
-                            // Fallback to placeholder on error
-                            e.currentTarget.style.display = 'none';
-                            const parent = e.currentTarget.parentElement;
-                            if (parent) {
-                              parent.classList.add('flex', 'items-center', 'justify-center');
-                              const icon = document.createElement('div');
-                              icon.innerHTML = '<svg class="h-6 w-6 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"></path></svg>';
-                              parent.appendChild(icon);
-                            }
-                          }}
-                        />
-                      ) : (
-                        <div className="h-full w-full flex items-center justify-center">
-                          <Package className="h-6 w-6 text-gray-400" />
+                    <div key={item.id} className="py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                      <div className="flex items-center gap-3 sm:gap-4 min-w-0">
+                        {/* Product Image or Placeholder */}
+                        <div className="h-16 w-16 rounded-xl bg-gray-100 border border-gray-200 overflow-hidden flex-shrink-0">
+                          {item.product_image_url ? (
+                            <img
+                              src={item.product_image_url}
+                              alt={item.product_title}
+                              className="h-full w-full object-cover"
+                              onError={(e) => {
+                                // Fallback to placeholder on error
+                                e.currentTarget.style.display = 'none';
+                                const parent = e.currentTarget.parentElement;
+                                if (parent) {
+                                  parent.classList.add('flex', 'items-center', 'justify-center');
+                                  const icon = document.createElement('div');
+                                  icon.innerHTML = '<svg class="h-6 w-6 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"></path></svg>';
+                                  parent.appendChild(icon);
+                                }
+                              }}
+                            />
+                          ) : (
+                            <div className="h-full w-full flex items-center justify-center">
+                              <Package className="h-6 w-6 text-gray-400" />
+                            </div>
+                          )}
                         </div>
-                      )}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-semibold text-gray-900 line-clamp-1">{item.product_title}</p>
-                      <p className="text-sm text-gray-700 mt-1">{formatBasePrice(item.unit_price)} · Qty: {item.quantity}</p>
-                      {variantSummary && (
-                        <p className="text-xs text-gray-500 mt-1">{variantSummary}</p>
-                      )}
-                      <p className="text-xs text-gray-500 mt-1">Payout: {formatBasePrice(item.vendor_payout)}</p>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <span className={`px-3 py-1 rounded-full text-xs font-semibold ${
-                        item.fulfillment_status === 'delivered' ? 'bg-[#E8F7EF] text-[#19984B]' :
-                        item.fulfillment_status === 'shipped' ? 'bg-blue-100 text-blue-700' :
-                        item.fulfillment_status === 'processing' ? 'bg-amber-100 text-amber-700' :
-                        'bg-gray-100 text-gray-700'
-                      }`}>
-                        {item.fulfillment_status}
-                      </span>
-                    </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-semibold text-gray-900 line-clamp-1">{item.product_title}</p>
+                          <p className="text-sm text-gray-700 mt-1">{formatBasePrice(item.unit_price)} · Qty: {item.quantity}</p>
+                          {variantSummary && (
+                            <p className="text-xs text-gray-500 mt-1">{variantSummary}</p>
+                          )}
+                          <p className="text-xs text-gray-500 mt-1">Payout: {formatBasePrice(item.vendor_payout)}</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-3 shrink-0 self-start sm:self-center">
+                        <span className={`px-3 py-1 rounded-full text-xs font-semibold ${
+                          item.fulfillment_status === 'delivered' ? 'bg-[#E8F7EF] text-[#19984B]' :
+                          item.fulfillment_status === 'shipped' ? 'bg-blue-100 text-blue-700' :
+                          item.fulfillment_status === 'processing' ? 'bg-amber-100 text-amber-700' :
+                          'bg-gray-100 text-gray-700'
+                        }`}>
+                          {item.fulfillment_status}
+                        </span>
+                      </div>
                     </div>
                   );
                 })}
@@ -636,7 +638,7 @@ export default function VendorOrderDetail() {
             </div>
           </div>
         </div>
-      </div>
+      </main>
 
       {/* Order Status Details Modal */}
       {isShippingModalOpen && primaryPickup && (

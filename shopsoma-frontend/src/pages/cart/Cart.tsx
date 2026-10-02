@@ -153,17 +153,17 @@ export default function Cart() {
                         />
                       </div>
                       <div className="flex-1 space-y-2">
-                        <div className="flex items-center justify-between">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                           <div>
                             <p className="text-[11px] uppercase tracking-[0.3em] text-gray-400">
                               {brand}
                             </p>
-                            <h2 className="text-lg font-display font-semibold text-dark">
+                            <h2 className="text-lg font-display font-semibold text-dark break-words">
                               {item.product.title}
                             </h2>
                             <p className="text-sm text-gray-500">{category}</p>
                           </div>
-                          <div className="inline-flex items-center border border-gray-300">
+                          <div className="inline-flex items-center border border-gray-300 self-start sm:self-auto">
                             <button
                               type="button"
                               className="px-3 py-1 text-gray-500 hover:text-primary"

@@ -262,16 +262,14 @@ export default function VendorProductEdit() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-[var(--color-page-bg)]">
-        <div className="flex">
-          <VendorSidebar activePrimary="products" />
-          <main className="flex-1 p-8">
-            <div className="flex items-center justify-center py-20 text-gray-600 gap-3">
-              <Loader2 className="h-6 w-6 animate-spin" />
-              <span className="text-sm">Loading product...</span>
-            </div>
-          </main>
-        </div>
+      <div className="flex flex-col md:flex-row min-h-screen bg-[var(--color-page-bg)] w-full overflow-x-hidden">
+        <VendorSidebar activePrimary="products" />
+        <main className="flex-1 min-w-0 p-4 sm:p-6 lg:p-8">
+          <div className="flex items-center justify-center py-20 text-gray-600 gap-3">
+            <Loader2 className="h-6 w-6 animate-spin" />
+            <span className="text-sm">Loading product...</span>
+          </div>
+        </main>
       </div>
     );
   }
@@ -281,29 +279,28 @@ export default function VendorProductEdit() {
   }
 
   return (
-    <div className="min-h-screen bg-[var(--color-page-bg)]">
+    <div className="flex flex-col md:flex-row min-h-screen bg-[var(--color-page-bg)] w-full overflow-x-hidden">
       <ToastContainer toasts={toasts} onClose={hideToast} />
-      <div className="flex">
-        <VendorSidebar activePrimary="products" />
+      <VendorSidebar activePrimary="products" />
 
-        <main className="flex-1 p-8">
-          {/* Header */}
-          <div className="mb-6 flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <button
-                type="button"
-                onClick={() => navigate(ROUTES.VENDOR_PRODUCTS)}
-                className="p-2 rounded-lg border border-gray-300 bg-white hover:bg-gray-50 transition"
-                title="Back to products"
-              >
-                <ArrowLeft className="h-5 w-5 text-gray-600" />
-              </button>
-              <div>
-                <h1 className="text-3xl font-semibold text-gray-900">Edit Product</h1>
-                <p className="text-sm text-gray-600 mt-1">{product.title}</p>
-              </div>
+      <main className="flex-1 min-w-0 p-4 sm:p-6 lg:p-8">
+        {/* Header */}
+        <div className="mb-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="flex items-center gap-3 sm:gap-4">
+            <button
+              type="button"
+              onClick={() => navigate(ROUTES.VENDOR_PRODUCTS)}
+              className="p-2 rounded-lg border border-gray-300 bg-white hover:bg-gray-50 transition shrink-0"
+              title="Back to products"
+            >
+              <ArrowLeft className="h-5 w-5 text-gray-600" />
+            </button>
+            <div className="min-w-0">
+              <h1 className="text-xl sm:text-3xl font-semibold text-gray-900 truncate">Edit Product</h1>
+              <p className="text-xs sm:text-sm text-gray-600 mt-1 truncate">{product.title}</p>
             </div>
           </div>
+        </div>
 
           {/* Form */}
           <form onSubmit={handleSubmit} className="max-w-4xl">
@@ -664,6 +661,5 @@ export default function VendorProductEdit() {
           </form>
         </main>
       </div>
-    </div>
   );
 }

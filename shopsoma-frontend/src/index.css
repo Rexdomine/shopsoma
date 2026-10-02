@@ -44,20 +44,33 @@
   }
 
   /* Base body font */
-  html,
-  body,
-  #root {
-    background-color: var(--color-page-bg);
-    color: var(--color-text-main);
+  html {
+    -webkit-text-size-adjust: 100%;
+    max-width: 100%;
+    overflow-x: hidden;
   }
 
   body {
+    background-color: var(--color-page-bg);
+    color: var(--color-text-main);
+    width: 100%;
+    max-width: 100%;
+    overflow-x: hidden;
     font-family: var(--font-serif);
     font-size: 1rem;
     line-height: 1.5;
     letter-spacing: 0.01em;
     font-optical-sizing: auto;
     font-variation-settings: "opsz" 6;
+  }
+
+  #root {
+    background-color: var(--color-page-bg);
+    color: var(--color-text-main);
+    width: 100%;
+    max-width: 100%;
+    overflow-x: hidden;
+    min-height: 100vh;
   }
 
   /* Heading hierarchy with Lao MN */

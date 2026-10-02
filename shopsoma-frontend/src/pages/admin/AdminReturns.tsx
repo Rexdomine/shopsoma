@@ -80,26 +80,26 @@ export default function AdminReturns() {
   }, [total]);
 
   return (
-    <div className="min-h-screen bg-[var(--color-page-bg)] flex">
+    <div className="flex flex-col md:flex-row min-h-screen bg-[var(--color-page-bg)] w-full overflow-x-hidden">
       <AdminSidebar activeSection="returns" />
 
-      <main className="flex-1 p-8 space-y-6">
-        <div className="flex items-center justify-between">
+      <main className="flex-1 min-w-0 p-4 sm:p-6 lg:p-8 space-y-6">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
-            <h1 className="text-3xl font-bold text-gray-900">Return Requests</h1>
-            <p className="mt-1 text-sm text-gray-500">Review, approve, and manage customer return requests</p>
+            <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Return Requests</h1>
+            <p className="mt-1 text-xs sm:text-sm text-gray-500">Review, approve, and manage customer return requests</p>
           </div>
         </div>
 
-        <div className="bg-white rounded-lg shadow p-6 space-y-4">
+        <div className="bg-white rounded-lg shadow p-4 sm:p-6 space-y-4">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-            <div className="flex flex-wrap gap-3">
+            <div className="flex flex-wrap gap-2 sm:gap-3">
               {STATUS_OPTIONS.map((option) => (
                 <button
                   key={option.label}
                   type="button"
                   onClick={() => handleStatusChange(option.value)}
-                  className={`px-4 py-1.5 rounded-full text-xs uppercase tracking-[0.3em] border transition ${
+                  className={`px-3 sm:px-4 py-1.5 rounded-full text-xs uppercase tracking-[0.2em] sm:tracking-[0.3em] border transition ${
                     (filters.status || '') === option.value
                       ? 'border-[#105E53] text-[#105E53] bg-[#105E53]/10'
                       : 'border-gray-200 text-gray-500 hover:border-[#105E53]/40'
@@ -109,14 +109,14 @@ export default function AdminReturns() {
                 </button>
               ))}
             </div>
-            <div className="flex items-center gap-3">
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
               <input
                 type="search"
                 placeholder="Search return number, order, customer"
                 onChange={(event) => handleSearchChange(event.target.value)}
-                className="w-72 border border-gray-200 rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-[#105E53]"
+                className="w-full sm:w-72 border border-gray-200 rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-[#105E53]"
               />
-              <span className="text-xs text-gray-500">{paginationLabel}</span>
+              <span className="text-xs text-gray-500 self-end sm:self-center">{paginationLabel}</span>
             </div>
           </div>
 

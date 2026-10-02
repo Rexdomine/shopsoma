@@ -47,7 +47,7 @@ export default function OrderFilters({ onFilterChange, loading }: OrderFiltersPr
     search || paymentStatus || fulfillmentStatus || dateFrom || dateTo;
 
   return (
-    <div className="bg-white rounded-lg shadow p-6 mb-6">
+    <div className="bg-white rounded-lg shadow p-4 sm:p-6 mb-6 min-w-0">
       <div className="flex items-center justify-between mb-4">
         <h3 className="text-lg font-semibold text-gray-900">Filters</h3>
         <div className="flex items-center gap-3">
@@ -77,13 +77,13 @@ export default function OrderFilters({ onFilterChange, loading }: OrderFiltersPr
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           disabled={loading}
-          className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#105E53] focus:border-transparent"
+          className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#105E53] focus:border-transparent text-sm"
         />
       </div>
 
       {/* Advanced Filters */}
       {showFilters && (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           {/* Payment Status */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">

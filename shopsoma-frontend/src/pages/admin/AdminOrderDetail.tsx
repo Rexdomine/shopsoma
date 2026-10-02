@@ -291,9 +291,9 @@ export default function AdminOrderDetail() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-[var(--color-page-bg)] flex">
+      <div className="flex flex-col md:flex-row min-h-screen bg-[var(--color-page-bg)] w-full overflow-x-hidden">
         <AdminSidebar activeSection="orders" />
-        <main className="flex-1 p-8 space-y-6">
+        <main className="flex-1 min-w-0 p-4 sm:p-6 lg:p-8 space-y-6">
           <div className="animate-pulse">
             <div className="h-8 bg-gray-200 rounded w-1/4 mb-4"></div>
             <div className="h-64 bg-gray-200 rounded"></div>
@@ -305,9 +305,9 @@ export default function AdminOrderDetail() {
 
   if (!order) {
     return (
-      <div className="min-h-screen bg-[var(--color-page-bg)] flex">
+      <div className="flex flex-col md:flex-row min-h-screen bg-[var(--color-page-bg)] w-full overflow-x-hidden">
         <AdminSidebar activeSection="orders" />
-        <main className="flex-1 p-8 space-y-6">
+        <main className="flex-1 min-w-0 p-4 sm:p-6 lg:p-8 space-y-6">
           <div className="text-center py-12">
             <h2 className="text-2xl font-bold text-gray-900">Order not found</h2>
             <button
@@ -323,10 +323,10 @@ export default function AdminOrderDetail() {
   }
 
   return (
-    <div className="min-h-screen bg-[var(--color-page-bg)] flex">
+    <div className="flex flex-col md:flex-row min-h-screen bg-[var(--color-page-bg)] w-full overflow-x-hidden">
       <AdminSidebar activeSection="orders" />
 
-      <main className="flex-1 p-8 space-y-6">
+      <main className="flex-1 min-w-0 p-4 sm:p-6 lg:p-8 space-y-6">
         {/* Toast Notifications */}
         {toasts.map((toast) => (
           <div
@@ -345,20 +345,20 @@ export default function AdminOrderDetail() {
         ))}
 
         {/* Header */}
-        <div className="flex items-center justify-between mb-8">
-          <div>
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6 sm:mb-8">
+          <div className="min-w-0">
             <button
               onClick={() => navigate('/admin/orders')}
-              className="text-gray-600 hover:text-gray-900 mb-2 flex items-center gap-1"
+              className="text-gray-600 hover:text-gray-900 mb-2 flex items-center gap-1 text-sm"
             >
               ← Back to orders
             </button>
-            <h1 className="text-3xl font-bold text-gray-900">Order #{order.order_number}</h1>
-            <p className="mt-1 text-sm text-gray-500">
+            <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 truncate">Order #{order.order_number}</h1>
+            <p className="mt-1 text-xs sm:text-sm text-gray-500">
               Placed {new Date(order.created_at).toLocaleString()}
             </p>
           </div>
-          <div className="flex gap-3 items-center">
+          <div className="flex flex-wrap gap-2 sm:gap-3 items-center">
             <CurrencySwitcher value={currentCurrency} onChange={setCurrency} />
             {order.fulfillment_status !== 'cancelled' && (
               <>
@@ -454,43 +454,45 @@ export default function AdminOrderDetail() {
               <h2 className="text-lg font-semibold text-gray-900 mb-4">Order Items</h2>
               <div className="space-y-4">
                 {order.items.map((item) => (
-                  <div key={item.id} className="flex gap-4 pb-4 border-b last:border-b-0">
-                    {/* Product Image */}
-                    <div className="flex-shrink-0">
-                      {item.product_image_url ? (
-                        <img
-                          src={item.product_image_url}
-                          alt={item.product_title}
-                          className="w-20 h-20 object-cover rounded-lg border border-gray-200"
-                          onError={(e) => {
-                            // Fallback to placeholder on error
-                            e.currentTarget.src = 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="80" height="80" viewBox="0 0 80 80"%3E%3Crect fill="%23f3f4f6" width="80" height="80"/%3E%3Ctext x="50%25" y="50%25" dominant-baseline="middle" text-anchor="middle" font-family="sans-serif" font-size="14" fill="%239ca3af"%3ENo Image%3C/text%3E%3C/svg%3E';
-                          }}
-                        />
-                      ) : (
-                        <div className="w-20 h-20 bg-gray-100 rounded-lg flex items-center justify-center">
-                          <svg className="w-8 h-8 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                          </svg>
-                        </div>
-                      )}
-                    </div>
+                  <div key={item.id} className="flex flex-col sm:flex-row gap-4 pb-4 border-b last:border-b-0">
+                    <div className="flex items-start gap-4 flex-1 min-w-0">
+                      {/* Product Image */}
+                      <div className="flex-shrink-0">
+                        {item.product_image_url ? (
+                          <img
+                            src={item.product_image_url}
+                            alt={item.product_title}
+                            className="w-20 h-20 object-cover rounded-lg border border-gray-200"
+                            onError={(e) => {
+                              // Fallback to placeholder on error
+                              e.currentTarget.src = 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="80" height="80" viewBox="0 0 80 80"%3E%3Crect fill="%23f3f4f6" width="80" height="80"/%3E%3Ctext x="50%25" y="50%25" dominant-baseline="middle" text-anchor="middle" font-family="sans-serif" font-size="14" fill="%239ca3af"%3ENo Image%3C/text%3E%3C/svg%3E';
+                            }}
+                          />
+                        ) : (
+                          <div className="w-20 h-20 bg-gray-100 rounded-lg flex items-center justify-center">
+                            <svg className="w-8 h-8 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                            </svg>
+                          </div>
+                        )}
+                      </div>
 
-                    {/* Product Details */}
-                    <div className="flex-1">
-                      <h3 className="font-medium text-gray-900">{item.product_title}</h3>
-                      {formatVariantDetails(item.variant_details) && (
-                        <p className="text-sm text-gray-500">
-                          {formatVariantDetails(item.variant_details)}
+                      {/* Product Details */}
+                      <div className="flex-1 min-w-0">
+                        <h3 className="font-medium text-gray-900 line-clamp-2">{item.product_title}</h3>
+                        {formatVariantDetails(item.variant_details) && (
+                          <p className="text-sm text-gray-500">
+                            {formatVariantDetails(item.variant_details)}
+                          </p>
+                        )}
+                        <p className="text-sm text-gray-600 mt-1">
+                          Vendor: {item.vendor.business_name}
                         </p>
-                      )}
-                      <p className="text-sm text-gray-600 mt-1">
-                        Vendor: {item.vendor.business_name}
-                      </p>
+                      </div>
                     </div>
 
                     {/* Pricing */}
-                    <div className="text-right">
+                    <div className="text-left sm:text-right shrink-0 pl-24 sm:pl-0">
                       <div className="font-medium">{formatDisplayPrice(item.unit_price, item.currency)}</div>
                       <div className="text-sm text-gray-500">Qty: {item.quantity}</div>
                       <div className="text-sm font-medium mt-1">{formatDisplayPrice(item.subtotal, item.currency)}</div>
@@ -657,6 +659,13 @@ export default function AdminOrderDetail() {
                 <div>
                   <div className="flex items-center justify-between mb-4">
                     {(() => {
+                      if (order.payment_status === 'pending') {
+                        return (
+                          <span className="px-3 py-1 rounded-full text-sm font-medium bg-amber-100 text-amber-800">
+                            Awaiting Payment
+                          </span>
+                        );
+                      }
                       const badgeConfig = getStatusBadgeConfig(order.fulfillment_status, 'admin');
                       return (
                         <span className={`px-3 py-1 rounded-full text-sm font-medium ${badgeConfig.bgColor} ${badgeConfig.textColor}`}>

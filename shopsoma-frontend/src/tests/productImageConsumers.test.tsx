@@ -22,7 +22,12 @@ vi.mock('../hooks/useWishlistActions', () => ({ useWishlistActions: () => ({ fav
 vi.mock('../store/cartStore', () => ({ useCartStore: (selector: (state: typeof mocks.cartState) => unknown) => selector(mocks.cartState) }));
 vi.mock('../store/preferenceStore', () => ({ usePreferenceStore: (selector: (state: { currency: string }) => unknown) => selector({ currency: 'NGN' }) }));
 vi.mock('../store/currencyStore', () => ({ useCurrencyStore: (selector?: (state: any) => unknown) => {
-  const state = { currentCurrency: 'NGN', exchangeRates: { NGN: 1, USD: 0.001 }, fetchExchangeRate: mocks.fetchExchangeRate };
+  const state = {
+    currentCurrency: 'NGN',
+    exchangeRates: { NGN: 1, USD: 0.001 },
+    fetchExchangeRate: mocks.fetchExchangeRate,
+    commerceFeatures: { usd_switching_enabled: false },
+  };
   return selector ? selector(state) : state;
 } }));
 const origin = API_BASE_URL.replace(/\/api\/v\d+\/?$/, '');

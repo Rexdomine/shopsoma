@@ -231,6 +231,63 @@ def test_parent_price_update_preserves_unknown_generic_legacy_variant_price():
     assert unknown_generic.price == Decimal("80")
 
 
+def test_parent_price_update_syncs_single_product_attribute_bearing_variants():
+    v12 = SimpleNamespace(size="12", color="Black", price=Decimal("85"), inherits_price=None)
+    v14 = SimpleNamespace(size="14", color="Black", price=Decimal("85"), inherits_price=None)
+
+    _sync_inherited_variation_prices(
+        [],
+        [v12, v14],
+        old_base_price=Decimal("85"),
+        old_compare_at_price=None,
+        new_base_price=Decimal("75"),
+        new_compare_at_price=None,
+    )
+
+    assert v12.price == Decimal("75")
+    assert v12.inherits_price is True
+    assert v14.price == Decimal("75")
+    assert v14.inherits_price is True
+
+
+def test_parent_price_update_syncs_desynced_single_product_variants():
+    # Covers Dance dress scenario where base_price was already changed to 75 while variants were 85
+    v12 = SimpleNamespace(size="12", color="Black", price=Decimal("85"), inherits_price=False)
+    v14 = SimpleNamespace(size="14", color="Black", price=Decimal("85"), inherits_price=False)
+
+    _sync_inherited_variation_prices(
+        [],
+        [v12, v14],
+        old_base_price=Decimal("75"),
+        old_compare_at_price=None,
+        new_base_price=Decimal("70"),
+        new_compare_at_price=None,
+    )
+
+    assert v12.price == Decimal("70")
+    assert v12.inherits_price is True
+    assert v14.price == Decimal("70")
+    assert v14.inherits_price is True
+
+
+def test_parent_price_update_preserves_divergent_custom_variant_price():
+    # Explicit custom variant price differing from parent is preserved
+    standard_var = SimpleNamespace(size="M", color=None, price=Decimal("80"), inherits_price=None)
+    custom_var = SimpleNamespace(size="XL", color=None, price=Decimal("130"), inherits_price=None)
+
+    _sync_inherited_variation_prices(
+        [],
+        [standard_var, custom_var],
+        old_base_price=Decimal("80"),
+        old_compare_at_price=Decimal("100"),
+        new_base_price=Decimal("90"),
+        new_compare_at_price=Decimal("110"),
+    )
+
+    assert standard_var.price == Decimal("90")
+    assert custom_var.price == Decimal("130")
+
+
 def test_parent_price_update_only_moves_inherited_variations_and_legacy_variants():
     inherited = SimpleNamespace(
         id="inherited", title="4", type="size", price=Decimal("100"),

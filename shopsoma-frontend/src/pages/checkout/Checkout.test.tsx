@@ -402,7 +402,7 @@ describe('Checkout M5 sequencing and recovery', () => {
     expect(screen.getByRole('button', { name: 'Edit delivery address' })).toBeDisabled();
     expect(mocks.createOrder).toHaveBeenCalledWith(expect.objectContaining({ customer_email: 'guest@example.com', guest_address: expect.objectContaining({ state: 'Lagos', postal_code: '100001' }) }));
     expect(mocks.createCheckoutEstimate).toHaveBeenCalledWith('order-1', expect.any(String), 'guest-manual-capability');
-    expect(sessionStorage.getItem('shopsoma_checkout_capability:order-1')).toBe('guest-manual-capability');
+    expect(sessionStorage.getItem('shopsoma_checkout_capability:ORDER-1')).toBe('guest-manual-capability');
     expect(mocks.calculateShipping).not.toHaveBeenCalled();
     expect(mocks.initializePayment).not.toHaveBeenCalled();
   });
@@ -933,7 +933,7 @@ describe('Checkout M5 sequencing and recovery', () => {
     expect(screen.getByRole('button', { name: 'USD' })).toBeDisabled();
     expect(mocks.cancelOrder).not.toHaveBeenCalled();
     expect(mocks.createOrder).toHaveBeenCalledTimes(1);
-    expect(storageSpy).toHaveBeenCalledWith('shopsoma_checkout_capability:order-1', capability);
+    expect(storageSpy).toHaveBeenCalledWith('shopsoma_checkout_capability:ORDER-1', capability);
 
     fireEvent.click(retry);
     await waitFor(() => expect(mocks.initializePayment).toHaveBeenCalledTimes(2));
@@ -943,7 +943,7 @@ describe('Checkout M5 sequencing and recovery', () => {
     }, capability);
     expect(mocks.createOrder).toHaveBeenCalledTimes(1);
     expect(mocks.createCheckoutEstimate).toHaveBeenCalledTimes(1);
-    expect(storageSpy).toHaveBeenCalledWith('shopsoma_checkout_capability:order-1', capability);
+    expect(storageSpy).toHaveBeenCalledWith('shopsoma_checkout_capability:ORDER-1', capability);
   });
 
   it.each([404, 410])('clears guest capability after terminal payment initialization status %s', async (status) => {

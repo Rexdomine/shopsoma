@@ -146,14 +146,14 @@ export default function AdminVendorApplications() {
   };
 
   return (
-    <div className="min-h-screen bg-[var(--color-page-bg)] flex">
+    <div className="flex flex-col md:flex-row min-h-screen bg-[var(--color-page-bg)] w-full overflow-x-hidden">
       <AdminSidebar activeSection="vendor-applications" />
 
-      <main className="flex-1 p-8 space-y-6">
+      <main className="flex-1 min-w-0 p-4 sm:p-6 lg:p-8 space-y-6">
         {/* Header */}
         <div>
-          <h1 className="text-3xl font-display text-gray-900 mb-2">Vendor Applications</h1>
-          <p className="text-gray-600 font-ui">Review and approve vendor applications from /vendor/signup</p>
+          <h1 className="text-2xl sm:text-3xl font-display text-gray-900 mb-1 sm:mb-2">Vendor Applications</h1>
+          <p className="text-gray-600 font-ui text-sm">Review and approve vendor applications from /vendor/signup</p>
         </div>
 
         {/* Message */}
@@ -175,7 +175,7 @@ export default function AdminVendorApplications() {
         )}
 
         {/* Filters */}
-        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6 space-y-4">
+        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4 sm:p-6 space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {/* Search */}
             <div className="relative">

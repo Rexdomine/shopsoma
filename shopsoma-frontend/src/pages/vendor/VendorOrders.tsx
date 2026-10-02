@@ -218,17 +218,17 @@ export default function VendorOrders() {
   };
 
   return (
-    <div className="flex min-h-screen bg-[var(--color-page-bg)]">
+    <div className="flex flex-col md:flex-row min-h-screen bg-[var(--color-page-bg)] w-full overflow-x-hidden">
       <VendorSidebar />
 
-      <div className="flex-1">
-        <div className="px-8 py-8">
+      <div className="flex-1 min-w-0">
+        <div className="p-4 sm:p-6 lg:p-8 space-y-6">
           {/* Header Section */}
-          <div className="flex items-center justify-between mb-8">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 mb-6">
             <div>
-              <h1 className="text-2xl font-semibold text-gray-900">Order Management</h1>
+              <h1 className="text-2xl sm:text-3xl font-semibold text-gray-900">Order Management</h1>
               <p className="mt-1 text-sm text-gray-500">Newest orders appear first.</p>
-              <div className="flex items-center gap-6 mt-2 text-sm">
+              <div className="flex flex-wrap items-center gap-4 sm:gap-6 mt-2 text-sm">
                 <span className="text-amber-600">
                   <span className="inline-block w-2 h-2 bg-amber-500 rounded-full mr-2"></span>
                   Pending Orders: {pendingCount}
@@ -240,17 +240,17 @@ export default function VendorOrders() {
               </div>
             </div>
 
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center gap-2 sm:gap-3 w-full lg:w-auto">
               <CurrencySwitcher value={currentCurrency} onChange={setCurrency} />
               {/* Search Bar */}
-              <div className="relative">
+              <div className="relative flex-1 sm:flex-initial min-w-[200px]">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
                 <input
                   type="text"
                   placeholder="Search order or customer"
                   value={search}
                   onChange={handleSearchChange}
-                  className="pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#105E53] focus:border-transparent w-64"
+                  className="pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#105E53] focus:border-transparent w-full sm:w-64 text-sm"
                 />
               </div>
 
@@ -308,70 +308,72 @@ export default function VendorOrders() {
             </div>
           ) : (
             <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-              <table className="w-full">
-                <thead className="bg-gray-50 border-b border-gray-200">
-                  <tr>
-                    <th className="px-8 py-5 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                      Order Number
-                    </th>
-                    <th className="px-8 py-5 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                      Received
-                    </th>
-                    <th className="px-8 py-5 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                      Order Items
-                    </th>
-                    <th className="px-8 py-5 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                      Your Payout
-                    </th>
-                    <th className="px-8 py-5 text-center text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                      Status
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-200">
-                  {orders.map((order) => (
-                    <tr
-                      key={order.id}
-                      className="hover:bg-gray-50 transition cursor-pointer"
-                      onClick={() => handleRowClick(order)}
-                    >
-                      <td className="px-8 py-6 whitespace-nowrap">
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm font-semibold text-gray-900">Order {order.order_number}</span>
-                          {isRecentOrder(order.created_at) && (
-                            <span className="rounded-full bg-[#E8F7EF] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[#19984B]">
-                              New
-                            </span>
-                          )}
-                        </div>
-                      </td>
-                      <td className="px-8 py-6 whitespace-nowrap">
-                        <div className="text-sm font-medium text-gray-900">{formatReceivedDate(order.created_at)}</div>
-                        <div className="text-xs text-gray-500">Newest first</div>
-                      </td>
-                      <td className="px-8 py-6">
-                        <div className="text-sm text-gray-600">{getItemsSummary(order)}</div>
-                      </td>
-                      <td className="px-8 py-6 whitespace-nowrap text-right">
-                        <div className="text-sm font-semibold text-gray-900">
-                          {formatDisplayPrice(calculateVendorPayout(order))}
-                        </div>
-                      </td>
-                      <td className="px-8 py-6 text-center">{getStatusBadge(order.fulfillment_status)}</td>
+              <div className="overflow-x-auto w-full">
+                <table className="w-full">
+                  <thead className="bg-gray-50 border-b border-gray-200">
+                    <tr>
+                      <th className="px-6 sm:px-8 py-4 sm:py-5 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                        Order Number
+                      </th>
+                      <th className="px-6 sm:px-8 py-4 sm:py-5 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                        Received
+                      </th>
+                      <th className="px-6 sm:px-8 py-4 sm:py-5 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                        Order Items
+                      </th>
+                      <th className="px-6 sm:px-8 py-4 sm:py-5 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                        Your Payout
+                      </th>
+                      <th className="px-6 sm:px-8 py-4 sm:py-5 text-center text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                        Status
+                      </th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody className="divide-y divide-gray-200">
+                    {orders.map((order) => (
+                      <tr
+                        key={order.id}
+                        className="hover:bg-gray-50 transition cursor-pointer"
+                        onClick={() => handleRowClick(order)}
+                      >
+                        <td className="px-6 sm:px-8 py-4 sm:py-6 whitespace-nowrap">
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-semibold text-gray-900">Order {order.order_number}</span>
+                            {isRecentOrder(order.created_at) && (
+                              <span className="rounded-full bg-[#E8F7EF] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[#19984B]">
+                                New
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-6 sm:px-8 py-4 sm:py-6 whitespace-nowrap">
+                          <div className="text-sm font-medium text-gray-900">{formatReceivedDate(order.created_at)}</div>
+                          <div className="text-xs text-gray-500">Newest first</div>
+                        </td>
+                        <td className="px-6 sm:px-8 py-4 sm:py-6">
+                          <div className="text-sm text-gray-600">{getItemsSummary(order)}</div>
+                        </td>
+                        <td className="px-6 sm:px-8 py-4 sm:py-6 whitespace-nowrap text-right">
+                          <div className="text-sm font-semibold text-gray-900">
+                            {formatDisplayPrice(calculateVendorPayout(order))}
+                          </div>
+                        </td>
+                        <td className="px-6 sm:px-8 py-4 sm:py-6 text-center">{getStatusBadge(order.fulfillment_status)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
 
               {/* Pagination Footer */}
-              <div className="flex items-center justify-between px-8 py-5 border-t border-gray-200 bg-white">
+              <div className="flex flex-col sm:flex-row items-center justify-between gap-4 px-4 sm:px-8 py-4 sm:py-5 border-t border-gray-200 bg-white">
                 {/* Pagination Controls */}
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2 sm:gap-3 flex-wrap justify-center">
                   <button
                     type="button"
                     onClick={goToFirstPage}
                     disabled={currentPage === 1}
-                    className="p-2.5 border border-gray-300 rounded-lg hover:bg-gray-50 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="p-2 sm:p-2.5 border border-gray-300 rounded-lg hover:bg-gray-50 transition disabled:opacity-50 disabled:cursor-not-allowed"
                     aria-label="First page"
                   >
                     <ChevronsLeft className="h-4 w-4 text-gray-600" />
@@ -380,19 +382,19 @@ export default function VendorOrders() {
                     type="button"
                     onClick={goToPrevPage}
                     disabled={currentPage === 1}
-                    className="p-2.5 border border-gray-300 rounded-lg hover:bg-gray-50 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="p-2 sm:p-2.5 border border-gray-300 rounded-lg hover:bg-gray-50 transition disabled:opacity-50 disabled:cursor-not-allowed"
                     aria-label="Previous page"
                   >
                     <ChevronLeft className="h-4 w-4 text-gray-600" />
                   </button>
-                  <span className="px-5 py-2.5 text-sm font-medium text-gray-700 bg-gray-50 rounded-lg border border-gray-200">
+                  <span className="px-3 sm:px-5 py-2 sm:py-2.5 text-xs sm:text-sm font-medium text-gray-700 bg-gray-50 rounded-lg border border-gray-200">
                     {String(currentPage).padStart(2, '0')}
                   </span>
                   <button
                     type="button"
                     onClick={goToNextPage}
                     disabled={currentPage === totalPages}
-                    className="p-2.5 border border-gray-300 rounded-lg hover:bg-gray-50 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="p-2 sm:p-2.5 border border-gray-300 rounded-lg hover:bg-gray-50 transition disabled:opacity-50 disabled:cursor-not-allowed"
                     aria-label="Next page"
                   >
                     <ChevronRight className="h-4 w-4 text-gray-600" />
@@ -401,7 +403,7 @@ export default function VendorOrders() {
                     type="button"
                     onClick={goToLastPage}
                     disabled={currentPage === totalPages}
-                    className="p-2.5 border border-gray-300 rounded-lg hover:bg-gray-50 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="p-2 sm:p-2.5 border border-gray-300 rounded-lg hover:bg-gray-50 transition disabled:opacity-50 disabled:cursor-not-allowed"
                     aria-label="Last page"
                   >
                     <ChevronsRight className="h-4 w-4 text-gray-600" />
@@ -412,7 +414,7 @@ export default function VendorOrders() {
                 <button
                   type="button"
                   onClick={handleExportCSV}
-                  className="flex items-center gap-2.5 px-5 py-2.5 text-sm font-medium text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50 transition"
+                  className="flex items-center gap-2 px-4 sm:px-5 py-2 sm:py-2.5 text-xs sm:text-sm font-medium text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50 transition"
                 >
                   <Download className="h-4 w-4" />
                   Download CSV

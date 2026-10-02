@@ -114,10 +114,14 @@ async def build_product_graph(
                 and variant_data.color is None
                 and not explicit_inventory
             )
+            inherits_price = (
+                not product_data.variations
+                and variant_data.price == product.base_price
+            )
             variant = ProductVariant(
                 product_id=product.id,
                 size=variant_data.size,
-                inherits_price=False,
+                inherits_price=inherits_price,
                 # A generic legacy row on a single product is the compatibility
                 # projection of product.total_stock, not an independent axis.
                 inherits_stock=inherits_stock,

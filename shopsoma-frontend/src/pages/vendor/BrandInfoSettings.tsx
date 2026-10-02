@@ -515,7 +515,7 @@ export default function BrandInfoSettings() {
   const disabledNav = isOnboarding && !brandInfoCompleted;
 
   return (
-    <div className="min-h-screen bg-[var(--color-page-bg)] flex">
+    <div className="flex flex-col md:flex-row min-h-screen bg-[var(--color-page-bg)] w-full overflow-x-hidden">
       {/* Toast Notification */}
       {toastVisible && (
         <div className="fixed inset-x-0 top-0 z-50">
@@ -552,7 +552,7 @@ export default function BrandInfoSettings() {
         onViewStore={() => navigate(ROUTES.PRODUCTS)}
       />
 
-      <main className="flex-1 p-8">
+      <main className="flex-1 min-w-0 p-4 sm:p-6 lg:p-8">
         <div>
 
           {/* Main Content */}
@@ -606,10 +606,10 @@ export default function BrandInfoSettings() {
                 </div>
               </div>
 
-              <div className="p-6 pt-20 space-y-6 bg-transparent overflow-visible">
-                <div className="grid grid-cols-[220px_minmax(0,1fr)] gap-12 mt-6">
+              <div className="p-4 sm:p-6 pt-16 sm:pt-20 space-y-6 bg-transparent overflow-visible">
+                <div className="grid grid-cols-1 lg:grid-cols-[220px_minmax(0,1fr)] gap-6 lg:gap-12 mt-6">
                   {/* Tabs */}
-                  <div className="space-y-3 text-sm font-ui">
+                  <div className="flex flex-row lg:flex-col gap-2 overflow-x-auto text-sm font-ui pb-2 lg:pb-0">
                     {[
                       { key: 'brand', label: 'Brand Info' },
                       { key: 'payout', label: 'Payout Information' },
@@ -621,10 +621,10 @@ export default function BrandInfoSettings() {
                         onClick={() =>
                           navigate(settingsTabRoutes[tab.key as keyof typeof settingsTabRoutes])
                         }
-                        className={`block text-left ${
+                        className={`block text-left px-3 py-1.5 rounded-lg whitespace-nowrap lg:whitespace-normal transition-colors ${
                           activeTab === tab.key
-                            ? 'text-[#222] font-semibold'
-                            : 'text-gray-500 font-normal'
+                            ? 'text-[#222] font-semibold bg-gray-100 lg:bg-transparent'
+                            : 'text-gray-500 font-normal hover:text-gray-700'
                         }`}
                       >
                         {tab.label}

@@ -141,16 +141,14 @@ export default function VendorProductView() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-[var(--color-page-bg)]">
-        <div className="flex">
-          <VendorSidebar activePrimary={activePrimary} />
-          <main className="flex-1 p-8">
-            <div className="flex items-center justify-center py-20 text-gray-600 gap-3">
-              <Loader2 className="h-6 w-6 animate-spin" />
-              <span className="text-sm">Loading product...</span>
-            </div>
-          </main>
-        </div>
+      <div className="flex flex-col md:flex-row min-h-screen bg-[var(--color-page-bg)] w-full overflow-x-hidden">
+        <VendorSidebar activePrimary={activePrimary} />
+        <main className="flex-1 min-w-0 p-4 sm:p-6 lg:p-8">
+          <div className="flex items-center justify-center py-20 text-gray-600 gap-3">
+            <Loader2 className="h-6 w-6 animate-spin" />
+            <span className="text-sm">Loading product...</span>
+          </div>
+        </main>
       </div>
     );
   }
@@ -190,7 +188,7 @@ export default function VendorProductView() {
       : 'Out of stock';
 
   return (
-    <div className="min-h-screen bg-[var(--color-page-bg)]">
+    <div className="flex flex-col md:flex-row min-h-screen bg-[var(--color-page-bg)] w-full overflow-x-hidden">
       <ToastContainer toasts={toasts} onClose={hideToast} />
       <DeleteProductModal
         product={product}
@@ -199,38 +197,37 @@ export default function VendorProductView() {
         onConfirm={handleDeleteConfirm}
         isDeleting={isDeleting}
       />
-      <div className="flex">
-        <VendorSidebar activePrimary={activePrimary} />
+      <VendorSidebar activePrimary={activePrimary} />
 
-        <main className="flex-1 p-8">
-          {/* Header */}
-          <div className="mb-6 flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <button
-                type="button"
-                onClick={() => navigate(returnTo)}
-                className="p-2 rounded-lg border border-gray-300 bg-white hover:bg-gray-50 transition"
-                title={returnLabel}
-              >
-                <ArrowLeft className="h-5 w-5 text-gray-600" />
-              </button>
-              <div>
-                <h1 className="text-3xl font-semibold text-gray-900">{product.title}</h1>
-                <p className="text-sm text-gray-600 mt-1">View product details</p>
-              </div>
-            </div>
-            <div className="flex items-center gap-3">
-              <CurrencySwitcher value={currentCurrency} onChange={setCurrency} />
-              <button
-                type="button"
-                onClick={() => navigate(`${ROUTES.VENDOR_PRODUCTS}/${product.id}/edit`)}
-                className="inline-flex items-center justify-center gap-2 rounded-lg bg-[#105E53] text-white px-5 py-2.5 text-sm font-medium hover:bg-[#0c4c45] transition"
-              >
-                <Edit2 className="h-4 w-4" />
-                Edit Product
-              </button>
+      <main className="flex-1 min-w-0 p-4 sm:p-6 lg:p-8">
+        {/* Header */}
+        <div className="mb-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="flex items-center gap-3 sm:gap-4 min-w-0">
+            <button
+              type="button"
+              onClick={() => navigate(returnTo)}
+              className="p-2 rounded-lg border border-gray-300 bg-white hover:bg-gray-50 transition shrink-0"
+              title={returnLabel}
+            >
+              <ArrowLeft className="h-5 w-5 text-gray-600" />
+            </button>
+            <div className="min-w-0">
+              <h1 className="text-xl sm:text-3xl font-semibold text-gray-900 truncate">{product.title}</h1>
+              <p className="text-xs sm:text-sm text-gray-600 mt-1">View product details</p>
             </div>
           </div>
+          <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+            <CurrencySwitcher value={currentCurrency} onChange={setCurrency} />
+            <button
+              type="button"
+              onClick={() => navigate(`${ROUTES.VENDOR_PRODUCTS}/${product.id}/edit`)}
+              className="inline-flex items-center justify-center gap-2 rounded-lg bg-[#105E53] text-white px-4 sm:px-5 py-2 sm:py-2.5 text-xs sm:text-sm font-medium hover:bg-[#0c4c45] transition"
+            >
+              <Edit2 className="h-4 w-4" />
+              Edit Product
+            </button>
+          </div>
+        </div>
 
           {/* Content */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -567,6 +564,5 @@ export default function VendorProductView() {
           </div>
         </main>
       </div>
-    </div>
   );
 }

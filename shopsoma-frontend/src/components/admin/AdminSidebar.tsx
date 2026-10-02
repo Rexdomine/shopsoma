@@ -15,6 +15,8 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Store,
+  Menu,
+  X,
 } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
@@ -27,7 +29,7 @@ type AdminSidebarProps = {
   mobileStacked?: boolean;
 };
 
-export default function AdminSidebar({ activeSection, activePrimary, mobileStacked = false }: AdminSidebarProps) {
+export default function AdminSidebar({ activeSection, activePrimary, mobileStacked: _mobileStacked = false }: AdminSidebarProps) {
   const navigate = useNavigate();
   const location = useLocation();
   const { user, logout } = useAuth();
@@ -85,11 +87,15 @@ export default function AdminSidebar({ activeSection, activePrimary, mobileStack
     }
   };
 
+  const [mobileOpen, setMobileOpen] = useState(false);
+
   const handleNav = (route: string) => {
+    setMobileOpen(false);
     navigate(route);
   };
 
   const handleLogout = async () => {
+    setMobileOpen(false);
     await logout();
     navigate(ROUTES.LOGIN);
   };
@@ -100,126 +106,232 @@ export default function AdminSidebar({ activeSection, activePrimary, mobileStack
   )?.section;
 
   return (
-    <aside className={`${mobileStacked ? `${isCollapsed ? 'md:w-[80px]' : 'md:w-[280px]'} w-full border-b md:border-b-0 md:border-r min-h-0 md:min-h-screen md:sticky md:top-0` : `${isCollapsed ? 'w-[80px]' : 'w-[280px]'} border-r min-h-screen sticky top-0`} bg-[var(--color-page-bg)] border-gray-200 px-4 py-6 flex flex-col justify-between transition-all duration-300`}>
-      <div className="space-y-6">
-        {/* Top brand row */}
-        <div className="flex items-center justify-between">
-          {!isCollapsed && <span className="text-sm font-semibold tracking-wide text-[#105E53]">SHOPSOMA ADMIN</span>}
+    <>
+      {/* Mobile Top Header */}
+      <div className="md:hidden sticky top-0 z-40 w-full bg-[var(--color-page-bg)] border-b border-gray-200 px-4 py-3 flex items-center justify-between">
+        <span className="text-sm font-semibold tracking-wide text-[#105E53]">SHOPSOMA ADMIN</span>
+        <button
+          type="button"
+          onClick={() => setMobileOpen((prev) => !prev)}
+          className="p-1.5 rounded-lg border border-gray-200 hover:bg-gray-100 text-gray-700 transition"
+          aria-label={mobileOpen ? 'Close admin menu' : 'Open admin menu'}
+        >
+          {mobileOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+        </button>
+      </div>
+
+      {/* Mobile Drawer */}
+      {mobileOpen && (
+        <div
+          className="md:hidden fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex"
+          onClick={() => setMobileOpen(false)}
+        >
+          <div
+            className="w-4/5 max-w-xs bg-[var(--color-page-bg)] h-full overflow-y-auto p-4 flex flex-col justify-between shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="space-y-4">
+              <div className="flex items-center justify-between pb-3 border-b border-gray-200">
+                <span className="text-sm font-semibold tracking-wide text-[#105E53]">SHOPSOMA ADMIN</span>
+                <button
+                  type="button"
+                  onClick={() => setMobileOpen(false)}
+                  className="p-1 text-gray-500 hover:text-gray-900"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Admin profile card */}
+              <button
+                type="button"
+                onClick={() => { setMobileOpen(false); navigate('/admin/profile'); }}
+                className="w-full bg-white rounded-xl border border-gray-200 shadow-sm px-3 py-2.5 flex items-center gap-3 text-left"
+              >
+                <div className="h-9 w-9 rounded-full bg-[#105E53]/10 flex items-center justify-center text-[#105E53]">
+                  <UserIcon className="w-4 h-4" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold text-gray-900 truncate">{user?.full_name || 'Admin'}</p>
+                  <p className="text-xs text-gray-500 truncate">{user?.email || 'admin@shopsoma.com'}</p>
+                </div>
+              </button>
+
+              {/* Navigation items */}
+              <nav className="space-y-1">
+                {mainNav.map((item) => {
+                  const isActive = currentSection === item.section;
+                  return (
+                    <button
+                      key={item.label}
+                      type="button"
+                      onClick={() => handleNav(item.route)}
+                      className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium font-ui transition ${
+                        isActive
+                          ? 'bg-white text-[#105E53] shadow-sm border border-gray-100 font-semibold'
+                          : 'text-gray-700 hover:bg-gray-100'
+                      }`}
+                    >
+                      {renderIcon(item.icon, isActive)}
+                      <span>{item.label}</span>
+                    </button>
+                  );
+                })}
+              </nav>
+
+              <button
+                type="button"
+                onClick={() => { setMobileOpen(false); navigate(ROUTES.HOME); }}
+                className="w-full bg-[#105E53] text-white rounded-full py-2.5 text-xs font-ui flex items-center justify-center gap-2 hover:bg-[#0c4c45] transition"
+              >
+                View Storefront <span aria-hidden>→</span>
+              </button>
+            </div>
+
+            <div className="space-y-2 pt-4 border-t border-gray-200">
+              <button
+                type="button"
+                onClick={() => { setMobileOpen(false); navigate('/admin/settings'); }}
+                className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-xs font-ui text-gray-700 hover:bg-gray-100 transition"
+              >
+                {renderIcon('settings', false)}
+                <span>Settings</span>
+              </button>
+              <button
+                type="button"
+                onClick={handleLogout}
+                className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-xs font-ui text-red-600 hover:bg-red-50 transition"
+              >
+                <LogOut className="w-4 h-4" />
+                <span>Logout</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Desktop sidebar */}
+      <aside className={`hidden md:flex ${isCollapsed ? 'md:w-[80px]' : 'md:w-[280px]'} border-r border-gray-200 min-h-screen sticky top-0 bg-[var(--color-page-bg)] px-4 py-6 flex-col justify-between transition-all duration-300 shrink-0`}>
+        <div className="space-y-6">
+          {/* Top brand row */}
+          <div className="flex items-center justify-between">
+            {!isCollapsed && <span className="text-sm font-semibold tracking-wide text-[#105E53]">SHOPSOMA ADMIN</span>}
+            <button
+              type="button"
+              onClick={() => setIsCollapsed(!isCollapsed)}
+              className="p-1.5 hover:bg-gray-200 rounded-lg transition ml-auto"
+              title={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            >
+              {isCollapsed ? (
+                <PanelLeftOpen className="w-4 h-4" />
+              ) : (
+                <PanelLeftClose className="w-4 h-4" />
+              )}
+            </button>
+          </div>
+
+          {/* Admin profile card */}
+          {!isCollapsed ? (
+            <button
+              type="button"
+              onClick={() => navigate('/admin/profile')}
+              className="w-full bg-white rounded-2xl border border-gray-200 shadow-sm px-3 py-3 flex items-center gap-3 text-left hover:shadow-md transition"
+            >
+              <div className="h-10 w-10 rounded-full bg-[#105E53]/10 flex items-center justify-center text-[#105E53]">
+                <UserIcon className="w-5 h-5" />
+              </div>
+              <div className="flex-1">
+                <p className="text-sm font-semibold text-gray-900 truncate">{user?.full_name || 'Admin'}</p>
+                <p className="text-xs text-gray-500 truncate">{user?.email || 'admin@shopsoma.com'}</p>
+              </div>
+            </button>
+          ) : (
+            <div className="flex justify-center">
+              <div className="h-10 w-10 rounded-full bg-[#105E53]/10 flex items-center justify-center text-[#105E53]">
+                <UserIcon className="w-5 h-5" />
+              </div>
+            </div>
+          )}
+
+          {/* Main navigation */}
+          <nav className="space-y-1">
+            {mainNav.map((item) => {
+              const isActive = currentSection === item.section;
+
+              return (
+                <button
+                  key={item.label}
+                  type="button"
+                  onClick={() => handleNav(item.route)}
+                  className={`w-full flex items-center ${isCollapsed ? 'justify-center' : 'gap-3'} px-3 py-2.5 rounded-lg text-[15px] font-medium font-ui transition ${
+                    isActive
+                      ? 'bg-white text-[#105E53] shadow-sm border border-gray-100'
+                      : 'text-gray-700 hover:bg-gray-100'
+                  }`}
+                  title={isCollapsed ? item.label : ''}
+                >
+                  {renderIcon(item.icon, isActive)}
+                  {!isCollapsed && (
+                    <>
+                      <span>{item.label}</span>
+                      {item.label === 'Vendor Applications' && (
+                        <span className="ml-auto bg-amber-100 text-amber-800 text-xs px-2 py-0.5 rounded-full font-semibold">
+                          New
+                        </span>
+                      )}
+                    </>
+                  )}
+                </button>
+              );
+            })}
+          </nav>
+
+          {/* View store button */}
           <button
             type="button"
-            onClick={() => setIsCollapsed(!isCollapsed)}
-            className="p-1.5 hover:bg-gray-200 rounded-lg transition ml-auto"
-            title={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            onClick={() => navigate(ROUTES.HOME)}
+            className={`w-full bg-[#105E53] text-white rounded-full py-3 text-sm font-ui flex items-center justify-center ${isCollapsed ? '' : 'gap-2'} hover:bg-[#0c4c45] transition`}
+            title={isCollapsed ? 'View Storefront' : ''}
           >
-            {isCollapsed ? (
-              <PanelLeftOpen className="w-4 h-4" />
-            ) : (
-              <PanelLeftClose className="w-4 h-4" />
-            )}
+            {isCollapsed ? <Store className="w-4 h-4" /> : <>View Storefront <span aria-hidden>→</span></>}
           </button>
         </div>
 
-        {/* Admin profile card */}
-        {!isCollapsed ? (
+        {/* Bottom section */}
+        <div className="space-y-3 pt-6 border-t border-gray-200">
           <button
             type="button"
-            onClick={() => navigate('/admin/profile')}
-            className="w-full bg-white rounded-2xl border border-gray-200 shadow-sm px-3 py-3 flex items-center gap-3 text-left hover:shadow-md transition"
+            onClick={() => navigate('/admin/settings')}
+            className={`w-full flex items-center ${isCollapsed ? 'justify-center' : 'gap-3'} px-3 py-2 rounded-lg text-sm font-ui transition ${
+              activePrimary === 'settings' || location.pathname.startsWith('/admin/settings')
+                ? 'text-[#105E53] bg-white border border-gray-100'
+                : 'text-gray-700 hover:bg-gray-100'
+            }`}
+            title={isCollapsed ? 'Settings' : ''}
           >
-            <div className="h-10 w-10 rounded-full bg-[#105E53]/10 flex items-center justify-center text-[#105E53]">
-              <UserIcon className="w-5 h-5" />
-            </div>
-            <div className="flex-1">
-              <p className="text-sm font-semibold text-gray-900 truncate">{user?.full_name || 'Admin'}</p>
-              <p className="text-xs text-gray-500 truncate">{user?.email || 'admin@shopsoma.com'}</p>
-            </div>
+            {renderIcon('settings', activePrimary === 'settings' || location.pathname.startsWith('/admin/settings'))}
+            {!isCollapsed && <span>Settings</span>}
           </button>
-        ) : (
-          <div className="flex justify-center">
-            <div className="h-10 w-10 rounded-full bg-[#105E53]/10 flex items-center justify-center text-[#105E53]">
-              <UserIcon className="w-5 h-5" />
-            </div>
-          </div>
-        )}
-
-        {/* Main navigation */}
-        <nav className="space-y-1">
-          {mainNav.map((item) => {
-            const isActive = currentSection === item.section;
-
-            return (
-              <button
-                key={item.label}
-                type="button"
-                onClick={() => handleNav(item.route)}
-                className={`w-full flex items-center ${isCollapsed ? 'justify-center' : 'gap-3'} px-3 py-2.5 rounded-lg text-[15px] font-medium font-ui transition ${
-                  isActive
-                    ? 'bg-white text-[#105E53] shadow-sm border border-gray-100'
-                    : 'text-gray-700 hover:bg-gray-100'
-                }`}
-                title={isCollapsed ? item.label : ''}
-              >
-                {renderIcon(item.icon, isActive)}
-                {!isCollapsed && (
-                  <>
-                    <span>{item.label}</span>
-                    {item.label === 'Vendor Applications' && (
-                      <span className="ml-auto bg-amber-100 text-amber-800 text-xs px-2 py-0.5 rounded-full font-semibold">
-                        New
-                      </span>
-                    )}
-                  </>
-                )}
-              </button>
-            );
-          })}
-        </nav>
-
-        {/* View store button */}
-        <button
-          type="button"
-          onClick={() => navigate(ROUTES.HOME)}
-          className={`w-full bg-[#105E53] text-white rounded-full py-3 text-sm font-ui flex items-center justify-center ${isCollapsed ? '' : 'gap-2'} hover:bg-[#0c4c45] transition`}
-          title={isCollapsed ? 'View Storefront' : ''}
-        >
-          {isCollapsed ? <Store className="w-4 h-4" /> : <>View Storefront <span aria-hidden>→</span></>}
-        </button>
-      </div>
-
-      {/* Bottom section */}
-      <div className="space-y-3 pt-6 border-t border-gray-200">
-        <button
-          type="button"
-          onClick={() => navigate('/admin/settings')}
-          className={`w-full flex items-center ${isCollapsed ? 'justify-center' : 'gap-3'} px-3 py-2 rounded-lg text-sm font-ui transition ${
-            activePrimary === 'settings' || location.pathname.startsWith('/admin/settings')
-              ? 'text-[#105E53] bg-white border border-gray-100'
-              : 'text-gray-700 hover:bg-gray-100'
-          }`}
-          title={isCollapsed ? 'Settings' : ''}
-        >
-          {renderIcon('settings', activePrimary === 'settings' || location.pathname.startsWith('/admin/settings'))}
-          {!isCollapsed && <span>Settings</span>}
-        </button>
-        <button
-          type="button"
-          onClick={() => navigate('/admin/help')}
-          className={`w-full flex items-center ${isCollapsed ? 'justify-center' : 'gap-3'} px-3 py-2 rounded-lg text-sm font-ui text-gray-700 hover:bg-gray-100 transition`}
-          title={isCollapsed ? 'Help & Support' : ''}
-        >
-          {renderIcon('help', false)}
-          {!isCollapsed && <span>Help & Support</span>}
-        </button>
-        <button
-          type="button"
-          onClick={handleLogout}
-          className={`w-full flex items-center ${isCollapsed ? 'justify-center' : 'gap-3'} px-3 py-2 rounded-lg text-sm font-ui text-red-600 hover:bg-red-50 transition`}
-          title={isCollapsed ? 'Logout' : ''}
-        >
-          <LogOut className="w-5 h-5" />
-          {!isCollapsed && <span>Logout</span>}
-        </button>
-      </div>
-    </aside>
+          <button
+            type="button"
+            onClick={() => navigate('/admin/help')}
+            className={`w-full flex items-center ${isCollapsed ? 'justify-center' : 'gap-3'} px-3 py-2 rounded-lg text-sm font-ui text-gray-700 hover:bg-gray-100 transition`}
+            title={isCollapsed ? 'Help & Support' : ''}
+          >
+            {renderIcon('help', false)}
+            {!isCollapsed && <span>Help & Support</span>}
+          </button>
+          <button
+            type="button"
+            onClick={handleLogout}
+            className={`w-full flex items-center ${isCollapsed ? 'justify-center' : 'gap-3'} px-3 py-2 rounded-lg text-sm font-ui text-red-600 hover:bg-red-50 transition`}
+            title={isCollapsed ? 'Logout' : ''}
+          >
+            <LogOut className="w-5 h-5" />
+            {!isCollapsed && <span>Logout</span>}
+          </button>
+        </div>
+      </aside>
+    </>
   );
 }

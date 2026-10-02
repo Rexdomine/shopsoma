@@ -240,14 +240,14 @@ export default function AdminVendors() {
   };
 
   return (
-    <div className="min-h-screen bg-[var(--color-page-bg)] flex">
+    <div className="flex flex-col md:flex-row min-h-screen bg-[var(--color-page-bg)] w-full overflow-x-hidden">
       <AdminSidebar activeSection="vendors" />
 
-      <main className="flex-1 p-8 space-y-6">
+      <main className="flex-1 min-w-0 p-4 sm:p-6 lg:p-8 space-y-6">
         {/* Header */}
         <div>
-          <h1 className="text-3xl font-display text-gray-900 mb-2">Vendors</h1>
-          <p className="text-gray-600 font-ui">Manage vendor accounts and monitor onboarding status</p>
+          <h1 className="text-2xl sm:text-3xl font-display text-gray-900 mb-1 sm:mb-2">Vendors</h1>
+          <p className="text-gray-600 font-ui text-sm">Manage vendor accounts and monitor onboarding status</p>
         </div>
 
         {/* Message */}
@@ -270,7 +270,7 @@ export default function AdminVendors() {
         )}
 
         {/* Stats Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-5">
             <div className="flex items-center justify-between">
               <div>
@@ -395,13 +395,13 @@ export default function AdminVendors() {
         </div>
 
         {selectedIds.length > 0 && (
-          <div role="region" aria-label="Bulk account status actions" className="bg-blue-50 border border-blue-200 rounded-xl p-4 flex items-center justify-between">
+          <div role="region" aria-label="Bulk account status actions" className="bg-blue-50 border border-blue-200 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-sm">
             <p>{selectedIds.length} selected. Status changes are reversible; no permanent deletion.</p>
             <div className="flex gap-2">
-              <button disabled={bulkLoading} onClick={() => handleBulkStatus(true)}>
+              <button disabled={bulkLoading} onClick={() => handleBulkStatus(true)} className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-semibold disabled:opacity-50">
                 Activate selected
               </button>
-              <button disabled={bulkLoading} onClick={() => handleBulkStatus(false)}>
+              <button disabled={bulkLoading} onClick={() => handleBulkStatus(false)} className="px-3 py-1.5 bg-gray-600 text-white rounded-lg text-xs font-semibold disabled:opacity-50">
                 Deactivate selected
               </button>
             </div>

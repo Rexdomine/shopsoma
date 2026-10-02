@@ -31,8 +31,8 @@ interface CurrencyState {
   fetchExchangeRate: () => Promise<void>;
 
   // Utility functions
-  convertPrice: (price: number, from: Currency, to: Currency) => number;
-  formatPrice: (price: number, currency?: Currency) => string;
+  convertPrice: (price: number | string, from: Currency, to: Currency) => number;
+  formatPrice: (price: number | string, currency?: Currency) => string;
 }
 
 // Default exchange rates (should be updated from API)
@@ -124,40 +124,47 @@ export const useCurrencyStore = create<CurrencyState>()(
         }
       },
 
-      convertPrice: (price: number, from: Currency, to: Currency): number => {
-        if (from === to) return price;
+      convertPrice: (price: number | string, from: Currency, to: Currency): number => {
+        const num = typeof price === 'number' ? price : parseFloat(String(price));
+        const safePrice = isNaN(num) ? 0 : num;
+        if (from === to) return safePrice;
 
         const { exchangeRates } = get();
 
         if (from === 'NGN' && to === 'USD') {
-          return price * exchangeRates.NGN_TO_USD;
+          return safePrice * exchangeRates.NGN_TO_USD;
         }
 
         if (from === 'USD' && to === 'NGN') {
-          return price * exchangeRates.USD_TO_NGN;
+          return safePrice * exchangeRates.USD_TO_NGN;
         }
 
-        return price;
+        return safePrice;
       },
 
-      formatPrice: (price: number, currency?: Currency): string => {
+      formatPrice: (price: number | string, currency?: Currency): string => {
         const curr = currency || get().currentCurrency;
+        const num = typeof price === 'number' ? price : parseFloat(String(price));
+        const safePrice = isNaN(num) ? 0 : num;
 
         if (curr === 'NGN') {
-          return `₦${price.toLocaleString('en-NG', {
+          return `₦${safePrice.toLocaleString('en-NG', {
             minimumFractionDigits: 2,
             maximumFractionDigits: 2
           })}`;
         }
 
         if (curr === 'USD') {
-          return `$${price.toLocaleString('en-US', {
+          return `$${safePrice.toLocaleString('en-US', {
             minimumFractionDigits: 2,
             maximumFractionDigits: 2
           })}`;
         }
 
-        return price.toString();
+        return safePrice.toLocaleString('en-US', {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        });
       },
     }),
     {

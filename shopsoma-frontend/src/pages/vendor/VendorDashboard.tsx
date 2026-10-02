@@ -73,7 +73,7 @@ export default function VendorDashboard() {
   const disableNav = isOnboarding && !brandInfoCompleted;
 
   return (
-    <div className="min-h-screen bg-[var(--color-page-bg)] flex">
+    <div className="min-h-screen bg-[var(--color-page-bg)] flex flex-col md:flex-row w-full overflow-x-hidden">
       <VendorWelcomePopup
         isOpen={showWelcomePopup}
         onClose={handleDismissWelcome}
@@ -86,7 +86,7 @@ export default function VendorDashboard() {
         completedOrders={vendorProfile?.total_orders || 0}
       />
 
-      <main className="flex-1 p-8">
+      <main className="flex-1 min-w-0 p-4 sm:p-6 lg:p-8">
         <div>
           <div className="bg-white border-b border-gray-200 mb-6">
             <div className="py-4">
@@ -155,18 +155,20 @@ export default function VendorDashboard() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
-                <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-                  <p className="text-sm text-gray-500 mb-2">Total Products</p>
-                  <p className="text-3xl font-display text-[#105E53]">{vendorProfile.total_products}</p>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6 mb-6">
+                <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-5 sm:p-6 min-w-0">
+                  <p className="text-sm text-gray-500 mb-2 truncate">Total Products</p>
+                  <p className="text-2xl sm:text-3xl font-display text-[#105E53] truncate">{vendorProfile.total_products}</p>
                 </div>
-                <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-                  <p className="text-sm text-gray-500 mb-2">Total Orders</p>
-                  <p className="text-3xl font-display text-[#105E53]">{vendorProfile.total_orders}</p>
+                <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-5 sm:p-6 min-w-0">
+                  <p className="text-sm text-gray-500 mb-2 truncate">Total Orders</p>
+                  <p className="text-2xl sm:text-3xl font-display text-[#105E53] truncate">{vendorProfile.total_orders}</p>
                 </div>
-                <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-                  <p className="text-sm text-gray-500 mb-2">Total Revenue</p>
-                  <p className="text-3xl font-display text-[#105E53]">₦{parseFloat(vendorProfile.total_revenue).toLocaleString()}</p>
+                <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-5 sm:p-6 min-w-0">
+                  <p className="text-sm text-gray-500 mb-2 truncate">Total Revenue</p>
+                  <p className="text-2xl sm:text-3xl font-display text-[#105E53] truncate" title={`₦${Number(vendorProfile.total_revenue || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}>
+                    ₦{Number(vendorProfile.total_revenue || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </p>
                 </div>
               </div>
             </>
