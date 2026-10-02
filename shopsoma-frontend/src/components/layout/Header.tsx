@@ -83,22 +83,22 @@ export default function Header() {
     <>
       <header className="bg-[var(--color-page-bg)] text-primary border-b border-primary relative z-30">
         <div className="max-w-6xl mx-auto px-4 sm:px-8 py-3 flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2 flex-1">
-            <div className="flex items-center gap-3 sm:hidden">
+          <div className="flex items-center gap-2 flex-1 min-w-0">
+            <div className="flex items-center gap-1.5 sm:gap-3 sm:hidden">
               <button
                 type="button"
                 onClick={() => setMobileMenuOpen((prev) => !prev)}
-                className="p-1.5 hover:text-primary-dark"
+                className="p-1 hover:text-primary-dark shrink-0"
                 aria-label={mobileMenuOpen ? 'Close menu' : 'Open menu'}
               >
-                {mobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
+                {mobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
               </button>
               <button
                 onClick={() => setSearchOpen(true)}
-                className="p-1.5 hover:text-primary-dark"
+                className="p-1 hover:text-primary-dark shrink-0"
                 aria-label="Open search"
               >
-                <Search className="w-6 h-6" />
+                <Search className="w-5 h-5" />
               </button>
             </div>
             <button
@@ -111,17 +111,17 @@ export default function Header() {
             </button>
           </div>
 
-          <div className="flex items-center justify-center flex-shrink-0">
+          <div className="flex items-center justify-center flex-shrink-0 px-1">
             <Link to={ROUTES.HOME} className="flex items-center justify-center">
               <img
                 src="/images/somalogo.svg"
                 alt="Shopsoma"
-                className="h-8 w-auto"
+                className="h-6 sm:h-8 w-auto max-w-[130px] sm:max-w-none"
               />
             </Link>
           </div>
 
-          <div className="flex items-center justify-end gap-2 sm:gap-4 text-sm font-ui flex-1">
+          <div className="flex items-center justify-end gap-1.5 sm:gap-4 text-sm font-ui flex-1 min-w-0">
             {/* Currency Switcher */}
             {commerceFeatures.usd_switching_enabled && <div className="hidden sm:block relative" ref={currencyDropdownRef}>
               <button

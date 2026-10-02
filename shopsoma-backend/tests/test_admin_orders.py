@@ -472,3 +472,131 @@ async def test_dhl_projection_is_admin_only(client, customer_user, vendor_user):
         response = await client.get(f"/api/v1/admin/orders/{order_id}", headers=headers)
         assert response.status_code in (401, 403)
         assert "dhl_operations" not in response.json()
+
+
+@pytest.mark.asyncio
+async def test_admin_order_stats_counts_only_paid_orders_as_received(
+    client, db_session, admin_user, customer_user, vendor_user
+):
+    from app.models.address import Address, AddressType
+    from app.models.order import FulfillmentStatus, Order, OrderItem, PaymentStatus
+    from app.models.product import ModerationStatus, Product, ProductStatus
+
+    # Create address & product
+    addr = Address(
+        id=uuid.uuid4(),
+        user_id=customer_user["user"].id,
+        address_type=AddressType.SHIPPING,
+        full_name="Pending Customer",
+        phone_number="08000000000",
+        address_line1="14 Broad St",
+        city="Lagos",
+        state="Lagos",
+        country="Nigeria",
+        is_default=True,
+    )
+    db_session.add(addr)
+    await db_session.flush()
+
+    prod = Product(
+        id=uuid.uuid4(),
+        vendor_id=vendor_user["vendor"].id,
+        title="Stats Test Product",
+        description="Product for testing order stats",
+        base_price=Decimal("150.00"),
+        currency="NGN",
+        total_stock=10,
+        status=ProductStatus.ACTIVE,
+        moderation_status=ModerationStatus.APPROVED,
+    )
+    db_session.add(prod)
+    await db_session.flush()
+
+    # Step 1: Create an order that reached checkout with pending payment
+    pending_order = Order(
+        id=uuid.uuid4(),
+        order_number=f"SHP-PENDING-{uuid.uuid4().hex[:6].upper()}",
+        customer_id=customer_user["user"].id,
+        shipping_address_id=addr.id,
+        billing_address_id=addr.id,
+        currency="NGN",
+        subtotal=Decimal("150.00"),
+        shipping_cost=Decimal("10.00"),
+        tax_amount=Decimal("0.00"),
+        discount_amount=Decimal("0.00"),
+        total_amount=Decimal("160.00"),
+        payment_status=PaymentStatus.PENDING,
+        fulfillment_status=FulfillmentStatus.ORDER_RECEIVED,
+    )
+    db_session.add(pending_order)
+    await db_session.flush()
+
+    item1 = OrderItem(
+        id=uuid.uuid4(),
+        order_id=pending_order.id,
+        product_id=prod.id,
+        vendor_id=vendor_user["vendor"].id,
+        product_title=prod.title,
+        unit_price=Decimal("150.00"),
+        currency="NGN",
+        quantity=1,
+        subtotal=Decimal("150.00"),
+        commission_rate=Decimal("15.00"),
+        commission_amount=Decimal("22.50"),
+        vendor_payout=Decimal("127.50"),
+        fulfillment_status=FulfillmentStatus.ORDER_RECEIVED,
+    )
+    db_session.add(item1)
+    await db_session.commit()
+
+    # Query admin stats before payment
+    res_before = await client.get("/api/v1/admin/orders/stats", headers=admin_user["headers"])
+    assert res_before.status_code == 200
+    stats_before = res_before.json()
+
+    # Pending payment order must NOT increment total_orders, total_revenue, or pending_orders (orders received)
+    assert stats_before["pending_payment"] >= 1
+    # It must be recorded in pending_payment, but NOT in pending_orders (orders received awaiting processing)
+    # Nor in total_orders or total_revenue
+
+    # Query admin order list filtered by order_received
+    list_res_before = await client.get(
+        "/api/v1/admin/orders?fulfillment_status=order_received",
+        headers=admin_user["headers"],
+    )
+    assert list_res_before.status_code == 200
+    received_order_ids_before = [o["id"] for o in list_res_before.json()["orders"]]
+    assert str(pending_order.id) not in received_order_ids_before
+
+    # But querying with payment_status=pending MUST find the order
+    list_res_pending = await client.get(
+        "/api/v1/admin/orders?payment_status=pending",
+        headers=admin_user["headers"],
+    )
+    assert list_res_pending.status_code == 200
+    pending_ids = [o["id"] for o in list_res_pending.json()["orders"]]
+    assert str(pending_order.id) in pending_ids
+
+    # Step 2: Now mark the order as PAID
+    pending_order.payment_status = PaymentStatus.PAID
+    await db_session.commit()
+
+    # Query admin stats after payment
+    res_after = await client.get("/api/v1/admin/orders/stats", headers=admin_user["headers"])
+    assert res_after.status_code == 200
+    stats_after = res_after.json()
+
+    # Now that it's paid, it counts as an order received!
+    assert stats_after["total_orders"] == stats_before["total_orders"] + 1
+    assert stats_after["pending_orders"] == stats_before["pending_orders"] + 1
+    assert Decimal(str(stats_after["total_revenue"])) == Decimal(str(stats_before["total_revenue"])) + Decimal("160.00")
+
+    # And filtering by order_received NOW includes it
+    list_res_after = await client.get(
+        "/api/v1/admin/orders?fulfillment_status=order_received",
+        headers=admin_user["headers"],
+    )
+    assert list_res_after.status_code == 200
+    received_order_ids_after = [o["id"] for o in list_res_after.json()["orders"]]
+    assert str(pending_order.id) in received_order_ids_after
+

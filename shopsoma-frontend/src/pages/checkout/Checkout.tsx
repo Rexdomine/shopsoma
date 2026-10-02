@@ -1104,21 +1104,21 @@ export default function Checkout() {
   return (
     <Layout showHeader={false}>
       <header className="bg-white border-b border-gray-100">
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-4 grid grid-cols-3 items-center">
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-3 sm:py-4 flex sm:grid sm:grid-cols-3 items-center justify-between gap-2 sm:gap-4">
           <button
             onClick={goBackToBag}
-            className="text-sm text-primary font-semibold justify-self-start hover:underline"
+            className="text-xs sm:text-sm text-primary font-semibold justify-self-start hover:underline order-1"
           >
-            ← Back to Shopping Bag
+            ← <span className="hidden sm:inline">Back to </span>Bag
           </button>
-          <div className="flex items-center justify-center">
+          <div className="flex items-center justify-center order-2">
             <Link to="/" className="flex items-center justify-center">
-              <img src="/images/somalogo.svg" alt="Shopsoma" className="h-10 w-auto" />
+              <img src="/images/somalogo.svg" alt="Shopsoma" className="h-7 sm:h-10 w-auto" />
             </Link>
           </div>
-          <div className="flex items-center justify-end gap-4">
+          <div className="flex items-center justify-end gap-2 sm:gap-4 order-3">
             {/* Currency Switcher */}
-            {commerceFeatures.usd_switching_enabled && <div className="flex items-center gap-2 border border-gray-300 rounded-sm px-3 py-1.5">
+            {commerceFeatures.usd_switching_enabled && <div className="flex items-center gap-1.5 sm:gap-2 border border-gray-300 rounded-sm px-2 sm:px-3 py-1 sm:py-1.5">
               <button
                 onClick={() => void changeCheckoutCurrency('NGN')}
                 disabled={isCreatingOrder || isSwitchingCurrency || Boolean(currentPaymentGateway) || showStripePaymentModal}
@@ -1143,7 +1143,7 @@ export default function Checkout() {
                 USD
               </button>
             </div>}
-            <span className="text-sm text-gray-700">Secure Checkout</span>
+            <span className="hidden md:inline text-xs sm:text-sm text-gray-700">Secure Checkout</span>
           </div>
         </div>
       </header>
@@ -1182,7 +1182,7 @@ export default function Checkout() {
                     ) : (
                       // Email input mode
                       <>
-                        <div className="flex items-end gap-4">
+                        <div className="flex flex-col sm:flex-row items-stretch sm:items-end gap-3 sm:gap-4">
                           <div className="flex-1">
                             <label className="text-xs text-gray-500">Email</label>
                             <input

@@ -1,19 +1,19 @@
 import { useEffect, useMemo, useState, useRef, type SVGProps } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Bookmark, Minus, Plus, X } from 'lucide-react';
+import { ArrowLeft, Bookmark, Minus, Plus, X } from 'lucide-react';
 import type { Product, ProductVariant, SizeGuide } from '../../types';
 import { productService } from '../../services/productService';
 import { wishlistService } from '../../services/wishlistService';
 import Loading from '../../components/common/Loading';
 import ProductCard from '../../components/products/ProductCard';
-import { IMAGE_CONFIG, STORAGE_KEYS } from '../../config/constants';
+import { IMAGE_CONFIG, ROUTES, STORAGE_KEYS } from '../../config/constants';
 import Layout from '../../components/layout/Layout';
 import AddToBagModal from '../../components/modals/AddToBagModal';
 import { useCartStore } from '../../store/cartStore';
 import { formatPriceWithConversion } from '../../utils/pricing';
 import { useCurrencyStore } from '../../store/currencyStore';
 import { hasSolidColorHex, normalizeColorValue } from '../../utils/colorDisplay';
-import { getProductImageSources, normalizeProductImageUrl } from '../../utils/productImages';
+import { getOptimizedImageUrl, getProductImageSources } from '../../utils/productImages';
 
 const FALLBACK_SIZE_GUIDE: SizeGuide = {
   gender: 'General Fit',
@@ -37,6 +37,7 @@ type ColorOption = {
 type GalleryImage = {
   id: string;
   src: string;
+  thumbnailSrc?: string;
   fallbackSrc?: string;
   altText?: string;
 };
@@ -70,6 +71,7 @@ export default function ProductDetail() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
+  const [isImageLoading, setIsImageLoading] = useState(false);
   const [selectedColor, setSelectedColor] = useState<string | null>(null);
   const [selectedSize, setSelectedSize] = useState<string | null>(null);
   const [quantity, setQuantity] = useState(1);
@@ -81,6 +83,7 @@ export default function ProductDetail() {
   const [addToBagError, setAddToBagError] = useState<string | null>(null);
   const [addedVariant, setAddedVariant] = useState<ProductVariant | null>(null);
   const sizeDropdownRef = useRef<HTMLDivElement>(null);
+  const heroImageRef = useRef<HTMLImageElement>(null);
 
   useEffect(() => {
     if (!id) {
@@ -154,16 +157,37 @@ export default function ProductDetail() {
 
     if (selectedVariation && selectedVariation.images.length > 0) {
       // Switch to variation's first image
-      const variationImage = normalizeProductImageUrl(selectedVariation.images[0]);
+      const variationImage = getOptimizedImageUrl(selectedVariation.images[0], 'high').src;
       if (variationImage) {
         setSelectedImage(variationImage);
+        return;
       }
-    } else {
-      // Fallback to product's default images if variation has no images
-      const defaultImage = getProductImageSources(product, 'high')[0]?.src;
-      if (defaultImage) {
-        setSelectedImage(defaultImage);
-      }
+    }
+
+    // Fallback: search product gallery images for color name in filename/URL
+    // e.g. "ZIMORA_RED_WINDBREAKER" contains "red"
+    const highQualityImages = getProductImageSources(product, 'high');
+    const colorMatch = highQualityImages.find((img) => {
+      const lower = img.src.toLowerCase();
+      return (
+        lower.includes(`_${normalizedColor}_`) ||
+        lower.includes(`-${normalizedColor}-`) ||
+        lower.includes(`_${normalizedColor}.`) ||
+        lower.includes(`-${normalizedColor}.`) ||
+        lower.includes(`_${normalizedColor}/`) ||
+        lower.includes(normalizedColor)
+      );
+    });
+
+    if (colorMatch) {
+      setSelectedImage(colorMatch.src);
+      return;
+    }
+
+    // Fallback to product's default images if variation has no images
+    const defaultImage = highQualityImages[0]?.src;
+    if (defaultImage) {
+      setSelectedImage(defaultImage);
     }
   }, [selectedColor, product]);
 
@@ -330,8 +354,13 @@ export default function ProductDetail() {
     return !selectedVariant;
   }, [product?.variants?.length, selectedColor, selectedSize, selectedVariant]);
 
-  const currentPrice = selectedVariant?.price ?? product?.base_price ?? 0;
-  const comparePrice = selectedVariant?.compare_at_price ?? product?.compare_at_price ?? null;
+  const isSingleProduct = !product?.variations || product.variations.length === 0;
+  const currentPrice = (isSingleProduct && product?.base_price != null)
+    ? product.base_price
+    : (selectedVariant?.price ?? product?.base_price ?? 0);
+  const comparePrice = (isSingleProduct && product?.compare_at_price != null)
+    ? product.compare_at_price
+    : (selectedVariant?.compare_at_price ?? product?.compare_at_price ?? null);
 
   const baseStock = product?.total_stock ?? 0;
   const variantStock = selectedVariant?.stock ?? null;
@@ -547,9 +576,13 @@ export default function ProductDetail() {
   const getDisplayImages = (): GalleryImage[] => {
     if (!product) return [];
 
-    return getProductImageSources(product, 'high').map((image, index) => ({
+    const highSources = getProductImageSources(product, 'high');
+    const thumbSources = getProductImageSources(product, 'thumbnail');
+
+    return highSources.map((image, index) => ({
       id: `${product.id}-gallery-${index}-${image.src}`,
       src: image.src,
+      thumbnailSrc: thumbSources[index]?.src ?? image.src,
       fallbackSrc: image.fallbackSrc,
       altText: product.title,
     }));
@@ -585,6 +618,26 @@ export default function ProductDetail() {
     }
   }, [hasSizeGuide, sizeGuideOpen]);
 
+  const heroImage = selectedImage ?? galleryImages[0]?.src ?? placeholderImage;
+  const heroFallbackImage = galleryImages.find((image) => image.src === heroImage)?.fallbackSrc;
+
+  useEffect(() => {
+    // If the image is already cached/loaded in the DOM, don't show the spinner
+    if (heroImageRef.current?.complete && heroImageRef.current?.naturalWidth > 0) {
+      setIsImageLoading(false);
+      return;
+    }
+
+    setIsImageLoading(true);
+
+    // Safety timeout: ensure spinner never gets stuck indefinitely
+    const timer = window.setTimeout(() => {
+      setIsImageLoading(false);
+    }, 1500);
+
+    return () => window.clearTimeout(timer);
+  }, [heroImage]);
+
   if (loading) {
     return (
       <div className="py-24">
@@ -602,9 +655,6 @@ export default function ProductDetail() {
       </section>
     );
   }
-
-  const heroImage = selectedImage ?? galleryImages[0]?.src ?? placeholderImage;
-  const heroFallbackImage = galleryImages.find((image) => image.src === heroImage)?.fallbackSrc;
 
   // Calculate savings percentage
   const savingsPercent = comparePrice && comparePrice > currentPrice
@@ -650,16 +700,44 @@ export default function ProductDetail() {
   return (
     <Layout>
     <section className="w-full overflow-x-clip bg-[var(--color-page-bg)] text-primary">
-      <main className="mx-auto flex max-w-7xl flex-col gap-10 px-6 py-10 md:flex-row md:gap-12 lg:py-12">
+      <div className="mx-auto max-w-7xl px-4 sm:px-6 pt-6 pb-2">
+        <button
+          type="button"
+          onClick={() => {
+            if (window.history.state && window.history.state.idx > 0) {
+              navigate(-1);
+            } else {
+              navigate(ROUTES.PRODUCTS);
+            }
+          }}
+          className="inline-flex items-center gap-2 text-xs font-ui uppercase tracking-[0.2em] text-primary/70 hover:text-primary transition"
+        >
+          <ArrowLeft className="w-4 h-4" />
+          <span>Back</span>
+        </button>
+      </div>
+      <main className="mx-auto flex max-w-7xl flex-col gap-8 sm:gap-10 px-4 sm:px-6 py-4 sm:py-6 md:flex-row md:gap-12 lg:py-8">
         <div className="md:w-1/2">
           <div className="relative aspect-[4/5] w-full overflow-hidden bg-[#f5f7f8]">
+            {isImageLoading && (
+              <div className="absolute inset-0 flex items-center justify-center bg-[#f5f7f8] animate-pulse z-10">
+                <div className="h-8 w-8 rounded-full border-2 border-primary/20 border-t-primary animate-spin" />
+              </div>
+            )}
             <div className="flex h-full w-full items-center justify-center lg:justify-end">
               <div className="h-full w-full">
                 <img
+                  ref={heroImageRef}
                   src={heroImage}
                   alt={product.title}
-                  className="h-full w-full object-contain object-center"
-                  onError={(event) => handleProductImageError(event, heroFallbackImage)}
+                  className={`h-full w-full object-contain object-center transition-opacity duration-300 ${
+                    isImageLoading ? 'opacity-0' : 'opacity-100'
+                  }`}
+                  onLoad={() => setIsImageLoading(false)}
+                  onError={(event) => {
+                    setIsImageLoading(false);
+                    handleProductImageError(event, heroFallbackImage);
+                  }}
                 />
               </div>
             </div>
@@ -681,7 +759,7 @@ export default function ProductDetail() {
                     aria-label={`View ${product.title} image`}
                   >
                     <img
-                      src={image.src}
+                      src={image.thumbnailSrc || image.src}
                       alt={image.altText ?? product.title}
                       className="h-full w-full object-cover object-center"
                       onError={(event) => handleProductImageError(event, image.fallbackSrc)}
@@ -701,7 +779,7 @@ export default function ProductDetail() {
                   {product.vendor_name}
                 </p>
               )}
-              <h1 className="mt-2 text-3xl font-display font-medium leading-tight text-primary md:text-4xl">
+              <h1 className="mt-2 text-2xl sm:text-3xl font-display font-medium leading-tight text-primary md:text-4xl break-words">
                 {product.title}
               </h1>
             </div>
@@ -917,7 +995,7 @@ export default function ProductDetail() {
 
       {productInfoItems.length > 0 && (
         <section className="border-t border-primary/20">
-          <div className="mx-auto max-w-7xl px-6 py-12">
+          <div className="mx-auto max-w-7xl px-4 sm:px-6 py-8 sm:py-12">
             <h2 className="mb-8 text-2xl font-display text-primary">Product information</h2>
             <div className="grid grid-cols-1 gap-x-16 gap-y-10 md:grid-cols-2">
               {productInfoItems.map((item) => (
@@ -936,7 +1014,7 @@ export default function ProductDetail() {
       )}
 
       {relatedProducts.length > 0 && (
-        <section className="mx-auto max-w-7xl px-6 py-12">
+        <section className="mx-auto max-w-7xl px-4 sm:px-6 py-8 sm:py-12">
           <h2 className="mb-8 text-2xl font-display text-primary">Shop The Look</h2>
           <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
             {relatedProducts.slice(0, 4).map((related) => (
@@ -947,7 +1025,7 @@ export default function ProductDetail() {
       )}
 
       {relatedProducts.length > 4 && (
-        <section className="mx-auto max-w-7xl px-6 pb-20">
+        <section className="mx-auto max-w-7xl px-4 sm:px-6 pb-16 sm:pb-20">
           <h2 className="mb-8 text-2xl font-display text-primary">You May Also Like</h2>
           <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
             {relatedProducts.slice(4, 8).map((related) => (

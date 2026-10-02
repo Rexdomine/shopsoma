@@ -18,9 +18,9 @@ export default function Layout({
   showFooter = true,
 }: LayoutProps) {
   return (
-    <div className="min-h-screen flex flex-col bg-[var(--color-page-bg)]">
+    <div className="min-h-screen flex flex-col bg-[var(--color-page-bg)] w-full overflow-x-hidden">
       {showHeader && <Header />}
-      <main className="flex-grow bg-[var(--color-page-bg)]">{children}</main>
+      <main className="flex-grow bg-[var(--color-page-bg)] w-full min-w-0">{children}</main>
       {showFooter && <Footer />}
     </div>
   );

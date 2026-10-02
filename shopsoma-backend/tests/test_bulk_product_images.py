@@ -5,9 +5,9 @@ import io
 import pytest
 from sqlalchemy import func, select
 
-from app.api.v1.products import BULK_IMAGE_HEADERS, BULK_SINGLE_HEADERS, BULK_VARIABLE_HEADERS, _parse_image_urls
+from app.api.v1.products import BULK_IMAGE_HEADERS, BULK_SINGLE_HEADERS, BULK_VARIABLE_HEADERS, _parse_image_urls, _optimize_bulk_image_url
 from app.models.category import Category
-from app.models.product import Product, ProductImage
+from app.models.product import Product, ProductImage, Variation
 
 
 @pytest.fixture
@@ -232,3 +232,66 @@ async def test_csv_cannot_copy_managed_upload_as_keyless_image(
     assert response.status_code == 422, response.text
     assert "server-issued storage keys" in str(response.json()["detail"])
     assert await db_session.scalar(select(ProductImage.id)) is None
+
+
+def test_optimize_bulk_image_url_unit():
+    # Cloudinary raw URL
+    url = "https://res.cloudinary.com/ekwntcvm/image/upload/v1790762856/ZIMORA_BLACK_WINDBREAKER.jpg"
+    thumb = _optimize_bulk_image_url(url, "thumbnail")
+    high = _optimize_bulk_image_url(url, "high")
+    assert thumb == "https://res.cloudinary.com/ekwntcvm/image/upload/c_limit,w_400,f_auto,q_auto/v1790762856/ZIMORA_BLACK_WINDBREAKER.jpg"
+    assert high == "https://res.cloudinary.com/ekwntcvm/image/upload/c_limit,w_1600,f_auto,q_auto/v1790762856/ZIMORA_BLACK_WINDBREAKER.jpg"
+
+    # Cloudinary with existing transforms
+    existing = "https://res.cloudinary.com/ekwntcvm/image/upload/c_scale,w_500/v1790762856/photo.jpg"
+    assert _optimize_bulk_image_url(existing, "thumbnail") == "https://res.cloudinary.com/ekwntcvm/image/upload/c_scale,w_500,c_limit,w_400,f_auto,q_auto/v1790762856/photo.jpg"
+
+    # Non-Cloudinary preserved
+    cdn = "https://cdn.example.com/photo.jpg"
+    assert _optimize_bulk_image_url(cdn, "thumbnail") == cdn
+    assert _optimize_bulk_image_url(cdn, "high") == cdn
+
+
+@pytest.mark.asyncio
+async def test_csv_cloudinary_images_are_optimized_and_variation_images_populated(
+    client, vendor_user, db_session, image_category
+):
+    black_url = "https://res.cloudinary.com/ekwntcvm/image/upload/v1/ZIMORA_BLACK.jpg"
+    red_url = "https://res.cloudinary.com/ekwntcvm/image/upload/v1/ZIMORA_RED.heic"
+
+    row1 = product_row("variable", color_name="Black", color_hex="#000000", size="S", variant_sku="WINDBREAKER-BLK-S", image_1_url=black_url)
+    row2 = product_row("variable", color_name="Red", color_hex="#FF0000", size="M", variant_sku="WINDBREAKER-RED-M", image_1_url=red_url)
+
+    response = await upload(client, vendor_user, "variable", [row1, row2])
+    assert response.status_code == 201, response.text
+
+    product = await db_session.scalar(select(Product).where(Product.sku == "CSV-IMAGE-SHIRT"))
+    images = (await db_session.scalars(select(ProductImage).where(ProductImage.product_id == product.id).order_by(ProductImage.display_order))).all()
+    assert len(images) == 2
+
+    # Verify Cloudinary optimization applied to product images
+    assert images[0].image_url == "https://res.cloudinary.com/ekwntcvm/image/upload/c_limit,w_1600,f_auto,q_auto/v1/ZIMORA_BLACK.jpg"
+    assert images[0].thumbnail_url == "https://res.cloudinary.com/ekwntcvm/image/upload/c_limit,w_400,f_auto,q_auto/v1/ZIMORA_BLACK.jpg"
+
+    assert images[1].image_url == "https://res.cloudinary.com/ekwntcvm/image/upload/c_limit,w_1600,f_auto,q_auto/v1/ZIMORA_RED.heic"
+    assert images[1].thumbnail_url == "https://res.cloudinary.com/ekwntcvm/image/upload/c_limit,w_400,f_auto,q_auto/v1/ZIMORA_RED.heic"
+
+    # Verify variation images populated
+    variations = (await db_session.scalars(select(Variation).where(Variation.product_id == product.id).order_by(Variation.title))).all()
+    assert len(variations) == 2
+    black_var = next(v for v in variations if v.title == "Black")
+    red_var = next(v for v in variations if v.title == "Red")
+
+    assert black_var.images == ["https://res.cloudinary.com/ekwntcvm/image/upload/c_limit,w_1600,f_auto,q_auto/v1/ZIMORA_BLACK.jpg"]
+    assert red_var.images == ["https://res.cloudinary.com/ekwntcvm/image/upload/c_limit,w_1600,f_auto,q_auto/v1/ZIMORA_RED.heic"]
+
+
+@pytest.mark.asyncio
+async def test_csv_non_cloudinary_heic_is_rejected(
+    client, vendor_user, db_session, image_category
+):
+    bad_heic = "https://cdn.example.com/unsupported.heic"
+    response = await upload(client, vendor_user, "single", [product_row("single", image_1_url=bad_heic)])
+    assert response.status_code == 422, response.text
+    errors = response.json()["detail"]["errors"]
+    assert any("HEIC format images are only supported when hosted on Cloudinary" in e["message"] for e in errors)

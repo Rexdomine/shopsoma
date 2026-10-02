@@ -680,13 +680,9 @@ class ProductResponse(ProductBase):
         if self.variants:
             if not self.variations and self.compare_at_price is not None:
                 for variant in self.variants:
-                    if (
-                        variant.size is None
-                        and variant.color is None
-                        and variant.price < self.compare_at_price
-                    ):
+                    if variant.price < self.compare_at_price:
                         # ProductVariant has no compare-at column. Derive the
-                        # generic legacy row's display value from the parent so
+                        # variant row's display value from the parent so
                         # a fresh request does not lose the sale metadata.
                         variant.compare_at_price = self.compare_at_price
             if self.variations:

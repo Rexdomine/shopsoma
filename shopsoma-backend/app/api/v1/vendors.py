@@ -541,9 +541,10 @@ async def list_vendor_orders(
     """
     print(f"[list_vendor_orders] ENDPOINT REACHED - Vendor: {vendor.business_name}, Page: {page}, Search: '{search}'")
 
-    # Base query - get distinct orders that have vendor's items
+    # Base query - get distinct orders that have vendor's items (only paid orders)
     query = select(Order).join(OrderItem).where(
-        OrderItem.vendor_id == vendor.id
+        OrderItem.vendor_id == vendor.id,
+        Order.payment_status == PaymentStatus.PAID
     ).distinct()
 
     # Filter by status
@@ -2071,10 +2072,13 @@ async def get_dashboard_metrics(
     )
     pending_approval = pending_approval_result.scalar() or 0
 
-    # Orders metrics
+    # Orders metrics (only paid orders count as received orders)
     total_orders_result = await db.execute(
-        select(func.count(func.distinct(OrderItem.order_id))).where(
-            OrderItem.vendor_id == vendor.id
+        select(func.count(func.distinct(OrderItem.order_id))).join(Order).where(
+            and_(
+                OrderItem.vendor_id == vendor.id,
+                Order.payment_status == PaymentStatus.PAID
+            )
         )
     )
     total_orders = total_orders_result.scalar() or 0
@@ -2083,7 +2087,8 @@ async def get_dashboard_metrics(
         select(func.count(func.distinct(OrderItem.order_id))).join(Order).where(
             and_(
                 OrderItem.vendor_id == vendor.id,
-                Order.fulfillment_status == FulfillmentStatus.ORDER_RECEIVED
+                Order.fulfillment_status == FulfillmentStatus.ORDER_RECEIVED,
+                Order.payment_status == PaymentStatus.PAID
             )
         )
     )
@@ -2093,7 +2098,8 @@ async def get_dashboard_metrics(
         select(func.count(func.distinct(OrderItem.order_id))).join(Order).where(
             and_(
                 OrderItem.vendor_id == vendor.id,
-                Order.fulfillment_status == FulfillmentStatus.PREPARING_FOR_PICKUP
+                Order.fulfillment_status == FulfillmentStatus.PREPARING_FOR_PICKUP,
+                Order.payment_status == PaymentStatus.PAID
             )
         )
     )
@@ -2103,7 +2109,8 @@ async def get_dashboard_metrics(
         select(func.count(func.distinct(OrderItem.order_id))).join(Order).where(
             and_(
                 OrderItem.vendor_id == vendor.id,
-                Order.fulfillment_status == FulfillmentStatus.DELIVERED
+                Order.fulfillment_status == FulfillmentStatus.DELIVERED,
+                Order.payment_status == PaymentStatus.PAID
             )
         )
     )

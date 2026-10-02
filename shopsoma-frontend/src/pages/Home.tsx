@@ -45,7 +45,10 @@ function HomeProductCard({
   const primaryImage = productImages[0] ?? { src: IMAGE_CONFIG.PLACEHOLDER };
   const secondaryImage = productImages[1] ?? primaryImage;
   const vendor = product.vendor_name || 'Shopsoma';
-  const price = product.variants?.[0]?.price ?? product.base_price ?? 0;
+  const isSingleProduct = !product.variations || product.variations.length === 0;
+  const price = (isSingleProduct && product.base_price != null)
+    ? product.base_price
+    : (product.variants?.[0]?.price ?? product.base_price ?? 0);
 
   const sizeOptions = Array.from(
     new Set(
@@ -613,7 +616,6 @@ export default function Home() {
   const [featuredProducts, setFeaturedProducts] = useState<Product[]>([]);
   const [featuredIndex, setFeaturedIndex] = useState(0);
   const [featuredLoading, setFeaturedLoading] = useState(true);
-  const [featuredReady, setFeaturedReady] = useState(false);
   const [rotationMinutes, setRotationMinutes] = useState(10);
   const { favorites, toggleFavorite } = useWishlistActions();
 
@@ -679,71 +681,45 @@ export default function Home() {
     return () => window.clearInterval(timer);
   }, [featuredProducts, rotationMinutes]);
 
-  const featuredProduct = featuredProducts[featuredIndex];
-  const featuredImage = featuredProduct ? getProductImageSource(featuredProduct, 'high') : null;
-  const featuredImageUrl = featuredImage?.src || '';
-  const showFeaturedSkeleton =
-    featuredLoading ||
-    !featuredProduct ||
-    !featuredImageUrl ||
-    !featuredReady;
-
-  useEffect(() => {
-    if (!featuredImageUrl) {
-      setFeaturedReady(false);
-      return;
-    }
-
-    let isMounted = true;
-    setFeaturedReady(false);
-
-    const img = new Image();
-    img.onload = () => {
-      if (isMounted) setFeaturedReady(true);
-    };
-    img.onerror = () => {
-      if (isMounted) setFeaturedReady(true);
-    };
-    img.src = featuredImageUrl;
-
-    return () => {
-      isMounted = false;
-    };
-  }, [featuredImageUrl]);
+  const featuredProduct =
+    featuredProducts[featuredIndex] ??
+    (products.length > 0 ? products[0] : null);
 
   return (
     <Layout>
       <div className="bg-[var(--color-page-bg)] text-[var(--color-text-main)]">
         <Hero />
 
-        <section className="py-12 bg-[var(--color-page-bg)] border-b border-[#1E5053]">
-          <div className="w-full px-4 sm:px-8 lg:px-20 space-y-6">
-            {loading ? (
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
-                {Array.from({ length: 4 }).map((_, index) => (
-                  <HomeProductCardSkeleton key={`home-skeleton-${index}`} />
-                ))}
-              </div>
-            ) : (
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
-                {products.slice(0, 4).map((product) => (
-                  <HomeProductCard
-                    key={product.id}
-                    product={product}
-                    isFavorite={favorites.has(product.id)}
-                    onToggleFavorite={toggleFavorite}
-                  />
-                ))}
-              </div>
-            )}
-          </div>
-        </section>
-
-        {showFeaturedSkeleton ? (
-          <FeaturedCollabSkeleton />
-        ) : (
-          <FeaturedCollab product={featuredProduct} />
+        {(loading || products.length > 0) && (
+          <section className="py-12 bg-[var(--color-page-bg)] border-b border-[#1E5053]">
+            <div className="w-full px-4 sm:px-8 lg:px-20 space-y-6">
+              {loading ? (
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
+                  {Array.from({ length: 4 }).map((_, index) => (
+                    <HomeProductCardSkeleton key={`home-skeleton-${index}`} />
+                  ))}
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
+                  {products.slice(0, 4).map((product) => (
+                    <HomeProductCard
+                      key={product.id}
+                      product={product}
+                      isFavorite={favorites.has(product.id)}
+                      onToggleFavorite={toggleFavorite}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          </section>
         )}
+
+        {featuredLoading ? (
+          <FeaturedCollabSkeleton />
+        ) : featuredProduct ? (
+          <FeaturedCollab product={featuredProduct} />
+        ) : null}
         <CategoryStrip />
         <EditorialSection />
       </div>

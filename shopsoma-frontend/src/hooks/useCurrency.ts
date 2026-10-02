@@ -22,14 +22,14 @@ export function useCurrency() {
    * Convert a price from NGN (base currency) to the current currency
    * All prices in the database are stored in NGN
    */
-  const convertFromBase = (ngnPrice: number): number => {
+  const convertFromBase = (ngnPrice: number | string): number => {
     return convertPrice(ngnPrice, 'NGN', currentCurrency);
   };
 
   /**
    * Format a price in NGN to the current currency with proper symbol
    */
-  const formatBasePrice = (ngnPrice: number): string => {
+  const formatBasePrice = (ngnPrice: number | string): string => {
     const converted = convertFromBase(ngnPrice);
     return formatPrice(converted, currentCurrency);
   };

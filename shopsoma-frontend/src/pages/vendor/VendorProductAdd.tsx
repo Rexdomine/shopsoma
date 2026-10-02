@@ -1109,32 +1109,31 @@ export default function VendorProductAdd() {
   return (
     <div>
       <ToastContainer toasts={toasts} onClose={hideToast} />
-      <div className="min-h-screen bg-[var(--color-page-bg)]">
-        <div className="flex">
-          <VendorSidebar activePrimary="products" />
-          <main className="flex-1 p-8">
+      <div className="flex flex-col md:flex-row min-h-screen bg-[var(--color-page-bg)] w-full overflow-x-hidden">
+        <VendorSidebar activePrimary="products" />
+        <main className="flex-1 min-w-0 p-4 sm:p-6 lg:p-8">
           {/* Header */}
-          <div className="flex items-center justify-between mb-8">
-            <div className="flex items-center gap-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6 sm:mb-8">
+            <div className="flex items-center gap-3 sm:gap-4">
               <button
                 type="button"
                 onClick={() => navigate(ROUTES.VENDOR_PRODUCTS)}
-                className="p-2 hover:bg-gray-100 rounded-lg transition"
+                className="p-2 hover:bg-gray-100 rounded-lg transition shrink-0"
               >
                 <ArrowLeft className="h-5 w-5 text-gray-600" />
               </button>
-              <div>
-                <h1 className="text-2xl font-semibold text-gray-900">Add New Product</h1>
-                <p className="text-sm text-gray-500 mt-1">Product ID: {productId}</p>
+              <div className="min-w-0">
+                <h1 className="text-xl sm:text-2xl font-semibold text-gray-900 truncate">Add New Product</h1>
+                <p className="text-xs sm:text-sm text-gray-500 mt-0.5 sm:mt-1">Product ID: {productId}</p>
               </div>
             </div>
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center gap-2 sm:gap-3">
               {/* Currency Switcher */}
               <div className="flex items-center border border-gray-200 rounded-lg overflow-hidden">
                 <button
                   type="button"
                   onClick={() => setProductCurrency('USD')}
-                  className={`px-4 py-2.5 text-sm font-medium transition ${
+                  className={`px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium transition ${
                     productCurrency === 'USD'
                       ? 'bg-[#105E53] text-white'
                       : 'bg-white text-gray-700 hover:bg-gray-50'
@@ -1145,7 +1144,7 @@ export default function VendorProductAdd() {
                 <button
                   type="button"
                   onClick={() => setProductCurrency('NGN')}
-                  className={`px-4 py-2.5 text-sm font-medium transition ${
+                  className={`px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium transition ${
                     productCurrency === 'NGN'
                       ? 'bg-[#105E53] text-white'
                       : 'bg-white text-gray-700 hover:bg-gray-50'
@@ -1158,14 +1157,14 @@ export default function VendorProductAdd() {
               <button
                 type="button"
                 onClick={() => navigate(ROUTES.VENDOR_PRODUCTS)}
-                className="px-5 py-2.5 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 transition"
+                className="px-3 sm:px-5 py-2 border border-gray-300 rounded-lg text-xs sm:text-sm font-medium text-gray-700 hover:bg-gray-50 transition"
               >
                 Cancel
               </button>
               <button
                 type="submit"
                 form="product-form"
-                className="px-5 py-2.5 bg-[#105E53] text-white rounded-lg text-sm font-medium hover:bg-[#0c4c45] transition"
+                className="px-4 sm:px-5 py-2 bg-[#105E53] text-white rounded-lg text-xs sm:text-sm font-medium hover:bg-[#0c4c45] transition"
               >
                 Save Product
               </button>
@@ -1176,7 +1175,7 @@ export default function VendorProductAdd() {
             id="product-form"
             data-ui-version="vendor-product-add-redeploy-2026-01-20"
             onSubmit={handleSubmit}
-            className="grid grid-cols-2 gap-8"
+            className="grid grid-cols-1 lg:grid-cols-2 gap-6 lg:gap-8"
           >
             <div className="space-y-6">
               <div className="bg-white rounded-lg border border-gray-200 p-6">
@@ -2506,7 +2505,6 @@ export default function VendorProductAdd() {
           </form>
         </main>
       </div>
-    </div>
 
       {/* Collection Modal */}
       <CollectionModal

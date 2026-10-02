@@ -413,15 +413,15 @@ export default function AdminProducts() {
   };
 
   return (
-    <div className="min-h-screen bg-[var(--color-page-bg)] flex">
+    <div className="flex flex-col md:flex-row min-h-screen bg-[var(--color-page-bg)] w-full overflow-x-hidden">
       <AdminSidebar activeSection="products" />
 
-      <main className="flex-1 p-8 space-y-6">
+      <main className="flex-1 min-w-0 p-4 sm:p-6 lg:p-8 space-y-6">
         {/* Header */}
-        <div className="flex items-start justify-between gap-4">
+        <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
           <div>
-            <h1 className="text-3xl font-display text-gray-900 mb-2">Product Management</h1>
-            <p className="text-gray-600 font-ui">Review and moderate vendor products</p>
+            <h1 className="text-2xl sm:text-3xl font-display text-gray-900 mb-1 sm:mb-2">Product Management</h1>
+            <p className="text-gray-600 font-ui text-sm">Review and moderate vendor products</p>
           </div>
           <CurrencySwitcher value={currentCurrency} onChange={setCurrency} />
         </div>
@@ -446,7 +446,7 @@ export default function AdminProducts() {
         )}
 
         {/* Filters */}
-        <div className="bg-white rounded-lg border border-gray-200 p-6 space-y-4">
+        <div className="bg-white rounded-lg border border-gray-200 p-4 sm:p-6 space-y-4">
           {/* Search */}
           <div className="relative">
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
@@ -458,12 +458,12 @@ export default function AdminProducts() {
                 setSearch(e.target.value);
                 setPage(1);
               }}
-              className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
             />
           </div>
 
           {/* Filter Row */}
-          <div className="flex gap-4">
+          <div className="flex flex-col sm:flex-row gap-4">
             <div className="flex-1">
               <label className="block text-sm font-medium text-gray-700 mb-1">Moderation Status</label>
               <select

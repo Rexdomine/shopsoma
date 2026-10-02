@@ -55,6 +55,7 @@ describe('ProductList', () => {
     getFeaturedStorefrontVendorsMock.mockResolvedValue([]);
     getFeaturedRotationSettingsMock.mockResolvedValue({ rotation_minutes: 10 });
     window.sessionStorage.clear();
+    window.scrollTo = vi.fn() as unknown as typeof window.scrollTo;
   });
 
   it('applies the responsive hero position override to the cover image', async () => {
@@ -415,5 +416,176 @@ describe('ProductList', () => {
       expect.objectContaining({ category_id: 'trousers-id' })
     ));
     expect(screen.getByRole('button', { name: 'Bottoms' })).toBeInTheDocument();
+  });
+
+  it("resolves child categories for Women's Lingerie/Pyjamas by slug override even when database ID is dynamic", async () => {
+    getProductsMock.mockResolvedValue({
+      products: [{ id: 'shapewear-prod-1', title: 'Shapewear Bodysuit', category_name: 'Shapewear' }],
+      total: 1,
+      total_pages: 1,
+    });
+
+    const categoryNav = [
+      {
+        id: 'dynamic-db-uuid-for-lingerie',
+        name: "Women's Lingerie/Pyjamas",
+        slug: 'women-lingerie-pyjamas',
+        is_active: true,
+        display_order: 9,
+        created_at: '',
+        updated_at: '',
+      },
+    ];
+
+    // Override keyed by slug instead of the runtime dynamic database UUID
+    const childCategoryOverrides = {
+      'women-lingerie-pyjamas': [
+        {
+          id: 'shapewear-id',
+          name: 'Shapewear',
+          slug: 'women-lingerie-shapewear',
+          is_active: true,
+          display_order: 1,
+          created_at: '',
+          updated_at: '',
+        },
+        {
+          id: 'bras-id',
+          name: 'Bras & Bralettes',
+          slug: 'women-lingerie-bras-bralettes',
+          is_active: true,
+          display_order: 2,
+          created_at: '',
+          updated_at: '',
+        },
+      ],
+    };
+
+    render(
+      <MemoryRouter initialEntries={['/women']}>
+        <ProductList
+          presetCategory="Women"
+          initialParams={{ category_id: 'women-id' }}
+          categoryNav={categoryNav}
+          childCategoryOverrides={childCategoryOverrides}
+        />
+      </MemoryRouter>
+    );
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: "Women's Lingerie/Pyjamas" })
+      ).toBeInTheDocument()
+    );
+
+    // Hover over Women's Lingerie/Pyjamas
+    fireEvent.mouseEnter(
+      screen.getByRole('button', { name: "Women's Lingerie/Pyjamas" })
+    );
+
+    // Child categories defined under slug should be visible
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Shapewear' })).toBeInTheDocument()
+    );
+    expect(
+      screen.getByRole('button', { name: 'Bras & Bralettes' })
+    ).toBeInTheDocument();
+
+    // Click Shapewear
+    fireEvent.click(screen.getByRole('button', { name: 'Shapewear' }));
+
+    await waitFor(() =>
+      expect(getProductsMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({ category_id: 'shapewear-id' })
+      )
+    );
+
+    // Parent tab should remain active with border-primary
+    expect(
+      screen.getByRole('button', { name: "Women's Lingerie/Pyjamas" })
+    ).toHaveClass('border-primary');
+  });
+
+  it('initializes page from the ?page query parameter and renders products for that page directly', async () => {
+    const products = Array.from({ length: 24 }, (_, index) => ({
+      id: `prod-${index + 1}`,
+      title: `Product ${index + 1}`,
+      category_name: 'Men',
+    }));
+    getProductsMock.mockResolvedValue({
+      products,
+      total: 24,
+      total_pages: 1,
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/products?page=2']}>
+        <ProductList />
+      </MemoryRouter>
+    );
+
+    // Products on page 2 (index 12 to 23 -> prod-13 to prod-24)
+    await waitFor(() => expect(screen.getAllByTestId('product-prod-13')).not.toHaveLength(0));
+    expect(screen.queryByTestId('product-prod-1')).not.toBeInTheDocument();
+
+    const page2Button = screen.getByRole('button', { name: '2' });
+    expect(page2Button).toHaveClass('border-primary', 'bg-primary', 'text-white');
+  });
+
+  it('updates rendered products when clicking pagination page buttons', async () => {
+    const products = Array.from({ length: 24 }, (_, index) => ({
+      id: `prod-${index + 1}`,
+      title: `Product ${index + 1}`,
+      category_name: 'Men',
+    }));
+    getProductsMock.mockResolvedValue({
+      products,
+      total: 24,
+      total_pages: 1,
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/products']}>
+        <ProductList />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => expect(screen.getAllByTestId('product-prod-1')).not.toHaveLength(0));
+
+    const page2Button = screen.getByRole('button', { name: '2' });
+    fireEvent.click(page2Button);
+
+    await waitFor(() => expect(screen.getAllByTestId('product-prod-13')).not.toHaveLength(0));
+    expect(screen.queryByTestId('product-prod-1')).not.toBeInTheDocument();
+  });
+
+  it('resets page to 1 when a filter is changed from a paginated view', async () => {
+    const products = Array.from({ length: 24 }, (_, index) => ({
+      id: `prod-${index + 1}`,
+      title: `Product ${index + 1}`,
+      category_name: index < 15 ? 'Shirts' : 'Trousers',
+    }));
+    getProductsMock.mockResolvedValue({
+      products,
+      total: 24,
+      total_pages: 1,
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/products?page=2']}>
+        <ProductList />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => expect(screen.getAllByTestId('product-prod-13')).not.toHaveLength(0));
+
+    // Open refine/filter menu
+    fireEvent.click(screen.getByRole('button', { name: 'REFINE' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Shirts' }));
+
+    // Should reset to page 1
+    await waitFor(() => expect(screen.getAllByTestId('product-prod-1')).not.toHaveLength(0));
+    const page1Button = screen.getByRole('button', { name: '1' });
+    expect(page1Button).toHaveClass('border-primary', 'bg-primary', 'text-white');
   });
 });

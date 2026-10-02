@@ -222,23 +222,23 @@ export default function VendorEarnings() {
 
   return (
     <>
-      <div className="flex min-h-screen bg-[var(--color-page-bg)]">
+      <div className="flex flex-col md:flex-row min-h-screen bg-[var(--color-page-bg)] w-full overflow-x-hidden">
       <VendorSidebar activePrimary="earnings" />
 
-      <div className="flex-1">
-        <div className="px-8 py-8 space-y-8">
-          <div className="flex flex-wrap items-center justify-between gap-4">
-            <h1 className="text-2xl font-semibold text-gray-900">Earnings & Payout</h1>
-            <div className="flex items-center gap-3 flex-1 justify-end">
-              <CurrencySwitcher className="mr-2" value={currentCurrency} onChange={setCurrency} />
-              <div className="relative">
+      <div className="flex-1 min-w-0">
+        <div className="p-4 sm:p-6 lg:p-8 space-y-6 sm:space-y-8">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+            <h1 className="text-2xl sm:text-3xl font-semibold text-gray-900">Earnings & Payout</h1>
+            <div className="flex flex-wrap items-center gap-2 sm:gap-3 w-full lg:w-auto">
+              <CurrencySwitcher value={currentCurrency} onChange={setCurrency} />
+              <div className="relative flex-1 sm:flex-initial min-w-[180px]">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
                 <input
                   type="text"
                   placeholder="Search"
                   value={search}
                   onChange={(event) => setSearch(event.target.value)}
-                  className="pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#105E53] focus:border-transparent w-64"
+                  className="pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#105E53] focus:border-transparent w-full sm:w-64 text-sm"
                 />
               </div>
               <button
@@ -256,7 +256,7 @@ export default function VendorEarnings() {
             </div>
           </div>
 
-          <div className="w-full flex items-start justify-between gap-8">
+          <div className="w-full flex flex-col lg:flex-row lg:items-start justify-between gap-6 sm:gap-8">
             <div className="flex-1 space-y-6">
               <div className="space-y-3">
                 <p className="text-sm text-gray-400">Current Earnings</p>
@@ -370,7 +370,8 @@ export default function VendorEarnings() {
           </div>
 
           <div className="bg-white border border-gray-200 rounded-2xl shadow-sm overflow-hidden">
-            <table className="w-full text-sm">
+            <div className="overflow-x-auto w-full">
+              <table className="w-full text-sm">
               <thead className="bg-gray-50">
                 <tr>
                   {viewMode === 'products' && (
@@ -505,6 +506,7 @@ export default function VendorEarnings() {
                 })}
               </tbody>
             </table>
+            </div>
           </div>
         </div>
       </div>

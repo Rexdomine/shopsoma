@@ -151,6 +151,182 @@ def upgrade():
             "Men's jackets",
         )
 
+    # Men's Accessories: ensure linked to Men parent
+    conn.execute(
+        sa.text(
+            """
+            UPDATE categories
+            SET parent_id = :men_id,
+                display_order = 6,
+                is_active = TRUE,
+                updated_at = now()
+            WHERE (slug = 'men-accessories' OR slug = 'accessories')
+              AND parent_id IS NULL
+            """
+        ),
+        {"men_id": men_id},
+    )
+    _ensure_category(
+        conn,
+        "Accessories",
+        "men-accessories",
+        men_id,
+        6,
+        "Men's accessories",
+    )
+
+    # Men's Activewear: Activewear Accessories
+    men_activewear_id = _find_category(conn, "Activewear", "men-activewear", men_id)
+    if men_activewear_id:
+        _ensure_category(
+            conn,
+            "Activewear Accessories",
+            "men-activewear-accessories",
+            men_activewear_id,
+            3,
+            "Men's activewear accessories",
+        )
+
+    # Men's Sets
+    mens_sets_id = _ensure_category(
+        conn,
+        "Men's Sets",
+        "men-sets",
+        men_id,
+        4,
+        "Men's matching sets and co-ords",
+    )
+    _ensure_category(
+        conn,
+        "Trouser Sets",
+        "men-sets-trouser-sets",
+        mens_sets_id,
+        1,
+        "Men's trouser sets",
+    )
+    _ensure_category(
+        conn,
+        "Shorts Sets",
+        "men-sets-shorts-sets",
+        mens_sets_id,
+        2,
+        "Men's shorts sets",
+    )
+
+    # Women's Activewear: Activewear Accessories
+    women_activewear_id = _find_category(conn, "Women's Activewear", "women-activewear", women_id)
+    if women_activewear_id:
+        _ensure_category(
+            conn,
+            "Activewear Accessories",
+            "women-activewear-accessories",
+            women_activewear_id,
+            3,
+            "Women's activewear accessories",
+        )
+
+    # Women's Swimwear
+    _ensure_category(
+        conn,
+        "Women's Swimwear",
+        "women-swimwear",
+        women_id,
+        8,
+        "Women's swimwear",
+    )
+
+    # Women's Lingerie/Pyjamas and subcategories
+    women_lingerie_id = _ensure_category(
+        conn,
+        "Women's Lingerie/Pyjamas",
+        "women-lingerie-pyjamas",
+        women_id,
+        9,
+        "Women's lingerie and pyjamas",
+    )
+    _ensure_category(
+        conn,
+        "Shapewear",
+        "women-lingerie-shapewear",
+        women_lingerie_id,
+        1,
+        "Women's shapewear",
+    )
+    _ensure_category(
+        conn,
+        "Bras & Bralettes",
+        "women-lingerie-bras-bralettes",
+        women_lingerie_id,
+        2,
+        "Bras and bralettes",
+    )
+    _ensure_category(
+        conn,
+        "Panties & Briefs",
+        "women-lingerie-panties-briefs",
+        women_lingerie_id,
+        3,
+        "Panties and briefs",
+    )
+    _ensure_category(
+        conn,
+        "Pyjamas & Sleepwear",
+        "women-lingerie-pyjamas-sleepwear",
+        women_lingerie_id,
+        4,
+        "Pyjamas and sleepwear",
+    )
+    _ensure_category(
+        conn,
+        "Robes & Loungewear",
+        "women-lingerie-robes-loungewear",
+        women_lingerie_id,
+        5,
+        "Robes and loungewear",
+    )
+    _ensure_category(
+        conn,
+        "Lingerie Sets",
+        "women-lingerie-sets",
+        women_lingerie_id,
+        6,
+        "Lingerie sets",
+    )
+
+    # Women's Sets
+    womens_sets_id = _ensure_category(
+        conn,
+        "Women's Sets",
+        "women-sets",
+        women_id,
+        10,
+        "Women's matching sets and co-ords",
+    )
+    _ensure_category(
+        conn,
+        "Trouser Sets",
+        "women-sets-trouser-sets",
+        womens_sets_id,
+        1,
+        "Women's trouser sets",
+    )
+    _ensure_category(
+        conn,
+        "Skirt Sets",
+        "women-sets-skirt-sets",
+        womens_sets_id,
+        2,
+        "Women's skirt sets",
+    )
+    _ensure_category(
+        conn,
+        "Shorts Sets",
+        "women-sets-shorts-sets",
+        womens_sets_id,
+        3,
+        "Women's shorts sets",
+    )
+
 
 def downgrade():
     pass

@@ -65,9 +65,14 @@ export default function ProductCard({
     image.onerror = null;
   };
 
-  const displayPrice = product.variants?.[0]?.price || product.base_price;
-  const comparePrice = product.variants?.[0]?.compare_at_price;
-  const hasDiscount = comparePrice && comparePrice > displayPrice;
+  const isSingleProduct = !product.variations || product.variations.length === 0;
+  const displayPrice = (isSingleProduct && product.base_price != null)
+    ? product.base_price
+    : (product.variants?.[0]?.price || product.base_price);
+  const comparePrice = (isSingleProduct && product.compare_at_price != null)
+    ? product.compare_at_price
+    : product.variants?.[0]?.compare_at_price;
+  const hasDiscount = Boolean(comparePrice && comparePrice > displayPrice);
 
   const handleToggleFavorite = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -78,16 +83,16 @@ export default function ProductCard({
   return (
     <Link
       to={`/products/${product.id}`}
-      className="group block"
+      className="group block w-full min-w-0"
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
     >
       {/* Image Container */}
-      <div className="relative overflow-hidden aspect-[3/4] mb-4 bg-gray-100">
+      <div className="relative overflow-hidden aspect-[3/4] mb-3 sm:mb-4 bg-gray-100">
         {/* Made to Order Badge - Top Left */}
         {product.made_to_order && (
-          <div className="absolute top-3 left-3 z-20">
-            <span className="px-2 py-1 bg-blue-600 text-white text-[10px] font-serif uppercase tracking-[0.15em] rounded shadow-md">
+          <div className="absolute top-2 sm:top-3 left-2 sm:left-3 z-20">
+            <span className="px-1.5 sm:px-2 py-0.5 sm:py-1 bg-blue-600 text-white text-[9px] sm:text-[10px] font-serif uppercase tracking-[0.15em] rounded shadow-md">
               MADE TO ORDER
             </span>
           </div>
@@ -125,11 +130,11 @@ export default function ProductCard({
         {/* Favorite Button - Top Right */}
         <button
           onClick={handleToggleFavorite}
-          className="absolute top-3 right-3 w-9 h-9 flex items-center justify-center transition-opacity hover:opacity-80 z-20"
+          className="absolute top-2 sm:top-3 right-2 sm:right-3 w-8 sm:w-9 h-8 sm:h-9 flex items-center justify-center transition-opacity hover:opacity-80 z-20"
           aria-label="Add to favorites"
         >
           <Bookmark
-            className={`w-5 h-5 ${
+            className={`w-4 sm:w-5 h-4 sm:h-5 ${
               isFavorite ? 'fill-primary stroke-primary' : 'stroke-white fill-none'
             }`}
             style={{ filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.2))' }}
@@ -209,24 +214,24 @@ export default function ProductCard({
       </div>
 
       {/* Product Info */}
-      <div className="space-y-1.5">
+      <div className="space-y-1 sm:space-y-1.5 min-w-0">
         {/* Brand/Vendor */}
-        <p className="text-[10px] font-ui uppercase tracking-[0.25em] text-primary">
+        <p className="text-[9px] sm:text-[10px] font-ui uppercase tracking-[0.2em] sm:tracking-[0.25em] text-primary truncate">
           {product.vendor_name || 'SHOPSOMA'}
         </p>
 
         {/* Title */}
-        <h3 className="text-sm font-serif text-dark leading-snug line-clamp-2">
+        <h3 className="text-xs sm:text-sm font-serif text-dark leading-snug line-clamp-2 break-words">
           {product.title}
         </h3>
 
         {/* Price */}
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-ui text-dark">
+        <div className="flex flex-wrap items-center gap-1 sm:gap-2">
+          <span className="text-xs sm:text-sm font-ui text-dark font-medium whitespace-nowrap">
             {formatPriceWithConversion(displayPrice, product.currency, currentCurrency, exchangeRates)}
           </span>
           {hasDiscount && comparePrice && (
-            <span className="text-xs font-ui text-gray-400 line-through">
+            <span className="text-[10px] sm:text-xs font-ui text-gray-400 line-through whitespace-nowrap">
               {formatPriceWithConversion(comparePrice, product.currency, currentCurrency, exchangeRates)}
             </span>
           )}
