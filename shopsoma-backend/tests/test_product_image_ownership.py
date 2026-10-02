@@ -592,3 +592,80 @@ async def test_managed_delete_clears_aliases_but_preserves_external_identity(
         assert pending.storage_keys == keys
         assert pending.resolved_at is None
     delete_storage.assert_awaited_once_with(keys)
+
+
+@pytest.mark.asyncio
+async def test_vendor_set_primary_image(
+    client, vendor_user, sample_product, db_session
+):
+    img1 = ProductImage(
+        product_id=sample_product.id,
+        image_url="https://legacy.example/img1.jpg",
+        is_primary=True,
+        display_order=0,
+    )
+    img2 = ProductImage(
+        product_id=sample_product.id,
+        image_url="https://legacy.example/img2.jpg",
+        is_primary=False,
+        display_order=1,
+    )
+    db_session.add_all([img1, img2])
+    await db_session.commit()
+
+    # Vendor sets img2 as primary via PUT
+    response = await client.put(
+        f"/api/v1/products/{sample_product.id}/images/{img2.id}",
+        json={"is_primary": True},
+        headers=vendor_user["headers"],
+    )
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["id"] == str(img2.id)
+    assert data["is_primary"] is True
+    assert data["display_order"] == 0
+
+    from tests.conftest import TestSessionLocal
+    async with TestSessionLocal() as reloaded:
+        r_img1 = await reloaded.get(ProductImage, img1.id)
+        r_img2 = await reloaded.get(ProductImage, img2.id)
+        assert r_img2.is_primary is True
+        assert r_img2.display_order == 0
+        assert r_img1.is_primary is False
+        assert r_img1.display_order == 1
+
+
+@pytest.mark.asyncio
+async def test_vendor_delete_primary_image_promotes_next_image(
+    client, vendor_user, sample_product, db_session
+):
+    img1 = ProductImage(
+        product_id=sample_product.id,
+        image_url="https://legacy.example/img1.jpg",
+        is_primary=True,
+        display_order=0,
+    )
+    img2 = ProductImage(
+        product_id=sample_product.id,
+        image_url="https://legacy.example/img2.jpg",
+        is_primary=False,
+        display_order=1,
+    )
+    db_session.add_all([img1, img2])
+    await db_session.commit()
+
+    # Vendor deletes primary image
+    response = await client.delete(
+        f"/api/v1/products/{sample_product.id}/images/{img1.id}",
+        headers=vendor_user["headers"],
+    )
+    assert response.status_code == 204, response.text
+
+    from tests.conftest import TestSessionLocal
+    async with TestSessionLocal() as reloaded:
+        assert await reloaded.get(ProductImage, img1.id) is None
+        r_img2 = await reloaded.get(ProductImage, img2.id)
+        assert r_img2 is not None
+        assert r_img2.is_primary is True
+        assert r_img2.display_order == 0
+

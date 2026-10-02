@@ -10,6 +10,7 @@ vi.mock('../../../services/productService', () => ({
     deleteProductImage: vi.fn(),
     uploadImage: vi.fn(),
     addProductImage: vi.fn(),
+    setPrimaryProductImage: vi.fn(),
     updateProduct: vi.fn(),
   },
 }));
@@ -158,9 +159,56 @@ describe('VendorProductEdit - Image Management before & after approval', () => {
     expect(screen.queryByRole('button', { name: /delete image/i })).not.toBeInTheDocument();
 
     // Locked notice banner should be displayed
-    expect(screen.getByText(/images are locked/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/images are locked/i).length).toBeGreaterThan(0);
     expect(
       screen.getByText(/This product has already been approved by the admin/i)
     ).toBeInTheDocument();
+  });
+
+  it('allows setting an image as primary when product is pending approval', async () => {
+    vi.mocked(productService.getVendorProduct).mockResolvedValue({
+      ...mockProductBase,
+      moderation_status: 'pending',
+    } as any);
+    vi.mocked(productService.setPrimaryProductImage).mockResolvedValue({
+      id: 'img-2',
+      product_id: 'prod-123',
+      image_url: 'https://example.com/image2.jpg',
+      thumbnail_url: 'https://example.com/thumb2.jpg',
+      is_primary: true,
+      display_order: 0,
+      created_at: '2026-01-01T00:00:00Z',
+    } as any);
+
+    renderComponent();
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue('Handmade Silk Blouse')).toBeInTheDocument();
+    });
+
+    // The non-primary image (img-2) should have a 'Set Primary' button
+    const setPrimaryBtn = screen.getByRole('button', { name: /set as primary/i });
+    expect(setPrimaryBtn).toBeInTheDocument();
+
+    fireEvent.click(setPrimaryBtn);
+
+    await waitFor(() => {
+      expect(productService.setPrimaryProductImage).toHaveBeenCalledWith('prod-123', 'img-2');
+    });
+  });
+
+  it('does not render "Set Primary" button when product is approved by admin', async () => {
+    vi.mocked(productService.getVendorProduct).mockResolvedValue({
+      ...mockProductBase,
+      moderation_status: 'approved',
+    } as any);
+
+    renderComponent();
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue('Handmade Silk Blouse')).toBeInTheDocument();
+    });
+
+    expect(screen.queryByRole('button', { name: /set as primary/i })).not.toBeInTheDocument();
   });
 });

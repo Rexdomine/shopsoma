@@ -887,7 +887,10 @@ async def bulk_update_status(
     """Bulk update order statuses"""
 
     # Get all orders
-    query = select(Order).where(Order.id.in_(update_data.order_ids)).with_for_update()
+    query = select(Order).where(Order.id.in_(update_data.order_ids)).with_for_update().options(
+        selectinload(Order.customer),
+        selectinload(Order.items).selectinload(OrderItem.vendor),
+    )
     result = await db.execute(query)
     orders = result.scalars().all()
 
@@ -898,6 +901,7 @@ async def bulk_update_status(
         )
 
     updated_count = 0
+    orders_to_notify = []
     for order in orders:
         if update_data.fulfillment_status == FulfillmentStatus.CANCELLED:
             try:
@@ -946,9 +950,22 @@ async def bulk_update_status(
                 order.delivered_at.isoformat(),
             )
 
+        if previous_status != update_data.fulfillment_status:
+            orders_to_notify.append(order)
+
         updated_count += 1
 
     await db.commit()
+
+    notification_service = OrderNotificationService(db)
+    for order in orders_to_notify:
+        try:
+            await notification_service.notify_status_change(
+                order=order,
+                new_status=update_data.fulfillment_status,
+            )
+        except Exception as e:
+            logger.error(f"Failed to send notification on bulk update for order {order.id}: {e}")
 
     return {
         "success": True,
@@ -1259,7 +1276,10 @@ async def cancel_order(
 ):
     """Cancel an order"""
 
-    query = select(Order).where(Order.id == order_id).with_for_update()
+    query = select(Order).where(Order.id == order_id).with_for_update().options(
+        selectinload(Order.customer),
+        selectinload(Order.items).selectinload(OrderItem.vendor),
+    )
     result = await db.execute(query)
     order = result.scalar_one_or_none()
 
@@ -1302,6 +1322,15 @@ async def cancel_order(
     # This would integrate with payment gateway
 
     await db.commit()
+
+    notification_service = OrderNotificationService(db)
+    try:
+        await notification_service.notify_status_change(
+            order=order,
+            new_status=FulfillmentStatus.CANCELLED,
+        )
+    except Exception as e:
+        logger.error(f"Failed to send cancellation notification for order {order.id}: {e}")
 
     return {
         "success": True,

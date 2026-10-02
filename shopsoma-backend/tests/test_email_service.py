@@ -467,27 +467,78 @@ async def test_send_order_confirmation_email_made_to_order_and_ready_to_wear_tim
     html = calls[0]["html_content"]
 
     # Check Made-to-Order badge and custom timeline
-    assert "Made-to-Order · Estimated production: 10-14 business days" in html
+    assert "Made-to-Order · Item is being made — Ready to ship in 10-14 business days" in html
     # Check Ready-to-Wear badge and timeline
-    assert "Ready-to-Wear · Ships within 24–48 hours" in html
+    assert "Ready-to-Wear · Ships in 24–48 hrs · Delivery: 2–4 business days" in html
     # Check processing and fulfillment overview box
-    assert "Processing &amp; Delivery Timeline" in html or "Processing & Delivery Timeline" in html
+    assert "Production &amp; Delivery Timeline" in html or "Production & Delivery Timeline" in html
     assert "24 to 48 hours" in html
     assert "Payment Status:</strong> Payment confirmed" in html
 
 
-def test_customer_status_notifications_suppressed_for_pickup_and_transit():
+def test_customer_status_notifications_only_for_allowed_milestones():
     from app.services.order_notification_service import CUSTOMER_STATUS_MESSAGES, VENDOR_STATUS_MESSAGES
     from app.models.order import FulfillmentStatus
 
-    # Customer notifications for pickup and in-transit must be suppressed (no spam before out for delivery)
-    assert CUSTOMER_STATUS_MESSAGES[FulfillmentStatus.PICKED_UP]["send_email"] is False
-    assert CUSTOMER_STATUS_MESSAGES[FulfillmentStatus.IN_TRANSIT]["send_email"] is False
+    # Only these 5 statuses send email to the customer
+    allowed_customer_email_statuses = {
+        FulfillmentStatus.OUT_FOR_DELIVERY,
+        FulfillmentStatus.DELIVERED,
+        FulfillmentStatus.DELIVERY_FAILED,
+        FulfillmentStatus.RETURNED,
+        FulfillmentStatus.CANCELLED,
+    }
 
-    # Out for delivery and delivered must notify the customer
-    assert CUSTOMER_STATUS_MESSAGES[FulfillmentStatus.OUT_FOR_DELIVERY]["send_email"] is True
-    assert CUSTOMER_STATUS_MESSAGES[FulfillmentStatus.DELIVERED]["send_email"] is True
+    # All other statuses must NOT send customer email
+    suppressed_customer_email_statuses = {
+        FulfillmentStatus.ORDER_RECEIVED,
+        FulfillmentStatus.PREPARING_FOR_PICKUP,
+        FulfillmentStatus.PICKUP_SCHEDULED,
+        FulfillmentStatus.PICKED_UP,
+        FulfillmentStatus.IN_TRANSIT,
+    }
 
-    # Vendor still gets informed when rider picks up from their store
+    for status in allowed_customer_email_statuses:
+        assert CUSTOMER_STATUS_MESSAGES[status]["send_email"] is True, f"{status} should send email"
+
+    for status in suppressed_customer_email_statuses:
+        assert CUSTOMER_STATUS_MESSAGES[status]["send_email"] is False, f"{status} should NOT send email"
+
+    # Vendor notifications remain active for vendor actions
     assert VENDOR_STATUS_MESSAGES[FulfillmentStatus.PICKED_UP]["send_email"] is True
+    assert VENDOR_STATUS_MESSAGES[FulfillmentStatus.ORDER_RECEIVED]["send_email"] is True
+
+
+@pytest.mark.asyncio
+async def test_send_order_status_update_email_allowed_milestones_and_suppression(monkeypatch):
+    service = EmailService()
+    calls = _capture_email(monkeypatch, service)
+
+    # Suppressed statuses: should return False and send NO email
+    for suppressed in ["picked_up", "in_transit", "order_received", "preparing_for_pickup", "pickup_scheduled"]:
+        result = await service.send_order_status_update_email(
+            email="customer@example.com",
+            name="Customer",
+            order_number="SHP-TEST-001",
+            status=suppressed,
+        )
+        assert result is False
+    assert len(calls) == 0
+
+    # Allowed milestones: should send emails with proper copy
+    for allowed in ["out_for_delivery", "delivered", "delivery_failed", "returned", "cancelled"]:
+        result = await service.send_order_status_update_email(
+            email="customer@example.com",
+            name="Customer",
+            order_number=f"SHP-TEST-{allowed}",
+            status=allowed,
+        )
+        assert result is True
+
+    assert len(calls) == 5
+    assert "out for delivery" in calls[0]["html_content"].lower()
+    assert "delivered" in calls[1]["html_content"].lower()
+    assert "delivery" in calls[2]["html_content"].lower()
+    assert "returned" in calls[3]["html_content"].lower()
+    assert "cancelled" in calls[4]["html_content"].lower()
 
