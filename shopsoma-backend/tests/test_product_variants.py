@@ -1,7 +1,15 @@
 from decimal import Decimal
 import uuid
 
-from app.models.product import Product, ProductStatus, ModerationStatus, ProductVariant
+from app.models.product import (
+    Product,
+    ProductStatus,
+    ModerationStatus,
+    ProductVariant,
+    Variation,
+    SizeStock,
+    SizeEnum,
+)
 
 
 async def test_update_variant_scopes_to_product_id(
@@ -199,3 +207,143 @@ async def test_update_variant_price_and_color_match_submitted_axis(
     assert new_variation.price == 88
     assert new_variation.inherits_price is False
     assert new_variation.inherits_sale_price is False
+
+
+async def test_admin_create_and_get_variants(
+    client,
+    db_session,
+    admin_user,
+    sample_product,
+):
+    # Admin creates variant
+    create_res = await client.post(
+        f"/api/v1/admin/products/{sample_product.id}/variants",
+        json={
+            "size": "L",
+            "stock": 8,
+            "price": "75.00",
+            "is_available": True,
+        },
+        headers=admin_user["headers"],
+    )
+    assert create_res.status_code == 201, create_res.text
+    create_data = create_res.json()
+    variant_id = create_data["variant_id"]
+
+    # Admin gets variants
+    get_res = await client.get(
+        f"/api/v1/admin/products/{sample_product.id}/variants",
+        headers=admin_user["headers"],
+    )
+    assert get_res.status_code == 200, get_res.text
+    get_data = get_res.json()
+    assert any(v["id"] == variant_id and v["size"] == "L" and v["stock"] == 8 for v in get_data["variants"])
+
+    # Admin updates variant
+    update_res = await client.put(
+        f"/api/v1/admin/products/{sample_product.id}/variants/{variant_id}",
+        json={"size": "XL", "stock": 12, "price": "80.00"},
+        headers=admin_user["headers"],
+    )
+    assert update_res.status_code == 200, update_res.text
+
+    # Admin deletes variant
+    delete_res = await client.delete(
+        f"/api/v1/admin/products/{sample_product.id}/variants/{variant_id}",
+        headers=admin_user["headers"],
+    )
+    assert delete_res.status_code == 200, delete_res.text
+
+
+async def test_admin_and_vendor_size_stock_fallback(
+    client,
+    db_session,
+    admin_user,
+    vendor_user,
+    sample_product,
+):
+    variation = Variation(
+        id=uuid.uuid4(),
+        product_id=sample_product.id,
+        title="Standard",
+        type="size",
+        price=sample_product.base_price,
+        is_active=True,
+    )
+    db_session.add(variation)
+    await db_session.flush()
+
+    size_stock = SizeStock(
+        id=uuid.uuid4(),
+        variation_id=variation.id,
+        size=SizeEnum.M,
+        stock=5,
+    )
+    db_session.add(size_stock)
+    await db_session.commit()
+
+    # Admin GET variants synthesizes the SizeStock
+    admin_get = await client.get(
+        f"/api/v1/admin/products/{sample_product.id}/variants",
+        headers=admin_user["headers"],
+    )
+    assert admin_get.status_code == 200, admin_get.text
+    admin_variants = admin_get.json()["variants"]
+    assert any(v["id"] == str(size_stock.id) and v["size"] == "M" for v in admin_variants)
+
+    # Vendor updates the SizeStock variant
+    vendor_update = await client.put(
+        f"/api/v1/products/{sample_product.id}/variants/{size_stock.id}",
+        json={"stock": 10},
+        headers=vendor_user["headers"],
+    )
+    assert vendor_update.status_code == 200, vendor_update.text
+    assert vendor_update.json()["stock"] == 10
+
+    # Admin updates the SizeStock variant
+    admin_update = await client.put(
+        f"/api/v1/admin/products/{sample_product.id}/variants/{size_stock.id}",
+        json={"stock": 15},
+        headers=admin_user["headers"],
+    )
+    assert admin_update.status_code == 200, admin_update.text
+
+    # Vendor deletes the SizeStock variant
+    vendor_delete = await client.delete(
+        f"/api/v1/products/{sample_product.id}/variants/{size_stock.id}",
+        headers=vendor_user["headers"],
+    )
+    assert vendor_delete.status_code == 204, vendor_delete.text
+
+
+async def test_create_variant_duplicate_size_rejected(
+    client,
+    db_session,
+    admin_user,
+    vendor_user,
+    sample_product,
+):
+    # Vendor creates a size variant
+    first_res = await client.post(
+        f"/api/v1/products/{sample_product.id}/variants",
+        json={"size": "S", "stock": 5, "price": "50.00"},
+        headers=vendor_user["headers"],
+    )
+    assert first_res.status_code == 201, first_res.text
+
+    # Duplicate size for vendor should be rejected
+    dup_vendor = await client.post(
+        f"/api/v1/products/{sample_product.id}/variants",
+        json={"size": "S", "stock": 10, "price": "50.00"},
+        headers=vendor_user["headers"],
+    )
+    assert dup_vendor.status_code == 400, dup_vendor.text
+
+    # Duplicate size for admin should be rejected
+    dup_admin = await client.post(
+        f"/api/v1/admin/products/{sample_product.id}/variants",
+        json={"size": "s", "stock": 10, "price": "50.00"},
+        headers=admin_user["headers"],
+    )
+    assert dup_admin.status_code == 400, dup_admin.text
+

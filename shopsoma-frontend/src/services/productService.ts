@@ -1,5 +1,5 @@
 import api from './api';
-import type { Product, ProductImage, ImageUploadResponse, ImageBatchUploadResponse } from '../types';
+import type { Product, ProductVariant, ProductImage, ImageUploadResponse, ImageBatchUploadResponse } from '../types';
 
 export interface CreateProductImagePayload {
   image_url: string;
@@ -297,5 +297,31 @@ export const productService = {
       timeout: 30000,
     });
     return response.data;
+  },
+
+  async getProductVariants(productId: string): Promise<ProductVariant[]> {
+    const response = await api.get(`/products/${productId}/variants`);
+    return response.data?.variants || [];
+  },
+
+  async createVariant(
+    productId: string,
+    data: CreateProductVariantPayload
+  ): Promise<ProductVariant> {
+    const response = await api.post(`/products/${productId}/variants`, data);
+    return response.data;
+  },
+
+  async updateVariant(
+    productId: string,
+    variantId: string,
+    data: Partial<CreateProductVariantPayload>
+  ): Promise<ProductVariant> {
+    const response = await api.put(`/products/${productId}/variants/${variantId}`, data);
+    return response.data;
+  },
+
+  async deleteVariant(productId: string, variantId: string): Promise<void> {
+    await api.delete(`/products/${productId}/variants/${variantId}`);
   },
 };

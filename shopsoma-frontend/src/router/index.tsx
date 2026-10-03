@@ -69,6 +69,7 @@ const ProfilePayments = lazy(() => import('../pages/profile/ProfilePayments'));
 const AdminDashboard = lazy(() => import('../pages/admin/AdminDashboard'));
 const AdminUsers = lazy(() => import('../pages/admin/AdminUsers'));
 const AdminProducts = lazy(() => import('../pages/admin/AdminProducts'));
+const AdminCategories = lazy(() => import('../pages/admin/AdminCategories'));
 const AdminProductDetail = lazy(() => import('../pages/admin/AdminProductDetail'));
 const AdminReturns = lazy(() => import('../pages/admin/AdminReturns'));
 const AdminReturnDetail = lazy(() => import('../pages/admin/AdminReturnDetail'));
@@ -785,6 +786,18 @@ const router = createBrowserRouter([
         <Suspense fallback={<Loading fullScreen message="Loading product..." />}>
           <ProtectedRoute roles={['admin']}>
             <AdminProductEdit />
+          </ProtectedRoute>
+        </Suspense>
+      </ErrorBoundary>
+    ),
+  },
+  {
+    path: ROUTES.ADMIN_CATEGORIES,
+    element: (
+      <ErrorBoundary>
+        <Suspense fallback={<Loading fullScreen message="Loading categories..." />}>
+          <ProtectedRoute roles={['admin']}>
+            <AdminCategories />
           </ProtectedRoute>
         </Suspense>
       </ErrorBoundary>

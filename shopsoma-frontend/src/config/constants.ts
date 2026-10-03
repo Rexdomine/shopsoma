@@ -86,6 +86,7 @@ export const ROUTES = {
   ADMIN_VENDORS: '/admin/vendors',
   ADMIN_USERS: '/admin/users',
   ADMIN_PRODUCTS: '/admin/products',
+  ADMIN_CATEGORIES: '/admin/categories',
   ADMIN_PRODUCT_DETAIL: '/admin/products/:id',
   ADMIN_PRODUCT_EDIT: '/admin/products/:id/edit',
   ADMIN_PAYOUTS: '/admin/payouts',

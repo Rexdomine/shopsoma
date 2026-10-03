@@ -6,7 +6,7 @@ from sqlalchemy.orm import selectinload
 from datetime import datetime
 import logging
 
-from app.models.order import Order, FulfillmentStatus
+from app.models.order import Order, FulfillmentStatus, PaymentStatus
 from app.models.user import User
 from app.models.vendor import Vendor
 from app.models.vendor_pickup import VendorNotification
@@ -137,9 +137,9 @@ CUSTOMER_STATUS_MESSAGES = {
 class OrderNotificationService:
     """Service for handling order status change notifications"""
 
-    def __init__(self, db: AsyncSession):
+    def __init__(self, db: AsyncSession, email_service: Optional[EmailService] = None):
         self.db = db
-        self.email_service = EmailService()
+        self.email_service = email_service or EmailService()
 
     async def notify_status_change(
         self,
@@ -193,6 +193,14 @@ class OrderNotificationService:
                 new_status = FulfillmentStatus(new_status)
             except ValueError:
                 pass
+
+        # Only notify vendors if the order is confirmed paid
+        payment_status = getattr(order, "payment_status", None)
+        if payment_status != PaymentStatus.PAID and payment_status != "paid":
+            logger.warning(
+                f"[Vendor Email] Suppressing vendor notification for order {order.order_number}: payment status is {payment_status} (not paid)"
+            )
+            return False
 
         status_config = VENDOR_STATUS_MESSAGES.get(new_status)
         if not status_config or not status_config["send_email"]:
@@ -328,13 +336,24 @@ class OrderNotificationService:
 
         pickup_window_info = ""
         if pickup_details:
+            if pickup_details.get("scheduled_pickup_date"):
+                sched = pickup_details["scheduled_pickup_date"]
+                sched_str = sched.strftime('%B %d, %Y · %I:%M %p') if hasattr(sched, 'strftime') else str(sched)
+                pickup_window_info += f"""
+                <div style="margin:16px 0;padding:12px;background:#F3F4F6;border-radius:8px;">
+                    <p style="margin:0;color:#6B7280;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;">Pickup Scheduled</p>
+                    <p style="margin:4px 0 0;color:#111827;font-size:14px;font-weight:500;">{sched_str}</p>
+                </div>
+                """
             if pickup_details.get("pickup_window_start") and pickup_details.get("pickup_window_end"):
                 start = pickup_details["pickup_window_start"]
                 end = pickup_details["pickup_window_end"]
-                pickup_window_info = f"""
+                start_str = start.strftime('%B %d, %Y %I:%M %p') if hasattr(start, 'strftime') else str(start)
+                end_str = end.strftime('%I:%M %p') if hasattr(end, 'strftime') else str(end)
+                pickup_window_info += f"""
                 <div style="margin:16px 0;padding:12px;background:#F3F4F6;border-radius:8px;">
                     <p style="margin:0;color:#6B7280;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;">Pickup Window</p>
-                    <p style="margin:4px 0 0;color:#111827;font-size:14px;font-weight:500;">{start.strftime('%B %d, %Y %I:%M %p')} - {end.strftime('%I:%M %p')}</p>
+                    <p style="margin:4px 0 0;color:#111827;font-size:14px;font-weight:500;">{start_str} - {end_str}</p>
                 </div>
                 """
             if pickup_details.get("courier_name"):
@@ -512,7 +531,13 @@ class OrderNotificationService:
         }
 
         if pickup_details:
-            notification_data["pickup_details"] = pickup_details
+            serializable_pickup_details = {}
+            for k, v in pickup_details.items():
+                if isinstance(v, datetime):
+                    serializable_pickup_details[k] = v.isoformat()
+                else:
+                    serializable_pickup_details[k] = v
+            notification_data["pickup_details"] = serializable_pickup_details
 
         notification = VendorNotification(
             vendor_id=vendor_id,

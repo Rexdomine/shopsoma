@@ -2,7 +2,7 @@
 
 from app.services.commerce_features import shopping_currency
 
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Header
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, func
@@ -456,14 +456,28 @@ async def send_vendor_order_notification(
     order_date: datetime,
     items: list,
     total_payout: float,
-    scheduled_pickup_date: datetime,
+    scheduled_pickup_date: Optional[datetime] = None,
+    fulfillment_status: Optional[Any] = None,
 ):
     """
     Background task to send vendor order notification email
     """
     from app.core.database import get_db_context
+    from app.models.order import Order, PaymentStatus
 
     async with get_db_context() as db:
+        order = await db.get(Order, UUID(str(order_id)) if isinstance(order_id, str) else order_id)
+        if order is not None:
+            payment_status = getattr(order, "payment_status", None)
+            if payment_status != PaymentStatus.PAID and payment_status != "paid":
+                logger.warning(
+                    "[Order Email] Suppressing background vendor email for order_id=%s order=%s: payment status is %s (not paid)",
+                    order_id,
+                    order_number,
+                    payment_status,
+                )
+                return
+
         vendor_notification_service = VendorNotificationService(email_service)
         try:
             await vendor_notification_service.send_order_notification(
@@ -475,6 +489,7 @@ async def send_vendor_order_notification(
                 items=items,
                 total_payout=total_payout,
                 scheduled_pickup_date=scheduled_pickup_date,
+                fulfillment_status=fulfillment_status or (getattr(order, "fulfillment_status", None) if order else None),
             )
             logger.info(
                 "[Order Email] Vendor email queued for vendor_id=%s order=%s items=%s",
@@ -1188,8 +1203,8 @@ async def create_order(
             order_type = OrderType.RTW
             estimated_days = None
 
-            # Calculate scheduled pickup date (48 hours for RTW)
-            scheduled_date = datetime.utcnow() + timedelta(hours=48)
+            # Pickup remains unscheduled until admin explicitly schedules it
+            scheduled_date = None
 
             # Create vendor pickup
             pickup = VendorPickup(
@@ -1198,7 +1213,7 @@ async def create_order(
                 order_item_id=order_item.id,
                 order_type=order_type,
                 estimated_production_days=estimated_days,
-                scheduled_pickup_date=scheduled_date,
+                scheduled_pickup_date=None,
                 pickup_address=vendor.business_address,
                 pickup_contact_name=vendor.user.full_name if vendor.user else None,
                 pickup_contact_phone=vendor.business_phone,
@@ -1225,8 +1240,6 @@ async def create_order(
                 }
             )
             vendor_entry["total_payout"] += order_item.vendor_payout
-            if vendor_entry["scheduled_date"] is None:
-                vendor_entry["scheduled_date"] = scheduled_date
 
             logger.info(
                 "[Order Email] Prepared vendor item vendor_id=%s order=%s product=%s qty=%s",
@@ -1244,7 +1257,7 @@ async def create_order(
         )
 
     for vendor_id, vendor_entry in vendor_notifications.items():
-        scheduled_date = vendor_entry["scheduled_date"] or datetime.utcnow()
+        scheduled_date = vendor_entry["scheduled_date"]
         items = vendor_entry["items"]
         total_payout = float(vendor_entry["total_payout"])
 
@@ -1252,7 +1265,7 @@ async def create_order(
             vendor_id=vendor_id,
             notification_type="order_placed",
             title=f"New Order #{new_order.order_number}",
-            message=f"You have received a new order with {len(items)} item(s). Pickup scheduled for {scheduled_date.strftime('%B %d, %Y at %I:%M %p')}.",
+            message=f"You have received a new order with {len(items)} item(s).",
             order_id=new_order.id,
             data={
                 "order_number": new_order.order_number,
@@ -1311,37 +1324,46 @@ async def create_order(
 
     await db.commit()
 
-    vendor_notification_service = VendorNotificationService(email_service)
-    for vendor_id, vendor_entry in vendor_notifications.items():
-        scheduled_date = vendor_entry["scheduled_date"] or datetime.utcnow()
-        items = vendor_entry["items"]
-        total_payout = float(vendor_entry["total_payout"])
+    # Only dispatch vendor notification emails if order is already confirmed paid
+    if new_order.payment_status == PaymentStatus.PAID or str(getattr(new_order, "payment_status", "")).lower() == "paid":
+        vendor_notification_service = VendorNotificationService(email_service)
+        for vendor_id, vendor_entry in vendor_notifications.items():
+            scheduled_date = vendor_entry["scheduled_date"]
+            items = vendor_entry["items"]
+            total_payout = float(vendor_entry["total_payout"])
 
-        try:
-            await vendor_notification_service.send_order_notification(
-                db=db,
-                vendor_id=str(vendor_id),
-                order_id=str(new_order.id),
-                order_number=new_order.order_number,
-                order_date=new_order.created_at or datetime.utcnow(),
-                items=items,
-                total_payout=total_payout,
-                scheduled_pickup_date=scheduled_date,
-                currency=new_order.currency or "NGN",
-            )
-            logger.info(
-                "[Order Email] Vendor email sent vendor_id=%s order=%s items=%s",
-                vendor_id,
-                new_order.order_number,
-                len(items),
-            )
-        except Exception as exc:
-            logger.exception(
-                "[Order Email] Vendor email failed vendor_id=%s order=%s: %s",
-                vendor_id,
-                new_order.order_number,
-                exc,
-            )
+            try:
+                await vendor_notification_service.send_order_notification(
+                    db=db,
+                    vendor_id=str(vendor_id),
+                    order_id=str(new_order.id),
+                    order_number=new_order.order_number,
+                    order_date=new_order.created_at or datetime.utcnow(),
+                    items=items,
+                    total_payout=total_payout,
+                    scheduled_pickup_date=scheduled_date,
+                    currency=new_order.currency or "NGN",
+                    fulfillment_status=new_order.fulfillment_status,
+                )
+                logger.info(
+                    "[Order Email] Vendor email sent vendor_id=%s order=%s items=%s",
+                    vendor_id,
+                    new_order.order_number,
+                    len(items),
+                )
+            except Exception as exc:
+                logger.exception(
+                    "[Order Email] Vendor email failed vendor_id=%s order=%s: %s",
+                    vendor_id,
+                    new_order.order_number,
+                    exc,
+                )
+    else:
+        logger.info(
+            "[Order Email] Suppressing vendor email dispatch during order creation for order=%s: payment status is %s (pending payment)",
+            new_order.order_number,
+            new_order.payment_status,
+        )
 
     # Load order with all relationships
     order_query = (

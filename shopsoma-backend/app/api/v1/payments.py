@@ -16,7 +16,7 @@ from app.services.commerce_features import get_commerce_features
 from app.core.config import settings
 from app.core.database import get_db
 from app.models.user import User
-from app.models.order import Order, OrderItem, PaymentStatus
+from app.models.order import Order, OrderItem, PaymentStatus, FulfillmentStatus
 from app.models.payment import Payment, PaymentGateway, TransactionStatus
 from app.models.stock_payment_persistence import PaymentAttempt
 from app.schemas.payment import (
@@ -43,8 +43,12 @@ from app.services.payments.fulfilment_bridge import (
 from app.services.shipping.capabilities import domestic_shipping_capabilities
 from app.services.checkout.capabilities import authorize_checkout_actor
 from sqlalchemy.orm import selectinload
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import logging
+
+from app.models.product import Product
+from app.models.vendor_pickup import VendorNotification
+from app.services.vendor_notification_service import VendorNotificationService
 
 logger = logging.getLogger(__name__)
 
@@ -144,6 +148,155 @@ async def send_order_confirmation_after_payment(db: AsyncSession, order_id: UUID
     except Exception as exc:
         logger.error(
             f"[Order Confirmation Email] Failed for order {order_id}: {exc}"
+        )
+        return False
+
+
+def _resolve_vendor_item_image_url(product, variant_details: Optional[dict]) -> Optional[str]:
+    if variant_details and getattr(product, "variations", None):
+        variation_id = variant_details.get("variation_id")
+        if variation_id:
+            for variation in product.variations:
+                if str(variation.id) == str(variation_id) and getattr(variation, "images", None):
+                    return variation.images[0]
+
+    if getattr(product, "images", None):
+        primary = next((image for image in product.images if getattr(image, "is_primary", False)), None)
+        selected = primary or product.images[0]
+        return getattr(selected, "thumbnail_url", None) or getattr(selected, "image_url", None)
+
+    return None
+
+
+async def send_vendor_notifications_after_payment(
+    db: AsyncSession, order_id: UUID
+) -> bool:
+    """Send order notification emails to vendors after payment is verified and committed."""
+    try:
+        order_query = (
+            select(Order)
+            .options(
+                selectinload(Order.items).selectinload(OrderItem.product).selectinload(Product.images),
+                selectinload(Order.items).selectinload(OrderItem.product).selectinload(Product.variations),
+                selectinload(Order.items).selectinload(OrderItem.pickup),
+            )
+            .where(Order.id == order_id)
+        )
+        result = await db.execute(order_query)
+        order = result.scalar_one_or_none()
+        if not order:
+            logger.warning(
+                "[Vendor Notification After Payment] Order %s not found", order_id
+            )
+            return False
+
+        # Explicit verification: payment status MUST be PAID
+        payment_status = getattr(order, "payment_status", None)
+        if payment_status != PaymentStatus.PAID and payment_status != "paid":
+            logger.warning(
+                "[Vendor Notification After Payment] Suppressing vendor notification for order %s: payment status is %s (not paid)",
+                order.order_number,
+                payment_status,
+            )
+            return False
+
+        if not order.items:
+            logger.warning(
+                "[Vendor Notification After Payment] No items found for order %s",
+                order.order_number,
+            )
+            return False
+
+        vendor_items_map: dict[UUID, list[OrderItem]] = {}
+        for item in order.items:
+            if not item.vendor_id:
+                continue
+            vendor_items_map.setdefault(item.vendor_id, []).append(item)
+
+        if not vendor_items_map:
+            logger.warning(
+                "[Vendor Notification After Payment] No vendor items found for order %s",
+                order.order_number,
+            )
+            return False
+
+        vendor_notification_service = VendorNotificationService(email_service)
+        notifications_sent = 0
+
+        for vendor_id, items in vendor_items_map.items():
+            # Check if this vendor was already notified (email_sent == True)
+            existing_notif_query = select(VendorNotification).where(
+                VendorNotification.vendor_id == vendor_id,
+                VendorNotification.order_id == order.id,
+                VendorNotification.notification_type == "order_placed",
+                VendorNotification.email_sent.is_(True),
+            )
+            already_notified = (await db.execute(existing_notif_query)).scalar_one_or_none()
+            if already_notified:
+                logger.info(
+                    "[Vendor Notification After Payment] Vendor %s already notified for order %s",
+                    vendor_id,
+                    order.order_number,
+                )
+                continue
+
+            scheduled_date = None
+            if order.fulfillment_status == FulfillmentStatus.PICKUP_SCHEDULED:
+                for item in items:
+                    if item.pickup and item.pickup.scheduled_pickup_date:
+                        scheduled_date = item.pickup.scheduled_pickup_date
+                        break
+
+            formatted_items = []
+            total_payout = Decimal("0.00")
+            for item in items:
+                img_url = _resolve_vendor_item_image_url(item.product, item.variant_details)
+                item_payout = item.vendor_payout if item.vendor_payout is not None else Decimal("0.00")
+                total_payout += item_payout
+                formatted_items.append(
+                    {
+                        "product_title": item.product_title,
+                        "quantity": item.quantity,
+                        "vendor_payout": float(item_payout),
+                        "currency": item.currency or order.currency or "NGN",
+                        "variant_details": item.variant_details,
+                        "image_url": img_url,
+                    }
+                )
+
+            try:
+                await vendor_notification_service.send_order_notification(
+                    db=db,
+                    vendor_id=str(vendor_id),
+                    order_id=str(order.id),
+                    order_number=order.order_number,
+                    order_date=order.created_at or datetime.now(timezone.utc),
+                    items=formatted_items,
+                    total_payout=float(total_payout),
+                    scheduled_pickup_date=scheduled_date,
+                    currency=order.currency or "NGN",
+                    fulfillment_status=order.fulfillment_status,
+                )
+                notifications_sent += 1
+                logger.info(
+                    "[Vendor Notification After Payment] Sent vendor order notification for vendor_id=%s order=%s",
+                    vendor_id,
+                    order.order_number,
+                )
+            except Exception as exc:
+                logger.exception(
+                    "[Vendor Notification After Payment] Failed for vendor_id=%s order=%s: %s",
+                    vendor_id,
+                    order.order_number,
+                    exc,
+                )
+
+        return notifications_sent > 0
+    except Exception as exc:
+        logger.exception(
+            "[Vendor Notification After Payment] Failed for order %s: %s",
+            order_id,
+            exc,
         )
         return False
 
@@ -919,6 +1072,8 @@ async def _verify_stripe_payment(
         payment = payment_result.scalar_one_or_none()
 
         claim_customer = None
+        order = None
+        result = None
 
         # Update payment status based on authenticated intent truth
         if intent.status == "succeeded":
@@ -1059,6 +1214,9 @@ async def _verify_stripe_payment(
             await send_order_confirmation_after_payment(db, order.id)
             await send_account_claim_email_if_guest(claim_customer)
 
+        if intent.status == "succeeded" and order and result and not result.replay:
+            await send_vendor_notifications_after_payment(db, order.id)
+
         return PaymentVerifyResponse(
             status=intent.status == "succeeded",
             message=(
@@ -1126,6 +1284,8 @@ async def _verify_paystack_payment(
             payment = payment_result.scalar_one_or_none()
 
             claim_customer = None
+            order = None
+            result = None
 
             # Update payment status from authenticated Paystack truth.
             if transaction_data["status"] == "success":
@@ -1240,6 +1400,9 @@ async def _verify_paystack_payment(
                 await send_order_confirmation_after_payment(db, order.id)
                 await send_account_claim_email_if_guest(claim_customer)
 
+            if transaction_data.get("status") == "success" and order and result and not result.replay:
+                await send_vendor_notifications_after_payment(db, order.id)
+
             return PaymentVerifyResponse(
                 status=True,
                 message="Payment verification successful",
@@ -1341,9 +1504,11 @@ async def paystack_webhook(
                 .where(Order.id == payment.order_id)
             )
             await db.commit()
-            if completed_order and completed_order.customer and not result.replay:
-                await send_order_confirmation_after_payment(db, completed_order.id)
-                await send_account_claim_email_if_guest(completed_order.customer)
+            if completed_order and not result.replay:
+                if completed_order.customer:
+                    await send_order_confirmation_after_payment(db, completed_order.id)
+                    await send_account_claim_email_if_guest(completed_order.customer)
+                await send_vendor_notifications_after_payment(db, completed_order.id)
         except PaymentRecoveryUnavailable as error:
             await db.rollback()
             raise HTTPException(status_code=503, detail=str(error))
@@ -1476,9 +1641,11 @@ async def stripe_webhook(
                 .where(Order.id == payment.order_id)
             )
             await db.commit()
-            if completed_order and completed_order.customer and not result.replay:
-                await send_order_confirmation_after_payment(db, completed_order.id)
-                await send_account_claim_email_if_guest(completed_order.customer)
+            if completed_order and not result.replay:
+                if completed_order.customer:
+                    await send_order_confirmation_after_payment(db, completed_order.id)
+                    await send_account_claim_email_if_guest(completed_order.customer)
+                await send_vendor_notifications_after_payment(db, completed_order.id)
 
         # Cancellation is definitive; payment_failed can still be retryable.
         elif event.type in {
