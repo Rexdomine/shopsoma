@@ -5,6 +5,7 @@ import {
   Package,
   ShoppingCart,
   Folder,
+  Layers,
   Megaphone,
   BarChart3,
   Wallet,
@@ -44,6 +45,7 @@ export default function AdminSidebar({ activeSection, activePrimary, mobileStack
       { label: 'Orders', route: '/admin/orders', icon: 'orders', section: 'orders' },
       { label: 'Returns', route: ROUTES.ADMIN_RETURNS, icon: 'returns', section: 'returns' },
       { label: 'Products', route: ROUTES.ADMIN_PRODUCTS, icon: 'products', section: 'products' },
+      { label: 'Categories', route: ROUTES.ADMIN_CATEGORIES, icon: 'categories', section: 'categories' },
       { label: 'Collections', route: '/admin/collections', icon: 'collections', section: 'collections' },
       { label: 'Marketing', route: '/admin/marketing', icon: 'marketing', section: 'marketing' },
       { label: 'Analytics', route: '/admin/analytics', icon: 'analytics', section: 'analytics' },
@@ -70,6 +72,8 @@ export default function AdminSidebar({ activeSection, activePrimary, mobileStack
         return <Package className={className} />;
       case 'products':
         return <Package className={className} />;
+      case 'categories':
+        return <Layers className={className} />;
       case 'collections':
         return <Folder className={className} />;
       case 'marketing':

@@ -593,13 +593,37 @@ class EmailService:
         order_date: datetime,
         items: List[dict],
         total_payout: float,
-        pickup_date: datetime,
+        pickup_date: Optional[datetime] = None,
         currency: Optional[str] = "NGN",
+        fulfillment_status: Optional[Any] = None,
+        order_status: Optional[Any] = None,
     ) -> bool:
         subject = f"New Order Received · {order_number}"
         normalized_currency = self._normalize_currency(currency)
         items_table = self._build_vendor_items_table(items, normalized_currency)
-        pickup_date_str = pickup_date.strftime("%d %B %Y · %I:%M %p")
+
+        pickup_date_html = ""
+        status_candidate = fulfillment_status if fulfillment_status is not None else order_status
+        is_scheduled_status = False
+        if status_candidate:
+            status_val = (
+                status_candidate.value.lower()
+                if hasattr(status_candidate, "value")
+                else str(status_candidate).strip().lower()
+            )
+            if status_val in ("pickup_scheduled", "scheduling_pickup", "scheduled"):
+                is_scheduled_status = True
+
+        if is_scheduled_status and pickup_date:
+            try:
+                pickup_date_str = (
+                    pickup_date.strftime("%d %B %Y · %I:%M %p")
+                    if hasattr(pickup_date, "strftime")
+                    else str(pickup_date)
+                )
+                pickup_date_html = f'<p style="margin:4px 0;"><strong>Pickup Scheduled:</strong> {pickup_date_str}</p>'
+            except Exception:
+                pickup_date_html = ""
 
         body_html = f"""
         <p style="font-size:16px;">Hello {name or 'there'},</p>
@@ -607,7 +631,7 @@ class EmailService:
         <div style="margin:24px 0;padding:20px;border:1px solid {BRAND_BORDER};border-radius:10px;background:{BRAND_LIGHT};">
             <p style="margin:0;"><strong>Order Number:</strong> {order_number}</p>
             <p style="margin:4px 0;"><strong>Order Date:</strong> {order_date.strftime('%d %B %Y · %I:%M %p')}</p>
-            <p style="margin:4px 0;"><strong>Pickup Scheduled:</strong> {pickup_date_str}</p>
+            {pickup_date_html}
         </div>
         <table style="width:100%;border-collapse:collapse;margin-bottom:24px;">
             <thead>

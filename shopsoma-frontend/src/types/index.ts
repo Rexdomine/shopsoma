@@ -208,6 +208,9 @@ export interface Category {
   slug: string;
   description?: string;
   parent_id?: string | null;
+  parent_name?: string | null;
+  level?: 'primary' | 'subcategory' | 'child';
+  children_count?: number;
   image_url?: string | null;
   display_order: number;
   is_active: boolean;

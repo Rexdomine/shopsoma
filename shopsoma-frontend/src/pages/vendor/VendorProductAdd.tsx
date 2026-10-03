@@ -3,8 +3,10 @@ import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, Trash2, ChevronDown, Upload, X, Plus, Edit2, Check, Star } from 'lucide-react';
 import VendorSidebar from '../../components/vendor/VendorSidebar';
 import CollectionModal from '../../components/vendor/CollectionModal';
+import CategoryCreateModal from '../../components/admin/CategoryCreateModal';
 import ToastContainer from '../../components/ui/ToastContainer';
 import { ROUTES } from '../../config/constants';
+import { useOptionalAuth } from '../../context/AuthContext';
 import { useToast } from '../../hooks/useToast';
 import { productService } from '../../services/productService';
 import type { CreateProductPayload } from '../../services/productService';
@@ -107,8 +109,14 @@ function ProductImageFramePreview({
 
 export default function VendorProductAdd() {
   const navigate = useNavigate();
+  const auth = useOptionalAuth();
+  const isAdmin = auth?.user?.role === 'admin';
   const { toasts, hideToast, success, error, warning } = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Category creation modal for admin
+  const [showCategoryModal, setShowCategoryModal] = useState(false);
+  const [categoryModalLevel, setCategoryModalLevel] = useState<'primary' | 'subcategory' | 'child'>('primary');
 
   // Currency state (for product pricing)
   const [productCurrency, setProductCurrency] = useState<Currency>('NGN');
@@ -229,10 +237,11 @@ export default function VendorProductAdd() {
           collectionService.getCollections(),
         ]);
 
-        const allowedPrimary = new Set(['men', 'women']);
-        const filteredPrimary = categoriesData.filter((category) =>
-          allowedPrimary.has(category.name.trim().toLowerCase())
-        );
+        // Load all active primary categories from the database, excluding internal editorial collections
+        const filteredPrimary = (categoriesData || []).filter((category) => {
+          const slug = category.slug || '';
+          return slug !== 'shop-edits' && !slug.startsWith('shop-edits-');
+        });
 
         setPrimaryCategories(filteredPrimary);
         setCollections(collectionsData);
@@ -296,6 +305,22 @@ export default function VendorProductAdd() {
     setCollections([newCollection, ...collections]);
     // Auto-select the newly created collection
     setCollectionId(newCollection.id);
+  };
+
+  const handleCategoryCreated = (newCategory: Category) => {
+    if (categoryModalLevel === 'primary') {
+      setPrimaryCategories((prev) => [...prev, newCategory]);
+      handlePrimaryCategoryChange(newCategory.id);
+      success(`Primary category "${newCategory.name}" created and selected!`, 'Category Created');
+    } else if (categoryModalLevel === 'subcategory') {
+      setSubcategories((prev) => [...prev, newCategory]);
+      handleSubcategoryChange(newCategory.id);
+      success(`Subcategory "${newCategory.name}" created and selected!`, 'Category Created');
+    } else if (categoryModalLevel === 'child') {
+      setChildCategories((prev) => [...prev, newCategory]);
+      handleChildCategoryChange(newCategory.id);
+      success(`Child category "${newCategory.name}" created and selected!`, 'Category Created');
+    }
   };
 
   // Populate variation form when editing
@@ -1255,6 +1280,22 @@ export default function VendorProductAdd() {
                           ) : (
                             <div className="p-4 text-center text-gray-500">No categories available</div>
                           )}
+                          {isAdmin && (
+                            <div className="border-t border-gray-200 p-2">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setShowPrimaryCategoryDropdown(false);
+                                  setCategoryModalLevel('primary');
+                                  setShowCategoryModal(true);
+                                }}
+                                className="w-full px-4 py-2 text-sm text-[#105E53] hover:bg-[#105E53]/5 rounded-lg flex items-center gap-2"
+                              >
+                                <Plus className="w-4 h-4" />
+                                Add Primary Category
+                              </button>
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>
@@ -1291,6 +1332,22 @@ export default function VendorProductAdd() {
                             ))
                           ) : (
                             <div className="p-4 text-center text-gray-500">No subcategories available</div>
+                          )}
+                          {isAdmin && primaryCategoryId && (
+                            <div className="border-t border-gray-200 p-2">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setShowSubcategoryDropdown(false);
+                                  setCategoryModalLevel('subcategory');
+                                  setShowCategoryModal(true);
+                                }}
+                                className="w-full px-4 py-2 text-sm text-[#105E53] hover:bg-[#105E53]/5 rounded-lg flex items-center gap-2"
+                              >
+                                <Plus className="w-4 h-4" />
+                                Add Subcategory
+                              </button>
+                            </div>
                           )}
                         </div>
                       )}
@@ -1330,6 +1387,22 @@ export default function VendorProductAdd() {
                             ))
                           ) : (
                             <div className="p-4 text-center text-gray-500">No child categories available</div>
+                          )}
+                          {isAdmin && subcategoryId && (
+                            <div className="border-t border-gray-200 p-2">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setShowChildCategoryDropdown(false);
+                                  setCategoryModalLevel('child');
+                                  setShowCategoryModal(true);
+                                }}
+                                className="w-full px-4 py-2 text-sm text-[#105E53] hover:bg-[#105E53]/5 rounded-lg flex items-center gap-2"
+                              >
+                                <Plus className="w-4 h-4" />
+                                Add Child Category
+                              </button>
+                            </div>
                           )}
                         </div>
                       )}
@@ -2511,6 +2584,16 @@ export default function VendorProductAdd() {
         isOpen={showCollectionModal}
         onClose={() => setShowCollectionModal(false)}
         onCollectionCreated={handleCollectionCreated}
+      />
+
+      {/* Category Creation Modal (Admin) */}
+      <CategoryCreateModal
+        isOpen={showCategoryModal}
+        onClose={() => setShowCategoryModal(false)}
+        onSuccess={handleCategoryCreated}
+        defaultLevel={categoryModalLevel}
+        preselectedPrimaryId={primaryCategoryId}
+        preselectedSubcategoryId={subcategoryId}
       />
     </div>
   );

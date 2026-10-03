@@ -1,12 +1,14 @@
 """Vendor notification email service"""
 from datetime import datetime
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import logging
+from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from app.models import Vendor, VendorNotification
+from app.models.order import Order, PaymentStatus
 from app.services.email_service import EmailService
 
 logger = logging.getLogger(__name__)
@@ -26,8 +28,9 @@ class VendorNotificationService:
         order_date: datetime,
         items: List[Dict[str, Any]],
         total_payout: float,
-        scheduled_pickup_date: datetime,
+        scheduled_pickup_date: Optional[datetime] = None,
         currency: str = "NGN",
+        fulfillment_status: Optional[Any] = None,
     ):
         """
         Send order placed notification to vendor
@@ -40,8 +43,31 @@ class VendorNotificationService:
             order_date: Order created datetime
             items: List of order items for this vendor
             total_payout: Total payout for this vendor
-            scheduled_pickup_date: Scheduled pickup datetime
+            scheduled_pickup_date: Scheduled pickup datetime (optional)
+            currency: Currency code
+            fulfillment_status: Order fulfillment status (optional)
         """
+        current_fulfillment_status = fulfillment_status
+        # Explicit verification: only send vendor email if order payment status is PAID
+        try:
+            order_uuid = UUID(str(order_id)) if isinstance(order_id, str) else order_id
+            order = await db.get(Order, order_uuid)
+            if order is not None:
+                order_payment_status = getattr(order, "payment_status", None)
+                if order_payment_status != PaymentStatus.PAID and order_payment_status != "paid":
+                    logger.warning(
+                        "[Vendor Email] Suppressing vendor order email for vendor_id=%s order_id=%s order=%s: payment status is %s (not paid)",
+                        vendor_id,
+                        order_id,
+                        order_number,
+                        order_payment_status,
+                    )
+                    return
+                if not current_fulfillment_status:
+                    current_fulfillment_status = getattr(order, "fulfillment_status", None)
+        except Exception as err:
+            logger.warning("[Vendor Email] Could not verify payment status for order_id=%s: %s", order_id, err)
+
         # Get vendor with user info
         result = await db.execute(
             select(Vendor).options(selectinload(Vendor.user)).where(Vendor.id == vendor_id)
@@ -65,9 +91,10 @@ class VendorNotificationService:
                 total_payout=total_payout,
                 pickup_date=scheduled_pickup_date,
                 currency=currency,
+                fulfillment_status=current_fulfillment_status,
             )
 
-            # Update notification email_sent status
+            # Update or create notification email_sent status
             notification_result = await db.execute(
                 select(VendorNotification).where(
                     VendorNotification.vendor_id == vendor_id,
@@ -80,7 +107,24 @@ class VendorNotificationService:
             if notification:
                 notification.email_sent = True
                 notification.email_sent_at = datetime.utcnow()
-                await db.commit()
+            else:
+                notification = VendorNotification(
+                    vendor_id=vendor_id,
+                    notification_type="order_placed",
+                    title=f"New Order #{order_number}",
+                    message=f"You have received a new order with {len(items)} item(s).",
+                    order_id=order_uuid,
+                    data={
+                        "order_number": order_number,
+                        "items": items,
+                        "total_payout": total_payout,
+                        "currency": currency,
+                    },
+                    email_sent=True,
+                    email_sent_at=datetime.utcnow(),
+                )
+                db.add(notification)
+            await db.commit()
 
             logger.info(
                 "[Vendor Email] New order email sent to vendor_id=%s order=%s",

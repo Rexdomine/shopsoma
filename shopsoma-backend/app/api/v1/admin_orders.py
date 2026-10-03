@@ -119,10 +119,25 @@ async def _notify_order_status_change(
         return
     notification_service = OrderNotificationService(db)
     try:
+        pickup_details = None
+        if order.fulfillment_status == FulfillmentStatus.PICKUP_SCHEDULED:
+            pickup_query = select(VendorPickup).where(VendorPickup.order_id == order.id)
+            pickup_result = await db.execute(pickup_query)
+            pickups = pickup_result.scalars().all()
+            if pickups:
+                pickup_details = {}
+                p = pickups[0]
+                if p.scheduled_pickup_date:
+                    pickup_details["scheduled_pickup_date"] = p.scheduled_pickup_date
+                if p.pickup_window_start and p.pickup_window_end:
+                    pickup_details["pickup_window_start"] = p.pickup_window_start
+                    pickup_details["pickup_window_end"] = p.pickup_window_end
+                if p.courier_name:
+                    pickup_details["courier_name"] = p.courier_name
         await notification_service.notify_status_change(
             order=order,
             new_status=order.fulfillment_status,
-            pickup_details=None,
+            pickup_details=pickup_details,
         )
     except Exception:
         logger.exception("Failed to send notifications for order %s", order.id)
@@ -737,7 +752,8 @@ async def update_order_status(
         order.cancelled_at = datetime.now()
 
     # Update vendor pickups with pickup window data if provided
-    if new_status == FulfillmentStatus.PICKUP_SCHEDULED and (update_data.pickup_window_start or update_data.pickup_window_end):
+    pickups = []
+    if new_status == FulfillmentStatus.PICKUP_SCHEDULED:
         from dateutil import parser
 
         # Get all pickups for this order
@@ -763,10 +779,33 @@ async def update_order_status(
     if old_status != new_status:
         notification_service = OrderNotificationService(db)
         try:
+            pickup_details = None
+            if new_status == FulfillmentStatus.PICKUP_SCHEDULED:
+                from dateutil import parser
+                pickup_details = {}
+                if update_data.pickup_window_start:
+                    pickup_details["pickup_window_start"] = (
+                        parser.isoparse(update_data.pickup_window_start)
+                        if isinstance(update_data.pickup_window_start, str)
+                        else update_data.pickup_window_start
+                    )
+                if update_data.pickup_window_end:
+                    pickup_details["pickup_window_end"] = (
+                        parser.isoparse(update_data.pickup_window_end)
+                        if isinstance(update_data.pickup_window_end, str)
+                        else update_data.pickup_window_end
+                    )
+                if update_data.courier_name:
+                    pickup_details["courier_name"] = update_data.courier_name
+                if pickups:
+                    first_sched = next((p.scheduled_pickup_date for p in pickups if p.scheduled_pickup_date), None)
+                    if first_sched:
+                        pickup_details["scheduled_pickup_date"] = first_sched
+
             await notification_service.notify_status_change(
                 order=order,
                 new_status=new_status,
-                pickup_details=None  # Can be enhanced to include pickup window if available
+                pickup_details=pickup_details,
             )
         except Exception as e:
             # Log error but don't fail the request
