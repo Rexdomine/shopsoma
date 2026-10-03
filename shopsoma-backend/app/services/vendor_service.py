@@ -325,23 +325,27 @@ class VendorService:
             Product.moderation_status == ModerationStatus.PENDING
         ).scalar() or 0
 
-        # Orders metrics
-        total_orders = db.query(func.count(func.distinct(OrderItem.order_id))).filter(
-            OrderItem.vendor_id == vendor_id
+        # Orders metrics (only paid orders count as received orders)
+        total_orders = db.query(func.count(func.distinct(OrderItem.order_id))).join(Order).filter(
+            OrderItem.vendor_id == vendor_id,
+            Order.payment_status == PaymentStatus.PAID
         ).scalar() or 0
 
         pending_orders = db.query(func.count(func.distinct(OrderItem.order_id))).join(Order).filter(
             OrderItem.vendor_id == vendor_id,
-            Order.fulfillment_status == FulfillmentStatus.PENDING
+            Order.payment_status == PaymentStatus.PAID,
+            Order.fulfillment_status == FulfillmentStatus.ORDER_RECEIVED
         ).scalar() or 0
 
         in_progress_orders = db.query(func.count(func.distinct(OrderItem.order_id))).join(Order).filter(
             OrderItem.vendor_id == vendor_id,
-            Order.fulfillment_status == FulfillmentStatus.PROCESSING
+            Order.payment_status == PaymentStatus.PAID,
+            Order.fulfillment_status == FulfillmentStatus.PREPARING_FOR_PICKUP
         ).scalar() or 0
 
         completed_orders = db.query(func.count(func.distinct(OrderItem.order_id))).join(Order).filter(
             OrderItem.vendor_id == vendor_id,
+            Order.payment_status == PaymentStatus.PAID,
             Order.fulfillment_status == FulfillmentStatus.DELIVERED
         ).scalar() or 0
 

@@ -45,8 +45,8 @@ export default function Footer() {
   };
 
   return (
-    <footer className="bg-[var(--color-page-bg)] border-t border-[#1E5053]">
-      <div className="w-full px-8 py-10">
+    <footer className="bg-[var(--color-page-bg)] border-t border-[#1E5053] w-full overflow-hidden">
+      <div className="w-full px-4 sm:px-8 py-8 sm:py-10">
         <div className="block lg:hidden max-w-[640px] mx-auto">
           <div className="space-y-6">
             <h3 className="text-xs font-ui uppercase tracking-[0.2em]" style={{ color: '#1E5053' }}>
@@ -62,7 +62,7 @@ export default function Footer() {
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder="example@mail.com"
-                  className="flex-1 border border-[#1E5053] bg-white px-3 py-2 text-sm font-ui focus:outline-none"
+                  className="min-w-0 flex-1 border border-[#1E5053] bg-white px-3 py-2 text-xs sm:text-sm font-ui focus:outline-none"
                   style={{ color: '#1E5053' }}
                   disabled={isSubmitting}
                   required
@@ -70,7 +70,7 @@ export default function Footer() {
                 <button
                   type="submit"
                   disabled={isSubmitting}
-                  className="bg-[#1E5053] text-white text-xs font-ui uppercase tracking-[0.3em] px-5"
+                  className="bg-[#1E5053] text-white text-[11px] sm:text-xs font-ui uppercase tracking-[0.2em] sm:tracking-[0.3em] px-3 sm:px-5 shrink-0"
                 >
                   {isSubmitting ? '...' : 'Join Now'}
                 </button>

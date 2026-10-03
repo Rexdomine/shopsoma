@@ -273,18 +273,18 @@ export default function AdminPayouts() {
   };
 
   return (
-    <div className="min-h-screen bg-[var(--color-page-bg)] flex">
+    <div className="flex flex-col md:flex-row min-h-screen bg-[var(--color-page-bg)] w-full overflow-x-hidden">
       <AdminSidebar activeSection="payouts" />
 
-      <main className="flex-1 p-8 space-y-6">
-        <div className="flex items-start justify-between gap-4">
+      <main className="flex-1 min-w-0 p-4 sm:p-6 lg:p-8 space-y-6">
+        <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
           <div>
-            <h1 className="text-3xl font-bold text-gray-900">Payout Management</h1>
-            <p className="mt-1 text-sm text-gray-500">
+            <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Payout Management</h1>
+            <p className="mt-1 text-xs sm:text-sm text-gray-500">
               Review vendor withdrawal requests and payout history
             </p>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             <CurrencySwitcher value={currentCurrency} onChange={setCurrency} />
             <button
               type="button"

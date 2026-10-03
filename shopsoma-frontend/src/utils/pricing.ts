@@ -145,9 +145,11 @@ export function convertCurrencyWithRates(
 /**
  * Format amount in specified currency
  */
-export function formatAmount(amount: number, currency: Currency): string {
+export function formatAmount(amount: number | string, currency: Currency): string {
   const symbol = currency === 'NGN' ? '₦' : '$';
-  return `${symbol}${amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const num = typeof amount === 'number' ? amount : parseFloat(String(amount));
+  const safeAmount = isNaN(num) ? 0 : num;
+  return `${symbol}${safeAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 /**
@@ -156,8 +158,10 @@ export function formatAmount(amount: number, currency: Currency): string {
  * @param currency - Target currency to display
  * @deprecated Use formatPriceWithConversion instead
  */
-export function formatPriceWithCurrency(amountInNGN: number, currency: Currency): string {
-  const converted = currency === 'USD' ? convertNGNToUSD(amountInNGN) : amountInNGN;
+export function formatPriceWithCurrency(amountInNGN: number | string, currency: Currency): string {
+  const num = typeof amountInNGN === 'number' ? amountInNGN : parseFloat(String(amountInNGN));
+  const safeAmount = isNaN(num) ? 0 : num;
+  const converted = currency === 'USD' ? convertNGNToUSD(safeAmount) : safeAmount;
   const locale = currency === 'USD' ? 'en-US' : 'en-NG';
   const minimumFractionDigits = currency === 'USD' ? 2 : 0;
   const maximumFractionDigits = currency === 'USD' ? 2 : 0;
@@ -178,14 +182,16 @@ export function formatPriceWithCurrency(amountInNGN: number, currency: Currency)
  * @param exchangeRates - Optional exchange rates from currency store (uses hardcoded if not provided)
  */
 export function formatPriceWithConversion(
-  amount: number,
+  amount: number | string,
   productCurrency: Currency,
   displayCurrency: Currency,
   exchangeRates?: { USD_TO_NGN: number; NGN_TO_USD: number }
-): string {
+ ): string {
+  const num = typeof amount === 'number' ? amount : parseFloat(String(amount));
+  const safeAmount = isNaN(num) ? 0 : num;
   const converted = exchangeRates
-    ? convertCurrencyWithRates(amount, productCurrency, displayCurrency, exchangeRates)
-    : convertCurrency(amount, productCurrency, displayCurrency);
+    ? convertCurrencyWithRates(safeAmount, productCurrency, displayCurrency, exchangeRates)
+    : convertCurrency(safeAmount, productCurrency, displayCurrency);
 
   const locale = displayCurrency === 'USD' ? 'en-US' : 'en-NG';
   const minimumFractionDigits = displayCurrency === 'USD' ? 2 : 0;

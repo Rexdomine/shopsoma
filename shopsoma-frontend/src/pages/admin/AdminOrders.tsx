@@ -188,24 +188,24 @@ export default function AdminOrders() {
   };
 
   return (
-    <div className="min-h-screen bg-[var(--color-page-bg)] flex">
+    <div className="min-h-screen bg-[var(--color-page-bg)] flex flex-col md:flex-row w-full overflow-x-hidden">
       <AdminSidebar activeSection="orders" />
 
-      <main className="flex-1 p-8 space-y-6">
+      <main className="min-w-0 flex-1 p-4 sm:p-6 lg:p-8 space-y-6">
         {/* Header */}
-        <div className="flex items-center justify-between mb-8">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6 sm:mb-8">
           <div>
-            <h1 className="text-3xl font-bold text-gray-900">Order Management</h1>
+            <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Order Management</h1>
             <p className="mt-1 text-sm text-gray-500">
               Manage and track all orders across vendors
             </p>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 flex-wrap">
             <CurrencySwitcher value={currentCurrency} onChange={setCurrency} />
             <button
               onClick={handleExport}
               disabled={exporting || loading}
-              className="px-4 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 transition-colors flex items-center gap-2"
+              className="px-4 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 transition-colors flex items-center gap-2 text-sm"
             >
               📥 {exporting ? 'Exporting...' : 'Export CSV'}
             </button>
@@ -338,11 +338,15 @@ export default function AdminOrders() {
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <span
-                          className={`px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${getStatusColor(
-                            order.fulfillment_status
-                          )}`}
+                          className={`px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${
+                            order.payment_status === 'pending'
+                              ? 'bg-amber-100 text-amber-800'
+                              : getStatusColor(order.fulfillment_status)
+                          }`}
                         >
-                          {getAdminStatusLabel(order.fulfillment_status)}
+                          {order.payment_status === 'pending'
+                            ? 'Awaiting Payment'
+                            : getAdminStatusLabel(order.fulfillment_status)}
                         </span>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">

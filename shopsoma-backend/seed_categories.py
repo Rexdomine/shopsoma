@@ -52,13 +52,24 @@ async def seed_categories():
                             "children": [
                                 {"name": "Activewear Tops", "slug": "men-activewear-tops", "description": "Men's activewear tops", "display_order": 1},
                                 {"name": "Activewear Bottoms", "slug": "men-activewear-bottoms", "description": "Men's activewear bottoms", "display_order": 2},
+                                {"name": "Activewear Accessories", "slug": "men-activewear-accessories", "description": "Men's activewear accessories", "display_order": 3},
+                            ],
+                        },
+                        {
+                            "name": "Men's Sets",
+                            "slug": "men-sets",
+                            "description": "Men's matching sets and co-ords",
+                            "display_order": 4,
+                            "children": [
+                                {"name": "Trouser Sets", "slug": "men-sets-trouser-sets", "description": "Men's trouser sets", "display_order": 1},
+                                {"name": "Shorts Sets", "slug": "men-sets-shorts-sets", "description": "Men's shorts sets", "display_order": 2},
                             ],
                         },
                         {
                             "name": "Shoes",
                             "slug": "men-shoes",
                             "description": "Men's footwear",
-                            "display_order": 4,
+                            "display_order": 5,
                             "children": [
                                 {"name": "Casual Shoes", "slug": "men-shoes-casual", "description": "Men's casual shoes", "display_order": 1},
                                 {"name": "Formal Shoes", "slug": "men-shoes-formal", "description": "Men's formal shoes", "display_order": 2},
@@ -68,7 +79,7 @@ async def seed_categories():
                             "name": "Accessories",
                             "slug": "men-accessories",
                             "description": "Men's accessories",
-                            "display_order": 5,
+                            "display_order": 6,
                             "children": [
                                 {"name": "Watches/Jewellery", "slug": "men-accessories-watches-jewellery", "description": "Watches and jewellery", "display_order": 1},
                                 {"name": "Wallets", "slug": "men-accessories-wallets", "description": "Wallets", "display_order": 2},
@@ -81,7 +92,7 @@ async def seed_categories():
                             "name": "Outerwear",
                             "slug": "men-outerwear",
                             "description": "Men's outerwear",
-                            "display_order": 6,
+                            "display_order": 7,
                             "children": [
                                 {"name": "Hoodies", "slug": "men-outerwear-hoodies", "description": "Hoodies", "display_order": 1},
                                 {"name": "Jackets", "slug": "men-outerwear-jackets", "description": "Men's jackets", "display_order": 2},
@@ -170,6 +181,7 @@ async def seed_categories():
                             "children": [
                                 {"name": "Women's Activewear Tops", "slug": "women-activewear-tops", "description": "Activewear tops", "display_order": 1},
                                 {"name": "Women's Activewear Bottoms", "slug": "women-activewear-bottoms", "description": "Activewear bottoms", "display_order": 2},
+                                {"name": "Activewear Accessories", "slug": "women-activewear-accessories", "description": "Women's activewear accessories", "display_order": 3},
                             ],
                         },
                         {
@@ -196,6 +208,25 @@ async def seed_categories():
                             "slug": "women-lingerie-pyjamas",
                             "description": "Women's lingerie and pyjamas",
                             "display_order": 9,
+                            "children": [
+                                {"name": "Shapewear", "slug": "women-lingerie-shapewear", "description": "Women's shapewear", "display_order": 1},
+                                {"name": "Bras & Bralettes", "slug": "women-lingerie-bras-bralettes", "description": "Bras and bralettes", "display_order": 2},
+                                {"name": "Panties & Briefs", "slug": "women-lingerie-panties-briefs", "description": "Panties and briefs", "display_order": 3},
+                                {"name": "Pyjamas & Sleepwear", "slug": "women-lingerie-pyjamas-sleepwear", "description": "Pyjamas and sleepwear", "display_order": 4},
+                                {"name": "Robes & Loungewear", "slug": "women-lingerie-robes-loungewear", "description": "Robes and loungewear", "display_order": 5},
+                                {"name": "Lingerie Sets", "slug": "women-lingerie-sets", "description": "Lingerie sets", "display_order": 6},
+                            ],
+                        },
+                        {
+                            "name": "Women's Sets",
+                            "slug": "women-sets",
+                            "description": "Women's matching sets and co-ords",
+                            "display_order": 10,
+                            "children": [
+                                {"name": "Trouser Sets", "slug": "women-sets-trouser-sets", "description": "Women's trouser sets", "display_order": 1},
+                                {"name": "Skirt Sets", "slug": "women-sets-skirt-sets", "description": "Women's skirt sets", "display_order": 2},
+                                {"name": "Shorts Sets", "slug": "women-sets-shorts-sets", "description": "Women's shorts sets", "display_order": 3},
+                            ],
                         },
                     ]
                 },

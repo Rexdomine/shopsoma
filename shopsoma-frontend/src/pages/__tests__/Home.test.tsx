@@ -170,4 +170,54 @@ describe('Home', () => {
     expect(editorialImage).toHaveAttribute('loading', 'lazy');
     expect(editorialImage).toHaveAttribute('decoding', 'async');
   });
+
+  it('does not remain stuck in skeleton loading when there are no featured products', async () => {
+    getProductsMock.mockResolvedValue({ products: [] });
+    getFeaturedProductsMock.mockResolvedValue([]);
+
+    render(
+      <MemoryRouter>
+        <Home />
+      </MemoryRouter>
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByText('FEATURED')).not.toBeInTheDocument();
+  });
+
+  it('displays featured collab product when available', async () => {
+    const mockFeaturedProduct = {
+      id: 'prod-123',
+      title: 'Silk Evening Dress',
+      description: 'Handcrafted luxury dress',
+      currency: 'NGN',
+      base_price: 50000,
+      vendor_name: 'Shopsoma',
+      status: 'active',
+      moderation_status: 'approved',
+      is_featured: true,
+      images: [{ id: 'img-1', image_url: '/test-img.jpg', is_primary: true }],
+      variants: [],
+      variations: [],
+      category_id: 'cat-1',
+    };
+
+    getFeaturedProductsMock.mockResolvedValue([mockFeaturedProduct]);
+
+    render(
+      <MemoryRouter>
+        <Home />
+      </MemoryRouter>
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText('FEATURED')).toBeInTheDocument();
+    expect(screen.getByText('Silk Evening Dress')).toBeInTheDocument();
+  });
 });

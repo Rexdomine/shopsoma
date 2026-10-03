@@ -319,33 +319,48 @@ async def get_order_statistics(
 ):
     """Get order statistics for admin dashboard"""
 
-    # Total orders and revenue
+    # Total orders and revenue (only paid orders count as received orders and revenue)
     total_query = select(
         func.count(Order.id).label("total_orders"),
         func.coalesce(func.sum(Order.total_amount), 0).label("total_revenue"),
-    )
+    ).where(Order.payment_status == PaymentStatus.PAID)
     total_result = await db.execute(total_query)
     total_row = total_result.one()
 
-    # Orders by fulfillment status
+    # Orders by fulfillment status (only paid orders count towards active fulfillment stages)
     pending_count = await db.scalar(
-        select(func.count(Order.id)).where(Order.fulfillment_status == FulfillmentStatus.ORDER_RECEIVED)
+        select(func.count(Order.id)).where(
+            Order.fulfillment_status == FulfillmentStatus.ORDER_RECEIVED,
+            Order.payment_status == PaymentStatus.PAID,
+        )
     ) or 0
 
     processing_count = await db.scalar(
-        select(func.count(Order.id)).where(Order.fulfillment_status == FulfillmentStatus.PREPARING_FOR_PICKUP)
+        select(func.count(Order.id)).where(
+            Order.fulfillment_status == FulfillmentStatus.PREPARING_FOR_PICKUP,
+            Order.payment_status == PaymentStatus.PAID,
+        )
     ) or 0
 
     shipped_count = await db.scalar(
-        select(func.count(Order.id)).where(Order.fulfillment_status == FulfillmentStatus.IN_TRANSIT)
+        select(func.count(Order.id)).where(
+            Order.fulfillment_status == FulfillmentStatus.IN_TRANSIT,
+            Order.payment_status == PaymentStatus.PAID,
+        )
     ) or 0
 
     delivered_count = await db.scalar(
-        select(func.count(Order.id)).where(Order.fulfillment_status == FulfillmentStatus.DELIVERED)
+        select(func.count(Order.id)).where(
+            Order.fulfillment_status == FulfillmentStatus.DELIVERED,
+            Order.payment_status == PaymentStatus.PAID,
+        )
     ) or 0
 
     cancelled_count = await db.scalar(
-        select(func.count(Order.id)).where(Order.fulfillment_status == FulfillmentStatus.CANCELLED)
+        select(func.count(Order.id)).where(
+            Order.fulfillment_status == FulfillmentStatus.CANCELLED,
+            Order.payment_status.in_([PaymentStatus.PAID, PaymentStatus.REFUNDED]),
+        )
     ) or 0
 
     # Orders by payment status
@@ -357,13 +372,16 @@ async def get_order_statistics(
         select(func.count(Order.id)).where(Order.payment_status == PaymentStatus.FAILED)
     ) or 0
 
-    # Today's orders
+    # Today's orders (only paid orders count)
     today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     today_stats = await db.execute(
         select(
             func.count(Order.id).label("orders_today"),
             func.coalesce(func.sum(Order.total_amount), 0).label("revenue_today"),
-        ).where(Order.created_at >= today_start)
+        ).where(
+            Order.created_at >= today_start,
+            Order.payment_status == PaymentStatus.PAID,
+        )
     )
     today_row = today_stats.one()
 
@@ -393,7 +411,7 @@ async def list_orders(
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(20, ge=1, le=100, description="Items per page"),
     search: Optional[str] = Query(None, description="Search by order number, customer name, or email"),
-    payment_status: Optional[PaymentStatus] = Query(None, description="Filter by payment status"),
+    payment_status: Optional[str] = Query(None, description="Filter by payment status"),
     fulfillment_status: Optional[FulfillmentStatus] = Query(None, description="Filter by fulfillment status"),
     vendor_id: Optional[str] = Query(None, description="Filter by vendor ID"),
     date_from: Optional[date] = Query(None, description="Filter orders from date"),
@@ -424,11 +442,19 @@ async def list_orders(
             )
         )
 
+    resolved_payment_status = None
     if payment_status:
-        filters.append(Order.payment_status == payment_status)
+        try:
+            resolved_payment_status = PaymentStatus(payment_status.upper())
+            filters.append(Order.payment_status == resolved_payment_status)
+        except ValueError:
+            filters.append(Order.payment_status == payment_status)
 
     if fulfillment_status:
         filters.append(Order.fulfillment_status == fulfillment_status)
+        if fulfillment_status == FulfillmentStatus.ORDER_RECEIVED and not payment_status:
+            # Only paid orders count as order_received
+            filters.append(Order.payment_status == PaymentStatus.PAID)
 
     if vendor_id:
         # Filter orders that have items from this vendor
@@ -1409,7 +1435,7 @@ async def process_refund(
 
 @router.get("/export/csv")
 async def export_orders_csv(
-    payment_status: Optional[PaymentStatus] = Query(None),
+    payment_status: Optional[str] = Query(None),
     fulfillment_status: Optional[FulfillmentStatus] = Query(None),
     date_from: Optional[date] = Query(None),
     date_to: Optional[date] = Query(None),
@@ -1427,9 +1453,14 @@ async def export_orders_csv(
     # Apply filters
     filters = []
     if payment_status:
-        filters.append(Order.payment_status == payment_status)
+        try:
+            filters.append(Order.payment_status == PaymentStatus(payment_status.upper()))
+        except ValueError:
+            filters.append(Order.payment_status == payment_status)
     if fulfillment_status:
         filters.append(Order.fulfillment_status == fulfillment_status)
+        if fulfillment_status == FulfillmentStatus.ORDER_RECEIVED and not payment_status:
+            filters.append(Order.payment_status == PaymentStatus.PAID)
     if date_from:
         filters.append(Order.created_at >= datetime.combine(date_from, datetime.min.time()))
     if date_to:

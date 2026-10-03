@@ -351,23 +351,23 @@ export default function VendorAnalytics() {
   const ordersCount = viewMode === 'orders' ? rowsMeta?.total : null;
 
   return (
-    <div className="flex min-h-screen bg-[var(--color-page-bg)]">
+    <div className="flex flex-col md:flex-row min-h-screen bg-[var(--color-page-bg)] w-full overflow-x-hidden">
       <VendorSidebar activePrimary="analytics" />
 
-      <div className="flex-1">
-        <div className="px-8 py-8 space-y-8">
-          <div className="flex flex-wrap items-center justify-between gap-4">
-            <h1 className="text-2xl font-semibold text-gray-900">Analytics</h1>
-            <div className="flex items-center gap-3 flex-1 justify-end">
+      <main className="flex-1 min-w-0 p-4 sm:p-6 lg:p-8">
+        <div className="space-y-6 sm:space-y-8">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <h1 className="text-xl sm:text-2xl font-semibold text-gray-900">Analytics</h1>
+            <div className="flex flex-wrap items-center gap-3 sm:justify-end">
               <CurrencySwitcher className="mr-2" value={currentCurrency} onChange={setCurrency} />
-              <div className="relative">
+              <div className="relative flex-1 sm:flex-initial">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
                 <input
                   type="text"
                   placeholder="Search"
                   value={search}
                   onChange={(event) => setSearch(event.target.value)}
-                  className="pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#105E53] focus:border-transparent w-64"
+                  className="pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#105E53] focus:border-transparent w-full sm:w-64 text-sm"
                 />
               </div>
               <button
@@ -385,7 +385,7 @@ export default function VendorAnalytics() {
             </div>
           </div>
 
-          <div className="flex flex-wrap items-start justify-between gap-6">
+          <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-6">
             <div className="space-y-4 min-w-[280px]">
               <div className="flex items-center gap-2 text-sm text-gray-500">
                 <span>Total Revenue</span>
@@ -403,7 +403,7 @@ export default function VendorAnalytics() {
               </p>
             </div>
 
-            <div className="flex flex-col items-end gap-3">
+            <div className="flex flex-col sm:items-end gap-3">
               <div className="text-sm text-gray-400">Showing trends for:</div>
               <div className="text-sm font-semibold text-gray-800">{rangeLabel}</div>
               <div className="flex items-center gap-2">
@@ -455,7 +455,7 @@ export default function VendorAnalytics() {
 
           <div className="space-y-3">
             <p className="text-sm text-gray-500">Important Stats</p>
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
               {importantStats.map((stat) => {
                 const Icon = stat.icon;
                 return (
@@ -506,7 +506,8 @@ export default function VendorAnalytics() {
             </div>
 
             <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-              <table className="w-full text-sm">
+              <div className="overflow-x-auto w-full">
+                <table className="w-full text-sm">
                 <thead className="bg-gray-50 text-gray-500">
                   <tr>
                     <th className="px-4 py-3 text-left font-semibold">Order Number</th>
@@ -593,6 +594,7 @@ export default function VendorAnalytics() {
                   )}
                 </tbody>
               </table>
+              </div>
             </div>
           </div>
 
@@ -600,7 +602,7 @@ export default function VendorAnalytics() {
             <div className="text-sm text-rose-500">{error}</div>
           )}
         </div>
-      </div>
+      </main>
     </div>
   );
 }

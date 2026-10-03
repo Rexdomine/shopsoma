@@ -273,24 +273,24 @@ export default function VendorProducts() {
           loadProducts();
         }}
       />
-      <div className="flex">
+      <div className="flex flex-col md:flex-row min-h-screen bg-[var(--color-page-bg)] w-full overflow-x-hidden">
         <VendorSidebar activePrimary="products" />
 
-        <main className="flex-1 p-8">
+        <main className="flex-1 min-w-0 p-4 sm:p-6 lg:p-8 space-y-6">
           {/* Header */}
-          <div className="mb-6">
-            <div className="flex items-center justify-between mb-4">
-              <h1 className="text-3xl font-semibold text-gray-900">Product Management</h1>
-              <div className="flex items-center gap-3">
+          <div className="mb-4">
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 mb-4">
+              <h1 className="text-2xl sm:text-3xl font-semibold text-gray-900">Product Management</h1>
+              <div className="flex flex-wrap items-center gap-2 sm:gap-3 w-full lg:w-auto">
                 <CurrencySwitcher value={currentCurrency} onChange={setCurrency} />
-                <div className="relative">
+                <div className="relative flex-1 sm:flex-initial min-w-[180px]">
                   <Search className="h-5 w-5 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
                   <input
                     type="text"
                     placeholder="Search"
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}
-                    className="w-64 rounded-lg border border-gray-300 bg-white pl-10 pr-4 py-2.5 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
+                    className="w-full sm:w-64 rounded-lg border border-gray-300 bg-white pl-10 pr-4 py-2.5 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
                   />
                 </div>
                 <button
@@ -310,7 +310,7 @@ export default function VendorProducts() {
                 <button
                   type="button"
                   onClick={() => setBulkUploadOpen(true)}
-                  className="inline-flex items-center justify-center rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 transition whitespace-nowrap gap-2"
+                  className="inline-flex items-center justify-center rounded-lg border border-gray-300 bg-white px-3 sm:px-4 py-2.5 text-xs sm:text-sm font-medium text-gray-700 hover:bg-gray-50 transition whitespace-nowrap gap-2"
                 >
                   <Upload className="h-4 w-4" />
                   Bulk Upload
@@ -318,7 +318,7 @@ export default function VendorProducts() {
                 <button
                   type="button"
                   onClick={() => navigate(`${ROUTES.VENDOR_PRODUCTS}/new`)}
-                  className="inline-flex items-center justify-center rounded-lg bg-[#105E53] text-white px-5 py-2.5 text-sm font-medium hover:bg-[#0c4c45] transition whitespace-nowrap"
+                  className="inline-flex items-center justify-center rounded-lg bg-[#105E53] text-white px-4 sm:px-5 py-2.5 text-xs sm:text-sm font-medium hover:bg-[#0c4c45] transition whitespace-nowrap"
                 >
                   + Add New Product
                 </button>
@@ -380,7 +380,8 @@ export default function VendorProducts() {
                   </div>
 
                   {/* Collection Products Table */}
-                  <table className="w-full">
+                  <div className="overflow-x-auto w-full">
+                    <table className="w-full">
                     <thead className="bg-gray-50 border-b border-gray-200">
                       <tr>
                         <th className="px-6 py-4 text-left">
@@ -477,13 +478,15 @@ export default function VendorProducts() {
                       })}
                     </tbody>
                   </table>
+                  </div>
                 </div>
               ))}
             </div>
           ) : (
             // All Products View
             <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-              <table className="w-full">
+              <div className="overflow-x-auto w-full">
+                <table className="w-full">
                 <thead className="bg-gray-50 border-b border-gray-200">
                   <tr>
                     <th className="px-6 py-4 text-left">
@@ -583,6 +586,7 @@ export default function VendorProducts() {
                   })}
                 </tbody>
               </table>
+              </div>
             </div>
           )}
         </main>

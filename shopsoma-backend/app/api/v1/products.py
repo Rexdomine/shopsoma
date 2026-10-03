@@ -127,11 +127,10 @@ def _sync_inherited_variation_prices(
         else legacy_regular_price
     )
 
-    # Legacy single-product rows can have one generic ProductVariant without
-    # Variation rows. That row is the effective purchase-price record for
-    # cart/order resolution. Attribute-bearing rows are explicit size/color
-    # prices and must not be overwritten merely because no Variation rows are
-    # present.
+    # Single-product variants without Variation rows: generic rows sync only
+    # when explicitly marked inherits_price=True to preserve explicit generic overrides.
+    # Attribute-bearing rows (size/color options of a single product) propagate parent
+    # price edits unless they were explicitly custom-priced differently from the parent.
     if not variations:
         new_regular_price = new_compare_at_price or new_base_price
         new_effective_price = (
@@ -139,16 +138,41 @@ def _sync_inherited_variation_prices(
             if new_compare_at_price is not None and new_base_price < new_regular_price
             else new_regular_price
         )
+        distinct_variant_prices = {
+            legacy_variant.price
+            for legacy_variant in legacy_variants
+            if getattr(legacy_variant, "price", None) is not None
+        }
+        all_variants_share_price = len(distinct_variant_prices) == 1
+
         for legacy_variant in legacy_variants:
-            if legacy_variant.size is not None or legacy_variant.color is not None:
-                continue
-            # Null is an unknown legacy state. The migration backfills existing
-            # generic rows to False because equality cannot distinguish an
-            # explicit price from inherited pricing; never overwrite unknown
-            # legacy data during a later parent edit.
-            if getattr(legacy_variant, "inherits_price", None) is not True:
-                continue
-            legacy_variant.price = new_effective_price
+            is_generic = legacy_variant.size is None and legacy_variant.color is None
+            if is_generic:
+                # Null is an unknown legacy state. The migration backfills existing
+                # generic rows to False because equality cannot distinguish an
+                # explicit price from inherited pricing; never overwrite unknown
+                # legacy data during a later parent edit.
+                if getattr(legacy_variant, "inherits_price", None) is not True:
+                    continue
+                legacy_variant.price = new_effective_price
+            else:
+                # Attribute-bearing rows (size/color variants of single products).
+                inherits = getattr(legacy_variant, "inherits_price", None) is True
+                matches_prior_parent = (
+                    legacy_variant.price == legacy_effective_price
+                    or legacy_variant.price == old_base_price
+                    or (old_compare_at_price is not None and legacy_variant.price == old_compare_at_price)
+                )
+                is_explicit_override = (
+                    not inherits
+                    and not matches_prior_parent
+                    and not (all_variants_share_price and len(legacy_variants) > 1)
+                )
+                if is_explicit_override:
+                    continue
+
+                legacy_variant.price = new_effective_price
+                legacy_variant.inherits_price = True
         return
 
     for variation in variations:
@@ -299,6 +323,14 @@ def _parse_image_urls(
                 raise ValueError
             if parsed.port is not None and not (1 <= parsed.port <= 65535):
                 raise ValueError
+            parsed_path = parsed.path.lower()
+            if parsed_path.endswith((".heic", ".heif")) and "res.cloudinary.com" not in (parsed.hostname or ""):
+                errors.append({
+                    "row": row_index,
+                    "field": field,
+                    "message": "HEIC format images are only supported when hosted on Cloudinary or when converted to JPEG/PNG/WebP",
+                })
+                continue
         except (ValueError, UnicodeError):
             errors.append({
                 "row": row_index, "field": field,
@@ -308,6 +340,37 @@ def _parse_image_urls(
         if value not in urls:
             urls.append(value)
     return urls
+
+
+def _optimize_bulk_image_url(url: str, quality: str = "high") -> str:
+    """
+    Apply Cloudinary transformations to bulk upload image URLs for fast web rendering.
+    Non-Cloudinary URLs are preserved unchanged to protect existing CDN contracts.
+    """
+    if not url or "res.cloudinary.com" not in url:
+        return url
+
+    match = re.match(
+        r"^(https?://res\.cloudinary\.com/[^/]+/image/upload/)(?:((?:[a-z]_[^/,]+,?)+)/)?(.*)$",
+        url,
+        re.IGNORECASE,
+    )
+    if not match:
+        return url
+
+    prefix, existing_transforms, rest = match.groups()
+    target_width = 400 if quality == "thumbnail" else 1600
+    auto_transform = f"c_limit,w_{target_width},f_auto,q_auto"
+
+    if existing_transforms:
+        if "f_auto" in existing_transforms and "w_" in existing_transforms:
+            transforms_to_use = existing_transforms
+        else:
+            transforms_to_use = f"{existing_transforms},{auto_transform}"
+    else:
+        transforms_to_use = auto_transform
+
+    return f"{prefix}{transforms_to_use}/{rest}"
 
 
 def _parse_bool(value: Optional[str]) -> bool:
@@ -615,8 +678,8 @@ async def bulk_upload_single_products(
         )
         for display_order, image_url in enumerate(image_urls):
             product.images.append(ProductImage(
-                image_url=image_url,
-                thumbnail_url=image_url,
+                image_url=_optimize_bulk_image_url(image_url, "high"),
+                thumbnail_url=_optimize_bulk_image_url(image_url, "thumbnail"),
                 display_order=display_order,
                 is_primary=display_order == 0,
             ))
@@ -792,8 +855,16 @@ async def bulk_upload_variable_products(
                 "color_hex": color_hex,
                 "price": variation_price,
                 "sale_price": variation_sale_price,
+                "images": [],
                 "sizes": [],
             }
+
+        for img_url in row_image_urls:
+            if (
+                img_url not in variations[variation_key]["images"]
+                and len(variations[variation_key]["images"]) < 5
+            ):
+                variations[variation_key]["images"].append(img_url)
 
         variations[variation_key]["sizes"].append(
             {"size": size, "stock": stock}
@@ -852,13 +923,17 @@ async def bulk_upload_variable_products(
         for display_order, image_url in enumerate(group["images"]):
             db.add(ProductImage(
                 product_id=product.id,
-                image_url=image_url,
-                thumbnail_url=image_url,
+                image_url=_optimize_bulk_image_url(image_url, "high"),
+                thumbnail_url=_optimize_bulk_image_url(image_url, "thumbnail"),
                 display_order=display_order,
                 is_primary=display_order == 0,
             ))
 
         for variation_data in group["variations"].values():
+            var_images = [
+                _optimize_bulk_image_url(u, "high")
+                for u in variation_data.get("images", [])
+            ]
             variation = Variation(
                 product_id=product.id,
                 title=variation_data["title"],
@@ -871,7 +946,7 @@ async def bulk_upload_variable_products(
                     variation_data["sale_price"] is None
                     and variation_data["price"] is None
                 ),
-                images=[],
+                images=var_images,
                 is_active=True,
             )
             db.add(variation)
@@ -1381,9 +1456,13 @@ async def create_variant(
         and variant_data.color is None
         and not explicit_inventory
     )
+    inherits_price = (
+        not product.variations
+        and variant_data.price == product.base_price
+    )
     variant = ProductVariant(
         product_id=product_id,
-        inherits_price=False,
+        inherits_price=inherits_price,
         inherits_stock=inherits_stock,
         size=variant_data.size,
         color=variant_data.color,
