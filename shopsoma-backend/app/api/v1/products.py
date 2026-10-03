@@ -1510,6 +1510,14 @@ async def create_variant(
             detail="Product not found"
         )
 
+    try:
+        validate_variation_inventory_shape(product.variations, [*product.variants, variant_data])
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=[{"loc": ["body"], "msg": str(exc), "type": "value_error"}],
+        ) from exc
+
     if variant_data.size:
         size_cand = variant_data.size.strip().casefold()
         v_sizes_res = await db.execute(
@@ -1528,14 +1536,6 @@ async def create_variant(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Size option '{variant_data.size}' already exists for this product",
             )
-
-    try:
-        validate_variation_inventory_shape(product.variations, [*product.variants, variant_data])
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=[{"loc": ["body"], "msg": str(exc), "type": "value_error"}],
-        ) from exc
 
     explicit_inventory = bool(
         {"stock", "is_available"} & variant_data.model_fields_set
