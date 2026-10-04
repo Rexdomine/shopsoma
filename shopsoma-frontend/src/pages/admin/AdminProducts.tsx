@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { Search, CheckCircle, XCircle, Eye, Package, AlertCircle, Edit2, Trash2 } from 'lucide-react';
 import AdminSidebar from '../../components/admin/AdminSidebar';
 import { adminService } from '../../services/adminService';
@@ -53,11 +53,30 @@ export const sameTimestamp = (left: string, right: string): boolean => {
 
 export default function AdminProducts() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { currentCurrency, setCurrency, exchangeRates, fetchExchangeRate } = useCurrencyStore();
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
-  const [page, setPage] = useState(1);
+  const pageParam = parseInt(searchParams.get('page') || '1', 10);
+  const page = Number.isInteger(pageParam) && pageParam > 0 ? pageParam : 1;
+
+  const setPage = (newPageOrUpdater: number | ((prev: number) => number)) => {
+    setSearchParams((prevParams) => {
+      const currentPage = parseInt(prevParams.get('page') || '1', 10);
+      const current = Number.isInteger(currentPage) && currentPage > 0 ? currentPage : 1;
+      const next = typeof newPageOrUpdater === 'function' ? newPageOrUpdater(current) : newPageOrUpdater;
+      const validNext = Math.max(1, next);
+      const nextParams = new URLSearchParams(prevParams);
+      if (validNext > 1) {
+        nextParams.set('page', String(validNext));
+      } else {
+        nextParams.delete('page');
+      }
+      return nextParams;
+    });
+  };
   const [totalPages, setTotalPages] = useState(1);
   const [total, setTotal] = useState(0);
   const [moderationFilter, setModerationFilter] = useState<string>('pending');
@@ -294,11 +313,15 @@ export default function AdminProducts() {
   };
 
   const handleViewProduct = (productId: string) => {
-    navigate(`${ROUTES.ADMIN_PRODUCTS}/${productId}`);
+    navigate(`${ROUTES.ADMIN_PRODUCTS}/${productId}`, {
+      state: { from: `${location.pathname}${location.search}` },
+    });
   };
 
   const handleEditProduct = (productId: string) => {
-    navigate(`${ROUTES.ADMIN_PRODUCTS}/${productId}/edit`);
+    navigate(`${ROUTES.ADMIN_PRODUCTS}/${productId}/edit`, {
+      state: { from: `${location.pathname}${location.search}` },
+    });
   };
 
   const handleFeatureToggle = async (product: Product) => {

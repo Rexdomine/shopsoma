@@ -14,7 +14,8 @@ def test_migration_graph_has_exactly_one_head() -> None:
 
     heads = script.get_heads()
 
-    assert heads == ["y8z9a0b1c2d3"]
+    assert heads == ["z9a0b1c2d3e4"]
+    assert script.get_revision("z9a0b1c2d3e4").down_revision == "y8z9a0b1c2d3"
     assert script.get_revision("y8z9a0b1c2d3").down_revision == "x7y8z9a0b1c2"
     assert script.get_revision("x7y8z9a0b1c2").down_revision == "w6x7y8z9a0b1"
     assert script.get_revision("w6x7y8z9a0b1").down_revision == "v5w6x7y8z9a0"

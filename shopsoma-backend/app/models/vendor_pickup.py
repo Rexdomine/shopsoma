@@ -41,6 +41,13 @@ class VendorPickup(Base):
     order_type = Column(SQLEnum(OrderType), nullable=False, default=OrderType.RTW)
     estimated_production_days = Column(Integer, nullable=True)  # For made-to-order
 
+    # Made-to-order readiness (per order item). NULL means the vendor has not yet
+    # confirmed the item is finished; a timestamp means "ready for Shopsoma pickup".
+    ready_for_pickup_at = Column(DateTime(timezone=True), nullable=True)
+    ready_for_pickup_marked_by = Column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
     # Pickup Details
     scheduled_pickup_date = Column(DateTime(timezone=True), nullable=True)
     actual_pickup_date = Column(DateTime(timezone=True), nullable=True)

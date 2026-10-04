@@ -12,7 +12,25 @@ import type { Category } from '../../types';
 import ProductList from './ProductList';
 
 export default function WomenStorefront() {
-  const [womenCategoryId, setWomenCategoryId] = useState<string | null>(WOMEN_CATEGORY_ID);
+  const [womenCategoryId, setWomenCategoryId] = useState<string | null>(() => {
+    if (typeof window === 'undefined') return WOMEN_CATEGORY_ID;
+    const cacheKey = 'shopsoma_primary_categories';
+    const cachedRaw = sessionStorage.getItem(cacheKey);
+    if (cachedRaw) {
+      try {
+        const cached = JSON.parse(cachedRaw) as { categories: { id: string; name?: string }[] };
+        const cachedWomen = cached.categories?.find(
+          (category) => category.name?.toLowerCase() === 'women'
+        );
+        if (cachedWomen?.id) {
+          return cachedWomen.id;
+        }
+      } catch {
+        sessionStorage.removeItem(cacheKey);
+      }
+    }
+    return WOMEN_CATEGORY_ID;
+  });
   const [categoryLoading, setCategoryLoading] = useState(false);
   const [subcategories, setSubcategories] = useState<Category[]>(() => {
     const cacheKey = `shopsoma_subcategories_${WOMEN_CATEGORY_ID}`;

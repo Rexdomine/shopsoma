@@ -224,6 +224,7 @@ class VendorPickupResponse(VendorPickupBase):
     driver_phone: Optional[str]
 
     status: str
+    ready_for_pickup_at: Optional[datetime] = None
 
     qc_center_arrival_date: Optional[datetime]
     qc_approved_date: Optional[datetime]

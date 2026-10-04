@@ -29,6 +29,13 @@ export type PickupStatus =
   | 'shipped_to_customer'
   | 'completed'
   | 'cancelled';
+/** Derived per-item made-to-order lifecycle; null for ready-to-wear items. */
+export type ReadinessState =
+  | 'being_prepared'
+  | 'ready_for_pickup'
+  | 'pickup_scheduled'
+  | 'picked_up'
+  | 'cancelled';
 
 export interface CustomerInfo {
   id: string;
@@ -71,10 +78,18 @@ export interface OrderItemDetail {
   vendor_payout: number;
   fulfillment_status: FulfillmentStatus;
   vendor: VendorInfo;
+  /** True when the item is made to order (vendor must mark it ready first). */
+  made_to_order?: boolean;
+  ready_for_pickup_at?: string | null;
+  readiness_state?: ReadinessState | null;
+  /** The per-item vendor pickup this item is collected through. */
+  pickup?: PickupInfo | null;
 }
 
 export interface PickupInfo {
   id: string;
+  order_item_id?: string;
+  vendor_id?: string;
   status: PickupStatus;
   scheduled_pickup_date?: string;
   actual_pickup_date?: string;
@@ -90,6 +105,7 @@ export interface PickupInfo {
   qc_notes?: string;
   vendor_notes?: string;
   admin_notes?: string;
+  ready_for_pickup_at?: string | null;
 }
 
 export interface ReadyPackageInfo {

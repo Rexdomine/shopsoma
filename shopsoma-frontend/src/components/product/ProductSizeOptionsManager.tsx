@@ -23,6 +23,35 @@ const PRESET_SIZING_SYSTEMS = {
 
 type SizingSystem = keyof typeof PRESET_SIZING_SYSTEMS | 'Custom';
 
+const SYSTEM_BUTTON_CONFIG: Record<
+  SizingSystem,
+  { label: string; sub: string }
+> = {
+  'US Sizing': { label: 'US', sub: 'Sizing' },
+  'UK Sizing': { label: 'UK', sub: 'Sizing' },
+  'EU Sizing': { label: 'EU', sub: 'Sizing' },
+  'One/Size': { label: 'One /', sub: 'Size' },
+  'Custom': { label: 'Custom', sub: 'Size' },
+};
+
+const detectSizingSystem = (size: string): SizingSystem => {
+  const trimmed = (size || '').trim();
+  if (!trimmed) return 'US Sizing';
+  if (trimmed.toLowerCase() === 'one/size' || trimmed.toLowerCase() === 'one size') {
+    return 'One/Size';
+  }
+  if ((PRESET_SIZING_SYSTEMS['US Sizing'] as readonly string[]).includes(trimmed)) {
+    return 'US Sizing';
+  }
+  if ((PRESET_SIZING_SYSTEMS['UK Sizing'] as readonly string[]).includes(trimmed)) {
+    return 'UK Sizing';
+  }
+  if ((PRESET_SIZING_SYSTEMS['EU Sizing'] as readonly string[]).includes(trimmed)) {
+    return 'EU Sizing';
+  }
+  return 'Custom';
+};
+
 export default function ProductSizeOptionsManager({
   productId,
   initialVariants = [],
@@ -48,6 +77,7 @@ export default function ProductSizeOptionsManager({
 
   // Edit modal state
   const [editingVariant, setEditingVariant] = useState<ProductVariant | null>(null);
+  const [editSystem, setEditSystem] = useState<SizingSystem>('US Sizing');
   const [editSize, setEditSize] = useState('');
   const [editStock, setEditStock] = useState('0');
   const [editPrice, setEditPrice] = useState('');
@@ -103,19 +133,24 @@ export default function ProductSizeOptionsManager({
   };
 
   const handleOpenAddModal = () => {
-    setNewSize('');
+    setSelectedSystem('US Sizing');
+    const available = PRESET_SIZING_SYSTEMS['US Sizing'].find(
+      (s) => !existingSizeLabels.has(s.toLowerCase())
+    );
+    setNewSize(available || '');
     setNewStock(madeToOrder ? '0' : '10');
     setNewPrice(basePrice > 0 ? basePrice.toString() : '');
     setNewIsAvailable(true);
-    setSelectedSystem('US Sizing');
     setErrorMsg(null);
     setSuccessMsg(null);
     setIsAddModalOpen(true);
   };
 
   const handleOpenEditModal = (variant: ProductVariant) => {
+    const sizeVal = variant.size || 'One/Size';
     setEditingVariant(variant);
-    setEditSize(variant.size || 'One/Size');
+    setEditSystem(detectSizingSystem(sizeVal));
+    setEditSize(sizeVal);
     setEditStock((variant.stock ?? 0).toString());
     setEditPrice((variant.price ?? basePrice).toString());
     setEditIsAvailable(variant.is_available ?? true);
@@ -379,7 +414,7 @@ export default function ProductSizeOptionsManager({
                       {/* Size */}
                       <td className="py-3.5 px-4">
                         <div className="flex items-center gap-2">
-                          <span className="inline-flex items-center justify-center min-w-[32px] h-8 px-2.5 rounded-lg bg-gray-100 border border-gray-200 font-bold text-gray-900 text-xs shadow-xs">
+                          <span className="inline-flex items-center justify-center min-w-[36px] h-8 px-3 rounded-lg bg-gray-100 border border-gray-200 font-bold text-gray-900 text-xs shadow-xs whitespace-nowrap">
                             {sizeLabel}
                           </span>
                           {variant.color && (
@@ -505,71 +540,74 @@ export default function ProductSizeOptionsManager({
                         setSelectedSystem(sys);
                         if (sys === 'One/Size') {
                           setNewSize('One/Size');
+                        } else if (sys === 'Custom') {
+                          setNewSize('');
+                        } else {
+                          const available = PRESET_SIZING_SYSTEMS[sys].find(
+                            (s) => !existingSizeLabels.has(s.toLowerCase())
+                          );
+                          setNewSize(available || '');
                         }
                       }}
-                      className={`px-2.5 py-1.5 text-xs font-medium rounded-lg border transition text-center ${
+                      className={`w-full px-1.5 py-2 text-xs rounded-lg border transition text-center flex flex-col items-center justify-center min-h-[46px] leading-tight ${
                         selectedSystem === sys
                           ? `${primaryBorder} ${primaryText} bg-gray-50 font-semibold ring-1 ${primaryRing}`
                           : 'border-gray-200 text-gray-600 hover:bg-gray-50'
                       }`}
                     >
-                      {sys}
+                      <span className="font-semibold text-xs whitespace-nowrap">{SYSTEM_BUTTON_CONFIG[sys].label}</span>
+                      <span className="text-[10px] opacity-80 whitespace-nowrap">{SYSTEM_BUTTON_CONFIG[sys].sub}</span>
                     </button>
                   ))}
                 </div>
               </div>
 
-              {/* Preset Chips */}
-              {selectedSystem !== 'Custom' && (
+              {/* Size Label selector: Dropdown for presets, free text only for Custom */}
+              {selectedSystem !== 'Custom' ? (
                 <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1.5">
-                    Select {selectedSystem} Option:
+                  <label htmlFor="newSizeSelect" className="block text-xs font-semibold text-gray-700 mb-1">
+                    Size Label *
                   </label>
-                  <div className="flex flex-wrap gap-1.5">
+                  <select
+                    id="newSizeSelect"
+                    value={newSize}
+                    onChange={(e) => setNewSize(e.target.value)}
+                    required
+                    className={`w-full rounded-lg border border-gray-300 bg-white px-3.5 py-2.5 text-xs text-gray-900 focus:outline-none ${primaryRing} focus:ring-2`}
+                  >
+                    <option value="">-- Select a size --</option>
                     {PRESET_SIZING_SYSTEMS[selectedSystem].map((sizeOpt) => {
                       const alreadyAdded = existingSizeLabels.has(sizeOpt.toLowerCase());
-                      const isSelected = newSize === sizeOpt;
-
                       return (
-                        <button
-                          key={sizeOpt}
-                          type="button"
-                          disabled={alreadyAdded}
-                          onClick={() => setNewSize(sizeOpt)}
-                          className={`px-3 py-1.5 text-xs rounded-lg border transition font-medium ${
-                            alreadyAdded
-                              ? 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed line-through'
-                              : isSelected
-                              ? `${primaryBg} text-white border-transparent shadow-xs font-semibold`
-                              : 'bg-white text-gray-700 border-gray-300 hover:border-gray-400'
-                          }`}
-                        >
-                          {sizeOpt}
-                        </button>
+                        <option key={sizeOpt} value={sizeOpt} disabled={alreadyAdded}>
+                          {sizeOpt} {alreadyAdded ? '(Already added)' : ''}
+                        </option>
                       );
                     })}
-                  </div>
+                  </select>
                   {existingSizeLabels.has(newSize.toLowerCase()) && (
                     <p className="text-[11px] text-red-500 mt-1">This size is already configured for this product.</p>
                   )}
                 </div>
+              ) : (
+                <div>
+                  <label htmlFor="newSizeInput" className="block text-xs font-semibold text-gray-700 mb-1">
+                    Size Label * <span className="font-normal text-gray-500">(Custom Size)</span>
+                  </label>
+                  <input
+                    id="newSizeInput"
+                    type="text"
+                    value={newSize}
+                    onChange={(e) => setNewSize(e.target.value)}
+                    placeholder="e.g. Tailored Fit, Made to measure, 42R"
+                    required
+                    className={`w-full rounded-lg border border-gray-300 bg-white px-3.5 py-2.5 text-xs text-gray-900 focus:outline-none ${primaryRing} focus:ring-2`}
+                  />
+                  {existingSizeLabels.has(newSize.trim().toLowerCase()) && (
+                    <p className="text-[11px] text-red-500 mt-1">This size is already configured for this product.</p>
+                  )}
+                </div>
               )}
-
-              {/* Custom Size input (or if Custom selected) */}
-              <div>
-                <label htmlFor="newSizeInput" className="block text-xs font-semibold text-gray-700 mb-1">
-                  Size Label *
-                </label>
-                <input
-                  id="newSizeInput"
-                  type="text"
-                  value={newSize}
-                  onChange={(e) => setNewSize(e.target.value)}
-                  placeholder="e.g. S, M, XL, 38, One/Size"
-                  required
-                  className={`w-full rounded-lg border border-gray-300 bg-white px-3.5 py-2 text-xs text-gray-900 focus:outline-none ${primaryRing} focus:ring-2`}
-                />
-              </div>
 
               {/* Stock and Price row */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -660,7 +698,7 @@ export default function ProductSizeOptionsManager({
       {/* ========================================================================= */}
       {editingVariant && (
         <div className="fixed inset-0 z-50 overflow-y-auto bg-black/50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl shadow-xl max-w-md w-full overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+          <div className="bg-white rounded-xl shadow-xl max-w-lg w-full overflow-hidden animate-in fade-in zoom-in-95 duration-150">
             <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
               <div>
                 <h3 className="text-base font-semibold text-gray-900">Edit Size Option</h3>
@@ -676,20 +714,94 @@ export default function ProductSizeOptionsManager({
             </div>
 
             <form onSubmit={handleUpdateVariant} className="p-6 space-y-4">
+              {/* Presets system tabs for Edit */}
               <div>
-                <label htmlFor="editSizeInput" className="block text-xs font-semibold text-gray-700 mb-1">
-                  Size Label *
+                <label className="block text-xs font-semibold text-gray-700 mb-1.5">
+                  Sizing System Preset
                 </label>
-                <input
-                  id="editSizeInput"
-                  type="text"
-                  value={editSize}
-                  onChange={(e) => setEditSize(e.target.value)}
-                  placeholder="e.g. S, M, XL, 38, One/Size"
-                  required
-                  className={`w-full rounded-lg border border-gray-300 bg-white px-3.5 py-2 text-xs text-gray-900 focus:outline-none ${primaryRing} focus:ring-2`}
-                />
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-1.5">
+                  {(['US Sizing', 'UK Sizing', 'EU Sizing', 'One/Size', 'Custom'] as const).map((sys) => (
+                    <button
+                      key={sys}
+                      type="button"
+                      onClick={() => {
+                        setEditSystem(sys);
+                        if (sys === 'One/Size') {
+                          setEditSize('One/Size');
+                        } else if (sys === 'Custom') {
+                          // Keep existing size in text input
+                        } else {
+                          const inSys = (PRESET_SIZING_SYSTEMS[sys] as readonly string[]).includes(editSize);
+                          if (!inSys) {
+                            const available = PRESET_SIZING_SYSTEMS[sys].find(
+                              (s) => s.toLowerCase() === (editingVariant?.size || '').toLowerCase() || !existingSizeLabels.has(s.toLowerCase())
+                            );
+                            setEditSize(available || '');
+                          }
+                        }
+                      }}
+                      className={`w-full px-1.5 py-2 text-xs rounded-lg border transition text-center flex flex-col items-center justify-center min-h-[46px] leading-tight ${
+                        editSystem === sys
+                          ? `${primaryBorder} ${primaryText} bg-gray-50 font-semibold ring-1 ${primaryRing}`
+                          : 'border-gray-200 text-gray-600 hover:bg-gray-50'
+                      }`}
+                    >
+                      <span className="font-semibold text-xs whitespace-nowrap">{SYSTEM_BUTTON_CONFIG[sys].label}</span>
+                      <span className="text-[10px] opacity-80 whitespace-nowrap">{SYSTEM_BUTTON_CONFIG[sys].sub}</span>
+                    </button>
+                  ))}
+                </div>
               </div>
+
+              {/* Size Label selector: Dropdown for presets, free text only for Custom */}
+              {editSystem !== 'Custom' ? (
+                <div>
+                  <label htmlFor="editSizeSelect" className="block text-xs font-semibold text-gray-700 mb-1">
+                    Size Label *
+                  </label>
+                  <select
+                    id="editSizeSelect"
+                    value={editSize}
+                    onChange={(e) => setEditSize(e.target.value)}
+                    required
+                    className={`w-full rounded-lg border border-gray-300 bg-white px-3.5 py-2.5 text-xs text-gray-900 focus:outline-none ${primaryRing} focus:ring-2`}
+                  >
+                    <option value="">-- Select a size --</option>
+                    {PRESET_SIZING_SYSTEMS[editSystem].map((sizeOpt) => {
+                      const isCurrent = sizeOpt.toLowerCase() === (editingVariant?.size || '').toLowerCase();
+                      const alreadyAdded = !isCurrent && existingSizeLabels.has(sizeOpt.toLowerCase());
+                      return (
+                        <option key={sizeOpt} value={sizeOpt} disabled={alreadyAdded}>
+                          {sizeOpt} {alreadyAdded ? '(Already configured)' : ''}
+                        </option>
+                      );
+                    })}
+                  </select>
+                  {editSize.toLowerCase() !== (editingVariant.size || '').toLowerCase() &&
+                    existingSizeLabels.has(editSize.toLowerCase()) && (
+                      <p className="text-[11px] text-red-500 mt-1">This size is already configured for this product.</p>
+                    )}
+                </div>
+              ) : (
+                <div>
+                  <label htmlFor="editSizeInput" className="block text-xs font-semibold text-gray-700 mb-1">
+                    Size Label * <span className="font-normal text-gray-500">(Custom Size)</span>
+                  </label>
+                  <input
+                    id="editSizeInput"
+                    type="text"
+                    value={editSize}
+                    onChange={(e) => setEditSize(e.target.value)}
+                    placeholder="e.g. Tailored Fit, Made to measure, 42R"
+                    required
+                    className={`w-full rounded-lg border border-gray-300 bg-white px-3.5 py-2.5 text-xs text-gray-900 focus:outline-none ${primaryRing} focus:ring-2`}
+                  />
+                  {editSize.toLowerCase() !== (editingVariant.size || '').toLowerCase() &&
+                    existingSizeLabels.has(editSize.trim().toLowerCase()) && (
+                      <p className="text-[11px] text-red-500 mt-1">This size is already configured for this product.</p>
+                    )}
+                </div>
+              )}
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
