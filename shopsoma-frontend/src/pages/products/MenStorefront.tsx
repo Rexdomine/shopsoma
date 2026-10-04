@@ -12,7 +12,25 @@ import ProductList from './ProductList';
 import type { Category } from '../../types';
 
 export default function MenStorefront() {
-  const [menCategoryId, setMenCategoryId] = useState<string | null>(MEN_CATEGORY_ID);
+  const [menCategoryId, setMenCategoryId] = useState<string | null>(() => {
+    if (typeof window === 'undefined') return MEN_CATEGORY_ID;
+    const cacheKey = 'shopsoma_primary_categories';
+    const cachedRaw = sessionStorage.getItem(cacheKey);
+    if (cachedRaw) {
+      try {
+        const cached = JSON.parse(cachedRaw) as { categories: { id: string; name?: string }[] };
+        const cachedMen = cached.categories?.find(
+          (category) => category.name?.toLowerCase() === 'men'
+        );
+        if (cachedMen?.id) {
+          return cachedMen.id;
+        }
+      } catch {
+        sessionStorage.removeItem(cacheKey);
+      }
+    }
+    return MEN_CATEGORY_ID;
+  });
   const [categoryLoading, setCategoryLoading] = useState(false);
   const [subcategories, setSubcategories] = useState<Category[]>(() => {
     const cacheKey = `shopsoma_subcategories_${MEN_CATEGORY_ID}`;

@@ -42,6 +42,11 @@ from app.services.commission import get_default_commission_rate
 from app.services.vendor_onboarding import reconcile_vendor_onboarding
 from app.services.image_service import image_service
 from app.services.product_image_storage import lock_and_validate_featured_storefront_key
+from app.services.orders.made_to_order_readiness import (
+    ReadinessError,
+    mark_item_ready_for_pickup,
+    readiness_fields,
+)
 
 router = APIRouter(prefix="/vendor", tags=["Vendors"])
 logger = logging.getLogger(__name__)
@@ -670,28 +675,7 @@ async def get_vendor_order(
     serialized_items = []
     for item in vendor_items:
         # Serialize pickup information if available
-        pickup_data = None
-        if item.pickup:
-            pickup_data = {
-                "id": str(item.pickup.id),
-                "order_type": item.pickup.order_type.value,
-                "scheduled_pickup_date": item.pickup.scheduled_pickup_date.isoformat() if item.pickup.scheduled_pickup_date else None,
-                "actual_pickup_date": item.pickup.actual_pickup_date.isoformat() if item.pickup.actual_pickup_date else None,
-                "pickup_window_start": item.pickup.pickup_window_start.isoformat() if item.pickup.pickup_window_start else None,
-                "pickup_window_end": item.pickup.pickup_window_end.isoformat() if item.pickup.pickup_window_end else None,
-                "pickup_address": item.pickup.pickup_address,
-                "courier_name": item.pickup.courier_name,
-                "rider_id": item.pickup.rider_id,
-                "logistics_partner": item.pickup.logistics_partner,
-                "tracking_number": item.pickup.tracking_number,
-                "status": item.pickup.status.value,
-                "qc_center_arrival_date": item.pickup.qc_center_arrival_date.isoformat() if item.pickup.qc_center_arrival_date else None,
-                "qc_approved_date": item.pickup.qc_approved_date.isoformat() if item.pickup.qc_approved_date else None,
-                "qc_notes": item.pickup.qc_notes,
-                "vendor_notes": item.pickup.vendor_notes,
-                "created_at": item.pickup.created_at.isoformat() if item.pickup.created_at else None,
-                "completed_at": item.pickup.completed_at.isoformat() if item.pickup.completed_at else None,
-            }
+        pickup_data = _serialize_vendor_pickup(item.pickup)
 
         # Get product image (prefer thumbnail, fallback to primary image)
         product_image_url = None
@@ -721,6 +705,7 @@ async def get_vendor_order(
             "created_at": item.created_at.isoformat() if item.created_at else None,
             "pickup": pickup_data,
             "product_image_url": product_image_url,
+            **_serialize_item_readiness(item, item.pickup),
         })
 
     return {
@@ -748,6 +733,124 @@ async def get_vendor_order(
 
 # NOTE: Vendors cannot update fulfillment status - only admin can do this
 # Fulfillment status is managed by Shopsoma logistics team through admin panel
+
+
+def _iso(value: Optional[datetime]) -> Optional[str]:
+    return value.isoformat() if value else None
+
+
+def _serialize_vendor_pickup(pickup: Optional[VendorPickup]) -> Optional[dict]:
+    if pickup is None:
+        return None
+    return {
+        "id": str(pickup.id),
+        "order_type": pickup.order_type.value,
+        "scheduled_pickup_date": _iso(pickup.scheduled_pickup_date),
+        "actual_pickup_date": _iso(pickup.actual_pickup_date),
+        "pickup_window_start": _iso(pickup.pickup_window_start),
+        "pickup_window_end": _iso(pickup.pickup_window_end),
+        "pickup_address": pickup.pickup_address,
+        "courier_name": pickup.courier_name,
+        "rider_id": pickup.rider_id,
+        "logistics_partner": pickup.logistics_partner,
+        "tracking_number": pickup.tracking_number,
+        "status": pickup.status.value,
+        "ready_for_pickup_at": _iso(pickup.ready_for_pickup_at),
+        "qc_center_arrival_date": _iso(pickup.qc_center_arrival_date),
+        "qc_approved_date": _iso(pickup.qc_approved_date),
+        "qc_notes": pickup.qc_notes,
+        "vendor_notes": pickup.vendor_notes,
+        "created_at": _iso(pickup.created_at),
+        "completed_at": _iso(pickup.completed_at),
+    }
+
+
+def _serialize_item_readiness(item: OrderItem, pickup: Optional[VendorPickup]) -> dict:
+    fields = readiness_fields(item, pickup)
+    fields["ready_for_pickup_at"] = _iso(fields["ready_for_pickup_at"])
+    return fields
+
+
+def _variant_summary(variant_details: Optional[dict]) -> Optional[str]:
+    if not isinstance(variant_details, dict):
+        return None
+    parts = []
+    if variant_details.get("size"):
+        parts.append(f"Size: {variant_details['size']}")
+    if variant_details.get("color"):
+        parts.append(f"Color: {variant_details['color']}")
+    return " • ".join(parts) or None
+
+
+@router.post("/orders/{order_id}/items/{item_id}/ready-for-pickup", response_model=dict)
+async def mark_order_item_ready_for_pickup(
+    order_id: UUID,
+    item_id: UUID,
+    background_tasks: BackgroundTasks,
+    vendor: Vendor = Depends(get_approved_vendor),
+    db: AsyncSession = Depends(get_db),
+):
+    """Vendor confirms a made-to-order item is finished and ready for Shopsoma pickup.
+
+    Idempotent: repeat requests return the existing ready state and never send a
+    second admin notification. Scheduling/pickup remain admin-only.
+    """
+    try:
+        result = await mark_item_ready_for_pickup(
+            db,
+            vendor=vendor,
+            order_id=order_id,
+            order_item_id=item_id,
+            actor_user_id=vendor.user_id,
+        )
+    except ReadinessError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    if result.transitioned:
+        log_order_number = result.order.order_number
+        log_item_id = str(result.item.id)
+        try:
+            admin_recipients = await _build_admin_recipients(db)
+            customer = result.order.customer
+            email_payload = {
+                "recipients": admin_recipients,
+                "order_id": str(result.order.id),
+                "order_number": result.order.order_number,
+                "customer_name": customer.full_name if customer else None,
+                "customer_email": customer.email if customer else None,
+                "vendor_name": vendor.business_name,
+                "product_title": result.item.product_title,
+                "quantity": result.item.quantity,
+                "ready_at": result.pickup.ready_for_pickup_at,
+                "variant_summary": _variant_summary(result.item.variant_details),
+            }
+
+            async def _send_ready_for_pickup_email():
+                try:
+                    await email_service.send_admin_made_to_order_ready_email(**email_payload)
+                except Exception:
+                    logger.exception(
+                        "[MTO Ready] Failed to send admin email order=%s item=%s",
+                        log_order_number,
+                        log_item_id,
+                    )
+
+            background_tasks.add_task(_send_ready_for_pickup_email)
+        except Exception:
+            logger.exception(
+                "[MTO Ready] Failed to queue admin email order=%s item=%s",
+                log_order_number,
+                log_item_id,
+            )
+
+    return {
+        "order_id": str(result.order.id),
+        "order_item_id": str(result.item.id),
+        "already_ready": not result.transitioned,
+        "pickup": _serialize_vendor_pickup(result.pickup),
+        **_serialize_item_readiness(result.item, result.pickup),
+    }
 
 
 # ==================== VENDOR PICKUPS ====================

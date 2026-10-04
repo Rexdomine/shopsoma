@@ -14,10 +14,18 @@ import {
 } from 'lucide-react';
 import VendorSidebar from '../../components/vendor/VendorSidebar';
 import { ROUTES } from '../../config/constants';
-import { getVendorOrder, type VendorOrder, type VendorPickup } from '../../services/orderService';
+import {
+  getVendorOrder,
+  markVendorOrderItemReadyForPickup,
+  type VendorOrder,
+  type VendorOrderItem,
+  type VendorPickup,
+} from '../../services/orderService';
 import { useToast } from '../../hooks/useToast';
 import ToastContainer from '../../components/ui/ToastContainer';
 import { useCurrency } from '../../hooks/useCurrency';
+import MadeToOrderReadinessBadge, { MadeToOrderTag } from '../../components/orders/MadeToOrderReadinessBadge';
+import { formatReadyAt } from '../../utils/madeToOrderReadiness';
 
 type VendorSidebarPrimary = 'dashboard' | 'orders' | 'products' | 'collections' | 'marketing' | 'analytics' | 'earnings' | 'settings';
 
@@ -26,6 +34,96 @@ function StatusPill({ label, tone = 'neutral' }: { label: string; tone?: 'succes
   if (tone === 'success') return <span className={`${base} bg-emerald-50 text-emerald-700`}>{label}</span>;
   if (tone === 'warning') return <span className={`${base} bg-amber-50 text-amber-700`}>{label}</span>;
   return <span className={`${base} bg-gray-100 text-gray-700`}>{label}</span>;
+}
+
+// Per-item made-to-order readiness (vendor can only move being_prepared -> ready)
+function MadeToOrderReadinessPanel({
+  item,
+  canMarkReady,
+  isConfirming,
+  isSubmitting,
+  onRequestConfirm,
+  onCancelConfirm,
+  onConfirm,
+}: {
+  item: VendorOrderItem;
+  canMarkReady: boolean;
+  isConfirming: boolean;
+  isSubmitting: boolean;
+  onRequestConfirm: () => void;
+  onCancelConfirm: () => void;
+  onConfirm: () => void;
+}) {
+  const state = item.readiness_state ?? 'being_prepared';
+  const readyAt = formatReadyAt(item.ready_for_pickup_at);
+  const pickup = item.pickup;
+  const windowStart = pickup?.pickup_window_start || pickup?.scheduled_pickup_date;
+
+  return (
+    <div className="mt-3 rounded-xl border border-gray-200 bg-gray-50 p-3 space-y-2" data-testid={`mto-panel-${item.id}`}>
+      <div className="flex flex-wrap items-center gap-2">
+        <MadeToOrderTag />
+        <MadeToOrderReadinessBadge
+          state={state}
+          label={state === 'being_prepared' ? 'Being prepared' : undefined}
+        />
+      </div>
+
+      {readyAt && (
+        <p className="text-xs text-gray-600">Marked ready: {readyAt}</p>
+      )}
+      {state === 'pickup_scheduled' && windowStart && (
+        <p className="text-xs text-gray-600">
+          Shopsoma pickup: {formatReadyAt(windowStart)}
+          {pickup?.pickup_window_end ? ` – ${formatReadyAt(pickup.pickup_window_end)}` : ''}
+        </p>
+      )}
+
+      {state === 'being_prepared' && (
+        canMarkReady ? (
+          isConfirming ? (
+            <div className="space-y-2">
+              <p className="text-xs text-gray-700">
+                Confirm this item is finished and ready for Shopsoma to collect. Shopsoma will be notified to schedule a pickup.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={onConfirm}
+                  disabled={isSubmitting}
+                  className="inline-flex items-center gap-2 rounded-full bg-[#105E53] px-4 py-2 text-xs font-semibold text-white hover:bg-[#0d4d44] disabled:opacity-60"
+                >
+                  {isSubmitting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                  Yes, it's ready
+                </button>
+                <button
+                  type="button"
+                  onClick={onCancelConfirm}
+                  disabled={isSubmitting}
+                  className="rounded-full border border-gray-300 bg-white px-4 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-100 disabled:opacity-60"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={onRequestConfirm}
+              className="inline-flex items-center gap-2 rounded-full bg-[#0B1D2C] px-4 py-2 text-xs font-semibold text-white hover:bg-[#13293b]"
+            >
+              <CheckCircle2 className="h-3.5 w-3.5" />
+              Ready for Shopsoma Pickup
+            </button>
+          )
+        ) : (
+          <p className="text-xs text-gray-500">
+            You can mark this item ready once the order payment is confirmed.
+          </p>
+        )
+      )}
+    </div>
+  );
 }
 
 // Shipping Status Card Component
@@ -240,13 +338,15 @@ export default function VendorOrderDetail() {
   const navigate = useNavigate();
   const location = useLocation();
   const { id } = useParams<{ id: string }>();
-  const { toasts, hideToast, error } = useToast();
+  const { toasts, hideToast, error, success } = useToast();
   const { currentCurrency, setCurrency, formatBasePrice, getCurrencySymbol, fetchExchangeRate } = useCurrency();
 
   const [order, setOrder] = useState<VendorOrder | null>(null);
   const [loading, setLoading] = useState(true);
   const [isShippingModalOpen, setIsShippingModalOpen] = useState(false);
   const [isCurrencyDropdownOpen, setIsCurrencyDropdownOpen] = useState(false);
+  const [confirmReadyItemId, setConfirmReadyItemId] = useState<string | null>(null);
+  const [markingReadyItemId, setMarkingReadyItemId] = useState<string | null>(null);
   const navigationState = location.state as {
     returnTo?: string;
     returnLabel?: string;
@@ -334,6 +434,44 @@ export default function VendorOrderDetail() {
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [isCurrencyDropdownOpen]);
+
+  const handleMarkReady = async (itemId: string) => {
+    if (!order || markingReadyItemId) return;
+    setMarkingReadyItemId(itemId);
+    try {
+      const result = await markVendorOrderItemReadyForPickup(order.id, itemId);
+      setOrder((current) =>
+        current
+          ? {
+              ...current,
+              items: current.items.map((item) =>
+                item.id === result.order_item_id
+                  ? {
+                      ...item,
+                      pickup: result.pickup ?? item.pickup,
+                      made_to_order: result.made_to_order,
+                      ready_for_pickup_at: result.ready_for_pickup_at,
+                      readiness_state: result.readiness_state,
+                    }
+                  : item
+              ),
+            }
+          : current
+      );
+      setConfirmReadyItemId(null);
+      success(
+        result.already_ready
+          ? 'This item was already marked ready for Shopsoma pickup.'
+          : 'Shopsoma has been notified that this item is ready for pickup.',
+        'Ready for pickup'
+      );
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail;
+      error(typeof detail === 'string' && detail ? detail : 'Failed to mark item ready for pickup', 'Error');
+    } finally {
+      setMarkingReadyItemId(null);
+    }
+  };
 
   const getVariantSummary = (variantDetails: VendorOrder['items'][number]['variant_details']) => {
     if (!variantDetails) return null;
@@ -606,6 +744,17 @@ export default function VendorOrderDetail() {
                             <p className="text-xs text-gray-500 mt-1">{variantSummary}</p>
                           )}
                           <p className="text-xs text-gray-500 mt-1">Payout: {formatBasePrice(item.vendor_payout)}</p>
+                          {item.made_to_order && (
+                            <MadeToOrderReadinessPanel
+                              item={item}
+                              canMarkReady={order.payment_status === 'paid' && item.fulfillment_status !== 'cancelled'}
+                              isConfirming={confirmReadyItemId === item.id}
+                              isSubmitting={markingReadyItemId === item.id}
+                              onRequestConfirm={() => setConfirmReadyItemId(item.id)}
+                              onCancelConfirm={() => setConfirmReadyItemId(null)}
+                              onConfirm={() => handleMarkReady(item.id)}
+                            />
+                          )}
                         </div>
                       </div>
                       <div className="flex items-center gap-3 shrink-0 self-start sm:self-center">

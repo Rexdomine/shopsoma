@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   updateShippingInfo: vi.fn(),
   cancelOrder: vi.fn(),
   processRefund: vi.fn(),
+  updatePickupStatus: vi.fn(),
   success: vi.fn(),
   error: vi.fn(),
   warning: vi.fn(),
@@ -67,6 +68,7 @@ vi.mock('../../services/adminOrderService', () => ({
   getDhlLabel: mocks.getDhlLabel,
   recordDhlHandoff: mocks.recordDhlHandoff,
   refreshDhlTracking: mocks.refreshDhlTracking,
+  updatePickupStatus: mocks.updatePickupStatus,
 }));
 
 import AdminOrderDetail from './AdminOrderDetail';
@@ -192,6 +194,68 @@ describe('AdminOrderDetail DHL shipment operations', () => {
     expect(screen.getByRole('heading', { name: 'DHL Shipment Operations' })).toBeInTheDocument();
     expect(screen.getByText(/DHL pickup booking is unavailable/i)).toBeInTheDocument();
     expect(screen.getByText(/Shipment operations are unavailable until backend shipment facts can be loaded/)).toBeInTheDocument();
+  });
+});
+
+describe('AdminOrderDetail made-to-order readiness per vendor/item', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('shows independent readiness per vendor item and only offers scheduling for ready items', async () => {
+    const base = baseOrder();
+    const template = base.items[0];
+    const order: OrderDetail = {
+      ...base,
+      items: [
+        {
+          ...template,
+          id: 'item-a',
+          product_title: 'Trousers',
+          vendor: { id: 'vendor-a', business_name: 'Vendor A' },
+          made_to_order: true,
+          readiness_state: 'ready_for_pickup',
+          ready_for_pickup_at: '2026-10-04T09:30:00Z',
+          pickup: { id: 'pickup-a', status: 'scheduled', ready_for_pickup_at: '2026-10-04T09:30:00Z' },
+        },
+        {
+          ...template,
+          id: 'item-b',
+          product_title: 'Leggings',
+          vendor: { id: 'vendor-b', business_name: 'Vendor B' },
+          made_to_order: true,
+          readiness_state: 'being_prepared',
+          ready_for_pickup_at: null,
+          pickup: { id: 'pickup-b', status: 'scheduled' },
+        },
+        {
+          ...template,
+          id: 'item-c',
+          product_title: 'Ready Tee',
+          vendor: { id: 'vendor-c', business_name: 'Vendor C' },
+          made_to_order: false,
+          readiness_state: null,
+          pickup: { id: 'pickup-c', status: 'scheduled' },
+        },
+      ],
+    };
+    mocks.getOrderDetail.mockResolvedValue(order);
+
+    renderPage();
+    await screen.findByText('Order #1001');
+
+    const panelA = screen.getByTestId('item-pickup-panel-item-a');
+    expect(within(panelA).getByText('Ready for pickup')).toBeInTheDocument();
+    expect(within(panelA).getByText(/Marked ready:/)).toBeInTheDocument();
+    expect(within(panelA).getByRole('button', { name: 'Schedule pickup' })).toBeInTheDocument();
+
+    const panelB = screen.getByTestId('item-pickup-panel-item-b');
+    expect(within(panelB).getByText('Not ready yet')).toBeInTheDocument();
+    expect(within(panelB).queryByRole('button', { name: 'Schedule pickup' })).not.toBeInTheDocument();
+
+    // Ready-to-wear items keep the existing layout (no readiness panel).
+    expect(screen.queryByTestId('item-pickup-panel-item-c')).not.toBeInTheDocument();
+    expect(screen.getByText('Ready Tee')).toBeInTheDocument();
   });
 });
 

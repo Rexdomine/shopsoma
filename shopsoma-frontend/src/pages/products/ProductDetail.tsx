@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, useRef, type SVGProps } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, Bookmark, Minus, Plus, X } from 'lucide-react';
 import type { Product, ProductVariant, SizeGuide } from '../../types';
 import { productService } from '../../services/productService';
@@ -62,6 +62,19 @@ const ShareOutlineIcon = (props: SVGProps<SVGSVGElement>) => (
 export default function ProductDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
+  const returnUrl = (location.state as { from?: string } | null)?.from;
+
+  const handleBack = () => {
+    if (returnUrl) {
+      navigate(returnUrl);
+    } else if (window.history.state && typeof window.history.state.idx === 'number' && window.history.state.idx > 0) {
+      navigate(-1);
+    } else {
+      navigate(ROUTES.PRODUCTS);
+    }
+  };
+
   const addItem = useCartStore((state) => state.addItem);
   const cartError = useCartStore((state) => state.error);
   const { currentCurrency: preferredCurrency, exchangeRates, fetchExchangeRate } = useCurrencyStore();
@@ -703,13 +716,7 @@ export default function ProductDetail() {
       <div className="mx-auto max-w-7xl px-4 sm:px-6 pt-6 pb-2">
         <button
           type="button"
-          onClick={() => {
-            if (window.history.state && window.history.state.idx > 0) {
-              navigate(-1);
-            } else {
-              navigate(ROUTES.PRODUCTS);
-            }
-          }}
+          onClick={handleBack}
           className="inline-flex items-center gap-2 text-xs font-ui uppercase tracking-[0.2em] text-primary/70 hover:text-primary transition"
         >
           <ArrowLeft className="w-4 h-4" />

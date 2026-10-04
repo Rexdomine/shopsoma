@@ -104,7 +104,19 @@ export interface VendorPickup {
   vendor_notes: string | null;
   created_at: string | null;
   completed_at: string | null;
+  ready_for_pickup_at?: string | null;
 }
+
+/**
+ * Derived per-item made-to-order lifecycle (null for ready-to-wear items).
+ * being_prepared -> ready_for_pickup -> pickup_scheduled -> picked_up
+ */
+export type ReadinessState =
+  | 'being_prepared'
+  | 'ready_for_pickup'
+  | 'pickup_scheduled'
+  | 'picked_up'
+  | 'cancelled';
 
 export interface VendorOrderItem {
   id: string;
@@ -122,6 +134,19 @@ export interface VendorOrderItem {
   created_at: string;
   product_image_url?: string;
   pickup: VendorPickup | null;
+  made_to_order?: boolean;
+  ready_for_pickup_at?: string | null;
+  readiness_state?: ReadinessState | null;
+}
+
+export interface MarkReadyForPickupResponse {
+  order_id: string;
+  order_item_id: string;
+  already_ready: boolean;
+  pickup: VendorPickup | null;
+  made_to_order: boolean;
+  ready_for_pickup_at: string | null;
+  readiness_state: ReadinessState | null;
 }
 
 export interface VendorOrder {
@@ -182,6 +207,20 @@ export const getVendorOrders = async (params: {
  */
 export const getVendorOrder = async (orderId: string): Promise<VendorOrder> => {
   const response = await api.get(`/vendor/orders/${orderId}`);
+  return response.data;
+};
+
+/**
+ * Vendor confirms a made-to-order item is finished and ready for Shopsoma pickup.
+ * Idempotent: repeat calls return the existing ready state (already_ready=true).
+ */
+export const markVendorOrderItemReadyForPickup = async (
+  orderId: string,
+  itemId: string
+): Promise<MarkReadyForPickupResponse> => {
+  const response = await api.post<MarkReadyForPickupResponse>(
+    `/vendor/orders/${orderId}/items/${itemId}/ready-for-pickup`
+  );
   return response.data;
 };
 
