@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, ArrowRight, ChevronDown, ChevronLeft, ChevronRight, X } from 'lucide-react';
 import Layout from '../../components/layout/Layout';
 import Loading from '../../components/common/Loading';
@@ -144,6 +144,7 @@ export default function ProductList({
   childCategoryOverrides,
 }: ProductListProps = {}) {
   const [searchParams, setSearchParams] = useSearchParams();
+  const location = useLocation();
   const searchQuery = (searchParams.get('q') || searchParams.get('search') || '').trim();
   const categoryParam = searchParams.get('category') || '';
   const pageParam = parseInt(searchParams.get('page') || '1', 10);
@@ -338,9 +339,11 @@ export default function ProductList({
         setAllProducts(products);
         setError(null);
         // The first page is usable immediately; additional catalog/category pages are background enrichment.
-        setLoading(false);
         if (response.total_pages > 1) {
           setIsEnriching(true);
+        }
+        setLoading(false);
+        if (response.total_pages > 1) {
           for (let nextPage = 2; nextPage <= response.total_pages; nextPage += 1) {
             if (cancelled) return;
             try {
@@ -395,13 +398,19 @@ export default function ProductList({
     };
   }, [initialParamsKey, stableInitialParams]);
 
+  const isFirstParamChangeRef = useRef(true);
   const prevParamsKeyRef = useRef(initialParamsKey);
   useEffect(() => {
     if (prevParamsKeyRef.current !== initialParamsKey) {
       prevParamsKeyRef.current = initialParamsKey;
+      if (isFirstParamChangeRef.current && pageFromUrl > 1) {
+        isFirstParamChangeRef.current = false;
+        return;
+      }
+      isFirstParamChangeRef.current = false;
       handlePageChange(1);
     }
-  }, [initialParamsKey, handlePageChange]);
+  }, [initialParamsKey, handlePageChange, pageFromUrl]);
 
   // Derive interest category from preference
   const interestCategory = preferredInterest === 'menswear' ? 'Men' : preferredInterest === 'womenswear' ? 'Women' : null;
@@ -1233,6 +1242,7 @@ const handleFilterChange = (key: keyof FilterState, value: string, categoryId?: 
                     <>
                       <Link
                         to={`/products/${featuredHoverProduct.id}`}
+                        state={{ from: `${location.pathname}${location.search}` }}
                         className="block aspect-[4/5] bg-gray-100 overflow-hidden mb-3 group/spotlight cursor-pointer"
                       >
                         <img
@@ -1247,12 +1257,14 @@ const handleFilterChange = (key: keyof FilterState, value: string, categoryId?: 
                       </p>
                       <Link
                         to={`/products/${featuredHoverProduct.id}`}
+                        state={{ from: `${location.pathname}${location.search}` }}
                         className="block text-sm font-semibold text-dark mb-3 line-clamp-2 hover:text-primary transition"
                       >
                         {featuredHoverProduct.title}
                       </Link>
                       <Link
                         to={`/products/${featuredHoverProduct.id}`}
+                        state={{ from: `${location.pathname}${location.search}` }}
                         className="inline-flex items-center gap-2 text-xs font-ui uppercase tracking-[0.25em] text-primary border-b border-primary/40 hover:text-dark hover:border-dark transition"
                       >
                         Shop now

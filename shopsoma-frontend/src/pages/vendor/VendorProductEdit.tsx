@@ -8,6 +8,7 @@ import { useToast } from '../../hooks/useToast';
 import ToastContainer from '../../components/ui/ToastContainer';
 import type { Product, ProductImage } from '../../types';
 import { normalizeProductImageUrl } from '../../utils/productImages';
+import ProductSizeOptionsManager from '../../components/product/ProductSizeOptionsManager';
 
 export default function VendorProductEdit() {
   const { id } = useParams<{ id: string }>();
@@ -487,6 +488,28 @@ export default function VendorProductEdit() {
                 </div>
               </div>
             </div>
+
+            {/* Size Options Management */}
+            {id && (
+              <div className="mt-6">
+                <ProductSizeOptionsManager
+                  productId={id}
+                  initialVariants={product?.variants || []}
+                  basePrice={parseFloat(basePrice) || 0}
+                  currency={product?.currency === 'USD' ? '$' : '£'}
+                  madeToOrder={madeToOrder}
+                  isAdmin={false}
+                  onVariantsUpdated={(updatedVariants) => {
+                    if (product) {
+                      setProduct({
+                        ...product,
+                        variants: updatedVariants,
+                      });
+                    }
+                  }}
+                />
+              </div>
+            )}
 
             {/* Product Images Card */}
             <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden mt-6">

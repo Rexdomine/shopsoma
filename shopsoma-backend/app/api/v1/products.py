@@ -1408,6 +1408,78 @@ async def delete_product(
 # Product Variant Endpoints
 # ============================================================================
 
+@router.get("/{product_id}/variants")
+async def get_product_variants(
+    product_id: UUID,
+    vendor: Vendor = Depends(get_completed_vendor),
+    db: AsyncSession = Depends(get_db)
+):
+    """Get all variants for a vendor's product"""
+    result = await db.execute(
+        select(Product)
+        .options(
+            selectinload(Product.variants),
+            selectinload(Product.variations).selectinload(Variation.size_stocks),
+        )
+        .where(Product.id == product_id)
+    )
+    product = result.scalar_one_or_none()
+
+    if not product or product.vendor_id != vendor.id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Product not found"
+        )
+
+    variants_res = await db.execute(
+        select(ProductVariant).where(ProductVariant.product_id == product_id)
+    )
+    product_variants = variants_res.scalars().all()
+
+    variants_list = [
+        {
+            "id": str(v.id),
+            "product_id": str(v.product_id),
+            "sku": v.sku,
+            "size": v.size,
+            "color": v.color,
+            "color_hex": v.color_hex,
+            "price": float(v.price),
+            "stock": v.stock,
+            "is_available": v.is_available,
+        }
+        for v in product_variants
+    ]
+
+    existing_sizes = {v["size"] for v in variants_list if v["size"] is not None}
+    if product.variations:
+        for variation in product.variations:
+            if not variation.is_active:
+                continue
+            for ss in variation.size_stocks:
+                size_str = ss.size.value if hasattr(ss.size, "value") else str(ss.size)
+                if size_str in existing_sizes:
+                    continue
+                var_price = float(variation.price if variation.price is not None else product.base_price)
+                variants_list.append({
+                    "id": str(ss.id),
+                    "product_id": str(product.id),
+                    "sku": None,
+                    "size": size_str,
+                    "color": variation.title if variation.type == "color" else None,
+                    "color_hex": variation.color_hex,
+                    "price": var_price,
+                    "stock": ss.stock,
+                    "is_available": bool(variation.is_active) and ss.stock > 0,
+                })
+                existing_sizes.add(size_str)
+
+    return {
+        "product_id": str(product_id),
+        "variants": variants_list,
+    }
+
+
 @router.post("/{product_id}/variants", response_model=ProductVariantResponse, status_code=status.HTTP_201_CREATED)
 async def create_variant(
     product_id: UUID,
@@ -1445,6 +1517,25 @@ async def create_variant(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=[{"loc": ["body"], "msg": str(exc), "type": "value_error"}],
         ) from exc
+
+    if variant_data.size:
+        size_cand = variant_data.size.strip().casefold()
+        v_sizes_res = await db.execute(
+            select(ProductVariant.size).where(
+                ProductVariant.product_id == product_id,
+                ProductVariant.size.isnot(None),
+            )
+        )
+        existing_sizes = {s.strip().casefold() for s in v_sizes_res.scalars().all()}
+        for variation in product.variations:
+            for ss in variation.size_stocks:
+                s_val = ss.size.value if hasattr(ss.size, "value") else str(ss.size)
+                existing_sizes.add(s_val.strip().casefold())
+        if size_cand in existing_sizes:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Size option '{variant_data.size}' already exists for this product",
+            )
 
     explicit_inventory = bool(
         {"stock", "is_available"} & variant_data.model_fields_set
@@ -1527,9 +1618,75 @@ async def update_variant(
     variant = result.scalar_one_or_none()
 
     if not variant:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Variant not found"
+        # Check SizeStock fallback
+        ss_result = await db.execute(
+            select(SizeStock)
+            .join(Variation, SizeStock.variation_id == Variation.id)
+            .options(selectinload(SizeStock.variation))
+            .where(
+                SizeStock.id == variant_id,
+                Variation.product_id == product_id,
+            )
+        )
+        size_stock = ss_result.scalar_one_or_none()
+        if not size_stock:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Variant not found"
+            )
+
+        update_dict = variant_data.model_dump(exclude_unset=True)
+        if "stock" in update_dict:
+            size_stock.stock = update_dict["stock"]
+        if "price" in update_dict and size_stock.variation:
+            size_stock.variation.price = update_dict["price"]
+            size_stock.variation.inherits_price = False
+        if "is_available" in update_dict and size_stock.variation:
+            if not update_dict["is_available"] and size_stock.stock > 0:
+                size_stock.stock = 0
+
+        effective_size = size_stock.size.value if hasattr(size_stock.size, "value") else str(size_stock.size)
+        if "size" in update_dict and update_dict["size"]:
+            new_size_val = update_dict["size"]
+            effective_size = new_size_val
+            if new_size_val in SizeEnum._value2member_map_:
+                size_stock.size = SizeEnum(new_size_val)
+            else:
+                current_price = update_dict.get("price") or (
+                    size_stock.variation.price
+                    if size_stock.variation and size_stock.variation.price is not None
+                    else product.base_price
+                )
+                current_stock = update_dict.get("stock", size_stock.stock)
+                is_avail = update_dict.get("is_available", current_stock > 0)
+                new_v = ProductVariant(
+                    id=variant_id,
+                    product_id=product_id,
+                    size=new_size_val,
+                    color=size_stock.variation.title if size_stock.variation and size_stock.variation.type == "color" else None,
+                    price=current_price,
+                    stock=current_stock,
+                    is_available=is_avail,
+                )
+                await db.delete(size_stock)
+                db.add(new_v)
+                await mark_product_content_pending(db=db, product_id=product_id)
+                await db.commit()
+                return ProductVariantResponse.model_validate(new_v)
+
+        await mark_product_content_pending(db=db, product_id=product_id)
+        await db.commit()
+        await db.refresh(size_stock)
+        return ProductVariantResponse(
+            id=size_stock.id,
+            product_id=product_id,
+            size=effective_size,
+            color=size_stock.variation.title if size_stock.variation and size_stock.variation.type == "color" else None,
+            price=size_stock.variation.price if size_stock.variation and size_stock.variation.price is not None else product.base_price,
+            stock=size_stock.stock,
+            is_available=bool(size_stock.variation.is_active) and size_stock.stock > 0,
+            created_at=size_stock.created_at,
+            updated_at=size_stock.updated_at,
         )
 
     # Validate changes to inventory axes against the canonical variation inventory.
@@ -1633,14 +1790,35 @@ async def delete_variant(
     )
     variant = result.scalar_one_or_none()
 
-    if not variant:
+    if variant:
+        await mark_product_content_pending(db=db, product_id=product_id)
+        await db.delete(variant)
+        await db.commit()
+        return
+
+    # Check SizeStock fallback
+    ss_result = await db.execute(
+        select(SizeStock)
+        .join(Variation, SizeStock.variation_id == Variation.id)
+        .options(selectinload(SizeStock.variation).selectinload(Variation.size_stocks))
+        .where(
+            SizeStock.id == variant_id,
+            Variation.product_id == product_id,
+        )
+    )
+    size_stock = ss_result.scalar_one_or_none()
+    if not size_stock:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Variant not found"
         )
 
+    variation = size_stock.variation
     await mark_product_content_pending(db=db, product_id=product_id)
-    await db.delete(variant)
+    await db.delete(size_stock)
+    if variation and variation.type.casefold() == "size" and len(variation.size_stocks) <= 1:
+        await db.delete(variation)
+
     await db.commit()
 
 

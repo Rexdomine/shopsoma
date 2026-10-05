@@ -6,6 +6,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import AdminSidebar from '../../components/admin/AdminSidebar';
 import DhlShipmentOperations from '../../components/admin/DhlShipmentOperations';
+import ItemPickupPanel from '../../components/admin/ItemPickupPanel';
 import { useToast } from '../../hooks/useToast';
 import CurrencySwitcher from '../../components/common/CurrencySwitcher';
 import { useCurrencyStore } from '../../store/currencyStore';
@@ -488,6 +489,15 @@ export default function AdminOrderDetail() {
                         <p className="text-sm text-gray-600 mt-1">
                           Vendor: {item.vendor.business_name}
                         </p>
+                        {item.made_to_order && (
+                          <ItemPickupPanel
+                            orderId={order.id}
+                            item={item}
+                            onUpdated={setOrder}
+                            onSuccess={success}
+                            onError={error}
+                          />
+                        )}
                       </div>
                     </div>
 
@@ -810,6 +820,19 @@ export default function AdminOrderDetail() {
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
             <div className="bg-white rounded-lg p-6 max-w-md w-full">
               <h3 className="text-lg font-semibold text-gray-900 mb-4">Schedule Pickup</h3>
+
+              {(() => {
+                const unreadyCount = order?.items.filter(
+                  (item) => item.made_to_order && item.readiness_state === 'being_prepared'
+                ).length ?? 0;
+                return unreadyCount > 0 ? (
+                  <p className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+                    {unreadyCount} made-to-order item{unreadyCount === 1 ? ' is' : 's are'} not ready yet and will not be
+                    included in this pickup. Schedule {unreadyCount === 1 ? 'it' : 'them'} individually from Order Items once
+                    the vendor marks {unreadyCount === 1 ? 'it' : 'them'} ready.
+                  </p>
+                ) : null;
+              })()}
 
               <div className="space-y-4">
                 <div>

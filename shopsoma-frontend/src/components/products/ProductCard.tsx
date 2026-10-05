@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import type { Product } from '../../types';
 import { Bookmark } from 'lucide-react';
 import { IMAGE_CONFIG } from '../../config/constants';
@@ -20,6 +20,7 @@ export default function ProductCard({
   isFavorite = false,
 }: ProductCardProps) {
   const navigate = useNavigate();
+  const location = useLocation();
   const [isHovered, setIsHovered] = useState(false);
   const [imageLoaded, setImageLoaded] = useState(false);
   const { currentCurrency, exchangeRates } = useCurrencyStore();
@@ -83,6 +84,7 @@ export default function ProductCard({
   return (
     <Link
       to={`/products/${product.id}`}
+      state={{ from: `${location.pathname}${location.search}` }}
       className="group block w-full min-w-0"
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}

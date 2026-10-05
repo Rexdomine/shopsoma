@@ -24,6 +24,13 @@ from app.models.product import Product
 from app.models.payment import Payment
 from app.models.setting import Setting
 from app.models.package_custody import HubPackage, CustodyEvent
+from app.services.orders.made_to_order_readiness import (
+    ReadinessError,
+    ensure_admin_pickup_update_allowed,
+    is_made_to_order_item,
+    pickups_by_order_item,
+    readiness_fields,
+)
 
 logger = logging.getLogger(__name__)
 from app.services.order_notification_service import OrderNotificationService
@@ -119,10 +126,25 @@ async def _notify_order_status_change(
         return
     notification_service = OrderNotificationService(db)
     try:
+        pickup_details = None
+        if order.fulfillment_status == FulfillmentStatus.PICKUP_SCHEDULED:
+            pickup_query = select(VendorPickup).where(VendorPickup.order_id == order.id)
+            pickup_result = await db.execute(pickup_query)
+            pickups = pickup_result.scalars().all()
+            if pickups:
+                pickup_details = {}
+                p = pickups[0]
+                if p.scheduled_pickup_date:
+                    pickup_details["scheduled_pickup_date"] = p.scheduled_pickup_date
+                if p.pickup_window_start and p.pickup_window_end:
+                    pickup_details["pickup_window_start"] = p.pickup_window_start
+                    pickup_details["pickup_window_end"] = p.pickup_window_end
+                if p.courier_name:
+                    pickup_details["courier_name"] = p.courier_name
         await notification_service.notify_status_change(
             order=order,
             new_status=order.fulfillment_status,
-            pickup_details=None,
+            pickup_details=pickup_details,
         )
     except Exception:
         logger.exception("Failed to send notifications for order %s", order.id)
@@ -285,7 +307,36 @@ def _resolve_admin_item_amounts(item: OrderItem, display_currency: str, usd_to_n
     return unit_price, subtotal, display_currency
 
 
-def _build_admin_order_item_detail(item: OrderItem, display_currency: str, usd_to_ngn_rate: Decimal) -> OrderItemDetail:
+def _build_pickup_info(pickup: VendorPickup) -> PickupInfo:
+    return PickupInfo(
+        id=pickup.id,
+        order_item_id=pickup.order_item_id,
+        vendor_id=pickup.vendor_id,
+        status=pickup.status,
+        ready_for_pickup_at=pickup.ready_for_pickup_at,
+        scheduled_pickup_date=pickup.scheduled_pickup_date,
+        actual_pickup_date=pickup.actual_pickup_date,
+        pickup_window_start=pickup.pickup_window_start,
+        pickup_window_end=pickup.pickup_window_end,
+        logistics_partner=pickup.logistics_partner,
+        courier_name=pickup.courier_name,
+        rider_id=pickup.rider_id,
+        tracking_number=pickup.tracking_number,
+        qc_center_arrival_date=pickup.qc_center_arrival_date,
+        qc_approved_date=pickup.qc_approved_date,
+        qc_rejected_date=pickup.qc_rejected_date,
+        qc_notes=pickup.qc_notes,
+        vendor_notes=pickup.vendor_notes,
+        admin_notes=pickup.admin_notes,
+    )
+
+
+def _build_admin_order_item_detail(
+    item: OrderItem,
+    display_currency: str,
+    usd_to_ngn_rate: Decimal,
+    pickup: Optional[VendorPickup] = None,
+) -> OrderItemDetail:
     unit_price, subtotal, item_currency = _resolve_admin_item_amounts(item, display_currency, usd_to_ngn_rate)
     return OrderItemDetail(
         id=item.id,
@@ -305,6 +356,8 @@ def _build_admin_order_item_detail(item: OrderItem, display_currency: str, usd_t
         vendor_payout=item.vendor_payout,
         fulfillment_status=item.fulfillment_status,
         vendor=build_vendor_info(item.vendor),
+        pickup=_build_pickup_info(pickup) if pickup is not None else None,
+        **readiness_fields(item, pickup),
     )
 
 
@@ -568,6 +621,7 @@ async def get_order_detail(
                 .order_by(desc(HubPackage.ready_at), desc(HubPackage.created_at))
             )
         ).scalars().all()
+        item_pickups = pickups_by_order_item(order.pickups)
         return OrderDetail(
         id=order.id,
         order_number=order.order_number,
@@ -594,30 +648,15 @@ async def get_order_detail(
         cancelled_at=order.cancelled_at,
         cancellation_reason=order.cancellation_reason,
         items=[
-            _build_admin_order_item_detail(item, display_currency, usd_to_ngn_rate)
+            _build_admin_order_item_detail(
+                item,
+                display_currency,
+                usd_to_ngn_rate,
+                pickup=item_pickups.get(item.id),
+            )
             for item in order.items
         ],
-        pickups=[
-            PickupInfo(
-                id=pickup.id,
-                status=pickup.status,
-                scheduled_pickup_date=pickup.scheduled_pickup_date,
-                actual_pickup_date=pickup.actual_pickup_date,
-                pickup_window_start=pickup.pickup_window_start,
-                pickup_window_end=pickup.pickup_window_end,
-                logistics_partner=pickup.logistics_partner,
-                courier_name=pickup.courier_name,
-                rider_id=pickup.rider_id,
-                tracking_number=pickup.tracking_number,
-                qc_center_arrival_date=pickup.qc_center_arrival_date,
-                qc_approved_date=pickup.qc_approved_date,
-                qc_rejected_date=pickup.qc_rejected_date,
-                qc_notes=pickup.qc_notes,
-                vendor_notes=pickup.vendor_notes,
-                admin_notes=pickup.admin_notes,
-            )
-            for pickup in order.pickups
-        ],
+        pickups=[_build_pickup_info(pickup) for pickup in order.pickups],
         dhl_operations=await load_dhl_operations(db, order_id=order.id),
         ready_packages=[
             ReadyPackageInfo(
@@ -668,6 +707,7 @@ async def update_order_status(
         selectinload(Order.shipping_address),
         selectinload(Order.billing_address),
         selectinload(Order.items).selectinload(OrderItem.vendor),
+        selectinload(Order.items).selectinload(OrderItem.product),
         selectinload(Order.payments),
         selectinload(Order.pickups),
     )
@@ -737,7 +777,8 @@ async def update_order_status(
         order.cancelled_at = datetime.now()
 
     # Update vendor pickups with pickup window data if provided
-    if new_status == FulfillmentStatus.PICKUP_SCHEDULED and (update_data.pickup_window_start or update_data.pickup_window_end):
+    pickups = []
+    if new_status == FulfillmentStatus.PICKUP_SCHEDULED:
         from dateutil import parser
 
         # Get all pickups for this order
@@ -745,8 +786,19 @@ async def update_order_status(
         pickup_result = await db.execute(pickup_query)
         pickups = pickup_result.scalars().all()
 
+        # Made-to-order items are scheduled individually once their vendor marks
+        # them ready; an order-wide schedule must not stamp unfinished items.
+        made_to_order_item_ids = {
+            item.id for item in order.items if is_made_to_order_item(item)
+        }
+
         # Update all pickups with the window data
         for pickup in pickups:
+            if (
+                pickup.order_item_id in made_to_order_item_ids
+                and pickup.ready_for_pickup_at is None
+            ):
+                continue
             if update_data.pickup_window_start:
                 pickup.pickup_window_start = parser.isoparse(update_data.pickup_window_start)
             if update_data.pickup_window_end:
@@ -763,10 +815,33 @@ async def update_order_status(
     if old_status != new_status:
         notification_service = OrderNotificationService(db)
         try:
+            pickup_details = None
+            if new_status == FulfillmentStatus.PICKUP_SCHEDULED:
+                from dateutil import parser
+                pickup_details = {}
+                if update_data.pickup_window_start:
+                    pickup_details["pickup_window_start"] = (
+                        parser.isoparse(update_data.pickup_window_start)
+                        if isinstance(update_data.pickup_window_start, str)
+                        else update_data.pickup_window_start
+                    )
+                if update_data.pickup_window_end:
+                    pickup_details["pickup_window_end"] = (
+                        parser.isoparse(update_data.pickup_window_end)
+                        if isinstance(update_data.pickup_window_end, str)
+                        else update_data.pickup_window_end
+                    )
+                if update_data.courier_name:
+                    pickup_details["courier_name"] = update_data.courier_name
+                if pickups:
+                    first_sched = next((p.scheduled_pickup_date for p in pickups if p.scheduled_pickup_date), None)
+                    if first_sched:
+                        pickup_details["scheduled_pickup_date"] = first_sched
+
             await notification_service.notify_status_change(
                 order=order,
                 new_status=new_status,
-                pickup_details=None  # Can be enhanced to include pickup window if available
+                pickup_details=pickup_details,
             )
         except Exception as e:
             # Log error but don't fail the request
@@ -835,16 +910,47 @@ async def update_pickup_status(
     admin: User = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Update pickup status and details"""
+    """Update pickup status and details for one vendor item.
 
-    # Get pickup
-    pickup = await db.get(VendorPickup, pickup_id)
+    Pickups are per order item, so a ready made-to-order item can be scheduled
+    and collected independently of the rest of the customer order.
+    """
 
-    if not pickup or str(pickup.order_id) != order_id:
+    try:
+        order_uuid = UUID(order_id)
+        pickup_uuid = UUID(pickup_id)
+    except ValueError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Pickup not found for this order",
         )
+
+    # Get pickup
+    pickup = await db.get(VendorPickup, pickup_uuid)
+
+    if not pickup or pickup.order_id != order_uuid:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Pickup not found for this order",
+        )
+
+    # Serialize with the vendor ready-for-pickup transition (same row lock).
+    order_item = await db.scalar(
+        select(OrderItem)
+        .options(selectinload(OrderItem.product))
+        .where(OrderItem.id == pickup.order_item_id)
+        .with_for_update(of=OrderItem)
+    )
+    await db.refresh(pickup)
+    try:
+        ensure_admin_pickup_update_allowed(
+            made_to_order=bool(order_item and is_made_to_order_item(order_item)),
+            pickup=pickup,
+            update=update_data,
+        )
+    except ReadinessError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
     # Update status if provided
     if update_data.pickup_status:

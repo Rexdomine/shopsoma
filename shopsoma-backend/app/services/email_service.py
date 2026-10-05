@@ -593,13 +593,37 @@ class EmailService:
         order_date: datetime,
         items: List[dict],
         total_payout: float,
-        pickup_date: datetime,
+        pickup_date: Optional[datetime] = None,
         currency: Optional[str] = "NGN",
+        fulfillment_status: Optional[Any] = None,
+        order_status: Optional[Any] = None,
     ) -> bool:
         subject = f"New Order Received · {order_number}"
         normalized_currency = self._normalize_currency(currency)
         items_table = self._build_vendor_items_table(items, normalized_currency)
-        pickup_date_str = pickup_date.strftime("%d %B %Y · %I:%M %p")
+
+        pickup_date_html = ""
+        status_candidate = fulfillment_status if fulfillment_status is not None else order_status
+        is_scheduled_status = False
+        if status_candidate:
+            status_val = (
+                status_candidate.value.lower()
+                if hasattr(status_candidate, "value")
+                else str(status_candidate).strip().lower()
+            )
+            if status_val in ("pickup_scheduled", "scheduling_pickup", "scheduled"):
+                is_scheduled_status = True
+
+        if is_scheduled_status and pickup_date:
+            try:
+                pickup_date_str = (
+                    pickup_date.strftime("%d %B %Y · %I:%M %p")
+                    if hasattr(pickup_date, "strftime")
+                    else str(pickup_date)
+                )
+                pickup_date_html = f'<p style="margin:4px 0;"><strong>Pickup Scheduled:</strong> {pickup_date_str}</p>'
+            except Exception:
+                pickup_date_html = ""
 
         body_html = f"""
         <p style="font-size:16px;">Hello {name or 'there'},</p>
@@ -607,7 +631,7 @@ class EmailService:
         <div style="margin:24px 0;padding:20px;border:1px solid {BRAND_BORDER};border-radius:10px;background:{BRAND_LIGHT};">
             <p style="margin:0;"><strong>Order Number:</strong> {order_number}</p>
             <p style="margin:4px 0;"><strong>Order Date:</strong> {order_date.strftime('%d %B %Y · %I:%M %p')}</p>
-            <p style="margin:4px 0;"><strong>Pickup Scheduled:</strong> {pickup_date_str}</p>
+            {pickup_date_html}
         </div>
         <table style="width:100%;border-collapse:collapse;margin-bottom:24px;">
             <thead>
@@ -890,6 +914,81 @@ class EmailService:
             )
             all_sent = all_sent and sent
         return all_sent
+
+    async def send_admin_made_to_order_ready_email(
+        self,
+        recipients: List[Dict[str, str]],
+        order_id: str,
+        order_number: str,
+        customer_name: Optional[str],
+        customer_email: Optional[str],
+        vendor_name: str,
+        product_title: str,
+        quantity: int,
+        ready_at: datetime,
+        variant_summary: Optional[str] = None,
+    ) -> bool:
+        """Tell Shopsoma admins a vendor finished a made-to-order item.
+
+        Sent once per order item, on the vendor's not-ready -> ready transition.
+        """
+        if not recipients:
+            return False
+
+        def esc(value: Any) -> str:
+            return html.escape(str(value)) if value not in (None, "") else "—"
+
+        subject = f"Made-to-order item ready for Shopsoma pickup · {order_number}"
+        ready_label = ready_at.strftime("%d %B %Y · %I:%M %p")
+        if ready_at.tzinfo is not None:
+            ready_label = f"{ready_label} {ready_at.tzname() or ''}".strip()
+        base_url = (getattr(settings, "FRONTEND_BASE_URL", "") or "").rstrip("/")
+        order_link = f"{base_url}/admin/orders/{quote(str(order_id), safe='')}"
+        variant_row = (
+            f'<p style="margin:4px 0;"><strong>Options:</strong> {esc(variant_summary)}</p>'
+            if variant_summary
+            else ""
+        )
+
+        body_html = f"""
+        <p style="font-size:16px;">Hello Admin,</p>
+        <p>A vendor has confirmed that a <strong>made-to-order</strong> item is finished and
+        <strong>ready for Shopsoma pickup</strong>. Other items in this customer order may still
+        be in production — this item can be collected on its own.</p>
+        <div style="margin:24px 0;padding:20px;border:1px solid {BRAND_BORDER};border-radius:10px;background:{BRAND_LIGHT};">
+            <p style="margin:0;"><strong>Order Number:</strong> {esc(order_number)}</p>
+            <p style="margin:4px 0;"><strong>Order ID:</strong> {esc(order_id)}</p>
+            <p style="margin:4px 0;"><strong>Customer:</strong> {esc(customer_name)} ({esc(customer_email)})</p>
+        </div>
+        <div style="margin:24px 0;padding:20px;border:1px solid {BRAND_BORDER};border-radius:10px;">
+            <p style="margin:0;"><strong>Vendor:</strong> {esc(vendor_name)}</p>
+            <p style="margin:4px 0;"><strong>Product:</strong> {esc(product_title)}</p>
+            {variant_row}
+            <p style="margin:4px 0;"><strong>Quantity:</strong> {esc(quantity)}</p>
+            <p style="margin:4px 0;"><strong>Marked ready:</strong> {esc(ready_label)}</p>
+        </div>
+        <p style="text-align:center;margin-top:32px;">
+            <a href="{html.escape(order_link, quote=True)}" style="display:inline-block;padding:12px 24px;background:{BRAND_PRIMARY};color:#fff;text-decoration:none;border-radius:999px;font-weight:600;">
+                Schedule Pickup
+            </a>
+        </p>
+        """
+
+        html_content = self._wrap_email(
+            "Ready for Pickup",
+            body_html,
+            html.escape(f"{vendor_name} marked {product_title} ready for pickup ({order_number})."),
+        )
+
+        sent_any = False
+        for recipient in recipients:
+            sent_any = await self.send_email(
+                recipient["email"],
+                recipient.get("name") or "Admin",
+                subject,
+                html_content,
+            ) or sent_any
+        return sent_any
 
     async def send_order_status_update_email(
         self,

@@ -125,6 +125,37 @@ class AddressInfo(BaseModel):
         from_attributes = True
 
 
+class PickupInfo(BaseModel):
+    """Pickup information"""
+    id: UUID
+    order_item_id: Optional[UUID] = None
+    vendor_id: Optional[UUID] = None
+    status: PickupStatus
+    ready_for_pickup_at: Optional[datetime] = None
+    scheduled_pickup_date: Optional[datetime]
+    actual_pickup_date: Optional[datetime]
+    pickup_window_start: Optional[datetime]
+    pickup_window_end: Optional[datetime]
+    logistics_partner: Optional[str]
+    courier_name: Optional[str]
+    rider_id: Optional[str]
+    tracking_number: Optional[str]
+    qc_center_arrival_date: Optional[datetime]
+    qc_approved_date: Optional[datetime]
+    qc_rejected_date: Optional[datetime]
+    qc_notes: Optional[str]
+    vendor_notes: Optional[str]
+    admin_notes: Optional[str]
+
+    class Config:
+        from_attributes = True
+
+
+ReadinessStateValue = Literal[
+    "being_prepared", "ready_for_pickup", "pickup_scheduled", "picked_up", "cancelled"
+]
+
+
 class OrderItemDetail(BaseModel):
     """Order item with vendor information"""
     id: UUID
@@ -141,29 +172,11 @@ class OrderItemDetail(BaseModel):
     vendor_payout: Decimal
     fulfillment_status: FulfillmentStatus
     vendor: VendorInfo
-
-    class Config:
-        from_attributes = True
-
-
-class PickupInfo(BaseModel):
-    """Pickup information"""
-    id: UUID
-    status: PickupStatus
-    scheduled_pickup_date: Optional[datetime]
-    actual_pickup_date: Optional[datetime]
-    pickup_window_start: Optional[datetime]
-    pickup_window_end: Optional[datetime]
-    logistics_partner: Optional[str]
-    courier_name: Optional[str]
-    rider_id: Optional[str]
-    tracking_number: Optional[str]
-    qc_center_arrival_date: Optional[datetime]
-    qc_approved_date: Optional[datetime]
-    qc_rejected_date: Optional[datetime]
-    qc_notes: Optional[str]
-    vendor_notes: Optional[str]
-    admin_notes: Optional[str]
+    # Made-to-order readiness is tracked per item/vendor, never order-wide.
+    made_to_order: bool = False
+    ready_for_pickup_at: Optional[datetime] = None
+    readiness_state: Optional[ReadinessStateValue] = None
+    pickup: Optional[PickupInfo] = None
 
     class Config:
         from_attributes = True

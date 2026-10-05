@@ -1,5 +1,5 @@
 import api from './api';
-import type { User, PaginatedResponse, Product, ProductImage } from '../types';
+import type { User, PaginatedResponse, Product, ProductVariant, ProductImage, Category } from '../types';
 
 export interface AdminProductUpdatePayload {
   title?: string;
@@ -392,4 +392,88 @@ export const adminService = {
     });
     return response.data;
   },
+
+  // ==================== PRODUCT VARIANTS / SIZE OPTIONS ====================
+
+  async getProductVariants(productId: string): Promise<ProductVariant[]> {
+    const response = await api.get(`/admin/products/${productId}/variants`);
+    return response.data?.variants || [];
+  },
+
+  async createProductVariant(
+    productId: string,
+    data: {
+      size?: string;
+      color?: string;
+      color_hex?: string;
+      price?: number;
+      stock?: number;
+      sku?: string;
+      is_available?: boolean;
+    }
+  ): Promise<any> {
+    const response = await api.post(`/admin/products/${productId}/variants`, data);
+    return response.data;
+  },
+
+  async updateProductVariant(
+    productId: string,
+    variantId: string,
+    data: {
+      size?: string;
+      color?: string;
+      color_hex?: string;
+      price?: number;
+      stock?: number;
+      sku?: string;
+      is_available?: boolean;
+    }
+  ): Promise<any> {
+    const response = await api.put(`/admin/products/${productId}/variants/${variantId}`, data);
+    return response.data;
+  },
+
+  async deleteProductVariant(productId: string, variantId: string): Promise<any> {
+    const response = await api.delete(`/admin/products/${productId}/variants/${variantId}`);
+    return response.data;
+  },
+
+  // ==================== CATEGORIES MANAGEMENT ====================
+
+  async listCategories(): Promise<Category[]> {
+    const response = await api.get('/admin/categories');
+    return response.data?.categories || [];
+  },
+
+  async createCategory(data: {
+    name: string;
+    parent_id?: string | null;
+    slug?: string;
+    description?: string;
+    display_order?: number;
+    is_active?: boolean;
+  }): Promise<Category> {
+    const response = await api.post('/admin/categories', data);
+    return response.data?.category;
+  },
+
+  async updateCategory(
+    categoryId: string,
+    data: {
+      name?: string;
+      parent_id?: string | null;
+      slug?: string;
+      description?: string;
+      display_order?: number;
+      is_active?: boolean;
+    }
+  ): Promise<Category> {
+    const response = await api.put(`/admin/categories/${categoryId}`, data);
+    return response.data?.category;
+  },
+
+  async deleteCategory(categoryId: string): Promise<void> {
+    await api.delete(`/admin/categories/${categoryId}`);
+  },
 };
+

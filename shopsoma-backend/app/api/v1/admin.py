@@ -13,6 +13,9 @@ from decimal import Decimal
 from urllib.parse import quote
 import asyncio
 import os
+import uuid
+import unicodedata
+import re
 import logging
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
@@ -26,6 +29,7 @@ from app.models.product import (
     ProductImage,
     ProductStatus,
     ProductVariant,
+    SizeEnum,
     SizeStock,
     Variation,
 )
@@ -45,6 +49,7 @@ from app.schemas.product import (
     ProductImageCreate,
     ProductImageUpdate,
     ProductImageResponse,
+    ProductVariantCreate,
     ProductVariantResponse,
     ProductVariantUpdate,
 )
@@ -91,8 +96,8 @@ class AdminProductVariantResponse(BaseModel):
     sku: Optional[str] = None
     is_available: bool = True
     compare_at_price: Optional[Decimal] = None
-    created_at: datetime
-    updated_at: datetime
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -192,6 +197,40 @@ class AdminProductResponse(BaseModel):
         self.base_price = self.base_price.quantize(Decimal("0.01"))
         if self.compare_at_price is not None:
             self.compare_at_price = self.compare_at_price.quantize(Decimal("0.01"))
+
+        # If product has variations but no variants, synthesize variants for admin view
+        if not self.variants and self.variations:
+            existing_sizes = set()
+            for variation in self.variations:
+                if not variation.is_active or not variation.size_stocks:
+                    continue
+                var_price = variation.price if variation.price is not None else self.base_price
+                for ss in variation.size_stocks:
+                    size_str = ss.size.value if hasattr(ss.size, "value") else str(ss.size)
+                    if size_str in existing_sizes:
+                        continue
+                    existing_sizes.add(size_str)
+                    self.variants.append(
+                        AdminProductVariantResponse(
+                            id=ss.id,
+                            product_id=self.id,
+                            size=size_str,
+                            color=variation.title if variation.type == "color" else None,
+                            color_hex=variation.color_hex,
+                            price=var_price,
+                            stock=ss.stock,
+                            sku=None,
+                            is_available=bool(variation.is_active) and ss.stock > 0,
+                            compare_at_price=(
+                                self.compare_at_price
+                                if self.compare_at_price is not None and var_price < self.compare_at_price
+                                else None
+                            ),
+                            created_at=ss.created_at,
+                            updated_at=ss.updated_at,
+                        )
+                    )
+
         if self.compare_at_price is None:
             return self
         for variant in self.variants:
@@ -2673,25 +2712,160 @@ async def get_product_variants(
 
     Requires admin role
     """
-    result = await db.execute(
+    product_result = await db.execute(
+        select(Product)
+        .options(
+            selectinload(Product.variants),
+            selectinload(Product.variations).selectinload(Variation.size_stocks),
+        )
+        .where(Product.id == product_id)
+    )
+    product = product_result.scalar_one_or_none()
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+
+    v_res = await db.execute(
         select(ProductVariant).where(ProductVariant.product_id == product_id)
     )
-    variants = result.scalars().all()
+    product_variants = v_res.scalars().all()
+
+    variant_list = [
+        {
+            "id": str(variant.id),
+            "sku": variant.sku,
+            "size": variant.size,
+            "color": variant.color,
+            "color_hex": variant.color_hex,
+            "price": float(variant.price),
+            "stock": variant.stock,
+            "is_available": variant.is_available,
+            "is_active": variant.is_available,
+        }
+        for variant in product_variants
+    ]
+
+    existing_sizes = {v["size"] for v in variant_list if v["size"] is not None}
+    if product.variations:
+        for variation in product.variations:
+            if not variation.is_active:
+                continue
+            for ss in variation.size_stocks:
+                size_str = ss.size.value if hasattr(ss.size, "value") else str(ss.size)
+                if size_str in existing_sizes:
+                    continue
+                var_price = float(variation.price if variation.price is not None else product.base_price)
+                variant_list.append({
+                    "id": str(ss.id),
+                    "sku": None,
+                    "size": size_str,
+                    "color": variation.title if variation.type == "color" else None,
+                    "color_hex": variation.color_hex,
+                    "price": var_price,
+                    "stock": ss.stock,
+                    "is_available": bool(variation.is_active) and ss.stock > 0,
+                    "is_active": bool(variation.is_active) and ss.stock > 0,
+                })
+                existing_sizes.add(size_str)
 
     return {
         "product_id": str(product_id),
-        "variants": [
-            {
-                "id": str(variant.id),
-                "sku": variant.sku,
-                "size": variant.size,
-                "color": variant.color,
-                "price": float(variant.price),
-                "stock": variant.stock,
-                "is_active": variant.is_active,
-            }
-            for variant in variants
-        ]
+        "variants": variant_list,
+    }
+
+
+@router.post("/products/{product_id}/variants", status_code=status.HTTP_201_CREATED)
+async def create_product_variant(
+    product_id: UUID,
+    variant_data: dict,
+    current_admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Create a new variant for a product
+
+    Requires admin role
+    """
+    try:
+        create_data = ProductVariantCreate.model_validate(variant_data).model_dump(
+            exclude_unset=True
+        )
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=jsonable_encoder(exc.errors()),
+        ) from exc
+
+    result = await db.execute(
+        select(Product)
+        .options(
+            selectinload(Product.variants),
+            selectinload(Product.variations).selectinload(Variation.size_stocks),
+        )
+        .where(Product.id == product_id)
+    )
+    product = result.scalar_one_or_none()
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+
+    size_label = create_data.get("size")
+    if not size_label:
+        size_label = "One/Size"
+
+    v_sizes_res = await db.execute(
+        select(ProductVariant.size).where(
+            ProductVariant.product_id == product_id,
+            ProductVariant.size.isnot(None),
+        )
+    )
+    existing_sizes = {s.strip().casefold() for s in v_sizes_res.scalars().all()}
+    for var in product.variations:
+        for ss in var.size_stocks:
+            s_val = ss.size.value if hasattr(ss.size, "value") else str(ss.size)
+            existing_sizes.add(s_val.strip().casefold())
+
+    if size_label.strip().casefold() in existing_sizes:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Size option '{size_label}' already exists for this product",
+        )
+
+    price = create_data.get("price")
+    if price is None:
+        price = product.base_price
+
+    stock = 0 if product.made_to_order else create_data.get("stock", 0)
+    is_available = True if product.made_to_order else create_data.get("is_available", stock > 0)
+
+    variant = ProductVariant(
+        product_id=product_id,
+        size=size_label,
+        color=create_data.get("color"),
+        color_hex=create_data.get("color_hex"),
+        price=price,
+        stock=stock,
+        sku=create_data.get("sku"),
+        is_available=is_available,
+        inherits_price=price == product.base_price,
+        inherits_stock=False,
+    )
+    db.add(variant)
+    await db.commit()
+    await db.refresh(variant)
+
+    return {
+        "message": "Variant created successfully",
+        "variant_id": str(variant.id),
+        "variant": {
+            "id": str(variant.id),
+            "sku": variant.sku,
+            "size": variant.size,
+            "color": variant.color,
+            "color_hex": variant.color_hex,
+            "price": float(variant.price),
+            "stock": variant.stock,
+            "is_available": variant.is_available,
+            "is_active": variant.is_available,
+        },
     }
 
 
@@ -2718,7 +2892,7 @@ async def update_product_variant(
             detail=jsonable_encoder(exc.errors()),
         ) from exc
 
-    # Get variant and ensure the path product owns it.
+    # 1. Direct edits on ProductVariant
     result = await db.execute(
         select(ProductVariant).where(
             ProductVariant.id == variant_id,
@@ -2727,37 +2901,96 @@ async def update_product_variant(
     )
     variant = result.scalar_one_or_none()
 
-    if not variant:
+    if variant:
+        if "price" in update_data:
+            variant.inherits_price = False
+            variation_result = await db.execute(
+                select(Variation).where(Variation.product_id == product_id)
+            )
+            variations = variation_result.scalars().all()
+            _sync_direct_variant_price_to_inherited_variation(
+                variations,
+                price=update_data["price"],
+                size=update_data.get("size", variant.size),
+                color=update_data.get("color", variant.color),
+            )
+        if "stock" in update_data or "is_available" in update_data:
+            variant.inherits_stock = False
+
+        for field, value in update_data.items():
+            if hasattr(variant, field):
+                setattr(variant, field, value)
+
+        await db.commit()
+        await db.refresh(variant)
+
+        return {
+            "message": "Variant updated successfully",
+            "variant_id": str(variant.id),
+        }
+
+    # 2. Check SizeStock
+    ss_result = await db.execute(
+        select(SizeStock)
+        .join(Variation, SizeStock.variation_id == Variation.id)
+        .options(selectinload(SizeStock.variation))
+        .where(
+            SizeStock.id == variant_id,
+            Variation.product_id == product_id,
+        )
+    )
+    size_stock = ss_result.scalar_one_or_none()
+
+    if not size_stock:
         raise HTTPException(status_code=404, detail="Variant not found")
 
-    # Direct edits transfer ownership from inherited parent values back to the
-    # variant. Otherwise a later parent edit would overwrite the admin's value.
-    if "price" in update_data:
-        variant.inherits_price = False
-        variation_result = await db.execute(
-            select(Variation).where(Variation.product_id == product_id)
-        )
-        variations = variation_result.scalars().all()
-        _sync_direct_variant_price_to_inherited_variation(
-            variations,
-            price=update_data["price"],
-            size=update_data.get("size", variant.size),
-            color=update_data.get("color", variant.color),
-        )
-    if "stock" in update_data or "is_available" in update_data:
-        variant.inherits_stock = False
+    if "stock" in update_data:
+        size_stock.stock = update_data["stock"]
 
-    # Update fields
-    for field, value in update_data.items():
-        if hasattr(variant, field):
-            setattr(variant, field, value)
+    if "price" in update_data and size_stock.variation:
+        size_stock.variation.price = update_data["price"]
+        size_stock.variation.inherits_price = False
+
+    if "is_available" in update_data and size_stock.variation:
+        if not update_data["is_available"] and size_stock.stock > 0:
+            size_stock.stock = 0
+
+    if "size" in update_data and update_data["size"]:
+        new_size_val = update_data["size"]
+        if new_size_val in SizeEnum._value2member_map_:
+            size_stock.size = SizeEnum(new_size_val)
+        else:
+            prod_result = await db.execute(select(Product).where(Product.id == product_id))
+            prod = prod_result.scalar_one_or_none()
+            base_p = prod.base_price if prod else Decimal("0.00")
+            current_price = update_data.get("price") or (
+                size_stock.variation.price
+                if size_stock.variation and size_stock.variation.price is not None
+                else base_p
+            )
+            current_stock = update_data.get("stock", size_stock.stock)
+            is_avail = update_data.get("is_available", current_stock > 0)
+            new_v = ProductVariant(
+                id=variant_id,
+                product_id=product_id,
+                size=new_size_val,
+                color=size_stock.variation.title if size_stock.variation and size_stock.variation.type == "color" else None,
+                price=current_price,
+                stock=current_stock,
+                is_available=is_avail,
+            )
+            await db.delete(size_stock)
+            db.add(new_v)
+            await db.commit()
+            return {
+                "message": "Variant updated successfully",
+                "variant_id": str(new_v.id),
+            }
 
     await db.commit()
-    await db.refresh(variant)
-
     return {
         "message": "Variant updated successfully",
-        "variant_id": str(variant.id)
+        "variant_id": str(size_stock.id),
     }
 
 
@@ -2774,23 +3007,68 @@ async def delete_product_variant(
     Requires admin role
     """
     result = await db.execute(
-        select(ProductVariant).where(ProductVariant.id == variant_id)
+        select(ProductVariant).where(
+            ProductVariant.id == variant_id,
+            ProductVariant.product_id == product_id,
+        )
     )
     variant = result.scalar_one_or_none()
 
-    if not variant:
+    if variant:
+        await db.delete(variant)
+        await db.commit()
+        return {
+            "message": "Variant deleted successfully",
+            "variant_id": str(variant.id)
+        }
+
+    # SizeStock fallback
+    ss_result = await db.execute(
+        select(SizeStock)
+        .join(Variation, SizeStock.variation_id == Variation.id)
+        .options(selectinload(SizeStock.variation).selectinload(Variation.size_stocks))
+        .where(
+            SizeStock.id == variant_id,
+            Variation.product_id == product_id,
+        )
+    )
+    size_stock = ss_result.scalar_one_or_none()
+    if not size_stock:
         raise HTTPException(status_code=404, detail="Variant not found")
 
-    await db.delete(variant)
-    await db.commit()
+    variation = size_stock.variation
+    await db.delete(size_stock)
+    if variation and variation.type.casefold() == "size" and len(variation.size_stocks) <= 1:
+        await db.delete(variation)
 
+    await db.commit()
     return {
         "message": "Variant deleted successfully",
-        "variant_id": str(variant.id)
+        "variant_id": str(size_stock.id)
     }
 
 
 # ==================== CATEGORIES AND COLLECTIONS MANAGEMENT ====================
+
+def _slugify_category_name(name: str) -> str:
+    cleaned = unicodedata.normalize('NFKD', name).encode('ascii', 'ignore').decode('ascii')
+    slug = re.sub(r'[^\w\s-]', '', cleaned.lower()).strip()
+    return re.sub(r'[-\s]+', '-', slug)
+
+
+async def _get_unique_category_slug(db: AsyncSession, base_slug: str, exclude_id: Optional[UUID] = None) -> str:
+    slug = base_slug
+    counter = 1
+    while True:
+        query = select(Category.id).where(Category.slug == slug)
+        if exclude_id:
+            query = query.where(Category.id != exclude_id)
+        result = await db.execute(query)
+        if not result.scalar_one_or_none():
+            return slug
+        slug = f"{base_slug}-{counter}"
+        counter += 1
+
 
 @router.get("/categories")
 async def list_categories(
@@ -2798,29 +3076,52 @@ async def list_categories(
     db: AsyncSession = Depends(get_db)
 ):
     """
-    List all categories
-
-    Requires admin role
+    List all categories with hierarchical metadata.
+    Requires admin role.
     """
-    from app.models.category import Category as ProductCategory
-
-    result = await db.execute(select(ProductCategory).order_by(ProductCategory.display_order))
+    result = await db.execute(
+        select(Category).order_by(Category.parent_id.nulls_first(), Category.display_order, Category.name)
+    )
     categories = result.scalars().all()
 
+    # Build lookup map for parent names and hierarchy levels
+    cat_map = {c.id: c for c in categories}
+
+    formatted = []
+    for category in categories:
+        parent_name = None
+        level = "primary"
+        if category.parent_id and category.parent_id in cat_map:
+            parent = cat_map[category.parent_id]
+            parent_name = parent.name
+            if parent.parent_id and parent.parent_id in cat_map:
+                level = "child"
+            else:
+                level = "subcategory"
+        elif category.parent_id:
+            level = "subcategory"
+
+        # Count direct subcategories
+        direct_children_count = sum(1 for c in categories if c.parent_id == category.id)
+
+        formatted.append({
+            "id": str(category.id),
+            "name": category.name,
+            "description": category.description,
+            "slug": category.slug,
+            "display_order": category.display_order,
+            "is_active": category.is_active,
+            "parent_id": str(category.parent_id) if category.parent_id else None,
+            "parent_category_id": str(category.parent_id) if category.parent_id else None,
+            "parent_name": parent_name,
+            "level": level,
+            "children_count": direct_children_count,
+            "created_at": category.created_at.isoformat() if category.created_at else None,
+            "updated_at": category.updated_at.isoformat() if category.updated_at else None,
+        })
+
     return {
-        "categories": [
-            {
-                "id": str(category.id),
-                "name": category.name,
-                "description": category.description,
-                "slug": category.slug,
-                "display_order": category.display_order,
-                "is_featured": category.is_featured,
-                "is_active": category.is_active,
-                "parent_category_id": str(category.parent_category_id) if category.parent_category_id else None,
-            }
-            for category in categories
-        ]
+        "categories": formatted
     }
 
 
@@ -2831,20 +3132,85 @@ async def create_category(
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Create a new category
+    Create a new category (Primary category, Subcategory, or Child category).
+    - If parent_id is omitted / None -> Primary category (Level 1)
+    - If parent_id has no parent -> Subcategory (Level 2)
+    - If parent_id is a Subcategory -> Child category (Level 3)
 
-    Requires admin role
+    Requires admin role.
     """
-    from app.models.product import ProductCategory
+    raw_name = category_data.get("name")
+    if not raw_name or not str(raw_name).strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Category name is required"
+        )
+    name = str(raw_name).strip()
 
-    category = ProductCategory(
-        name=category_data.get("name"),
+    raw_parent_id = category_data.get("parent_id") or category_data.get("parent_category_id")
+    parent_uuid = None
+    level = "primary"
+    parent_name = None
+
+    if raw_parent_id:
+        try:
+            parent_uuid = UUID(str(raw_parent_id))
+        except (ValueError, TypeError):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid parent category ID"
+            )
+
+        parent = await db.get(Category, parent_uuid)
+        if not parent:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Parent category not found"
+            )
+        parent_name = parent.name
+
+        # Check hierarchy depth
+        if parent.parent_id is None:
+            level = "subcategory"
+        else:
+            grandparent = await db.get(Category, parent.parent_id)
+            if grandparent and grandparent.parent_id is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Categories only support up to 3 levels: Primary -> Subcategory -> Child Category"
+                )
+            level = "child"
+
+    # Slug handling
+    user_slug = category_data.get("slug")
+    if user_slug and str(user_slug).strip():
+        base_slug = _slugify_category_name(str(user_slug).strip())
+    else:
+        base_slug = _slugify_category_name(name)
+
+    if not base_slug:
+        base_slug = f"cat-{uuid.uuid4().hex[:8]}"
+
+    final_slug = await _get_unique_category_slug(db, base_slug)
+
+    display_order = category_data.get("display_order", 0)
+    try:
+        display_order = int(display_order)
+    except (ValueError, TypeError):
+        display_order = 0
+
+    is_active = category_data.get("is_active", True)
+    if isinstance(is_active, str):
+        is_active = is_active.lower() not in ("false", "0", "no")
+
+    category = Category(
+        id=uuid.uuid4(),
+        name=name,
+        slug=final_slug,
         description=category_data.get("description"),
-        slug=category_data.get("slug"),
-        display_order=category_data.get("display_order", 0),
-        is_featured=category_data.get("is_featured", False),
-        is_active=category_data.get("is_active", True),
-        parent_category_id=category_data.get("parent_category_id")
+        parent_id=parent_uuid,
+        display_order=display_order,
+        is_active=bool(is_active)
     )
 
     db.add(category)
@@ -2852,16 +3218,20 @@ async def create_category(
     await db.refresh(category)
 
     return {
-        "message": "Category created successfully",
+        "message": f"{level.capitalize()} category created successfully",
         "category": {
             "id": str(category.id),
             "name": category.name,
             "description": category.description,
             "slug": category.slug,
             "display_order": category.display_order,
-            "is_featured": category.is_featured,
             "is_active": category.is_active,
-            "parent_category_id": str(category.parent_category_id) if category.parent_category_id else None,
+            "parent_id": str(category.parent_id) if category.parent_id else None,
+            "parent_category_id": str(category.parent_id) if category.parent_id else None,
+            "parent_name": parent_name,
+            "level": level,
+            "created_at": category.created_at.isoformat() if category.created_at else None,
+            "updated_at": category.updated_at.isoformat() if category.updated_at else None,
         }
     }
 
@@ -2874,25 +3244,69 @@ async def update_category(
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Update a category
-
-    Requires admin role
+    Update an existing category.
+    Requires admin role.
     """
-    from app.models.product import ProductCategory
-
-    result = await db.execute(select(ProductCategory).where(ProductCategory.id == category_id))
-    category = result.scalar_one_or_none()
-
+    category = await db.get(Category, category_id)
     if not category:
         raise HTTPException(status_code=404, detail="Category not found")
 
-    # Update fields
-    for field, value in category_data.items():
-        if hasattr(category, field):
-            setattr(category, field, value)
+    if "name" in category_data:
+        raw_name = category_data["name"]
+        if not raw_name or not str(raw_name).strip():
+            raise HTTPException(status_code=400, detail="Category name cannot be empty")
+        category.name = str(raw_name).strip()
+
+    if "slug" in category_data and category_data["slug"]:
+        slug_input = _slugify_category_name(str(category_data["slug"]).strip())
+        if slug_input != category.slug:
+            category.slug = await _get_unique_category_slug(db, slug_input, exclude_id=category.id)
+
+    if "description" in category_data:
+        category.description = category_data["description"]
+
+    if "display_order" in category_data:
+        try:
+            category.display_order = int(category_data["display_order"])
+        except (ValueError, TypeError):
+            pass
+
+    if "is_active" in category_data:
+        is_active = category_data["is_active"]
+        if isinstance(is_active, str):
+            category.is_active = is_active.lower() not in ("false", "0", "no")
+        else:
+            category.is_active = bool(is_active)
+
+    if "parent_id" in category_data or "parent_category_id" in category_data:
+        raw_parent = category_data.get("parent_id") if "parent_id" in category_data else category_data.get("parent_category_id")
+        if raw_parent:
+            try:
+                new_parent_id = UUID(str(raw_parent))
+            except (ValueError, TypeError):
+                raise HTTPException(status_code=400, detail="Invalid parent ID")
+            if new_parent_id == category.id:
+                raise HTTPException(status_code=400, detail="A category cannot be its own parent")
+            parent = await db.get(Category, new_parent_id)
+            if not parent:
+                raise HTTPException(status_code=404, detail="Parent category not found")
+            category.parent_id = new_parent_id
+        else:
+            category.parent_id = None
 
     await db.commit()
     await db.refresh(category)
+
+    parent_name = None
+    level = "primary"
+    if category.parent_id:
+        parent = await db.get(Category, category.parent_id)
+        if parent:
+            parent_name = parent.name
+            if parent.parent_id:
+                level = "child"
+            else:
+                level = "subcategory"
 
     return {
         "message": "Category updated successfully",
@@ -2902,9 +3316,13 @@ async def update_category(
             "description": category.description,
             "slug": category.slug,
             "display_order": category.display_order,
-            "is_featured": category.is_featured,
             "is_active": category.is_active,
-            "parent_category_id": str(category.parent_category_id) if category.parent_category_id else None,
+            "parent_id": str(category.parent_id) if category.parent_id else None,
+            "parent_category_id": str(category.parent_id) if category.parent_id else None,
+            "parent_name": parent_name,
+            "level": level,
+            "created_at": category.created_at.isoformat() if category.created_at else None,
+            "updated_at": category.updated_at.isoformat() if category.updated_at else None,
         }
     }
 
@@ -2916,24 +3334,42 @@ async def delete_category(
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Delete a category
-
-    Requires admin role
+    Delete a category.
+    Requires admin role.
     """
-    from app.models.product import ProductCategory
-
-    result = await db.execute(select(ProductCategory).where(ProductCategory.id == category_id))
-    category = result.scalar_one_or_none()
-
+    category = await db.get(Category, category_id)
     if not category:
         raise HTTPException(status_code=404, detail="Category not found")
 
+    # Check products assigned to this category or its descendants
+    descendants = select(Category.id).where(Category.id == category_id).cte(
+        "del_category_descendants", recursive=True
+    )
+    descendant_category = aliased(Category)
+    descendants = descendants.union_all(
+        select(descendant_category.id).where(
+            descendant_category.parent_id == descendants.c.id
+        )
+    )
+
+    product_count_result = await db.execute(
+        select(func.count(Product.id)).where(Product.category_id.in_(select(descendants.c.id)))
+    )
+    product_count = product_count_result.scalar() or 0
+
+    if product_count > 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Cannot delete category '{category.name}' because {product_count} product(s) are assigned to it or its subcategories. Please reassign the products first."
+        )
+
+    cat_name = category.name
     await db.delete(category)
     await db.commit()
 
     return {
-        "message": "Category deleted successfully",
-        "category_id": str(category.id)
+        "message": f"Category '{cat_name}' deleted successfully",
+        "category_id": str(category_id)
     }
 
 

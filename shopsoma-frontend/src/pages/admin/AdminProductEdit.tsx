@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, Link } from 'react-router-dom';
 import { ArrowLeft, Save, Loader2, Upload, Trash2, Star, ChevronUp, ChevronDown } from 'lucide-react';
 import { ROUTES } from '../../config/constants';
 import { normalizeProductImageUrl } from '../../utils/productImages';
@@ -9,6 +9,7 @@ import { categoryService } from '../../services/categoryService';
 import { useToast } from '../../hooks/useToast';
 import ToastContainer from '../../components/ui/ToastContainer';
 import type { Category, Product } from '../../types';
+import ProductSizeOptionsManager from '../../components/product/ProductSizeOptionsManager';
 
 function resolveCategoryLineage(
   targetId: string,
@@ -410,9 +411,18 @@ export default function AdminProductEdit() {
                     </span>
                   )}
                 </div>
-                <p className="text-xs text-gray-500">
-                  Assign or correct product classification across primary categories and subcategories.
-                </p>
+                <div className="flex items-center justify-between">
+                  <p className="text-xs text-gray-500">
+                    Assign or correct product classification across primary categories and subcategories.
+                  </p>
+                  <Link
+                    to="/admin/categories"
+                    target="_blank"
+                    className="text-xs text-[#105E53] hover:underline font-medium inline-flex items-center gap-1"
+                  >
+                    Manage Categories &rarr;
+                  </Link>
+                </div>
 
                 {categoriesLoadError && (
                   <p className="text-xs text-amber-700">{categoriesLoadError}</p>
@@ -618,6 +628,26 @@ export default function AdminProductEdit() {
               </div>
             </div>
           </div>
+
+          {/* Size Options Management */}
+          {id && (
+            <ProductSizeOptionsManager
+              productId={id}
+              initialVariants={product?.variants || []}
+              basePrice={parseFloat(basePrice) || 0}
+              currency={product?.currency === 'USD' ? '$' : '£'}
+              madeToOrder={Boolean(product?.made_to_order)}
+              isAdmin={true}
+              onVariantsUpdated={(updatedVariants) => {
+                if (product) {
+                  setProduct({
+                    ...product,
+                    variants: updatedVariants,
+                  });
+                }
+              }}
+            />
+          )}
 
           {/* Product Status & Settings */}
           <div className="bg-white rounded-xl border border-gray-200 shadow-sm">

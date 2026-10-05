@@ -15,7 +15,7 @@ from sqlalchemy.engine import make_url
 
 REVISION = "e8c0a2d4f6b8"
 HEAD = "v5w6x7y8z9a0"
-CURRENT_HEAD = "y8z9a0b1c2d3"
+CURRENT_HEAD = "z9a0b1c2d3e4"
 FEATURED_IMAGE_PARENT = "l9m0n1o2p3q4"
 CURRENT_HEAD_PARENT = "k7l8m9n0p1q2"
 PREVIOUS_HEAD = "d5e6f7a8b9c0"

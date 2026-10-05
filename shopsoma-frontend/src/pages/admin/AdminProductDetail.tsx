@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { ArrowLeft, CheckCircle, ChevronLeft, ChevronRight, Edit2, Loader2, Package, Tag, Trash2, X, XCircle } from 'lucide-react';
 import { ROUTES } from '../../config/constants';
 import { apiErrorMessage } from '../../utils/apiErrorMessage';
@@ -30,6 +30,19 @@ function formatDate(dateStr: string) {
 export default function AdminProductDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
+  const returnUrl = (location.state as { from?: string } | null)?.from;
+
+  const handleBackToProducts = () => {
+    if (returnUrl) {
+      navigate(returnUrl);
+    } else if (window.history.state && typeof window.history.state.idx === 'number' && window.history.state.idx > 0) {
+      navigate(-1);
+    } else {
+      navigate(ROUTES.ADMIN_PRODUCTS);
+    }
+  };
+
   const { toasts, hideToast, error, success } = useToast();
   const { currentCurrency, setCurrency, exchangeRates } = useCurrencyStore();
   const [product, setProduct] = useState<Product | null>(null);
@@ -427,7 +440,7 @@ export default function AdminProductDetail() {
       <main className="min-h-screen bg-[var(--color-page-bg)] p-8">
         <h1 className="text-2xl font-semibold">Unable to load product</h1>
         <p role="alert" className="mt-4 text-red-700">{loadError}</p>
-        <button type="button" onClick={() => navigate(ROUTES.ADMIN_PRODUCTS)} className="mt-6 rounded border px-4 py-2">
+        <button type="button" onClick={handleBackToProducts} className="mt-6 rounded border px-4 py-2">
           Back to Products
         </button>
       </main>
@@ -462,7 +475,7 @@ export default function AdminProductDetail() {
         <div className="mb-6">
           <button
             ref={lightboxFocusFallback}
-            onClick={() => navigate(ROUTES.ADMIN_PRODUCTS)}
+            onClick={handleBackToProducts}
             className="flex items-center gap-2 text-gray-600 hover:text-gray-900 mb-4"
           >
             <ArrowLeft className="h-4 w-4" />
