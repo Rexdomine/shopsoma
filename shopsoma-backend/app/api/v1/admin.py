@@ -52,6 +52,15 @@ from app.schemas.product import (
     ProductVariantCreate,
     ProductVariantResponse,
     ProductVariantUpdate,
+    VariationResponse,
+    VariationUpdate,
+    VariationPayload,
+    validate_variation_inventory_shape,
+)
+from app.services.variation_persistence import (
+    sync_product_variations,
+    update_single_variation,
+    delete_single_variation,
 )
 from app.api.v1.products import (
     PRODUCT_RELATIONSHIPS,
@@ -251,13 +260,19 @@ class AdminProductUpdate(BaseModel):
     total_stock: Optional[int] = Field(None, ge=0)
     status: Optional[ProductStatus] = None
     shop_edits: Optional[List[str]] = None
-
+    variations: Optional[List[VariationPayload]] = None
 
     @model_validator(mode="after")
     def reject_null_required_fields(self):
         for field in ("title", "base_price", "total_stock", "status"):
             if field in self.model_fields_set and getattr(self, field) is None:
                 raise ValueError(f"{field} cannot be null")
+        return self
+
+    @model_validator(mode="after")
+    def validate_variations_payload(self) -> "AdminProductUpdate":
+        if self.variations is not None:
+            validate_variation_inventory_shape(self.variations)
         return self
 
 
@@ -2637,7 +2652,8 @@ async def update_product(
         select(Product)
         .options(
             selectinload(Product.variants),
-            selectinload(Product.variations),
+            selectinload(Product.variations).selectinload(Variation.size_stocks),
+            selectinload(Product.images),
             selectinload(Product.shop_edit_categories),
         )
         .where(Product.id == product_id)
@@ -2649,6 +2665,7 @@ async def update_product(
 
     changes = product_data.model_dump(exclude_unset=True)
     shop_edits = changes.pop("shop_edits", None)
+    variations_data = changes.pop("variations", None)
 
     # Validate the complete replacement before changing product fields so a
     # failed request leaves both the product and curation untouched.
@@ -2682,6 +2699,15 @@ async def update_product(
     if shop_edit_categories is not None:
         product.shop_edit_categories = shop_edit_categories
 
+    if variations_data is not None:
+        await sync_product_variations(
+            db,
+            product,
+            variations_data,
+            inherited_price_update=("base_price" in changes or "compare_at_price" in changes),
+            is_admin=True,
+        )
+
     if "base_price" in changes or "compare_at_price" in changes:
         _sync_inherited_variation_prices(
             product.variations,
@@ -2697,6 +2723,79 @@ async def update_product(
 
     await db.commit()
     await db.refresh(product)
+
+    return {
+        "message": "Product updated successfully",
+        "product_id": str(product.id)
+    }
+
+
+@router.get("/products/{product_id}/variations", response_model=List[VariationResponse])
+async def get_admin_product_variations(
+    product_id: UUID,
+    current_admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db)
+):
+    """Get all variations for a product (admin only)"""
+    result = await db.execute(
+        select(Product).options(*PRODUCT_RELATIONSHIPS).where(Product.id == product_id)
+    )
+    product = result.scalar_one_or_none()
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    return product.variations
+
+
+@router.put("/products/{product_id}/variations/{variation_id}", response_model=VariationResponse)
+async def update_admin_product_variation(
+    product_id: UUID,
+    variation_id: UUID,
+    variation_data: VariationUpdate,
+    current_admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Update a single variation for a product (admin only).
+    Untouched variations and the product gallery remain unchanged.
+    """
+    result = await db.execute(
+        select(Product).options(*PRODUCT_RELATIONSHIPS).where(Product.id == product_id)
+    )
+    product = result.scalar_one_or_none()
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+
+    updated_variation = await update_single_variation(
+        db=db,
+        product=product,
+        variation_id=variation_id,
+        variation_data=variation_data,
+        is_admin=True,
+    )
+    return updated_variation
+
+
+@router.delete("/products/{product_id}/variations/{variation_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_admin_product_variation(
+    product_id: UUID,
+    variation_id: UUID,
+    current_admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db)
+):
+    """Delete a single variation from a product (admin only)"""
+    result = await db.execute(
+        select(Product).options(*PRODUCT_RELATIONSHIPS).where(Product.id == product_id)
+    )
+    product = result.scalar_one_or_none()
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+
+    await delete_single_variation(
+        db=db,
+        product=product,
+        variation_id=variation_id,
+        is_admin=True,
+    )
 
     return {"message": "Product updated successfully", "product_id": str(product.id)}
 

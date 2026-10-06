@@ -1,7 +1,7 @@
 """
 Product Pydantic schemas for request/response validation
 """
-from typing import Annotated, Optional, List
+from typing import Annotated, Optional, List, Any
 from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
@@ -92,77 +92,132 @@ def variation_inventory_axis_signature(variations) -> tuple:
     return tuple(sorted(signature))
 
 
+def _v_is_active(v: Any) -> bool:
+    if hasattr(v, "is_active"):
+        return bool(v.is_active)
+    if isinstance(v, dict):
+        return bool(v.get("is_active", True))
+    return True
+
+
+def _v_type(v: Any) -> str:
+    if hasattr(v, "type"):
+        return str(v.type or "color")
+    if isinstance(v, dict):
+        return str(v.get("type", "color"))
+    return "color"
+
+
+def _v_title(v: Any) -> Optional[str]:
+    if hasattr(v, "title"):
+        return v.title
+    if isinstance(v, dict):
+        return v.get("title")
+    return None
+
+
+def _v_sizes(v: Any) -> list:
+    if hasattr(v, "sizes") and v.sizes is not None:
+        return list(v.sizes)
+    if hasattr(v, "size_stocks") and v.size_stocks is not None:
+        return list(v.size_stocks)
+    if isinstance(v, dict):
+        return list(v.get("sizes") or v.get("size_stocks") or [])
+    return []
+
+
+def _s_size(s: Any) -> Optional[str]:
+    if hasattr(s, "size"):
+        val = s.size
+    elif isinstance(s, dict):
+        val = s.get("size")
+    else:
+        val = None
+    if hasattr(val, "value"):
+        return val.value
+    return str(val) if val is not None else None
+
+
 def validate_variation_inventory_shape(
-    variations: Optional[List["VariationCreate"]],
-    variants: Optional[List["ProductVariantCreate"]] = None,
+    variations: Optional[List[Any]],
+    variants: Optional[List[Any]] = None,
 ) -> None:
     """Reject variation combinations without one canonical inventory source."""
     all_variations = list(variations or [])
-    size_variation_labels = [
-        normalize_color_value(getattr(variation, "title", None))
+
+    color_variation_labels = [
+        normalize_color_value(_v_title(variation))
         for variation in all_variations
-        if variation.type.casefold() == "size"
+        if is_color_variation_type(_v_type(variation))
+    ]
+    if len(color_variation_labels) != len(set(color_variation_labels)):
+        raise ValueError("Variation titles must be unique after normalization")
+
+    size_variation_labels = [
+        normalize_color_value(_v_title(variation))
+        for variation in all_variations
+        if _v_type(variation).casefold() == "size"
     ]
     if len(size_variation_labels) != len(set(size_variation_labels)):
         raise ValueError("Size variation labels must be unique after normalization")
 
+    for variation in all_variations:
+        nested_sizes = _v_sizes(variation)
+        v_size_labels = [
+            normalize_color_value(_s_size(s))
+            for s in nested_sizes
+            if _s_size(s) is not None
+        ]
+        if len(v_size_labels) != len(set(v_size_labels)):
+            raise ValueError("Duplicate size options are not allowed within the same variation")
+
     nested_size_owners: dict[str, set[int]] = {}
     for variation_index, variation in enumerate(all_variations):
-        if not variation.is_active or variation.type.casefold() != "size":
+        if not _v_is_active(variation) or _v_type(variation).casefold() != "size":
             continue
-        nested_sizes = (
-            getattr(variation, "sizes", None)
-            if getattr(variation, "sizes", None) is not None
-            else getattr(variation, "size_stocks", [])
-        ) or []
+        nested_sizes = _v_sizes(variation)
         for size in nested_sizes:
-            label = normalize_color_value(getattr(size, "size", None))
+            label = normalize_color_value(_s_size(size))
             if label:
                 nested_size_owners.setdefault(label, set()).add(variation_index)
         if not nested_sizes:
-            label = normalize_color_value(getattr(variation, "title", None))
+            label = normalize_color_value(_v_title(variation))
             if label:
                 nested_size_owners.setdefault(label, set()).add(variation_index)
     if any(len(owners) > 1 for owners in nested_size_owners.values()):
         raise ValueError("Nested size-stock labels must be unique across size variations")
 
-    active_variations = [variation for variation in all_variations if variation.is_active]
+    active_variations = [variation for variation in all_variations if _v_is_active(variation)]
     color_variations = [
         variation
         for variation in active_variations
-        if is_color_variation_type(variation.type)
+        if is_color_variation_type(_v_type(variation))
     ]
     size_variations = [
         variation
         for variation in active_variations
-        if variation.type.casefold() == "size"
+        if _v_type(variation).casefold() == "size"
     ]
 
     legacy_variants = list(variants or [])
     legacy_size_labels = {
-        normalize_color_value(variant.size)
+        normalize_color_value(getattr(variant, "size", None) if hasattr(variant, "size") else (variant.get("size") if isinstance(variant, dict) else None))
         for variant in legacy_variants
-        if getattr(variant, "size", None) is not None
+        if (getattr(variant, "size", None) if hasattr(variant, "size") else (variant.get("size") if isinstance(variant, dict) else None)) is not None
     }
     bare_size_labels = {
-        normalize_color_value(getattr(variation, "title", None))
+        normalize_color_value(_v_title(variation))
         for variation in active_variations
-        if variation.type.casefold() == "size"
-        and not (
-            (
-                getattr(variation, "sizes", None)
-                if getattr(variation, "sizes", None) is not None
-                else getattr(variation, "size_stocks", [])
-            )
-            or []
-        )
+        if _v_type(variation).casefold() == "size"
+        and not _v_sizes(variation)
     }
     if legacy_size_labels and bare_size_labels and legacy_size_labels != bare_size_labels:
         raise ValueError(
             "Bare size variations must match legacy size inventory labels exactly"
         )
     legacy_color_variants = [
-        variant for variant in legacy_variants if getattr(variant, "color", None) is not None
+        variant for variant in legacy_variants
+        if (getattr(variant, "color", None) if hasattr(variant, "color") else (variant.get("color") if isinstance(variant, dict) else None)) is not None
     ]
     if (color_variations or legacy_color_variants) and size_variations:
         raise ValueError(
@@ -171,21 +226,14 @@ def validate_variation_inventory_shape(
         )
 
     size_stock_labels = {
-        normalize_color_value(getattr(size, "size", None))
+        normalize_color_value(_s_size(size))
         for variation in active_variations
-        for size in (
-            (
-                getattr(variation, "sizes", None)
-                if getattr(variation, "sizes", None) is not None
-                else getattr(variation, "size_stocks", [])
-            )
-            or []
-        )
+        for size in _v_sizes(variation)
     }
     if any(
-        normalize_color_value(variant.size) in size_stock_labels
+        normalize_color_value(getattr(variant, "size", None) if hasattr(variant, "size") else (variant.get("size") if isinstance(variant, dict) else None)) in size_stock_labels
         for variant in legacy_variants
-        if variant.size is not None
+        if (getattr(variant, "size", None) if hasattr(variant, "size") else (variant.get("size") if isinstance(variant, dict) else None)) is not None
     ):
         raise ValueError(
             "Legacy variants cannot duplicate size variation inventory; "
@@ -193,18 +241,12 @@ def validate_variation_inventory_shape(
         )
 
     has_size_stocks = any(
-        bool(
-            (
-                getattr(variation, "sizes", None)
-                if getattr(variation, "sizes", None) is not None
-                else getattr(variation, "size_stocks", [])
-            )
-            or []
-        )
+        bool(_v_sizes(variation))
         for variation in active_variations
     )
     if has_size_stocks and any(
-        getattr(variant, "size", None) is None for variant in legacy_variants
+        (getattr(variant, "size", None) if hasattr(variant, "size") else (variant.get("size") if isinstance(variant, dict) else None)) is None
+        for variant in legacy_variants
     ):
         inventory_axis = "color variation" if color_variations else "variation"
         raise ValueError(
@@ -217,7 +259,8 @@ def validate_variation_inventory_shape(
             "use variation-backed inventory as the sole stock source"
         )
     if bare_size_labels and any(
-        getattr(variant, "size", None) is None for variant in legacy_variants
+        (getattr(variant, "size", None) if hasattr(variant, "size") else (variant.get("size") if isinstance(variant, dict) else None)) is None
+        for variant in legacy_variants
     ):
         raise ValueError(
             "Generic legacy variants cannot coexist with bare size variations; "
@@ -326,9 +369,10 @@ class SizeStockBase(BaseModel):
     - UK Sizing: Numeric sizes (4, 6, 8, 10, 12, 14, 16, 18, 20, 22)
     - EU Sizing: Numeric sizes (32, 34, 36, 38, 40, 42, 44, 46, 48, 50)
     """
+    id: Optional[UUID] = Field(None, description="Size stock UUID if existing")
     size: str = Field(
         ...,
-        pattern="^(XXS|XS|S|M|L|XL|XXL|XXXL|One/Size|4|6|8|10|12|14|16|18|20|22|32|34|36|38|40|42|44|46|48|50)$",
+        pattern="^(XXS|XS|S|M|L|XL|XXL|XXXL|One/Size|ONE_SIZE|4|6|8|10|12|14|16|18|20|22|32|34|36|38|40|42|44|46|48|50)$",
         description="Size (US/UK/EU sizing or One/Size)"
     )
     stock: int = Field(default=0, ge=0, description="Stock quantity")
@@ -383,13 +427,20 @@ class VariationBase(BaseModel):
         return v
 
 
-class VariationCreate(VariationBase):
-    """Schema for creating variation"""
+class VariationPayload(VariationBase):
+    """Schema for variation creation or synchronization payload with optional stable ID."""
+    id: Optional[UUID] = Field(None, description="Stable variation ID if updating an existing variation")
     sizes: List[SizeStockCreate] = Field(default_factory=list, description="Optional size stock array")
+
+
+class VariationCreate(VariationPayload):
+    """Schema for creating variation"""
+    pass
 
 
 class VariationUpdate(BaseModel):
     """Schema for updating variation"""
+    id: Optional[UUID] = Field(None, description="Variation UUID if existing")
     title: Optional[str] = Field(None, min_length=1, max_length=100)
     type: Optional[str] = Field(None, max_length=50)
     color_hex: Optional[str] = Field(None, pattern=r"^#[0-9A-Fa-f]{6}$")
@@ -619,7 +670,7 @@ class ProductUpdate(BaseModel):
     meta_title: Optional[str] = Field(None, max_length=255)
     meta_description: Optional[str] = Field(None, max_length=500)
     size_guide: Optional[SizeGuide] = None
-    variations: Optional[List[VariationCreate]] = None  # For sync operations
+    variations: Optional[List[VariationPayload]] = None  # For sync operations
 
     @field_validator("base_price", "compare_at_price")
     @classmethod
@@ -640,6 +691,12 @@ class ProductUpdate(BaseModel):
             if not self.made_to_order_timeline or not self.made_to_order_timeline.strip():
                 raise ValueError("Made-to-order products require a production timeline")
             self.total_stock = 0
+        return self
+
+    @model_validator(mode="after")
+    def validate_variations_payload(self) -> "ProductUpdate":
+        if self.variations is not None:
+            validate_variation_inventory_shape(self.variations)
         return self
 
 

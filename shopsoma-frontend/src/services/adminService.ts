@@ -1,5 +1,6 @@
 import api from './api';
-import type { User, PaginatedResponse, Product, ProductVariant, ProductImage, Category } from '../types';
+import type { User, PaginatedResponse, Product, ProductVariant, ProductImage, Category, Variation } from '../types';
+import type { CreateProductVariationPayload } from './productService';
 
 export interface AdminProductUpdatePayload {
   title?: string;
@@ -474,6 +475,26 @@ export const adminService = {
 
   async deleteCategory(categoryId: string): Promise<void> {
     await api.delete(`/admin/categories/${categoryId}`);
+  },
+
+  // ==================== PRODUCT VARIATIONS ====================
+
+  async getProductVariations(productId: string): Promise<Variation[]> {
+    const response = await api.get(`/admin/products/${productId}/variations`);
+    return response.data || [];
+  },
+
+  async updateProductVariation(
+    productId: string,
+    variationId: string,
+    data: Partial<CreateProductVariationPayload>
+  ): Promise<Variation> {
+    const response = await api.put(`/admin/products/${productId}/variations/${variationId}`, data);
+    return response.data;
+  },
+
+  async deleteProductVariation(productId: string, variationId: string): Promise<void> {
+    await api.delete(`/admin/products/${productId}/variations/${variationId}`);
   },
 };
 

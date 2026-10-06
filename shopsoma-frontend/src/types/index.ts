@@ -131,7 +131,7 @@ export interface ImageBatchUploadResponse {
 export interface SizeStock {
   id?: string;
   variation_id?: string;
-  size: 'XXS' | 'XS' | 'S' | 'M' | 'L' | 'XL' | 'XXL' | 'XXXL';
+  size: 'XXS' | 'XS' | 'S' | 'M' | 'L' | 'XL' | 'XXL' | 'XXXL' | 'One/Size' | string;
   stock: number;
   created_at?: string;
   updated_at?: string;
