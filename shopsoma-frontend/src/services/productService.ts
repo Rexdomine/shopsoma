@@ -1,5 +1,5 @@
 import api from './api';
-import type { Product, ProductVariant, ProductImage, ImageUploadResponse, ImageBatchUploadResponse } from '../types';
+import type { Product, ProductVariant, ProductImage, ImageUploadResponse, ImageBatchUploadResponse, Variation } from '../types';
 
 export interface CreateProductImagePayload {
   image_url: string;
@@ -323,5 +323,25 @@ export const productService = {
 
   async deleteVariant(productId: string, variantId: string): Promise<void> {
     await api.delete(`/products/${productId}/variants/${variantId}`);
+  },
+
+  // ==================== PRODUCT VARIATIONS ====================
+
+  async getVariations(productId: string): Promise<Variation[]> {
+    const response = await api.get(`/products/${productId}/variations`);
+    return response.data || [];
+  },
+
+  async updateVariation(
+    productId: string,
+    variationId: string,
+    data: Partial<CreateProductVariationPayload>
+  ): Promise<Variation> {
+    const response = await api.put(`/products/${productId}/variations/${variationId}`, data);
+    return response.data;
+  },
+
+  async deleteVariation(productId: string, variationId: string): Promise<void> {
+    await api.delete(`/products/${productId}/variations/${variationId}`);
   },
 };
