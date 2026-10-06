@@ -4,6 +4,7 @@ Preserves stable Variation.id and SizeStock.id entities across product updates.
 """
 from decimal import Decimal
 from typing import Any, List, Optional, Sequence
+import uuid
 from uuid import UUID
 
 from fastapi import HTTPException, status
@@ -261,7 +262,21 @@ async def sync_product_variations(
             variations_to_sync.append(target)
         else:
             # Create new variation
+            new_var_id = uuid.uuid4()
+            size_stocks_list = []
+            if "sizes" in v_dict and v_dict["sizes"] is not None:
+                for s_item in v_dict["sizes"]:
+                    s_dict = s_item if isinstance(s_item, dict) else s_item.model_dump()
+                    size_stock = SizeStock(
+                        id=uuid.uuid4(),
+                        variation_id=new_var_id,
+                        size=normalize_size_enum(s_dict["size"]),
+                        stock=s_dict.get("stock", 0),
+                    )
+                    size_stocks_list.append(size_stock)
+
             new_variation = Variation(
+                id=new_var_id,
                 product_id=product.id,
                 title=v_dict["title"],
                 type=v_dict.get("type", "color"),
@@ -272,22 +287,11 @@ async def sync_product_variations(
                 inherits_sale_price=inherits_sale_price,
                 images=v_dict.get("images", []),
                 is_active=v_dict.get("is_active", True),
+                size_stocks=size_stocks_list,
             )
             db.add(new_variation)
-            await db.flush()  # Allocate new UUID
-
-            if "sizes" in v_dict and v_dict["sizes"] is not None:
-                for s_item in v_dict["sizes"]:
-                    s_dict = s_item if isinstance(s_item, dict) else s_item.model_dump()
-                    size_stock = SizeStock(
-                        variation_id=new_variation.id,
-                        size=normalize_size_enum(s_dict["size"]),
-                        stock=s_dict.get("stock", 0),
-                    )
-                    db.add(size_stock)
-                    new_variation.size_stocks.append(size_stock)
-
-            touched_ids.add(new_variation.id)
+            product.variations.append(new_variation)
+            touched_ids.add(new_var_id)
             variations_to_sync.append(new_variation)
 
     # Delete variations that were removed from the product
