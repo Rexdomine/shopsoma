@@ -63,6 +63,14 @@ from app.schemas.product import (
     effective_variation_price,
     variation_regular_price,
     variation_sale_price,
+    VariationResponse,
+    VariationUpdate,
+    VariationPayload,
+)
+from app.services.variation_persistence import (
+    sync_product_variations,
+    update_single_variation,
+    delete_single_variation,
 )
 
 logger = logging.getLogger(__name__)
@@ -1217,48 +1225,6 @@ async def update_product(
     variations_data = update_data.pop("variations", None)
     variations_to_sync = product.variations
 
-    if variations_data is not None:
-        variation_image_urls = [
-            image_url
-            for variation_data in variations_data
-            for image_url in (variation_data.get("images") or [])
-        ]
-        try:
-            # Deletion paths acquire the catalog coordinator before any
-            # storage-key lock. Keep this writer in the same global order to
-            # prevent a catalog/storage lock inversion.
-            await coordinate_catalog_write(db, product_ids=[product_id], lock_only=True)
-            await lock_and_validate_variation_image_urls(
-                db, variation_image_urls, product_id=product_id
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-
-    # ProductUpdate validates only the incoming variation payload. When an
-    # existing product retains legacy variants, include those persisted rows in
-    # the same invariant before replacing any variations.
-    if (
-        variations_data is not None
-        and variation_inventory_axis_signature(product_data.variations)
-        != variation_inventory_axis_signature(product.variations)
-    ):
-        try:
-            validate_variation_inventory_shape(product_data.variations, product.variants)
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=[
-                    {
-                        "loc": ["body", "variations"],
-                        "msg": str(exc),
-                        "type": "value_error",
-                    }
-                ],
-            ) from exc
-
-    # Acquire the catalog coordinator before any moderation-relevant parent or
-    # child write. This advances the revision while the write is serialized, so
-    # a moderation decision based on the prior revision cannot approve it.
     content_rewrite = variations_data is not None or any(
         field in update_data for field in ["title", "description"]
     )
@@ -1275,56 +1241,13 @@ async def update_product(
 
     # Sync variations if provided
     if variations_data is not None:
-        variations_to_sync = []
-        # Delete all existing variations (cascade will delete size_stocks)
-        await db.execute(
-            select(Variation).where(Variation.product_id == product_id)
+        variations_to_sync = await sync_product_variations(
+            db,
+            product,
+            variations_data,
+            inherited_price_update=inherited_price_update,
+            is_admin=False,
         )
-        for existing_variation in product.variations:
-            await db.delete(existing_variation)
-
-        # Create new variations
-        for variation_data in variations_data:
-            inherits_price = variation_data.get("inherits_price")
-            inherits_sale_price = variation_data.get("inherits_sale_price")
-            variation_price = variation_data.get("price")
-            variation_sale_price = variation_data.get("sale_price")
-            if inherited_price_update and inherits_price is True:
-                variation_price = product.compare_at_price
-            if inherited_price_update and inherits_sale_price is True:
-                variation_sale_price = product.base_price if product.compare_at_price is not None else None
-            variation = Variation(
-                product_id=product.id,
-                title=variation_data["title"],
-                type=variation_data.get("type", "color"),
-                color_hex=variation_data.get("color_hex"),
-                price=variation_price,
-                sale_price=variation_sale_price,
-                inherits_price=inherits_price,
-                inherits_sale_price=inherits_sale_price,
-                images=variation_data.get("images", []),
-                is_active=variation_data.get("is_active", True),
-            )
-            db.add(variation)
-            await db.flush()  # Get variation ID
-            if inherited_price_update:
-                if variation.inherits_price is True:
-                    variation.price = product.compare_at_price
-                if variation.inherits_sale_price is True:
-                    variation.sale_price = (
-                        product.base_price if product.compare_at_price is not None else None
-                    )
-            variations_to_sync.append(variation)
-
-            # Add size stocks for this variation
-            if "sizes" in variation_data:
-                for size_data in variation_data["sizes"]:
-                    size_stock = SizeStock(
-                        variation_id=variation.id,
-                        size=SizeEnum(size_data["size"]),
-                        stock=size_data.get("stock", 0),
-                    )
-                    db.add(size_stock)
 
     if any(field in update_data for field in ["total_stock", "made_to_order"]):
         _sync_single_product_variant_inventory(product)
@@ -1402,6 +1325,90 @@ async def delete_product(
     # Ensure archived products no longer count toward collection totals
     product.collection_id = None
     await db.commit()
+
+
+# ============================================================================
+# Product Variation Endpoints
+# ============================================================================
+
+@router.get("/{product_id}/variations", response_model=List[VariationResponse])
+async def get_product_variations(
+    product_id: UUID,
+    vendor: Vendor = Depends(get_completed_vendor),
+    db: AsyncSession = Depends(get_db)
+):
+    """Get all variations for a vendor's product"""
+    result = await db.execute(
+        select(Product)
+        .options(*PRODUCT_RELATIONSHIPS)
+        .where(Product.id == product_id)
+    )
+    product = result.scalar_one_or_none()
+    if not product:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
+    if product.vendor_id != vendor.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to access this product")
+    return product.variations
+
+
+@router.put("/{product_id}/variations/{variation_id}", response_model=VariationResponse)
+async def update_vendor_product_variation(
+    product_id: UUID,
+    variation_id: UUID,
+    variation_data: VariationUpdate,
+    vendor: Vendor = Depends(get_completed_vendor),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Update a single selected variation for a vendor's product.
+    Untouched variations and the product gallery remain unchanged.
+    """
+    result = await db.execute(
+        select(Product)
+        .options(*PRODUCT_RELATIONSHIPS)
+        .where(Product.id == product_id)
+    )
+    product = result.scalar_one_or_none()
+    if not product:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
+    if product.vendor_id != vendor.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to update this product")
+
+    updated_variation = await update_single_variation(
+        db=db,
+        product=product,
+        variation_id=variation_id,
+        variation_data=variation_data,
+        is_admin=False,
+    )
+    return updated_variation
+
+
+@router.delete("/{product_id}/variations/{variation_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_vendor_product_variation(
+    product_id: UUID,
+    variation_id: UUID,
+    vendor: Vendor = Depends(get_completed_vendor),
+    db: AsyncSession = Depends(get_db)
+):
+    """Delete a single variation from a vendor's product"""
+    result = await db.execute(
+        select(Product)
+        .options(*PRODUCT_RELATIONSHIPS)
+        .where(Product.id == product_id)
+    )
+    product = result.scalar_one_or_none()
+    if not product:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
+    if product.vendor_id != vendor.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to update this product")
+
+    await delete_single_variation(
+        db=db,
+        product=product,
+        variation_id=variation_id,
+        is_admin=False,
+    )
 
 
 # ============================================================================

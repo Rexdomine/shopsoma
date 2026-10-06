@@ -9,6 +9,7 @@ import ToastContainer from '../../components/ui/ToastContainer';
 import type { Product, ProductImage } from '../../types';
 import { normalizeProductImageUrl } from '../../utils/productImages';
 import ProductSizeOptionsManager from '../../components/product/ProductSizeOptionsManager';
+import ProductVariationsManager from '../../components/product/ProductVariationsManager';
 
 export default function VendorProductEdit() {
   const { id } = useParams<{ id: string }>();
@@ -489,25 +490,45 @@ export default function VendorProductEdit() {
               </div>
             </div>
 
-            {/* Size Options Management */}
+            {/* Variations / Size Options Management */}
             {id && (
               <div className="mt-6">
-                <ProductSizeOptionsManager
-                  productId={id}
-                  initialVariants={product?.variants || []}
-                  basePrice={parseFloat(basePrice) || 0}
-                  currency={product?.currency === 'USD' ? '$' : '£'}
-                  madeToOrder={madeToOrder}
-                  isAdmin={false}
-                  onVariantsUpdated={(updatedVariants) => {
-                    if (product) {
-                      setProduct({
-                        ...product,
-                        variants: updatedVariants,
-                      });
-                    }
-                  }}
-                />
+                {product?.product_type === 'variable' ? (
+                  <ProductVariationsManager
+                    productId={id}
+                    initialVariations={product?.variations || []}
+                    productImages={images}
+                    basePrice={parseFloat(basePrice) || 0}
+                    compareAtPrice={parseFloat(comparePrice) || undefined}
+                    currency={product?.currency === 'USD' ? '$' : '£'}
+                    isAdmin={false}
+                    onVariationsUpdated={(updatedVariations) => {
+                      if (product) {
+                        setProduct({
+                          ...product,
+                          variations: updatedVariations,
+                        });
+                      }
+                    }}
+                  />
+                ) : (
+                  <ProductSizeOptionsManager
+                    productId={id}
+                    initialVariants={product?.variants || []}
+                    basePrice={parseFloat(basePrice) || 0}
+                    currency={product?.currency === 'USD' ? '$' : '£'}
+                    madeToOrder={madeToOrder}
+                    isAdmin={false}
+                    onVariantsUpdated={(updatedVariants) => {
+                      if (product) {
+                        setProduct({
+                          ...product,
+                          variants: updatedVariants,
+                        });
+                      }
+                    }}
+                  />
+                )}
               </div>
             )}
 
