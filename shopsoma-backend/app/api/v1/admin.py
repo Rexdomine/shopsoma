@@ -269,12 +269,6 @@ class AdminProductUpdate(BaseModel):
                 raise ValueError(f"{field} cannot be null")
         return self
 
-    @model_validator(mode="after")
-    def validate_variations_payload(self) -> "AdminProductUpdate":
-        if self.variations is not None:
-            validate_variation_inventory_shape(self.variations)
-        return self
-
 
 class ShopEditsUpdate(BaseModel):
     """Admin-only replacement set for independent Shop Edits tags."""

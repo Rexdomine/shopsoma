@@ -693,12 +693,6 @@ class ProductUpdate(BaseModel):
             self.total_stock = 0
         return self
 
-    @model_validator(mode="after")
-    def validate_variations_payload(self) -> "ProductUpdate":
-        if self.variations is not None:
-            validate_variation_inventory_shape(self.variations)
-        return self
-
 
 class ProductResponse(ProductBase):
     """Schema for product response"""
