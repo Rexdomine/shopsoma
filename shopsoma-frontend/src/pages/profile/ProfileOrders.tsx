@@ -8,6 +8,7 @@ import { useAuth } from '../../context/AuthContext';
 import { usePreferenceStore } from '../../store/preferenceStore';
 import { formatPriceWithCurrency } from '../../utils/pricing';
 import CustomerShippingQuotes from '../../components/shipping/CustomerShippingQuotes';
+import { normalizeProductImageUrl } from '../../utils/productImages';
 
 export default function ProfileOrders() {
   const navigate = useNavigate();
@@ -319,7 +320,8 @@ export default function ProfileOrders() {
                         {selectedOrder.items.map((item: any, index: number) => {
                           const productTitle = item.product_title || item.product_name || 'Product';
                           const variantDisplay = item.variant_name || item.variant_title || item.variant_details?.name || item.variant_details?.title;
-                          const imageSrc = item.product_image_url || item.product_image || item.variant_details?.image_url || '/images/placeholder-product.svg';
+                          const rawImageSrc = item.product_image_url || item.product_image || item.variant_details?.image_url;
+                          const imageSrc = normalizeProductImageUrl(rawImageSrc) || '/images/placeholder-product.svg';
 
                           return (
                             <div key={index} className="flex gap-3 border-b border-gray-100 pb-3">
@@ -328,6 +330,9 @@ export default function ProfileOrders() {
                                   src={imageSrc}
                                   alt={productTitle}
                                   className="w-16 h-16 object-cover rounded-sm border border-gray-200"
+                                  onError={(e) => {
+                                    e.currentTarget.src = '/images/placeholder-product.svg';
+                                  }}
                                 />
                               </div>
                               <div className="flex-1 min-w-0">

@@ -26,6 +26,7 @@ import type {
 } from '../../services/adminOrderService';
 import { getStatusBadgeConfig } from '../../utils/orderStatusMessages';
 import { formatPriceWithConversion } from '../../utils/pricing';
+import { normalizeProductImageUrl } from '../../utils/productImages';
 
 export default function AdminOrderDetail() {
   const { orderId } = useParams<{ orderId: string }>();
@@ -462,7 +463,7 @@ export default function AdminOrderDetail() {
                       <div className="flex-shrink-0">
                         {item.product_image_url ? (
                           <img
-                            src={item.product_image_url}
+                            src={normalizeProductImageUrl(item.product_image_url)}
                             alt={item.product_title}
                             className="w-20 h-20 object-cover rounded-lg border border-gray-200"
                             onError={(e) => {

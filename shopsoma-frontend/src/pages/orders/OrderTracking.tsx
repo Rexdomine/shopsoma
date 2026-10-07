@@ -12,6 +12,7 @@ import websocketService, { type OrderUpdateData } from '../../services/websocket
 import { useCurrencyStore } from '../../store/currencyStore';
 import { formatPriceWithConversion, type Currency } from '../../utils/pricing';
 import { loadCheckoutCapability } from '../../utils/checkoutCapability';
+import { normalizeProductImageUrl } from '../../utils/productImages';
 
 const STATUS_STEPS: Array<{ key: OrderStatus; label: string }> = [
   { key: 'order_placed', label: 'Order Placed' },
@@ -758,9 +759,12 @@ export default function OrderTracking() {
                       {item.product_image_url && (
                         <div className="shrink-0">
                           <img
-                            src={item.product_image_url}
+                            src={normalizeProductImageUrl(item.product_image_url) || '/images/placeholder-product.svg'}
                             alt={item.product_title}
                             className="w-14 h-14 sm:w-16 sm:h-16 object-cover rounded-sm border border-gray-200"
+                            onError={(e) => {
+                              e.currentTarget.src = '/images/placeholder-product.svg';
+                            }}
                           />
                         </div>
                       )}

@@ -26,6 +26,7 @@ import ToastContainer from '../../components/ui/ToastContainer';
 import { useCurrency } from '../../hooks/useCurrency';
 import MadeToOrderReadinessBadge, { MadeToOrderTag } from '../../components/orders/MadeToOrderReadinessBadge';
 import { formatReadyAt } from '../../utils/madeToOrderReadiness';
+import { normalizeProductImageUrl } from '../../utils/productImages';
 
 type VendorSidebarPrimary = 'dashboard' | 'orders' | 'products' | 'collections' | 'marketing' | 'analytics' | 'earnings' | 'settings';
 
@@ -716,7 +717,7 @@ export default function VendorOrderDetail() {
                         <div className="h-16 w-16 rounded-xl bg-gray-100 border border-gray-200 overflow-hidden flex-shrink-0">
                           {item.product_image_url ? (
                             <img
-                              src={item.product_image_url}
+                              src={normalizeProductImageUrl(item.product_image_url) || item.product_image_url}
                               alt={item.product_title}
                               className="h-full w-full object-cover"
                               onError={(e) => {
