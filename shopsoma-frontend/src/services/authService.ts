@@ -1,6 +1,7 @@
 import api from './api';
 import type { User, AuthTokens } from '../types';
 import { STORAGE_KEYS } from '../config/constants';
+import { apiErrorMessage } from '../utils/apiErrorMessage';
 
 export interface LoginCredentials {
   email: string;
@@ -74,15 +75,17 @@ export const authService = {
     } catch (error: any) {
       // Enhanced error handling
       if (error.response?.status === 401) {
-        throw new Error('Invalid email or password');
+        const detailMsg = apiErrorMessage(error, '');
+        throw new Error(detailMsg || 'Invalid email or password');
       } else if (error.response?.status === 403) {
-        throw new Error('Your account has been disabled');
+        const detailMsg = apiErrorMessage(error, '');
+        throw new Error(detailMsg || 'Your account has been disabled');
       } else if (error.response?.status === 429) {
         throw new Error('Too many login attempts. Please try again later');
       } else if (error.response?.data?.detail) {
-        throw new Error(error.response.data.detail);
+        throw new Error(apiErrorMessage(error, 'Login failed. Please try again'));
       }
-      throw new Error('Login failed. Please try again');
+      throw new Error(error?.message || 'Login failed. Please try again');
     }
   },
 
@@ -122,12 +125,13 @@ export const authService = {
     } catch (error: any) {
       // Enhanced error handling
       if (error.response?.status === 400) {
-        if (error.response.data?.detail?.includes('Email already registered')) {
+        const detail = error.response.data?.detail;
+        if (typeof detail === 'string' && detail.includes('Email already registered')) {
           throw new Error('This email is already registered');
         }
-        throw new Error(error.response.data?.detail || 'Invalid registration data');
+        throw new Error(apiErrorMessage(error, 'Invalid registration data'));
       } else if (error.response?.data?.detail) {
-        throw new Error(error.response.data.detail);
+        throw new Error(apiErrorMessage(error, 'Registration failed. Please try again'));
       }
       throw new Error('Registration failed. Please try again');
     }

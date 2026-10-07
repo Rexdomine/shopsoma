@@ -1338,4 +1338,32 @@ describe('Checkout M5 sequencing and recovery', () => {
     expect(screen.queryByText('Stripe form')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Continue to payment' })).toBeEnabled();
   });
+
+  it('disables the address Continue button when the shipping method Continue button is displayed', async () => {
+    const secondary = { ...address, id: 'address-2', address_line1: '2 Other St', state: 'Abuja', is_default: false };
+    mocks.getAddresses.mockResolvedValueOnce({ addresses: [address, secondary] });
+    render(<MemoryRouter initialEntries={['/checkout']}><CheckoutTestRoutes /></MemoryRouter>);
+    await waitFor(() => expect(mocks.getAddresses).toHaveBeenCalled());
+
+    // Initially on address step: exactly one Continue button, which is enabled
+    const addressContinue = screen.getByRole('button', { name: 'Continue' });
+    expect(addressContinue).toBeEnabled();
+
+    // Click Continue on address -> advances to shipping step
+    fireEvent.click(addressContinue);
+    await screen.findByText('Standard');
+
+    // Now two Continue buttons exist
+    const continueButtons = screen.getAllByRole('button', { name: 'Continue' });
+    expect(continueButtons).toHaveLength(2);
+    // The first Continue button (under Addresses) is disabled
+    expect(continueButtons[0]).toBeDisabled();
+    // The second Continue button (under Shipping Method) is enabled
+    expect(continueButtons[1]).toBeEnabled();
+
+    // If user clicks a different address, it resets to address step and re-enables address continue
+    fireEvent.click(screen.getByText(/2 Other St/));
+    const reenabledAddressContinue = screen.getByRole('button', { name: 'Continue' });
+    expect(reenabledAddressContinue).toBeEnabled();
+  });
 });

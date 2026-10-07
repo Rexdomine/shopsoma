@@ -34,6 +34,9 @@ export interface OrderTracking {
   currency: string;
   updated_at: string;
   current_status: OrderStatus;
+  payment_status?: string;
+  cancellation_reason?: string | null;
+  cancelled_at?: string | null;
   history: TrackingHistory[];
 }
 

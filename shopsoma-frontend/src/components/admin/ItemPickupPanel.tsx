@@ -7,6 +7,7 @@
 import { useState } from 'react';
 import MadeToOrderReadinessBadge, { MadeToOrderTag } from '../orders/MadeToOrderReadinessBadge';
 import { formatReadyAt } from '../../utils/madeToOrderReadiness';
+import { formatProductionDuration, formatWorkingDaysLeft } from '../../utils/productionTracking';
 import { updatePickupStatus } from '../../services/adminOrderService';
 import type { OrderDetail, OrderItemDetail, PickupStatusUpdate } from '../../services/adminOrderService';
 
@@ -35,6 +36,17 @@ const toIso = (value: string): string | undefined => {
 const errorDetail = (err: unknown, fallback: string): string => {
   const detail = (err as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail;
   return typeof detail === 'string' && detail ? detail : fallback;
+};
+
+const WORKING_DAYS_TONE_CLASSES: Record<
+  'completed' | 'normal' | 'due-soon' | 'overdue' | 'unavailable',
+  string
+> = {
+  completed: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+  normal: 'bg-teal-50 text-teal-700 border-teal-200',
+  'due-soon': 'bg-amber-50 text-amber-800 border-amber-200',
+  overdue: 'bg-rose-50 text-rose-700 border-rose-200',
+  unavailable: 'bg-gray-100 text-gray-600 border-gray-200',
 };
 
 export default function ItemPickupPanel({ orderId, item, onUpdated, onSuccess, onError }: ItemPickupPanelProps) {
@@ -108,6 +120,24 @@ export default function ItemPickupPanel({ orderId, item, onUpdated, onSuccess, o
     );
   };
 
+  const isCompleted =
+    item.is_production_completed ||
+    !!item.ready_for_pickup_at ||
+    state === 'ready_for_pickup' ||
+    state === 'pickup_scheduled' ||
+    state === 'picked_up';
+
+  const duration = formatProductionDuration(
+    item.production_duration,
+    item.estimated_production_days ?? item.pickup?.estimated_production_days
+  );
+
+  const countdown = formatWorkingDaysLeft({
+    ...item,
+    is_production_completed: isCompleted,
+  });
+
+  const dueDate = formatReadyAt(item.production_due_date);
   const readyAt = formatReadyAt(item.ready_for_pickup_at);
   const windowStart = formatReadyAt(pickup?.pickup_window_start || pickup?.scheduled_pickup_date);
   const windowEnd = formatReadyAt(pickup?.pickup_window_end);
@@ -121,16 +151,44 @@ export default function ItemPickupPanel({ orderId, item, onUpdated, onSuccess, o
       <div className="flex flex-wrap items-center gap-2">
         <MadeToOrderTag />
         <MadeToOrderReadinessBadge state={state} />
+        {duration ? (
+          <span
+            className="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700 border border-slate-200"
+            data-testid="mto-duration"
+          >
+            Duration: {duration}
+          </span>
+        ) : (
+          <span
+            className="inline-flex items-center rounded-full bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-500 border border-gray-200"
+            data-testid="mto-duration"
+          >
+            Duration: Not specified
+          </span>
+        )}
+        <span
+          className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold border ${WORKING_DAYS_TONE_CLASSES[countdown.tone]}`}
+          data-testid="mto-countdown"
+        >
+          {countdown.text}
+        </span>
       </div>
 
       {readyAt ? (
         <p className="text-xs text-gray-600">Marked ready: {readyAt}</p>
       ) : (
-        state === 'being_prepared' && (
-          <p className="text-xs text-gray-500">
-            Waiting for {item.vendor.business_name} to mark this item ready. Pickup can be scheduled once it is ready.
-          </p>
-        )
+        <>
+          {dueDate && (
+            <p className="text-xs text-gray-500">
+              Estimated completion: {dueDate}
+            </p>
+          )}
+          {state === 'being_prepared' && (
+            <p className="text-xs text-gray-500">
+              Waiting for {item.vendor.business_name} to mark this item ready. Pickup can be scheduled once it is ready.
+            </p>
+          )}
+        </>
       )}
 
       {windowStart && (state === 'pickup_scheduled' || state === 'picked_up') && (

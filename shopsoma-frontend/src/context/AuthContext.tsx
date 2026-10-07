@@ -72,23 +72,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [user]);
 
   const login = useCallback(async (credentials: LoginCredentials) => {
-    setIsLoading(true);
-    try {
-      await authService.login(credentials);
-      await loadUser();
-    } finally {
-      setIsLoading(false);
-    }
+    await authService.login(credentials);
+    await loadUser();
   }, [loadUser]);
 
   const register = useCallback(async (data: RegisterData) => {
-    setIsLoading(true);
-    try {
-      await authService.register(data);
-      await loadUser();
-    } finally {
-      setIsLoading(false);
-    }
+    await authService.register(data);
+    await loadUser();
   }, [loadUser]);
 
   const logout = useCallback(async () => {

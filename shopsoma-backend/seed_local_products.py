@@ -130,7 +130,7 @@ SIZE_ENUM_MAP = {
 
 VENDORS_SEED = [
     {
-        "email": "vendor@shopsoma.com",
+        "email": "sirkaysonline@gmail.com",
         "name": "Shopsoma Fashion Studio",
         "business_name": "Shopsoma Studio",
         "business_description": "Curated African luxury, clean silhouettes, and contemporary craftsmanship.",
@@ -1047,6 +1047,23 @@ async def seed_local_products(activate_existing: bool = False):
 
         default_vendor = vendors_by_name["Shopsoma Studio"]
 
+        # Ensure demo customer exists
+        cust_res = await session.execute(select(User).where(User.email == "customer@shopsoma.com"))
+        if not cust_res.scalar_one_or_none():
+            demo_cust = User(
+                id=uuid.uuid4(),
+                email="customer@shopsoma.com",
+                hashed_password=get_password_hash("Customer123!"),
+                full_name="Demo Customer",
+                phone_number="+2348012345678",
+                role=UserRole.CUSTOMER,
+                email_verified=True,
+                is_active=True,
+            )
+            session.add(demo_cust)
+            await session.flush()
+            print("  [+] Created demo customer: customer@shopsoma.com")
+
         # ---------------------------------------------------------------------
         # 2. Build Category Lookup Map
         # ---------------------------------------------------------------------
@@ -1225,6 +1242,17 @@ async def seed_local_products(activate_existing: bool = False):
             print("  [OK] All existing products marked ACTIVE and APPROVED")
 
         await session.commit()
+
+        # Ensure default shipping rates exist for local checkout
+        try:
+            from seed_shipping_rates import ensure_default_shipping_rates
+            seeded_rates = await ensure_default_shipping_rates(session)
+            if seeded_rates:
+                print("  [OK] Default local shipping rates verified and seeded.")
+            else:
+                print("  [OK] Default local shipping rates already present.")
+        except Exception as e:
+            print(f"  [WARN] Failed to verify default shipping rates: {e}")
 
         # ---------------------------------------------------------------------
         # 5. Output Summary

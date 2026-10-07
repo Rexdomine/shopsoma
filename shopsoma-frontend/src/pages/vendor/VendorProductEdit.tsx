@@ -10,6 +10,8 @@ import type { Product, ProductImage } from '../../types';
 import { normalizeProductImageUrl } from '../../utils/productImages';
 import ProductSizeOptionsManager from '../../components/product/ProductSizeOptionsManager';
 import ProductVariationsManager from '../../components/product/ProductVariationsManager';
+import PriceInput from '../../components/common/PriceInput';
+import { cleanNumberString } from '../../utils/pricing';
 
 export default function VendorProductEdit() {
   const { id } = useParams<{ id: string }>();
@@ -184,7 +186,10 @@ export default function VendorProductEdit() {
       return;
     }
 
-    if (!basePrice || parseFloat(basePrice) <= 0) {
+    const cleanBasePrice = cleanNumberString(basePrice);
+    const cleanComparePrice = cleanNumberString(comparePrice);
+
+    if (!cleanBasePrice || parseFloat(cleanBasePrice) <= 0) {
       warning('Please enter a valid base price');
       return;
     }
@@ -231,8 +236,8 @@ export default function VendorProductEdit() {
       const updateData: Partial<Product> = {
         title: title.trim(),
         description: description.trim(),
-        base_price: parseFloat(basePrice),
-        compare_at_price: comparePrice ? parseFloat(comparePrice) : undefined,
+        base_price: parseFloat(cleanBasePrice),
+        compare_at_price: cleanComparePrice ? parseFloat(cleanComparePrice) : undefined,
         total_stock: madeToOrder ? 0 : stock ? parseInt(stock) : 0,
         status,
         made_to_order: madeToOrder,
@@ -349,13 +354,10 @@ export default function VendorProductEdit() {
                     <label htmlFor="basePrice" className="block text-sm font-medium text-gray-700 mb-2">
                       Base Price ($) *
                     </label>
-                    <input
+                    <PriceInput
                       id="basePrice"
-                      type="number"
-                      step="0.01"
-                      min="0"
                       value={basePrice}
-                      onChange={(e) => setBasePrice(e.target.value)}
+                      onChange={setBasePrice}
                       className="w-full rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
                       placeholder="0.00"
                       required
@@ -366,13 +368,10 @@ export default function VendorProductEdit() {
                     <label htmlFor="comparePrice" className="block text-sm font-medium text-gray-700 mb-2">
                       Compare at Price ($)
                     </label>
-                    <input
+                    <PriceInput
                       id="comparePrice"
-                      type="number"
-                      step="0.01"
-                      min="0"
                       value={comparePrice}
-                      onChange={(e) => setComparePrice(e.target.value)}
+                      onChange={setComparePrice}
                       className="w-full rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
                       placeholder="0.00"
                     />
@@ -498,8 +497,8 @@ export default function VendorProductEdit() {
                     productId={id}
                     initialVariations={product?.variations || []}
                     productImages={images}
-                    basePrice={parseFloat(basePrice) || 0}
-                    compareAtPrice={parseFloat(comparePrice) || undefined}
+                    basePrice={parseFloat(cleanNumberString(basePrice)) || 0}
+                    compareAtPrice={parseFloat(cleanNumberString(comparePrice)) || undefined}
                     currency={product?.currency === 'USD' ? '$' : '£'}
                     isAdmin={false}
                     onVariationsUpdated={(updatedVariations) => {
@@ -515,7 +514,7 @@ export default function VendorProductEdit() {
                   <ProductSizeOptionsManager
                     productId={id}
                     initialVariants={product?.variants || []}
-                    basePrice={parseFloat(basePrice) || 0}
+                    basePrice={parseFloat(cleanNumberString(basePrice)) || 0}
                     currency={product?.currency === 'USD' ? '$' : '£'}
                     madeToOrder={madeToOrder}
                     isAdmin={false}
