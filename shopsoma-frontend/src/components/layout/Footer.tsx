@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { subscribeToNewsletter } from '../../services/newsletterService';
 
 export const FOOTER_SECTIONS = [
-  { key: 'customer-care', title: 'Customer Care', links: [{ to: '/contact', label: 'Contact Us' }, { to: '/track', label: 'Track your order' }, { to: '/shipping', label: 'Shipping' }, { to: '/returns', label: 'Returns and Refunds' }, { to: '/faqs', label: 'FAQ' }] },
+  { key: 'customer-care', title: 'Customer Care', links: [{ to: '/contact', label: 'Contact Us' }, { to: '/orders', label: 'My Orders' }, { to: '/track', label: 'Track your order' }, { to: '/shipping', label: 'Shipping' }, { to: '/returns', label: 'Returns and Refunds' }, { to: '/faqs', label: 'FAQ' }] },
   { key: 'about', title: 'About ShopSoma', links: [{ to: '/about', label: 'About Us' }, { to: '/collaborate', label: 'Become a ShopSoma partner' }] },
   { key: 'policies', title: 'Policies', links: [{ to: '/terms', label: 'Terms of Use' }, { to: '/privacy', label: 'Privacy Policy' }, { to: '/cookies', label: 'Cookie Policy' }] },
 ] as const;

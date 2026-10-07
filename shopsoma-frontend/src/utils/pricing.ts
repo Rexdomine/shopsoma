@@ -253,3 +253,60 @@ export function applyCoupon(
     message: `Coupon applied: ${coupon.type === 'percentage' ? `${coupon.value}% off` : formatCurrency(coupon.value)}`,
   };
 }
+
+/**
+ * Strips all commas and non-numeric characters (except a single decimal point).
+ * Ensures numbers are never stored with commas in state, database, or code.
+ */
+export function cleanNumberString(
+  value: string | number | undefined | null,
+  maxDecimals: number = 2
+): string {
+  if (value === null || value === undefined) return '';
+  const str = String(value);
+  if (!str) return '';
+
+  // Remove commas, currency symbols, and whitespace
+  let cleaned = str.replace(/[,₦$£€\s]/g, '').trim();
+
+  // Keep only digits and decimal points
+  cleaned = cleaned.replace(/[^\d.]/g, '');
+
+  // If there are multiple dots, preserve only the first dot
+  const dotIndex = cleaned.indexOf('.');
+  if (dotIndex !== -1) {
+    const integerPart = cleaned.slice(0, dotIndex);
+    const decimalPart = cleaned
+      .slice(dotIndex + 1)
+      .replace(/\./g, '')
+      .slice(0, maxDecimals);
+    return `${integerPart}.${decimalPart}`;
+  }
+
+  return cleaned;
+}
+
+/**
+ * Formats a clean number string with commas for humanized presentation (e.g. 50000 -> 50,000).
+ * Handles partial user input including trailing decimal points (e.g. "5000." -> "5,000.").
+ */
+export function formatWithCommas(
+  value: string | number | undefined | null
+): string {
+  if (value === null || value === undefined) return '';
+  const str = String(value);
+  if (!str) return '';
+
+  const cleaned = cleanNumberString(str);
+  if (!cleaned) return '';
+
+  const hasDot = cleaned.includes('.');
+  if (hasDot) {
+    const [integerPart, decimalPart] = cleaned.split('.');
+    const formattedInteger = (integerPart || '0').replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    return `${integerPart === '' ? '' : formattedInteger}.${decimalPart ?? ''}`;
+  }
+
+  return cleaned.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+

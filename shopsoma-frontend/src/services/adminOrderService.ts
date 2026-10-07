@@ -84,6 +84,22 @@ export interface OrderItemDetail {
   readiness_state?: ReadinessState | null;
   /** The per-item vendor pickup this item is collected through. */
   pickup?: PickupInfo | null;
+  /** Classification: 'made_to_order', 'rtw', or 'custom' */
+  order_type?: 'made_to_order' | 'rtw' | 'custom' | string;
+  /** Configured production duration string, e.g. '5-7 business days' */
+  production_duration?: string | null;
+  /** Configured production days as an integer */
+  estimated_production_days?: number | null;
+  /** Production start date (confirmed_at or created_at) */
+  production_start_date?: string | null;
+  /** Production target due date based on platform working-day calendar */
+  production_due_date?: string | null;
+  /** Automatically calculated working days remaining (negative if overdue) */
+  working_days_left?: number | null;
+  /** True if the current date is past the production due date */
+  is_production_overdue?: boolean | null;
+  /** True if vendor has completed production (ready_for_pickup_at is set) */
+  is_production_completed?: boolean | null;
 }
 
 export interface PickupInfo {
@@ -106,6 +122,7 @@ export interface PickupInfo {
   vendor_notes?: string;
   admin_notes?: string;
   ready_for_pickup_at?: string | null;
+  estimated_production_days?: number | null;
 }
 
 export interface ReadyPackageInfo {

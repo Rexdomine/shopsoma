@@ -14,6 +14,7 @@ export default function ProfileOrders() {
   const { logout } = useAuth();
   const [orders, setOrders] = useState<Order[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
@@ -28,12 +29,14 @@ export default function ProfileOrders() {
 
   const loadOrders = async () => {
     setIsLoading(true);
+    setError(null);
     try {
       const data = await checkoutService.getOrders(currentPage, pageSize);
-      setOrders(data.orders);
-      setTotalPages(Math.ceil(data.total / pageSize));
-    } catch (error) {
-      console.error('Error loading orders:', error);
+      setOrders(data.orders || []);
+      setTotalPages(Math.ceil((data.total || 0) / pageSize) || 1);
+    } catch (err: any) {
+      console.error('Error loading orders:', err);
+      setError(err?.response?.data?.detail || 'Failed to load your orders. Please try again.');
     } finally {
       setIsLoading(false);
     }
@@ -105,9 +108,32 @@ export default function ProfileOrders() {
           <ProfileMenu items={menuItems} onNavigate={(route) => navigate(route)} />
 
           <section className="flex-1">
-            <header className="mb-8">
-              <p className="text-xs uppercase tracking-[0.3em] text-gray-400">Order History</p>
+            <header className="mb-8 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div>
+                <p className="text-xs uppercase tracking-[0.3em] text-gray-400">My Account</p>
+                <h1 className="text-2xl font-serif text-dark mt-1">My Orders</h1>
+              </div>
+              <button
+                type="button"
+                onClick={() => navigate(ROUTES.HOME)}
+                className="text-xs uppercase tracking-wider text-primary hover:underline font-medium self-start sm:self-auto"
+              >
+                Continue Shopping &rarr;
+              </button>
             </header>
+
+            {error && (
+              <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-sm text-sm mb-6 flex items-center justify-between">
+                <span>{error}</span>
+                <button
+                  type="button"
+                  onClick={loadOrders}
+                  className="text-xs font-semibold underline hover:no-underline"
+                >
+                  Try Again
+                </button>
+              </div>
+            )}
 
             {isLoading ? (
               <div className="flex items-center justify-center py-12">
@@ -125,6 +151,7 @@ export default function ProfileOrders() {
                         <th className="py-3 px-4 font-semibold">Amount</th>
                         <th className="py-3 px-4 font-semibold">Payment</th>
                         <th className="py-3 px-4 font-semibold">Fulfillment</th>
+                        <th className="py-3 px-4 font-semibold text-right">Action</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -140,13 +167,25 @@ export default function ProfileOrders() {
                           <td className="py-3 px-4">{formatPriceWithCurrency(order.total_amount, preferredCurrency)}</td>
                           <td className="py-3 px-4">
                             <span className={`px-3 py-1 rounded-sm text-xs font-semibold ${getPaymentStatusStyles(order.payment_status)}`}>
-                              {order.payment_status.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase())}
+                              {formatStatusLabel(order.payment_status)}
                             </span>
                           </td>
                           <td className="py-3 px-4">
                             <span className={`px-3 py-1 rounded-sm text-xs font-semibold ${getFulfillmentStatusStyles(order.fulfillment_status)}`}>
-                              {order.fulfillment_status.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase())}
+                              {formatStatusLabel(order.fulfillment_status)}
                             </span>
+                          </td>
+                          <td className="py-3 px-4 text-right">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleOrderClick(order);
+                              }}
+                              className="text-xs font-semibold text-primary hover:underline"
+                            >
+                              View Details
+                            </button>
                           </td>
                         </tr>
                       ))}
@@ -253,14 +292,20 @@ export default function ProfileOrders() {
                     </div>
                     <div className="flex justify-between text-sm">
                       <span className="text-gray-600">Payment Status:</span>
-                      <span className={`font-semibold uppercase ${
+                      <span className={`font-semibold ${
                         selectedOrder.payment_status === 'paid'
                           ? 'text-green-600'
                           : selectedOrder.payment_status === 'pending'
                             ? 'text-amber-600'
                             : 'text-red-600'
                       }`}>
-                        {selectedOrder.payment_status}
+                        {formatStatusLabel(selectedOrder.payment_status)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between text-sm">
+                      <span className="text-gray-600">Fulfillment Status:</span>
+                      <span className="font-semibold text-gray-900">
+                        {formatStatusLabel(selectedOrder.fulfillment_status)}
                       </span>
                     </div>
                   </div>
@@ -271,30 +316,36 @@ export default function ProfileOrders() {
                         Items ({selectedOrder.items.length})
                       </h3>
                       <div className="space-y-3">
-                        {selectedOrder.items.map((item: any, index: number) => (
-                          <div key={index} className="flex gap-3 border-b border-gray-100 pb-3">
-                            <div className="flex-shrink-0">
-                              <img
-                                src={item.product_image_url || item.product_image || '/images/placeholder-product.svg'}
-                                alt={item.product_name}
-                                className="w-16 h-16 object-cover rounded-sm border border-gray-200"
-                              />
+                        {selectedOrder.items.map((item: any, index: number) => {
+                          const productTitle = item.product_title || item.product_name || 'Product';
+                          const variantDisplay = item.variant_name || item.variant_title || item.variant_details?.name || item.variant_details?.title;
+                          const imageSrc = item.product_image_url || item.product_image || item.variant_details?.image_url || '/images/placeholder-product.svg';
+
+                          return (
+                            <div key={index} className="flex gap-3 border-b border-gray-100 pb-3">
+                              <div className="flex-shrink-0">
+                                <img
+                                  src={imageSrc}
+                                  alt={productTitle}
+                                  className="w-16 h-16 object-cover rounded-sm border border-gray-200"
+                                />
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <p className="font-medium text-sm text-gray-900">{productTitle}</p>
+                                {variantDisplay && <p className="text-xs text-gray-500 mt-1">{variantDisplay}</p>}
+                                <p className="text-xs text-gray-500 mt-1">Qty: {item.quantity}</p>
+                              </div>
+                              <div className="text-right">
+                                <p className="font-semibold text-sm text-gray-900">
+                                  {formatPriceWithCurrency(item.subtotal || item.unit_price * item.quantity, preferredCurrency)}
+                                </p>
+                                <p className="text-xs text-gray-500">
+                                  {formatPriceWithCurrency(item.unit_price, preferredCurrency)} each
+                                </p>
+                              </div>
                             </div>
-                            <div className="flex-1 min-w-0">
-                              <p className="font-medium text-sm text-gray-900">{item.product_name}</p>
-                              {item.variant_name && <p className="text-xs text-gray-500 mt-1">{item.variant_name}</p>}
-                              <p className="text-xs text-gray-500 mt-1">Qty: {item.quantity}</p>
-                            </div>
-                            <div className="text-right">
-                              <p className="font-semibold text-sm text-gray-900">
-                                {formatPriceWithCurrency(item.subtotal || item.unit_price * item.quantity, preferredCurrency)}
-                              </p>
-                              <p className="text-xs text-gray-500">
-                                {formatPriceWithCurrency(item.unit_price, preferredCurrency)} each
-                              </p>
-                            </div>
-                          </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     </div>
                   )}
@@ -354,6 +405,13 @@ export default function ProfileOrders() {
   );
 }
 
+export function formatStatusLabel(status?: string): string {
+  if (!status) return '';
+  return status
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
 function getPaymentStatusStyles(status: string): string {
   switch (status.toLowerCase()) {
     case 'paid':
@@ -361,6 +419,7 @@ function getPaymentStatusStyles(status: string): string {
       return 'bg-emerald-50 text-emerald-700';
     case 'pending':
     case 'processing':
+    case 'partially_paid':
       return 'bg-amber-50 text-amber-700';
     case 'failed':
     case 'cancelled':
@@ -378,12 +437,18 @@ function getFulfillmentStatusStyles(status: string): string {
       return 'bg-emerald-50 text-emerald-700';
     case 'pending':
     case 'processing':
+    case 'order_received':
+    case 'preparing_for_pickup':
+    case 'pickup_scheduled':
       return 'bg-amber-50 text-amber-700';
     case 'shipped':
+    case 'picked_up':
     case 'in_transit':
+    case 'out_for_delivery':
       return 'bg-blue-50 text-blue-700';
     case 'cancelled':
     case 'returned':
+    case 'delivery_failed':
       return 'bg-red-50 text-red-700';
     default:
       return 'bg-gray-100 text-gray-600';

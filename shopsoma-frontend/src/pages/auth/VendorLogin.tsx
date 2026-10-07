@@ -1,38 +1,117 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Mail, Lock, Eye, EyeOff, LogIn } from 'lucide-react';
 import { useNavigate, useLocation, Link } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { ROUTES, VENDOR_LOGIN_IMAGE_URL } from '../../config/constants';
 import { vendorService } from '../../services/vendorService';
+import { apiErrorMessage } from '../../utils/apiErrorMessage';
+
+export const isValidEmail = (email: string): boolean => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
+
+export interface VendorLoginFormState {
+  email: string;
+  password: string;
+}
+
+export interface VendorLoginFieldErrors {
+  email?: string;
+  password?: string;
+}
+
+export const validateVendorLoginField = (
+  field: keyof VendorLoginFieldErrors,
+  form: VendorLoginFormState
+): string | undefined => {
+  switch (field) {
+    case 'email': {
+      const trimmed = form.email.trim();
+      if (!trimmed) return 'Email address is required';
+      if (!isValidEmail(trimmed)) return 'Please enter a valid email address';
+      return undefined;
+    }
+    case 'password': {
+      if (!form.password) return 'Password is required';
+      return undefined;
+    }
+    default:
+      return undefined;
+  }
+};
+
+export const validateVendorLoginForm = (form: VendorLoginFormState): VendorLoginFieldErrors => {
+  const errors: VendorLoginFieldErrors = {};
+  const fields: (keyof VendorLoginFieldErrors)[] = ['email', 'password'];
+  for (const field of fields) {
+    const error = validateVendorLoginField(field, form);
+    if (error) {
+      errors[field] = error;
+    }
+  }
+  return errors;
+};
 
 export default function VendorLogin() {
   const { login } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
 
-  const [form, setForm] = useState({ email: '', password: '' });
+  const [form, setForm] = useState<VendorLoginFormState>({ email: '', password: '' });
+  const [fieldErrors, setFieldErrors] = useState<VendorLoginFieldErrors>({});
+  const [touched, setTouched] = useState<Record<keyof VendorLoginFieldErrors, boolean>>({
+    email: false,
+    password: false,
+  });
+
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [attemptsLeft, setAttemptsLeft] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
-  const isComplete = form.email.trim() && form.password.trim();
+  const handleFieldChange = (key: keyof VendorLoginFormState, value: string) => {
+    setForm((prev) => {
+      const next = { ...prev, [key]: value };
+      if (touched[key] || fieldErrors[key]) {
+        const err = validateVendorLoginField(key, next);
+        setFieldErrors((e) => ({ ...e, [key]: err }));
+      }
+      return next;
+    });
+    if (error) {
+      setError('');
+      setAttemptsLeft(null);
+    }
+  };
 
-  useEffect(() => {
-    setError('');
-    setAttemptsLeft(null);
-  }, [form.email, form.password]);
+  const handleBlur = (field: keyof VendorLoginFieldErrors) => {
+    setTouched((prev) => ({ ...prev, [field]: true }));
+    const err = validateVendorLoginField(field, form);
+    setFieldErrors((prev) => ({ ...prev, [field]: err }));
+  };
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (!isComplete || isLoading) return;
-
     setError('');
+    setAttemptsLeft(null);
+
+    const allTouched: Record<keyof VendorLoginFieldErrors, boolean> = {
+      email: true,
+      password: true,
+    };
+    setTouched(allTouched);
+
+    const errors = validateVendorLoginForm(form);
+    setFieldErrors(errors);
+
+    if (Object.keys(errors).length > 0) {
+      setError('Please fix the errors below to continue');
+      return;
+    }
+
     setIsLoading(true);
 
     try {
       await login({
-        email: form.email,
+        email: form.email.trim(),
         password: form.password,
       });
 
@@ -60,7 +139,7 @@ export default function VendorLogin() {
         }
       }
     } catch (err: any) {
-      const message = err?.message || 'Login failed. Please try again.';
+      const message = apiErrorMessage(err, err?.message || 'Login failed. Please try again.');
       setError(message);
       const match = /\b(\d+)\s*attempt/i.exec(message);
       if (match) {
@@ -93,7 +172,7 @@ export default function VendorLogin() {
             />
             <div className="w-full max-w-[460px]">
               {bannerText && (
-                <div className="rounded-t-3xl bg-[#d62c2c] text-white text-xs font-semibold px-4 py-2 text-center">
+                <div className="rounded-t-3xl bg-[#d62c2c] text-white text-xs font-semibold px-4 py-2 text-center" role="alert">
                   {bannerText}
                 </div>
               )}
@@ -110,44 +189,72 @@ export default function VendorLogin() {
                   </div>
                 </div>
 
-                <form className="space-y-6" onSubmit={handleSubmit}>
+                <form className="space-y-6 text-left" onSubmit={handleSubmit} noValidate>
                   <div className="space-y-2">
                     <div className="relative">
-                      <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                      <Mail className={`absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 transition-colors ${fieldErrors.email ? 'text-red-500' : 'text-gray-400'}`} />
                       <input
+                        id="vendor-login-email"
                         type="email"
                         value={form.email}
-                        onChange={(e) => setForm((prev) => ({ ...prev, email: e.target.value }))}
+                        onChange={(e) => handleFieldChange('email', e.target.value)}
+                        onBlur={() => handleBlur('email')}
                         placeholder="example@mail.com"
-                        className="w-full pl-10 pr-3 py-3 rounded-xl border border-gray-200 text-sm font-ui text-[#222424] focus:outline-none focus:border-[#105E53] focus:ring-1 focus:ring-[#105E53]/30"
-                        required
+                        autoComplete="email"
+                        aria-label="Email Address"
+                        aria-invalid={Boolean(fieldErrors.email)}
+                        aria-describedby={fieldErrors.email ? 'vendor-email-error' : undefined}
+                        className={`w-full pl-10 pr-3 py-3 rounded-xl border text-sm font-ui text-[#222424] focus:outline-none transition-colors ${
+                          fieldErrors.email
+                            ? 'border-red-500 focus:border-red-600 focus:ring-1 focus:ring-red-500/30'
+                            : 'border-gray-200 focus:border-[#105E53] focus:ring-1 focus:ring-[#105E53]/30'
+                        }`}
                         disabled={isLoading}
                       />
                     </div>
+                    {fieldErrors.email && (
+                      <p id="vendor-email-error" className="text-xs font-ui text-red-600 pl-1">
+                        {fieldErrors.email}
+                      </p>
+                    )}
                   </div>
 
                   <div className="space-y-2">
                     <div className="relative">
-                      <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                      <Lock className={`absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 transition-colors ${fieldErrors.password ? 'text-red-500' : 'text-gray-400'}`} />
                       <input
+                        id="vendor-login-password"
                         type={showPassword ? 'text' : 'password'}
                         value={form.password}
-                        onChange={(e) => setForm((prev) => ({ ...prev, password: e.target.value }))}
+                        onChange={(e) => handleFieldChange('password', e.target.value)}
+                        onBlur={() => handleBlur('password')}
                         placeholder="Password"
-                        className="w-full pl-10 pr-10 py-3 rounded-xl border border-gray-200 text-sm font-ui text-[#222424] focus:outline-none focus:border-[#105E53] focus:ring-1 focus:ring-[#105E53]/30"
-                        required
+                        autoComplete="current-password"
+                        aria-label="Password"
+                        aria-invalid={Boolean(fieldErrors.password)}
+                        aria-describedby={fieldErrors.password ? 'vendor-password-error' : undefined}
+                        className={`w-full pl-10 pr-10 py-3 rounded-xl border text-sm font-ui text-[#222424] focus:outline-none transition-colors ${
+                          fieldErrors.password
+                            ? 'border-red-500 focus:border-red-600 focus:ring-1 focus:ring-red-500/30'
+                            : 'border-gray-200 focus:border-[#105E53] focus:ring-1 focus:ring-[#105E53]/30'
+                        }`}
                         disabled={isLoading}
                       />
                       <button
                         type="button"
                         onClick={() => setShowPassword((prev) => !prev)}
                         className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-[#105E53] transition"
-                        aria-label="Toggle password visibility"
+                        aria-label={showPassword ? 'Hide password' : 'Show password'}
                         disabled={isLoading}
                       >
                         {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                       </button>
                     </div>
+                    {fieldErrors.password && (
+                      <p id="vendor-password-error" className="text-xs font-ui text-red-600 pl-1">
+                        {fieldErrors.password}
+                      </p>
+                    )}
                   </div>
 
                   <div className="flex items-center justify-between text-xs font-[var(--font-ui)] text-[#105E53]">
@@ -161,14 +268,17 @@ export default function VendorLogin() {
 
                   <button
                     type="submit"
-                    disabled={!isComplete || isLoading}
-                    className={`w-full py-3.5 text-sm font-[var(--font-ui)] tracking-[0.08em] rounded-xl transition ${
-                      isComplete && !isLoading
-                        ? 'bg-[#105E53] text-white hover:bg-[#0c4c45]'
-                        : 'bg-[#cbd5d1] text-[#105E53]/70 cursor-not-allowed'
-                    }`}
+                    disabled={isLoading}
+                    className="w-full py-3.5 text-sm font-[var(--font-ui)] tracking-[0.08em] rounded-xl transition bg-[#105E53] text-white hover:bg-[#0c4c45] disabled:opacity-60 disabled:cursor-not-allowed"
                   >
-                    {isLoading ? 'Logging in...' : 'Log in'}
+                    {isLoading ? (
+                      <span className="flex items-center justify-center gap-2">
+                        <div className="h-4 w-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                        Logging in...
+                      </span>
+                    ) : (
+                      'Log in'
+                    )}
                   </button>
                 </form>
               </div>

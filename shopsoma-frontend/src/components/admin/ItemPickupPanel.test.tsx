@@ -126,4 +126,62 @@ describe('ItemPickupPanel', () => {
     await waitFor(() => expect(props.onError).toHaveBeenCalledWith('Backend says no'));
     expect(within(screen.getByTestId('item-pickup-panel-item-a')).getByRole('button', { name: 'Edit pickup' })).toBeInTheDocument();
   });
+
+  it('renders configured production duration and working days countdown for in-progress MTO item', () => {
+    renderPanel(
+      mtoItem({
+        production_duration: '5-7 business days',
+        estimated_production_days: 7,
+        working_days_left: 4,
+        production_due_date: '2026-10-15T12:00:00Z',
+      })
+    );
+
+    expect(screen.getByTestId('mto-duration')).toHaveTextContent('Duration: 5-7 business days');
+    expect(screen.getByTestId('mto-countdown')).toHaveTextContent('4 working days left');
+    expect(screen.getByText(/Estimated completion:/)).toBeInTheDocument();
+  });
+
+  it('renders overdue status when working days left is negative', () => {
+    renderPanel(
+      mtoItem({
+        production_duration: '3 working days',
+        working_days_left: -2,
+        is_production_overdue: true,
+      })
+    );
+
+    expect(screen.getByTestId('mto-duration')).toHaveTextContent('Duration: 3 working days');
+    expect(screen.getByTestId('mto-countdown')).toHaveTextContent('Overdue by 2 working days');
+  });
+
+  it('handles missing timeline and unconfigured duration safely', () => {
+    renderPanel(
+      mtoItem({
+        production_duration: null,
+        estimated_production_days: null,
+        working_days_left: null,
+      })
+    );
+
+    expect(screen.getByTestId('mto-duration')).toHaveTextContent('Duration: Not specified');
+    expect(screen.getByTestId('mto-countdown')).toHaveTextContent('Timeline not configured');
+  });
+
+  it('shows production completed once marked ready regardless of remaining days', () => {
+    renderPanel(
+      mtoItem({
+        production_duration: '5 working days',
+        working_days_left: 3,
+        readiness_state: 'ready_for_pickup',
+        ready_for_pickup_at: '2026-10-06T10:00:00Z',
+        is_production_completed: true,
+      })
+    );
+
+    expect(screen.getByTestId('mto-duration')).toHaveTextContent('Duration: 5 working days');
+    expect(screen.getByTestId('mto-countdown')).toHaveTextContent('Production completed');
+    expect(screen.queryByText(/Estimated completion:/)).not.toBeInTheDocument();
+  });
 });
+

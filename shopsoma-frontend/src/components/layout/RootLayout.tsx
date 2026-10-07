@@ -63,7 +63,10 @@ export function shouldShowGateLoading(
   resolvedScope: 'public' | 'bypass' | null,
   gateScope: 'public' | 'bypass',
 ): boolean {
-  return authLoading || (!bypassComingSoon && (gateState === 'loading' || resolvedScope !== gateScope));
+  if (bypassComingSoon) {
+    return false;
+  }
+  return authLoading || gateState === 'loading' || resolvedScope !== gateScope;
 }
 
 export function gateStateAfterRefreshFailure(

@@ -7,6 +7,7 @@ import {
   type OrderStatus,
 } from '../../services/orderService';
 import { checkoutService } from '../../services/checkoutService';
+import { paymentService, buildPaystackWidgetConfig } from '../../services/paymentService';
 import websocketService, { type OrderUpdateData } from '../../services/websocketService';
 import { useCurrencyStore } from '../../store/currencyStore';
 import { formatPriceWithConversion, type Currency } from '../../utils/pricing';
@@ -270,6 +271,97 @@ export default function OrderTracking() {
     return ['delivery_failed', 'returned', 'cancelled'].includes(tracking.current_status);
   }, [tracking]);
 
+  const isPaymentPending = useMemo(() => {
+    if (!tracking) return false;
+    const ps = tracking.payment_status?.toLowerCase();
+    return ps === 'pending' || ps === 'unpaid' || ps === 'failed';
+  }, [tracking]);
+
+  const [isRetryingPayment, setIsRetryingPayment] = useState(false);
+  const [isCancellingOrder, setIsCancellingOrder] = useState(false);
+
+  const handleRetryPayment = async () => {
+    if (!resolvedOrderId) return;
+    setIsRetryingPayment(true);
+    try {
+      let order = orderDetails;
+      if (!order) {
+        order = await checkoutService.getOrder(
+          resolvedOrderId,
+          loadCheckoutCapability(resolvedOrderId),
+        );
+        setOrderDetails(order);
+      }
+      const email = order?.customer_email || order?.customer?.email || 'guest@shopsoma.com';
+      const paymentData = await paymentService.initializePayment({
+        order_id: resolvedOrderId,
+        email,
+        payment_gateway: 'paystack',
+        currency: (order?.currency as any) || 'NGN',
+        callback_url: `${window.location.origin}/payment/verify`,
+      }, loadCheckoutCapability(resolvedOrderId));
+
+      if (paymentData.authorization_url && (window as any).PaystackPop) {
+        const widgetTruth = buildPaystackWidgetConfig(paymentData, {
+          key: import.meta.env.VITE_PAYSTACK_PUBLIC_KEY,
+          email,
+        });
+        const handler = (window as any).PaystackPop.setup({
+          ...widgetTruth,
+          callback: (response: { reference: string }) => {
+            paymentService.verifyPayment({
+              reference: response.reference,
+              payment_gateway: 'paystack',
+            }).then(() => {
+              window.location.href = `${ROUTES.ORDER_SUCCESS}?orderId=${resolvedOrderId}&payment=success`;
+            }).catch((err) => {
+              console.error('Verification error:', err);
+              window.location.href = `${ROUTES.ORDER_SUCCESS}?orderId=${resolvedOrderId}&payment=verification_failed`;
+            });
+          },
+          onClose: () => {
+            setIsRetryingPayment(false);
+          },
+        });
+        handler.openIframe();
+      } else if (paymentData.authorization_url) {
+        window.location.href = paymentData.authorization_url;
+      }
+    } catch (err: any) {
+      console.error('Failed to initialize payment:', err);
+      const detail = err.response?.data?.detail;
+      const msg = typeof detail === 'string' ? detail : detail?.message || err.message || 'Unable to re-initialize payment.';
+      alert(msg);
+      setIsRetryingPayment(false);
+    }
+  };
+
+  const handleCancelOrder = async () => {
+    if (!resolvedOrderId) return;
+    if (!window.confirm('Are you sure you want to cancel this order?')) return;
+    setIsCancellingOrder(true);
+    try {
+      await checkoutService.cancelOrder(
+        resolvedOrderId,
+        'Customer cancelled unpaid order',
+        loadCheckoutCapability(resolvedOrderId),
+      );
+      const updated = await orderService.getOrderTracking(
+        resolvedOrderId,
+        loadCheckoutCapability(resolvedOrderId),
+      );
+      setTracking(updated);
+      alert('Order has been cancelled.');
+    } catch (err: any) {
+      console.error('Failed to cancel order:', err);
+      const detail = err.response?.data?.detail;
+      const msg = typeof detail === 'string' ? detail : detail?.message || err.message || 'Unable to cancel order.';
+      alert(msg);
+    } finally {
+      setIsCancellingOrder(false);
+    }
+  };
+
   const handleViewOrderDetails = async () => {
     if (!resolvedOrderId) return;
 
@@ -322,9 +414,17 @@ export default function OrderTracking() {
             <span>Back</span>
           </button>
         </div>
-        <span className="text-[10px] sm:text-xs uppercase tracking-[0.2em] sm:tracking-[0.3em] text-gray-500 font-medium">
-          Track My Order
-        </span>
+        <div className="flex items-center gap-3 sm:gap-4">
+          <Link
+            to={ROUTES.ORDERS}
+            className="text-xs sm:text-sm text-primary hover:underline font-medium"
+          >
+            My Orders
+          </Link>
+          <span className="text-[10px] sm:text-xs uppercase tracking-[0.2em] sm:tracking-[0.3em] text-gray-500 font-medium">
+            Track My Order
+          </span>
+        </div>
       </div>
 
       <div className="flex-1 px-3 sm:px-8 pb-12 sm:pb-16">
@@ -343,7 +443,12 @@ export default function OrderTracking() {
                   {tracking?.tracking_id || 'Loading...'}
                 </span>
               </p>
-              {isConnectedToWebSocket && !wsError && (
+              {isPaymentPending && !isTerminalState ? (
+                <div className="flex items-center gap-1.5 text-xs text-amber-800 bg-amber-100/90 border border-amber-300 px-2.5 py-0.5 rounded-full font-medium shrink-0">
+                  <span className="h-1.5 w-1.5 rounded-full bg-amber-500"></span>
+                  <span>Awaiting Payment</span>
+                </div>
+              ) : isConnectedToWebSocket && !wsError ? (
                 <div className="flex items-center gap-2 text-xs text-emerald-600 shrink-0">
                   <span className="relative flex h-2 w-2">
                     <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
@@ -351,17 +456,51 @@ export default function OrderTracking() {
                   </span>
                   <span>Live Updates Active</span>
                 </div>
-              )}
-              {wsError && (
+              ) : wsError ? (
                 <div className="flex items-center gap-2 text-xs text-amber-600 shrink-0">
                   <span className="relative flex h-2 w-2">
                     <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
                   </span>
                   <span>Polling for Updates</span>
                 </div>
-              )}
+              ) : null}
             </div>
           </div>
+
+          {/* Payment Pending Alert Banner */}
+          {isPaymentPending && !isTerminalState && tracking && (
+            <div className="rounded-sm p-4 sm:px-6 sm:py-4 border-2 border-amber-300 bg-amber-50/90 text-amber-900 shadow-sm">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex items-start sm:items-center gap-3">
+                  <span className="text-2xl shrink-0">⚠️</span>
+                  <div>
+                    <p className="font-semibold text-sm">Payment Pending</p>
+                    <p className="text-xs mt-0.5 text-amber-800">
+                      Payment for this order has not been completed. Fulfillment and dispatch will begin once payment is confirmed.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 shrink-0 pt-2 sm:pt-0">
+                  <button
+                    type="button"
+                    onClick={handleRetryPayment}
+                    disabled={isRetryingPayment}
+                    className="px-4 py-2 bg-primary text-white text-xs font-semibold rounded-sm hover:bg-primary-dark transition disabled:opacity-50"
+                  >
+                    {isRetryingPayment ? 'Opening Payment...' : 'Complete Payment'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleCancelOrder}
+                    disabled={isCancellingOrder}
+                    className="px-3 py-2 border border-amber-300 bg-white text-gray-700 text-xs font-semibold rounded-sm hover:bg-gray-50 transition disabled:opacity-50"
+                  >
+                    {isCancellingOrder ? 'Cancelling...' : 'Cancel Order'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
 
           <div className="bg-white border border-gray-100 rounded-sm p-4 sm:p-8 shadow-sm space-y-6 sm:space-y-8">
             {loading ? (
@@ -527,6 +666,8 @@ export default function OrderTracking() {
                                     : tracking?.current_status === 'returned'
                                     ? 'bg-orange-50 text-orange-700'
                                     : 'bg-red-50 text-red-700'
+                                  : isPaymentPending
+                                  ? 'bg-amber-100 text-amber-800 border border-amber-300'
                                   : activeIndex >= STATUS_STEPS.length - 1
                                   ? 'bg-emerald-50 text-emerald-700'
                                   : activeIndex > 1
@@ -535,9 +676,12 @@ export default function OrderTracking() {
                               }`}
                             >
                               {tracking
-                                ? TERMINAL_STATES[tracking.current_status]?.label ||
-                                  STATUS_STEPS.find((step) => step.key === tracking.current_status)?.label ||
-                                  'Processing'
+                                ? isTerminalState
+                                  ? TERMINAL_STATES[tracking.current_status]?.label || 'Cancelled'
+                                  : isPaymentPending
+                                  ? 'Payment Pending'
+                                  : STATUS_STEPS.find((step) => step.key === tracking.current_status)?.label ||
+                                    'Processing'
                                 : 'Processing'}
                             </span>
                           </td>
@@ -597,7 +741,7 @@ export default function OrderTracking() {
                       ? 'text-red-600'
                       : 'text-yellow-600'
                   }`}>
-                    {orderDetails.payment_status}
+                    {orderDetails.payment_status?.replace(/_/g, ' ')}
                   </span>
                 </div>
               </div>

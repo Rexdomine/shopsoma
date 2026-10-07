@@ -501,3 +501,112 @@ describe('DHL correction regressions', () => {
     expect(mocks.createDhlBooking).not.toHaveBeenCalled(); expect(mocks.recordDhlHandoff).not.toHaveBeenCalled();
   });
 });
+
+describe('AdminOrderDetail production tracking and classification', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('classifies items as Made to order or Ready to wear directly on the order item card', async () => {
+    const order = baseOrder();
+    order.items = [
+      {
+        id: 'item-rtw',
+        product_id: 'product-rtw',
+        product_title: 'Ready-to-Wear Shirt',
+        variant_details: {},
+        unit_price: 5000,
+        currency: 'NGN',
+        quantity: 1,
+        subtotal: 5000,
+        commission_rate: 0,
+        commission_amount: 0,
+        vendor_payout: 5000,
+        fulfillment_status: 'order_received',
+        vendor: { id: 'vendor-1', business_name: 'Vendor One' },
+        made_to_order: false,
+        order_type: 'rtw',
+      },
+      {
+        id: 'item-mto',
+        product_id: 'product-mto',
+        product_title: 'Bespoke Blazer',
+        variant_details: {},
+        unit_price: 15000,
+        currency: 'NGN',
+        quantity: 1,
+        subtotal: 15000,
+        commission_rate: 0,
+        commission_amount: 0,
+        vendor_payout: 15000,
+        fulfillment_status: 'order_received',
+        vendor: { id: 'vendor-2', business_name: 'Vendor Two' },
+        made_to_order: true,
+        order_type: 'made_to_order',
+        production_duration: '7 working days',
+        estimated_production_days: 7,
+        working_days_left: 5,
+        readiness_state: 'being_prepared',
+        pickup: { id: 'pickup-2', order_item_id: 'item-mto', vendor_id: 'vendor-2', status: 'scheduled' },
+      },
+    ];
+
+    mocks.getOrderDetail.mockResolvedValue(order);
+    renderPage();
+
+    expect(await screen.findByText('Ready-to-Wear Shirt')).toBeInTheDocument();
+    expect(screen.getByText('Bespoke Blazer')).toBeInTheDocument();
+
+    const rtwTag = screen.getByTestId('rtw-tag');
+    expect(rtwTag).toHaveTextContent('Ready to wear');
+
+    const mtoTags = screen.getAllByTestId('mto-tag');
+    expect(mtoTags.length).toBeGreaterThanOrEqual(1);
+    expect(mtoTags[0]).toHaveTextContent('Made to order');
+
+    // MTO item displays duration and working days countdown
+    expect(screen.getByTestId('mto-duration')).toHaveTextContent('Duration: 7 working days');
+    expect(screen.getByTestId('mto-countdown')).toHaveTextContent('5 working days left');
+
+    // RTW item does not render an item pickup panel or countdown
+    expect(screen.queryByTestId('item-pickup-panel-item-rtw')).not.toBeInTheDocument();
+  });
+
+  it('displays production completed status when vendor marked ready early', async () => {
+    const order = baseOrder();
+    order.items = [
+      {
+        id: 'item-mto',
+        product_id: 'product-mto',
+        product_title: 'Bespoke Blazer',
+        variant_details: {},
+        unit_price: 15000,
+        currency: 'NGN',
+        quantity: 1,
+        subtotal: 15000,
+        commission_rate: 0,
+        commission_amount: 0,
+        vendor_payout: 15000,
+        fulfillment_status: 'order_received',
+        vendor: { id: 'vendor-2', business_name: 'Vendor Two' },
+        made_to_order: true,
+        order_type: 'made_to_order',
+        production_duration: '7 working days',
+        estimated_production_days: 7,
+        working_days_left: 4,
+        is_production_completed: true,
+        ready_for_pickup_at: '2026-10-06T11:00:00Z',
+        readiness_state: 'ready_for_pickup',
+        pickup: { id: 'pickup-2', order_item_id: 'item-mto', vendor_id: 'vendor-2', status: 'scheduled' },
+      },
+    ];
+
+    mocks.getOrderDetail.mockResolvedValue(order);
+    renderPage();
+
+    expect(await screen.findByText('Bespoke Blazer')).toBeInTheDocument();
+    expect(screen.getByTestId('mto-countdown')).toHaveTextContent('Production completed');
+    expect(screen.getByText('Ready for pickup')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Schedule pickup' })).toBeInTheDocument();
+  });
+});

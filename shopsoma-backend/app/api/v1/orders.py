@@ -1782,6 +1782,12 @@ async def get_order_tracking(
     )
     currency = currency_result.scalar_one_or_none() or "NGN"
 
+    payment_status_str = (
+        order.payment_status.value
+        if hasattr(order.payment_status, "value")
+        else str(order.payment_status)
+    ).lower()
+
     return {
         "order_id": str(order.id),
         "order_number": order.order_number,
@@ -1791,6 +1797,9 @@ async def get_order_tracking(
         "currency": currency,
         "updated_at": order.updated_at.isoformat(),
         "current_status": current_status,
+        "payment_status": payment_status_str,
+        "cancellation_reason": order.cancellation_reason,
+        "cancelled_at": order.cancelled_at.isoformat() if order.cancelled_at else None,
         "history": history,
     }
 
@@ -1830,11 +1839,24 @@ async def cancel_order(
             current_user=current_user,
             token=capability,
         )
-    elif current_user is None or order.customer_id != current_user.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not authorized to cancel this order",
-        )
+    elif current_user:
+        if order.customer_id != current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not authorized to cancel this order",
+            )
+    else:
+        owner = await db.get(User, order.customer_id)
+        if not (
+            owner is not None
+            and owner.is_guest_created
+            and owner.hashed_password is None
+            and owner.is_active
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not authorized to cancel this order",
+            )
 
     # Check if order can be cancelled
     if order.fulfillment_status in [

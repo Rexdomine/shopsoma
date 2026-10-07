@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import Layout from '../components/layout/Layout';
-import type { Product } from '../types';
+import type { Product, ProductVariant } from '../types';
+import { useCartStore } from '../store/cartStore';
 import { productService } from '../services/productService';
 import { getFeaturedRotationSettings } from '../services/settingsService';
 import { IMAGE_CONFIG } from '../config/constants';
@@ -40,6 +41,10 @@ function HomeProductCard({
   onToggleFavorite,
 }: HomeProductCardProps) {
   const [isHovered, setIsHovered] = useState(false);
+  const [selectedSize, setSelectedSize] = useState<string | null>(null);
+  const [selectedColor, setSelectedColor] = useState<string | null>(null);
+  const [isAdded, setIsAdded] = useState(false);
+  const addItem = useCartStore((state) => state.addItem);
   const { currentCurrency, exchangeRates } = useCurrency();
   const productImages = getProductImageSources(product, 'high');
   const primaryImage = productImages[0] ?? { src: IMAGE_CONFIG.PLACEHOLDER };
@@ -70,6 +75,63 @@ function HomeProductCard({
     });
     return Array.from(colorMap.values());
   })();
+
+  const resolveVariant = (): ProductVariant => {
+    const variants = product.variants || [];
+    if (variants.length === 0) {
+      return {
+        id: `default-${product.id}`,
+        product_id: product.id,
+        price: product.base_price,
+        compare_at_price: product.compare_at_price,
+        stock: product.total_stock,
+        is_available: product.made_to_order ? true : (product.total_stock ?? 0) > 0,
+      } as ProductVariant;
+    }
+
+    const currentSize = selectedSize || sizeOptions[0] || null;
+    const currentColor = selectedColor || colorOptions[0]?.color || null;
+
+    if (currentSize && currentColor) {
+      const match = variants.find(
+        (v) =>
+          v.size?.trim().toLowerCase() === currentSize.trim().toLowerCase() &&
+          v.color?.trim().toLowerCase() === currentColor.trim().toLowerCase()
+      );
+      if (match) return match;
+    }
+
+    if (currentSize) {
+      const match = variants.find(
+        (v) => v.size?.trim().toLowerCase() === currentSize.trim().toLowerCase()
+      );
+      if (match) return match;
+    }
+
+    if (currentColor) {
+      const match = variants.find(
+        (v) => v.color?.trim().toLowerCase() === currentColor.trim().toLowerCase()
+      );
+      if (match) return match;
+    }
+
+    return variants[0];
+  };
+
+  const handleAddToBag = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    const variant = resolveVariant();
+    addItem({
+      product,
+      variant,
+      quantity: 1,
+    });
+
+    setIsAdded(true);
+    setTimeout(() => setIsAdded(false), 1800);
+  };
 
   const handleImageError = (
     event: React.SyntheticEvent<HTMLImageElement>,
@@ -133,16 +195,28 @@ function HomeProductCard({
               {sizeOptions.length > 0 && (
                 <div>
                   <p className="text-[10px] font-ui uppercase tracking-[0.25em] text-gray-500 mb-2">Sizes</p>
-                  <div className="flex flex-wrap items-center justify-center gap-2">
-                    {sizeOptions.map((size) => (
-                      <span
-                        key={size}
-                        className="text-xs font-ui"
-                        style={{ color: '#1E5053' }}
-                      >
-                        {size}
-                      </span>
-                    ))}
+                  <div className="flex flex-wrap items-center justify-center gap-1.5">
+                    {sizeOptions.map((size) => {
+                      const isSelected = (selectedSize ?? sizeOptions[0]) === size;
+                      return (
+                        <button
+                          type="button"
+                          key={size}
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setSelectedSize(size);
+                          }}
+                          className={`text-xs font-ui px-2 py-0.5 rounded transition-colors ${
+                            isSelected
+                              ? 'bg-primary text-white font-medium'
+                              : 'text-[#1E5053] hover:bg-gray-100'
+                          }`}
+                        >
+                          {size}
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
               )}
@@ -151,14 +225,29 @@ function HomeProductCard({
                 <div>
                   <p className="text-[10px] font-ui uppercase tracking-[0.25em] text-gray-500 mb-2">Colors</p>
                   <div className="flex flex-wrap items-center justify-center gap-1.5">
-                    {colorOptions.slice(0, 6).map((color) => (
-                      <span
-                        key={color.color}
-                        className="w-5 h-5 border border-gray-300"
-                        style={{ backgroundColor: color.hex ?? '#e5e5e5' }}
-                        title={color.color}
-                      />
-                    ))}
+                    {colorOptions.slice(0, 6).map((color) => {
+                      const isSelected = (selectedColor ?? colorOptions[0]?.color) === color.color;
+                      return (
+                        <button
+                          type="button"
+                          key={color.color}
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setSelectedColor(color.color);
+                          }}
+                          className={`p-0.5 rounded transition ${
+                            isSelected ? 'ring-2 ring-primary ring-offset-1' : 'opacity-80 hover:opacity-100'
+                          }`}
+                          title={color.color}
+                        >
+                          <span
+                            className="w-5 h-5 border border-gray-300 block"
+                            style={{ backgroundColor: color.hex ?? '#e5e5e5' }}
+                          />
+                        </button>
+                      );
+                    })}
                     {colorOptions.length > 6 && (
                       <span className="text-xs font-ui text-gray-500 ml-1">+{colorOptions.length - 6}</span>
                     )}
@@ -166,12 +255,17 @@ function HomeProductCard({
                 </div>
               )}
 
-              <Link
-                to={`/products/${product.id}`}
-                className="inline-block w-full bg-primary text-white text-xs font-ui tracking-[0.2em] py-2.5 uppercase hover:bg-primary-dark transition-colors"
+              <button
+                type="button"
+                onClick={handleAddToBag}
+                className={`w-full text-xs font-ui tracking-[0.2em] py-2.5 uppercase transition-colors ${
+                  isAdded
+                    ? 'bg-[#0f4e45] text-white font-medium'
+                    : 'bg-primary text-white hover:bg-primary-dark'
+                }`}
               >
-                Add to Bag
-              </Link>
+                {isAdded ? 'Added to Bag ✓' : 'Add to Bag'}
+              </button>
             </div>
           </div>
         )}

@@ -1,9 +1,10 @@
 import { useState } from 'react';
-import { Link, useLocation, useNavigate } from 'react-router-dom';
-import type { Product } from '../../types';
+import { Link, useLocation } from 'react-router-dom';
+import type { Product, ProductVariant } from '../../types';
 import { Bookmark } from 'lucide-react';
 import { IMAGE_CONFIG } from '../../config/constants';
 import { useCurrencyStore } from '../../store/currencyStore';
+import { useCartStore } from '../../store/cartStore';
 import { formatPriceWithConversion } from '../../utils/pricing';
 import { hasSolidColorHex } from '../../utils/colorDisplay';
 import { getProductImageSources } from '../../utils/productImages';
@@ -19,11 +20,15 @@ export default function ProductCard({
   onToggleFavorite,
   isFavorite = false,
 }: ProductCardProps) {
-  const navigate = useNavigate();
   const location = useLocation();
   const [isHovered, setIsHovered] = useState(false);
   const [imageLoaded, setImageLoaded] = useState(false);
+  const [selectedSize, setSelectedSize] = useState<string | null>(null);
+  const [selectedColor, setSelectedColor] = useState<string | null>(null);
+  const [isAdded, setIsAdded] = useState(false);
+
   const { currentCurrency, exchangeRates } = useCurrencyStore();
+  const addItem = useCartStore((state) => state.addItem);
 
   const placeholderImage = IMAGE_CONFIG.PLACEHOLDER;
   const productImages = getProductImageSources(product, 'high');
@@ -74,6 +79,74 @@ export default function ProductCard({
     ? product.compare_at_price
     : product.variants?.[0]?.compare_at_price;
   const hasDiscount = Boolean(comparePrice && comparePrice > displayPrice);
+
+  const resolveVariant = (): ProductVariant => {
+    const variants = product.variants || [];
+    if (variants.length === 0) {
+      return {
+        id: `default-${product.id}`,
+        product_id: product.id,
+        price: product.base_price,
+        compare_at_price: product.compare_at_price,
+        stock: product.total_stock,
+        is_available: product.made_to_order ? true : (product.total_stock ?? 0) > 0,
+      } as ProductVariant;
+    }
+
+    const currentSize = selectedSize || sizeOptions[0] || null;
+    const currentColor = selectedColor || colorOptions[0]?.color || null;
+
+    let matchedVariant: ProductVariant | undefined;
+
+    if (currentSize && currentColor) {
+      matchedVariant = variants.find(
+        (v) =>
+          v.size?.trim().toLowerCase() === currentSize.trim().toLowerCase() &&
+          v.color?.trim().toLowerCase() === currentColor.trim().toLowerCase()
+      );
+    }
+
+    if (!matchedVariant && currentSize) {
+      matchedVariant = variants.find(
+        (v) => v.size?.trim().toLowerCase() === currentSize.trim().toLowerCase()
+      );
+    }
+
+    if (!matchedVariant && currentColor) {
+      matchedVariant = variants.find(
+        (v) => v.color?.trim().toLowerCase() === currentColor.trim().toLowerCase()
+      );
+    }
+
+    const baseVariant = matchedVariant || variants[0];
+    const resolvedPrice = (isSingleProduct && product.base_price != null)
+      ? product.base_price
+      : (baseVariant.price ?? product.base_price);
+    const resolvedComparePrice = (isSingleProduct && product.compare_at_price != null)
+      ? product.compare_at_price
+      : (baseVariant.compare_at_price ?? product.compare_at_price);
+
+    return {
+      ...baseVariant,
+      price: resolvedPrice,
+      compare_at_price: resolvedComparePrice,
+    };
+  };
+
+  const handleAddToBag = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    const variant = resolveVariant();
+    addItem({
+      product,
+      variant,
+      quantity: 1,
+    });
+
+    setIsAdded(true);
+    setTimeout(() => setIsAdded(false), 1800);
+  };
 
   const handleToggleFavorite = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -143,76 +216,109 @@ export default function ProductCard({
           />
         </button>
 
-        {/* Hover Overlay - Bottom Panel with Sizes/Colors (only show if product has variants) */}
-        {(sizeOptions.length > 0 || colorOptions.length > 0) && (
-          <div
-            className={`absolute bottom-0 left-0 right-0 bg-white transition-transform duration-300 z-10 ${
-              isHovered ? 'translate-y-0' : 'translate-y-full'
-            }`}
-          >
-            <div className="px-4 py-4 space-y-4">
-              {/* Sizes */}
-              {sizeOptions.length > 0 && (
-                <div className="text-center">
-                  <p className="text-[10px] font-serif uppercase tracking-[0.15em] text-dark mb-2">
-                    SIZES
-                  </p>
-                  <div className="flex flex-wrap gap-2 justify-center">
-                    {sizeOptions.map((size) => (
-                      <span
+        {/* Hover Overlay - Bottom Panel with Sizes/Colors */}
+        <div
+          className={`absolute bottom-0 left-0 right-0 bg-white transition-transform duration-300 z-10 ${
+            isHovered ? 'translate-y-0' : 'translate-y-full'
+          }`}
+        >
+          <div className="px-4 py-4 space-y-3">
+            {/* Sizes */}
+            {sizeOptions.length > 0 && (
+              <div className="text-center">
+                <p className="text-[10px] font-serif uppercase tracking-[0.15em] text-dark mb-2">
+                  SIZES
+                </p>
+                <div className="flex flex-wrap gap-1.5 justify-center">
+                  {sizeOptions.map((size) => {
+                    const isSelected = (selectedSize ?? sizeOptions[0]) === size;
+                    return (
+                      <button
+                        type="button"
                         key={size}
-                        className="text-xs font-serif text-dark"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setSelectedSize(size);
+                        }}
+                        className={`text-xs font-serif px-2 py-0.5 rounded transition-colors ${
+                          isSelected
+                            ? 'bg-primary text-white font-medium shadow-sm'
+                            : 'text-dark hover:bg-gray-100'
+                        }`}
                       >
                         {size}
-                      </span>
-                    ))}
-                  </div>
+                      </button>
+                    );
+                  })}
                 </div>
-              )}
+              </div>
+            )}
 
-              {/* Colors */}
-              {colorOptions.length > 0 && (
-                <div className="text-center">
-                  <p className="text-[10px] font-serif uppercase tracking-[0.15em] text-dark mb-2">
-                    COLORS
-                  </p>
-                  <div className="flex flex-wrap gap-2 justify-center">
-                    {colorOptions.map((colorOption) => (
-                      <div
+            {/* Colors */}
+            {colorOptions.length > 0 && (
+              <div className="text-center">
+                <p className="text-[10px] font-serif uppercase tracking-[0.15em] text-dark mb-2">
+                  COLORS
+                </p>
+                <div className="flex flex-wrap gap-2 justify-center">
+                  {colorOptions.map((colorOption) => {
+                    const isSelected =
+                      (selectedColor ?? colorOptions[0]?.color) === colorOption.color;
+                    return (
+                      <button
+                        type="button"
                         key={colorOption.color}
-                        className="flex flex-col items-center"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setSelectedColor(colorOption.color);
+                        }}
+                        className={`flex flex-col items-center p-0.5 rounded transition ${
+                          isSelected
+                            ? 'ring-2 ring-primary ring-offset-1'
+                            : 'opacity-85 hover:opacity-100'
+                        }`}
+                        title={colorOption.color}
+                        aria-label={`Select color ${colorOption.color}`}
                       >
                         {hasSolidColorHex(colorOption.hex) ? (
                           <span
-                            className="w-6 h-6 border border-gray-300"
+                            className="w-6 h-6 border border-gray-300 block"
                             style={{ backgroundColor: colorOption.hex! }}
-                            title={colorOption.color}
                           />
                         ) : (
-                          <span className="rounded-full border border-gray-200 px-2 py-1 text-[10px] font-medium uppercase tracking-[0.08em] text-dark">
+                          <span
+                            className={`rounded-full border px-2 py-1 text-[10px] font-medium uppercase tracking-[0.08em] ${
+                              isSelected
+                                ? 'border-primary bg-primary text-white'
+                                : 'border-gray-200 text-dark'
+                            }`}
+                          >
                             {colorOption.color}
                           </span>
                         )}
-                      </div>
-                    ))}
-                  </div>
+                      </button>
+                    );
+                  })}
                 </div>
-              )}
+              </div>
+            )}
 
-              {/* Add to Bag Button */}
-              <button
-                onClick={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  navigate(`/products/${product.id}`);
-                }}
-                className="w-full py-2.5 bg-primary text-white text-[10px] font-serif uppercase tracking-[0.15em] hover:bg-primary-dark transition-colors"
-              >
-                ADD TO BAG
-              </button>
-            </div>
+            {/* Add to Bag Button */}
+            <button
+              type="button"
+              onClick={handleAddToBag}
+              className={`w-full py-2.5 text-[10px] font-serif uppercase tracking-[0.15em] transition-colors ${
+                isAdded
+                  ? 'bg-green-700 text-white font-semibold'
+                  : 'bg-primary text-white hover:bg-primary-dark'
+              }`}
+            >
+              {isAdded ? 'ADDED TO BAG ✓' : 'ADD TO BAG'}
+            </button>
           </div>
-        )}
+        </div>
       </div>
 
       {/* Product Info */}

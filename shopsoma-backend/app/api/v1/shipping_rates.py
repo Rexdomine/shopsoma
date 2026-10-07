@@ -353,6 +353,19 @@ async def _get_local_rates(
     available_rates = list((await db.scalars(query)).all())
 
     if not available_rates:
+        # Check if shipping rates table is empty (e.g. freshly initialized local database).
+        # If so, auto-seed default shipping rates and re-query.
+        from sqlalchemy import func
+        total_rates = await db.scalar(select(func.count(ShippingRate.id)))
+        if total_rates == 0:
+            try:
+                from seed_shipping_rates import ensure_default_shipping_rates
+                if await ensure_default_shipping_rates(db):
+                    available_rates = list((await db.scalars(query)).all())
+            except Exception as e:
+                logger.warning(f"Failed to auto-seed shipping rates: {e}")
+
+    if not available_rates:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={

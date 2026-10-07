@@ -7,6 +7,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import AdminSidebar from '../../components/admin/AdminSidebar';
 import DhlShipmentOperations from '../../components/admin/DhlShipmentOperations';
 import ItemPickupPanel from '../../components/admin/ItemPickupPanel';
+import { MadeToOrderTag, ReadyToWearTag } from '../../components/orders/MadeToOrderReadinessBadge';
 import { useToast } from '../../hooks/useToast';
 import CurrencySwitcher from '../../components/common/CurrencySwitcher';
 import { useCurrencyStore } from '../../store/currencyStore';
@@ -385,7 +386,7 @@ export default function AdminOrderDetail() {
                 >
                   Cancel Order
                 </button>
-                {order.payment_status === 'paid' && (
+                {(order.payment_status || '').toLowerCase() === 'paid' && (
                   <button
                     onClick={() => setShowRefundModal(true)}
                     disabled={updating}
@@ -480,24 +481,38 @@ export default function AdminOrderDetail() {
 
                       {/* Product Details */}
                       <div className="flex-1 min-w-0">
-                        <h3 className="font-medium text-gray-900 line-clamp-2">{item.product_title}</h3>
-                        {formatVariantDetails(item.variant_details) && (
-                          <p className="text-sm text-gray-500">
-                            {formatVariantDetails(item.variant_details)}
-                          </p>
-                        )}
-                        <p className="text-sm text-gray-600 mt-1">
-                          Vendor: {item.vendor.business_name}
-                        </p>
-                        {item.made_to_order && (
-                          <ItemPickupPanel
-                            orderId={order.id}
-                            item={item}
-                            onUpdated={setOrder}
-                            onSuccess={success}
-                            onError={error}
-                          />
-                        )}
+                        {(() => {
+                          const isMto = Boolean(
+                            item.made_to_order ||
+                            item.order_type === 'made_to_order' ||
+                            item.order_type === 'custom'
+                          );
+                          return (
+                            <>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <h3 className="font-medium text-gray-900 line-clamp-2">{item.product_title}</h3>
+                                {isMto ? <MadeToOrderTag /> : <ReadyToWearTag />}
+                              </div>
+                              {formatVariantDetails(item.variant_details) && (
+                                <p className="text-sm text-gray-500">
+                                  {formatVariantDetails(item.variant_details)}
+                                </p>
+                              )}
+                              <p className="text-sm text-gray-600 mt-1">
+                                Vendor: {item.vendor.business_name}
+                              </p>
+                              {isMto && (
+                                <ItemPickupPanel
+                                  orderId={order.id}
+                                  item={item}
+                                  onUpdated={setOrder}
+                                  onSuccess={success}
+                                  onError={error}
+                                />
+                              )}
+                            </>
+                          );
+                        })()}
                       </div>
                     </div>
 

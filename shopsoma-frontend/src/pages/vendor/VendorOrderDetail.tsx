@@ -747,7 +747,11 @@ export default function VendorOrderDetail() {
                           {item.made_to_order && (
                             <MadeToOrderReadinessPanel
                               item={item}
-                              canMarkReady={order.payment_status === 'paid' && item.fulfillment_status !== 'cancelled'}
+                              canMarkReady={
+                                (order.payment_status || '').toLowerCase() === 'paid' &&
+                                (item.fulfillment_status || '').toLowerCase() !== 'cancelled' &&
+                                (order.fulfillment_status || '').toLowerCase() !== 'cancelled'
+                              }
                               isConfirming={confirmReadyItemId === item.id}
                               isSubmitting={markingReadyItemId === item.id}
                               onRequestConfirm={() => setConfirmReadyItemId(item.id)}
