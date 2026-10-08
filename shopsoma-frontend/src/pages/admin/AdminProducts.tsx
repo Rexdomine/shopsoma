@@ -24,6 +24,15 @@ interface Product {
   currency?: 'NGN' | 'USD';
   inventory_quantity: number;
   total_stock: number;
+  product_type?: 'single' | 'variable';
+  variations?: Array<{
+    id?: string;
+    size_stocks?: Array<{
+      id?: string;
+      size: string;
+      stock: number;
+    }>;
+  }>;
   made_to_order: boolean;
   made_to_order_timeline?: string | null;
   status: 'draft' | 'active' | 'inactive' | 'archived';
@@ -377,7 +386,18 @@ export default function AdminProducts() {
       );
     }
 
-    return <p className="text-sm text-gray-900">{product.total_stock}</p>;
+    let stockQty = product.total_stock;
+    if (product.product_type === 'variable' && product.variations && product.variations.length > 0) {
+      const varStock = product.variations.reduce(
+        (sum: number, v) => sum + (v.size_stocks || []).reduce((sSum: number, s) => sSum + (s.stock || 0), 0),
+        0
+      );
+      if (varStock > 0 || (stockQty ?? 0) === 0) {
+        stockQty = varStock;
+      }
+    }
+
+    return <p className="text-sm text-gray-900">{stockQty}</p>;
   };
 
   const getModerationBadge = (status: string) => {

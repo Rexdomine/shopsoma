@@ -300,6 +300,11 @@ async def sync_product_variations(
             await db.delete(existing_variation)
             product.variations.remove(existing_variation)
 
+    if getattr(product, "product_type", None) == "variable" and not getattr(product, "made_to_order", False):
+        product.total_stock = sum(
+            (s.stock or 0) for v in product.variations for s in getattr(v, "size_stocks", [])
+        )
+
     if not is_admin:
         await mark_product_content_pending(db=db, product_id=product.id)
 
@@ -449,6 +454,11 @@ async def update_single_variation(
                 await db.delete(old_s)
                 target.size_stocks.remove(old_s)
 
+    if getattr(product, "product_type", None) == "variable" and not getattr(product, "made_to_order", False):
+        product.total_stock = sum(
+            (s.stock or 0) for v in product.variations for s in getattr(v, "size_stocks", [])
+        )
+
     if not is_admin:
         await mark_product_content_pending(db=db, product_id=product.id)
 
@@ -478,6 +488,11 @@ async def delete_single_variation(
 
     await db.delete(target)
     product.variations.remove(target)
+
+    if getattr(product, "product_type", None) == "variable" and not getattr(product, "made_to_order", False):
+        product.total_stock = sum(
+            (s.stock or 0) for v in product.variations for s in getattr(v, "size_stocks", [])
+        )
 
     if not is_admin:
         await mark_product_content_pending(db=db, product_id=product.id)

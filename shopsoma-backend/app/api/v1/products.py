@@ -1249,7 +1249,11 @@ async def update_product(
             is_admin=False,
         )
 
-    if any(field in update_data for field in ["total_stock", "made_to_order"]):
+    if (product.product_type == ProductType.VARIABLE or getattr(product.product_type, "value", None) == "variable") and not product.made_to_order and product.variations:
+        product.total_stock = sum(
+            (s.stock or 0) for v in product.variations for s in getattr(v, "size_stocks", [])
+        )
+    elif any(field in update_data for field in ["total_stock", "made_to_order"]):
         _sync_single_product_variant_inventory(product)
 
     if inherited_price_update:
