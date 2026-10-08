@@ -174,7 +174,18 @@ export default function AdminProductEdit() {
         setCategoryId(data.category_id || '');
         setBasePrice(data.base_price.toString());
         setComparePrice(data.compare_at_price?.toString() || '');
-        setTotalStock(data.total_stock?.toString() || '0');
+
+        let initialStock = data.total_stock ?? 0;
+        if (data.product_type === 'variable' && !data.made_to_order && data.variations && data.variations.length > 0) {
+          const varStock = data.variations.reduce(
+            (sum: number, v: any) => sum + (v.size_stocks || []).reduce((sSum: number, s: any) => sSum + (s.stock || 0), 0),
+            0
+          );
+          if (varStock > 0 || initialStock === 0) {
+            initialStock = varStock;
+          }
+        }
+        setTotalStock(initialStock.toString());
         setStatus(data.status);
 
         // A curation read failure must not block normal product repairs or
@@ -219,13 +230,24 @@ export default function AdminProductEdit() {
     try {
       setSaving(true);
 
+      const isVariable = product?.product_type === 'variable';
+      const variableStock = isVariable
+        ? (product?.variations || []).reduce(
+            (sum, v) => sum + (v.size_stocks || []).reduce((sSum, s) => sSum + (s.stock || 0), 0),
+            0
+          )
+        : 0;
+      const effectiveTotalStock = isVariable
+        ? (variableStock > 0 ? variableStock : (totalStock ? parseInt(totalStock) : 0))
+        : totalStock ? parseInt(totalStock) : 0;
+
       const updateData: AdminProductUpdatePayload = {
         title: title.trim(),
         description: description.trim(),
         category_id: categoryId.trim() || null,
         base_price: parseFloat(basePrice),
         compare_at_price: comparePrice ? parseFloat(comparePrice) : null,
-        total_stock: totalStock ? parseInt(totalStock) : 0,
+        total_stock: effectiveTotalStock,
         status,
         ...(shopEditsLoaded ? { shop_edits: shopEdits } : {}),
       };
@@ -338,6 +360,8 @@ export default function AdminProductEdit() {
   if (!product) {
     return null;
   }
+
+  const currencyDisplay = product?.currency === 'USD' ? 'USD' : 'NGN';
 
   return (
     <div className="min-h-screen bg-[var(--color-page-bg)]">
@@ -569,7 +593,7 @@ export default function AdminProductEdit() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div>
                   <label htmlFor="basePrice" className="block text-sm font-medium text-gray-700 mb-2">
-                    Base Price ($) *
+                    Base Price ({currencyDisplay}) *
                   </label>
                   <input
                     id="basePrice"
@@ -586,7 +610,7 @@ export default function AdminProductEdit() {
 
                 <div>
                   <label htmlFor="comparePrice" className="block text-sm font-medium text-gray-700 mb-2">
-                    Compare At Price ($)
+                    Compare At Price ({currencyDisplay})
                   </label>
                   <input
                     id="comparePrice"
@@ -622,9 +646,19 @@ export default function AdminProductEdit() {
                     min="0"
                     value={totalStock}
                     onChange={(e) => setTotalStock(e.target.value)}
-                    className="w-full rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+                    disabled={product?.product_type === 'variable'}
+                    className={`w-full rounded-lg border px-4 py-2.5 text-sm ${
+                      product?.product_type === 'variable'
+                        ? 'border-gray-300 bg-gray-100 text-gray-600 cursor-not-allowed'
+                        : 'border-gray-300 bg-white focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20'
+                    }`}
                     placeholder="0"
                   />
+                  {product?.product_type === 'variable' && (
+                    <p className="mt-2 text-xs text-gray-500">
+                      Total stock is calculated automatically from variation size stock.
+                    </p>
+                  )}
                 </div>
               </div>
             </div>
@@ -639,12 +673,18 @@ export default function AdminProductEdit() {
                 productImages={product?.images || []}
                 basePrice={parseFloat(basePrice) || 0}
                 compareAtPrice={comparePrice ? parseFloat(comparePrice) : undefined}
-                currency={product?.currency === 'USD' ? '$' : '£'}
+                currency={currencyDisplay}
                 isAdmin={true}
                 onVariationsUpdated={(updatedVariations) => {
+                  const newTotalStock = updatedVariations.reduce(
+                    (sum, v) => sum + (v.size_stocks || []).reduce((sSum, s) => sSum + (s.stock || 0), 0),
+                    0
+                  );
+                  setTotalStock(newTotalStock.toString());
                   if (product) {
                     setProduct({
                       ...product,
+                      total_stock: newTotalStock,
                       variations: updatedVariations,
                     });
                   }
@@ -655,7 +695,7 @@ export default function AdminProductEdit() {
                 productId={id}
                 initialVariants={product?.variants || []}
                 basePrice={parseFloat(basePrice) || 0}
-                currency={product?.currency === 'USD' ? '$' : '£'}
+                currency={currencyDisplay}
                 madeToOrder={Boolean(product?.made_to_order)}
                 isAdmin={true}
                 onVariantsUpdated={(updatedVariants) => {

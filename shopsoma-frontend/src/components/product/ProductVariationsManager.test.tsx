@@ -97,7 +97,7 @@ describe('ProductVariationsManager', () => {
         initialVariations={mockVariations}
         productImages={mockProductImages}
         basePrice={50}
-        currency="£"
+        currency="NGN"
         isAdmin={false}
       />
     );
@@ -134,7 +134,7 @@ describe('ProductVariationsManager', () => {
         initialVariations={mockVariations}
         productImages={mockProductImages}
         basePrice={50}
-        currency="£"
+        currency="NGN"
         isAdmin={false}
       />
     );
@@ -177,7 +177,7 @@ describe('ProductVariationsManager', () => {
         initialVariations={mockVariations}
         productImages={mockProductImages}
         basePrice={50}
-        currency="£"
+        currency="NGN"
         isAdmin={false}
         onVariationsUpdated={onUpdatedMock}
       />
@@ -236,7 +236,7 @@ describe('ProductVariationsManager', () => {
         initialVariations={mockVariations}
         productImages={mockProductImages}
         basePrice={50}
-        currency="£"
+        currency="NGN"
         isAdmin={true}
       />
     );

@@ -59,7 +59,18 @@ export default function VendorProductEdit() {
         setDescription(data.description || '');
         setBasePrice(data.base_price.toString());
         setComparePrice(data.compare_at_price?.toString() || '');
-        setStock(data.total_stock?.toString() || '0');
+
+        let initialStock = data.total_stock ?? 0;
+        if (data.product_type === 'variable' && !data.made_to_order && data.variations && data.variations.length > 0) {
+          const varStock = data.variations.reduce(
+            (sum: number, v: any) => sum + (v.size_stocks || []).reduce((sSum: number, s: any) => sSum + (s.stock || 0), 0),
+            0
+          );
+          if (varStock > 0 || initialStock === 0) {
+            initialStock = varStock;
+          }
+        }
+        setStock(initialStock.toString());
         setStatus(data.status);
         setMadeToOrder(Boolean(data.made_to_order));
         setProductionTimeline(data.made_to_order_timeline || '');
@@ -233,12 +244,25 @@ export default function VendorProductEdit() {
               height_cm: null,
             }
           : {};
+      const isVariable = product?.product_type === 'variable';
+      const variableStock = isVariable
+        ? (product?.variations || []).reduce(
+            (sum, v) => sum + (v.size_stocks || []).reduce((sSum, s) => sSum + (s.stock || 0), 0),
+            0
+          )
+        : 0;
+      const effectiveTotalStock = madeToOrder
+        ? 0
+        : isVariable
+          ? (variableStock > 0 ? variableStock : (stock ? parseInt(stock) : 0))
+          : stock ? parseInt(stock) : 0;
+
       const updateData: Partial<Product> = {
         title: title.trim(),
         description: description.trim(),
         base_price: parseFloat(cleanBasePrice),
         compare_at_price: cleanComparePrice ? parseFloat(cleanComparePrice) : undefined,
-        total_stock: madeToOrder ? 0 : stock ? parseInt(stock) : 0,
+        total_stock: effectiveTotalStock,
         status,
         made_to_order: madeToOrder,
         made_to_order_timeline: madeToOrder ? productionTimeline.trim() : undefined,
@@ -284,6 +308,8 @@ export default function VendorProductEdit() {
   if (!product) {
     return null;
   }
+
+  const currencyDisplay = product?.currency === 'USD' ? 'USD' : 'NGN';
 
   return (
     <div className="flex flex-col md:flex-row min-h-screen bg-[var(--color-page-bg)] w-full overflow-x-hidden">
@@ -352,7 +378,7 @@ export default function VendorProductEdit() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   <div>
                     <label htmlFor="basePrice" className="block text-sm font-medium text-gray-700 mb-2">
-                      Base Price ($) *
+                      Base Price ({currencyDisplay}) *
                     </label>
                     <PriceInput
                       id="basePrice"
@@ -366,7 +392,7 @@ export default function VendorProductEdit() {
 
                   <div>
                     <label htmlFor="comparePrice" className="block text-sm font-medium text-gray-700 mb-2">
-                      Compare at Price ($)
+                      Compare at Price ({currencyDisplay})
                     </label>
                     <PriceInput
                       id="comparePrice"
@@ -425,10 +451,10 @@ export default function VendorProductEdit() {
                       min="0"
                       value={stock}
                       onChange={(e) => setStock(e.target.value)}
-                      disabled={madeToOrder}
+                      disabled={madeToOrder || product?.product_type === 'variable'}
                       className={`w-full rounded-lg border px-4 py-2.5 text-sm transition ${
-                        madeToOrder
-                          ? 'border-gray-300 bg-gray-100 text-gray-400 cursor-not-allowed'
+                        madeToOrder || product?.product_type === 'variable'
+                          ? 'border-gray-300 bg-gray-100 text-gray-600 cursor-not-allowed'
                           : 'border-gray-300 bg-white focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20'
                       }`}
                       placeholder={madeToOrder ? 'Disabled for made-to-order' : '0'}
@@ -436,7 +462,9 @@ export default function VendorProductEdit() {
                     <p className="mt-2 text-xs text-gray-500">
                       {madeToOrder
                         ? 'Inventory tracking is disabled for made-to-order products.'
-                        : 'Use stock only for ready-to-ship inventory.'}
+                        : product?.product_type === 'variable'
+                          ? 'Total stock is calculated automatically from variation size stock.'
+                          : 'Use stock only for ready-to-ship inventory.'}
                     </p>
                   </div>
 
@@ -499,12 +527,18 @@ export default function VendorProductEdit() {
                     productImages={images}
                     basePrice={parseFloat(cleanNumberString(basePrice)) || 0}
                     compareAtPrice={parseFloat(cleanNumberString(comparePrice)) || undefined}
-                    currency={product?.currency === 'USD' ? '$' : '£'}
+                    currency={currencyDisplay}
                     isAdmin={false}
                     onVariationsUpdated={(updatedVariations) => {
+                      const newTotalStock = updatedVariations.reduce(
+                        (sum, v) => sum + (v.size_stocks || []).reduce((sSum, s) => sSum + (s.stock || 0), 0),
+                        0
+                      );
+                      setStock(newTotalStock.toString());
                       if (product) {
                         setProduct({
                           ...product,
+                          total_stock: newTotalStock,
                           variations: updatedVariations,
                         });
                       }
@@ -515,7 +549,7 @@ export default function VendorProductEdit() {
                     productId={id}
                     initialVariants={product?.variants || []}
                     basePrice={parseFloat(cleanNumberString(basePrice)) || 0}
-                    currency={product?.currency === 'USD' ? '$' : '£'}
+                    currency={currencyDisplay}
                     madeToOrder={madeToOrder}
                     isAdmin={false}
                     onVariantsUpdated={(updatedVariants) => {

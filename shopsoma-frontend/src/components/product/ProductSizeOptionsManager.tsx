@@ -56,7 +56,7 @@ export default function ProductSizeOptionsManager({
   productId,
   initialVariants = [],
   basePrice = 0,
-  currency = '£',
+  currency = 'NGN',
   madeToOrder = false,
   isAdmin = false,
   onVariantsUpdated,
@@ -449,10 +449,10 @@ export default function ProductSizeOptionsManager({
                       {/* Price */}
                       <td className="py-3.5 px-4">
                         <div className="font-medium text-gray-900">
-                          {currency}{Number(price).toFixed(2)}
+                          {currency.length > 1 ? `${currency} ` : currency}{Number(price).toFixed(2)}
                           {variant.compare_at_price && Number(variant.compare_at_price) > Number(price) && (
                             <span className="ml-1.5 text-gray-400 line-through text-[11px]">
-                              {currency}{Number(variant.compare_at_price).toFixed(2)}
+                              {currency.length > 1 ? `${currency} ` : currency}{Number(variant.compare_at_price).toFixed(2)}
                             </span>
                           )}
                         </div>

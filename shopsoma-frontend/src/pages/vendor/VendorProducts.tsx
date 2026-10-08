@@ -109,9 +109,22 @@ export default function VendorProducts() {
   const allCount = products.length;
   const collectionsCount = Object.keys(productsByCollection).length;
 
+  const getProductStock = (p: Product) => {
+    if (p.product_type === 'variable' && !p.made_to_order && p.variations && p.variations.length > 0) {
+      const varStock = p.variations.reduce(
+        (sum, v) => sum + (v.size_stocks || []).reduce((sSum, s) => sSum + (s.stock || 0), 0),
+        0
+      );
+      if (varStock > 0 || (p.total_stock ?? 0) === 0) {
+        return varStock;
+      }
+    }
+    return p.total_stock ?? p.inventory_quantity ?? 0;
+  };
+
   const renderStatusBadge = (p: Product) => {
-    const qty = p.total_stock ?? p.inventory_quantity ?? 0;
-    const lowStock = (p.total_stock ?? p.inventory_quantity ?? 0) < 5;
+    const qty = getProductStock(p);
+    const lowStock = qty < 5;
 
     // Priority: Show rejection first, then low stock, then approval status
     let label: string;
@@ -145,7 +158,7 @@ export default function VendorProducts() {
   };
 
   const getStockLabel = (p: Product) => {
-    const qty = p.total_stock ?? p.inventory_quantity ?? 0;
+    const qty = getProductStock(p);
     if (p.made_to_order) {
       return p.made_to_order_timeline
         ? `Made to Order • ${p.made_to_order_timeline}`

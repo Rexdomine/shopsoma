@@ -48,7 +48,7 @@ export default function ProductVariationsManager({
   productImages = [],
   basePrice = 0,
   compareAtPrice,
-  currency = '£',
+  currency = 'NGN',
   isAdmin = false,
   onVariationsUpdated,
 }: ProductVariationsManagerProps) {
@@ -502,8 +502,8 @@ export default function ProductVariationsManager({
                 <label className="block text-xs font-medium text-gray-700 mb-1.5">
                   Availability Status
                 </label>
-                <div className="flex items-center h-9">
-                  <label className="relative inline-flex items-center cursor-pointer">
+                <div className="flex items-center h-[38px] px-3.5 bg-white border border-gray-300 rounded-lg">
+                  <label className="relative inline-flex items-center cursor-pointer select-none">
                     <input
                       type="checkbox"
                       checked={editIsActive}
@@ -511,8 +511,8 @@ export default function ProductVariationsManager({
                       className="sr-only peer"
                       aria-label="Variation active state"
                     />
-                    <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#105E53]"></div>
-                    <span className="ml-3 text-sm text-gray-700 font-medium">
+                    <div className="relative w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#105E53]"></div>
+                    <span className="ml-3 text-xs sm:text-sm text-gray-700 font-medium">
                       {editIsActive ? 'Active (Purchasable)' : 'Inactive (Hidden)'}
                     </span>
                   </label>
@@ -539,7 +539,7 @@ export default function ProductVariationsManager({
                         onChange={(e) => setEditInheritsPrice(e.target.checked)}
                         className="rounded border-gray-300 text-[#105E53] focus:ring-[#105E53]"
                       />
-                      <span>Inherit product base price ({currency}{basePrice})</span>
+                      <span>Inherit product base price ({currency.length > 1 ? `${currency} ` : currency}{basePrice})</span>
                     </label>
                   </div>
                   <input
@@ -875,12 +875,12 @@ export default function ProductVariationsManager({
                             <span>•</span>
                             <span>
                               {v.price !== undefined && v.price !== null
-                                ? `${currency}${v.price}`
-                                : `Base price (${currency}${basePrice})`}
+                                ? `${currency.length > 1 ? `${currency} ` : currency}${v.price}`
+                                : `Base price (${currency.length > 1 ? `${currency} ` : currency}${basePrice})`}
                             </span>
                             {v.sale_price !== undefined && v.sale_price !== null && (
                               <span className="text-emerald-600 font-medium">
-                                (Sale: {currency}{v.sale_price})
+                                (Sale: {currency.length > 1 ? `${currency} ` : currency}{v.sale_price})
                               </span>
                             )}
                             <span>•</span>

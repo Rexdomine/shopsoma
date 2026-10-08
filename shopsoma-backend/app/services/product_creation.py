@@ -101,6 +101,12 @@ async def build_product_graph(
                 )
                 db.add(size_stock)
 
+    # For variable products, sync total_stock from variations
+    if product.product_type == ProductType.VARIABLE and not product.made_to_order and product_data.variations:
+        product.total_stock = sum(
+            (s.stock or 0) for v in product_data.variations for s in (v.sizes or [])
+        )
+
     # Add variants if provided (legacy system - backward compatibility)
     if product_data.variants:
         for variant_data in product_data.variants:

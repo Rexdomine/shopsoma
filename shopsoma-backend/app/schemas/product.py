@@ -933,6 +933,12 @@ class ProductResponse(ProductBase):
             # Replace empty variants list with generated ones
             self.variants = generated_variants
 
+        # For variable products, automatically derive total_stock from variations
+        if self.product_type == "variable" and not self.made_to_order and self.variations:
+            self.total_stock = sum(
+                (s.stock or 0) for v in self.variations for s in (v.size_stocks or [])
+            )
+
         return self
 
 
