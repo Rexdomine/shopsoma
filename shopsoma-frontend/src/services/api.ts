@@ -8,6 +8,19 @@ const clearStoredAuthSession = () => {
   localStorage.removeItem(STORAGE_KEYS.USER);
 };
 
+const isAuthEndpoint = (url?: string): boolean => {
+  if (!url) return false;
+  return [
+    '/auth/login',
+    '/auth/signup',
+    '/auth/refresh',
+    '/auth/forgot-password',
+    '/auth/reset-password',
+    '/auth/verify-email',
+    '/auth/claim',
+  ].some((path) => url.includes(path));
+};
+
 // Create axios instance
 const api: AxiosInstance = axios.create({
   baseURL: API_BASE_URL,
@@ -37,6 +50,11 @@ api.interceptors.response.use(
   async (error: AxiosError) => {
     const originalRequest = error.config as any;
 
+    // Do not attempt token refresh for unauthenticated auth endpoints (login, signup, etc.)
+    if (isAuthEndpoint(originalRequest?.url)) {
+      return Promise.reject(error);
+    }
+
     // Handle 401 Unauthorized - token expired
     if (error.response?.status === 401 && !originalRequest._retry) {
       originalRequest._retry = true;
@@ -58,8 +76,12 @@ api.interceptors.response.use(
       } catch (refreshError) {
         // Refresh failed, logout user
         clearStoredAuthSession();
-        const isVendorRoute = window.location.pathname.startsWith('/vendor');
-        window.location.href = isVendorRoute ? '/vendor/login' : '/login';
+        const pathname = typeof window !== 'undefined' ? window.location.pathname : '';
+        const isAlreadyOnAuthPage = pathname === '/login' || pathname === '/vendor/login' || pathname === '/register';
+        if (!isAlreadyOnAuthPage && typeof window !== 'undefined') {
+          const isVendorRoute = pathname.startsWith('/vendor');
+          window.location.href = isVendorRoute ? '/vendor/login' : '/login';
+        }
         return Promise.reject(refreshError);
       }
     }

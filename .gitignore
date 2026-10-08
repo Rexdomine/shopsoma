@@ -16,3 +16,9 @@ Thumbs.db
 
 # Local uploads
 shopsoma-backend/uploads/
+
+# Environment files
+.env
+.env.*
+!.env.example
+

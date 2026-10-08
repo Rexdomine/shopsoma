@@ -194,12 +194,12 @@ async def seed_local_demo():
         print("[+] Seeding local database demo products and vendor...")
 
         # 1. Ensure demo vendor exists
-        res = await session.execute(select(User).where(User.email == "vendor@shopsoma.com"))
+        res = await session.execute(select(User).where(User.email == "sirkaysonline@gmail.com"))
         vendor_user = res.scalar_one_or_none()
         if not vendor_user:
             vendor_user = User(
                 id=uuid.uuid4(),
-                email="vendor@shopsoma.com",
+                email="sirkaysonline@gmail.com",
                 hashed_password=get_password_hash("Vendor123!"),
                 full_name="Shopsoma Fashion Studio",
                 role=UserRole.VENDOR,
@@ -208,9 +208,9 @@ async def seed_local_demo():
             )
             session.add(vendor_user)
             await session.flush()
-            print("[OK] Created vendor user vendor@shopsoma.com")
+            print("[OK] Created vendor user sirkaysonline@gmail.com")
         else:
-            print("[OK] Vendor user vendor@shopsoma.com already exists")
+            print("[OK] Vendor user sirkaysonline@gmail.com already exists")
 
         res_v = await session.execute(select(Vendor).where(Vendor.user_id == vendor_user.id))
         vendor = res_v.scalar_one_or_none()

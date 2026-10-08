@@ -183,4 +183,18 @@ describe('VendorOrderDetail made-to-order readiness', () => {
     });
     expect(within(panel).getByText('Being prepared')).toBeInTheDocument();
   });
+
+  it('allows vendor to mark item ready when payment_status is uppercase PAID', async () => {
+    mocks.getVendorOrder.mockResolvedValue(
+      order(
+        [item({ id: 'item-mto', product_title: 'MTO Kaftan', made_to_order: true, readiness_state: 'being_prepared' })],
+        'PAID'
+      )
+    );
+
+    renderPage();
+    const panel = await screen.findByTestId('mto-panel-item-mto');
+    expect(within(panel).getByRole('button', { name: 'Ready for Shopsoma Pickup' })).toBeInTheDocument();
+    expect(within(panel).queryByText(/once the order payment is confirmed/)).not.toBeInTheDocument();
+  });
 });

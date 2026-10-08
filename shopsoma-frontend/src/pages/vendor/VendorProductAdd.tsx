@@ -14,6 +14,8 @@ import { categoryService } from '../../services/categoryService';
 import { collectionService } from '../../services/collectionService';
 import type { Category, Collection } from '../../types';
 import type { Currency } from '../../store/currencyStore';
+import PriceInput from '../../components/common/PriceInput';
+import { cleanNumberString } from '../../utils/pricing';
 
 // US Sizing: Letter sizes (XXS-XXXL)
 // UK Sizing: Numeric sizes (4-22)
@@ -757,17 +759,20 @@ export default function VendorProductAdd() {
 
     // Validate price if different pricing is enabled
     if (variationHasDifferentPricing) {
-      if (!variationPrice.trim()) {
+      const cleanVarPrice = cleanNumberString(variationPrice);
+      const cleanVarSalesPrice = cleanNumberString(variationSalesPrice);
+
+      if (!cleanVarPrice.trim()) {
         warning('Variation price is required when different pricing is enabled');
         return;
       }
-      const parsedVariationPrice = parseFloat(variationPrice);
+      const parsedVariationPrice = parseFloat(cleanVarPrice);
       if (isNaN(parsedVariationPrice) || parsedVariationPrice <= 0) {
         warning('Invalid variation price');
         return;
       }
-      if (variationSalesPrice) {
-        const parsedSalesPrice = parseFloat(variationSalesPrice);
+      if (cleanVarSalesPrice) {
+        const parsedSalesPrice = parseFloat(cleanVarSalesPrice);
         if (isNaN(parsedSalesPrice) || parsedSalesPrice <= 0) {
           warning('Invalid sales price');
           return;
@@ -798,8 +803,8 @@ export default function VendorProductAdd() {
       name: variationType === 'Color' ? getResolvedColorLabel(variationColorMode, variationColorLabel) : variationName,
       type: variationType,
       hasDifferentPricing: variationHasDifferentPricing,
-      price: variationPrice,
-      salesPrice: variationSalesPrice,
+      price: cleanNumberString(variationPrice),
+      salesPrice: cleanNumberString(variationSalesPrice),
       colorMode: variationColorMode,
       colorLabel: getResolvedColorLabel(variationColorMode, variationColorLabel),
       colorHex: variationColorMode === 'solid' ? variationColorHex : '#000000',
@@ -866,7 +871,10 @@ export default function VendorProductAdd() {
       return;
     }
 
-    if (!productPrice || Number.isNaN(Number(productPrice))) {
+    const rawCleanProductPrice = cleanNumberString(productPrice);
+    const rawCleanSalesPrice = cleanNumberString(salesPrice);
+
+    if (!rawCleanProductPrice || Number.isNaN(Number(rawCleanProductPrice))) {
       warning('Product price is required', 'Missing info');
       return;
     }
@@ -897,8 +905,8 @@ export default function VendorProductAdd() {
         if (!variation.hasDifferentPricing || !variation.salesPrice?.trim()) {
           continue;
         }
-        const customRegularPrice = parseFloat(variation.price);
-        const customSalePrice = parseFloat(variation.salesPrice);
+        const customRegularPrice = parseFloat(cleanNumberString(variation.price));
+        const customSalePrice = parseFloat(cleanNumberString(variation.salesPrice));
         if (
           !Number.isFinite(customRegularPrice) ||
           !Number.isFinite(customSalePrice) ||
@@ -931,8 +939,8 @@ export default function VendorProductAdd() {
     setIsSubmitting(true);
 
     try {
-      const parsedProductPrice = parseFloat(productPrice);
-      const parsedSalesPrice = salesPrice ? parseFloat(salesPrice) : undefined;
+      const parsedProductPrice = parseFloat(rawCleanProductPrice);
+      const parsedSalesPrice = rawCleanSalesPrice ? parseFloat(rawCleanSalesPrice) : undefined;
       const basePrice =
         parsedSalesPrice && parsedSalesPrice > 0 && parsedSalesPrice < parsedProductPrice
           ? parsedSalesPrice
@@ -1006,8 +1014,8 @@ export default function VendorProductAdd() {
         const variationPayload: NonNullable<CreateProductPayload['variations']> = [];
 
         detailedVariations.forEach((variation) => {
-          const customRegularPrice = variation.price ? parseFloat(variation.price) : undefined;
-          const customSalePrice = variation.salesPrice ? parseFloat(variation.salesPrice) : undefined;
+          const customRegularPrice = variation.price ? parseFloat(cleanNumberString(variation.price)) : undefined;
+          const customSalePrice = variation.salesPrice ? parseFloat(cleanNumberString(variation.salesPrice)) : undefined;
           const inheritedRegularPrice = compareAtPrice ?? parsedProductPrice;
           const inheritedSalePrice = compareAtPrice ? basePrice : undefined;
           const hasCustomRegularPrice =
@@ -1471,10 +1479,9 @@ export default function VendorProductAdd() {
                       <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 text-sm">
                         {currencySymbol}
                       </span>
-                      <input
-                        type="text"
+                      <PriceInput
                         value={productPrice}
-                        onChange={(e) => setProductPrice(e.target.value)}
+                        onChange={setProductPrice}
                         className="w-full rounded-lg border border-gray-200 bg-gray-50 pl-8 pr-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
                         placeholder="0.00"
                         required
@@ -1490,10 +1497,9 @@ export default function VendorProductAdd() {
                       <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 text-sm">
                         {currencySymbol}
                       </span>
-                      <input
-                        type="text"
+                      <PriceInput
                         value={salesPrice}
-                        onChange={(e) => setSalesPrice(e.target.value)}
+                        onChange={setSalesPrice}
                         className="w-full rounded-lg border border-gray-200 bg-gray-50 pl-8 pr-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
                         placeholder="0.00"
                       />
@@ -2177,10 +2183,9 @@ export default function VendorProductAdd() {
                             <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 text-sm">
                               {currencySymbol}
                             </span>
-                            <input
-                              type="text"
+                            <PriceInput
                               value={variationPrice}
-                              onChange={(e) => setVariationPrice(e.target.value)}
+                              onChange={setVariationPrice}
                               placeholder="0.00"
                               disabled={!variationHasDifferentPricing}
                               className="w-full rounded-lg border border-gray-200 bg-gray-50 pl-8 pr-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -2195,10 +2200,9 @@ export default function VendorProductAdd() {
                             <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 text-sm">
                               {currencySymbol}
                             </span>
-                            <input
-                              type="text"
+                            <PriceInput
                               value={variationSalesPrice}
-                              onChange={(e) => setVariationSalesPrice(e.target.value)}
+                              onChange={setVariationSalesPrice}
                               placeholder="0.00"
                               disabled={!variationHasDifferentPricing}
                               className="w-full rounded-lg border border-gray-200 bg-gray-50 pl-8 pr-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20 disabled:opacity-50 disabled:cursor-not-allowed"

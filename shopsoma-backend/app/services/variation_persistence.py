@@ -300,6 +300,11 @@ async def sync_product_variations(
             await db.delete(existing_variation)
             product.variations.remove(existing_variation)
 
+    if getattr(product, "product_type", None) == "variable" and not getattr(product, "made_to_order", False):
+        product.total_stock = sum(
+            (s.stock or 0) for v in product.variations for s in getattr(v, "size_stocks", [])
+        )
+
     if not is_admin:
         await mark_product_content_pending(db=db, product_id=product.id)
 
@@ -339,22 +344,47 @@ async def update_single_variation(
                     detail="Variation titles must be unique after normalization",
                 )
 
+    # Determine candidate price & sale_price with inheritance support
+    if v_dict.get("inherits_price"):
+        candidate_price = None
+    elif "price" in v_dict and v_dict["price"] is not None:
+        candidate_price = v_dict["price"]
+    else:
+        candidate_price = None if target.inherits_price else target.price
+
+    if v_dict.get("inherits_sale_price"):
+        candidate_sale_price = None
+    elif "sale_price" in v_dict and v_dict["sale_price"] is not None:
+        candidate_sale_price = v_dict["sale_price"]
+    else:
+        candidate_sale_price = None if target.inherits_sale_price else target.sale_price
+
+    candidate_var = {
+        "title": candidate_title,
+        "type": v_dict.get("type", target.type),
+        "price": candidate_price,
+        "sale_price": candidate_sale_price,
+        "is_active": v_dict.get("is_active", target.is_active),
+        "sizes": v_dict.get("sizes", [
+            {"size": s.size.value if hasattr(s.size, "value") else str(s.size), "stock": s.stock}
+            for s in target.size_stocks
+        ]),
+    }
+
     # Validate single variation payload
     try:
-        synthetic_list = other_variations + [
-            {
-                "title": candidate_title,
-                "type": v_dict.get("type", target.type),
-                "price": v_dict.get("price", target.price),
-                "sale_price": v_dict.get("sale_price", target.sale_price),
-                "is_active": v_dict.get("is_active", target.is_active),
-                "sizes": v_dict.get("sizes", [
-                    {"size": s.size.value if hasattr(s.size, "value") else str(s.size), "stock": s.stock}
-                    for s in target.size_stocks
-                ]),
-            }
-        ]
-        validate_variation_data_list(synthetic_list, product.variants)
+        # 1. Validate the candidate variation's own fields (prices, nested sizes, stock)
+        validate_variation_data_list([candidate_var], variants=None)
+
+        # 2. Check price vs sale_price using product base_price if regular price is inherited
+        effective_reg_price = candidate_price if candidate_price is not None else product.base_price
+        if candidate_sale_price is not None and effective_reg_price is not None:
+            if Decimal(str(candidate_sale_price)) >= Decimal(str(effective_reg_price)):
+                raise ValueError("Sale price must be less than regular price")
+
+        # 3. Validate shape with other variations against variants
+        synthetic_shape_list = other_variations + [candidate_var]
+        validate_variation_inventory_shape(synthetic_shape_list, variants=None)
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -378,9 +408,24 @@ async def update_single_variation(
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
     # In-place field updates
-    for field in ("title", "type", "color_hex", "price", "sale_price", "inherits_price", "inherits_sale_price", "images", "is_active"):
+    for field in ("title", "type", "color_hex", "is_active", "images"):
         if field in v_dict:
             setattr(target, field, v_dict[field])
+
+    # In-place pricing updates with inheritance
+    if v_dict.get("inherits_price"):
+        target.price = None
+        target.inherits_price = True
+    elif "price" in v_dict:
+        target.price = v_dict["price"]
+        target.inherits_price = False
+
+    if v_dict.get("inherits_sale_price"):
+        target.sale_price = None
+        target.inherits_sale_price = True
+    elif "sale_price" in v_dict:
+        target.sale_price = v_dict["sale_price"]
+        target.inherits_sale_price = False
 
     # Nested sizes update
     if "sizes" in v_dict and v_dict["sizes"] is not None:
@@ -408,6 +453,11 @@ async def update_single_variation(
             if old_size not in handled_sizes:
                 await db.delete(old_s)
                 target.size_stocks.remove(old_s)
+
+    if getattr(product, "product_type", None) == "variable" and not getattr(product, "made_to_order", False):
+        product.total_stock = sum(
+            (s.stock or 0) for v in product.variations for s in getattr(v, "size_stocks", [])
+        )
 
     if not is_admin:
         await mark_product_content_pending(db=db, product_id=product.id)
@@ -438,6 +488,11 @@ async def delete_single_variation(
 
     await db.delete(target)
     product.variations.remove(target)
+
+    if getattr(product, "product_type", None) == "variable" and not getattr(product, "made_to_order", False):
+        product.total_stock = sum(
+            (s.stock or 0) for v in product.variations for s in getattr(v, "size_stocks", [])
+        )
 
     if not is_admin:
         await mark_product_content_pending(db=db, product_id=product.id)

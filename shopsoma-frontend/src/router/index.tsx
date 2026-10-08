@@ -232,6 +232,18 @@ const router = createBrowserRouter([
     ),
   },
   {
+    path: ROUTES.ORDERS,
+    element: (
+      <ErrorBoundary>
+        <Suspense fallback={<Loading fullScreen message="Loading orders..." />}>
+          <ProtectedRoute>
+            <ProfileOrders />
+          </ProtectedRoute>
+        </Suspense>
+      </ErrorBoundary>
+    ),
+  },
+  {
     path: '/orders/:orderId',
     element: (
       <ErrorBoundary>

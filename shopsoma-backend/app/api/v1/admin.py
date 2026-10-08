@@ -28,6 +28,7 @@ from app.models.product import (
     Product,
     ProductImage,
     ProductStatus,
+    ProductType,
     ProductVariant,
     SizeEnum,
     SizeStock,
@@ -2712,7 +2713,11 @@ async def update_product(
             new_compare_at_price=product.compare_at_price,
         )
 
-    if "total_stock" in changes:
+    if (product.product_type == ProductType.VARIABLE or getattr(product.product_type, "value", None) == "variable") and not product.made_to_order and product.variations:
+        product.total_stock = sum(
+            (s.stock or 0) for v in product.variations for s in getattr(v, "size_stocks", [])
+        )
+    elif "total_stock" in changes:
         _sync_single_product_variant_inventory(product)
 
     await db.commit()

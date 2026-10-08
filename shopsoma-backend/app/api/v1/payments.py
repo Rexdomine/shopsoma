@@ -366,6 +366,12 @@ async def initialize_payment(
             detail="Order has already been paid",
         )
 
+    if order.fulfillment_status == FulfillmentStatus.CANCELLED:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Order has been cancelled",
+        )
+
     # Route to appropriate payment gateway
     if payment_data.payment_gateway == "stripe":
         return await _initialize_stripe_payment(payment_data, order, db)
@@ -837,7 +843,45 @@ async def _initialize_paystack_payment(
     if truth.bridge_applied:
         # Durable call_started truth must precede the provider boundary.
         await db.commit()
-    reference = truth.provider_reference or f"SHP-{order.order_number}"
+
+    clean_order_number = (
+        order.order_number
+        if order.order_number.startswith("SHP-")
+        else f"SHP-{order.order_number}"
+    )
+
+    existing_payments = list(
+        await db.scalars(
+            select(Payment)
+            .where(
+                Payment.order_id == order.id,
+                Payment.payment_gateway == PaymentGateway.PAYSTACK,
+            )
+            .order_by(Payment.created_at.asc())
+        )
+    )
+
+    if truth.provider_reference:
+        reference = truth.provider_reference
+    else:
+        if not existing_payments:
+            is_used = await db.scalar(
+                select(Payment.id)
+                .where(Payment.transaction_id == clean_order_number)
+                .limit(1)
+            )
+            reference = clean_order_number if not is_used else f"{clean_order_number}-1"
+        else:
+            attempt_num = len(existing_payments) + 1
+            candidate_ref = f"{clean_order_number}-{attempt_num}"
+            while await db.scalar(
+                select(Payment.id)
+                .where(Payment.transaction_id == candidate_ref)
+                .limit(1)
+            ):
+                attempt_num += 1
+                candidate_ref = f"{clean_order_number}-{attempt_num}"
+            reference = candidate_ref
     if truth.bridge_applied and not truth.provider_call_required:
         try:
             stored_session = await _stored_paystack_initialization_session(
@@ -902,31 +946,59 @@ async def _initialize_paystack_payment(
 
             # Check for HTTP errors
             if response.status_code != 200:
-                if truth.bridge_applied:
-                    await _reconcile_paystack_initialization(
-                        client,
-                        reference=reference,
+                if (
+                    not truth.bridge_applied
+                    and response.status_code == 400
+                    and isinstance(paystack_response, dict)
+                    and "duplicate" in str(paystack_response.get("message", "")).lower()
+                    and "reference" in str(paystack_response.get("message", "")).lower()
+                ):
+                    retry_ref = f"{clean_order_number}-{int(datetime.now(timezone.utc).timestamp())}"
+                    logger.warning(
+                        "Paystack reported duplicate reference %s for order %s. Retrying initialization with %s",
+                        reference,
+                        order.order_number,
+                        retry_ref,
+                    )
+                    reference = retry_ref
+                    payload["reference"] = reference
+                    response = await client.post(
+                        f"{PAYSTACK_BASE_URL}/transaction/initialize",
+                        json=payload,
                         headers=headers,
-                        db=db,
+                        timeout=30.0,
                     )
-                error_message = paystack_response.get(
-                    "message", "Payment initialization failed"
-                )
-                print(
-                    f"❌ Paystack API Error (HTTP {response.status_code}): {error_message}"
-                )
-                print(f"   Response: {paystack_response}")
+                    try:
+                        paystack_response = response.json()
+                    except Exception:
+                        paystack_response = {"message": response.text}
 
-                # Provide specific error messages
-                if response.status_code == 401:
-                    raise HTTPException(
-                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                        detail="Payment gateway authentication failed. Please contact support.",
+                if response.status_code != 200:
+                    if truth.bridge_applied:
+                        await _reconcile_paystack_initialization(
+                            client,
+                            reference=reference,
+                            headers=headers,
+                            db=db,
+                        )
+                    error_message = paystack_response.get(
+                        "message", "Payment initialization failed"
                     )
-                else:
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST, detail=error_message
+                    print(
+                        f"❌ Paystack API Error (HTTP {response.status_code}): {error_message}"
                     )
+                    print(f"   Response: {paystack_response}")
+
+                    # Provide specific error messages
+                    if response.status_code == 401:
+                        raise HTTPException(
+                            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                            detail="Payment gateway authentication failed. Please contact support.",
+                        )
+                    else:
+                        raise HTTPException(
+                            status_code=status.HTTP_400_BAD_REQUEST, detail=error_message
+                        )
 
             if not isinstance(paystack_response, dict):
                 if truth.bridge_applied:
@@ -992,6 +1064,14 @@ async def _initialize_paystack_payment(
                     detail="Payment initialization outcome is not definitive",
                 )
             data = cast(dict, data)
+
+            # Mark previous pending payment records for this order as superseded
+            if not truth.bridge_applied and existing_payments:
+                for prev in existing_payments:
+                    if prev.status == TransactionStatus.PENDING:
+                        prev.status = TransactionStatus.FAILED
+                        prev.failed_at = datetime.now(timezone.utc)
+                        prev.failure_reason = "Superseded by new payment attempt"
 
             # Create payment record
             payment = Payment(

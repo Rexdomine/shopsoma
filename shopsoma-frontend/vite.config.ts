@@ -9,6 +9,14 @@ const resolveModule = (pkg: string) => path.resolve(projectRoot, 'node_modules',
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
+  server: {
+    proxy: {
+      '/uploads': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+      },
+    },
+  },
   resolve: {
     alias: {
       react: resolveModule('react'),

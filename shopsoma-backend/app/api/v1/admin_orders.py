@@ -27,6 +27,7 @@ from app.models.package_custody import HubPackage, CustodyEvent
 from app.services.orders.made_to_order_readiness import (
     ReadinessError,
     ensure_admin_pickup_update_allowed,
+    get_production_tracking,
     is_made_to_order_item,
     pickups_by_order_item,
     readiness_fields,
@@ -314,6 +315,7 @@ def _build_pickup_info(pickup: VendorPickup) -> PickupInfo:
         vendor_id=pickup.vendor_id,
         status=pickup.status,
         ready_for_pickup_at=pickup.ready_for_pickup_at,
+        estimated_production_days=pickup.estimated_production_days,
         scheduled_pickup_date=pickup.scheduled_pickup_date,
         actual_pickup_date=pickup.actual_pickup_date,
         pickup_window_start=pickup.pickup_window_start,
@@ -336,6 +338,7 @@ def _build_admin_order_item_detail(
     display_currency: str,
     usd_to_ngn_rate: Decimal,
     pickup: Optional[VendorPickup] = None,
+    order: Optional[Order] = None,
 ) -> OrderItemDetail:
     unit_price, subtotal, item_currency = _resolve_admin_item_amounts(item, display_currency, usd_to_ngn_rate)
     return OrderItemDetail(
@@ -358,6 +361,7 @@ def _build_admin_order_item_detail(
         vendor=build_vendor_info(item.vendor),
         pickup=_build_pickup_info(pickup) if pickup is not None else None,
         **readiness_fields(item, pickup),
+        **get_production_tracking(item, pickup, order=order),
     )
 
 
@@ -653,6 +657,7 @@ async def get_order_detail(
                 display_currency,
                 usd_to_ngn_rate,
                 pickup=item_pickups.get(item.id),
+                order=order,
             )
             for item in order.items
         ],

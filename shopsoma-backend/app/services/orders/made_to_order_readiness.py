@@ -196,7 +196,12 @@ async def mark_item_ready_for_pickup(
     )
     if order is None:
         raise ReadinessError(404, "Order not found")
-    if order.payment_status != PaymentStatus.PAID:
+    status_str = (
+        order.payment_status.value
+        if hasattr(order.payment_status, "value")
+        else str(order.payment_status or "")
+    )
+    if status_str.upper() != "PAID":
         raise ReadinessError(409, "Order has not been paid yet")
     if (
         order.fulfillment_status == FulfillmentStatus.CANCELLED
@@ -276,3 +281,12 @@ def ensure_admin_pickup_update_allowed(
 
 def _as_aware(value: datetime) -> datetime:
     return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+
+
+from app.services.orders.production_tracking import (
+    add_working_days,
+    count_working_days_between,
+    get_production_tracking,
+    is_working_day,
+    parse_production_days,
+)

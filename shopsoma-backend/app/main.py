@@ -70,8 +70,17 @@ async def lifespan(app: FastAPI):
             else f"object ({settings.S3_BUCKET_NAME})"
         ),
     )
-    # TODO: Initialize database connection pool
-    # TODO: Initialize Redis connection
+    # Ensure default shipping rates exist for local development and initial setups
+    try:
+        from app.core.database import AsyncSessionLocal
+        from seed_shipping_rates import ensure_default_shipping_rates
+        async with AsyncSessionLocal() as db:
+            seeded = await ensure_default_shipping_rates(db)
+            if seeded:
+                logger.info("Default shipping rates seeded successfully")
+    except Exception as exc:
+        logger.warning(f"Could not auto-seed default shipping rates on startup: {exc}")
+
     yield
     # Shutdown
     logger.info("Shopsoma API shutting down")

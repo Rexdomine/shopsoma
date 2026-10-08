@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Bookmark, Menu, Search, User, X } from 'lucide-react';
+import { Bookmark, Menu, Search, User, X, Package, LogOut } from 'lucide-react';
 import { ROUTES } from '../../config/constants';
 import { useCartStore } from '../../store/cartStore';
 import { useAuth } from '../../context/AuthContext';
@@ -10,35 +10,16 @@ import { usePreferenceStore } from '../../store/preferenceStore';
 export default function Header() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [currencyDropdownOpen, setCurrencyDropdownOpen] = useState(false);
+  const [accountDropdownOpen, setAccountDropdownOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const navigate = useNavigate();
   const cart = useCartStore((state) => state.cart);
   const itemCount = cart.summary.itemCount;
-  const { isAuthenticated, user } = useAuth();
+  const { isAuthenticated, user, logout } = useAuth();
   const { currentCurrency, setCurrency, commerceFeatures } = useCurrencyStore();
   const setPreferredCurrency = usePreferenceStore((state) => state.setCurrency);
   const currencyDropdownRef = useRef<HTMLDivElement>(null);
-
-  const handleProfileClick = () => {
-    // Check localStorage directly - it's the source of truth
-    // Don't rely on context state as it may not have re-rendered yet
-    const token = localStorage.getItem('shopsoma_access_token');
-    const userStr = localStorage.getItem('shopsoma_user');
-
-    console.log('Profile Click Debug:', {
-      isAuthenticated,
-      hasToken: !!token,
-      hasUser: !!user,
-      hasUserInStorage: !!userStr
-    });
-
-    // Only check localStorage, not context state
-    if (token && userStr) {
-      navigate(ROUTES.PROFILE);
-    } else {
-      navigate(ROUTES.LOGIN);
-    }
-  };
+  const accountDropdownRef = useRef<HTMLDivElement>(null);
 
   // Get user initials from full name
   const getUserInitials = (fullName: string): string => {
@@ -49,19 +30,22 @@ export default function Header() {
     return (names[0].charAt(0) + names[names.length - 1].charAt(0)).toUpperCase();
   };
 
-  // Close currency dropdown when clicking outside
+  // Close dropdowns when clicking outside
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
       if (currencyDropdownRef.current && !currencyDropdownRef.current.contains(event.target as Node)) {
         setCurrencyDropdownOpen(false);
       }
+      if (accountDropdownRef.current && !accountDropdownRef.current.contains(event.target as Node)) {
+        setAccountDropdownOpen(false);
+      }
     }
 
-    if (currencyDropdownOpen) {
+    if (currencyDropdownOpen || accountDropdownOpen) {
       document.addEventListener('mousedown', handleClickOutside);
       return () => document.removeEventListener('mousedown', handleClickOutside);
     }
-  }, [currencyDropdownOpen]);
+  }, [currencyDropdownOpen, accountDropdownOpen]);
 
   // Handle currency selection
   const handleCurrencyChange = (currency: Currency) => {
@@ -161,15 +145,97 @@ export default function Header() {
             <Link to={ROUTES.PROFILE_WISHLIST || ROUTES.PROFILE} className="hidden sm:inline-flex p-1.5 hover:text-primary-dark" aria-label="Wishlist">
               <Bookmark className="w-5 h-5" />
             </Link>
-            <button onClick={handleProfileClick} className="p-1.5 hover:text-primary-dark" aria-label="Account">
-              {isAuthenticated && user ? (
-                <div className="w-8 h-8 rounded-full bg-primary text-white flex items-center justify-center text-xs font-semibold">
-                  {getUserInitials(user.full_name)}
+            <div className="relative" ref={accountDropdownRef}>
+              <button
+                onClick={() => setAccountDropdownOpen((prev) => !prev)}
+                className="p-1.5 hover:text-primary-dark flex items-center gap-1"
+                aria-label="Account"
+                aria-expanded={accountDropdownOpen}
+              >
+                {isAuthenticated && user ? (
+                  <div className="w-8 h-8 rounded-full bg-primary text-white flex items-center justify-center text-xs font-semibold">
+                    {getUserInitials(user.full_name)}
+                  </div>
+                ) : (
+                  <User className="w-5 h-5" />
+                )}
+              </button>
+
+              {accountDropdownOpen && (
+                <div className="absolute top-full right-0 mt-2 w-56 bg-white border border-[#1E5053]/20 shadow-xl rounded-sm z-50 py-2 text-sm text-gray-700">
+                  {isAuthenticated && user ? (
+                    <>
+                      <div className="px-4 py-2 border-b border-gray-100">
+                        <p className="font-semibold text-gray-900 truncate">{user.full_name}</p>
+                        <p className="text-xs text-gray-500 truncate">{user.email}</p>
+                      </div>
+                      <Link
+                        to={ROUTES.ORDERS}
+                        onClick={() => setAccountDropdownOpen(false)}
+                        className="flex items-center gap-3 px-4 py-2.5 hover:bg-gray-50 text-gray-800 transition-colors font-medium"
+                      >
+                        <Package className="w-4 h-4 text-primary" />
+                        <span>My Orders</span>
+                      </Link>
+                      <Link
+                        to={ROUTES.PROFILE}
+                        onClick={() => setAccountDropdownOpen(false)}
+                        className="flex items-center gap-3 px-4 py-2 hover:bg-gray-50 text-gray-800 transition-colors"
+                      >
+                        <User className="w-4 h-4 text-primary" />
+                        <span>Account Details</span>
+                      </Link>
+                      <Link
+                        to={ROUTES.PROFILE_WISHLIST}
+                        onClick={() => setAccountDropdownOpen(false)}
+                        className="flex items-center gap-3 px-4 py-2 hover:bg-gray-50 text-gray-800 transition-colors"
+                      >
+                        <Bookmark className="w-4 h-4 text-primary" />
+                        <span>Wishlist</span>
+                      </Link>
+                      <div className="border-t border-gray-100 mt-1 pt-1">
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            setAccountDropdownOpen(false);
+                            await logout();
+                            navigate(ROUTES.LOGIN, { replace: true });
+                          }}
+                          className="w-full flex items-center gap-3 px-4 py-2 text-left text-red-600 hover:bg-red-50 transition-colors"
+                        >
+                          <LogOut className="w-4 h-4" />
+                          <span>Sign Out</span>
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <Link
+                        to={ROUTES.LOGIN}
+                        onClick={() => setAccountDropdownOpen(false)}
+                        className="block px-4 py-2.5 hover:bg-gray-50 font-semibold text-primary transition-colors"
+                      >
+                        Sign In
+                      </Link>
+                      <Link
+                        to={ROUTES.REGISTER}
+                        onClick={() => setAccountDropdownOpen(false)}
+                        className="block px-4 py-2 hover:bg-gray-50 text-gray-700 transition-colors"
+                      >
+                        Create Account
+                      </Link>
+                      <Link
+                        to={ROUTES.TRACK_ENTRY}
+                        onClick={() => setAccountDropdownOpen(false)}
+                        className="block px-4 py-2 hover:bg-gray-50 text-gray-700 transition-colors border-t border-gray-100"
+                      >
+                        Track an Order
+                      </Link>
+                    </>
+                  )}
                 </div>
-              ) : (
-                <User className="w-5 h-5" />
               )}
-            </button>
+            </div>
             <Link to={ROUTES.CART} className="relative hover:text-primary-dark flex items-center gap-1" aria-label="Shopping bag">
               <svg
                 width="20"
@@ -210,6 +276,77 @@ export default function Header() {
               <Link to={ROUTES.SHOP_EDITS} className="block" onClick={() => setMobileMenuOpen(false)}>
                 Shop Edits
               </Link>
+            </div>
+
+            <div className="border-t border-[#1E5053]/30 mt-6 pt-6 space-y-3 font-ui text-sm text-primary">
+              {isAuthenticated && user ? (
+                <>
+                  <div className="pb-1">
+                    <p className="text-xs uppercase tracking-wider text-gray-500 font-semibold">Signed in as</p>
+                    <p className="font-semibold truncate">{user.full_name}</p>
+                  </div>
+                  <Link
+                    to={ROUTES.ORDERS}
+                    className="flex items-center gap-2 py-1 font-semibold"
+                    onClick={() => setMobileMenuOpen(false)}
+                  >
+                    <Package className="w-4 h-4" />
+                    <span>My Orders</span>
+                  </Link>
+                  <Link
+                    to={ROUTES.PROFILE}
+                    className="flex items-center gap-2 py-1"
+                    onClick={() => setMobileMenuOpen(false)}
+                  >
+                    <User className="w-4 h-4" />
+                    <span>Account Details</span>
+                  </Link>
+                  <Link
+                    to={ROUTES.PROFILE_WISHLIST}
+                    className="flex items-center gap-2 py-1"
+                    onClick={() => setMobileMenuOpen(false)}
+                  >
+                    <Bookmark className="w-4 h-4" />
+                    <span>Wishlist</span>
+                  </Link>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      setMobileMenuOpen(false);
+                      await logout();
+                      navigate(ROUTES.LOGIN, { replace: true });
+                    }}
+                    className="flex items-center gap-2 py-1 text-red-600"
+                  >
+                    <LogOut className="w-4 h-4" />
+                    <span>Sign Out</span>
+                  </button>
+                </>
+              ) : (
+                <>
+                  <Link
+                    to={ROUTES.LOGIN}
+                    className="block font-semibold"
+                    onClick={() => setMobileMenuOpen(false)}
+                  >
+                    Sign In
+                  </Link>
+                  <Link
+                    to={ROUTES.REGISTER}
+                    className="block"
+                    onClick={() => setMobileMenuOpen(false)}
+                  >
+                    Create Account
+                  </Link>
+                  <Link
+                    to={ROUTES.TRACK_ENTRY}
+                    className="block"
+                    onClick={() => setMobileMenuOpen(false)}
+                  >
+                    Track Order
+                  </Link>
+                </>
+              )}
             </div>
           </div>
         )}

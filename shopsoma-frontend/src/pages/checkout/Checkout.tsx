@@ -392,9 +392,9 @@ export default function Checkout() {
     }
   };
 
-  const handleCalculateShipping = async () => {
+  const handleCalculateShipping = async (): Promise<boolean> => {
     const selectedAddress = addresses.find(addr => addr.id === selectedAddressId);
-    if (!selectedAddress) return;
+    if (!selectedAddress) return false;
 
     setIsLoadingShipping(true);
     try {
@@ -412,9 +412,15 @@ export default function Checkout() {
       } else if (data.available_rates.length > 0) {
         setSelectedShippingRateId(data.available_rates[0].id);
       }
-    } catch (error) {
+      return true;
+    } catch (error: any) {
       console.error('Error calculating shipping:', error);
-      alert('Failed to calculate shipping rates. Please try again.');
+      const detail = error.response?.data?.detail;
+      const errorMessage = typeof detail === 'string'
+        ? detail
+        : detail?.message || error.message || 'Failed to calculate shipping rates. Please try again.';
+      alert(errorMessage);
+      return false;
     } finally {
       setIsLoadingShipping(false);
     }
@@ -803,7 +809,11 @@ export default function Checkout() {
       if (error.response?.status === 404 || error.response?.status === 410) {
         discardExpiredCheckout();
       }
-      alert(error.response?.data?.detail || error.message || 'Failed to create order. Please try again.');
+      const detail = error.response?.data?.detail;
+      const errorMessage = typeof detail === 'string'
+        ? detail
+        : detail?.message || error.message || 'Failed to create order. Please try again.';
+      alert(errorMessage);
       setIsCreatingOrder(false);
     }
   };
@@ -1072,8 +1082,10 @@ export default function Checkout() {
         // customer must see a delivery step before any payment controls.
         setStep('shipping');
       } else {
-        await handleCalculateShipping();
-        setStep('shipping');
+        const success = await handleCalculateShipping();
+        if (success) {
+          setStep('shipping');
+        }
       }
     }
   };
@@ -1273,7 +1285,15 @@ export default function Checkout() {
                               <button
                                 type="button"
                                 disabled={!!enforcedOrder || isCheckoutRequestPending}
-                                onClick={() => setSelectedAddressId(addr.id)}
+                                onClick={() => {
+                                  if (addr.id !== selectedAddressId) {
+                                    setSelectedAddressId(addr.id);
+                                    setSelectedShippingRateId('');
+                                    setShippingRates([]);
+                                    setOrderReview(null);
+                                    setStep('address');
+                                  }
+                                }}
                                 className="flex-1 text-left"
                               >
                                 <p className="text-sm font-semibold text-gray-800">{addr.full_name}</p>
@@ -1490,7 +1510,7 @@ export default function Checkout() {
                             <button
                               type="button"
                               onClick={handleAddressSave}
-                              disabled={!hasSelectedAddress || selectedAddressNeedsPostalCode || isCheckoutRequestPending || !shippingConfigLoaded || shippingConfigError || !!enforcedOrder}
+                              disabled={step !== 'address' || !hasSelectedAddress || selectedAddressNeedsPostalCode || isCheckoutRequestPending || !shippingConfigLoaded || shippingConfigError || !!enforcedOrder}
                               className="w-full py-3 rounded-sm bg-primary text-white text-sm font-semibold disabled:opacity-50"
                             >
                               {isLoadingShipping ? 'Calculating Shipping...' : 'Continue'}
@@ -1556,7 +1576,13 @@ export default function Checkout() {
                         <button
                           key={rate.id}
                           type="button"
-                          onClick={() => setSelectedShippingRateId(rate.id)}
+                          onClick={() => {
+                            setSelectedShippingRateId(rate.id);
+                            if (step === 'payment') {
+                              setOrderReview(null);
+                              setStep('shipping');
+                            }
+                          }}
                           className={`w-full text-left border border-gray-200 px-4 py-3 flex items-center gap-4 ${
                             selectedShippingRateId === rate.id ? 'bg-gray-50 border-primary' : ''
                           }`}
@@ -1583,7 +1609,7 @@ export default function Checkout() {
                       <button
                         type="button"
                         onClick={handleShippingSave}
-                        disabled={!hasSelectedShipping || isReviewingOrder}
+                        disabled={!hasSelectedShipping || isReviewingOrder || step !== 'shipping'}
                         aria-busy={isReviewingOrder}
                         className="px-6 py-2 rounded-sm bg-primary text-white text-sm font-semibold disabled:opacity-50 flex items-center justify-center gap-2"
                       >

@@ -5,9 +5,12 @@ import { useAuth } from '../../context/AuthContext';
 import Layout from '../../components/layout/Layout';
 import { subscribeToNewsletter } from '../../services/newsletterService';
 import { ROUTES } from '../../config/constants';
+import { apiErrorMessage } from '../../utils/apiErrorMessage';
+
+export const isValidEmail = (email: string): boolean => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
 
 // Password validation rules
-const validatePassword = (password: string) => {
+export const validatePassword = (password: string) => {
   const rules = {
     minLength: password.length >= 8,
     hasUppercase: /[A-Z]/.test(password),
@@ -17,13 +20,92 @@ const validatePassword = (password: string) => {
   return { ...rules, isValid };
 };
 
+export interface RegisterFormState {
+  fullName: string;
+  email: string;
+  password: string;
+  dob: string;
+  newsletter: boolean;
+}
+
+export interface RegisterFieldErrors {
+  fullName?: string;
+  email?: string;
+  password?: string;
+  confirmPassword?: string;
+  dob?: string;
+}
+
+export const validateRegisterField = (
+  field: keyof RegisterFieldErrors,
+  form: RegisterFormState,
+  confirmPasswordValue: string
+): string | undefined => {
+  switch (field) {
+    case 'fullName': {
+      const trimmed = form.fullName.trim();
+      if (!trimmed) return 'Full name is required';
+      if (trimmed.length < 2) return 'Full name must be at least 2 characters';
+      return undefined;
+    }
+    case 'email': {
+      const trimmed = form.email.trim();
+      if (!trimmed) return 'Email address is required';
+      if (!isValidEmail(trimmed)) return 'Please enter a valid email address';
+      return undefined;
+    }
+    case 'password': {
+      if (!form.password) return 'Password is required';
+      const validation = validatePassword(form.password);
+      if (!validation.isValid) {
+        if (!validation.minLength) return 'Password must be at least 8 characters';
+        if (!validation.hasUppercase) return 'Password must include at least one uppercase letter';
+        if (!validation.hasNumber) return 'Password must include at least one number';
+        return 'Password does not meet security requirements';
+      }
+      return undefined;
+    }
+    case 'confirmPassword': {
+      if (!confirmPasswordValue) return 'Please confirm your password';
+      if (confirmPasswordValue !== form.password) return 'Passwords do not match';
+      return undefined;
+    }
+    case 'dob': {
+      if (form.dob) {
+        const selected = new Date(form.dob);
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        if (selected > today) return 'Date of birth cannot be in the future';
+      }
+      return undefined;
+    }
+    default:
+      return undefined;
+  }
+};
+
+export const validateRegisterForm = (
+  form: RegisterFormState,
+  confirmPasswordValue: string
+): RegisterFieldErrors => {
+  const errors: RegisterFieldErrors = {};
+  const fields: (keyof RegisterFieldErrors)[] = ['fullName', 'email', 'password', 'confirmPassword', 'dob'];
+  for (const field of fields) {
+    const error = validateRegisterField(field, form, confirmPasswordValue);
+    if (error) {
+      errors[field] = error;
+    }
+  }
+  return errors;
+};
+
 type RegisterLocationState = {
   from?: { pathname?: string };
   prefillEmail?: string;
 };
 
 export default function Register() {
-  const [form, setForm] = useState({
+  const [form, setForm] = useState<RegisterFormState>({
     fullName: '',
     email: '',
     password: '',
@@ -31,10 +113,22 @@ export default function Register() {
     newsletter: false,
   });
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [fieldErrors, setFieldErrors] = useState<RegisterFieldErrors>({});
+  const [touched, setTouched] = useState<Record<keyof RegisterFieldErrors, boolean>>({
+    fullName: false,
+    email: false,
+    password: false,
+    confirmPassword: false,
+    dob: false,
+  });
+
   const [guestEmail, setGuestEmail] = useState('');
   const [guestNewsletter, setGuestNewsletter] = useState(false);
   const [guestError, setGuestError] = useState('');
+  const [guestTouched, setGuestTouched] = useState(false);
+
   const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
@@ -50,20 +144,56 @@ export default function Register() {
   }, [locationState?.prefillEmail]);
 
   const passwordValidation = validatePassword(form.password);
-  const isComplete = form.fullName.trim() && form.email.trim() && form.password.trim() && passwordValidation.isValid;
 
-  const handleChange = (key: keyof typeof form, value: string | boolean) => {
-    setForm((prev) => ({ ...prev, [key]: value as never }));
-    if (error) setError(''); // Clear error on input change
+  const handleFieldChange = (key: keyof RegisterFormState, value: string | boolean) => {
+    setForm((prev) => {
+      const next = { ...prev, [key]: value };
+      if (touched[key as keyof RegisterFieldErrors] || fieldErrors[key as keyof RegisterFieldErrors]) {
+        const err = validateRegisterField(key as keyof RegisterFieldErrors, next, confirmPassword);
+        setFieldErrors((e) => ({ ...e, [key]: err }));
+      }
+      if (key === 'password' && (touched.confirmPassword || fieldErrors.confirmPassword)) {
+        const confirmErr = validateRegisterField('confirmPassword', next, confirmPassword);
+        setFieldErrors((e) => ({ ...e, confirmPassword: confirmErr }));
+      }
+      return next;
+    });
+    if (error) setError('');
+  };
+
+  const handleConfirmPasswordChange = (value: string) => {
+    setConfirmPassword(value);
+    if (touched.confirmPassword || fieldErrors.confirmPassword) {
+      const err = validateRegisterField('confirmPassword', form, value);
+      setFieldErrors((e) => ({ ...e, confirmPassword: err }));
+    }
+    if (error) setError('');
+  };
+
+  const handleBlur = (field: keyof RegisterFieldErrors) => {
+    setTouched((prev) => ({ ...prev, [field]: true }));
+    const err = validateRegisterField(field, form, confirmPassword);
+    setFieldErrors((prev) => ({ ...prev, [field]: err }));
   };
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
     setError('');
 
-    // Validate password
-    if (!passwordValidation.isValid) {
-      setError('Password does not meet security requirements');
+    const allTouched: Record<keyof RegisterFieldErrors, boolean> = {
+      fullName: true,
+      email: true,
+      password: true,
+      confirmPassword: true,
+      dob: true,
+    };
+    setTouched(allTouched);
+
+    const errors = validateRegisterForm(form, confirmPassword);
+    setFieldErrors(errors);
+
+    if (Object.keys(errors).length > 0) {
+      setError('Please fix the errors below to continue');
       return;
     }
 
@@ -71,8 +201,8 @@ export default function Register() {
 
     try {
       await register({
-        full_name: form.fullName,
-        email: form.email,
+        full_name: form.fullName.trim(),
+        email: form.email.trim(),
         password: form.password,
         date_of_birth: form.dob || undefined,
         role: 'customer',
@@ -95,22 +225,51 @@ export default function Register() {
       const from = locationState?.from?.pathname;
       navigate(from && from !== ROUTES.REGISTER ? from : '/', { replace: true });
     } catch (err: any) {
-      setError(err.message || 'Registration failed. Please try again.');
+      setError(apiErrorMessage(err, err?.message || 'Registration failed. Please try again.'));
     } finally {
       setIsLoading(false);
     }
   };
 
-  const isValidEmail = (email: string): boolean => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+  const handleGuestEmailChange = (val: string) => {
+    setGuestEmail(val);
+    if (guestTouched) {
+      const trimmed = val.trim();
+      if (!trimmed) {
+        setGuestError('Email address is required');
+      } else if (!isValidEmail(trimmed)) {
+        setGuestError('Please enter a valid email address');
+      } else {
+        setGuestError('');
+      }
+    }
+  };
+
+  const handleGuestEmailBlur = () => {
+    setGuestTouched(true);
+    const trimmed = guestEmail.trim();
+    if (!trimmed) {
+      setGuestError('Email address is required');
+    } else if (!isValidEmail(trimmed)) {
+      setGuestError('Please enter a valid email address');
+    } else {
+      setGuestError('');
+    }
+  };
 
   const handleGuestSubmit = (event: React.FormEvent) => {
     event.preventDefault();
-    setGuestError('');
+    setGuestTouched(true);
     const trimmedEmail = guestEmail.trim();
-    if (!trimmedEmail || !isValidEmail(trimmedEmail)) {
-      setGuestError('Please enter a valid email address.');
+    if (!trimmedEmail) {
+      setGuestError('Email address is required');
       return;
     }
+    if (!isValidEmail(trimmedEmail)) {
+      setGuestError('Please enter a valid email address');
+      return;
+    }
+    setGuestError('');
     sessionStorage.setItem('shopsoma_guest_email', trimmedEmail);
     if (guestNewsletter) {
       sessionStorage.setItem('shopsoma_guest_newsletter', 'true');
@@ -136,56 +295,109 @@ export default function Register() {
               </div>
 
               {error && (
-                <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 flex items-start gap-2 text-left">
+                <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 flex items-start gap-2 text-left" role="alert">
                   <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
                   <span className="text-sm">{error}</span>
                 </div>
               )}
 
-              <form onSubmit={handleSubmit} className="space-y-8 text-left">
+              <form onSubmit={handleSubmit} noValidate className="space-y-8 text-left">
                 <div className="space-y-6">
                   <Field
                     label="Full Name"
                     value={form.fullName}
-                    onChange={(val) => handleChange('fullName', val)}
+                    onChange={(val) => handleFieldChange('fullName', val)}
+                    onBlur={() => handleBlur('fullName')}
+                    error={fieldErrors.fullName}
                     type="text"
                     disabled={isLoading}
+                    required
+                    autoComplete="name"
                   />
                   <Field
                     label="Email Address"
                     value={form.email}
-                    onChange={(val) => handleChange('email', val)}
+                    onChange={(val) => handleFieldChange('email', val)}
+                    onBlur={() => handleBlur('email')}
+                    error={fieldErrors.email}
                     type="email"
                     disabled={isLoading}
+                    required
+                    autoComplete="email"
                   />
                   <PasswordField
                     label="Password"
                     value={form.password}
-                    onChange={(val) => handleChange('password', val)}
+                    onChange={(val) => handleFieldChange('password', val)}
+                    onBlur={() => handleBlur('password')}
                     showPassword={showPassword}
                     setShowPassword={setShowPassword}
+                    error={fieldErrors.password}
                     disabled={isLoading}
-                  />
+                    required
+                    autoComplete="new-password"
+                  >
+                    <div className="pt-2 space-y-1.5 text-xs font-ui" aria-live="polite">
+                      <div
+                        className={`flex items-center gap-2 transition-colors ${
+                          passwordValidation.minLength ? 'text-emerald-700 font-medium' : 'text-gray-500'
+                        }`}
+                      >
+                        <span className="w-3.5 h-3.5 flex items-center justify-center text-xs">
+                          {passwordValidation.minLength ? '✓' : '○'}
+                        </span>
+                        <span>At least 8 characters</span>
+                      </div>
+                      <div
+                        className={`flex items-center gap-2 transition-colors ${
+                          passwordValidation.hasUppercase ? 'text-emerald-700 font-medium' : 'text-gray-500'
+                        }`}
+                      >
+                        <span className="w-3.5 h-3.5 flex items-center justify-center text-xs">
+                          {passwordValidation.hasUppercase ? '✓' : '○'}
+                        </span>
+                        <span>At least one uppercase letter (A-Z)</span>
+                      </div>
+                      <div
+                        className={`flex items-center gap-2 transition-colors ${
+                          passwordValidation.hasNumber ? 'text-emerald-700 font-medium' : 'text-gray-500'
+                        }`}
+                      >
+                        <span className="w-3.5 h-3.5 flex items-center justify-center text-xs">
+                          {passwordValidation.hasNumber ? '✓' : '○'}
+                        </span>
+                        <span>At least one number (0-9)</span>
+                      </div>
+                    </div>
+                  </PasswordField>
                   <PasswordField
                     label="Confirm Password"
                     value={confirmPassword}
-                    onChange={setConfirmPassword}
-                    showPassword={showPassword}
-                    setShowPassword={setShowPassword}
+                    onChange={handleConfirmPasswordChange}
+                    onBlur={() => handleBlur('confirmPassword')}
+                    showPassword={showConfirmPassword}
+                    setShowPassword={setShowConfirmPassword}
+                    error={fieldErrors.confirmPassword}
                     disabled={isLoading}
+                    required
+                    autoComplete="new-password"
                   />
                   <div className="space-y-2">
                     <label className="text-base font-serif text-[#105E53]">Date of Birth</label>
                     <DatePicker
                       value={form.dob}
-                      onChange={(val) => handleChange('dob', val)}
+                      onChange={(val) => handleFieldChange('dob', val)}
+                      onBlur={() => handleBlur('dob')}
+                      error={fieldErrors.dob}
+                      disabled={isLoading}
                     />
                   </div>
                   <label className="inline-flex items-center gap-3 text-sm font-serif text-[#105E53]">
                     <input
                       type="checkbox"
                       checked={form.newsletter}
-                      onChange={(e) => handleChange('newsletter', e.target.checked)}
+                      onChange={(e) => handleFieldChange('newsletter', e.target.checked)}
+                      disabled={isLoading}
                       className="h-4 w-4 border border-[#105E53] text-[#105E53] focus:ring-[#105E53]"
                     />
                     Register to get style news and exclusive offers.
@@ -194,12 +406,8 @@ export default function Register() {
 
                 <button
                   type="submit"
-                  disabled={!isComplete || isLoading}
-                  className={`w-full py-4 text-sm font-ui uppercase tracking-[0.24em] transition ${
-                    isComplete && !isLoading
-                      ? 'bg-[#105E53] text-white hover:bg-[#0c4c45]'
-                      : 'bg-[#cbd5d1] text-[#105E53]/70 cursor-not-allowed'
-                  }`}
+                  disabled={isLoading}
+                  className="w-full py-4 text-sm font-ui uppercase tracking-[0.24em] bg-[#105E53] text-white hover:bg-[#0c4c45] transition disabled:opacity-60 disabled:cursor-not-allowed"
                 >
                   {isLoading ? (
                     <span className="flex items-center justify-center gap-2">
@@ -229,24 +437,34 @@ export default function Register() {
                 </p>
               </div>
 
-              <form className="space-y-8 text-left" onSubmit={handleGuestSubmit}>
+              <form className="space-y-8 text-left" onSubmit={handleGuestSubmit} noValidate>
                 <div className="space-y-2">
-                  <label className="text-base font-serif text-[#105E53]">Email</label>
+                  <label htmlFor="guest-email" className="text-base font-serif text-[#105E53]">
+                    Email
+                  </label>
                   <input
+                    id="guest-email"
                     type="email"
                     value={guestEmail}
-                    onChange={(e) => setGuestEmail(e.target.value)}
-                    className="w-full border-0 border-b border-[#105E53] bg-transparent px-0 py-3 text-base font-serif text-[#222424] focus:border-[#105E53] focus:outline-none focus:ring-0"
-                    required
+                    onChange={(e) => handleGuestEmailChange(e.target.value)}
+                    onBlur={handleGuestEmailBlur}
+                    aria-invalid={Boolean(guestError)}
+                    aria-describedby={guestError ? 'guest-email-error' : undefined}
+                    className={`w-full border-0 border-b bg-transparent px-0 py-3 text-base font-serif text-[#222424] focus:outline-none focus:ring-0 transition-colors ${
+                      guestError
+                        ? 'border-red-500 focus:border-red-600'
+                        : 'border-[#105E53] focus:border-[#105E53]'
+                    }`}
                   />
                   {guestError && (
-                    <p className="text-xs font-ui text-red-600">{guestError}</p>
+                    <p id="guest-email-error" className="text-xs font-ui text-red-600">
+                      {guestError}
+                    </p>
                   )}
                 </div>
 
                 <button
                   type="submit"
-                  disabled={!guestEmail.trim()}
                   className="w-full py-4 text-sm font-ui uppercase tracking-[0.24em] bg-[#105E53] text-white hover:bg-[#0c4c45] transition"
                 >
                   Continue as guest
@@ -274,22 +492,59 @@ type FieldProps = {
   label: string;
   value: string;
   onChange: (value: string) => void;
+  onBlur?: () => void;
   type?: string;
+  error?: string;
   disabled?: boolean;
+  required?: boolean;
+  id?: string;
+  autoComplete?: string;
 };
 
-function Field({ label, value, onChange, type = 'text', disabled }: FieldProps) {
+function Field({
+  label,
+  value,
+  onChange,
+  onBlur,
+  type = 'text',
+  error,
+  disabled,
+  required,
+  id,
+  autoComplete,
+}: FieldProps) {
+  const inputId = id || `field-${label.toLowerCase().replace(/\s+/g, '-')}`;
+  const errorId = `${inputId}-error`;
+
   return (
     <div className="space-y-2">
-      <label className="text-base font-serif text-[#105E53]">{label}</label>
+      <label htmlFor={inputId} className="text-base font-serif text-[#105E53] flex items-center justify-between">
+        <span>
+          {label}
+          {required && <span className="text-red-500 ml-1" aria-hidden="true">*</span>}
+        </span>
+      </label>
       <input
+        id={inputId}
         type={type}
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="w-full border-0 border-b border-[#105E53] bg-transparent px-0 py-3 text-base font-serif text-[#222424] focus:border-[#105E53] focus:outline-none focus:ring-0"
-        required
+        onBlur={onBlur}
+        autoComplete={autoComplete}
+        aria-invalid={Boolean(error)}
+        aria-describedby={error ? errorId : undefined}
+        className={`w-full border-0 border-b bg-transparent px-0 py-3 text-base font-serif text-[#222424] focus:outline-none focus:ring-0 transition-colors ${
+          error
+            ? 'border-red-500 focus:border-red-600'
+            : 'border-[#105E53] focus:border-[#105E53]'
+        }`}
         disabled={disabled}
       />
+      {error && (
+        <p id={errorId} className="text-xs font-ui text-red-600">
+          {error}
+        </p>
+      )}
     </div>
   );
 }
@@ -298,41 +553,75 @@ type PasswordFieldProps = {
   label: string;
   value: string;
   onChange: (value: string) => void;
+  onBlur?: () => void;
   showPassword: boolean;
   setShowPassword: (value: boolean) => void;
+  error?: string;
   disabled?: boolean;
+  required?: boolean;
+  id?: string;
+  autoComplete?: string;
+  children?: React.ReactNode;
 };
 
 function PasswordField({
   label,
   value,
   onChange,
+  onBlur,
   showPassword,
   setShowPassword,
+  error,
   disabled,
+  required,
+  id,
+  autoComplete,
+  children,
 }: PasswordFieldProps) {
+  const inputId = id || `field-${label.toLowerCase().replace(/\s+/g, '-')}`;
+  const errorId = `${inputId}-error`;
+
   return (
     <div className="space-y-2">
-      <label className="text-base font-serif text-[#105E53]">{label}</label>
+      <label htmlFor={inputId} className="text-base font-serif text-[#105E53] flex items-center justify-between">
+        <span>
+          {label}
+          {required && <span className="text-red-500 ml-1" aria-hidden="true">*</span>}
+        </span>
+      </label>
       <div className="relative">
         <input
+          id={inputId}
           type={showPassword ? 'text' : 'password'}
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          className="w-full border-0 border-b border-[#105E53] bg-transparent px-0 py-3 pr-10 text-base font-serif text-[#222424] focus:border-[#105E53] focus:outline-none focus:ring-0"
-          required
+          onBlur={onBlur}
+          autoComplete={autoComplete}
+          aria-invalid={Boolean(error)}
+          aria-describedby={error ? errorId : undefined}
+          className={`w-full border-0 border-b bg-transparent px-0 py-3 pr-10 text-base font-serif text-[#222424] focus:outline-none focus:ring-0 transition-colors ${
+            error
+              ? 'border-red-500 focus:border-red-600'
+              : 'border-[#105E53] focus:border-[#105E53]'
+          }`}
           disabled={disabled}
         />
         <button
           type="button"
           onClick={() => setShowPassword(!showPassword)}
-          className="absolute inset-y-0 right-0 flex items-center text-[#105E53] hover:text-[#0c4c45] transition"
-          aria-label="Toggle password visibility"
+          className="absolute inset-y-0 right-0 flex items-center text-[#105E53] hover:text-[#0c4c45] transition p-1"
+          aria-label={showPassword ? `Hide ${label.toLowerCase()}` : `Show ${label.toLowerCase()}`}
           disabled={disabled}
         >
           {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
         </button>
       </div>
+      {error && (
+        <p id={errorId} className="text-xs font-ui text-red-600">
+          {error}
+        </p>
+      )}
+      {children}
     </div>
   );
 }
@@ -340,9 +629,12 @@ function PasswordField({
 type DatePickerProps = {
   value: string;
   onChange: (value: string) => void;
+  onBlur?: () => void;
+  error?: string;
+  disabled?: boolean;
 };
 
-function DatePicker({ value, onChange }: DatePickerProps) {
+function DatePicker({ value, onChange, onBlur, error, disabled }: DatePickerProps) {
   const [open, setOpen] = useState(false);
   const selectedParts = useMemo(() => {
     if (!value) return null;
@@ -381,6 +673,7 @@ function DatePicker({ value, onChange }: DatePickerProps) {
     onChange(iso);
     setOpen(false);
     setCurrentMonth(new Date(year, month - 1, day));
+    onBlur?.();
   };
 
   const prevMonth = () => {
@@ -406,22 +699,29 @@ function DatePicker({ value, onChange }: DatePickerProps) {
     const handleClickOutside = (event: MouseEvent) => {
       if (pickerRef.current && !pickerRef.current.contains(event.target as Node)) {
         setOpen(false);
+        onBlur?.();
       }
     };
     if (open) {
       document.addEventListener('mousedown', handleClickOutside);
     }
     return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [open]);
+  }, [open, onBlur]);
 
   return (
     <div className="relative" ref={pickerRef}>
       <button
         type="button"
-        onClick={() => setOpen((prev) => !prev)}
-        className={`w-full px-0 py-3 text-base font-serif text-left flex items-center justify-between border-0 border-b border-[#105E53] bg-transparent transition focus:outline-none focus:ring-0 ${
-          open ? 'border-[#105E53]' : 'hover:border-[#105E53]'
-        }`}
+        onClick={() => !disabled && setOpen((prev) => !prev)}
+        disabled={disabled}
+        aria-invalid={Boolean(error)}
+        className={`w-full px-0 py-3 text-base font-serif text-left flex items-center justify-between border-0 border-b bg-transparent transition focus:outline-none focus:ring-0 ${
+          error
+            ? 'border-red-500 focus:border-red-600'
+            : open
+            ? 'border-[#105E53]'
+            : 'border-[#105E53] hover:border-[#105E53]'
+        } ${disabled ? 'cursor-not-allowed opacity-60' : ''}`}
       >
         <span className={selectedDate ? 'text-[#222424]' : 'text-[#105E53]/60'}>{displayValue}</span>
         <svg
@@ -435,6 +735,12 @@ function DatePicker({ value, onChange }: DatePickerProps) {
           <path d="M6 9l6 6 6-6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       </button>
+
+      {error && (
+        <p className="text-xs font-ui text-red-600 mt-1">
+          {error}
+        </p>
+      )}
 
       {open && (
         <div className="absolute z-20 mt-2 w-full bg-white rounded-2xl shadow-2xl border border-[#105E53]/30 p-4">

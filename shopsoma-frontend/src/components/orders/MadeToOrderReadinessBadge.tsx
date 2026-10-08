@@ -68,8 +68,22 @@ export default function MadeToOrderReadinessBadge({ state, label }: MadeToOrderR
 
 export function MadeToOrderTag() {
   return (
-    <span className="inline-flex items-center rounded-full bg-purple-50 px-2.5 py-1 text-xs font-semibold text-purple-700 border border-purple-200">
+    <span
+      className="inline-flex items-center rounded-full bg-purple-50 px-2.5 py-1 text-xs font-semibold text-purple-700 border border-purple-200"
+      data-testid="mto-tag"
+    >
       Made to order
+    </span>
+  );
+}
+
+export function ReadyToWearTag() {
+  return (
+    <span
+      className="inline-flex items-center rounded-full bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700 border border-blue-200"
+      data-testid="rtw-tag"
+    >
+      Ready to wear
     </span>
   );
 }

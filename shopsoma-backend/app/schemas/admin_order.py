@@ -132,6 +132,7 @@ class PickupInfo(BaseModel):
     vendor_id: Optional[UUID] = None
     status: PickupStatus
     ready_for_pickup_at: Optional[datetime] = None
+    estimated_production_days: Optional[int] = None
     scheduled_pickup_date: Optional[datetime]
     actual_pickup_date: Optional[datetime]
     pickup_window_start: Optional[datetime]
@@ -177,6 +178,15 @@ class OrderItemDetail(BaseModel):
     ready_for_pickup_at: Optional[datetime] = None
     readiness_state: Optional[ReadinessStateValue] = None
     pickup: Optional[PickupInfo] = None
+    # Admin-side production tracking
+    order_type: str = "rtw"
+    production_duration: Optional[str] = None
+    estimated_production_days: Optional[int] = None
+    production_start_date: Optional[datetime] = None
+    production_due_date: Optional[datetime] = None
+    working_days_left: Optional[int] = None
+    is_production_overdue: bool = False
+    is_production_completed: bool = False
 
     class Config:
         from_attributes = True

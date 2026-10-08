@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams, useParams } from 'react-router-dom';
 import { ROUTES } from '../../config/constants';
 import { checkoutService } from '../../services/checkoutService';
+import { paymentService, buildPaystackWidgetConfig } from '../../services/paymentService';
 import { useCartStore } from '../../store/cartStore';
 import { useCurrencyStore } from '../../store/currencyStore';
 import { formatPriceWithConversion, type Currency } from '../../utils/pricing';
@@ -59,6 +60,8 @@ export default function OrderSuccess() {
   const [order, setOrder] = useState<Order | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [isRetrying, setIsRetrying] = useState(false);
+  const [isCancelling, setIsCancelling] = useState(false);
 
   useEffect(() => {
     if (isMock) {
@@ -100,22 +103,97 @@ export default function OrderSuccess() {
     }
   };
 
+  const handleRetryPayment = async () => {
+    if (!order) return;
+    setIsRetrying(true);
+    try {
+      const email = (order as any).customer_email || (order as any).customer?.email || 'guest@shopsoma.com';
+      const paymentData = await paymentService.initializePayment({
+        order_id: order.id,
+        email,
+        payment_gateway: 'paystack',
+        currency: (order.currency as any) || 'NGN',
+        callback_url: `${window.location.origin}/payment/verify`,
+      }, loadCheckoutCapability(order.id));
+
+      if (paymentData.authorization_url && (window as any).PaystackPop) {
+        const widgetTruth = buildPaystackWidgetConfig(paymentData, {
+          key: import.meta.env.VITE_PAYSTACK_PUBLIC_KEY,
+          email,
+        });
+        const handler = (window as any).PaystackPop.setup({
+          ...widgetTruth,
+          callback: (response: { reference: string }) => {
+            paymentService.verifyPayment({
+              reference: response.reference,
+              payment_gateway: 'paystack',
+            }).then(() => {
+              clearCart();
+              window.location.href = `${ROUTES.ORDER_SUCCESS}?orderId=${order.id}&payment=success`;
+            }).catch((err) => {
+              console.error('Verification error:', err);
+              window.location.href = `${ROUTES.ORDER_SUCCESS}?orderId=${order.id}&payment=verification_failed`;
+            });
+          },
+          onClose: () => {
+            setIsRetrying(false);
+          },
+        });
+        handler.openIframe();
+      } else if (paymentData.authorization_url) {
+        window.location.href = paymentData.authorization_url;
+      }
+    } catch (err: any) {
+      console.error('Failed to initialize payment:', err);
+      const detail = err.response?.data?.detail;
+      const msg = typeof detail === 'string' ? detail : detail?.message || err.message || 'Unable to start payment.';
+      alert(msg);
+      setIsRetrying(false);
+    }
+  };
+
+  const handleCancelOrder = async () => {
+    if (!order) return;
+    if (!window.confirm('Are you sure you want to cancel this order?')) return;
+    setIsCancelling(true);
+    try {
+      await checkoutService.cancelOrder(order.id, 'Customer cancelled unpaid order', loadCheckoutCapability(order.id));
+      setOrder({ ...order, fulfillment_status: 'cancelled' });
+      alert('Order has been cancelled.');
+    } catch (err: any) {
+      console.error('Failed to cancel order:', err);
+      const detail = err.response?.data?.detail;
+      const msg = typeof detail === 'string' ? detail : detail?.message || err.message || 'Unable to cancel order.';
+      alert(msg);
+    } finally {
+      setIsCancelling(false);
+    }
+  };
+
   const getStatusConfig = () => {
-    if (paymentStatus === 'success') {
+    if (order?.fulfillment_status === 'cancelled') {
+      return {
+        title: 'Order Cancelled',
+        subtitle: 'This order has been cancelled',
+        icon: '✕',
+        iconColor: 'text-gray-500',
+        message: 'No charge was made. You can browse and place a new order anytime.',
+      };
+    } else if (paymentStatus === 'success' || order?.payment_status === 'paid') {
       return {
         title: 'Payment Successful',
         subtitle: 'Your order has been confirmed',
         icon: '✓',
         iconColor: 'text-green-600',
-        message: 'Thanks for your purchase',
+        message: 'Thanks for your purchase. We are preparing your order.',
       };
-    } else if (paymentStatus === 'cancelled') {
+    } else if (paymentStatus === 'cancelled' || order?.payment_status === 'pending') {
       return {
-        title: 'Payment Cancelled',
-        subtitle: 'Order created but payment was cancelled',
+        title: 'Payment Pending',
+        subtitle: 'Order saved, awaiting payment',
         icon: '⚠',
-        iconColor: 'text-yellow-600',
-        message: 'You can complete payment from your order details',
+        iconColor: 'text-amber-600',
+        message: 'Your items are reserved. Complete payment to process and ship your order, or cancel if you no longer wish to purchase.',
       };
     } else if (paymentStatus === 'verification_failed') {
       return {
@@ -123,7 +201,7 @@ export default function OrderSuccess() {
         subtitle: 'We could not verify your payment',
         icon: '!',
         iconColor: 'text-red-600',
-        message: 'Please contact support if amount was deducted',
+        message: 'Please contact support if amount was deducted.',
       };
     }
     return {
@@ -131,7 +209,7 @@ export default function OrderSuccess() {
       subtitle: 'Your order has been placed',
       icon: 'ℹ',
       iconColor: 'text-blue-600',
-      message: 'Complete payment to process your order',
+      message: 'Complete payment to process your order.',
     };
   };
 
@@ -250,7 +328,7 @@ export default function OrderSuccess() {
                       : 'text-yellow-600'
                   }`}
                 >
-                  {order.payment_status}
+                  {order.payment_status?.replace(/_/g, ' ')}
                 </span>
               </div>
               <div className="flex justify-between">
@@ -262,20 +340,82 @@ export default function OrderSuccess() {
 
           {/* Action Buttons */}
           <div className="space-y-3">
-            <button
-              type="button"
-              onClick={handleTrackOrder}
-              className="w-full rounded-sm bg-primary text-white font-semibold py-3 text-sm hover:bg-primary-dark transition focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-primary"
-            >
-              Track Order
-            </button>
+            {order.fulfillment_status === 'cancelled' ? (
+              <>
+                <Link
+                  to={ROUTES.HOME}
+                  className="block w-full rounded-sm bg-primary text-white text-center font-semibold py-3 text-sm hover:bg-primary-dark transition"
+                >
+                  Continue Shopping
+                </Link>
+                <button
+                  type="button"
+                  onClick={handleTrackOrder}
+                  className="w-full rounded-sm border border-gray-300 text-center text-gray-700 font-semibold py-3 text-sm hover:border-gray-400 transition"
+                >
+                  View Order Status
+                </button>
+              </>
+            ) : paymentStatus === 'cancelled' || order.payment_status?.toLowerCase() === 'pending' || order.payment_status?.toLowerCase() === 'failed' ? (
+              <>
+                <button
+                  type="button"
+                  onClick={handleRetryPayment}
+                  disabled={isRetrying}
+                  className="w-full rounded-sm bg-primary text-white font-semibold py-3 text-sm hover:bg-primary-dark transition focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-primary disabled:opacity-50"
+                >
+                  {isRetrying ? 'Opening Payment...' : 'Complete Payment'}
+                </button>
 
-            <Link
-              to={ROUTES.HOME}
-              className="block w-full rounded-sm border-2 border-gray-300 text-center text-gray-700 font-semibold py-3 text-sm hover:border-gray-400 transition"
-            >
-              Continue Shopping
-            </Link>
+                <button
+                  type="button"
+                  onClick={handleCancelOrder}
+                  disabled={isCancelling}
+                  className="w-full rounded-sm border border-red-300 text-red-700 bg-red-50/50 hover:bg-red-50 font-semibold py-3 text-sm transition disabled:opacity-50"
+                >
+                  {isCancelling ? 'Cancelling...' : 'Cancel This Order'}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleTrackOrder}
+                  className="w-full rounded-sm border border-gray-300 text-center text-gray-700 font-semibold py-3 text-sm hover:border-gray-400 transition"
+                >
+                  View Order Tracking
+                </button>
+
+                <Link
+                  to={ROUTES.ORDERS}
+                  className="block w-full rounded-sm border border-gray-300 text-center text-gray-700 font-semibold py-3 text-sm hover:border-gray-400 transition"
+                >
+                  View All Orders
+                </Link>
+              </>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  onClick={handleTrackOrder}
+                  className="w-full rounded-sm bg-primary text-white font-semibold py-3 text-sm hover:bg-primary-dark transition focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-primary"
+                >
+                  Track Order
+                </button>
+
+                <Link
+                  to={ROUTES.ORDERS}
+                  className="block w-full rounded-sm border-2 border-primary text-primary hover:bg-primary hover:text-white text-center font-semibold py-3 text-sm transition"
+                >
+                  View All Orders
+                </Link>
+
+                <Link
+                  to={ROUTES.HOME}
+                  className="block w-full rounded-sm border-2 border-gray-300 text-center text-gray-700 font-semibold py-3 text-sm hover:border-gray-400 transition"
+                >
+                  Continue Shopping
+                </Link>
+              </>
+            )}
           </div>
 
           {/* Help Text */}
