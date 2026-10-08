@@ -137,9 +137,18 @@ def derive_readiness_state(
     pickup: Optional[VendorPickup],
     item_cancelled: bool = False,
 ) -> Optional[str]:
-    """Derive the per-item state; ``None`` for non-made-to-order items."""
+    """Derive the per-item state; ``None`` for non-made-to-order items that haven't transitioned."""
     if not made_to_order:
-        return None
+        if pickup is None or pickup.ready_for_pickup_at is None:
+            return None
+        if item_cancelled or pickup.status == PickupStatus.CANCELLED:
+            return ReadinessState.CANCELLED
+        if is_picked_up(pickup):
+            return ReadinessState.PICKED_UP
+        if is_pickup_scheduled(pickup):
+            return ReadinessState.PICKUP_SCHEDULED
+        return ReadinessState.READY_FOR_PICKUP
+
     if item_cancelled or (pickup is not None and pickup.status == PickupStatus.CANCELLED):
         return ReadinessState.CANCELLED
     if is_picked_up(pickup):
@@ -156,7 +165,7 @@ def readiness_fields(item: OrderItem, pickup: Optional[VendorPickup]) -> dict:
     made_to_order = is_made_to_order_item(item)
     return {
         "made_to_order": made_to_order,
-        "ready_for_pickup_at": pickup.ready_for_pickup_at if (made_to_order and pickup) else None,
+        "ready_for_pickup_at": pickup.ready_for_pickup_at if pickup else None,
         "readiness_state": derive_readiness_state(
             made_to_order=made_to_order,
             pickup=pickup,
@@ -173,7 +182,7 @@ async def mark_item_ready_for_pickup(
     order_item_id: UUID,
     actor_user_id: Optional[UUID],
 ) -> MarkReadyResult:
-    """Idempotently mark one vendor-owned made-to-order item ready for pickup.
+    """Idempotently mark one vendor-owned item (MTO or RTW) ready for pickup.
 
     The order item row is locked ``FOR UPDATE`` so concurrent/duplicate requests
     serialize; only the first request observes the not-ready -> ready transition
@@ -208,8 +217,8 @@ async def mark_item_ready_for_pickup(
         or item.fulfillment_status == FulfillmentStatus.CANCELLED
     ):
         raise ReadinessError(409, "Cancelled items cannot be marked ready for pickup")
-    if not is_made_to_order_item(item):
-        raise ReadinessError(400, "Only made-to-order items can be marked ready for pickup")
+
+    is_mto = is_made_to_order_item(item)
 
     pickups = (
         await db.scalars(
@@ -224,7 +233,7 @@ async def mark_item_ready_for_pickup(
             vendor_id=item.vendor_id,
             order_id=order.id,
             order_item_id=item.id,
-            order_type=OrderType.MADE_TO_ORDER,
+            order_type=OrderType.MADE_TO_ORDER if is_mto else OrderType.RTW,
             scheduled_pickup_date=None,
             pickup_address=vendor.business_address,
             pickup_contact_phone=vendor.business_phone,
@@ -238,8 +247,10 @@ async def mark_item_ready_for_pickup(
     if pickup.ready_for_pickup_at is None and not is_picked_up(pickup):
         pickup.ready_for_pickup_at = datetime.now(timezone.utc)
         pickup.ready_for_pickup_marked_by = actor_user_id
-        if pickup.order_type != OrderType.MADE_TO_ORDER:
+        if is_mto and pickup.order_type != OrderType.MADE_TO_ORDER:
             pickup.order_type = OrderType.MADE_TO_ORDER
+        elif not is_mto and pickup.order_type != OrderType.RTW:
+            pickup.order_type = OrderType.RTW
         transitioned = True
 
     await db.commit()

@@ -927,8 +927,9 @@ class EmailService:
         quantity: int,
         ready_at: datetime,
         variant_summary: Optional[str] = None,
+        item_type: str = "made_to_order",
     ) -> bool:
-        """Tell Shopsoma admins a vendor finished a made-to-order item.
+        """Tell Shopsoma admins a vendor finished an item (MTO) or confirmed availability (RTW).
 
         Sent once per order item, on the vendor's not-ready -> ready transition.
         """
@@ -938,7 +939,13 @@ class EmailService:
         def esc(value: Any) -> str:
             return html.escape(str(value)) if value not in (None, "") else "—"
 
-        subject = f"Made-to-order item ready for Shopsoma pickup · {order_number}"
+        is_rtw = item_type == "ready_to_wear"
+        type_label = "Ready-to-wear" if is_rtw else "Made-to-order"
+        subject = (
+            f"Ready-to-wear item available & ready for Shopsoma pickup · {order_number}"
+            if is_rtw
+            else f"Made-to-order item ready for Shopsoma pickup · {order_number}"
+        )
         ready_label = ready_at.strftime("%d %B %Y · %I:%M %p")
         if ready_at.tzinfo is not None:
             ready_label = f"{ready_label} {ready_at.tzname() or ''}".strip()
@@ -950,11 +957,18 @@ class EmailService:
             else ""
         )
 
+        intro_p = (
+            "<p>A vendor has confirmed that a <strong>ready-to-wear</strong> item is in stock, available, and "
+            "<strong>ready for Shopsoma pickup</strong>. You can now schedule courier collection.</p>"
+            if is_rtw
+            else """<p>A vendor has confirmed that a <strong>made-to-order</strong> item is finished and
+        <strong>ready for Shopsoma pickup</strong>. Other items in this customer order may still
+        be in production — this item can be collected on its own.</p>"""
+        )
+
         body_html = f"""
         <p style="font-size:16px;">Hello Admin,</p>
-        <p>A vendor has confirmed that a <strong>made-to-order</strong> item is finished and
-        <strong>ready for Shopsoma pickup</strong>. Other items in this customer order may still
-        be in production — this item can be collected on its own.</p>
+        {intro_p}
         <div style="margin:24px 0;padding:20px;border:1px solid {BRAND_BORDER};border-radius:10px;background:{BRAND_LIGHT};">
             <p style="margin:0;"><strong>Order Number:</strong> {esc(order_number)}</p>
             <p style="margin:4px 0;"><strong>Order ID:</strong> {esc(order_id)}</p>
@@ -963,6 +977,7 @@ class EmailService:
         <div style="margin:24px 0;padding:20px;border:1px solid {BRAND_BORDER};border-radius:10px;">
             <p style="margin:0;"><strong>Vendor:</strong> {esc(vendor_name)}</p>
             <p style="margin:4px 0;"><strong>Product:</strong> {esc(product_title)}</p>
+            <p style="margin:4px 0;"><strong>Type:</strong> {type_label}</p>
             {variant_row}
             <p style="margin:4px 0;"><strong>Quantity:</strong> {esc(quantity)}</p>
             <p style="margin:4px 0;"><strong>Marked ready:</strong> {esc(ready_label)}</p>

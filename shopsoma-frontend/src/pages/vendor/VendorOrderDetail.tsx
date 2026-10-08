@@ -5,6 +5,7 @@ import {
   MapPin,
   Package,
   CheckCircle2,
+  Clock3,
   Loader2,
   ChevronDown,
   Truck,
@@ -24,7 +25,7 @@ import {
 import { useToast } from '../../hooks/useToast';
 import ToastContainer from '../../components/ui/ToastContainer';
 import { useCurrency } from '../../hooks/useCurrency';
-import MadeToOrderReadinessBadge, { MadeToOrderTag } from '../../components/orders/MadeToOrderReadinessBadge';
+import MadeToOrderReadinessBadge, { MadeToOrderTag, ReadyToWearTag } from '../../components/orders/MadeToOrderReadinessBadge';
 import { formatReadyAt } from '../../utils/madeToOrderReadiness';
 import { normalizeProductImageUrl } from '../../utils/productImages';
 
@@ -86,6 +87,114 @@ function MadeToOrderReadinessPanel({
             <div className="space-y-2">
               <p className="text-xs text-gray-700">
                 Confirm this item is finished and ready for Shopsoma to collect. Shopsoma will be notified to schedule a pickup.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={onConfirm}
+                  disabled={isSubmitting}
+                  className="inline-flex items-center gap-2 rounded-full bg-[#105E53] px-4 py-2 text-xs font-semibold text-white hover:bg-[#0d4d44] disabled:opacity-60"
+                >
+                  {isSubmitting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                  Yes, it's ready
+                </button>
+                <button
+                  type="button"
+                  onClick={onCancelConfirm}
+                  disabled={isSubmitting}
+                  className="rounded-full border border-gray-300 bg-white px-4 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-100 disabled:opacity-60"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={onRequestConfirm}
+              className="inline-flex items-center gap-2 rounded-full bg-[#0B1D2C] px-4 py-2 text-xs font-semibold text-white hover:bg-[#13293b]"
+            >
+              <CheckCircle2 className="h-3.5 w-3.5" />
+              Ready for Shopsoma Pickup
+            </button>
+          )
+        ) : (
+          <p className="text-xs text-gray-500">
+            You can mark this item ready once the order payment is confirmed.
+          </p>
+        )
+      )}
+    </div>
+  );
+}
+
+// Per-item ready-to-wear readiness (vendor confirms item available & ready in stock)
+function ReadyToWearReadinessPanel({
+  item,
+  canMarkReady,
+  isConfirming,
+  isSubmitting,
+  onRequestConfirm,
+  onCancelConfirm,
+  onConfirm,
+}: {
+  item: VendorOrderItem;
+  canMarkReady: boolean;
+  isConfirming: boolean;
+  isSubmitting: boolean;
+  onRequestConfirm: () => void;
+  onCancelConfirm: () => void;
+  onConfirm: () => void;
+}) {
+  const isReady = Boolean(
+    item.ready_for_pickup_at ||
+    item.readiness_state === 'ready_for_pickup' ||
+    item.readiness_state === 'pickup_scheduled' ||
+    item.readiness_state === 'picked_up'
+  );
+  const readyAt = formatReadyAt(item.ready_for_pickup_at);
+  const pickup = item.pickup;
+  const windowStart = pickup?.pickup_window_start || pickup?.scheduled_pickup_date;
+
+  return (
+    <div className="mt-3 rounded-xl border border-gray-200 bg-gray-50 p-3 space-y-2" data-testid={`rtw-panel-${item.id}`}>
+      <div className="flex flex-wrap items-center gap-2">
+        <ReadyToWearTag />
+        {isReady ? (
+          <span
+            className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700"
+            data-testid="rtw-readiness-badge"
+          >
+            <CheckCircle2 className="h-3.5 w-3.5" />
+            Available & Ready for pickup
+          </span>
+        ) : (
+          <span
+            className="inline-flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-800"
+            data-testid="rtw-readiness-badge"
+          >
+            <Clock3 className="h-3.5 w-3.5" />
+            Confirmation needed
+          </span>
+        )}
+      </div>
+
+      {readyAt && (
+        <p className="text-xs text-gray-600">Confirmed ready: {readyAt}</p>
+      )}
+      {item.readiness_state === 'pickup_scheduled' && windowStart && (
+        <p className="text-xs text-gray-600">
+          Shopsoma pickup: {formatReadyAt(windowStart)}
+          {pickup?.pickup_window_end ? ` – ${formatReadyAt(pickup.pickup_window_end)}` : ''}
+        </p>
+      )}
+
+      {!isReady && (
+        canMarkReady ? (
+          isConfirming ? (
+            <div className="space-y-2">
+              <p className="text-xs text-gray-700">
+                Confirm this ready-to-wear item is in stock and ready for Shopsoma to collect. Shopsoma will be notified to schedule a pickup.
               </p>
               <div className="flex flex-wrap gap-2">
                 <button
@@ -745,8 +854,22 @@ export default function VendorOrderDetail() {
                             <p className="text-xs text-gray-500 mt-1">{variantSummary}</p>
                           )}
                           <p className="text-xs text-gray-500 mt-1">Payout: {formatBasePrice(item.vendor_payout)}</p>
-                          {item.made_to_order && (
+                          {item.made_to_order ? (
                             <MadeToOrderReadinessPanel
+                              item={item}
+                              canMarkReady={
+                                (order.payment_status || '').toLowerCase() === 'paid' &&
+                                (item.fulfillment_status || '').toLowerCase() !== 'cancelled' &&
+                                (order.fulfillment_status || '').toLowerCase() !== 'cancelled'
+                              }
+                              isConfirming={confirmReadyItemId === item.id}
+                              isSubmitting={markingReadyItemId === item.id}
+                              onRequestConfirm={() => setConfirmReadyItemId(item.id)}
+                              onCancelConfirm={() => setConfirmReadyItemId(null)}
+                              onConfirm={() => handleMarkReady(item.id)}
+                            />
+                          ) : (
+                            <ReadyToWearReadinessPanel
                               item={item}
                               canMarkReady={
                                 (order.payment_status || '').toLowerCase() === 'paid' &&

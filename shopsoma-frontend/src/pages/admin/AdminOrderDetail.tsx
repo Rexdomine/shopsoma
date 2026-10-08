@@ -4,10 +4,12 @@
  */
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { CheckCircle2, Clock3 } from 'lucide-react';
 import AdminSidebar from '../../components/admin/AdminSidebar';
 import DhlShipmentOperations from '../../components/admin/DhlShipmentOperations';
 import ItemPickupPanel from '../../components/admin/ItemPickupPanel';
 import { MadeToOrderTag, ReadyToWearTag } from '../../components/orders/MadeToOrderReadinessBadge';
+import { formatReadyAt } from '../../utils/madeToOrderReadiness';
 import { useToast } from '../../hooks/useToast';
 import CurrencySwitcher from '../../components/common/CurrencySwitcher';
 import { useCurrencyStore } from '../../store/currencyStore';
@@ -493,7 +495,29 @@ export default function AdminOrderDetail() {
                               <div className="flex flex-wrap items-center gap-2">
                                 <h3 className="font-medium text-gray-900 line-clamp-2">{item.product_title}</h3>
                                 {isMto ? <MadeToOrderTag /> : <ReadyToWearTag />}
+                                {!isMto && (
+                                  (item.ready_for_pickup_at || item.readiness_state === 'ready_for_pickup' || item.readiness_state === 'pickup_scheduled' || item.readiness_state === 'picked_up') ? (
+                                    <span
+                                      className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700"
+                                      data-testid="rtw-admin-ready"
+                                    >
+                                      <CheckCircle2 className="h-3.5 w-3.5" />
+                                      Available & Ready for pickup
+                                    </span>
+                                  ) : (
+                                    <span
+                                      className="inline-flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-800"
+                                      data-testid="rtw-admin-pending"
+                                    >
+                                      <Clock3 className="h-3.5 w-3.5" />
+                                      Awaiting vendor confirmation
+                                    </span>
+                                  )
+                                )}
                               </div>
+                              {!isMto && item.ready_for_pickup_at && (
+                                <p className="text-xs text-gray-600 mt-1">Confirmed ready: {formatReadyAt(item.ready_for_pickup_at)}</p>
+                              )}
                               {formatVariantDetails(item.variant_details) && (
                                 <p className="text-sm text-gray-500">
                                   {formatVariantDetails(item.variant_details)}
