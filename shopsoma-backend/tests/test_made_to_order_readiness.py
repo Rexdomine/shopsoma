@@ -322,10 +322,6 @@ async def test_mark_ready_authorization_and_validation(
     as_admin = await client.post(_ready_url(order.id, mine.id), headers=admin_user["headers"])
     assert as_admin.status_code in (403, 404)
 
-    # Non made-to-order items are rejected.
-    not_mto = await client.post(_ready_url(order.id, rtw.id), headers=vendor_user["headers"])
-    assert not_mto.status_code == 400
-
     # Item must belong to the order in the URL.
     mismatch = await client.post(
         _ready_url(order.id, foreign_item.id), headers=vendor_user["headers"]
@@ -347,6 +343,14 @@ async def test_mark_ready_authorization_and_validation(
         )
     ).all()
     assert all(row.ready_for_pickup_at is None for row in rows)
+
+    # Ready-to-wear items can be marked ready by their vendor once paid.
+    rtw_res = await client.post(_ready_url(order.id, rtw.id), headers=vendor_user["headers"])
+    assert rtw_res.status_code == 200
+    assert rtw_res.json()["readiness_state"] == "ready_for_pickup"
+    assert rtw_res.json()["made_to_order"] is False
+    assert len(captured_ready_emails) == 1
+    assert captured_ready_emails[0]["item_type"] == "ready_to_wear"
 
 
 @pytest.mark.asyncio
@@ -657,3 +661,51 @@ async def test_admin_made_to_order_ready_email_content(monkeypatch):
         )
         is False
     )
+
+
+@pytest.mark.asyncio
+async def test_admin_ready_to_wear_ready_email_content(monkeypatch):
+    from app.services.email_service import EmailService
+
+    service = EmailService()
+    sent = []
+
+    async def _send_email(to_email, to_name, subject, html_content, template_params=None):
+        sent.append({"to": to_email, "subject": subject, "html": html_content})
+        return True
+
+    monkeypatch.setattr(service, "send_email", _send_email)
+    order_id = str(uuid.uuid4())
+    ok = await service.send_admin_made_to_order_ready_email(
+        recipients=[{"email": "ops@shopsoma.test", "name": "Ops"}],
+        order_id=order_id,
+        order_number="SHP-RTW-456",
+        customer_name="Kolawole",
+        customer_email="kola@example.com",
+        vendor_name="Vendor RTW",
+        product_title="Classic Silk Shirt",
+        quantity=1,
+        ready_at=datetime(2026, 10, 8, 14, 0, tzinfo=timezone.utc),
+        variant_summary="Size: L • Color: Blue",
+        item_type="ready_to_wear",
+    )
+
+    assert ok is True
+    assert len(sent) == 1
+    message = sent[0]
+    assert message["to"] == "ops@shopsoma.test"
+    assert "Ready-to-wear item available & ready for Shopsoma pickup" in message["subject"]
+    assert "SHP-RTW-456" in message["subject"]
+    html = message["html"]
+    for expected in (
+        "SHP-RTW-456",
+        order_id,
+        "Vendor RTW",
+        "Classic Silk Shirt",
+        "Ready-to-wear",
+        "Size: L • Color: Blue",
+        "kola@example.com",
+        "ready-to-wear</strong> item is in stock, available",
+        f"/admin/orders/{order_id}",
+    ):
+        assert expected in html

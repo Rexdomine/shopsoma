@@ -44,6 +44,7 @@ from app.services.image_service import image_service
 from app.services.product_image_storage import lock_and_validate_featured_storefront_key
 from app.services.orders.made_to_order_readiness import (
     ReadinessError,
+    is_made_to_order_item,
     mark_item_ready_for_pickup,
     readiness_fields,
 )
@@ -813,6 +814,7 @@ async def mark_order_item_ready_for_pickup(
         try:
             admin_recipients = await _build_admin_recipients(db)
             customer = result.order.customer
+            is_mto = is_made_to_order_item(result.item)
             email_payload = {
                 "recipients": admin_recipients,
                 "order_id": str(result.order.id),
@@ -824,6 +826,7 @@ async def mark_order_item_ready_for_pickup(
                 "quantity": result.item.quantity,
                 "ready_at": result.pickup.ready_for_pickup_at,
                 "variant_summary": _variant_summary(result.item.variant_details),
+                "item_type": "made_to_order" if is_mto else "ready_to_wear",
             }
 
             async def _send_ready_for_pickup_email():
@@ -831,7 +834,7 @@ async def mark_order_item_ready_for_pickup(
                     await email_service.send_admin_made_to_order_ready_email(**email_payload)
                 except Exception:
                     logger.exception(
-                        "[MTO Ready] Failed to send admin email order=%s item=%s",
+                        "[Item Ready] Failed to send admin email order=%s item=%s",
                         log_order_number,
                         log_item_id,
                     )
@@ -839,7 +842,7 @@ async def mark_order_item_ready_for_pickup(
             background_tasks.add_task(_send_ready_for_pickup_email)
         except Exception:
             logger.exception(
-                "[MTO Ready] Failed to queue admin email order=%s item=%s",
+                "[Item Ready] Failed to queue admin email order=%s item=%s",
                 log_order_number,
                 log_item_id,
             )
