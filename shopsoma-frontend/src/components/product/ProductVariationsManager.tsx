@@ -214,9 +214,9 @@ export default function ProductVariationsManager({
         });
       }
 
-      // Associate with this variation
-      setEditImages((prev) => [...prev, imageUrl]);
-      setSuccessMsg('Image uploaded and added to variation preview. Click "Save Variation Changes" below to save.');
+      // Associate with this variation (place first as primary)
+      setEditImages((prev) => [imageUrl, ...prev.filter((u) => u !== imageUrl)]);
+      setSuccessMsg('Image uploaded and set as primary for this variation. Click "Save Variation Changes" below to save.');
     } catch (err: any) {
       console.error('Failed to upload variation image', err);
       setErrorMsg(err.response?.data?.detail || 'Failed to upload variation image.');
@@ -224,6 +224,10 @@ export default function ProductVariationsManager({
       setIsUploadingImage(false);
       if (e.target) e.target.value = '';
     }
+  };
+
+  const handleSetPrimaryVariationImage = (imgUrl: string) => {
+    setEditImages((prev) => [imgUrl, ...prev.filter((u) => u !== imgUrl)]);
   };
 
   // Save selected variation
@@ -731,6 +735,20 @@ export default function ProductVariationsManager({
                           alt={`Variation ${idx + 1}`}
                           className="w-full h-full object-cover"
                         />
+                        {idx === 0 ? (
+                          <span className="absolute bottom-1.5 left-1.5 px-2 py-0.5 text-[10px] font-semibold tracking-wider uppercase bg-[#105E53] text-white rounded shadow-sm">
+                            Primary
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => handleSetPrimaryVariationImage(imgUrl)}
+                            className="absolute bottom-1.5 left-1.5 px-2 py-0.5 text-[10px] font-medium bg-black/75 hover:bg-[#105E53] text-white rounded opacity-0 group-hover:opacity-100 transition shadow"
+                            title="Set as primary image for this variation"
+                          >
+                            Make Primary
+                          </button>
+                        )}
                         <button
                           type="button"
                           onClick={() => handleToggleVariationImage(imgUrl)}

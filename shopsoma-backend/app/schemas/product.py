@@ -800,6 +800,16 @@ class ProductResponse(ProductBase):
                     variant.compare_at_price = (
                         regular_price if variant_price < regular_price else None
                     )
+                    if variant.size is not None and getattr(variation, "size_stocks", None):
+                        norm_v_size = normalize_color_value(variant.size)
+                        for ss in variation.size_stocks:
+                            ss_size = getattr(ss.size, "value", str(ss.size))
+                            if normalize_color_value(ss_size) == norm_v_size:
+                                variant.stock = ss.stock
+                                variant.is_available = bool(variation.is_active) and ss.stock > 0
+                                break
+                    if getattr(variation, "color_hex", None) and not variant.color_hex:
+                        variant.color_hex = variation.color_hex
 
                 existing_inventory = {
                     (
@@ -865,10 +875,9 @@ class ProductResponse(ProductBase):
                             )
                         )
                         existing_inventory.add(inventory_key)
-            return self
 
-        # If product has variations (vendor-created), generate variants
-        if self.variations:
+        # If product has variations (vendor-created) and no existing variants, generate variants
+        elif self.variations:
             generated_variants = []
 
             for variation in self.variations:
