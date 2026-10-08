@@ -14,6 +14,7 @@ import {
   Upload,
 } from 'lucide-react';
 import type { Variation, ProductImage } from '../../types';
+import api from '../../services/api';
 import { productService } from '../../services/productService';
 import { adminService } from '../../services/adminService';
 import { normalizeProductImageUrl } from '../../utils/productImages';
@@ -195,17 +196,27 @@ export default function ProductVariationsManager({
       const imageUrl = uploadRes.original;
 
       // Add to product gallery as a non-primary image so backend validation accepts ownership
-      await productService.addProductImage(productId, {
-        image_url: imageUrl,
-        thumbnail_url: uploadRes.thumbnail,
-        alt_text: `${editTitle || 'Variation'} image`,
-        is_primary: false,
-        storage_keys: uploadRes.storage_keys,
-      });
+      if (isAdmin) {
+        await api.post(`/admin/products/${productId}/images`, {
+          image_url: imageUrl,
+          thumbnail_url: uploadRes.thumbnail,
+          alt_text: `${editTitle || 'Variation'} image`,
+          is_primary: false,
+          storage_keys: uploadRes.storage_keys,
+        });
+      } else {
+        await productService.addProductImage(productId, {
+          image_url: imageUrl,
+          thumbnail_url: uploadRes.thumbnail,
+          alt_text: `${editTitle || 'Variation'} image`,
+          is_primary: false,
+          storage_keys: uploadRes.storage_keys,
+        });
+      }
 
       // Associate with this variation
       setEditImages((prev) => [...prev, imageUrl]);
-      setSuccessMsg('Image uploaded and assigned to variation.');
+      setSuccessMsg('Image uploaded and added to variation preview. Click "Save Variation Changes" below to save.');
     } catch (err: any) {
       console.error('Failed to upload variation image', err);
       setErrorMsg(err.response?.data?.detail || 'Failed to upload variation image.');
@@ -740,6 +751,29 @@ export default function ProductVariationsManager({
                 )}
               </div>
             </div>
+
+            {/* Bottom inline feedback alerts */}
+            {errorMsg && (
+              <div className="bg-red-50 border border-red-200 rounded-lg p-3.5 flex items-start gap-2.5 text-sm text-red-700" role="alert">
+                <AlertCircle className="h-5 w-5 text-red-500 shrink-0 mt-0.5" />
+                <div className="flex-1">
+                  <strong className="font-semibold">Error:</strong> {errorMsg}
+                </div>
+                <button type="button" onClick={() => setErrorMsg(null)} className="text-red-400 hover:text-red-600">
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            )}
+
+            {successMsg && (
+              <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3.5 flex items-start gap-2.5 text-sm text-emerald-800" role="status">
+                <Check className="h-5 w-5 text-emerald-600 shrink-0 mt-0.5" />
+                <div className="flex-1 font-medium">{successMsg}</div>
+                <button type="button" onClick={() => setSuccessMsg(null)} className="text-emerald-400 hover:text-emerald-600">
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            )}
 
             {/* Bottom Actions */}
             <div className="flex justify-end gap-3 pt-4 border-t border-gray-100">
