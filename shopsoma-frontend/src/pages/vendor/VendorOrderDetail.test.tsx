@@ -117,9 +117,10 @@ describe('VendorOrderDetail made-to-order readiness', () => {
     renderPage();
     const panel = await screen.findByTestId('mto-panel-item-mto');
     expect(within(panel).getByText('Being prepared')).toBeInTheDocument();
-    // Ready-to-wear items get no readiness action.
+    // Ready-to-wear items get the RTW readiness panel.
     expect(screen.queryByTestId('mto-panel-item-rtw')).not.toBeInTheDocument();
-    expect(screen.getAllByRole('button', { name: 'Ready for Shopsoma Pickup' })).toHaveLength(1);
+    expect(screen.getByTestId('rtw-panel-item-rtw')).toBeInTheDocument();
+    expect(within(panel).getByRole('button', { name: 'Ready for Shopsoma Pickup' })).toBeInTheDocument();
 
     fireEvent.click(within(panel).getByRole('button', { name: 'Ready for Shopsoma Pickup' }));
     // Confirmation step prevents accidental notifications.
@@ -196,5 +197,43 @@ describe('VendorOrderDetail made-to-order readiness', () => {
     const panel = await screen.findByTestId('mto-panel-item-mto');
     expect(within(panel).getByRole('button', { name: 'Ready for Shopsoma Pickup' })).toBeInTheDocument();
     expect(within(panel).queryByText(/once the order payment is confirmed/)).not.toBeInTheDocument();
+  });
+
+  it('lets the vendor confirm a ready-to-wear item is available and ready for pickup', async () => {
+    mocks.getVendorOrder.mockResolvedValue(
+      order([
+        item({ id: 'item-rtw', product_title: 'Ready Silk Shirt', made_to_order: false }),
+      ])
+    );
+    mocks.markVendorOrderItemReadyForPickup.mockResolvedValue({
+      order_id: 'order-1',
+      order_item_id: 'item-rtw',
+      already_ready: false,
+      pickup: null,
+      made_to_order: false,
+      ready_for_pickup_at: '2026-10-08T14:00:00Z',
+      readiness_state: 'ready_for_pickup',
+    });
+
+    renderPage();
+    const panel = await screen.findByTestId('rtw-panel-item-rtw');
+    expect(within(panel).getByText('Confirmation needed')).toBeInTheDocument();
+    expect(within(panel).getByRole('button', { name: 'Ready for Shopsoma Pickup' })).toBeInTheDocument();
+
+    fireEvent.click(within(panel).getByRole('button', { name: 'Ready for Shopsoma Pickup' }));
+    expect(mocks.markVendorOrderItemReadyForPickup).not.toHaveBeenCalled();
+    fireEvent.click(within(panel).getByRole('button', { name: "Yes, it's ready" }));
+
+    await waitFor(() => {
+      expect(mocks.markVendorOrderItemReadyForPickup).toHaveBeenCalledTimes(1);
+    });
+    expect(mocks.markVendorOrderItemReadyForPickup).toHaveBeenCalledWith('order-1', 'item-rtw');
+    expect(await within(panel).findByText('Available & Ready for pickup')).toBeInTheDocument();
+    expect(within(panel).getByText(/Confirmed ready:/)).toBeInTheDocument();
+    expect(within(panel).queryByRole('button', { name: 'Ready for Shopsoma Pickup' })).not.toBeInTheDocument();
+    expect(mocks.success).toHaveBeenCalledWith(
+      'Shopsoma has been notified that this item is ready for pickup.',
+      'Ready for pickup'
+    );
   });
 });

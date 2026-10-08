@@ -570,6 +570,7 @@ describe('AdminOrderDetail production tracking and classification', () => {
 
     // RTW item does not render an item pickup panel or countdown
     expect(screen.queryByTestId('item-pickup-panel-item-rtw')).not.toBeInTheDocument();
+    expect(screen.getByTestId('rtw-admin-pending')).toHaveTextContent('Awaiting vendor confirmation');
   });
 
   it('displays production completed status when vendor marked ready early', async () => {
@@ -608,5 +609,39 @@ describe('AdminOrderDetail production tracking and classification', () => {
     expect(screen.getByTestId('mto-countdown')).toHaveTextContent('Production completed');
     expect(screen.getByText('Ready for pickup')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Schedule pickup' })).toBeInTheDocument();
+  });
+
+  it('displays confirmed ready status on admin page when vendor confirmed ready-to-wear item', async () => {
+    const order = baseOrder();
+    order.items = [
+      {
+        id: 'item-rtw',
+        product_id: 'product-rtw',
+        product_title: 'Ready Silk Shirt',
+        variant_details: {},
+        unit_price: 8000,
+        currency: 'NGN',
+        quantity: 1,
+        subtotal: 8000,
+        commission_rate: 0,
+        commission_amount: 0,
+        vendor_payout: 8000,
+        fulfillment_status: 'order_received',
+        vendor: { id: 'vendor-1', business_name: 'Vendor One' },
+        made_to_order: false,
+        order_type: 'rtw',
+        ready_for_pickup_at: '2026-10-08T14:30:00Z',
+        readiness_state: 'ready_for_pickup',
+        pickup: { id: 'pickup-1', order_item_id: 'item-rtw', vendor_id: 'vendor-1', status: 'scheduled' },
+      },
+    ];
+
+    mocks.getOrderDetail.mockResolvedValue(order);
+    renderPage();
+
+    expect(await screen.findByText('Ready Silk Shirt')).toBeInTheDocument();
+    expect(screen.getByTestId('rtw-tag')).toHaveTextContent('Ready to wear');
+    expect(screen.getByTestId('rtw-admin-ready')).toHaveTextContent('Available & Ready for pickup');
+    expect(screen.getByText(/Confirmed ready:/)).toBeInTheDocument();
   });
 });
