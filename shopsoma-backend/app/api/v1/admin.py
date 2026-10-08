@@ -28,6 +28,7 @@ from app.models.product import (
     Product,
     ProductImage,
     ProductStatus,
+    ProductType,
     ProductVariant,
     SizeEnum,
     SizeStock,
