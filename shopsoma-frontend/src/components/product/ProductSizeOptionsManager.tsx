@@ -65,6 +65,7 @@ export default function ProductSizeOptionsManager({
   const [loading, setLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [modalErrorMsg, setModalErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
   // Add modal state
@@ -142,6 +143,7 @@ export default function ProductSizeOptionsManager({
     setNewPrice(basePrice > 0 ? basePrice.toString() : '');
     setNewIsAvailable(true);
     setErrorMsg(null);
+    setModalErrorMsg(null);
     setSuccessMsg(null);
     setIsAddModalOpen(true);
   };
@@ -155,44 +157,58 @@ export default function ProductSizeOptionsManager({
     setEditPrice((variant.price ?? basePrice).toString());
     setEditIsAvailable(variant.is_available ?? true);
     setErrorMsg(null);
+    setModalErrorMsg(null);
     setSuccessMsg(null);
   };
 
-  const handleCreateVariant = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleCreateVariant = async (e?: React.SyntheticEvent) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
     const sizeName = newSize.trim();
     if (!sizeName) {
-      setErrorMsg('Please enter or select a size name');
+      setModalErrorMsg('Please enter or select a size name');
       return;
     }
 
     if (existingSizeLabels.has(sizeName.toLowerCase())) {
-      setErrorMsg(`Size option "${sizeName}" already exists for this product.`);
+      setModalErrorMsg(`Size option "${sizeName}" already exists for this product.`);
       return;
     }
 
     const parsedStock = madeToOrder ? 0 : parseInt(newStock, 10);
     if (!madeToOrder && (isNaN(parsedStock) || parsedStock < 0)) {
-      setErrorMsg('Stock quantity must be a non-negative number');
+      setModalErrorMsg('Stock quantity must be a non-negative number');
       return;
     }
 
     const parsedPrice = newPrice ? parseFloat(newPrice) : basePrice;
     if (isNaN(parsedPrice) || parsedPrice <= 0) {
-      setErrorMsg('Price must be greater than 0');
+      setModalErrorMsg('Price must be greater than 0');
       return;
     }
 
     try {
       setActionLoading(true);
+      setModalErrorMsg(null);
       setErrorMsg(null);
 
-      const payload = {
+      const sharedColor = variants.find((v) => v.color)?.color;
+      const sharedColorHex = variants.find((v) => v.color_hex)?.color_hex;
+
+      const payload: any = {
         size: sizeName,
         stock: parsedStock,
         price: parsedPrice,
         is_available: newIsAvailable,
       };
+      if (sharedColor) {
+        payload.color = sharedColor;
+      }
+      if (sharedColorHex) {
+        payload.color_hex = sharedColorHex;
+      }
 
       if (isAdmin) {
         await adminService.createProductVariant(productId, payload);
@@ -206,19 +222,27 @@ export default function ProductSizeOptionsManager({
     } catch (err: any) {
       console.error('Error creating size variant:', err);
       const detail = err.response?.data?.detail;
-      setErrorMsg(typeof detail === 'string' ? detail : 'Failed to create size option.');
+      const msg = typeof detail === 'string'
+        ? detail
+        : Array.isArray(detail)
+          ? detail.map((d: any) => d.msg || d.message).join(', ')
+          : 'Failed to create size option.';
+      setModalErrorMsg(msg);
     } finally {
       setActionLoading(false);
     }
   };
 
-  const handleUpdateVariant = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleUpdateVariant = async (e?: React.SyntheticEvent) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
     if (!editingVariant) return;
 
     const sizeName = editSize.trim();
     if (!sizeName) {
-      setErrorMsg('Size name cannot be empty');
+      setModalErrorMsg('Size name cannot be empty');
       return;
     }
 
@@ -227,32 +251,39 @@ export default function ProductSizeOptionsManager({
       sizeName.toLowerCase() !== (editingVariant.size || '').toLowerCase() &&
       existingSizeLabels.has(sizeName.toLowerCase())
     ) {
-      setErrorMsg(`Size option "${sizeName}" already exists for this product.`);
+      setModalErrorMsg(`Size option "${sizeName}" already exists for this product.`);
       return;
     }
 
     const parsedStock = madeToOrder ? 0 : parseInt(editStock, 10);
     if (!madeToOrder && (isNaN(parsedStock) || parsedStock < 0)) {
-      setErrorMsg('Stock quantity must be a non-negative number');
+      setModalErrorMsg('Stock quantity must be a non-negative number');
       return;
     }
 
     const parsedPrice = editPrice ? parseFloat(editPrice) : basePrice;
     if (isNaN(parsedPrice) || parsedPrice <= 0) {
-      setErrorMsg('Price must be greater than 0');
+      setModalErrorMsg('Price must be greater than 0');
       return;
     }
 
     try {
       setActionLoading(true);
+      setModalErrorMsg(null);
       setErrorMsg(null);
 
-      const payload = {
+      const payload: any = {
         size: sizeName,
         stock: parsedStock,
         price: parsedPrice,
         is_available: editIsAvailable,
       };
+      if (editingVariant.color) {
+        payload.color = editingVariant.color;
+      }
+      if (editingVariant.color_hex) {
+        payload.color_hex = editingVariant.color_hex;
+      }
 
       if (isAdmin) {
         await adminService.updateProductVariant(productId, editingVariant.id, payload);
@@ -266,7 +297,12 @@ export default function ProductSizeOptionsManager({
     } catch (err: any) {
       console.error('Error updating size variant:', err);
       const detail = err.response?.data?.detail;
-      setErrorMsg(typeof detail === 'string' ? detail : 'Failed to update size option.');
+      const msg = typeof detail === 'string'
+        ? detail
+        : Array.isArray(detail)
+          ? detail.map((d: any) => d.msg || d.message).join(', ')
+          : 'Failed to update size option.';
+      setModalErrorMsg(msg);
     } finally {
       setActionLoading(false);
     }
@@ -525,7 +561,22 @@ export default function ProductSizeOptionsManager({
               </button>
             </div>
 
-            <form onSubmit={handleCreateVariant} className="p-6 space-y-4">
+            <div className="p-6 space-y-4">
+              {/* Modal Error Message */}
+              {modalErrorMsg && (
+                <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-xs text-red-700 flex items-start gap-2">
+                  <AlertCircle className="h-4 w-4 text-red-500 shrink-0 mt-0.5" />
+                  <div className="flex-1">{modalErrorMsg}</div>
+                  <button
+                    type="button"
+                    onClick={() => setModalErrorMsg(null)}
+                    className="text-red-400 hover:text-red-600"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+              )}
+
               {/* Presets system tabs */}
               <div>
                 <label className="block text-xs font-semibold text-gray-700 mb-1.5">
@@ -599,6 +650,13 @@ export default function ProductSizeOptionsManager({
                     type="text"
                     value={newSize}
                     onChange={(e) => setNewSize(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        handleCreateVariant();
+                      }
+                    }}
                     placeholder="e.g. Tailored Fit, Made to measure, 42R"
                     required
                     className={`w-full rounded-lg border border-gray-300 bg-white px-3.5 py-2.5 text-xs text-gray-900 focus:outline-none ${primaryRing} focus:ring-2`}
@@ -623,6 +681,13 @@ export default function ProductSizeOptionsManager({
                     disabled={madeToOrder}
                     value={madeToOrder ? '0' : newStock}
                     onChange={(e) => setNewStock(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        handleCreateVariant();
+                      }
+                    }}
                     required={!madeToOrder}
                     className={`w-full rounded-lg border border-gray-300 bg-white px-3.5 py-2 text-xs text-gray-900 focus:outline-none ${primaryRing} focus:ring-2 disabled:bg-gray-100 disabled:text-gray-400`}
                   />
@@ -642,6 +707,13 @@ export default function ProductSizeOptionsManager({
                     step="0.01"
                     value={newPrice}
                     onChange={(e) => setNewPrice(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        handleCreateVariant();
+                      }
+                    }}
                     required
                     placeholder="Defaults to base price"
                     className={`w-full rounded-lg border border-gray-300 bg-white px-3.5 py-2 text-xs text-gray-900 focus:outline-none ${primaryRing} focus:ring-2`}
@@ -674,7 +746,8 @@ export default function ProductSizeOptionsManager({
                   Cancel
                 </button>
                 <button
-                  type="submit"
+                  type="button"
+                  onClick={() => handleCreateVariant()}
                   disabled={actionLoading || !newSize.trim()}
                   className={`inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white rounded-lg transition shadow-sm disabled:opacity-50 ${primaryBg}`}
                 >
@@ -688,7 +761,7 @@ export default function ProductSizeOptionsManager({
                   )}
                 </button>
               </div>
-            </form>
+            </div>
           </div>
         </div>
       )}
@@ -713,7 +786,22 @@ export default function ProductSizeOptionsManager({
               </button>
             </div>
 
-            <form onSubmit={handleUpdateVariant} className="p-6 space-y-4">
+            <div className="p-6 space-y-4">
+              {/* Modal Error Message */}
+              {modalErrorMsg && (
+                <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-xs text-red-700 flex items-start gap-2">
+                  <AlertCircle className="h-4 w-4 text-red-500 shrink-0 mt-0.5" />
+                  <div className="flex-1">{modalErrorMsg}</div>
+                  <button
+                    type="button"
+                    onClick={() => setModalErrorMsg(null)}
+                    className="text-red-400 hover:text-red-600"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+              )}
+
               {/* Presets system tabs for Edit */}
               <div>
                 <label className="block text-xs font-semibold text-gray-700 mb-1.5">
@@ -792,6 +880,13 @@ export default function ProductSizeOptionsManager({
                     type="text"
                     value={editSize}
                     onChange={(e) => setEditSize(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        handleUpdateVariant();
+                      }
+                    }}
                     placeholder="e.g. Tailored Fit, Made to measure, 42R"
                     required
                     className={`w-full rounded-lg border border-gray-300 bg-white px-3.5 py-2.5 text-xs text-gray-900 focus:outline-none ${primaryRing} focus:ring-2`}
@@ -816,6 +911,13 @@ export default function ProductSizeOptionsManager({
                     disabled={madeToOrder}
                     value={madeToOrder ? '0' : editStock}
                     onChange={(e) => setEditStock(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        handleUpdateVariant();
+                      }
+                    }}
                     required={!madeToOrder}
                     className={`w-full rounded-lg border border-gray-300 bg-white px-3.5 py-2 text-xs text-gray-900 focus:outline-none ${primaryRing} focus:ring-2 disabled:bg-gray-100 disabled:text-gray-400`}
                   />
@@ -835,6 +937,13 @@ export default function ProductSizeOptionsManager({
                     step="0.01"
                     value={editPrice}
                     onChange={(e) => setEditPrice(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        handleUpdateVariant();
+                      }
+                    }}
                     required
                     className={`w-full rounded-lg border border-gray-300 bg-white px-3.5 py-2 text-xs text-gray-900 focus:outline-none ${primaryRing} focus:ring-2`}
                   />
@@ -864,7 +973,8 @@ export default function ProductSizeOptionsManager({
                   Cancel
                 </button>
                 <button
-                  type="submit"
+                  type="button"
+                  onClick={() => handleUpdateVariant()}
                   disabled={actionLoading || !editSize.trim()}
                   className={`inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white rounded-lg transition shadow-sm disabled:opacity-50 ${primaryBg}`}
                 >
@@ -878,7 +988,7 @@ export default function ProductSizeOptionsManager({
                   )}
                 </button>
               </div>
-            </form>
+            </div>
           </div>
         </div>
       )}

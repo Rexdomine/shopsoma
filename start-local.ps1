@@ -25,7 +25,7 @@ Write-Host " Shopsoma is running locally!" -ForegroundColor Green
 Write-Host "   Frontend: http://localhost:5173" -ForegroundColor Yellow
 Write-Host "   Backend:  http://127.0.0.1:8000" -ForegroundColor Yellow
 Write-Host "   API Docs: http://127.0.0.1:8000/docs" -ForegroundColor Yellow
-Write-Host "   Admin:    admin@shopsoma.com / Admin123" -ForegroundColor Yellow
+Write-Host "   Admin:    kayodedevelopment@gmail.com / Admin123" -ForegroundColor Yellow
 Write-Host "=======================================================" -ForegroundColor Cyan
 Write-Host "Press Ctrl+C or close the window to stop.`n"
 
