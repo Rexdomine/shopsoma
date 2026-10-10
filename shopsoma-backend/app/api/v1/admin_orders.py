@@ -6,7 +6,7 @@ from sqlalchemy import select, func, and_, or_, desc, exists
 from sqlalchemy.orm import selectinload
 from typing import Optional, List
 from uuid import UUID
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 from decimal import Decimal
 import logging
 import csv
@@ -19,7 +19,7 @@ from app.models.user import User
 from app.models.order import Order, OrderItem, PaymentStatus, FulfillmentStatus
 from app.models.vendor import Vendor
 from app.models.address import Address
-from app.models.vendor_pickup import VendorPickup, PickupStatus
+from app.models.vendor_pickup import VendorPickup, PickupStatus, OrderType
 from app.models.product import Product
 from app.models.payment import Payment
 from app.models.setting import Setting
@@ -29,8 +29,10 @@ from app.services.orders.made_to_order_readiness import (
     ensure_admin_pickup_update_allowed,
     get_production_tracking,
     is_made_to_order_item,
+    is_picked_up,
     pickups_by_order_item,
     readiness_fields,
+    select_item_pickup,
 )
 
 logger = logging.getLogger(__name__)
@@ -939,10 +941,20 @@ async def update_pickup_status(
             detail="Pickup not found for this order",
         )
 
+    order = await db.get(Order, order_uuid)
+    if not order:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Order not found",
+        )
+
     # Serialize with the vendor ready-for-pickup transition (same row lock).
     order_item = await db.scalar(
         select(OrderItem)
-        .options(selectinload(OrderItem.product))
+        .options(
+            selectinload(OrderItem.product),
+            selectinload(OrderItem.vendor).selectinload(Vendor.user),
+        )
         .where(OrderItem.id == pickup.order_item_id)
         .with_for_update(of=OrderItem)
     )
@@ -976,6 +988,11 @@ async def update_pickup_status(
             pickup.cancelled_at = datetime.now()
 
     # Update other fields if provided
+    is_scheduling = (
+        update_data.pickup_window_start is not None
+        or update_data.scheduled_pickup_date is not None
+    )
+
     if update_data.scheduled_pickup_date is not None:
         pickup.scheduled_pickup_date = update_data.scheduled_pickup_date
 
@@ -1009,9 +1026,101 @@ async def update_pickup_status(
         else:
             pickup.admin_notes = f"[{datetime.now().isoformat()}] {update_data.admin_notes}"
 
+    if is_scheduling and not update_data.pickup_status:
+        pickup.status = PickupStatus.SCHEDULED
+        if order_item and order_item.fulfillment_status != FulfillmentStatus.CANCELLED:
+            order_item.fulfillment_status = FulfillmentStatus.PICKUP_SCHEDULED
+
     await db.commit()
 
+    # Send notification email to the vendor that pickup is scheduled for their item
+    if is_scheduling and order_item and order_item.vendor:
+        try:
+            notification_service = OrderNotificationService(db)
+            await notification_service.notify_vendor_item_pickup_scheduled(
+                order=order,
+                vendor=order_item.vendor,
+                item=order_item,
+                pickup=pickup,
+            )
+        except Exception as e:
+            logger.error(f"Failed to send vendor item pickup notification: {e}")
+
     # Return updated order
+    return await get_order_detail(order_id, admin, db)
+
+
+@router.post("/{order_id}/items/{item_id}/ready-for-pickup", response_model=OrderDetail)
+async def admin_mark_item_ready_for_pickup(
+    order_id: str,
+    item_id: str,
+    admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Admin marks an order item ready for pickup on behalf of the vendor."""
+    try:
+        order_uuid = UUID(order_id)
+        item_uuid = UUID(item_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Order or item not found",
+        )
+
+    order = await db.scalar(
+        select(Order)
+        .options(selectinload(Order.customer))
+        .where(Order.id == order_uuid)
+    )
+    if not order:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Order not found",
+        )
+
+    item = await db.scalar(
+        select(OrderItem)
+        .options(selectinload(OrderItem.product), selectinload(OrderItem.vendor))
+        .where(OrderItem.id == item_uuid, OrderItem.order_id == order_uuid)
+        .with_for_update(of=OrderItem)
+    )
+    if not item:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Order item not found",
+        )
+
+    is_mto = is_made_to_order_item(item)
+    pickups = (
+        await db.scalars(
+            select(VendorPickup).where(VendorPickup.order_item_id == item.id)
+        )
+    ).all()
+    pickup = select_item_pickup(pickups)
+    if pickup is None:
+        pickup = VendorPickup(
+            vendor_id=item.vendor_id,
+            order_id=order.id,
+            order_item_id=item.id,
+            order_type=OrderType.MADE_TO_ORDER if is_mto else OrderType.RTW,
+            scheduled_pickup_date=None,
+            pickup_address=item.vendor.business_address if item.vendor else None,
+            pickup_contact_phone=item.vendor.business_phone if item.vendor else None,
+            status=PickupStatus.SCHEDULED,
+        )
+        db.add(pickup)
+
+    if pickup.ready_for_pickup_at is None and not is_picked_up(pickup):
+        pickup.ready_for_pickup_at = datetime.now(timezone.utc)
+        pickup.ready_for_pickup_marked_by = admin.id
+        if is_mto and pickup.order_type != OrderType.MADE_TO_ORDER:
+            pickup.order_type = OrderType.MADE_TO_ORDER
+        elif not is_mto and pickup.order_type != OrderType.RTW:
+            pickup.order_type = OrderType.RTW
+
+    await db.commit()
+    await db.refresh(pickup)
+
     return await get_order_detail(order_id, admin, db)
 
 

@@ -709,3 +709,71 @@ async def test_admin_ready_to_wear_ready_email_content(monkeypatch):
         f"/admin/orders/{order_id}",
     ):
         assert expected in html
+
+
+@pytest.mark.asyncio
+async def test_admin_marks_item_ready_and_schedules_individual_pickup_notifying_vendor(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    vendor_user,
+    customer_user,
+    admin_user,
+    monkeypatch,
+):
+    from app.services.email_service import EmailService
+
+    sent_emails = []
+
+    async def _capture_send_email(self, to_email, to_name, subject, html_content, template_params=None):
+        sent_emails.append({
+            "to": to_email,
+            "to_name": to_name,
+            "subject": subject,
+            "html": html_content,
+        })
+        return True
+
+    monkeypatch.setattr(EmailService, "send_email", _capture_send_email)
+
+    order, (item,), (pickup,) = await _create_order(
+        db_session, customer_user, [(vendor_user["vendor"], True, "Bespoke Agbada")]
+    )
+
+    # 1. Admin marks item ready on behalf of vendor
+    mark_ready_res = await client.post(
+        f"/api/v1/admin/orders/{order.id}/items/{item.id}/ready-for-pickup",
+        headers=admin_user["headers"],
+    )
+    assert mark_ready_res.status_code == 200, mark_ready_res.text
+    item_data = _item(mark_ready_res.json(), item.id)
+    assert item_data["readiness_state"] == "ready_for_pickup"
+    assert item_data["ready_for_pickup_at"] is not None
+
+    # 2. Admin schedules pickup for this individual item
+    start = datetime.now(timezone.utc) + timedelta(days=1)
+    end = start + timedelta(hours=3)
+    schedule_res = await client.patch(
+        f"/api/v1/admin/orders/{order.id}/pickup/{pickup.id}",
+        headers=admin_user["headers"],
+        json={
+            "pickup_window_start": start.isoformat(),
+            "pickup_window_end": end.isoformat(),
+            "courier_name": "Kwik Delivery",
+            "rider_id": "RIDER-99",
+        },
+    )
+    assert schedule_res.status_code == 200, schedule_res.text
+    sched_item = _item(schedule_res.json(), item.id)
+    assert sched_item["readiness_state"] == "pickup_scheduled"
+    assert sched_item["pickup"]["status"] == "scheduled"
+    assert sched_item["pickup"]["courier_name"] == "Kwik Delivery"
+
+    # 3. Verify vendor was notified via email about this specific item pickup
+    vendor_emails = [e for e in sent_emails if e["to"] == vendor_user["user"].email]
+    assert len(vendor_emails) >= 1
+    vendor_email = vendor_emails[-1]
+    assert order.order_number in vendor_email["subject"] or order.order_number in vendor_email["html"]
+    assert "Bespoke Agbada" in vendor_email["html"]
+    assert "Kwik Delivery" in vendor_email["html"]
+    assert "RIDER-99" in vendor_email["html"]
+
