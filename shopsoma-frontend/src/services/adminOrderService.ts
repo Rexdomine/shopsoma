@@ -355,6 +355,21 @@ export const updatePickupStatus = async (
 };
 
 /**
+ * Admin marks an order item ready for pickup on behalf of vendor
+ */
+export const adminMarkItemReady = async (
+  orderId: string,
+  itemId: string
+): Promise<OrderDetail> => {
+  const response = await api.post<OrderDetail>(
+    `/admin/orders/${orderId}/items/${itemId}/ready-for-pickup`,
+    {},
+    { timeout: 30000 }
+  );
+  return response.data;
+};
+
+/**
  * Bulk update order statuses
  */
 export const bulkUpdateStatus = async (data: BulkStatusUpdate): Promise<{ success: boolean; updated_count: number; message: string }> => {

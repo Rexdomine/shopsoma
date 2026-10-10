@@ -6,7 +6,7 @@ from sqlalchemy.orm import selectinload
 from datetime import datetime
 import logging
 
-from app.models.order import Order, FulfillmentStatus, PaymentStatus
+from app.models.order import Order, OrderItem, FulfillmentStatus, PaymentStatus
 from app.models.user import User
 from app.models.vendor import Vendor
 from app.models.vendor_pickup import VendorNotification
@@ -252,6 +252,160 @@ class OrderNotificationService:
                 continue
 
         return notifications_sent > 0
+
+    async def notify_vendor_item_pickup_scheduled(
+        self,
+        order: Order,
+        vendor: Vendor,
+        item: OrderItem,
+        pickup: Any,
+    ) -> bool:
+        """Send notification to a specific vendor when pickup is scheduled for their individual item."""
+        payment_status = getattr(order, "payment_status", None)
+        if payment_status != PaymentStatus.PAID and payment_status != "paid":
+            logger.warning(
+                f"[Vendor Email] Suppressing vendor pickup notification for order {order.order_number}: payment status is {payment_status}"
+            )
+            return False
+
+        if not vendor or not getattr(vendor, "user", None) or not getattr(vendor.user, "email", None):
+            logger.warning(f"[Vendor Email] Vendor or vendor user email missing for vendor {getattr(vendor, 'id', None)}")
+            return False
+
+        pickup_details = {
+            "pickup_window_start": getattr(pickup, "pickup_window_start", None),
+            "pickup_window_end": getattr(pickup, "pickup_window_end", None),
+            "courier_name": getattr(pickup, "courier_name", None),
+            "rider_id": getattr(pickup, "rider_id", None),
+            "scheduled_pickup_date": getattr(pickup, "scheduled_pickup_date", None),
+        }
+
+        pickup_window_info = ""
+        if pickup_details.get("scheduled_pickup_date"):
+            sched = pickup_details["scheduled_pickup_date"]
+            sched_str = sched.strftime('%B %d, %Y · %I:%M %p') if hasattr(sched, 'strftime') else str(sched)
+            pickup_window_info += f"""
+            <div style="margin:16px 0;padding:12px;background:#F3F4F6;border-radius:8px;">
+                <p style="margin:0;color:#6B7280;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;">Pickup Scheduled</p>
+                <p style="margin:4px 0 0;color:#111827;font-size:14px;font-weight:500;">{sched_str}</p>
+            </div>
+            """
+        if pickup_details.get("pickup_window_start") and pickup_details.get("pickup_window_end"):
+            start = pickup_details["pickup_window_start"]
+            end = pickup_details["pickup_window_end"]
+            start_str = start.strftime('%B %d, %Y %I:%M %p') if hasattr(start, 'strftime') else str(start)
+            end_str = end.strftime('%I:%M %p') if hasattr(end, 'strftime') else str(end)
+            pickup_window_info += f"""
+            <div style="margin:16px 0;padding:12px;background:#F3F4F6;border-radius:8px;">
+                <p style="margin:0;color:#6B7280;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;">Pickup Window</p>
+                <p style="margin:4px 0 0;color:#111827;font-size:14px;font-weight:500;">{start_str} - {end_str}</p>
+            </div>
+            """
+        if pickup_details.get("courier_name"):
+            courier_line = pickup_details['courier_name']
+            if pickup_details.get("rider_id"):
+                courier_line += f" (Rider: {pickup_details['rider_id']})"
+            pickup_window_info += f"""
+            <div style="margin:8px 0;padding:12px;background:#F3F4F6;border-radius:8px;">
+                <p style="margin:0;color:#6B7280;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;">Courier / Rider</p>
+                <p style="margin:4px 0 0;color:#111827;font-size:14px;font-weight:500;">{courier_line}</p>
+            </div>
+            """
+
+        variant_summary = ""
+        if hasattr(item, "variant_details") and item.variant_details:
+            parts = [f"{k}: {v}" for k, v in item.variant_details.items() if v]
+            if parts:
+                variant_summary = f"<p style='margin:2px 0 0;color:#6B7280;font-size:12px;'>{' · '.join(parts)}</p>"
+
+        item_html = f"""
+        <div style="padding:12px 0;border-bottom:1px solid #E5E7EB;">
+            <p style="margin:0;color:#111827;font-size:14px;font-weight:500;">{item.product_title}</p>
+            <p style="margin:4px 0 0;color:#6B7280;font-size:13px;">Quantity: {item.quantity}</p>
+            {variant_summary}
+        </div>
+        """
+
+        action_required_html = """
+        <div style="margin:24px 0;padding:16px;background:#FEF3C7;border-left:4px solid #F59E0B;border-radius:4px;">
+            <p style="margin:0;color:#92400E;font-size:14px;font-weight:600;">⚠️ Action Required</p>
+            <p style="margin:4px 0 0;color:#92400E;font-size:13px;">Please have this item packaged and ready for collection during the pickup window.</p>
+        </div>
+        """
+
+        body_content = f"""
+        <p style="margin:0 0 24px;color:#111827;font-size:14px;line-height:1.6;">Hello {vendor.business_name},</p>
+        <p style="margin:0 0 24px;color:#4B5563;font-size:14px;line-height:1.6;">Pickup has been scheduled for your item from order #{order.order_number}. Please have the item ready during the pickup window.</p>
+
+        <div style="margin:24px 0;">
+            <h2 style="margin:0 0 16px;color:#111827;font-size:16px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;">Order Details</h2>
+            <div style="background:#F9FAFB;padding:16px;border-radius:8px;margin-bottom:8px;">
+                <p style="margin:0;color:#6B7280;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;">Order Number</p>
+                <p style="margin:4px 0 0;color:#111827;font-size:16px;font-weight:600;">{order.order_number}</p>
+            </div>
+        </div>
+
+        {pickup_window_info}
+
+        <div style="margin:24px 0;">
+            <h2 style="margin:0 0 16px;color:#111827;font-size:16px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;">Scheduled Item</h2>
+            <div style="background:#FFFFFF;border:1px solid #E5E7EB;border-radius:8px;padding:8px 16px;">
+                {item_html}
+            </div>
+        </div>
+
+        {action_required_html}
+
+        <p style="margin:24px 0 0;color:#6B7280;font-size:13px;line-height:1.6;">Thank you for being a valued partner!</p>
+        <p style="margin:4px 0 0;color:#6B7280;font-size:13px;font-weight:600;">Shopsoma Team</p>
+        """
+
+        subject = f"Order {order.order_number}: Pickup Scheduled for {item.product_title}"
+        html_content = self.email_service._wrap_email(
+            heading="Pickup Scheduled",
+            body_html=body_content,
+            preheader=f"Order {order.order_number}: Pickup scheduled for {item.product_title}"
+        )
+
+        try:
+            await self.email_service.send_email(
+                to_email=vendor.user.email,
+                to_name=vendor.business_name,
+                subject=subject,
+                html_content=html_content,
+            )
+            logger.info(f"📧 Sent item pickup notification to vendor {vendor.business_name} ({vendor.user.email}) for item {item.product_title}")
+        except Exception as e:
+            logger.error(f"Failed to send email to vendor {vendor.business_name}: {e}")
+
+        # In-app notification
+        try:
+            notification = VendorNotification(
+                vendor_id=vendor.id,
+                notification_type="item_pickup_scheduled",
+                title=f"Pickup Scheduled: {item.product_title}",
+                message=f"Pickup has been scheduled for {item.product_title} ({order.order_number}).",
+                order_id=order.id,
+                data={
+                    "order_number": order.order_number,
+                    "order_id": str(order.id),
+                    "order_item_id": str(item.id),
+                    "product_title": item.product_title,
+                    "pickup_details": {
+                        k: (v.isoformat() if isinstance(v, datetime) else v)
+                        for k, v in pickup_details.items()
+                        if v is not None
+                    },
+                },
+                email_sent=True,
+                email_sent_at=datetime.utcnow(),
+            )
+            self.db.add(notification)
+            await self.db.commit()
+        except Exception as e:
+            logger.error(f"Failed to create in-app notification for vendor {vendor.id}: {e}")
+
+        return True
 
     async def _notify_customer(
         self,
