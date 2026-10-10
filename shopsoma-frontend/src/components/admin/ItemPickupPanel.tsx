@@ -5,10 +5,11 @@
  * scheduled and collected independently of other vendors in the same order.
  */
 import { useState } from 'react';
-import MadeToOrderReadinessBadge, { MadeToOrderTag } from '../orders/MadeToOrderReadinessBadge';
+import { CheckCircle2, Clock3 } from 'lucide-react';
+import MadeToOrderReadinessBadge, { MadeToOrderTag, ReadyToWearTag } from '../orders/MadeToOrderReadinessBadge';
 import { formatReadyAt } from '../../utils/madeToOrderReadiness';
 import { formatProductionDuration, formatWorkingDaysLeft } from '../../utils/productionTracking';
-import { updatePickupStatus } from '../../services/adminOrderService';
+import { updatePickupStatus, adminMarkItemReady } from '../../services/adminOrderService';
 import type { OrderDetail, OrderItemDetail, PickupStatusUpdate } from '../../services/adminOrderService';
 
 interface ItemPickupPanelProps {
@@ -51,11 +52,20 @@ const WORKING_DAYS_TONE_CLASSES: Record<
 
 export default function ItemPickupPanel({ orderId, item, onUpdated, onSuccess, onError }: ItemPickupPanelProps) {
   const pickup = item.pickup ?? null;
-  const state = item.readiness_state ?? 'being_prepared';
-  const canSchedule = !!pickup && (state === 'ready_for_pickup' || state === 'pickup_scheduled');
+  const isMto = Boolean(
+    item.made_to_order ||
+    item.order_type === 'made_to_order' ||
+    item.order_type === 'custom'
+  );
+  const state = item.readiness_state ?? (isMto ? 'being_prepared' : (item.ready_for_pickup_at ? 'ready_for_pickup' : null));
+  const isReady = isMto
+    ? (state === 'ready_for_pickup' || state === 'pickup_scheduled' || state === 'picked_up')
+    : Boolean(item.ready_for_pickup_at || state === 'ready_for_pickup' || state === 'pickup_scheduled' || state === 'picked_up');
+  const canSchedule = !!pickup && isReady && state !== 'picked_up' && state !== 'cancelled';
 
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [markingReady, setMarkingReady] = useState(false);
   const [form, setForm] = useState({
     pickup_window_start: '',
     pickup_window_end: '',
@@ -65,6 +75,20 @@ export default function ItemPickupPanel({ orderId, item, onUpdated, onSuccess, o
     tracking_number: '',
     admin_notes: '',
   });
+
+  const handleMarkReady = async () => {
+    try {
+      setMarkingReady(true);
+      const updated = await adminMarkItemReady(orderId, item.id);
+      onUpdated(updated);
+      onSuccess(`Marked ${item.product_title} as ready for pickup. You can now schedule pickup.`);
+    } catch (err) {
+      console.error('Failed to mark item ready:', err);
+      onError(errorDetail(err, 'Failed to mark item ready for pickup'));
+    } finally {
+      setMarkingReady(false);
+    }
+  };
 
   const openEditor = () => {
     setForm({
@@ -148,47 +172,98 @@ export default function ItemPickupPanel({ orderId, item, onUpdated, onSuccess, o
       className="mt-3 rounded-lg border border-gray-200 bg-gray-50 p-3 space-y-2"
       data-testid={`item-pickup-panel-${item.id}`}
     >
-      <div className="flex flex-wrap items-center gap-2">
-        <MadeToOrderTag />
-        <MadeToOrderReadinessBadge state={state} />
-        {duration ? (
+      {isMto ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <MadeToOrderTag />
+          <MadeToOrderReadinessBadge state={state ?? 'being_prepared'} />
+          {duration ? (
+            <span
+              className="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700 border border-slate-200"
+              data-testid="mto-duration"
+            >
+              Duration: {duration}
+            </span>
+          ) : (
+            <span
+              className="inline-flex items-center rounded-full bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-500 border border-gray-200"
+              data-testid="mto-duration"
+            >
+              Duration: Not specified
+            </span>
+          )}
           <span
-            className="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700 border border-slate-200"
-            data-testid="mto-duration"
+            className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold border ${WORKING_DAYS_TONE_CLASSES[countdown.tone]}`}
+            data-testid="mto-countdown"
           >
-            Duration: {duration}
+            {countdown.text}
           </span>
-        ) : (
-          <span
-            className="inline-flex items-center rounded-full bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-500 border border-gray-200"
-            data-testid="mto-duration"
-          >
-            Duration: Not specified
-          </span>
-        )}
-        <span
-          className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold border ${WORKING_DAYS_TONE_CLASSES[countdown.tone]}`}
-          data-testid="mto-countdown"
-        >
-          {countdown.text}
-        </span>
-      </div>
-
-      {readyAt ? (
-        <p className="text-xs text-gray-600">Marked ready: {readyAt}</p>
+        </div>
       ) : (
-        <>
-          {dueDate && (
-            <p className="text-xs text-gray-500">
-              Estimated completion: {dueDate}
-            </p>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs font-semibold text-gray-700">Individual Pickup:</span>
+          {isReady ? (
+            <span
+              className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700"
+            >
+              <CheckCircle2 className="h-3.5 w-3.5" />
+              Ready for pickup
+            </span>
+          ) : (
+            <span
+              className="inline-flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-800"
+            >
+              <Clock3 className="h-3.5 w-3.5" />
+              Awaiting vendor confirmation
+            </span>
           )}
-          {state === 'being_prepared' && (
+        </div>
+      )}
+
+      {isMto ? (
+        readyAt ? (
+          <p className="text-xs text-gray-600">Marked ready: {readyAt}</p>
+        ) : (
+          <>
+            {dueDate && (
+              <p className="text-xs text-gray-500">
+                Estimated completion: {dueDate}
+              </p>
+            )}
+            {state === 'being_prepared' && (
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs text-gray-500">
+                  Waiting for {item.vendor.business_name} to mark this item ready. Pickup can be scheduled once it is ready.
+                </p>
+                <button
+                  type="button"
+                  onClick={handleMarkReady}
+                  disabled={markingReady || saving}
+                  className="px-2.5 py-1 text-xs font-medium rounded border border-[#105E53] text-[#105E53] bg-white hover:bg-[#f1f8f6] disabled:opacity-50"
+                  data-testid={`mark-ready-${item.id}`}
+                >
+                  {markingReady ? 'Marking ready...' : 'Mark Ready (Admin)'}
+                </button>
+              </div>
+            )}
+          </>
+        )
+      ) : (
+        !isReady && (
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <p className="text-xs text-gray-500">
-              Waiting for {item.vendor.business_name} to mark this item ready. Pickup can be scheduled once it is ready.
+              Awaiting vendor confirmation. Pickup can be scheduled once marked ready.
             </p>
-          )}
-        </>
+            <button
+              type="button"
+              onClick={handleMarkReady}
+              disabled={markingReady || saving}
+              className="px-2.5 py-1 text-xs font-medium rounded border border-[#105E53] text-[#105E53] bg-white hover:bg-[#f1f8f6] disabled:opacity-50"
+              data-testid={`mark-ready-${item.id}`}
+            >
+              {markingReady ? 'Marking ready...' : 'Mark Ready (Admin)'}
+            </button>
+          </div>
+        )
       )}
 
       {windowStart && (state === 'pickup_scheduled' || state === 'picked_up') && (

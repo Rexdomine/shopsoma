@@ -3,10 +3,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   updatePickupStatus: vi.fn(),
+  adminMarkItemReady: vi.fn(),
 }));
 
 vi.mock('../../services/adminOrderService', () => ({
   updatePickupStatus: mocks.updatePickupStatus,
+  adminMarkItemReady: mocks.adminMarkItemReady,
 }));
 
 import ItemPickupPanel from './ItemPickupPanel';
@@ -56,6 +58,83 @@ describe('ItemPickupPanel', () => {
     expect(screen.getByText(/Waiting for Vendor A to mark this item ready/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Schedule pickup' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Mark picked up' })).not.toBeInTheDocument();
+    expect(screen.getByTestId('mark-ready-item-a')).toBeInTheDocument();
+  });
+
+  it('allows admin to mark an unready made-to-order item ready', async () => {
+    const updatedOrder = { id: 'order-1' } as OrderDetail;
+    mocks.adminMarkItemReady.mockResolvedValue(updatedOrder);
+    const props = renderPanel(mtoItem());
+
+    const markReadyBtn = screen.getByTestId('mark-ready-item-a');
+    expect(markReadyBtn).toHaveTextContent('Mark Ready (Admin)');
+    fireEvent.click(markReadyBtn);
+
+    await waitFor(() => {
+      expect(mocks.adminMarkItemReady).toHaveBeenCalledWith('order-1', 'item-a');
+    });
+    expect(props.onUpdated).toHaveBeenCalledWith(updatedOrder);
+    expect(props.onSuccess).toHaveBeenCalledWith(expect.stringContaining('as ready for pickup'));
+  });
+
+  it('renders and schedules pickup for a ready ready-to-wear (RTW) item', async () => {
+    const updatedOrder = { id: 'order-1' } as OrderDetail;
+    mocks.updatePickupStatus.mockResolvedValue(updatedOrder);
+    const rtwItem: OrderItemDetail = {
+      ...mtoItem(),
+      id: 'rtw-item-1',
+      made_to_order: false,
+      readiness_state: 'ready_for_pickup',
+      ready_for_pickup_at: '2026-10-10T12:00:00Z',
+      pickup: { id: 'pickup-rtw-1', order_item_id: 'rtw-item-1', vendor_id: 'vendor-a', status: 'pending' },
+    };
+
+    const props = renderPanel(rtwItem);
+
+    expect(screen.getByText('Individual Pickup:')).toBeInTheDocument();
+    expect(screen.getByText('Ready for pickup')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Schedule pickup' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Schedule pickup' }));
+    fireEvent.change(screen.getByLabelText(/Pickup window start/), { target: { value: '2026-10-11T10:00' } });
+    fireEvent.change(screen.getByLabelText(/Pickup window end/), { target: { value: '2026-10-11T12:00' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save pickup' }));
+
+    await waitFor(() => {
+      expect(mocks.updatePickupStatus).toHaveBeenCalledWith(
+        'order-1',
+        'pickup-rtw-1',
+        expect.objectContaining({
+          pickup_window_start: new Date('2026-10-11T10:00').toISOString(),
+          pickup_window_end: new Date('2026-10-11T12:00').toISOString(),
+        })
+      );
+    });
+    expect(props.onUpdated).toHaveBeenCalledWith(updatedOrder);
+  });
+
+  it('allows admin to mark ready an unconfirmed RTW item', async () => {
+    const updatedOrder = { id: 'order-1' } as OrderDetail;
+    mocks.adminMarkItemReady.mockResolvedValue(updatedOrder);
+    const unconfirmedRtwItem: OrderItemDetail = {
+      ...mtoItem(),
+      id: 'rtw-item-2',
+      made_to_order: false,
+      readiness_state: 'pending_confirmation',
+      ready_for_pickup_at: null,
+      pickup: { id: 'pickup-rtw-2', order_item_id: 'rtw-item-2', vendor_id: 'vendor-a', status: 'pending' },
+    };
+
+    const props = renderPanel(unconfirmedRtwItem);
+
+    expect(screen.getByText('Awaiting vendor confirmation')).toBeInTheDocument();
+    const markReadyBtn = screen.getByTestId('mark-ready-rtw-item-2');
+    fireEvent.click(markReadyBtn);
+
+    await waitFor(() => {
+      expect(mocks.adminMarkItemReady).toHaveBeenCalledWith('order-1', 'rtw-item-2');
+    });
+    expect(props.onUpdated).toHaveBeenCalledWith(updatedOrder);
   });
 
   it('schedules a pickup for a ready item through the per-item pickup endpoint', async () => {
