@@ -6,7 +6,7 @@
  */
 import { useState } from 'react';
 import { CheckCircle2, Clock3 } from 'lucide-react';
-import MadeToOrderReadinessBadge, { MadeToOrderTag, ReadyToWearTag } from '../orders/MadeToOrderReadinessBadge';
+import MadeToOrderReadinessBadge, { MadeToOrderTag } from '../orders/MadeToOrderReadinessBadge';
 import { formatReadyAt } from '../../utils/madeToOrderReadiness';
 import { formatProductionDuration, formatWorkingDaysLeft } from '../../utils/productionTracking';
 import { updatePickupStatus, adminMarkItemReady } from '../../services/adminOrderService';
@@ -200,7 +200,6 @@ export default function ItemPickupPanel({ orderId, item, onUpdated, onSuccess, o
         </div>
       ) : (
         <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs font-semibold text-gray-700">Individual Pickup:</span>
           {isReady ? (
             <span
               className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700"

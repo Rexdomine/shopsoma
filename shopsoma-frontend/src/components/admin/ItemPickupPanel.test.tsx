@@ -86,12 +86,11 @@ describe('ItemPickupPanel', () => {
       made_to_order: false,
       readiness_state: 'ready_for_pickup',
       ready_for_pickup_at: '2026-10-10T12:00:00Z',
-      pickup: { id: 'pickup-rtw-1', order_item_id: 'rtw-item-1', vendor_id: 'vendor-a', status: 'pending' },
+      pickup: { id: 'pickup-rtw-1', order_item_id: 'rtw-item-1', vendor_id: 'vendor-a', status: 'scheduled' },
     };
 
     const props = renderPanel(rtwItem);
 
-    expect(screen.getByText('Individual Pickup:')).toBeInTheDocument();
     expect(screen.getByText('Ready for pickup')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Schedule pickup' })).toBeInTheDocument();
 
@@ -120,9 +119,9 @@ describe('ItemPickupPanel', () => {
       ...mtoItem(),
       id: 'rtw-item-2',
       made_to_order: false,
-      readiness_state: 'pending_confirmation',
+      readiness_state: null,
       ready_for_pickup_at: null,
-      pickup: { id: 'pickup-rtw-2', order_item_id: 'rtw-item-2', vendor_id: 'vendor-a', status: 'pending' },
+      pickup: { id: 'pickup-rtw-2', order_item_id: 'rtw-item-2', vendor_id: 'vendor-a', status: 'scheduled' },
     };
 
     const props = renderPanel(unconfirmedRtwItem);
