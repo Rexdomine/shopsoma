@@ -609,3 +609,122 @@ async def test_vendor_variation_edit_reverts_moderation_to_pending(
         headers=vendor_user["headers"],
     )
     assert vendor_res.status_code == 200
+
+
+# ============================================================================
+# 9. Create Single Variation (Vendor & Admin) & Combination Matrix
+# ============================================================================
+
+@pytest.mark.asyncio
+async def test_vendor_can_add_new_variation_to_matrix(
+    client: AsyncClient, vendor_user, variable_product, db_session: AsyncSession
+):
+    """Vendor can add a new variation with nested sizes via POST /{product_id}/variations."""
+    product_id = variable_product["id"]
+
+    # Register upload for emerald image and attach to product images
+    vendor_id = vendor_user["user"].id
+    emerald_key = f"vendors/{vendor_id}/products/2026/10/emerald.jpg"
+    emerald_url = f"/uploads/{emerald_key}"
+    db_session.add(ProductImageUpload(image_url=emerald_url, storage_keys=[emerald_key]))
+    db_session.add(
+        ProductImage(
+            product_id=uuid.UUID(str(product_id)),
+            image_url=emerald_url,
+            alt_text="Emerald",
+            is_primary=False,
+            display_order=5,
+            storage_keys=[emerald_key],
+        )
+    )
+    await db_session.commit()
+
+    # Initial total stock of variable_product is 10 + 15 + 8 + 12 = 45
+    product_before = await db_session.get(Product, product_id)
+    assert product_before.total_stock == 45
+
+    res = await client.post(
+        f"/api/v1/products/{product_id}/variations",
+        json={
+            "title": "Emerald Green",
+            "type": "color",
+            "color_hex": "#00AA55",
+            "price": 60.00,
+            "images": [emerald_url],
+            "sizes": [
+                {"size": "M", "stock": 10},
+                {"size": "L", "stock": 20},
+            ],
+        },
+        headers=vendor_user["headers"],
+    )
+    assert res.status_code == 201
+    data = res.json()
+    assert data["title"] == "Emerald Green"
+    assert data["color_hex"] == "#00AA55"
+    assert Decimal(str(data["price"])) == Decimal("60.00")
+    assert len(data["size_stocks"]) == 2
+
+    # Verify total_stock updated: 45 + 10 + 20 = 75
+    await db_session.refresh(product_before)
+    assert product_before.total_stock == 75
+
+    # Verify moderation status is PENDING
+    assert product_before.moderation_status == ModerationStatus.PENDING
+
+
+@pytest.mark.asyncio
+async def test_admin_can_add_new_variation_without_resetting_moderation(
+    client: AsyncClient, admin_user, vendor_user, variable_product, db_session: AsyncSession
+):
+    """Admin can add a new variation with nested sizes and keep product APPROVED."""
+    product_id = variable_product["id"]
+
+    # Set product as approved first
+    product = await db_session.get(Product, product_id)
+    product.moderation_status = ModerationStatus.APPROVED
+    product.status = ProductStatus.ACTIVE
+    await db_session.commit()
+
+    # Register upload for gold image and attach to product images
+    vendor_id = vendor_user["user"].id
+    gold_key = f"vendors/{vendor_id}/products/2026/10/gold.jpg"
+    gold_url = f"/uploads/{gold_key}"
+    db_session.add(ProductImageUpload(image_url=gold_url, storage_keys=[gold_key]))
+    db_session.add(
+        ProductImage(
+            product_id=uuid.UUID(str(product_id)),
+            image_url=gold_url,
+            alt_text="Sunset Gold",
+            is_primary=False,
+            display_order=6,
+            storage_keys=[gold_key],
+        )
+    )
+    await db_session.commit()
+
+    res = await client.post(
+        f"/api/v1/admin/products/{product_id}/variations",
+        json={
+            "title": "Sunset Gold",
+            "type": "color",
+            "color_hex": "#FFD700",
+            "price": 65.00,
+            "images": [gold_url],
+            "sizes": [
+                {"size": "S", "stock": 5},
+                {"size": "XL", "stock": 7},
+            ],
+        },
+        headers=admin_user["headers"],
+    )
+    assert res.status_code == 201
+    data = res.json()
+    assert data["title"] == "Sunset Gold"
+    assert len(data["size_stocks"]) == 2
+
+    # Verification: moderation remains APPROVED for admin edit
+    await db_session.refresh(product)
+    assert product.moderation_status == ModerationStatus.APPROVED
+    assert product.total_stock == 45 + 5 + 7
+

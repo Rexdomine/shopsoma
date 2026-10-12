@@ -498,3 +498,213 @@ async def delete_single_variation(
         await mark_product_content_pending(db=db, product_id=product.id)
 
     await db.commit()
+
+
+async def create_single_variation(
+    db: AsyncSession,
+    product: Product,
+    variation_data: Any,
+    *,
+    is_admin: bool = False,
+) -> Variation:
+    """
+    Create a new variation on an existing variable product.
+    - Validates candidate variation payload (duplicate title, prices, nested sizes, stock).
+    - Checks scoped image ownership.
+    - Instantiates Variation with stable UUID and nested SizeStock rows.
+    - Updates product.total_stock if product is variable and not made to order.
+    - Moderation safe: marks content pending if vendor action.
+    """
+    v_dict = (
+        variation_data
+        if isinstance(variation_data, dict)
+        else variation_data.model_dump(exclude_unset=True)
+    )
+
+    candidate_title = v_dict.get("title")
+    if not candidate_title or not str(candidate_title).strip():
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=[
+                {
+                    "loc": ["body", "title"],
+                    "msg": "Variation title is required",
+                    "type": "value_error",
+                }
+            ],
+        )
+
+    norm_candidate = normalize_color_value(candidate_title)
+    existing_titles = [normalize_color_value(v.title) for v in product.variations]
+    if norm_candidate in existing_titles:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=[
+                {
+                    "loc": ["body", "title"],
+                    "msg": "Variation titles must be unique after normalization",
+                    "type": "value_error",
+                }
+            ],
+        )
+
+    candidate_price = v_dict.get("price")
+    candidate_sale_price = v_dict.get("sale_price")
+    if candidate_price is not None:
+        if Decimal(str(candidate_price)) <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=[
+                    {
+                        "loc": ["body", "price"],
+                        "msg": "Price must be greater than 0",
+                        "type": "value_error",
+                    }
+                ],
+            )
+        if Decimal(str(candidate_price)) > Decimal("999999.99"):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=[
+                    {
+                        "loc": ["body", "price"],
+                        "msg": "Price cannot exceed 999,999.99",
+                        "type": "value_error",
+                    }
+                ],
+            )
+
+    effective_reg_price = candidate_price if candidate_price is not None else product.base_price
+    if candidate_sale_price is not None:
+        if Decimal(str(candidate_sale_price)) <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=[
+                    {
+                        "loc": ["body", "sale_price"],
+                        "msg": "Sale price must be greater than 0",
+                        "type": "value_error",
+                    }
+                ],
+            )
+        if Decimal(str(candidate_sale_price)) > Decimal("999999.99"):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=[
+                    {
+                        "loc": ["body", "sale_price"],
+                        "msg": "Sale price cannot exceed 999,999.99",
+                        "type": "value_error",
+                    }
+                ],
+            )
+        if effective_reg_price is not None and Decimal(str(candidate_sale_price)) >= Decimal(str(effective_reg_price)):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=[
+                    {
+                        "loc": ["body", "sale_price"],
+                        "msg": "Sale price must be less than regular price",
+                        "type": "value_error",
+                    }
+                ],
+            )
+
+    sizes_input = v_dict.get("sizes") or []
+    seen_sizes = set()
+    validated_sizes = []
+    for s_item in sizes_input:
+        s_dict = s_item if isinstance(s_item, dict) else s_item.model_dump()
+        try:
+            enum_size = normalize_size_enum(s_dict.get("size"))
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=[{"loc": ["body", "sizes"], "msg": str(exc), "type": "value_error"}],
+            ) from exc
+
+        if enum_size in seen_sizes:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=[
+                    {
+                        "loc": ["body", "sizes"],
+                        "msg": "Duplicate size options are not allowed within the same variation",
+                        "type": "value_error",
+                    }
+                ],
+            )
+        seen_sizes.add(enum_size)
+
+        stock_qty = s_dict.get("stock", 0)
+        try:
+            stock_int = int(stock_qty)
+        except (ValueError, TypeError):
+            stock_int = 0
+        if stock_int < 0:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=[
+                    {
+                        "loc": ["body", "sizes"],
+                        "msg": "Stock quantity cannot be negative",
+                        "type": "value_error",
+                    }
+                ],
+            )
+        validated_sizes.append((enum_size, stock_int))
+
+    images = v_dict.get("images") or []
+    if images:
+        try:
+            await coordinate_catalog_write(db, product_ids=[product.id], lock_only=True)
+            await lock_and_validate_variation_image_urls(db, images, product_id=product.id)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    inherits_price = v_dict.get("inherits_price", candidate_price is None)
+    inherits_sale_price = v_dict.get("inherits_sale_price", candidate_sale_price is None)
+
+    new_var = Variation(
+        product_id=product.id,
+        title=candidate_title.strip(),
+        type=v_dict.get("type", "color"),
+        color_hex=v_dict.get("color_hex"),
+        price=candidate_price if not inherits_price else None,
+        sale_price=candidate_sale_price if not inherits_sale_price else None,
+        inherits_price=inherits_price,
+        inherits_sale_price=inherits_sale_price,
+        images=images,
+        is_active=v_dict.get("is_active", True),
+    )
+    new_var.size_stocks = [
+        SizeStock(
+            variation_id=new_var.id,
+            size=enum_size,
+            stock=stock_qty,
+        )
+        for enum_size, stock_qty in validated_sizes
+    ]
+    db.add(new_var)
+    product.variations.append(new_var)
+
+    is_variable = (
+        getattr(product, "product_type", None) == ProductType.VARIABLE
+        or str(getattr(product, "product_type", "")).casefold() == "variable"
+    )
+    if is_variable and not getattr(product, "made_to_order", False):
+        product.total_stock = sum(
+            (s.stock or 0) for v in product.variations for s in getattr(v, "size_stocks", [])
+        )
+
+    if not is_admin:
+        await mark_product_content_pending(db=db, product_id=product.id)
+
+    await db.commit()
+    reloaded_result = await db.execute(
+        select(Variation)
+        .options(selectinload(Variation.size_stocks))
+        .where(Variation.id == new_var.id)
+    )
+    return reloaded_result.scalar_one()
+

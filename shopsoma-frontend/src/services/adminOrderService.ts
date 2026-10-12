@@ -9,6 +9,7 @@ import api from './api';
 // ============================================================================
 
 export type PaymentStatus = 'pending' | 'paid' | 'failed' | 'refunded';
+export type PaymentStatusScope = PaymentStatus | 'all';
 export type FulfillmentStatus =
   | 'order_received'
   | 'preparing_for_pickup'
@@ -203,7 +204,7 @@ export interface OrderFilterParams {
   page?: number;
   page_size?: number;
   search?: string;
-  payment_status?: PaymentStatus;
+  payment_status?: PaymentStatusScope;
   fulfillment_status?: FulfillmentStatus;
   vendor_id?: string;
   date_from?: string;
@@ -421,7 +422,7 @@ export const runShadowQuote = async (
  * Export orders to CSV
  */
 export const exportOrdersCSV = async (params?: {
-  payment_status?: PaymentStatus;
+  payment_status?: PaymentStatusScope;
   fulfillment_status?: FulfillmentStatus;
   date_from?: string;
   date_to?: string;

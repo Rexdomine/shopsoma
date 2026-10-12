@@ -585,6 +585,94 @@ class EmailService:
         html_content = self._wrap_email(heading, body_html, preheader)
         return await self.send_email(email, name, subject, html_content)
 
+    async def send_pending_payment_reminder_email(
+        self,
+        email: str,
+        name: str,
+        order_number: str,
+        order_date: datetime,
+        items: List[dict],
+        total: float,
+        currency: str = "NGN",
+        payment_url: Optional[str] = None,
+        order_url: Optional[str] = None,
+    ) -> bool:
+        """Send a single 24-hour reminder email for an unpaid pending checkout payment."""
+        subject = f"Complete Your Order · {order_number}"
+        heading = "Complete Your Payment"
+        preheader = f"Your Shopsoma order {order_number} is awaiting payment."
+
+        formatted_total = self._format_amount(total, currency)
+        items_table = self._build_items_table(items)
+        date_str = (
+            order_date.strftime("%d %B %Y · %I:%M %p")
+            if hasattr(order_date, "strftime")
+            else str(order_date)
+        )
+
+        cta_button_html = ""
+        if payment_url:
+            safe_payment_url = html.escape(payment_url)
+            cta_button_html = f"""
+            <div style="text-align:center;margin:32px 0 16px;">
+                <a href="{safe_payment_url}" target="_blank" rel="noopener noreferrer" style="background-color:{BRAND_PRIMARY};color:#ffffff;padding:14px 32px;text-decoration:none;border-radius:4px;font-weight:600;display:inline-block;font-size:15px;letter-spacing:0.02em;">
+                    Complete Your Payment
+                </a>
+            </div>
+            """
+
+        view_order_html = ""
+        if order_url:
+            safe_order_url = html.escape(order_url)
+            view_order_html = f"""
+            <p style="text-align:center;margin:12px 0 0;font-size:13px;color:#6B7280;">
+                Or <a href="{safe_order_url}" target="_blank" rel="noopener noreferrer" style="color:{BRAND_PRIMARY};text-decoration:underline;">view your order details</a> on Shopsoma.
+            </p>
+            """
+
+        body_html = f"""
+        <p style="font-size:16px;">Hi {name or 'there'},</p>
+        <p>We noticed that you reached checkout for order <strong>{order_number}</strong>, but your payment hasn't been completed yet. Your selected luxury pieces are waiting for you.</p>
+
+        <div style="margin:24px 0;padding:20px;border:1px solid {BRAND_BORDER};border-radius:10px;background:{BRAND_LIGHT};">
+            <p style="margin:0;"><strong>Order Number:</strong> {order_number}</p>
+            <p style="margin:4px 0;"><strong>Order Date:</strong> {date_str}</p>
+            <p style="margin:4px 0;"><strong>Total Amount:</strong> {formatted_total}</p>
+            <p style="margin:4px 0 0;"><strong>Payment Status:</strong> Payment Pending</p>
+        </div>
+
+        <table style="width:100%;border-collapse:collapse;margin-bottom:24px;">
+            <thead>
+                <tr style="background:{BRAND_LIGHT};text-transform:uppercase;font-size:12px;letter-spacing:0.15em;color:#6B7280;">
+                    <th style="padding:12px;text-align:left;">Item</th>
+                    <th style="padding:12px;text-align:center;">Qty</th>
+                    <th style="padding:12px;text-align:right;">Price</th>
+                    <th style="padding:12px;text-align:right;">Subtotal</th>
+                </tr>
+            </thead>
+            <tbody>
+                {items_table}
+            </tbody>
+        </table>
+
+        <div style="text-align:right;margin-bottom:24px;padding:12px 0;border-top:1px solid {BRAND_BORDER};">
+            <span style="font-size:14px;color:#6B7280;margin-right:12px;">Total Due:</span>
+            <span style="font-size:18px;font-weight:700;color:{BRAND_PRIMARY};">{formatted_total}</span>
+        </div>
+
+        {cta_button_html}
+        {view_order_html}
+
+        <div style="margin-top:32px;padding:16px;background:#F9FAFB;border-left:4px solid {BRAND_PRIMARY};border-radius:4px;font-size:12px;color:#6B7280;line-height:1.5;">
+            🔒 <strong>Secure checkout:</strong> This email provides a safe path back to complete payment for your order. Shopsoma will never request sensitive card details, PINs, or private account credentials via email.
+        </div>
+
+        <p style="margin-top:24px;font-size:13px;color:#6B7280;">If you have already completed payment or cancelled this order, please disregard this reminder. Need help? Contact our concierge team at support@shopsoma.com.</p>
+        """
+
+        html_content = self._wrap_email(heading, body_html, preheader)
+        return await self.send_email(email, name, subject, html_content)
+
     async def send_vendor_new_order_email(
         self,
         email: str,

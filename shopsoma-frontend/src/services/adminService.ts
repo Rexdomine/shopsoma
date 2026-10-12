@@ -484,6 +484,14 @@ export const adminService = {
     return response.data || [];
   },
 
+  async createProductVariation(
+    productId: string,
+    data: CreateProductVariationPayload
+  ): Promise<Variation> {
+    const response = await api.post(`/admin/products/${productId}/variations`, data);
+    return response.data;
+  },
+
   async updateProductVariation(
     productId: string,
     variationId: string,

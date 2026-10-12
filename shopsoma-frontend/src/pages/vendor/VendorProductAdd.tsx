@@ -22,7 +22,7 @@ import { cleanNumberString } from '../../utils/pricing';
 // EU Sizing: Numeric sizes (32-50)
 type SizeOption = 'One/Size' | 'XXXL' | 'XXL' | 'XL' | 'L' | 'M' | 'S' | 'XS' | 'XXS' | '4' | '6' | '8' | '10' | '12' | '14' | '16' | '18' | '20' | '22' | '32' | '34' | '36' | '38' | '40' | '42' | '44' | '46' | '48' | '50';
 type SizingSystem = 'One/Size' | 'US Sizing' | 'UK Sizing' | 'EU Sizing';
-type VariationMode = 'Size' | 'Color';
+type VariationMode = 'Combination' | 'Color' | 'Size';
 
 const SIZE_STOCK_OPTIONS = new Set<SizeOption>(['XXXL', 'XXL', 'XL', 'L', 'M', 'S', 'XS', 'XXS', 'One/Size']);
 type ColorMode = 'solid' | 'multi' | 'none';
@@ -183,7 +183,7 @@ export default function VendorProductAdd() {
 
   // Variation modal form state (controlled inputs)
   const [variationName, setVariationName] = useState('');
-  const [variationType, setVariationType] = useState<VariationMode>('Color');
+  const [variationType, setVariationType] = useState<VariationMode>('Combination');
   const [variationHasDifferentPricing, setVariationHasDifferentPricing] = useState(false);
   const [variationPrice, setVariationPrice] = useState('');
   const [variationSalesPrice, setVariationSalesPrice] = useState('');
@@ -346,7 +346,7 @@ export default function VendorProductAdd() {
     } else {
       // Reset form for new variation
       setVariationName('');
-      setVariationType('Color');
+      setVariationType('Combination');
       setVariationHasDifferentPricing(false);
       setVariationPrice('');
       setVariationSalesPrice('');
@@ -369,11 +369,15 @@ export default function VendorProductAdd() {
       setVariationSizeStock({} as Record<SizeOption, string>);
       return;
     }
-    setVariationColorMode('solid');
-    setVariationColorLabel('');
-    setVariationColor('#000000');
-    setVariationColorHex('#000000');
-    setVariationColorStock('');
+    if (variationType === 'Size') {
+      setVariationColorMode('solid');
+      setVariationColorLabel('');
+      setVariationColor('#000000');
+      setVariationColorHex('#000000');
+      setVariationColorStock('');
+      return;
+    }
+    // If Combination, preserve both color settings and size selections
   }, [variationType]);
 
   useEffect(() => {
@@ -388,7 +392,7 @@ export default function VendorProductAdd() {
   }, [colorMode, colorLabel]);
 
   useEffect(() => {
-    if (variationType !== 'Color') {
+    if (variationType === 'Size') {
       return;
     }
 
@@ -722,14 +726,19 @@ export default function VendorProductAdd() {
 
   // Validate and save variation
   const handleSaveVariation = () => {
-    // Validation
-    if (variationType === 'Size' && !variationName.trim()) {
-      warning('Variation name is required');
-      return;
-    }
+    const resolvedVariationColorLabel = getResolvedColorLabel(variationColorMode, variationColorLabel);
+    const effectiveName = variationType === 'Size'
+      ? variationName.trim()
+      : (resolvedVariationColorLabel || variationName.trim());
 
+    // Validation
     if (variationType === 'Size') {
-      if (variationSelectedSizes.length === 0) {
+      if (!variationName.trim()) {
+        warning('Variation name is required');
+        return;
+      }
+
+      if (variationSizingSystem !== 'One/Size' && variationSelectedSizes.length === 0) {
         warning('Please select at least one size');
         return;
       }
@@ -743,9 +752,7 @@ export default function VendorProductAdd() {
           }
         }
       }
-    } else {
-      const resolvedVariationColorLabel = getResolvedColorLabel(variationColorMode, variationColorLabel);
-
+    } else if (variationType === 'Color') {
       if (!resolvedVariationColorLabel) {
         warning('Please provide a color label for this variation');
         return;
@@ -755,6 +762,45 @@ export default function VendorProductAdd() {
         warning('Invalid stock value for color');
         return;
       }
+    } else {
+      // Combination variation (Color + Size options)
+      if (!resolvedVariationColorLabel) {
+        warning('Please provide a color label for this combination');
+        return;
+      }
+
+      if (!madeToOrder) {
+        if (variationSizingSystem === 'One/Size' || variationSelectedSizes.length === 0) {
+          const stockVal = variationColorStock || variationSizeStock['One/Size'];
+          if (stockVal && (isNaN(parseInt(stockVal)) || parseInt(stockVal) < 0)) {
+            warning('Invalid stock value for One/Size');
+            return;
+          }
+        } else {
+          for (const size of variationSelectedSizes) {
+            const stockValue = variationSizeStock[size];
+            if (stockValue && (isNaN(parseInt(stockValue)) || parseInt(stockValue) < 0)) {
+              warning(`Invalid stock value for size ${size}`);
+              return;
+            }
+          }
+        }
+      }
+    }
+
+    if (!effectiveName) {
+      warning('Please provide a valid variation label');
+      return;
+    }
+
+    // Check for duplicate labels
+    const isDuplicate = detailedVariations.some(
+      (v) => v.id !== (editingVariation ? editingVariation.id : null) &&
+             v.name.trim().toLowerCase() === effectiveName.toLowerCase()
+    );
+    if (isDuplicate) {
+      warning(`A variation labeled "${effectiveName}" already exists. Each variation must have a unique label.`);
+      return;
     }
 
     // Validate price if different pricing is enabled
@@ -800,18 +846,26 @@ export default function VendorProductAdd() {
 
     const newVariation: DetailedVariation = {
       id: editingVariation ? editingVariation.id : Date.now().toString(),
-      name: variationType === 'Color' ? getResolvedColorLabel(variationColorMode, variationColorLabel) : variationName,
+      name: effectiveName,
       type: variationType,
       hasDifferentPricing: variationHasDifferentPricing,
       price: cleanNumberString(variationPrice),
       salesPrice: cleanNumberString(variationSalesPrice),
-      colorMode: variationColorMode,
-      colorLabel: getResolvedColorLabel(variationColorMode, variationColorLabel),
-      colorHex: variationColorMode === 'solid' ? variationColorHex : '#000000',
+      colorMode: variationType === 'Size' ? 'solid' : variationColorMode,
+      colorLabel: variationType === 'Size' ? '' : resolvedVariationColorLabel,
+      colorHex: (variationType !== 'Size' && variationColorMode === 'solid') ? variationColorHex : '#000000',
       colorStock: variationColorStock,
       sizingSystem: variationSizingSystem,
-      selectedSizes: variationSelectedSizes,
-      sizeStock: variationSizeStock,
+      selectedSizes: variationType === 'Color'
+        ? []
+        : (variationSizingSystem === 'One/Size' || variationSelectedSizes.length === 0
+            ? ['One/Size' as SizeOption]
+            : variationSelectedSizes),
+      sizeStock: variationType === 'Color'
+        ? ({} as Record<SizeOption, string>)
+        : (variationSizingSystem === 'One/Size' || variationSelectedSizes.length === 0
+            ? ({ 'One/Size': variationColorStock || variationSizeStock['One/Size'] || '0' } as Record<SizeOption, string>)
+            : variationSizeStock),
       images: orderedVariationImages,
     };
 
@@ -839,22 +893,19 @@ export default function VendorProductAdd() {
       return;
     }
 
-    const activeColorVariations = detailedVariations.filter(
-      (variation) => variation.type === 'Color'
-    );
-    const activeSizeVariations = detailedVariations.filter(
-      (variation) => variation.type === 'Size'
-    );
-    if (
-      productType === 'variable' &&
-      activeColorVariations.length > 0 &&
-      activeSizeVariations.length > 0
-    ) {
-      warning(
-        'Color and size variations cannot be combined yet. Create explicit variants instead.',
-        'Unsupported variation combination'
-      );
-      return;
+    if (productType === 'variable') {
+      const seenVariationTitles = new Set<string>();
+      for (const variation of detailedVariations) {
+        const titleKey = (variation.name || variation.colorLabel || '').trim().toLowerCase();
+        if (seenVariationTitles.has(titleKey)) {
+          warning(
+            `Duplicate variation "${variation.name || variation.colorLabel}". Each variation must have a unique title or color.`,
+            'Duplicate Variation'
+          );
+          return;
+        }
+        seenVariationTitles.add(titleKey);
+      }
     }
     if (!primaryCategoryId) {
       warning('Primary category is required', 'Missing info');
@@ -951,6 +1002,28 @@ export default function VendorProductAdd() {
           : undefined;
       const parsedStockAmount = parseInt(stockAmount || '0', 10) || 0;
       const shouldTrackStock = !madeToOrder;
+
+      let totalVariableStock = 0;
+      if (shouldTrackStock && productType === 'variable') {
+        detailedVariations.forEach((v) => {
+          if (v.type === 'Color') {
+            totalVariableStock += parseInt(v.colorStock || '0', 10) || 0;
+          } else if (v.type === 'Size') {
+            v.selectedSizes.forEach((sz) => {
+              totalVariableStock += parseInt(v.sizeStock[sz] || '0', 10) || 0;
+            });
+          } else if (v.type === 'Combination') {
+            if (v.sizingSystem === 'One/Size') {
+              totalVariableStock += parseInt(v.colorStock || v.sizeStock['One/Size'] || '0', 10) || 0;
+            } else {
+              v.selectedSizes.forEach((sz) => {
+                totalVariableStock += parseInt(v.sizeStock[sz] || '0', 10) || 0;
+              });
+            }
+          }
+        });
+      }
+
       const resolvedCategoryId = childCategoryId || subcategoryId || primaryCategoryId;
       const uploadedImages =
         productType === 'single'
@@ -978,7 +1051,9 @@ export default function VendorProductAdd() {
         base_price: basePrice,
         compare_at_price: compareAtPrice,
         currency: productCurrency,
-        total_stock: shouldTrackStock ? parsedStockAmount : 0,
+        total_stock: shouldTrackStock
+          ? (productType === 'variable' ? totalVariableStock : parsedStockAmount)
+          : 0,
         status: 'draft',
         is_featured: false,
         product_type: productType,
@@ -1010,7 +1085,6 @@ export default function VendorProductAdd() {
           is_available: shouldTrackStock ? parsedStockAmount > 0 : true,
         }));
       } else {
-        const variantPayload: NonNullable<CreateProductPayload['variants']> = [];
         const variationPayload: NonNullable<CreateProductPayload['variations']> = [];
 
         detailedVariations.forEach((variation) => {
@@ -1041,11 +1115,10 @@ export default function VendorProductAdd() {
             : validInheritedSalePrice;
           const inheritsRegularPrice = !hasCustomRegularPrice;
           const inheritsSalePrice = !hasCustomSalePrice;
-          const variationBasePrice = variationSalePrice ?? variationRegularPrice;
+
           if (variation.type === 'Color') {
-            const colorStock = shouldTrackStock ? parseInt(variation.colorStock || '0', 10) || 0 : 0;
             variationPayload.push({
-              title: variation.colorLabel,
+              title: variation.colorLabel || variation.name,
               type: variation.colorMode,
               color_hex: variation.colorMode === 'solid' ? variation.colorHex || undefined : undefined,
               price: variationRegularPrice,
@@ -1058,49 +1131,68 @@ export default function VendorProductAdd() {
               is_active: true,
               sizes: [],
             });
-            variantPayload.push({
-              color: variation.colorLabel,
+            return;
+          }
+
+          if (variation.type === 'Combination') {
+            const effectiveSizes = variation.sizingSystem === 'One/Size'
+              ? (['One/Size'] as SizeOption[])
+              : variation.selectedSizes;
+
+            const nestedSizes = effectiveSizes
+              .filter((sz) => SIZE_STOCK_OPTIONS.has(sz))
+              .map((sz) => {
+                const stockVal = variation.sizingSystem === 'One/Size'
+                  ? (variation.colorStock || variation.sizeStock['One/Size'] || '0')
+                  : (variation.sizeStock[sz] || '0');
+                return {
+                  size: sz,
+                  stock: shouldTrackStock ? (parseInt(stockVal, 10) || 0) : 0,
+                };
+              });
+
+            variationPayload.push({
+              title: variation.colorLabel || variation.name,
+              type: variation.colorMode,
               color_hex: variation.colorMode === 'solid' ? variation.colorHex || undefined : undefined,
-              price: variationBasePrice,
-              stock: colorStock,
-              is_available: shouldTrackStock ? colorStock > 0 : true,
+              price: variationRegularPrice,
+              sale_price: variationSalePrice,
+              inherits_price: inheritsRegularPrice,
+              inherits_sale_price: inheritsSalePrice,
+              images: variation.images
+                .filter((image) => image.uploaded && image.imageUrl)
+                .map((image) => image.imageUrl!),
+              is_active: true,
+              sizes: nestedSizes,
             });
             return;
           }
 
-          variation.selectedSizes.forEach((size) => {
-            const sizeStock = shouldTrackStock ? parseInt(variation.sizeStock[size] || '0', 10) || 0 : 0;
-            if (variation.type === 'Size') {
-              variationPayload.push({
-                title: size,
-                type: 'size',
-                price: variationRegularPrice,
-                sale_price: variationSalePrice,
-                inherits_price: inheritsRegularPrice,
-                inherits_sale_price: inheritsSalePrice,
-                images: variation.images
-                  .filter((image) => image.uploaded && image.imageUrl)
-                  .map((image) => image.imageUrl!),
-                is_active: true,
-                sizes: SIZE_STOCK_OPTIONS.has(size) ? [{ size, stock: sizeStock }] : [],
-              });
-            }
-            if (!SIZE_STOCK_OPTIONS.has(size)) {
-              variantPayload.push({
-                size,
-                price: variationBasePrice,
-                stock: sizeStock,
-                is_available: shouldTrackStock ? sizeStock > 0 : true,
-              });
-            }
+          // Size-only variation
+          const nestedSizes = variation.selectedSizes
+            .filter((sz) => SIZE_STOCK_OPTIONS.has(sz))
+            .map((sz) => ({
+              size: sz,
+              stock: shouldTrackStock ? (parseInt(variation.sizeStock[sz] || '0', 10) || 0) : 0,
+            }));
+
+          variationPayload.push({
+            title: variation.name || variation.selectedSizes.join(', '),
+            type: 'size',
+            price: variationRegularPrice,
+            sale_price: variationSalePrice,
+            inherits_price: inheritsRegularPrice,
+            inherits_sale_price: inheritsSalePrice,
+            images: variation.images
+              .filter((image) => image.uploaded && image.imageUrl)
+              .map((image) => image.imageUrl!),
+            is_active: true,
+            sizes: nestedSizes,
           });
         });
 
         if (variationPayload.length > 0) {
           payload.variations = variationPayload;
-        }
-        if (variantPayload.length > 0) {
-          payload.variants = variantPayload;
         }
       }
 
@@ -2032,64 +2124,206 @@ export default function VendorProductAdd() {
                   {/* List of existing variations */}
                   {detailedVariations.length > 0 ? (
                     <div className="space-y-3">
-                      {detailedVariations.map((variation) => (
-                        <div
-                          key={variation.id}
-                          className="flex items-center justify-between p-4 border border-gray-200 rounded-lg hover:border-gray-300 transition"
-                        >
-                          <div className="flex-1">
-                            <div className="flex items-center gap-3">
-                              {variation.type === 'Color' && variation.colorMode === 'solid' ? (
-                                <div
-                                  className="w-6 h-6 rounded-full border border-gray-300"
-                                  style={{ backgroundColor: variation.colorHex }}
-                                />
-                              ) : variation.type === 'Color' ? (
-                                <span className="rounded-full border border-gray-200 bg-gray-50 px-3 py-1 text-xs font-medium text-gray-600">
-                                  {variation.colorLabel}
-                                </span>
-                              ) : (
-                                <div className="w-6 h-6 rounded-full border border-dashed border-gray-300 bg-gray-50" />
-                              )}
-                              <div>
-                                <p className="font-medium text-gray-900">
-                                  {variation.type === 'Color' ? variation.colorLabel : variation.name}
-                                </p>
-                                <p className="text-sm text-gray-500">
-                                  {variation.type} • {variation.type === 'Size'
-                                    ? `${variation.selectedSizes.join(', ')} • Stock: ${Object.values(variation.sizeStock).reduce((acc, val) => acc + (parseInt(val) || 0), 0)}`
-                                    : `Stock: ${parseInt(variation.colorStock || '0', 10) || 0}`}
-                                </p>
+                      {detailedVariations.map((variation) => {
+                        const totalVariationStock = variation.type === 'Color'
+                          ? (parseInt(variation.colorStock || '0', 10) || 0)
+                          : variation.type === 'Combination' && variation.sizingSystem === 'One/Size'
+                            ? (parseInt(variation.colorStock || variation.sizeStock['One/Size'] || '0', 10) || 0)
+                            : Object.values(variation.sizeStock).reduce((acc, val) => acc + (parseInt(val, 10) || 0), 0);
+
+                        const imagesCount = variation.images.filter((img) => img.uploaded && img.imageUrl).length;
+
+                        return (
+                          <div
+                            key={variation.id}
+                            className="flex items-center justify-between p-4 border border-gray-200 rounded-lg hover:border-gray-300 transition"
+                          >
+                            <div className="flex-1">
+                              <div className="flex items-center gap-3">
+                                {variation.type !== 'Size' && variation.colorMode === 'solid' ? (
+                                  <div
+                                    className="w-6 h-6 rounded-full border border-gray-300 shrink-0"
+                                    style={{ backgroundColor: variation.colorHex }}
+                                  />
+                                ) : variation.type !== 'Size' ? (
+                                  <span className="rounded-full border border-gray-200 bg-gray-50 px-3 py-1 text-xs font-medium text-gray-600 shrink-0">
+                                    {variation.colorLabel || 'No color'}
+                                  </span>
+                                ) : (
+                                  <div className="w-6 h-6 rounded-full border border-dashed border-gray-300 bg-gray-50 shrink-0" />
+                                )}
+                                <div>
+                                  <p className="font-medium text-gray-900">
+                                    {variation.type === 'Color' ? variation.colorLabel : (variation.colorLabel || variation.name)}
+                                  </p>
+                                  <p className="text-sm text-gray-500">
+                                    <span className="font-medium text-gray-700">{variation.type}</span>
+                                    {variation.hasDifferentPricing && variation.price && (
+                                      <span> • {currencySymbol}{parseFloat(variation.price).toFixed(2)}</span>
+                                    )}
+                                    {variation.type === 'Combination' ? (
+                                      variation.sizingSystem === 'One/Size'
+                                        ? ` • One/Size • Stock: ${totalVariationStock}`
+                                        : ` • ${variation.selectedSizes.map((s) => `${s} (${variation.sizeStock[s] || 0})`).join(', ')} • Total Stock: ${totalVariationStock}`
+                                    ) : variation.type === 'Size' ? (
+                                      ` • ${variation.selectedSizes.map((s) => `${s} (${variation.sizeStock[s] || 0})`).join(', ')} • Total Stock: ${totalVariationStock}`
+                                    ) : (
+                                      ` • Stock: ${totalVariationStock}`
+                                    )}
+                                    {imagesCount > 0 && <span> • {imagesCount} image{imagesCount > 1 ? 's' : ''}</span>}
+                                  </p>
+                                </div>
                               </div>
                             </div>
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setEditingVariation(variation);
+                                  setShowVariationModal(true);
+                                }}
+                                className="p-2 text-gray-600 hover:text-[#105E53] transition"
+                              >
+                                <Edit2 className="w-4 h-4" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setDetailedVariations(detailedVariations.filter((v) => v.id !== variation.id));
+                                }}
+                                className="p-2 text-gray-600 hover:text-red-600 transition"
+                              >
+                                <X className="w-4 h-4" />
+                              </button>
+                            </div>
                           </div>
-                          <div className="flex items-center gap-2">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setEditingVariation(variation);
-                                setShowVariationModal(true);
-                              }}
-                              className="p-2 text-gray-600 hover:text-[#105E53] transition"
-                            >
-                              <Edit2 className="w-4 h-4" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setDetailedVariations(detailedVariations.filter(v => v.id !== variation.id));
-                              }}
-                              className="p-2 text-gray-600 hover:text-red-600 transition"
-                            >
-                              <X className="w-4 h-4" />
-                            </button>
-                          </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   ) : (
                     <div className="text-center py-8 text-gray-500">
                       <p className="text-sm">No variations added yet. Click "Add Variation" to create one.</p>
+                    </div>
+                  )}
+
+                  {/* Sellable Combinations Matrix Preview */}
+                  {detailedVariations.length > 0 && (
+                    <div className="mt-6 border-t border-gray-200 pt-6">
+                      <div className="mb-4">
+                        <h3 className="text-sm font-semibold text-gray-900">Sellable Combinations Matrix</h3>
+                        <p className="text-xs text-gray-500">
+                          Active product combinations generated from your variations. Customers will purchase these distinct options.
+                        </p>
+                      </div>
+                      <div className="overflow-x-auto rounded-lg border border-gray-200">
+                        <table className="min-w-full divide-y divide-gray-200 text-left text-xs">
+                          <thead className="bg-gray-50 text-gray-700 font-medium">
+                            <tr>
+                              <th className="px-4 py-3">Combination</th>
+                              <th className="px-4 py-3">Color</th>
+                              <th className="px-4 py-3">Size</th>
+                              <th className="px-4 py-3">Price</th>
+                              <th className="px-4 py-3">Stock</th>
+                              <th className="px-4 py-3">Images</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-100 bg-white">
+                            {detailedVariations.flatMap((variation) => {
+                              const varPrice = variation.hasDifferentPricing && variation.price
+                                ? `${currencySymbol}${parseFloat(cleanNumberString(variation.price)).toFixed(2)}`
+                                : `${currencySymbol}${productPrice ? parseFloat(cleanNumberString(productPrice)).toFixed(2) : '0.00'} (Base)`;
+
+                              const varImagesCount = variation.images.filter((img) => img.uploaded && img.imageUrl).length;
+
+                              if (variation.type === 'Combination') {
+                                const sizesList = variation.sizingSystem === 'One/Size'
+                                  ? (['One/Size'] as SizeOption[])
+                                  : variation.selectedSizes;
+
+                                return sizesList.map((size) => {
+                                  const stockVal = madeToOrder
+                                    ? 'Made to Order'
+                                    : variation.sizingSystem === 'One/Size'
+                                      ? (variation.colorStock || variation.sizeStock['One/Size'] || '0')
+                                      : (variation.sizeStock[size] || '0');
+
+                                  return (
+                                    <tr key={`${variation.id}-${size}`} className="hover:bg-gray-50/50">
+                                      <td className="px-4 py-3 font-medium text-gray-900">
+                                        {variation.colorLabel || variation.name} / {size}
+                                      </td>
+                                      <td className="px-4 py-3">
+                                        <div className="flex items-center gap-2">
+                                          {variation.colorMode === 'solid' && (
+                                            <span
+                                              className="inline-block h-3.5 w-3.5 rounded-full border border-gray-300"
+                                              style={{ backgroundColor: variation.colorHex }}
+                                            />
+                                          )}
+                                          <span className="text-gray-700">{variation.colorLabel || 'No color'}</span>
+                                        </div>
+                                      </td>
+                                      <td className="px-4 py-3 text-gray-700">{size}</td>
+                                      <td className="px-4 py-3 text-gray-700">{varPrice}</td>
+                                      <td className="px-4 py-3 font-semibold text-gray-900">{stockVal}</td>
+                                      <td className="px-4 py-3 text-gray-500">{varImagesCount} image{varImagesCount !== 1 ? 's' : ''}</td>
+                                    </tr>
+                                  );
+                                });
+                              }
+
+                              if (variation.type === 'Color') {
+                                const stockVal = madeToOrder
+                                  ? 'Made to Order'
+                                  : (variation.colorStock || '0');
+
+                                return [
+                                  <tr key={`${variation.id}-color`} className="hover:bg-gray-50/50">
+                                    <td className="px-4 py-3 font-medium text-gray-900">
+                                      {variation.colorLabel || variation.name}
+                                    </td>
+                                    <td className="px-4 py-3">
+                                      <div className="flex items-center gap-2">
+                                        {variation.colorMode === 'solid' && (
+                                          <span
+                                            className="inline-block h-3.5 w-3.5 rounded-full border border-gray-300"
+                                            style={{ backgroundColor: variation.colorHex }}
+                                          />
+                                        )}
+                                        <span className="text-gray-700">{variation.colorLabel || 'No color'}</span>
+                                      </div>
+                                    </td>
+                                    <td className="px-4 py-3 text-gray-400">—</td>
+                                    <td className="px-4 py-3 text-gray-700">{varPrice}</td>
+                                    <td className="px-4 py-3 font-semibold text-gray-900">{stockVal}</td>
+                                    <td className="px-4 py-3 text-gray-500">{varImagesCount} image{varImagesCount !== 1 ? 's' : ''}</td>
+                                  </tr>,
+                                ];
+                              }
+
+                              // Size only
+                              return variation.selectedSizes.map((size) => {
+                                const stockVal = madeToOrder
+                                  ? 'Made to Order'
+                                  : (variation.sizeStock[size] || '0');
+
+                                return (
+                                  <tr key={`${variation.id}-${size}`} className="hover:bg-gray-50/50">
+                                    <td className="px-4 py-3 font-medium text-gray-900">
+                                      {variation.name} - {size}
+                                    </td>
+                                    <td className="px-4 py-3 text-gray-400">—</td>
+                                    <td className="px-4 py-3 text-gray-700">{size}</td>
+                                    <td className="px-4 py-3 text-gray-700">{varPrice}</td>
+                                    <td className="px-4 py-3 font-semibold text-gray-900">{stockVal}</td>
+                                    <td className="px-4 py-3 text-gray-500">{varImagesCount} image{varImagesCount !== 1 ? 's' : ''}</td>
+                                  </tr>
+                                );
+                              });
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -2133,13 +2367,13 @@ export default function VendorProductAdd() {
                       {/* Variation Name */}
                       <div>
                         <label className="block text-sm font-medium text-gray-700 mb-2">
-                          {variationType === 'Color' ? 'Internal Variation Name' : 'Variation Name *'}
+                          {variationType === 'Size' ? 'Variation Name *' : 'Variation Label / Name'}
                         </label>
                         <input
                           type="text"
                           value={variationName}
                           onChange={(e) => setVariationName(e.target.value)}
-                          placeholder={variationType === 'Color' ? 'Optional internal name' : 'E.g., Red Large'}
+                          placeholder={variationType === 'Size' ? 'E.g., Large' : 'E.g., Black or Red Floral (optional if color label provided)'}
                           className="w-full rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
                         />
                       </div>
@@ -2154,8 +2388,9 @@ export default function VendorProductAdd() {
                           onChange={(e) => setVariationType(e.target.value as VariationMode)}
                           className="w-full rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20"
                         >
-                          <option value="Color">Color</option>
-                          <option value="Size">Size</option>
+                          <option value="Combination">Combination (Color + Sizes)</option>
+                          <option value="Color">Color Only</option>
+                          <option value="Size">Size Only</option>
                         </select>
                       </div>
 
@@ -2231,7 +2466,7 @@ export default function VendorProductAdd() {
                           </select>
                         </div>
 
-                        {variationType === 'Color' && variationColorMode !== 'none' && (
+                        {variationType !== 'Size' && variationColorMode !== 'none' && (
                           <div>
                             <label className="block text-sm font-medium text-gray-700 mb-2">
                               Color Label *
@@ -2246,7 +2481,7 @@ export default function VendorProductAdd() {
                           </div>
                         )}
 
-                        {variationType === 'Color' && variationColorMode === 'solid' && (
+                        {variationType !== 'Size' && variationColorMode === 'solid' && (
                           <div>
                             <label className="block text-sm font-medium text-gray-700 mb-2">
                               Solid Color Swatch
@@ -2269,32 +2504,34 @@ export default function VendorProductAdd() {
                           </div>
                         )}
 
-                        {variationType === 'Color' && variationColorMode === 'none' && (
+                        {variationType !== 'Size' && variationColorMode === 'none' && (
                           <p className="rounded-lg border border-dashed border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-500">
                             Customers will see this option as <span className="font-medium text-gray-700">No color</span>.
                           </p>
                         )}
                       </div>
 
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-2">
-                          Stock per Color
-                        </label>
-                        <input
-                          type="number"
-                          min="0"
-                          value={variationColorStock}
-                          onChange={(e) => setVariationColorStock(e.target.value)}
-                          disabled={variationType === 'Size' || madeToOrder}
-                          placeholder={madeToOrder ? 'Disabled for made-to-order' : '0'}
-                          className="w-full rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20 disabled:opacity-50 disabled:cursor-not-allowed"
-                        />
-                        {madeToOrder && (
-                          <p className="mt-2 text-xs text-gray-500">
-                            Stock tracking is off for made-to-order variations.
-                          </p>
-                        )}
-                      </div>
+                      {(variationType === 'Color' || (variationType === 'Combination' && variationSizingSystem === 'One/Size')) && (
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-2">
+                            {variationSizingSystem === 'One/Size' ? 'Stock for One/Size' : 'Stock per Color'}
+                          </label>
+                          <input
+                            type="number"
+                            min="0"
+                            value={variationColorStock}
+                            onChange={(e) => setVariationColorStock(e.target.value)}
+                            disabled={madeToOrder}
+                            placeholder={madeToOrder ? 'Disabled for made-to-order' : '0'}
+                            className="w-full rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm focus:outline-none focus:border-[#105E53] focus:ring-2 focus:ring-[#105E53]/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                          />
+                          {madeToOrder && (
+                            <p className="mt-2 text-xs text-gray-500">
+                              Stock tracking is off for made-to-order variations.
+                            </p>
+                          )}
+                        </div>
+                      )}
 
                       {/* Variation Sizing System */}
                       <div>

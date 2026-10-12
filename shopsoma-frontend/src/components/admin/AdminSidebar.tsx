@@ -18,6 +18,7 @@ import {
   Store,
   Menu,
   X,
+  Clock,
 } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
@@ -42,7 +43,8 @@ export default function AdminSidebar({ activeSection, activePrimary, mobileStack
       { label: 'Vendor Applications', route: '/admin/vendor-applications', icon: 'applications', section: 'vendor-applications' },
       { label: 'Vendors', route: ROUTES.ADMIN_VENDORS, icon: 'vendors', section: 'vendors' },
       { label: 'Users', route: ROUTES.ADMIN_USERS, icon: 'users', section: 'users' },
-      { label: 'Orders', route: '/admin/orders', icon: 'orders', section: 'orders' },
+      { label: 'Orders Received', route: '/admin/orders', icon: 'orders', section: 'orders' },
+      { label: 'Pending Payments', route: '/admin/orders?payment_status=pending', icon: 'orders-pending', section: 'orders-pending' },
       { label: 'Returns', route: ROUTES.ADMIN_RETURNS, icon: 'returns', section: 'returns' },
       { label: 'Products', route: ROUTES.ADMIN_PRODUCTS, icon: 'products', section: 'products' },
       { label: 'Categories', route: ROUTES.ADMIN_CATEGORIES, icon: 'categories', section: 'categories' },
@@ -68,6 +70,8 @@ export default function AdminSidebar({ activeSection, activePrimary, mobileStack
         return <UserIcon className={className} />;
       case 'orders':
         return <ShoppingCart className={className} />;
+      case 'orders-pending':
+        return <Clock className={className} />;
       case 'returns':
         return <Package className={className} />;
       case 'products':
@@ -105,9 +109,11 @@ export default function AdminSidebar({ activeSection, activePrimary, mobileStack
   };
 
   // Determine active section from current path
-  const currentSection = activeSection || mainNav.find(item =>
-    location.pathname.startsWith(item.route)
-  )?.section;
+  const currentSection = activeSection || (
+    location.pathname === '/admin/orders'
+      ? (location.search.includes('payment_status=pending') ? 'orders-pending' : 'orders')
+      : mainNav.find(item => location.pathname.startsWith(item.route))?.section
+  );
 
   return (
     <>

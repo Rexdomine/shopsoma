@@ -4,6 +4,7 @@ from celery import Celery
 
 from app.core.config import Settings, settings
 from app.tasks.checkout_outbox import dispatch_checkout_outbox
+from app.tasks.pending_payment_reminders import dispatch_pending_payment_reminders
 from app.tasks.product_image_storage_cleanup import reconcile_product_image_storage_cleanup
 
 
@@ -50,6 +51,10 @@ celery_app.conf.update(
             "task": "app.tasks.product_image_storage_cleanup.reconcile_product_image_storage_cleanup",
             "schedule": 60.0,
         },
+        "dispatch-pending-payment-reminders": {
+            "task": "app.tasks.pending_payment_reminders.dispatch_pending_payment_reminders",
+            "schedule": 300.0,
+        },
     },
 )
 celery_app.task(
@@ -60,3 +65,7 @@ celery_app.task(
     name="app.tasks.product_image_storage_cleanup.reconcile_product_image_storage_cleanup",
     ignore_result=True,
 )(reconcile_product_image_storage_cleanup)
+celery_app.task(
+    name="app.tasks.pending_payment_reminders.dispatch_pending_payment_reminders",
+    ignore_result=True,
+)(dispatch_pending_payment_reminders)

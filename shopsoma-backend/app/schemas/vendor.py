@@ -61,6 +61,15 @@ class VendorOnboardingRequest(BaseModel):
     bank_account_number: Optional[str] = None
     bank_account_name: Optional[str] = None
 
+    @field_validator("business_name")
+    @classmethod
+    def validate_business_name(cls, v: str) -> str:
+        if v is not None:
+            v = v.strip()
+            if len(v) < 2 or len(v) > 255:
+                raise ValueError("Business name must be between 2 and 255 characters")
+        return v
+
 
 class VendorKYCSubmission(BaseModel):
     """Vendor KYC document submission"""
@@ -77,6 +86,15 @@ class VendorProfileUpdate(BaseModel):
     bank_name: Optional[str] = None
     bank_account_number: Optional[str] = None
     bank_account_name: Optional[str] = None
+
+    @field_validator("business_name")
+    @classmethod
+    def validate_business_name(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None:
+            v = v.strip()
+            if len(v) < 2 or len(v) > 255:
+                raise ValueError("Business name must be between 2 and 255 characters")
+        return v
 
 
 class VendorBrandInfoUpdate(BaseModel):
