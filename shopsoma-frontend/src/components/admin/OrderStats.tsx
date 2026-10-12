@@ -2,12 +2,13 @@
  * Order Statistics Component
  * Display order metrics for admin dashboard
  */
-import type { OrderStats as OrderStatsType } from '../../services/adminOrderService';
+import type { OrderStats as OrderStatsType, PaymentStatusScope } from '../../services/adminOrderService';
 import { useCurrency } from '../../hooks/useCurrency';
 
 interface OrderStatsProps {
   stats: OrderStatsType | null;
   loading?: boolean;
+  onSelectPaymentStatus?: (status: PaymentStatusScope) => void;
 }
 
 interface StatCard {
@@ -18,7 +19,7 @@ interface StatCard {
   icon: string;
 }
 
-function OrderStatsComponent({ stats, loading }: OrderStatsProps) {
+function OrderStatsComponent({ stats, loading, onSelectPaymentStatus }: OrderStatsProps) {
   const { formatBasePrice } = useCurrency();
 
   if (loading) {
@@ -127,23 +128,47 @@ function OrderStatsComponent({ stats, loading }: OrderStatsProps) {
       {/* Payment Status Info */}
       {(stats.pending_payment > 0 || stats.failed_payment > 0) && (
         <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-6">
-          <div className="flex flex-col sm:flex-row sm:items-start gap-3">
-            <span className="text-amber-600 text-xl shrink-0">⚠️</span>
-            <div className="flex-1 min-w-0">
-              <h3 className="font-medium text-amber-900 mb-1">Payment Attention Required</h3>
-              <p className="text-sm text-amber-700 flex flex-wrap gap-x-4 gap-y-1">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-start gap-3 min-w-0">
+              <span className="text-amber-600 text-xl shrink-0">⚠️</span>
+              <div className="flex-1 min-w-0">
+                <h3 className="font-medium text-amber-900 mb-1">Payment Attention Required</h3>
+                <p className="text-sm text-amber-700 flex flex-wrap gap-x-4 gap-y-1">
+                  {stats.pending_payment > 0 && (
+                    <span>
+                      <strong>{stats.pending_payment}</strong> orders with pending payment
+                    </span>
+                  )}
+                  {stats.failed_payment > 0 && (
+                    <span>
+                      <strong>{stats.failed_payment}</strong> orders with failed payment
+                    </span>
+                  )}
+                </p>
+              </div>
+            </div>
+            {onSelectPaymentStatus && (
+              <div className="flex items-center gap-2 shrink-0">
                 {stats.pending_payment > 0 && (
-                  <span>
-                    <strong>{stats.pending_payment}</strong> orders with pending payment
-                  </span>
+                  <button
+                    type="button"
+                    onClick={() => onSelectPaymentStatus('pending')}
+                    className="px-3 py-1.5 bg-amber-200 hover:bg-amber-300 text-amber-900 text-xs font-semibold rounded-lg transition"
+                  >
+                    View Pending Payments →
+                  </button>
                 )}
                 {stats.failed_payment > 0 && (
-                  <span>
-                    <strong>{stats.failed_payment}</strong> orders with failed payment
-                  </span>
+                  <button
+                    type="button"
+                    onClick={() => onSelectPaymentStatus('failed')}
+                    className="px-3 py-1.5 bg-red-100 hover:bg-red-200 text-red-900 text-xs font-semibold rounded-lg transition"
+                  >
+                    View Failed Payments →
+                  </button>
                 )}
-              </p>
-            </div>
+              </div>
+            )}
           </div>
         </div>
       )}

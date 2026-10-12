@@ -3,7 +3,7 @@
  * Complete order management and details for admins
  */
 import { useState, useEffect, useCallback } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { CheckCircle2, Clock3 } from 'lucide-react';
 import AdminSidebar from '../../components/admin/AdminSidebar';
 import DhlShipmentOperations from '../../components/admin/DhlShipmentOperations';
@@ -34,6 +34,8 @@ import { normalizeProductImageUrl } from '../../utils/productImages';
 export default function AdminOrderDetail() {
   const { orderId } = useParams<{ orderId: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
+  const backUrl = (location.state as any)?.from || '/admin/orders';
   const { toasts, hideToast, success, error, warning } = useToast();
   const { currentCurrency, setCurrency, exchangeRates, fetchExchangeRate } = useCurrencyStore();
 
@@ -317,7 +319,7 @@ export default function AdminOrderDetail() {
           <div className="text-center py-12">
             <h2 className="text-2xl font-bold text-gray-900">Order not found</h2>
             <button
-              onClick={() => navigate('/admin/orders')}
+              onClick={() => navigate(backUrl)}
               className="mt-4 text-[#105E53] hover:text-[#0d4a41]"
             >
               ← Back to orders
@@ -354,7 +356,7 @@ export default function AdminOrderDetail() {
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6 sm:mb-8">
           <div className="min-w-0">
             <button
-              onClick={() => navigate('/admin/orders')}
+              onClick={() => navigate(backUrl)}
               className="text-gray-600 hover:text-gray-900 mb-2 flex items-center gap-1 text-sm"
             >
               ← Back to orders
@@ -739,8 +741,22 @@ export default function AdminOrderDetail() {
                     {(() => {
                       if (order.payment_status === 'pending') {
                         return (
-                          <span className="px-3 py-1 rounded-full text-sm font-medium bg-amber-100 text-amber-800">
+                          <span className="px-3 py-1 rounded-full text-sm font-medium bg-amber-100 text-amber-800 border border-amber-200">
                             Awaiting Payment
+                          </span>
+                        );
+                      }
+                      if (order.payment_status === 'failed') {
+                        return (
+                          <span className="px-3 py-1 rounded-full text-sm font-medium bg-red-100 text-red-800 border border-red-200">
+                            Payment Failed
+                          </span>
+                        );
+                      }
+                      if (order.payment_status === 'refunded') {
+                        return (
+                          <span className="px-3 py-1 rounded-full text-sm font-medium bg-gray-100 text-gray-800 border border-gray-200">
+                            Payment Refunded
                           </span>
                         );
                       }

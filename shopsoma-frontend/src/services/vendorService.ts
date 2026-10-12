@@ -153,6 +153,15 @@ const extractErrorMessage = (error: any, fallback: string) => {
   if (typeof detail === 'string') {
     return detail;
   }
+  if (Array.isArray(detail) && detail.length > 0) {
+    const first = detail[0];
+    if (typeof first === 'string') {
+      return first;
+    }
+    if (first && typeof first === 'object' && typeof first.msg === 'string') {
+      return first.msg.replace(/^Value error,\s*/i, '');
+    }
+  }
   if (detail && typeof detail === 'object') {
     if (typeof detail.message === 'string') {
       return detail.message;
@@ -207,6 +216,16 @@ export interface VendorEarningsItemsResponse<TItem> {
   total_pages: number;
 }
 
+export interface VendorProfileUpdateData {
+  business_name?: string;
+  business_description?: string;
+  business_address?: string;
+  business_phone?: string;
+  bank_name?: string;
+  bank_account_number?: string;
+  bank_account_name?: string;
+}
+
 export const vendorService = {
   /**
    * Get current vendor profile
@@ -216,7 +235,20 @@ export const vendorService = {
       const response = await api.get('/vendor/profile');
       return response.data;
     } catch (error: any) {
-      const message = error?.response?.data?.detail || 'Failed to fetch vendor profile';
+      const message = extractErrorMessage(error, 'Failed to fetch vendor profile');
+      throw new Error(message);
+    }
+  },
+
+  /**
+   * Update vendor profile
+   */
+  async updateProfile(data: VendorProfileUpdateData): Promise<VendorProfile> {
+    try {
+      const response = await api.put('/vendor/profile', data);
+      return response.data;
+    } catch (error: any) {
+      const message = extractErrorMessage(error, 'Failed to update vendor profile');
       throw new Error(message);
     }
   },

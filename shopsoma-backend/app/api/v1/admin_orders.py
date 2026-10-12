@@ -470,7 +470,7 @@ async def list_orders(
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(20, ge=1, le=100, description="Items per page"),
     search: Optional[str] = Query(None, description="Search by order number, customer name, or email"),
-    payment_status: Optional[str] = Query(None, description="Filter by payment status"),
+    payment_status: Optional[str] = Query("paid", description="Filter by payment status (default: paid)"),
     fulfillment_status: Optional[FulfillmentStatus] = Query(None, description="Filter by fulfillment status"),
     vendor_id: Optional[str] = Query(None, description="Filter by vendor ID"),
     date_from: Optional[date] = Query(None, description="Filter orders from date"),
@@ -478,7 +478,7 @@ async def list_orders(
     admin: User = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """List all orders with filters and pagination"""
+    """List all orders with filters and pagination. Defaults to paid orders."""
 
     # Build base query
     query = select(Order).options(
@@ -502,18 +502,20 @@ async def list_orders(
         )
 
     resolved_payment_status = None
-    if payment_status:
+    raw_status = (payment_status if payment_status is not None else "paid").strip().lower()
+    if raw_status and raw_status != "all":
         try:
-            resolved_payment_status = PaymentStatus(payment_status.upper())
+            resolved_payment_status = PaymentStatus(raw_status.upper())
             filters.append(Order.payment_status == resolved_payment_status)
         except ValueError:
-            filters.append(Order.payment_status == payment_status)
+            try:
+                resolved_payment_status = PaymentStatus(raw_status)
+                filters.append(Order.payment_status == resolved_payment_status)
+            except ValueError:
+                filters.append(Order.payment_status == payment_status)
 
     if fulfillment_status:
         filters.append(Order.fulfillment_status == fulfillment_status)
-        if fulfillment_status == FulfillmentStatus.ORDER_RECEIVED and not payment_status:
-            # Only paid orders count as order_received
-            filters.append(Order.payment_status == PaymentStatus.PAID)
 
     if vendor_id:
         # Filter orders that have items from this vendor
@@ -1655,14 +1657,14 @@ async def process_refund(
 
 @router.get("/export/csv")
 async def export_orders_csv(
-    payment_status: Optional[str] = Query(None),
+    payment_status: Optional[str] = Query("paid", description="Filter by payment status (default: paid)"),
     fulfillment_status: Optional[FulfillmentStatus] = Query(None),
     date_from: Optional[date] = Query(None),
     date_to: Optional[date] = Query(None),
     admin: User = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Export orders to CSV"""
+    """Export orders to CSV with payment and fulfillment filters. Defaults to paid orders."""
 
     # Build query
     query = select(Order).options(
@@ -1672,15 +1674,21 @@ async def export_orders_csv(
 
     # Apply filters
     filters = []
-    if payment_status:
+    raw_status = (payment_status if payment_status is not None else "paid").strip().lower()
+    if raw_status and raw_status != "all":
         try:
-            filters.append(Order.payment_status == PaymentStatus(payment_status.upper()))
+            resolved_payment_status = PaymentStatus(raw_status.upper())
+            filters.append(Order.payment_status == resolved_payment_status)
         except ValueError:
-            filters.append(Order.payment_status == payment_status)
+            try:
+                resolved_payment_status = PaymentStatus(raw_status)
+                filters.append(Order.payment_status == resolved_payment_status)
+            except ValueError:
+                filters.append(Order.payment_status == payment_status)
+
     if fulfillment_status:
         filters.append(Order.fulfillment_status == fulfillment_status)
-        if fulfillment_status == FulfillmentStatus.ORDER_RECEIVED and not payment_status:
-            filters.append(Order.payment_status == PaymentStatus.PAID)
+
     if date_from:
         filters.append(Order.created_at >= datetime.combine(date_from, datetime.min.time()))
     if date_to:
@@ -1714,18 +1722,19 @@ async def export_orders_csv(
 
     # Write data
     for order in orders:
-        customer_name = f"{order.customer.first_name or ''} {order.customer.last_name or ''}".strip()
+        customer_name = getattr(order.customer, "full_name", "") or ""
+        customer_email = getattr(order.customer, "email", "") or ""
         item_count = sum(item.quantity for item in order.items)
 
         writer.writerow([
             order.order_number,
             customer_name,
-            order.customer.email,
+            customer_email,
             float(order.total_amount),
-            order.payment_status.value,
-            order.fulfillment_status.value,
+            order.payment_status.value if hasattr(order.payment_status, "value") else str(order.payment_status),
+            order.fulfillment_status.value if hasattr(order.fulfillment_status, "value") else str(order.fulfillment_status),
             item_count,
-            order.created_at.isoformat(),
+            order.created_at.isoformat() if order.created_at else "",
             order.delivered_at.isoformat() if order.delivered_at else "",
         ])
 
@@ -1735,6 +1744,6 @@ async def export_orders_csv(
         iter([output.getvalue()]),
         media_type="text/csv",
         headers={
-            "Content-Disposition": f"attachment; filename=orders_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            "Content-Disposition": f"attachment; filename=orders_{raw_status}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
         },
     )

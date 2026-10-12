@@ -600,3 +600,293 @@ async def test_admin_order_stats_counts_only_paid_orders_as_received(
     received_order_ids_after = [o["id"] for o in list_res_after.json()["orders"]]
     assert str(pending_order.id) in received_order_ids_after
 
+
+@pytest.mark.asyncio
+async def test_admin_orders_list_defaults_to_paid_and_filters_pending_explicitly(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    admin_user,
+    customer_user,
+    vendor_user,
+):
+    from app.models.address import Address, AddressType
+    from app.models.order import FulfillmentStatus, Order, OrderItem, PaymentStatus
+    from app.models.product import ModerationStatus, Product, ProductStatus
+
+    # Create shared address and product
+    addr = Address(
+        id=uuid.uuid4(),
+        user_id=customer_user["user"].id,
+        address_type=AddressType.SHIPPING,
+        full_name="Payment Scope Customer",
+        phone_number="08022223333",
+        address_line1="10 Fashion Way",
+        city="Lagos",
+        state="Lagos",
+        country="Nigeria",
+        is_default=True,
+    )
+    db_session.add(addr)
+    await db_session.flush()
+
+    prod = Product(
+        id=uuid.uuid4(),
+        vendor_id=vendor_user["vendor"].id,
+        title="Scope Test Product",
+        description="Product for testing payment status scope",
+        base_price=Decimal("200.00"),
+        currency="NGN",
+        total_stock=10,
+        status=ProductStatus.ACTIVE,
+        moderation_status=ModerationStatus.APPROVED,
+    )
+    db_session.add(prod)
+    await db_session.flush()
+
+    # 1. Paid order
+    paid_order = Order(
+        id=uuid.uuid4(),
+        order_number=f"ORD-PAID-{uuid.uuid4().hex[:6].upper()}",
+        customer_id=customer_user["user"].id,
+        shipping_address_id=addr.id,
+        billing_address_id=addr.id,
+        currency="NGN",
+        subtotal=Decimal("200.00"),
+        shipping_cost=Decimal("0.00"),
+        tax_amount=Decimal("0.00"),
+        discount_amount=Decimal("0.00"),
+        total_amount=Decimal("200.00"),
+        payment_status=PaymentStatus.PAID,
+        fulfillment_status=FulfillmentStatus.ORDER_RECEIVED,
+    )
+    db_session.add(paid_order)
+    await db_session.flush()
+    db_session.add(
+        OrderItem(
+            id=uuid.uuid4(),
+            order_id=paid_order.id,
+            product_id=prod.id,
+            vendor_id=vendor_user["vendor"].id,
+            product_title=prod.title,
+            unit_price=Decimal("200.00"),
+            currency="NGN",
+            quantity=1,
+            subtotal=Decimal("200.00"),
+            commission_rate=Decimal("15.00"),
+            commission_amount=Decimal("30.00"),
+            vendor_payout=Decimal("170.00"),
+            fulfillment_status=FulfillmentStatus.ORDER_RECEIVED,
+        )
+    )
+
+    # 2. Pending payment order
+    pending_order = Order(
+        id=uuid.uuid4(),
+        order_number=f"ORD-PEND-{uuid.uuid4().hex[:6].upper()}",
+        customer_id=customer_user["user"].id,
+        shipping_address_id=addr.id,
+        billing_address_id=addr.id,
+        currency="NGN",
+        subtotal=Decimal("200.00"),
+        shipping_cost=Decimal("0.00"),
+        tax_amount=Decimal("0.00"),
+        discount_amount=Decimal("0.00"),
+        total_amount=Decimal("200.00"),
+        payment_status=PaymentStatus.PENDING,
+        fulfillment_status=FulfillmentStatus.ORDER_RECEIVED,
+    )
+    db_session.add(pending_order)
+    await db_session.flush()
+    db_session.add(
+        OrderItem(
+            id=uuid.uuid4(),
+            order_id=pending_order.id,
+            product_id=prod.id,
+            vendor_id=vendor_user["vendor"].id,
+            product_title=prod.title,
+            unit_price=Decimal("200.00"),
+            currency="NGN",
+            quantity=1,
+            subtotal=Decimal("200.00"),
+            commission_rate=Decimal("15.00"),
+            commission_amount=Decimal("30.00"),
+            vendor_payout=Decimal("170.00"),
+            fulfillment_status=FulfillmentStatus.ORDER_RECEIVED,
+        )
+    )
+
+    # 3. Failed payment order
+    failed_order = Order(
+        id=uuid.uuid4(),
+        order_number=f"ORD-FAIL-{uuid.uuid4().hex[:6].upper()}",
+        customer_id=customer_user["user"].id,
+        shipping_address_id=addr.id,
+        billing_address_id=addr.id,
+        currency="NGN",
+        subtotal=Decimal("200.00"),
+        shipping_cost=Decimal("0.00"),
+        tax_amount=Decimal("0.00"),
+        discount_amount=Decimal("0.00"),
+        total_amount=Decimal("200.00"),
+        payment_status=PaymentStatus.FAILED,
+        fulfillment_status=FulfillmentStatus.ORDER_RECEIVED,
+    )
+    db_session.add(failed_order)
+    await db_session.flush()
+    db_session.add(
+        OrderItem(
+            id=uuid.uuid4(),
+            order_id=failed_order.id,
+            product_id=prod.id,
+            vendor_id=vendor_user["vendor"].id,
+            product_title=prod.title,
+            unit_price=Decimal("200.00"),
+            currency="NGN",
+            quantity=1,
+            subtotal=Decimal("200.00"),
+            commission_rate=Decimal("15.00"),
+            commission_amount=Decimal("30.00"),
+            vendor_payout=Decimal("170.00"),
+            fulfillment_status=FulfillmentStatus.ORDER_RECEIVED,
+        )
+    )
+
+    # 4. Refunded order
+    refunded_order = Order(
+        id=uuid.uuid4(),
+        order_number=f"ORD-RFND-{uuid.uuid4().hex[:6].upper()}",
+        customer_id=customer_user["user"].id,
+        shipping_address_id=addr.id,
+        billing_address_id=addr.id,
+        currency="NGN",
+        subtotal=Decimal("200.00"),
+        shipping_cost=Decimal("0.00"),
+        tax_amount=Decimal("0.00"),
+        discount_amount=Decimal("0.00"),
+        total_amount=Decimal("200.00"),
+        payment_status=PaymentStatus.REFUNDED,
+        fulfillment_status=FulfillmentStatus.CANCELLED,
+    )
+    db_session.add(refunded_order)
+    await db_session.flush()
+    db_session.add(
+        OrderItem(
+            id=uuid.uuid4(),
+            order_id=refunded_order.id,
+            product_id=prod.id,
+            vendor_id=vendor_user["vendor"].id,
+            product_title=prod.title,
+            unit_price=Decimal("200.00"),
+            currency="NGN",
+            quantity=1,
+            subtotal=Decimal("200.00"),
+            commission_rate=Decimal("15.00"),
+            commission_amount=Decimal("30.00"),
+            vendor_payout=Decimal("170.00"),
+            fulfillment_status=FulfillmentStatus.CANCELLED,
+        )
+    )
+    await db_session.commit()
+
+    # Case A: Default listing (Orders Received view) MUST return only paid orders
+    res_default = await client.get("/api/v1/admin/orders", headers=admin_user["headers"])
+    assert res_default.status_code == 200
+    default_payload = res_default.json()
+    default_ids = [o["id"] for o in default_payload["orders"]]
+    assert str(paid_order.id) in default_ids
+    assert str(pending_order.id) not in default_ids
+    assert str(failed_order.id) not in default_ids
+    assert str(refunded_order.id) not in default_ids
+
+    # Case B: Explicit pending filtering MUST return only pending payment orders
+    res_pending = await client.get("/api/v1/admin/orders?payment_status=pending", headers=admin_user["headers"])
+    assert res_pending.status_code == 200
+    pending_payload = res_pending.json()
+    pending_ids = [o["id"] for o in pending_payload["orders"]]
+    assert str(pending_order.id) in pending_ids
+    assert str(paid_order.id) not in pending_ids
+    assert str(failed_order.id) not in pending_ids
+    assert str(refunded_order.id) not in pending_ids
+    for o in pending_payload["orders"]:
+        assert o["payment_status"].lower() == "pending"
+
+    # Case C: Explicit failed and refunded filtering
+    res_failed = await client.get("/api/v1/admin/orders?payment_status=failed", headers=admin_user["headers"])
+    assert res_failed.status_code == 200
+    failed_ids = [o["id"] for o in res_failed.json()["orders"]]
+    assert str(failed_order.id) in failed_ids
+    assert str(paid_order.id) not in failed_ids
+    assert str(pending_order.id) not in failed_ids
+
+    res_refunded = await client.get("/api/v1/admin/orders?payment_status=refunded", headers=admin_user["headers"])
+    assert res_refunded.status_code == 200
+    refunded_ids = [o["id"] for o in res_refunded.json()["orders"]]
+    assert str(refunded_order.id) in refunded_ids
+    assert str(paid_order.id) not in refunded_ids
+    assert str(pending_order.id) not in refunded_ids
+
+    # Case D: "all" scope returns all payment statuses
+    res_all = await client.get("/api/v1/admin/orders?payment_status=all", headers=admin_user["headers"])
+    assert res_all.status_code == 200
+    all_ids = [o["id"] for o in res_all.json()["orders"]]
+    assert str(paid_order.id) in all_ids
+    assert str(pending_order.id) in all_ids
+    assert str(failed_order.id) in all_ids
+    assert str(refunded_order.id) in all_ids
+
+    # Case E: Search respects payment-status scope
+    # Search for this customer's orders in default (paid) scope
+    res_search_paid = await client.get(
+        f"/api/v1/admin/orders?search={paid_order.order_number}",
+        headers=admin_user["headers"],
+    )
+    assert res_search_paid.status_code == 200
+    assert any(o["id"] == str(paid_order.id) for o in res_search_paid.json()["orders"])
+
+    # Search for pending order number in default (paid) scope MUST return 0 results
+    res_search_pending_in_paid = await client.get(
+        f"/api/v1/admin/orders?search={pending_order.order_number}",
+        headers=admin_user["headers"],
+    )
+    assert res_search_pending_in_paid.status_code == 200
+    assert len(res_search_pending_in_paid.json()["orders"]) == 0
+    assert res_search_pending_in_paid.json()["total"] == 0
+
+    # Search for pending order number in pending scope returns the order
+    res_search_pending_in_pending = await client.get(
+        f"/api/v1/admin/orders?payment_status=pending&search={pending_order.order_number}",
+        headers=admin_user["headers"],
+    )
+    assert res_search_pending_in_pending.status_code == 200
+    assert any(o["id"] == str(pending_order.id) for o in res_search_pending_in_pending.json()["orders"])
+
+    # Case F: Empty state
+    res_empty = await client.get(
+        "/api/v1/admin/orders?payment_status=pending&search=nonexistent_order_number_xyz",
+        headers=admin_user["headers"],
+    )
+    assert res_empty.status_code == 200
+    assert res_empty.json()["orders"] == []
+    assert res_empty.json()["total"] == 0
+    assert res_empty.json()["total_pages"] == 0
+
+    # Case G: CSV Export respects payment status scope
+    res_export_default = await client.get("/api/v1/admin/orders/export/csv", headers=admin_user["headers"])
+    assert res_export_default.status_code == 200
+    default_csv = res_export_default.text
+    assert paid_order.order_number in default_csv
+    assert pending_order.order_number not in default_csv
+    assert failed_order.order_number not in default_csv
+    assert refunded_order.order_number not in default_csv
+
+    res_export_pending = await client.get(
+        "/api/v1/admin/orders/export/csv?payment_status=pending",
+        headers=admin_user["headers"],
+    )
+    assert res_export_pending.status_code == 200
+    pending_csv = res_export_pending.text
+    assert pending_order.order_number in pending_csv
+    assert paid_order.order_number not in pending_csv
+    assert failed_order.order_number not in pending_csv
+    assert refunded_order.order_number not in pending_csv
+

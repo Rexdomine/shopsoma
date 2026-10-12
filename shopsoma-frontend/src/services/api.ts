@@ -21,6 +21,30 @@ const isAuthEndpoint = (url?: string): boolean => {
   ].some((path) => url.includes(path));
 };
 
+const handleAuthExpired = () => {
+  clearStoredAuthSession();
+  if (typeof window !== 'undefined') {
+    const pathname = window.location.pathname;
+    const isAlreadyOnAuthPage =
+      pathname === '/login' ||
+      pathname === '/vendor/login' ||
+      pathname === '/register' ||
+      pathname === '/vendor/signup' ||
+      pathname.startsWith('/vendor/signup') ||
+      pathname === '/forgot-password' ||
+      pathname === '/reset-password' ||
+      pathname === '/verify-email' ||
+      pathname === '/claim-account' ||
+      pathname === '/vendor/otp' ||
+      pathname === '/vendor/set-password';
+
+    if (!isAlreadyOnAuthPage) {
+      const isVendorRoute = pathname.startsWith('/vendor');
+      window.location.href = isVendorRoute ? '/vendor/login' : '/login';
+    }
+  }
+};
+
 // Create axios instance
 const api: AxiosInstance = axios.create({
   baseURL: API_BASE_URL,
@@ -44,6 +68,8 @@ api.interceptors.request.use(
   }
 );
 
+let refreshPromise: Promise<string> | null = null;
+
 // Response interceptor for error handling
 api.interceptors.response.use(
   (response) => response,
@@ -56,32 +82,47 @@ api.interceptors.response.use(
     }
 
     // Handle 401 Unauthorized - token expired
-    if (error.response?.status === 401 && !originalRequest._retry) {
+    if (error.response?.status === 401) {
+      // If this request was already retried with a refreshed token and still failed 401, session has expired
+      if (originalRequest?._retry) {
+        handleAuthExpired();
+        return Promise.reject(error);
+      }
+
+      const refreshToken = localStorage.getItem(STORAGE_KEYS.REFRESH_TOKEN);
+      if (!refreshToken) {
+        // No refresh token available, session has expired -> redirect to login
+        handleAuthExpired();
+        return Promise.reject(error);
+      }
+
       originalRequest._retry = true;
 
       try {
-        const refreshToken = localStorage.getItem(STORAGE_KEYS.REFRESH_TOKEN);
-        if (refreshToken) {
-          const response = await axios.post(`${API_BASE_URL}/auth/refresh`, {
-            refresh_token: refreshToken,
-          });
+        if (!refreshPromise) {
+          refreshPromise = (async () => {
+            try {
+              const response = await axios.post(`${API_BASE_URL}/auth/refresh`, {
+                refresh_token: refreshToken,
+              });
 
-          const { access_token } = response.data;
-          localStorage.setItem(STORAGE_KEYS.ACCESS_TOKEN, access_token);
-
-          // Retry the original request with new token
-          originalRequest.headers.Authorization = `Bearer ${access_token}`;
-          return api(originalRequest);
+              const { access_token } = response.data;
+              localStorage.setItem(STORAGE_KEYS.ACCESS_TOKEN, access_token);
+              return access_token;
+            } finally {
+              refreshPromise = null;
+            }
+          })();
         }
+
+        const newAccessToken = await refreshPromise;
+
+        // Retry the original request with new token
+        originalRequest.headers.Authorization = `Bearer ${newAccessToken}`;
+        return api(originalRequest);
       } catch (refreshError) {
         // Refresh failed, logout user
-        clearStoredAuthSession();
-        const pathname = typeof window !== 'undefined' ? window.location.pathname : '';
-        const isAlreadyOnAuthPage = pathname === '/login' || pathname === '/vendor/login' || pathname === '/register';
-        if (!isAlreadyOnAuthPage && typeof window !== 'undefined') {
-          const isVendorRoute = pathname.startsWith('/vendor');
-          window.location.href = isVendorRoute ? '/vendor/login' : '/login';
-        }
+        handleAuthExpired();
         return Promise.reject(refreshError);
       }
     }

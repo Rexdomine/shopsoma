@@ -158,7 +158,7 @@ export default function VendorSidebar({
           {showVendorLogo ? (
             <img
               src={vendorLogoUrl}
-              alt={`${user?.full_name || 'Vendor'} logo`}
+              alt={`${vendorProfile?.business_name || user?.full_name || 'Vendor'} logo`}
               className="h-8 w-8 rounded-full object-cover shrink-0"
               onError={() => setLogoError(true)}
             />
@@ -169,7 +169,7 @@ export default function VendorSidebar({
           )}
           <div className="leading-tight min-w-0">
             <span className="text-xs font-semibold tracking-wide text-[#105E53] uppercase block truncate max-w-[150px]">
-              {user?.full_name || 'Vendor Portal'}
+              {vendorProfile?.business_name || user?.full_name || 'Vendor Portal'}
             </span>
             <span className="text-[10px] text-gray-500 block truncate">
               {resolvedPendingOrders} pending orders
@@ -224,7 +224,7 @@ export default function VendorSidebar({
                   </div>
                 )}
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-semibold text-gray-900 truncate">{user?.full_name || 'Your Brand'}</p>
+                  <p className="text-sm font-semibold text-gray-900 truncate">{vendorProfile?.business_name || user?.full_name || 'Your Brand'}</p>
                   <p className="text-xs text-gray-500 truncate">{user?.email || 'email@brand.com'}</p>
                 </div>
               </div>
@@ -351,7 +351,7 @@ export default function VendorSidebar({
               </div>
             )}
             <div className="flex-1">
-              <p className="text-sm font-semibold text-gray-900 truncate">{user?.full_name || 'Your Brand'}</p>
+              <p className="text-sm font-semibold text-gray-900 truncate">{vendorProfile?.business_name || user?.full_name || 'Your Brand'}</p>
               <p className="text-xs text-gray-500 truncate">{user?.email || 'email@brand.com'}</p>
             </div>
           </button>
@@ -360,7 +360,7 @@ export default function VendorSidebar({
             {showVendorLogo ? (
               <img
                 src={vendorLogoUrl}
-                alt={`${user?.full_name || 'Vendor'} logo`}
+                alt={`${vendorProfile?.business_name || user?.full_name || 'Vendor'} logo`}
                 className="h-10 w-10 rounded-full object-cover"
                 onError={() => setLogoError(true)}
               />

@@ -332,6 +332,14 @@ export const productService = {
     return response.data || [];
   },
 
+  async createVariation(
+    productId: string,
+    data: CreateProductVariationPayload
+  ): Promise<Variation> {
+    const response = await api.post(`/products/${productId}/variations`, data);
+    return response.data;
+  },
+
   async updateVariation(
     productId: string,
     variationId: string,

@@ -55,6 +55,7 @@ from app.schemas.product import (
     ProductVariantUpdate,
     VariationResponse,
     VariationUpdate,
+    VariationCreate,
     VariationPayload,
     validate_variation_inventory_shape,
 )
@@ -62,6 +63,7 @@ from app.services.variation_persistence import (
     sync_product_variations,
     update_single_variation,
     delete_single_variation,
+    create_single_variation,
 )
 from app.api.v1.products import (
     PRODUCT_RELATIONSHIPS,
@@ -2745,6 +2747,34 @@ async def get_admin_product_variations(
     return product.variations
 
 
+@router.post("/products/{product_id}/variations", response_model=VariationResponse, status_code=status.HTTP_201_CREATED)
+async def create_admin_product_variation(
+    product_id: UUID,
+    variation_data: VariationCreate,
+    current_admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Create a new variation on a product (admin only).
+    Untouched variations and the product gallery remain unchanged.
+    Preserves moderation status.
+    """
+    result = await db.execute(
+        select(Product).options(*PRODUCT_RELATIONSHIPS).where(Product.id == product_id)
+    )
+    product = result.scalar_one_or_none()
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+
+    new_variation = await create_single_variation(
+        db=db,
+        product=product,
+        variation_data=variation_data,
+        is_admin=True,
+    )
+    return new_variation
+
+
 @router.put("/products/{product_id}/variations/{variation_id}", response_model=VariationResponse)
 async def update_admin_product_variation(
     product_id: UUID,
@@ -3851,7 +3881,7 @@ async def list_orders(
     page_size: int = Query(20, ge=1, le=100, description="Items per page"),
     search: Optional[str] = Query(None, description="Search by order number or customer name"),
     status: Optional[str] = Query(None, description="Filter by status"),
-    payment_status: Optional[str] = Query(None, description="Filter by payment status"),
+    payment_status: Optional[str] = Query("paid", description="Filter by payment status (default: paid)"),
     fulfillment_status: Optional[str] = Query(None, description="Filter by fulfillment status"),
     vendor_id: Optional[UUID] = Query(None, description="Filter by vendor ID"),
     current_admin: User = Depends(get_current_admin),
@@ -3862,7 +3892,7 @@ async def list_orders(
 
     Requires admin role
     """
-    from app.models.order import Order
+    from app.models.order import Order, PaymentStatus, FulfillmentStatus
 
     # Build query
     query = (
@@ -3884,18 +3914,23 @@ async def list_orders(
             )
         )
 
+    raw_status = (payment_status if payment_status is not None else "paid").strip().lower()
+    if raw_status and raw_status != "all":
+        try:
+            resolved_payment_status = PaymentStatus(raw_status.upper())
+            filters.append(Order.payment_status == resolved_payment_status)
+        except ValueError:
+            try:
+                resolved_payment_status = PaymentStatus(raw_status)
+                filters.append(Order.payment_status == resolved_payment_status)
+            except ValueError:
+                filters.append(Order.payment_status == payment_status)
+
     if status is not None:
         filters.append(Order.fulfillment_status == status)
-        if status == FulfillmentStatus.ORDER_RECEIVED and payment_status is None:
-            filters.append(Order.payment_status == PaymentStatus.PAID)
-
-    if payment_status is not None:
-        filters.append(Order.payment_status == payment_status)
 
     if fulfillment_status is not None:
         filters.append(Order.fulfillment_status == fulfillment_status)
-        if fulfillment_status == FulfillmentStatus.ORDER_RECEIVED and payment_status is None:
-            filters.append(Order.payment_status == PaymentStatus.PAID)
 
     if vendor_id is not None:
         filters.append(Order.vendor_id == vendor_id)

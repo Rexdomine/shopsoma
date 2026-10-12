@@ -101,7 +101,8 @@ type ProductListProps = {
 const DEFAULT_HERO: HeroContent = {
   title: 'The ShopSoma Edit',
   body: 'A considered selection of contemporary fashion, chosen for the way you live, work and go out.',
-  imageUrl: '/images/hero/demo-image-2.png',
+  imageUrl: '/images/hero/shop-edits-2088.jpg',
+  imagePositionClassName: 'object-center sm:object-top',
   ctaLabel: 'Shop the edit',
 };
 
