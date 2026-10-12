@@ -25,7 +25,6 @@ import type {
   OrderStats as OrderStatsType,
   FulfillmentStatus,
   PaymentStatus,
-  PaymentStatusScope,
 } from '../../services/adminOrderService';
 import { getAdminStatusLabel } from '../../utils/orderStatusMessages';
 

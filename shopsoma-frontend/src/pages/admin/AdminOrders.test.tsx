@@ -85,6 +85,9 @@ const mockStats: OrderStats = {
   cancelled_orders: 1,
   pending_payment: 6,
   failed_payment: 2,
+  average_order_value: 10000,
+  orders_today: 5,
+  revenue_today: 50000,
 };
 
 const makeMockOrder = (overrides: Partial<OrderListItem> = {}): OrderListItem => ({
