@@ -501,6 +501,10 @@ export default function VendorOrderDetail() {
 
         setOrder(data);
       } catch (err: any) {
+        if (err.response?.status === 401 || err.response?.data?.detail === 'Not authenticated') {
+          navigate(ROUTES.VENDOR_LOGIN, { replace: true, state: { from: location } });
+          return;
+        }
         console.error('Failed to load order', err);
         console.error('[VendorOrderDetail] Error details:', err.response?.data);
         error(

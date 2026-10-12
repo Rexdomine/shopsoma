@@ -144,6 +144,26 @@ export default function ProductVariationsManager({
     setErrorMsg(null);
   };
 
+  const isCreatingNew = selectedVariationId === 'new';
+
+  const startCreatingNew = () => {
+    setSelectedVariationId('new');
+    setEditTitle('');
+    setEditColorHex('#000000');
+    setEditIsActive(true);
+    setEditInheritsPrice(true);
+    setEditPrice('');
+    setEditInheritsSalePrice(true);
+    setEditSalePrice('');
+    setEditSizes([
+      { size: 'S', stock: 10 },
+      { size: 'M', stock: 10 },
+    ]);
+    setEditImages([]);
+    setErrorMsg(null);
+    setSuccessMsg(null);
+  };
+
   // Nested sizes management in editor
   const handleAddSize = () => {
     if (!newSizeName.trim()) return;
@@ -295,24 +315,43 @@ export default function ProductVariationsManager({
         })),
       };
 
-      const updated = isAdmin
-        ? await adminService.updateProductVariation(productId, selectedVariationId, payload)
-        : await productService.updateVariation(productId, selectedVariationId, payload);
+      if (isCreatingNew) {
+        const created = isAdmin
+          ? await adminService.createProductVariation(productId, payload)
+          : await productService.createVariation(productId, payload);
 
-      setSuccessMsg(`Variation "${updated.title}" saved successfully.`);
+        setSuccessMsg(`Variation "${created.title}" created successfully.`);
 
-      // Update in local state preserving stable identity
-      const updatedList = variations.map((v) => (v.id === selectedVariationId ? updated : v));
-      setVariations(updatedList);
-      if (onVariationsUpdated) {
-        onVariationsUpdated(updatedList);
+        const updatedList = [...variations, created];
+        setVariations(updatedList);
+        if (onVariationsUpdated) {
+          onVariationsUpdated(updatedList);
+        }
+
+        setTimeout(() => {
+          setSelectedVariationId(null);
+          setSuccessMsg(null);
+        }, 1200);
+      } else {
+        const updated = isAdmin
+          ? await adminService.updateProductVariation(productId, selectedVariationId, payload)
+          : await productService.updateVariation(productId, selectedVariationId, payload);
+
+        setSuccessMsg(`Variation "${updated.title}" saved successfully.`);
+
+        // Update in local state preserving stable identity
+        const updatedList = variations.map((v) => (v.id === selectedVariationId ? updated : v));
+        setVariations(updatedList);
+        if (onVariationsUpdated) {
+          onVariationsUpdated(updatedList);
+        }
+
+        // Exit edit view after brief confirmation
+        setTimeout(() => {
+          setSelectedVariationId(null);
+          setSuccessMsg(null);
+        }, 1200);
       }
-
-      // Exit edit view after brief confirmation
-      setTimeout(() => {
-        setSelectedVariationId(null);
-        setSuccessMsg(null);
-      }, 1200);
     } catch (err: any) {
       console.error('Failed to save variation', err);
       const detail = err.response?.data?.detail;
@@ -354,7 +393,9 @@ export default function ProductVariationsManager({
     }
   };
 
-  const selectedVariation = variations.find((v) => v.id === selectedVariationId);
+  const selectedVariation = isCreatingNew
+    ? ({ id: 'new', title: editTitle || 'New Variation' } as any)
+    : variations.find((v) => v.id === selectedVariationId);
 
   return (
     <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden" data-testid="product-variations-manager">
@@ -371,6 +412,18 @@ export default function ProductVariationsManager({
             </p>
           </div>
         </div>
+
+        {!selectedVariationId && (
+          <button
+            type="button"
+            onClick={startCreatingNew}
+            className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-medium text-white ${primaryBg} rounded-lg transition shadow-sm`}
+            data-testid="add-variation-button"
+          >
+            <Plus className="h-4 w-4" />
+            <span>Add Variation</span>
+          </button>
+        )}
       </div>
 
       {/* Global Alerts */}
@@ -419,14 +472,24 @@ export default function ProductVariationsManager({
                 </button>
                 <div>
                   <h3 className="text-base font-semibold text-gray-900">
-                    Editing Variation: <span className={primaryText}>{selectedVariation.title}</span>
+                    {isCreatingNew ? (
+                      <>
+                        Create New Variation: <span className={primaryText}>{editTitle || 'Untitled'}</span>
+                      </>
+                    ) : (
+                      <>
+                        Editing Variation: <span className={primaryText}>{selectedVariation.title}</span>
+                      </>
+                    )}
                   </h3>
                   <div className="flex items-center gap-2 mt-0.5 text-xs text-gray-500">
                     <span className="font-mono bg-gray-100 px-2 py-0.5 rounded text-[11px] text-gray-600">
-                      Stable ID: {selectedVariation.id}
+                      {isCreatingNew ? 'New Entry' : `Stable ID: ${selectedVariation.id}`}
                     </span>
                     <span>•</span>
-                    <span className="text-gray-500">ID preserved across saves</span>
+                    <span className="text-gray-500">
+                      {isCreatingNew ? 'Will be assigned permanent stable ID' : 'ID preserved across saves'}
+                    </span>
                   </div>
                 </div>
               </div>
@@ -449,12 +512,12 @@ export default function ProductVariationsManager({
                   {saving ? (
                     <>
                       <Loader2 className="h-4 w-4 animate-spin" />
-                      Saving...
+                      {isCreatingNew ? 'Creating...' : 'Saving...'}
                     </>
                   ) : (
                     <>
                       <Check className="h-4 w-4" />
-                      Save Variation
+                      {isCreatingNew ? 'Create Variation' : 'Save Variation'}
                     </>
                   )}
                 </button>
@@ -812,12 +875,12 @@ export default function ProductVariationsManager({
                 {saving ? (
                   <>
                     <Loader2 className="h-4 w-4 animate-spin" />
-                    Saving...
+                    {isCreatingNew ? 'Creating...' : 'Saving...'}
                   </>
                 ) : (
                   <>
                     <Check className="h-4 w-4" />
-                    Save Variation Changes
+                    {isCreatingNew ? 'Create Variation' : 'Save Variation Changes'}
                   </>
                 )}
               </button>
@@ -955,9 +1018,18 @@ export default function ProductVariationsManager({
               <div className="text-center py-10 text-gray-500">
                 <Layers className="h-10 w-10 mx-auto text-gray-300 mb-2" />
                 <p className="text-sm font-medium text-gray-700">No variations configured for this product.</p>
-                <p className="text-xs text-gray-500 mt-1">
-                  Variations are defined during product creation or through bulk uploads.
+                <p className="text-xs text-gray-500 mt-1 mb-4">
+                  Add color options, pricing overrides, and combination-level size stock.
                 </p>
+                <button
+                  type="button"
+                  onClick={startCreatingNew}
+                  className={`inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-white ${primaryBg} rounded-lg transition shadow-sm`}
+                  data-testid="add-first-variation-button"
+                >
+                  <Plus className="h-4 w-4" />
+                  <span>Add First Variation</span>
+                </button>
               </div>
             )}
           </div>

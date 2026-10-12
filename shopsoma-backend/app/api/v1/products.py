@@ -65,12 +65,14 @@ from app.schemas.product import (
     variation_sale_price,
     VariationResponse,
     VariationUpdate,
+    VariationCreate,
     VariationPayload,
 )
 from app.services.variation_persistence import (
     sync_product_variations,
     update_single_variation,
     delete_single_variation,
+    create_single_variation,
 )
 
 logger = logging.getLogger(__name__)
@@ -1353,6 +1355,37 @@ async def get_product_variations(
     if product.vendor_id != vendor.id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to access this product")
     return product.variations
+
+
+@router.post("/{product_id}/variations", response_model=VariationResponse, status_code=status.HTTP_201_CREATED)
+async def create_vendor_product_variation(
+    product_id: UUID,
+    variation_data: VariationCreate,
+    vendor: Vendor = Depends(get_completed_vendor),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Create a new variation on a vendor's variable product.
+    Untouched variations and the product gallery remain unchanged.
+    """
+    result = await db.execute(
+        select(Product)
+        .options(*PRODUCT_RELATIONSHIPS)
+        .where(Product.id == product_id)
+    )
+    product = result.scalar_one_or_none()
+    if not product:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
+    if product.vendor_id != vendor.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to update this product")
+
+    new_variation = await create_single_variation(
+        db=db,
+        product=product,
+        variation_data=variation_data,
+        is_admin=False,
+    )
+    return new_variation
 
 
 @router.put("/{product_id}/variations/{variation_id}", response_model=VariationResponse)

@@ -9,6 +9,7 @@ import api from './api';
 // ============================================================================
 
 export type PaymentStatus = 'pending' | 'paid' | 'failed' | 'refunded';
+export type PaymentStatusScope = PaymentStatus | 'all';
 export type FulfillmentStatus =
   | 'order_received'
   | 'preparing_for_pickup'
@@ -203,7 +204,7 @@ export interface OrderFilterParams {
   page?: number;
   page_size?: number;
   search?: string;
-  payment_status?: PaymentStatus;
+  payment_status?: PaymentStatusScope;
   fulfillment_status?: FulfillmentStatus;
   vendor_id?: string;
   date_from?: string;
@@ -355,6 +356,21 @@ export const updatePickupStatus = async (
 };
 
 /**
+ * Admin marks an order item ready for pickup on behalf of vendor
+ */
+export const adminMarkItemReady = async (
+  orderId: string,
+  itemId: string
+): Promise<OrderDetail> => {
+  const response = await api.post<OrderDetail>(
+    `/admin/orders/${orderId}/items/${itemId}/ready-for-pickup`,
+    {},
+    { timeout: 30000 }
+  );
+  return response.data;
+};
+
+/**
  * Bulk update order statuses
  */
 export const bulkUpdateStatus = async (data: BulkStatusUpdate): Promise<{ success: boolean; updated_count: number; message: string }> => {
@@ -406,7 +422,7 @@ export const runShadowQuote = async (
  * Export orders to CSV
  */
 export const exportOrdersCSV = async (params?: {
-  payment_status?: PaymentStatus;
+  payment_status?: PaymentStatusScope;
   fulfillment_status?: FulfillmentStatus;
   date_from?: string;
   date_to?: string;

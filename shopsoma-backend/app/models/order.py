@@ -181,6 +181,11 @@ class Order(Base):
         uselist=False,
         passive_deletes="all",
     )
+    payment_reminders = relationship(
+        "OrderPaymentReminder",
+        back_populates="order",
+        cascade="all, delete-orphan",
+    )
 
     def __repr__(self):
         return f"<Order {self.order_number}>"

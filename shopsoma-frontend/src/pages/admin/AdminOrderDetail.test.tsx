@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   cancelOrder: vi.fn(),
   processRefund: vi.fn(),
   updatePickupStatus: vi.fn(),
+  adminMarkItemReady: vi.fn(),
   success: vi.fn(),
   error: vi.fn(),
   warning: vi.fn(),
@@ -69,6 +70,7 @@ vi.mock('../../services/adminOrderService', () => ({
   recordDhlHandoff: mocks.recordDhlHandoff,
   refreshDhlTracking: mocks.refreshDhlTracking,
   updatePickupStatus: mocks.updatePickupStatus,
+  adminMarkItemReady: mocks.adminMarkItemReady,
 }));
 
 import AdminOrderDetail from './AdminOrderDetail';

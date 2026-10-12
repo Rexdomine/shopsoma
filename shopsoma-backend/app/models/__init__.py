@@ -104,6 +104,7 @@ from app.models.order_guest_capability import (
     OrderWorkflowClassification,
     OrderWorkflowMigrationRun,
 )
+from app.models.payment_reminder import OrderPaymentReminder
 
 __all__ = [
     "User",
@@ -191,4 +192,5 @@ __all__ = [
     "OrderGuestCapability",
     "OrderWorkflowClassification",
     "OrderWorkflowMigrationRun",
+    "OrderPaymentReminder",
 ]

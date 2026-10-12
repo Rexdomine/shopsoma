@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { ROUTES } from '../../config/constants';
 import VendorSidebar from '../../components/vendor/VendorSidebar';
-import { Check, Image as ImageIcon, ChevronDown, PauseCircle, Trash2 } from 'lucide-react';
+import { Check, Image as ImageIcon, ChevronDown, PauseCircle, Trash2, Edit2 } from 'lucide-react';
 import { vendorService, type BrandInfoData, type PayoutInfoData } from '../../services/vendorService';
 import { productService } from '../../services/productService';
 import { vendorPaymentMethodsService, type PaymentMethod, type PaymentMethodCreate } from '../../services/vendorPaymentMethodsService';
@@ -101,6 +101,11 @@ export default function BrandInfoSettings() {
   const [toastMessage, setToastMessage] = useState('');
   const [toastVisible, setToastVisible] = useState(false);
   const [toastType, setToastType] = useState<'success' | 'error'>('success');
+  const [toastTitle, setToastTitle] = useState('Settings');
+  const [isEditingBrandName, setIsEditingBrandName] = useState(false);
+  const [brandNameInput, setBrandNameInput] = useState('');
+  const [savingBrandName, setSavingBrandName] = useState(false);
+  const [brandNameError, setBrandNameError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'brand' | 'payout' | 'security'>('brand');
   const [defaultPayout, setDefaultPayout] = useState('');
   const [tin, setTin] = useState('');
@@ -432,11 +437,55 @@ export default function BrandInfoSettings() {
   };
 
   // Show toast notification
-  const showToast = (message: string, type: 'success' | 'error' = 'success') => {
+  const showToast = (message: string, type: 'success' | 'error' = 'success', title?: string) => {
     setToastMessage(message);
     setToastType(type);
+    setToastTitle(title || (type === 'success' ? 'Storefront Settings' : 'Error'));
     setToastVisible(true);
     setTimeout(() => setToastVisible(false), 4000);
+  };
+
+  // Brand Name edit handlers
+  const handleStartEditBrandName = () => {
+    setBrandNameInput(vendorProfile?.business_name || '');
+    setBrandNameError(null);
+    setIsEditingBrandName(true);
+  };
+
+  const handleCancelEditBrandName = () => {
+    setBrandNameInput(vendorProfile?.business_name || '');
+    setBrandNameError(null);
+    setIsEditingBrandName(false);
+  };
+
+  const handleSaveBrandName = async () => {
+    const trimmed = brandNameInput.trim();
+    if (!trimmed) {
+      setBrandNameError('Brand name cannot be blank.');
+      return;
+    }
+    if (trimmed.length < 2 || trimmed.length > 255) {
+      setBrandNameError('Brand name must be between 2 and 255 characters.');
+      return;
+    }
+
+    setSavingBrandName(true);
+    setBrandNameError(null);
+
+    try {
+      const updatedProfile = await vendorService.updateProfile({
+        business_name: trimmed,
+      });
+      updateProfile(updatedProfile);
+      setIsEditingBrandName(false);
+      showToast('Brand name updated successfully!', 'success', 'Brand Info');
+    } catch (err: any) {
+      const errMsg = err?.message || 'Failed to update brand name.';
+      setBrandNameError(errMsg);
+      showToast(errMsg, 'error', 'Error');
+    } finally {
+      setSavingBrandName(false);
+    }
   };
 
   // Handle changing default payment method
@@ -528,7 +577,7 @@ export default function BrandInfoSettings() {
           >
             <div>
               <p className="text-[10px] uppercase tracking-[0.4em] text-white/70">
-                {toastType === 'success' ? 'Payment Settings' : 'Error'}
+                {toastTitle}
               </p>
               <p className="text-sm font-semibold tracking-wide">{toastMessage}</p>
             </div>
@@ -639,18 +688,93 @@ export default function BrandInfoSettings() {
                         <h2 className="text-xl font-display text-[#222]">Brand Info</h2>
 
                         <form className="space-y-6" onSubmit={handleSave}>
-                          {/* Brand name (read-only) */}
+                          {/* Brand name */}
                           <div className="space-y-2">
-                            <label className="text-sm font-ui text-gray-700">Brand Name</label>
-                            <input
-                              type="text"
-                              value={vendorProfile?.business_name || 'Your Brand Name'}
-                              disabled
-                              className="w-full border border-gray-200 rounded-xl px-3 py-3 bg-gray-50 text-gray-600"
-                            />
-                            <p className="text-xs text-gray-500 font-ui">
-                              The brand name cannot be changed without contacting the Support team.
-                            </p>
+                            <label htmlFor="brand-name-input" className="text-sm font-ui text-gray-700">
+                              Brand Name
+                            </label>
+                            {!isEditingBrandName ? (
+                              <div className="flex items-center gap-2">
+                                <input
+                                  id="brand-name-input"
+                                  type="text"
+                                  value={vendorProfile?.business_name || 'Your Brand Name'}
+                                  disabled
+                                  readOnly
+                                  className="flex-1 min-w-0 border border-gray-200 rounded-xl px-3 py-3 bg-gray-50 text-gray-600 cursor-not-allowed"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={handleStartEditBrandName}
+                                  className="shrink-0 px-4 py-3 text-xs font-semibold text-[#105E53] border border-gray-200 rounded-xl hover:bg-gray-50 transition flex items-center gap-1.5"
+                                  aria-label="Edit Brand Name"
+                                >
+                                  <Edit2 className="w-3.5 h-3.5" />
+                                  Edit
+                                </button>
+                              </div>
+                            ) : (
+                              <div className="space-y-2">
+                                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                                  <input
+                                    id="brand-name-input"
+                                    type="text"
+                                    value={brandNameInput}
+                                    onChange={(e) => {
+                                      setBrandNameInput(e.target.value);
+                                      if (brandNameError) setBrandNameError(null);
+                                    }}
+                                    onKeyDown={(e) => {
+                                      if (e.key === 'Enter') {
+                                        e.preventDefault();
+                                        handleSaveBrandName();
+                                      } else if (e.key === 'Escape') {
+                                        e.preventDefault();
+                                        handleCancelEditBrandName();
+                                      }
+                                    }}
+                                    disabled={savingBrandName}
+                                    placeholder="Enter brand name"
+                                    className={`flex-1 min-w-0 border rounded-xl px-3 py-3 focus:outline-none focus:border-[#105E53] bg-white text-gray-900 ${
+                                      brandNameError ? 'border-red-400' : 'border-gray-200'
+                                    }`}
+                                    autoFocus
+                                  />
+                                  <div className="flex items-center gap-2 shrink-0">
+                                    <button
+                                      type="button"
+                                      onClick={handleSaveBrandName}
+                                      disabled={savingBrandName}
+                                      className="px-4 py-3 bg-[#105E53] text-white text-xs font-semibold rounded-xl hover:bg-[#0d4a41] disabled:opacity-50 disabled:cursor-not-allowed transition flex items-center gap-1.5"
+                                      aria-label="Save Brand Name"
+                                    >
+                                      {savingBrandName ? (
+                                        <>
+                                          <span className="inline-block w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                                          Saving...
+                                        </>
+                                      ) : (
+                                        'Save'
+                                      )}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={handleCancelEditBrandName}
+                                      disabled={savingBrandName}
+                                      className="px-4 py-3 border border-gray-200 text-gray-700 text-xs font-semibold rounded-xl hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed transition"
+                                      aria-label="Cancel Brand Name"
+                                    >
+                                      Cancel
+                                    </button>
+                                  </div>
+                                </div>
+                                {brandNameError && (
+                                  <p className="text-xs text-red-600 font-ui" role="alert">
+                                    {brandNameError}
+                                  </p>
+                                )}
+                              </div>
+                            )}
                           </div>
 
                           {/* Contact */}

@@ -75,16 +75,24 @@ describe('ProductList', () => {
   });
 
   it.each([
-    [undefined, 'object-center'],
+    [undefined, 'object-center sm:object-top'],
     ['Men', 'object-[40%_25%] max-sm:object-[25%_40%]'],
     ['Women', 'object-[40%_0%] max-sm:object-[36%_42%]'],
-  ])('preserves the existing %s hero positioning without an override', async (presetCategory, position) => {
+  ])('preserves the %s hero positioning without an override', async (presetCategory, position) => {
     const { container } = render(<MemoryRouter><ProductList presetCategory={presetCategory} /></MemoryRouter>);
 
     await waitFor(() => expect(getProductsMock).toHaveBeenCalled());
     const hero = container.querySelector('picture img');
     expect(hero).toHaveClass('object-cover', ...position.split(' '));
-    expect(hero).not.toHaveClass('sm:object-top');
+  });
+
+  it('renders the default hero image from shop-edits when no override or category is provided', async () => {
+    const { container } = render(<MemoryRouter><ProductList /></MemoryRouter>);
+
+    await waitFor(() => expect(getProductsMock).toHaveBeenCalled());
+    const hero = container.querySelector('picture img');
+    expect(hero).toHaveAttribute('src', '/images/hero/shop-edits-2088.jpg');
+    expect(hero).toHaveClass('object-cover', 'object-center', 'sm:object-top');
   });
 
   it('renders the first category page before background pages finish loading', async () => {

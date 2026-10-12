@@ -542,3 +542,46 @@ async def test_send_order_status_update_email_allowed_milestones_and_suppression
     assert "returned" in calls[3]["html_content"].lower()
     assert "cancelled" in calls[4]["html_content"].lower()
 
+
+@pytest.mark.asyncio
+async def test_send_pending_payment_reminder_email_content_and_safe_url(monkeypatch):
+    service = EmailService()
+    calls = _capture_email(monkeypatch, service)
+
+    result = await service.send_pending_payment_reminder_email(
+        email="shopper@example.com",
+        name="Ada Lovelace",
+        order_number="SHP-20261011-001",
+        order_date=datetime(2026, 10, 10, 14, 30),
+        items=[
+            {
+                "product_name": "Lagos Sunset Silk Dress",
+                "quantity": 1,
+                "price": 125000,
+                "currency": "NGN",
+                "subtotal": 125000,
+            }
+        ],
+        total=125000,
+        currency="NGN",
+        payment_url="https://checkout.paystack.com/access_code_12345",
+        order_url="https://shopsoma.com/orders/order-uuid-12345",
+    )
+
+    assert result is True
+    assert len(calls) == 1
+    call = calls[0]
+    assert call["to_email"] == "shopper@example.com"
+    assert "SHP-20261011-001" in call["subject"]
+    html = call["html_content"]
+    assert "Ada Lovelace" in html
+    assert "SHP-20261011-001" in html
+    assert "Lagos Sunset Silk Dress" in html
+    assert "Complete Your Payment" in html
+    assert "https://checkout.paystack.com/access_code_12345" in html
+    assert "https://shopsoma.com/orders/order-uuid-12345" in html
+
+    # Verify no secrets or sensitive credentials are leak in the email
+    for sensitive in ["sk_test_", "sk_live_", "secret_key", "pepper", "api_key"]:
+        assert sensitive not in html.lower()
+

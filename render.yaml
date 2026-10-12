@@ -147,6 +147,16 @@ services:
           type: web
           name: shopsoma-staging-api
           envVarKey: S3_BUCKET_NAME
+      - key: BREVO_API_KEY
+        fromService:
+          type: web
+          name: shopsoma-staging-api
+          envVarKey: BREVO_API_KEY
+      - key: FRONTEND_BASE_URL
+        fromService:
+          type: web
+          name: shopsoma-staging-api
+          envVarKey: FRONTEND_BASE_URL
 
   - type: worker
     name: shopsoma-staging-checkout-outbox-beat

@@ -3,7 +3,7 @@
  * Complete order management and details for admins
  */
 import { useState, useEffect, useCallback } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { CheckCircle2, Clock3 } from 'lucide-react';
 import AdminSidebar from '../../components/admin/AdminSidebar';
 import DhlShipmentOperations from '../../components/admin/DhlShipmentOperations';
@@ -20,6 +20,7 @@ import {
   cancelOrder,
   processRefund,
   runShadowQuote,
+  adminMarkItemReady,
 } from '../../services/adminOrderService';
 import type {
   OrderDetail,
@@ -33,6 +34,8 @@ import { normalizeProductImageUrl } from '../../utils/productImages';
 export default function AdminOrderDetail() {
   const { orderId } = useParams<{ orderId: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
+  const backUrl = (location.state as any)?.from || '/admin/orders';
   const { toasts, hideToast, success, error, warning } = useToast();
   const { currentCurrency, setCurrency, exchangeRates, fetchExchangeRate } = useCurrencyStore();
 
@@ -316,7 +319,7 @@ export default function AdminOrderDetail() {
           <div className="text-center py-12">
             <h2 className="text-2xl font-bold text-gray-900">Order not found</h2>
             <button
-              onClick={() => navigate('/admin/orders')}
+              onClick={() => navigate(backUrl)}
               className="mt-4 text-[#105E53] hover:text-[#0d4a41]"
             >
               ← Back to orders
@@ -353,7 +356,7 @@ export default function AdminOrderDetail() {
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6 sm:mb-8">
           <div className="min-w-0">
             <button
-              onClick={() => navigate('/admin/orders')}
+              onClick={() => navigate(backUrl)}
               className="text-gray-600 hover:text-gray-900 mb-2 flex items-center gap-1 text-sm"
             >
               ← Back to orders
@@ -490,13 +493,20 @@ export default function AdminOrderDetail() {
                             item.order_type === 'made_to_order' ||
                             item.order_type === 'custom'
                           );
+                          const isReady = Boolean(
+                            item.ready_for_pickup_at ||
+                            item.readiness_state === 'ready_for_pickup' ||
+                            item.readiness_state === 'pickup_scheduled' ||
+                            item.readiness_state === 'picked_up'
+                          );
+                          const showPickupPanel = Boolean(item.pickup && (isMto || isReady));
                           return (
                             <>
                               <div className="flex flex-wrap items-center gap-2">
                                 <h3 className="font-medium text-gray-900 line-clamp-2">{item.product_title}</h3>
                                 {isMto ? <MadeToOrderTag /> : <ReadyToWearTag />}
                                 {!isMto && (
-                                  (item.ready_for_pickup_at || item.readiness_state === 'ready_for_pickup' || item.readiness_state === 'pickup_scheduled' || item.readiness_state === 'picked_up') ? (
+                                  isReady ? (
                                     <span
                                       className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700"
                                       data-testid="rtw-admin-ready"
@@ -505,13 +515,33 @@ export default function AdminOrderDetail() {
                                       Available & Ready for pickup
                                     </span>
                                   ) : (
-                                    <span
-                                      className="inline-flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-800"
-                                      data-testid="rtw-admin-pending"
-                                    >
-                                      <Clock3 className="h-3.5 w-3.5" />
-                                      Awaiting vendor confirmation
-                                    </span>
+                                    <div className="inline-flex items-center gap-2">
+                                      <span
+                                        className="inline-flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-800"
+                                        data-testid="rtw-admin-pending"
+                                      >
+                                        <Clock3 className="h-3.5 w-3.5" />
+                                        Awaiting vendor confirmation
+                                      </span>
+                                      {item.pickup && (
+                                        <button
+                                          type="button"
+                                          onClick={async () => {
+                                            try {
+                                              const updated = await adminMarkItemReady(order.id, item.id);
+                                              setOrder(updated);
+                                              success(`Marked ${item.product_title} as ready for pickup.`);
+                                            } catch (err) {
+                                              error('Failed to mark item ready for pickup');
+                                            }
+                                          }}
+                                          className="px-2 py-0.5 text-xs font-medium rounded border border-[#105E53] text-[#105E53] bg-white hover:bg-[#f1f8f6]"
+                                          data-testid={`rtw-admin-mark-ready-${item.id}`}
+                                        >
+                                          Mark Ready (Admin)
+                                        </button>
+                                      )}
+                                    </div>
                                   )
                                 )}
                               </div>
@@ -526,7 +556,7 @@ export default function AdminOrderDetail() {
                               <p className="text-sm text-gray-600 mt-1">
                                 Vendor: {item.vendor.business_name}
                               </p>
-                              {isMto && (
+                              {showPickupPanel && (
                                 <ItemPickupPanel
                                   orderId={order.id}
                                   item={item}
@@ -711,8 +741,22 @@ export default function AdminOrderDetail() {
                     {(() => {
                       if (order.payment_status === 'pending') {
                         return (
-                          <span className="px-3 py-1 rounded-full text-sm font-medium bg-amber-100 text-amber-800">
+                          <span className="px-3 py-1 rounded-full text-sm font-medium bg-amber-100 text-amber-800 border border-amber-200">
                             Awaiting Payment
+                          </span>
+                        );
+                      }
+                      if (order.payment_status === 'failed') {
+                        return (
+                          <span className="px-3 py-1 rounded-full text-sm font-medium bg-red-100 text-red-800 border border-red-200">
+                            Payment Failed
+                          </span>
+                        );
+                      }
+                      if (order.payment_status === 'refunded') {
+                        return (
+                          <span className="px-3 py-1 rounded-full text-sm font-medium bg-gray-100 text-gray-800 border border-gray-200">
+                            Payment Refunded
                           </span>
                         );
                       }

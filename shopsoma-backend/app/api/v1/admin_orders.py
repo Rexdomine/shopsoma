@@ -6,7 +6,7 @@ from sqlalchemy import select, func, and_, or_, desc, exists
 from sqlalchemy.orm import selectinload
 from typing import Optional, List
 from uuid import UUID
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 from decimal import Decimal
 import logging
 import csv
@@ -19,7 +19,7 @@ from app.models.user import User
 from app.models.order import Order, OrderItem, PaymentStatus, FulfillmentStatus
 from app.models.vendor import Vendor
 from app.models.address import Address
-from app.models.vendor_pickup import VendorPickup, PickupStatus
+from app.models.vendor_pickup import VendorPickup, PickupStatus, OrderType
 from app.models.product import Product
 from app.models.payment import Payment
 from app.models.setting import Setting
@@ -29,8 +29,10 @@ from app.services.orders.made_to_order_readiness import (
     ensure_admin_pickup_update_allowed,
     get_production_tracking,
     is_made_to_order_item,
+    is_picked_up,
     pickups_by_order_item,
     readiness_fields,
+    select_item_pickup,
 )
 
 logger = logging.getLogger(__name__)
@@ -468,7 +470,7 @@ async def list_orders(
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(20, ge=1, le=100, description="Items per page"),
     search: Optional[str] = Query(None, description="Search by order number, customer name, or email"),
-    payment_status: Optional[str] = Query(None, description="Filter by payment status"),
+    payment_status: Optional[str] = Query("paid", description="Filter by payment status (default: paid)"),
     fulfillment_status: Optional[FulfillmentStatus] = Query(None, description="Filter by fulfillment status"),
     vendor_id: Optional[str] = Query(None, description="Filter by vendor ID"),
     date_from: Optional[date] = Query(None, description="Filter orders from date"),
@@ -476,7 +478,7 @@ async def list_orders(
     admin: User = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """List all orders with filters and pagination"""
+    """List all orders with filters and pagination. Defaults to paid orders."""
 
     # Build base query
     query = select(Order).options(
@@ -500,18 +502,20 @@ async def list_orders(
         )
 
     resolved_payment_status = None
-    if payment_status:
+    raw_status = (payment_status if payment_status is not None else "paid").strip().lower()
+    if raw_status and raw_status != "all":
         try:
-            resolved_payment_status = PaymentStatus(payment_status.upper())
+            resolved_payment_status = PaymentStatus(raw_status.upper())
             filters.append(Order.payment_status == resolved_payment_status)
         except ValueError:
-            filters.append(Order.payment_status == payment_status)
+            try:
+                resolved_payment_status = PaymentStatus(raw_status)
+                filters.append(Order.payment_status == resolved_payment_status)
+            except ValueError:
+                filters.append(Order.payment_status == payment_status)
 
     if fulfillment_status:
         filters.append(Order.fulfillment_status == fulfillment_status)
-        if fulfillment_status == FulfillmentStatus.ORDER_RECEIVED and not payment_status:
-            # Only paid orders count as order_received
-            filters.append(Order.payment_status == PaymentStatus.PAID)
 
     if vendor_id:
         # Filter orders that have items from this vendor
@@ -939,10 +943,20 @@ async def update_pickup_status(
             detail="Pickup not found for this order",
         )
 
+    order = await db.get(Order, order_uuid)
+    if not order:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Order not found",
+        )
+
     # Serialize with the vendor ready-for-pickup transition (same row lock).
     order_item = await db.scalar(
         select(OrderItem)
-        .options(selectinload(OrderItem.product))
+        .options(
+            selectinload(OrderItem.product),
+            selectinload(OrderItem.vendor).selectinload(Vendor.user),
+        )
         .where(OrderItem.id == pickup.order_item_id)
         .with_for_update(of=OrderItem)
     )
@@ -976,6 +990,11 @@ async def update_pickup_status(
             pickup.cancelled_at = datetime.now()
 
     # Update other fields if provided
+    is_scheduling = (
+        update_data.pickup_window_start is not None
+        or update_data.scheduled_pickup_date is not None
+    )
+
     if update_data.scheduled_pickup_date is not None:
         pickup.scheduled_pickup_date = update_data.scheduled_pickup_date
 
@@ -1009,9 +1028,101 @@ async def update_pickup_status(
         else:
             pickup.admin_notes = f"[{datetime.now().isoformat()}] {update_data.admin_notes}"
 
+    if is_scheduling and not update_data.pickup_status:
+        pickup.status = PickupStatus.SCHEDULED
+        if order_item and order_item.fulfillment_status != FulfillmentStatus.CANCELLED:
+            order_item.fulfillment_status = FulfillmentStatus.PICKUP_SCHEDULED
+
     await db.commit()
 
+    # Send notification email to the vendor that pickup is scheduled for their item
+    if is_scheduling and order_item and order_item.vendor:
+        try:
+            notification_service = OrderNotificationService(db)
+            await notification_service.notify_vendor_item_pickup_scheduled(
+                order=order,
+                vendor=order_item.vendor,
+                item=order_item,
+                pickup=pickup,
+            )
+        except Exception as e:
+            logger.error(f"Failed to send vendor item pickup notification: {e}")
+
     # Return updated order
+    return await get_order_detail(order_id, admin, db)
+
+
+@router.post("/{order_id}/items/{item_id}/ready-for-pickup", response_model=OrderDetail)
+async def admin_mark_item_ready_for_pickup(
+    order_id: str,
+    item_id: str,
+    admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Admin marks an order item ready for pickup on behalf of the vendor."""
+    try:
+        order_uuid = UUID(order_id)
+        item_uuid = UUID(item_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Order or item not found",
+        )
+
+    order = await db.scalar(
+        select(Order)
+        .options(selectinload(Order.customer))
+        .where(Order.id == order_uuid)
+    )
+    if not order:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Order not found",
+        )
+
+    item = await db.scalar(
+        select(OrderItem)
+        .options(selectinload(OrderItem.product), selectinload(OrderItem.vendor))
+        .where(OrderItem.id == item_uuid, OrderItem.order_id == order_uuid)
+        .with_for_update(of=OrderItem)
+    )
+    if not item:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Order item not found",
+        )
+
+    is_mto = is_made_to_order_item(item)
+    pickups = (
+        await db.scalars(
+            select(VendorPickup).where(VendorPickup.order_item_id == item.id)
+        )
+    ).all()
+    pickup = select_item_pickup(pickups)
+    if pickup is None:
+        pickup = VendorPickup(
+            vendor_id=item.vendor_id,
+            order_id=order.id,
+            order_item_id=item.id,
+            order_type=OrderType.MADE_TO_ORDER if is_mto else OrderType.RTW,
+            scheduled_pickup_date=None,
+            pickup_address=item.vendor.business_address if item.vendor else None,
+            pickup_contact_phone=item.vendor.business_phone if item.vendor else None,
+            status=PickupStatus.SCHEDULED,
+        )
+        db.add(pickup)
+
+    if pickup.ready_for_pickup_at is None and not is_picked_up(pickup):
+        pickup.ready_for_pickup_at = datetime.now(timezone.utc)
+        pickup.ready_for_pickup_marked_by = admin.id
+        if is_mto and pickup.order_type != OrderType.MADE_TO_ORDER:
+            pickup.order_type = OrderType.MADE_TO_ORDER
+        elif not is_mto and pickup.order_type != OrderType.RTW:
+            pickup.order_type = OrderType.RTW
+
+    await db.commit()
+    await db.refresh(pickup)
+
     return await get_order_detail(order_id, admin, db)
 
 
@@ -1546,14 +1657,14 @@ async def process_refund(
 
 @router.get("/export/csv")
 async def export_orders_csv(
-    payment_status: Optional[str] = Query(None),
+    payment_status: Optional[str] = Query("paid", description="Filter by payment status (default: paid)"),
     fulfillment_status: Optional[FulfillmentStatus] = Query(None),
     date_from: Optional[date] = Query(None),
     date_to: Optional[date] = Query(None),
     admin: User = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Export orders to CSV"""
+    """Export orders to CSV with payment and fulfillment filters. Defaults to paid orders."""
 
     # Build query
     query = select(Order).options(
@@ -1563,15 +1674,21 @@ async def export_orders_csv(
 
     # Apply filters
     filters = []
-    if payment_status:
+    raw_status = (payment_status if payment_status is not None else "paid").strip().lower()
+    if raw_status and raw_status != "all":
         try:
-            filters.append(Order.payment_status == PaymentStatus(payment_status.upper()))
+            resolved_payment_status = PaymentStatus(raw_status.upper())
+            filters.append(Order.payment_status == resolved_payment_status)
         except ValueError:
-            filters.append(Order.payment_status == payment_status)
+            try:
+                resolved_payment_status = PaymentStatus(raw_status)
+                filters.append(Order.payment_status == resolved_payment_status)
+            except ValueError:
+                filters.append(Order.payment_status == payment_status)
+
     if fulfillment_status:
         filters.append(Order.fulfillment_status == fulfillment_status)
-        if fulfillment_status == FulfillmentStatus.ORDER_RECEIVED and not payment_status:
-            filters.append(Order.payment_status == PaymentStatus.PAID)
+
     if date_from:
         filters.append(Order.created_at >= datetime.combine(date_from, datetime.min.time()))
     if date_to:
@@ -1605,18 +1722,19 @@ async def export_orders_csv(
 
     # Write data
     for order in orders:
-        customer_name = f"{order.customer.first_name or ''} {order.customer.last_name or ''}".strip()
+        customer_name = getattr(order.customer, "full_name", "") or ""
+        customer_email = getattr(order.customer, "email", "") or ""
         item_count = sum(item.quantity for item in order.items)
 
         writer.writerow([
             order.order_number,
             customer_name,
-            order.customer.email,
+            customer_email,
             float(order.total_amount),
-            order.payment_status.value,
-            order.fulfillment_status.value,
+            order.payment_status.value if hasattr(order.payment_status, "value") else str(order.payment_status),
+            order.fulfillment_status.value if hasattr(order.fulfillment_status, "value") else str(order.fulfillment_status),
             item_count,
-            order.created_at.isoformat(),
+            order.created_at.isoformat() if order.created_at else "",
             order.delivered_at.isoformat() if order.delivered_at else "",
         ])
 
@@ -1626,6 +1744,6 @@ async def export_orders_csv(
         iter([output.getvalue()]),
         media_type="text/csv",
         headers={
-            "Content-Disposition": f"attachment; filename=orders_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            "Content-Disposition": f"attachment; filename=orders_{raw_status}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
         },
     )

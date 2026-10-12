@@ -2,49 +2,71 @@
  * Order Filters Component
  * Filter controls for admin order list
  */
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import type {
   OrderFilterParams,
-  PaymentStatus,
+  PaymentStatusScope,
   FulfillmentStatus,
 } from '../../services/adminOrderService';
 
 interface OrderFiltersProps {
   onFilterChange: (filters: OrderFilterParams) => void;
   loading?: boolean;
+  activePaymentStatus?: PaymentStatusScope;
+  onPaymentStatusChange?: (status: PaymentStatusScope) => void;
 }
 
-export default function OrderFilters({ onFilterChange, loading }: OrderFiltersProps) {
+export default function OrderFilters({
+  onFilterChange,
+  loading,
+  activePaymentStatus = 'paid',
+  onPaymentStatusChange,
+}: OrderFiltersProps) {
   const [search, setSearch] = useState('');
-  const [paymentStatus, setPaymentStatus] = useState<PaymentStatus | ''>('');
+  const [paymentStatus, setPaymentStatus] = useState<PaymentStatusScope>(activePaymentStatus);
   const [fulfillmentStatus, setFulfillmentStatus] = useState<FulfillmentStatus | ''>('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const [showFilters, setShowFilters] = useState(false);
 
+  const onFilterChangeRef = useRef(onFilterChange);
+  onFilterChangeRef.current = onFilterChange;
+  const isFirstRender = useRef(true);
+
+  // Sync internal paymentStatus when parent activePaymentStatus changes
+  useEffect(() => {
+    setPaymentStatus(activePaymentStatus);
+  }, [activePaymentStatus]);
+
   // Apply filters when they change
   useEffect(() => {
+    if (isFirstRender.current) {
+      isFirstRender.current = false;
+      return;
+    }
+
     const filters: OrderFilterParams = {};
 
     if (search.trim()) filters.search = search.trim();
-    if (paymentStatus) filters.payment_status = paymentStatus as PaymentStatus;
+    if (paymentStatus) filters.payment_status = paymentStatus;
     if (fulfillmentStatus) filters.fulfillment_status = fulfillmentStatus as FulfillmentStatus;
     if (dateFrom) filters.date_from = dateFrom;
     if (dateTo) filters.date_to = dateTo;
 
-    onFilterChange(filters);
-  }, [search, paymentStatus, fulfillmentStatus, dateFrom, dateTo, onFilterChange]);
+    onFilterChangeRef.current(filters);
+  }, [search, paymentStatus, fulfillmentStatus, dateFrom, dateTo]);
 
   const handleReset = () => {
     setSearch('');
-    setPaymentStatus('');
+    setPaymentStatus('paid');
+    onPaymentStatusChange?.('paid');
     setFulfillmentStatus('');
     setDateFrom('');
     setDateTo('');
   };
 
   const hasActiveFilters =
-    search || paymentStatus || fulfillmentStatus || dateFrom || dateTo;
+    Boolean(search || (paymentStatus && paymentStatus !== 'paid') || fulfillmentStatus || dateFrom || dateTo);
 
   return (
     <div className="bg-white rounded-lg shadow p-4 sm:p-6 mb-6 min-w-0">
@@ -91,15 +113,19 @@ export default function OrderFilters({ onFilterChange, loading }: OrderFiltersPr
             </label>
             <select
               value={paymentStatus}
-              onChange={(e) => setPaymentStatus(e.target.value as PaymentStatus | '')}
+              onChange={(e) => {
+                const val = e.target.value as PaymentStatusScope;
+                setPaymentStatus(val);
+                onPaymentStatusChange?.(val);
+              }}
               disabled={loading}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#105E53] focus:border-transparent"
             >
-              <option value="">All payments</option>
-              <option value="pending">Pending</option>
-              <option value="paid">Paid</option>
-              <option value="failed">Failed</option>
-              <option value="refunded">Refunded</option>
+              <option value="paid">Orders Received (Paid)</option>
+              <option value="pending">Pending Payments</option>
+              <option value="failed">Failed Payments</option>
+              <option value="refunded">Refunded Payments</option>
+              <option value="all">All Orders</option>
             </select>
           </div>
 
@@ -174,11 +200,14 @@ export default function OrderFilters({ onFilterChange, loading }: OrderFiltersPr
               </button>
             </span>
           )}
-          {paymentStatus && (
+          {paymentStatus && paymentStatus !== 'paid' && (
             <span className="inline-flex items-center gap-1 px-3 py-1 bg-blue-100 text-blue-700 rounded-full text-sm">
-              Payment: {paymentStatus}
+              Payment: {paymentStatus === 'pending' ? 'Pending Payments' : paymentStatus === 'failed' ? 'Failed Payments' : paymentStatus === 'all' ? 'All Orders' : paymentStatus}
               <button
-                onClick={() => setPaymentStatus('')}
+                onClick={() => {
+                  setPaymentStatus('paid');
+                  onPaymentStatusChange?.('paid');
+                }}
                 className="hover:text-blue-900"
                 disabled={loading}
               >

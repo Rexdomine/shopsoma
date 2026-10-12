@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import VendorSidebar from '../../components/vendor/VendorSidebar';
 import ToastContainer from '../../components/ui/ToastContainer';
 import CurrencySwitcher from '../../components/common/CurrencySwitcher';
@@ -13,6 +13,7 @@ import { Search, Loader2, Filter, ArrowUpDown, ChevronLeft, ChevronRight, Chevro
 export default function VendorOrders() {
   const { toasts, hideToast } = useToast();
   const navigate = useNavigate();
+  const location = useLocation();
   const [orders, setOrders] = useState<VendorOrder[]>([]);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
@@ -50,6 +51,10 @@ export default function VendorOrders() {
       setOrders(response.orders || []);
       setTotalPages(response.total_pages || 1);
     } catch (err: any) {
+      if (err.response?.status === 401 || err.response?.data?.detail === 'Not authenticated') {
+        navigate(ROUTES.VENDOR_LOGIN, { replace: true, state: { from: location } });
+        return;
+      }
       console.error('❌ Error fetching orders:', err);
       console.error('📋 Error status:', err.response?.status);
       console.error('📋 Error data:', err.response?.data);

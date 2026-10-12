@@ -10,6 +10,7 @@ from app.core.config import Settings
 TASK_NAMES = {
     "app.tasks.checkout_outbox.dispatch_checkout_outbox",
     "app.tasks.product_image_storage_cleanup.reconcile_product_image_storage_cleanup",
+    "app.tasks.pending_payment_reminders.dispatch_pending_payment_reminders",
 }
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -156,3 +157,23 @@ def test_render_api_and_checkout_consumers_share_supported_python_runtime() -> N
 
     assert web_version == worker_version == beat_version
     assert tuple(map(int, str(web_version).split("."))) >= (3, 10)
+
+
+def test_render_blueprint_wires_worker_email_delivery_configuration() -> None:
+    blueprint = yaml.safe_load((ROOT / "render.yaml").read_text(encoding="utf-8"))
+    services = {service["name"]: service for service in blueprint["services"]}
+    worker = services["shopsoma-staging-checkout-outbox-worker"]
+
+    env = env_by_key(worker)
+    assert "BREVO_API_KEY" in env
+    assert env["BREVO_API_KEY"]["fromService"] == {
+        "type": "web",
+        "name": "shopsoma-staging-api",
+        "envVarKey": "BREVO_API_KEY",
+    }
+    assert "FRONTEND_BASE_URL" in env
+    assert env["FRONTEND_BASE_URL"]["fromService"] == {
+        "type": "web",
+        "name": "shopsoma-staging-api",
+        "envVarKey": "FRONTEND_BASE_URL",
+    }
