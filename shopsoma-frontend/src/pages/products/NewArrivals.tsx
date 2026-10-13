@@ -12,7 +12,8 @@ export default function NewArrivals() {
       heroOverride={{
         title: 'New Arrivals',
         body: 'Discover the latest drops across Shopsoma, curated fresh for you.',
-        imageUrl: '/images/hero/demo-image-2.png',
+        imageUrl: '/images/hero/shop-edits-2088.jpg',
+        imagePositionClassName: 'object-center sm:object-top',
         ctaLabel: 'Shop new arrivals',
       }}
       initialParams={initialParams}
