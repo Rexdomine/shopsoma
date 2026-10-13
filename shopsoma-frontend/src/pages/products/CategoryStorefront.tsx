@@ -69,7 +69,8 @@ export default function CategoryStorefront() {
       heroOverride={{
         title: category.name,
         body: CATEGORY_HERO_COPY[category.slug] || category.description || `Explore the ${category.name.toLowerCase()} edit.`,
-        imageUrl: '/images/hero/demo-image-2.png',
+        imageUrl: category.image_url || '/images/hero/shop-edits-2088.jpg',
+        imagePositionClassName: 'object-center sm:object-top',
         ctaLabel: `Shop ${category.name.toLowerCase()}`,
       }}
     />
