@@ -7,7 +7,8 @@ export default function BagsWalletsStorefront() {
       heroOverride={{
         title: 'Bags & Wallets',
         body: 'Carry the season with structured bags, soft leathers, and everyday wallets.',
-        imageUrl: '/images/hero/demo-image-2.png',
+        imageUrl: '/images/hero/shop-edits-2088.jpg',
+        imagePositionClassName: 'object-center sm:object-top',
         ctaLabel: 'Shop bags & wallets',
       }}
     />

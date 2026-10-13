@@ -7,7 +7,8 @@ export default function PerfumesStorefront() {
       heroOverride={{
         title: 'Perfumes: Signature Scents',
         body: 'Explore fragrances that linger, from fresh florals to bold, smoky blends.',
-        imageUrl: '/images/hero/demo-image-2.png',
+        imageUrl: '/images/hero/shop-edits-2088.jpg',
+        imagePositionClassName: 'object-center sm:object-top',
         ctaLabel: 'Shop perfumes',
       }}
     />

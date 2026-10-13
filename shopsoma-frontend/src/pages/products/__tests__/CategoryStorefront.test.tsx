@@ -17,11 +17,20 @@ vi.mock('../../errors/NotFound', () => ({
   default: () => <div>Not found</div>,
 }));
 vi.mock('../ProductList', () => ({
-  default: ({ presetCategory, heroOverride, serverFilteredCategory }: { presetCategory: string; heroOverride?: { body: string }; serverFilteredCategory?: boolean }) => (
+  default: ({ presetCategory, heroOverride, serverFilteredCategory }: {
+    presetCategory: string;
+    heroOverride?: { title: string; body: string; imageUrl: string; imagePositionClassName?: string };
+    serverFilteredCategory?: boolean;
+  }) => (
     <div>
       <div>{presetCategory} products</div>
       <div data-testid="server-filtered-category">{String(serverFilteredCategory)}</div>
-      {heroOverride && <div data-testid="category-hero-copy">{heroOverride.body}</div>}
+      {heroOverride && (
+        <>
+          <div data-testid="category-hero-copy">{heroOverride.body}</div>
+          <img data-testid="category-hero-image" src={heroOverride.imageUrl} className={heroOverride.imagePositionClassName} alt="" />
+        </>
+      )}
     </div>
   ),
 }));
@@ -84,5 +93,7 @@ describe('CategoryStorefront', () => {
       'Polished silhouettes and memorable details for dinners, celebrations and nights that call for something more.',
     ));
     expect(screen.getByTestId('server-filtered-category')).toHaveTextContent('true');
+    expect(screen.getByTestId('category-hero-image')).toHaveAttribute('src', '/images/hero/shop-edits-2088.jpg');
+    expect(screen.getByTestId('category-hero-image')).toHaveClass('object-center', 'sm:object-top');
   });
 });
