@@ -1,7 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ROUTES } from '../../config/constants';
-import { orderService, type OrderTrackingResponse } from '../../services/orderService';
+import {
+  orderService,
+  type OrderStatus,
+  type OrderTracking,
+  type TrackingHistory,
+} from '../../services/orderService';
 import { useAuthStore } from '../../store/authStore';
 import { loadCheckoutCapability } from '../../utils/checkoutCapability';
 import ShipbubbleLiveMap from '../../components/orders/ShipbubbleLiveMap';
@@ -74,7 +79,7 @@ export default function OrderMapTracking() {
   const [searchParams] = useSearchParams();
   const { user } = useAuthStore();
 
-  const [tracking, setTracking] = useState<OrderTrackingResponse | null>(null);
+  const [tracking, setTracking] = useState<OrderTracking | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
@@ -128,7 +133,7 @@ export default function OrderMapTracking() {
     try {
       const updated = await orderService.simulateOrderTracking(
         orderId,
-        statusKey,
+        statusKey as OrderStatus,
         loadCheckoutCapability(orderId)
       );
       setTracking(updated);
@@ -342,7 +347,7 @@ export default function OrderMapTracking() {
                   const isLast = index === VERTICAL_STATUS_STEPS.length - 1;
 
                   const matchedHistory = tracking.history?.find(
-                    (h) => normalizeStatusKey(h.status) === step.key
+                    (h: TrackingHistory) => normalizeStatusKey(h.status) === step.key
                   );
 
                   return (
