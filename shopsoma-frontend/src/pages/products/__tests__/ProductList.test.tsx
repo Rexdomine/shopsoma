@@ -317,7 +317,7 @@ describe('ProductList', () => {
 
     await waitFor(() => expect(screen.getAllByTestId('vendor-image')).not.toHaveLength(0));
     expect(screen.getAllByTestId('vendor-image')[0]).toHaveTextContent(
-      'http://localhost:8000/uploads/featured.jpg',
+      'http://localhost:8050/uploads/featured.jpg',
     );
   });
 

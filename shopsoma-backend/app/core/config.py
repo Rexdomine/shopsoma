@@ -104,7 +104,11 @@ class Settings(BaseSettings):
     # ShipBubble Shipping Service
     # Docs: https://docs.shipbubble.com
     SHIPBUBBLE_API_KEY: str = ""
-    SHIPBUBBLE_WEBHOOK_SECRET: str = ""  # For webhook signature verification
+    SHIPBUBBLE_WEBHOOK_SECRET: str = ""  # For webhook signature verification (optional, API key is primary)
+    SHIPBUBBLE_BASE_URL: str = "https://api.shipbubble.com/v1"
+    SHIPBUBBLE_TIMEOUT_SECONDS: float = Field(default=30.0, ge=1, le=60)
+    SHIPBUBBLE_SENDER_EMAIL: str = "shipping@shopsoma.com"
+    SHIPBUBBLE_CATEGORY_ID: Optional[int] = None
 
     # DHL Express MyDHL API
     # Docs: https://developer.dhl.com/api-reference/dhl-express-mydhl-api
@@ -178,6 +182,11 @@ class Settings(BaseSettings):
                 self.DHL_EXPORT_ACCOUNT_NUMBER,
             )
         )
+
+    @property
+    def shipbubble_configured(self) -> bool:
+        """Return whether ShipBubble is configured with an API key."""
+        return bool(self.SHIPBUBBLE_API_KEY and self.SHIPBUBBLE_API_KEY.strip())
 
     @property
     def dhl_domestic_sandbox_cohort_ids(self) -> frozenset[UUID]:

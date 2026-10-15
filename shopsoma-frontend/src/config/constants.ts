@@ -19,7 +19,7 @@ const resolveApiBaseUrl = () => {
     }
   }
 
-  return 'http://localhost:8000/api/v1';
+  return 'http://localhost:8050/api/v1';
 };
 
 export const API_BASE_URL = resolveApiBaseUrl();
@@ -76,6 +76,7 @@ export const ROUTES = {
   CHECKOUT: '/checkout',
   ORDER_SUCCESS: '/order-success',
   ORDER_TRACKING: '/track/:orderId',
+  ORDER_MAP_TRACKING: '/track/:orderId/map',
   TRACK_ENTRY: '/track', CONTACT: '/contact', SHIPPING: '/shipping', RETURNS: '/returns', FAQS: '/faqs', ABOUT: '/about', COLLABORATE: '/collaborate', TERMS: '/terms', PRIVACY: '/privacy', COOKIES: '/cookies',
   VENDOR_DASHBOARD: '/vendor/dashboard',
   VENDOR_PRODUCTS: '/vendor/products',

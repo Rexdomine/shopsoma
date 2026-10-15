@@ -1529,7 +1529,21 @@ export default function Checkout() {
                   {renderStepTitle('Shipping Method', step === 'shipping' || step === 'payment')}
                   {secureShipping ? step === 'shipping' ? (
                     <div className="space-y-3 rounded-sm border border-gray-200 p-4">
-                      <p className="text-sm text-gray-700">We will prepare your order securely, then show the delivery options available for this address before payment.</p>
+                      {shippingProvider === 'shipbubble' ? (
+                        <div>
+                          <div className="flex items-center gap-2 mb-1.5">
+                            <span className="font-semibold text-sm text-gray-900">ShipBubble Couriers</span>
+                            <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                              Live Rates
+                            </span>
+                          </div>
+                          <p className="text-sm text-gray-600">
+                            We will calculate live rates from Nigerian couriers (GIG Logistics, Topship, DHL, etc.) for this address.
+                          </p>
+                        </div>
+                      ) : (
+                        <p className="text-sm text-gray-700">We will prepare your order securely, then show the delivery options available for this address before payment.</p>
+                      )}
                       {!enforcedOrder ? (
                         <button
                           type="button"
@@ -1537,7 +1551,7 @@ export default function Checkout() {
                           disabled={isCreatingOrder || !hasEmail || !isEmailConfirmed}
                           className="w-full py-3 rounded-sm bg-primary text-white text-sm font-semibold disabled:opacity-50"
                         >
-                          {isCreatingOrder ? 'Loading delivery options…' : 'Continue to delivery options'}
+                          {isCreatingOrder ? 'Calculating live courier rates…' : 'Calculate live courier rates'}
                         </button>
                       ) : !checkoutEstimate ? (
                         isCreatingOrder ? (

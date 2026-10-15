@@ -14,11 +14,12 @@ async def shipping_provider_settings(db):
             "shipping_provider", "shipping_use_shipbubble",
         )))
     )).all())
+    shipbubble_ready = settings.shipbubble_configured
     dhl_ready = (
         settings.ENVIRONMENT != "production"
         and domestic_shipping_capabilities(settings).checkout_enabled
     )
-    secure_checkout_routing = (
+    dhl_secure_checkout_routing = (
         settings.DOMESTIC_CHECKOUT_PREREQUISITES_ENABLED
         and settings.DOMESTIC_CHECKOUT_COHORT_PERCENTAGE == 100
         and settings.ENVIRONMENT != "production"
@@ -39,7 +40,7 @@ async def shipping_provider_settings(db):
             if (rows.get("shipping_use_shipbubble") or "").lower() == "true"
             else ("dhl" if dhl_ready else "manual")
         )
-    elif provider == "dhl" and not secure_checkout_routing:
+    elif provider == "dhl" and not dhl_secure_checkout_routing:
         # A rollout rollback must not strand the partial/legacy population on
         # the provider-only preview endpoint. Resolve the stale persisted
         # selection to the safe manual preview mode until full routing returns.
@@ -47,10 +48,11 @@ async def shipping_provider_settings(db):
     return ShippingProviderSettings(
         provider=provider,
         checkout_estimates_required=(
-            secure_checkout_routing
+            (provider == "shipbubble" and shipbubble_ready)
+            or (provider == "dhl" and dhl_ready and dhl_secure_checkout_routing)
         ),
         use_shipbubble=provider == "shipbubble",
-        readiness={"manual": True, "shipbubble": False, "dhl": dhl_ready},
+        readiness={"manual": True, "shipbubble": shipbubble_ready, "dhl": dhl_ready},
     )
 
 

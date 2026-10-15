@@ -72,7 +72,8 @@ def test_shipping_rate_response_keeps_legacy_blank_name_readable():
 
 
 @pytest.mark.asyncio
-async def test_admin_provider_persistence_readiness_and_legacy(client, admin_user, customer_user, db_session):
+async def test_admin_provider_persistence_readiness_and_legacy(client, admin_user, customer_user, db_session, monkeypatch):
+    monkeypatch.setattr(settings, 'SHIPBUBBLE_API_KEY', '')
     for headers in ({}, customer_user['headers']):
         response = await client.put('/api/v1/settings/shipping-provider', headers=headers, json={'provider': 'manual'})
         assert response.status_code in (401, 403)
@@ -215,6 +216,8 @@ async def test_manual_quote_keeps_snapshot_after_deactivation_with_dhl_gate_on(c
     assert selected.json()['selected_option']['amount'] == option['amount']
     assert Decimal(selected.json()['selected_option']['amount']) == Decimal('1500')
     provider_call.assert_not_awaited()
+    provider_row.value = 'manual'
+    await db_session.commit()
 
 
 @pytest.mark.asyncio

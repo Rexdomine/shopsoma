@@ -611,6 +611,16 @@ async def get_order_detail(
                 detail="Order not found",
             )
 
+        if order.payment_status == PaymentStatus.PAID and not order.delivery_provider:
+            try:
+                from app.services.shipping.shipbubble_booking import record_shipbubble_selection_on_paid_order
+                updated_order = await record_shipbubble_selection_on_paid_order(db, order_id=order.id)
+                if updated_order is not None:
+                    await db.commit()
+                    await db.refresh(order)
+            except Exception as sb_exc:
+                logger.warning("Failed to record ShipBubble selection in get_order_detail: %s", sb_exc)
+
         # Build response with detailed error tracking
         display_currency = resolve_order_currency(order)
         usd_to_ngn_rate = await _get_usd_to_ngn_rate(db)
@@ -816,6 +826,17 @@ async def update_order_status(
                 pickup.courier_name = update_data.courier_name
             if update_data.rider_id:
                 pickup.rider_id = update_data.rider_id
+
+    if new_status in (
+        FulfillmentStatus.PREPARING_FOR_PICKUP,
+        FulfillmentStatus.PICKUP_SCHEDULED,
+        FulfillmentStatus.PICKED_UP,
+    ):
+        try:
+            from app.services.shipping.shipbubble_booking import book_shipbubble_shipment_if_selected
+            await book_shipbubble_shipment_if_selected(db, order_id=order.id)
+        except Exception as sb_exc:
+            logger.warning("Failed to book ShipBubble pickup on status update for order %s: %s", order.id, sb_exc)
 
     await db.commit()
     await db.refresh(order)
@@ -1033,6 +1054,8 @@ async def update_pickup_status(
         if order_item and order_item.fulfillment_status != FulfillmentStatus.CANCELLED:
             order_item.fulfillment_status = FulfillmentStatus.PICKUP_SCHEDULED
 
+    await _book_shipbubble_if_all_items_ready(db, order_id=order.id)
+
     await db.commit()
 
     # Send notification email to the vendor that pickup is scheduled for their item
@@ -1050,6 +1073,44 @@ async def update_pickup_status(
 
     # Return updated order
     return await get_order_detail(order_id, admin, db)
+
+
+async def _book_shipbubble_if_all_items_ready(db: AsyncSession, *, order_id: UUID) -> None:
+    """When all items in an order are marked Ready for Pickup at the Hub, book the ShipBubble pickup."""
+    try:
+        items = (
+            await db.scalars(select(OrderItem).where(OrderItem.order_id == order_id))
+        ).all()
+        if not items:
+            return
+        pickups = (
+            await db.scalars(select(VendorPickup).where(VendorPickup.order_id == order_id))
+        ).all()
+        by_item = pickups_by_order_item(pickups)
+        all_ready = True
+        for it in items:
+            p = by_item.get(it.id)
+            if p is None:
+                all_ready = False
+                break
+            item_ready = (
+                p.ready_for_pickup_at is not None
+                or is_picked_up(p)
+                or p.status in (
+                    PickupStatus.DELIVERED_TO_QC,
+                    PickupStatus.QC_APPROVED,
+                    PickupStatus.SHIPPED_TO_CUSTOMER,
+                    PickupStatus.COMPLETED,
+                )
+            )
+            if not item_ready:
+                all_ready = False
+                break
+        if all_ready:
+            from app.services.shipping.shipbubble_booking import book_shipbubble_shipment_if_selected
+            await book_shipbubble_shipment_if_selected(db, order_id=order_id)
+    except Exception as exc:
+        logger.warning("Failed checking/booking ShipBubble pickup after item readiness for order %s: %s", order_id, exc)
 
 
 @router.post("/{order_id}/items/{item_id}/ready-for-pickup", response_model=OrderDetail)
@@ -1120,8 +1181,90 @@ async def admin_mark_item_ready_for_pickup(
         elif not is_mto and pickup.order_type != OrderType.RTW:
             pickup.order_type = OrderType.RTW
 
+    await db.flush()
+    await _book_shipbubble_if_all_items_ready(db, order_id=order.id)
     await db.commit()
     await db.refresh(pickup)
+
+    return await get_order_detail(order_id, admin, db)
+
+
+@router.post("/{order_id}/shipbubble/book-pickup", response_model=OrderDetail)
+async def admin_book_shipbubble_pickup(
+    order_id: str,
+    admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Mark all items in the order ready for pickup at the Hub and dispatch the ShipBubble courier."""
+    try:
+        order_uuid = UUID(order_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Order not found",
+        )
+
+    order = await db.scalar(
+        select(Order)
+        .options(
+            selectinload(Order.customer),
+            selectinload(Order.items).selectinload(OrderItem.product),
+            selectinload(Order.items).selectinload(OrderItem.vendor),
+        )
+        .where(Order.id == order_uuid)
+        .with_for_update()
+    )
+    if not order:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Order not found",
+        )
+
+    if order.payment_status != PaymentStatus.PAID:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot dispatch ShipBubble pickup until order payment is verified",
+        )
+
+    now_utc = datetime.now(timezone.utc)
+    for item in order.items:
+        is_mto = is_made_to_order_item(item)
+        pickups = (
+            await db.scalars(
+                select(VendorPickup).where(VendorPickup.order_item_id == item.id)
+            )
+        ).all()
+        pickup = select_item_pickup(pickups)
+        if pickup is None:
+            pickup = VendorPickup(
+                vendor_id=item.vendor_id,
+                order_id=order.id,
+                order_item_id=item.id,
+                order_type=OrderType.MADE_TO_ORDER if is_mto else OrderType.RTW,
+                scheduled_pickup_date=None,
+                pickup_address=item.vendor.business_address if item.vendor else None,
+                pickup_contact_phone=item.vendor.business_phone if item.vendor else None,
+                status=PickupStatus.SCHEDULED,
+            )
+            db.add(pickup)
+        if pickup.ready_for_pickup_at is None and not is_picked_up(pickup):
+            pickup.ready_for_pickup_at = now_utc
+            pickup.ready_for_pickup_marked_by = admin.id
+
+    await db.flush()
+
+    from app.services.shipping.shipbubble_booking import book_shipbubble_shipment_if_selected
+    shipment = await book_shipbubble_shipment_if_selected(db, order_id=order.id)
+    if shipment is None:
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Could not book ShipBubble pickup label. Check order admin notes or ShipBubble wallet balance.",
+        )
+
+    await db.commit()
+    await db.refresh(order)
+    await _broadcast_order_update(order)
 
     return await get_order_detail(order_id, admin, db)
 

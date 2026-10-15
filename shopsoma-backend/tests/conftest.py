@@ -300,6 +300,14 @@ async def db_session() -> AsyncGenerator[AsyncSession, None]:
         await _assert_catalog_baseline()
 
 
+@pytest.fixture(autouse=True)
+def reset_checkout_test_defaults(monkeypatch):
+    """Ensure tests run against canonical inert checkout gate defaults unless explicitly monkeypatched."""
+    monkeypatch.setattr(settings, "DOMESTIC_CHECKOUT_PREREQUISITES_ENABLED", False)
+    monkeypatch.setattr(settings, "DOMESTIC_CHECKOUT_COHORT_PERCENTAGE", 0)
+    monkeypatch.setattr(settings, "SHIPBUBBLE_API_KEY", "")
+
+
 @pytest.fixture
 def enable_stripe(db_session: AsyncSession):
     """Persist Stripe opt-in when a provider-parameterized test requests it."""

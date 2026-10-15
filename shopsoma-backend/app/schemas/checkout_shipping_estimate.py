@@ -17,6 +17,7 @@ class CheckoutEstimateOptionResponse(BaseModel):
     currency: str
     min_delivery_days: Optional[int] = None
     max_delivery_days: Optional[int] = None
+    provider_metadata: Optional[dict] = None
 
     class Config:
         from_attributes = True

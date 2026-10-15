@@ -86,14 +86,18 @@ SUPPORTED_ORDER_CURRENCIES = {"NGN", "USD"}
 
 
 def _domestic_checkout_is_enforced(
-    *, customer_id: UUID, country: str, currency: str
+    *, customer_id: UUID, country: str, currency: str, shipping_provider: str = "manual"
 ) -> bool:
     """Assign only explicitly eligible new orders; absence never implies domestic."""
     if not settings.DOMESTIC_CHECKOUT_PREREQUISITES_ENABLED:
         return False
-    # The DHL checkout bridge is a staging/sandbox capability.  Even if an
-    # operator accidentally enables the cohort flag in production, new orders
-    # must remain on the legacy path rather than exposing the bridge there.
+    if (
+        shipping_provider == "shipbubble"
+        and settings.shipbubble_configured
+        and country.strip().casefold() in {"nigeria", "ng"}
+        and currency in SUPPORTED_ORDER_CURRENCIES
+    ):
+        return True
     if settings.ENVIRONMENT == "production" or settings.DHL_ENVIRONMENT != "sandbox":
         return False
     if country.strip().casefold() not in {"nigeria", "ng"} or currency not in SUPPORTED_ORDER_CURRENCIES:
@@ -862,10 +866,12 @@ async def create_order(
             detail="Either shipping_address_id or guest_address must be provided",
         )
 
+    effective_shipping_settings = await shipping_provider_settings(db)
     enforced_checkout = _domestic_checkout_is_enforced(
         customer_id=customer_id_for_order,
         country=shipping_address.country,
         currency=checkout_currency,
+        shipping_provider=effective_shipping_settings.provider,
     )
     if (
         enforced_checkout
@@ -998,7 +1004,6 @@ async def create_order(
         rate.max_order_value is None or _convert_currency(_as_decimal(rate.max_order_value), "NGN", checkout_currency, usd_to_ngn_rate) >= subtotal
     )]
 
-    effective_shipping_settings = await shipping_provider_settings(db)
     if enforced_checkout and not effective_shipping_settings.readiness[effective_shipping_settings.provider]:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1006,8 +1011,10 @@ async def create_order(
         )
     if not shipping_rates and not (
         enforced_checkout
-        and effective_shipping_settings.provider == "dhl"
-        and domestic_shipping_capabilities(settings).checkout_enabled
+        and (
+            (effective_shipping_settings.provider == "dhl" and domestic_shipping_capabilities(settings).checkout_enabled)
+            or (effective_shipping_settings.provider == "shipbubble" and effective_shipping_settings.readiness["shipbubble"])
+        )
     ):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1788,11 +1795,24 @@ async def get_order_tracking(
         else str(order.payment_status)
     ).lower()
 
+    from app.services.shipping.shipbubble_tracking import (
+        build_shipbubble_tracking_payload,
+    )
+    shipbubble_tracking = await build_shipbubble_tracking_payload(
+        db, order=order, current_status=current_status
+    )
+    if shipbubble_tracking and shipbubble_tracking.get("is_booked"):
+        await db.commit()
+        await db.refresh(order)
+    if order.tracking_number:
+        tracking_id = order.tracking_number
+
     return {
         "order_id": str(order.id),
         "order_number": order.order_number,
         "tracking_id": tracking_id,
         "tracking_number": order.tracking_number,
+        "delivery_provider": order.delivery_provider,
         "amount": float(order.total_amount),
         "currency": currency,
         "updated_at": order.updated_at.isoformat(),
@@ -1801,7 +1821,131 @@ async def get_order_tracking(
         "cancellation_reason": order.cancellation_reason,
         "cancelled_at": order.cancelled_at.isoformat() if order.cancelled_at else None,
         "history": history,
+        "shipbubble_tracking": shipbubble_tracking,
     }
+
+
+@router.post("/{order_ref}/tracking/sync")
+async def sync_order_tracking(
+    order_ref: str,
+    capability: Optional[str] = Header(None, alias="X-ShopSoma-Checkout-Capability"),
+    current_user: Optional[User] = Depends(get_optional_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Sync live shipment tracking status from ShipBubble API."""
+    try:
+        order_uuid = UUID(order_ref)
+    except ValueError:
+        order_uuid = None
+
+    order_filter = (
+        Order.id == order_uuid
+        if order_uuid
+        else Order.order_number == order_ref.upper()
+    )
+    order = (
+        await db.execute(select(Order).where(order_filter).with_for_update())
+    ).scalar_one_or_none()
+    if not order:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Order not found")
+
+    await _authorize_order_read(
+        db, order=order, current_user=current_user, capability=capability
+    )
+
+    from app.services.shipping.shipbubble_tracking import sync_shipbubble_shipment_status
+    await sync_shipbubble_shipment_status(db, order=order)
+
+    return await get_order_tracking(
+        order_ref=str(order.id),
+        capability=capability,
+        current_user=current_user,
+        db=db,
+    )
+
+
+@router.post("/{order_ref}/tracking/simulate")
+async def simulate_order_tracking_step(
+    order_ref: str,
+    payload: dict,
+    capability: Optional[str] = Header(None, alias="X-ShopSoma-Checkout-Capability"),
+    current_user: Optional[User] = Depends(get_optional_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Simulate a ShipBubble courier status transition in Sandbox mode for live map testing."""
+    if not (
+        settings.SHIPBUBBLE_API_KEY
+        and settings.SHIPBUBBLE_API_KEY.strip().startswith("sb_sandbox_")
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Tracking simulation is only available in ShipBubble Sandbox mode",
+        )
+
+    try:
+        order_uuid = UUID(order_ref)
+    except ValueError:
+        order_uuid = None
+
+    order_filter = (
+        Order.id == order_uuid
+        if order_uuid
+        else Order.order_number == order_ref.upper()
+    )
+    order = (
+        await db.execute(select(Order).where(order_filter).with_for_update())
+    ).scalar_one_or_none()
+    if not order:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Order not found")
+
+    await _authorize_order_read(
+        db, order=order, current_user=current_user, capability=capability
+    )
+
+    target_status = str(payload.get("status") or "").lower().strip()
+    step_map = {
+        "order_placed": (FulfillmentStatus.PREPARING_FOR_PICKUP, "pending"),
+        "picked_up": (FulfillmentStatus.PICKED_UP, "picked_up"),
+        "in_transit": (FulfillmentStatus.IN_TRANSIT, "in_transit"),
+        "out_for_delivery": (FulfillmentStatus.OUT_FOR_DELIVERY, "out_for_delivery"),
+        "delivered": (FulfillmentStatus.DELIVERED, "completed"),
+    }
+    if target_status not in step_map:
+        raise HTTPException(status_code=422, detail="Invalid simulation status")
+
+    fulfillment_enum, sb_status = step_map[target_status]
+    order.fulfillment_status = fulfillment_enum
+    if fulfillment_enum == FulfillmentStatus.DELIVERED:
+        order.delivered_at = datetime.now(timezone.utc)
+
+    from app.models.shipbubble_shipment import ShipbubbleShipment
+    from app.services.shipbubble_service import get_shipbubble_service
+
+    shipment = await db.scalar(
+        select(ShipbubbleShipment).where(ShipbubbleShipment.order_id == order.id)
+    )
+    if shipment:
+        shipment.status = sb_status
+        shipment.updated_at = datetime.now(timezone.utc)
+        db.add(shipment)
+        if shipment.shipbubble_order_id:
+            try:
+                svc = get_shipbubble_service()
+                await svc.simulate_webhook(shipment.shipbubble_order_id, sb_status)
+            except Exception as exc:
+                logger.info("[ShipBubble] Sandbox webhook simulation call note: %s", exc)
+
+    db.add(order)
+    await db.commit()
+    await db.refresh(order)
+
+    return await get_order_tracking(
+        order_ref=str(order.id),
+        capability=capability,
+        current_user=current_user,
+        db=db,
+    )
+
 
 
 @router.post("/{order_id}/cancel", response_model=OrderResponse)

@@ -51,6 +51,7 @@ const VerifyEmail = lazy(() => import('../pages/auth/VerifyEmail'));
 const ClaimAccount = lazy(() => import('../pages/auth/ClaimAccount'));
 const OrderSuccess = lazy(() => import('../pages/orders/OrderSuccess'));
 const OrderTracking = lazy(() => import('../pages/orders/OrderTracking'));
+const OrderMapTracking = lazy(() => import('../pages/orders/OrderMapTracking'));
 const PublicDocument = lazy(() => import('../pages/public/PublicDocument'));
 const documentElement = (documentKey: Parameters<typeof PublicDocument>[0]['documentKey']) => (<ErrorBoundary><Suspense fallback={<Loading fullScreen message="Loading document..." />}><PublicDocument documentKey={documentKey} /></Suspense></ErrorBoundary>);
 const BrandInfoSettings = lazy(() => import('../pages/vendor/BrandInfoSettings'));
@@ -269,6 +270,16 @@ const router = createBrowserRouter([
       <ErrorBoundary>
         <Suspense fallback={<Loading fullScreen message="Loading order..." />}>
           <OrderTracking />
+        </Suspense>
+      </ErrorBoundary>
+    ),
+  },
+  {
+    path: ROUTES.ORDER_MAP_TRACKING,
+    element: (
+      <ErrorBoundary>
+        <Suspense fallback={<Loading fullScreen message="Loading live courier radar..." />}>
+          <OrderMapTracking />
         </Suspense>
       </ErrorBoundary>
     ),

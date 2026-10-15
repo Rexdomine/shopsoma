@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 ROOT = Path(__file__).resolve().parents[1]
 HEAD = "v5w6x7y8z9a0"
-CURRENT_HEAD = "a8b9c0d1e2f3"
+CURRENT_HEAD = "b9c0d1e2f3a4"
 CURRENT_HEAD_PARENT = "l9m0n1o2p3q4"
 FEATURED_VENDOR_MIGRATION = ROOT / "alembic" / "versions" / "n1o2p3q4r5s6_add_admin_featured_storefront_vendor.py"
 PREVIOUS_HEAD = "d5e6f7a8b9c0"
@@ -376,7 +376,7 @@ async def test_domestic_rate_real_upgrade_downgrade_upgrade_cycle() -> None:
         # then return to the pre-rate foundation. The subsequent path remains the
         # real foundation -> parent -> lease revision migration cycle, with this
         # row pre-existing when the destination hash is introduced.
-        migrate("upgrade", HEAD)
+        migrate("upgrade", CURRENT_HEAD)
         sentinel_id = await _seed_valid_outbound_intent(database_url)
         migrate("downgrade", FOUNDATION_PARENT)
 
