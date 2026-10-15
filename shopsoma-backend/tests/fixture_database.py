@@ -646,6 +646,26 @@ class DisposableDatabase:
 
     def fence_sessions(self) -> None:
         """Terminate only sessions attached to this exact, still-owned database."""
+        if self._lease_connection is not None:
+            actual = self._lease_connection.execute(
+                text(
+                    "SELECT shobj_description(oid, 'pg_database') "
+                    "FROM pg_database WHERE datname=:name"
+                ),
+                {"name": self.name},
+            ).scalar()
+            if actual != self.marker_text:
+                raise RuntimeError(
+                    "refusing to fence sessions without exact ownership"
+                )
+            self._lease_connection.execute(
+                text(
+                    "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                    "WHERE datname=:name AND pid<>pg_backend_pid()"
+                ),
+                {"name": self.name},
+            )
+            return
         engine = self._admin()
         try:
             with engine.connect() as connection:

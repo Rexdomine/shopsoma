@@ -783,7 +783,7 @@ async def update_order_status(
 
     # Always refresh delivered_at when status is set to DELIVERED
     if new_status == FulfillmentStatus.DELIVERED:
-        order.delivered_at = datetime.now()
+        order.delivered_at = datetime.now(timezone.utc)
         logger.info(
             "[Order Status] order=%s status=%s delivered_at=%s",
             order.order_number,
@@ -793,7 +793,7 @@ async def update_order_status(
 
     # Set cancelled_at timestamp if status is CANCELLED
     if new_status == FulfillmentStatus.CANCELLED and not order.cancelled_at:
-        order.cancelled_at = datetime.now()
+        order.cancelled_at = datetime.now(timezone.utc)
 
     # Update vendor pickups with pickup window data if provided
     pickups = []
@@ -819,9 +819,15 @@ async def update_order_status(
             ):
                 continue
             if update_data.pickup_window_start:
-                pickup.pickup_window_start = parser.isoparse(update_data.pickup_window_start)
+                parsed_start = parser.isoparse(update_data.pickup_window_start)
+                pickup.pickup_window_start = (
+                    parsed_start if parsed_start.tzinfo is not None else parsed_start.replace(tzinfo=timezone.utc)
+                )
             if update_data.pickup_window_end:
-                pickup.pickup_window_end = parser.isoparse(update_data.pickup_window_end)
+                parsed_end = parser.isoparse(update_data.pickup_window_end)
+                pickup.pickup_window_end = (
+                    parsed_end if parsed_end.tzinfo is not None else parsed_end.replace(tzinfo=timezone.utc)
+                )
             if update_data.courier_name:
                 pickup.courier_name = update_data.courier_name
             if update_data.rider_id:
@@ -932,6 +938,12 @@ async def update_shipping_info(
     return await get_order_detail(str(order.id), admin, db)
 
 
+def _ensure_tz_aware(dt: Optional[datetime]) -> Optional[datetime]:
+    if dt is None:
+        return None
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+
+
 @router.patch("/{order_id}/pickup/{pickup_id}", response_model=OrderDetail)
 async def update_pickup_status(
     order_id: str,
@@ -992,23 +1004,25 @@ async def update_pickup_status(
         await db.rollback()
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
+    now_utc = datetime.now(timezone.utc)
+
     # Update status if provided
     if update_data.pickup_status:
         pickup.status = update_data.pickup_status
 
-        # Update timestamps based on status
+        # Update timestamps based on status (must be timezone-aware for PostgreSQL TIMESTAMPTZ)
         if update_data.pickup_status == PickupStatus.IN_TRANSIT and not pickup.actual_pickup_date:
-            pickup.actual_pickup_date = datetime.now()
+            pickup.actual_pickup_date = now_utc
         elif update_data.pickup_status == PickupStatus.DELIVERED_TO_QC and not pickup.qc_center_arrival_date:
-            pickup.qc_center_arrival_date = datetime.now()
+            pickup.qc_center_arrival_date = now_utc
         elif update_data.pickup_status == PickupStatus.QC_APPROVED and not pickup.qc_approved_date:
-            pickup.qc_approved_date = datetime.now()
+            pickup.qc_approved_date = now_utc
         elif update_data.pickup_status == PickupStatus.QC_REJECTED and not pickup.qc_rejected_date:
-            pickup.qc_rejected_date = datetime.now()
+            pickup.qc_rejected_date = now_utc
         elif update_data.pickup_status == PickupStatus.COMPLETED and not pickup.completed_at:
-            pickup.completed_at = datetime.now()
+            pickup.completed_at = now_utc
         elif update_data.pickup_status == PickupStatus.CANCELLED and not pickup.cancelled_at:
-            pickup.cancelled_at = datetime.now()
+            pickup.cancelled_at = now_utc
 
     # Update other fields if provided
     is_scheduling = (
@@ -1017,16 +1031,16 @@ async def update_pickup_status(
     )
 
     if update_data.scheduled_pickup_date is not None:
-        pickup.scheduled_pickup_date = update_data.scheduled_pickup_date
+        pickup.scheduled_pickup_date = _ensure_tz_aware(update_data.scheduled_pickup_date)
 
     if update_data.actual_pickup_date is not None:
-        pickup.actual_pickup_date = update_data.actual_pickup_date
+        pickup.actual_pickup_date = _ensure_tz_aware(update_data.actual_pickup_date)
 
     if update_data.pickup_window_start is not None:
-        pickup.pickup_window_start = update_data.pickup_window_start
+        pickup.pickup_window_start = _ensure_tz_aware(update_data.pickup_window_start)
 
     if update_data.pickup_window_end is not None:
-        pickup.pickup_window_end = update_data.pickup_window_end
+        pickup.pickup_window_end = _ensure_tz_aware(update_data.pickup_window_end)
 
     if update_data.logistics_partner is not None:
         pickup.logistics_partner = update_data.logistics_partner
@@ -1045,16 +1059,28 @@ async def update_pickup_status(
 
     if update_data.admin_notes:
         if pickup.admin_notes:
-            pickup.admin_notes += f"\n\n[{datetime.now().isoformat()}] {update_data.admin_notes}"
+            pickup.admin_notes += f"\n\n[{now_utc.isoformat()}] {update_data.admin_notes}"
         else:
-            pickup.admin_notes = f"[{datetime.now().isoformat()}] {update_data.admin_notes}"
+            pickup.admin_notes = f"[{now_utc.isoformat()}] {update_data.admin_notes}"
 
     if is_scheduling and not update_data.pickup_status:
         pickup.status = PickupStatus.SCHEDULED
-        if order_item and order_item.fulfillment_status != FulfillmentStatus.CANCELLED:
+        # Avoid mutating order_items on paid domestic_checkout_v1 orders because
+        # trg_order_items_checkout_completion enforces active stock_reservations,
+        # whereas paid orders have consumed reservations.
+        if (
+            order_item
+            and order_item.fulfillment_status != FulfillmentStatus.CANCELLED
+            and getattr(order, "workflow_cohort", None) != "domestic_checkout_v1"
+        ):
             order_item.fulfillment_status = FulfillmentStatus.PICKUP_SCHEDULED
 
-    await _book_shipbubble_if_all_items_ready(db, order_id=order.id)
+    if update_data.pickup_status in (
+        PickupStatus.IN_TRANSIT,
+        PickupStatus.DELIVERED_TO_QC,
+        PickupStatus.QC_APPROVED,
+    ):
+        await _book_shipbubble_if_all_items_ready(db, order_id=order.id)
 
     await db.commit()
 
@@ -1333,7 +1359,7 @@ async def bulk_update_status(
 
         # Always refresh delivered_at when status is set to DELIVERED
         if update_data.fulfillment_status == FulfillmentStatus.DELIVERED:
-            order.delivered_at = datetime.now()
+            order.delivered_at = datetime.now(timezone.utc)
             logger.info(
                 "[Order Status] order=%s status=%s delivered_at=%s",
                 order.order_number,
@@ -1696,7 +1722,7 @@ async def cancel_order(
 
     # Cancel order
     order.fulfillment_status = FulfillmentStatus.CANCELLED
-    order.cancelled_at = datetime.now()
+    order.cancelled_at = datetime.now(timezone.utc)
     order.cancellation_reason = cancel_data.cancellation_reason
 
     # Add admin notes

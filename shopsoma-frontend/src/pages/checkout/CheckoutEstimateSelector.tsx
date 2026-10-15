@@ -67,34 +67,49 @@ export default function CheckoutEstimateSelector({
       </p>
       {estimate.options.map((option) => {
         const selected = estimate.selected_option?.id === option.id;
+        const isSelecting = selectingId === option.id;
         const delivery = option.min_delivery_days === null || option.max_delivery_days === null
           ? 'Delivery timing confirmed after selection'
           : `${option.min_delivery_days}–${option.max_delivery_days} business days`;
         return (
-          <div key={option.id} className={`border px-4 py-3 ${selected ? 'border-primary bg-gray-50' : 'border-gray-200'}`}>
-            <div className="flex items-center justify-between gap-4">
-              <div className="flex items-center gap-3">
+          <div
+            key={option.id}
+            className={`border rounded-sm p-3.5 sm:px-4 sm:py-3.5 overflow-hidden transition-colors ${
+              selected ? 'border-primary bg-gray-50' : 'border-gray-200 bg-white'
+            }`}
+          >
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <div className="flex items-start sm:items-center gap-3 min-w-0 flex-1">
                 {option.provider_metadata?.courier_image && (
                   <img
                     src={option.provider_metadata.courier_image}
                     alt=""
-                    className="h-8 w-8 object-contain rounded shrink-0 bg-white border border-gray-100 p-0.5"
+                    className="h-9 w-9 object-contain rounded shrink-0 bg-white border border-gray-100 p-1"
                   />
                 )}
-                <div>
-                  <p className="text-sm font-semibold">{option.service_label}</p>
-                  <p className="text-xs text-gray-500">{delivery}</p>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold text-gray-900 break-words leading-snug">
+                    {option.service_label}
+                  </p>
+                  <p className="text-xs text-gray-500 mt-0.5">{delivery}</p>
                 </div>
               </div>
-              <div className="text-right shrink-0">
-                <p className="text-sm font-semibold">{money(option.amount, option.currency)}</p>
+              <div className="flex items-center justify-between sm:flex-col sm:items-end sm:justify-center gap-2 pt-2.5 sm:pt-0 border-t sm:border-t-0 border-gray-100 shrink-0">
+                <p className="text-sm font-semibold text-gray-900 whitespace-nowrap">
+                  {money(option.amount, option.currency)}
+                </p>
                 <button
                   type="button"
                   onClick={() => choose(option.id)}
                   disabled={Boolean(selectingId) || selected}
-                  className="mt-2 px-3 py-1 border border-primary text-primary text-xs disabled:opacity-50"
+                  aria-label={selected ? `Selected ${option.service_label}` : isSelecting ? 'Selecting…' : `Select ${option.service_label}`}
+                  className={`px-3.5 py-1.5 rounded-sm border text-xs font-semibold transition-colors whitespace-nowrap disabled:opacity-50 ${
+                    selected
+                      ? 'border-primary bg-primary text-white'
+                      : 'border-primary text-primary hover:bg-primary/5'
+                  }`}
                 >
-                  {selected ? `Selected ${option.service_label}` : selectingId === option.id ? 'Selecting…' : `Select ${option.service_label}`}
+                  {selected ? 'Selected' : isSelecting ? 'Selecting…' : 'Select'}
                 </button>
               </div>
             </div>

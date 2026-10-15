@@ -172,6 +172,14 @@ SELECT current_database(), current_user, inet_server_addr()::text,
        inet_server_port(), current_setting('server_version_num')
 """
 _catalog_baseline: dict[str, tuple] | None = None
+_catalog_verified_clean: bool = False
+
+from app.core.security import pwd_context, get_password_hash as _raw_get_password_hash
+
+pwd_context.update(bcrypt__rounds=4)
+_VENDOR_PASSWORD_HASH = _raw_get_password_hash("VendorPass123")
+_CUSTOMER_PASSWORD_HASH = _raw_get_password_hash("CustomerPass123")
+_ADMIN_PASSWORD_HASH = _raw_get_password_hash("AdminPass123")
 
 
 def _sync_catalog(connection) -> dict[str, tuple]:
@@ -198,6 +206,7 @@ async def _async_catalog(connection=None) -> dict[str, tuple]:
 
 
 async def _assert_catalog_baseline(connection=None) -> None:
+    global _catalog_verified_clean
     if _catalog_baseline is None:
         raise RuntimeError("fixture catalog baseline was not installed")
     current = await _async_catalog(connection)
@@ -205,58 +214,82 @@ async def _assert_catalog_baseline(connection=None) -> None:
         name for name, value in current.items() if value != _catalog_baseline[name]
     ]
     if drift:
+        _catalog_verified_clean = False
         raise RuntimeError(f"test database catalog drift detected: {', '.join(drift)}")
+    if connection is None:
+        _catalog_verified_clean = True
+
+
+_TRUNCATE_NON_EMPTY_SQL = """
+DO $$
+DECLARE
+    rec RECORD;
+    has_data BOOLEAN;
+    targets TEXT := '';
+BEGIN
+    FOR rec IN
+        SELECT n.nspname, c.relname, c.oid
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p')
+        ORDER BY n.nspname, c.relname
+    LOOP
+        EXECUTE format('SELECT EXISTS (SELECT 1 FROM %I.%I LIMIT 1)', rec.nspname, rec.relname)
+        INTO has_data;
+        IF NOT has_data THEN
+            SELECT EXISTS (
+                SELECT 1
+                FROM pg_depend d
+                JOIN pg_sequence s ON s.seqrelid = d.objid
+                WHERE d.refobjid = rec.oid
+                  AND d.classid = 'pg_class'::regclass
+                  AND d.refclassid = 'pg_class'::regclass
+                  AND d.deptype IN ('a', 'i')
+                  AND pg_sequence_last_value(s.seqrelid) IS NOT NULL
+            ) INTO has_data;
+        END IF;
+        IF has_data THEN
+            IF targets <> '' THEN
+                targets := targets || ', ';
+            END IF;
+            targets := targets || format('%I.%I', rec.nspname, rec.relname);
+        END IF;
+    END LOOP;
+    IF targets <> '' THEN
+        EXECUTE 'TRUNCATE TABLE ' || targets || ' RESTART IDENTITY CASCADE';
+    END IF;
+    FOR rec IN
+        SELECT n.nspname, c.relname, s.seqstart
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        JOIN pg_sequence s ON s.seqrelid = c.oid
+        LEFT JOIN pg_depend d ON d.objid = c.oid
+            AND d.classid = 'pg_class'::regclass
+            AND d.refclassid = 'pg_class'::regclass
+            AND d.deptype IN ('a', 'i')
+        WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
+          AND d.objid IS NULL
+          AND pg_sequence_last_value(s.seqrelid) IS NOT NULL
+        ORDER BY n.nspname, c.relname
+    LOOP
+        EXECUTE format('ALTER SEQUENCE %I.%I RESTART WITH %s', rec.nspname, rec.relname, rec.seqstart);
+    END LOOP;
+END $$;
+"""
 
 
 async def _truncate_user_tables() -> None:
-    """Discover and truncate every ordinary public table in one bounded statement."""
+    """Discover and truncate non-empty ordinary public tables in one bounded statement."""
     async with test_engine.begin() as connection:
         await connection.execute(text("SET LOCAL lock_timeout = '5s'"))
         await connection.execute(text("SET LOCAL statement_timeout = '30s'"))
-        rows = (
-            await connection.execute(
-                text(
-                    "SELECT n.nspname, c.relname FROM pg_class c "
-                    "JOIN pg_namespace n ON n.oid=c.relnamespace "
-                    "WHERE n.nspname='public' AND c.relkind IN ('r', 'p') "
-                    "ORDER BY n.nspname, c.relname"
-                )
-            )
-        ).all()
-        preparer = connection.dialect.identifier_preparer
-        if rows:
-            targets = ", ".join(
-                f"{preparer.quote_schema(schema)}.{preparer.quote(table)}"
-                for schema, table in rows
-            )
-            await connection.execute(
-                text(f"TRUNCATE TABLE {targets} RESTART IDENTITY CASCADE")
-            )
-        standalone = (
-            await connection.execute(
-                text(
-                    "SELECT n.nspname,c.relname,s.seqstart FROM pg_class c "
-                    "JOIN pg_namespace n ON n.oid=c.relnamespace "
-                    "JOIN pg_sequence s ON s.seqrelid=c.oid "
-                    "LEFT JOIN pg_depend d ON d.objid=c.oid "
-                    "AND d.classid='pg_class'::regclass "
-                    "AND d.refclassid='pg_class'::regclass AND d.deptype IN ('a','i') "
-                    "WHERE n.nspname !~ '^pg_' AND n.nspname<>'information_schema' "
-                    "AND d.objid IS NULL ORDER BY n.nspname,c.relname"
-                )
-            )
-        ).all()
-        for schema, sequence, start in standalone:
-            qualified = f"{preparer.quote_schema(schema)}.{preparer.quote(sequence)}"
-            await connection.execute(
-                text(f"ALTER SEQUENCE {qualified} RESTART WITH {int(start)}")
-            )
+        await connection.execute(text(_TRUNCATE_NON_EMPTY_SQL))
 
 
 @pytest.fixture(scope="session", autouse=True)
 def _session_database_schema() -> Generator[None, None, None]:
     """Install the metadata, functions, and triggers once per pytest process."""
-    global _catalog_baseline
+    global _catalog_baseline, _catalog_verified_clean
     sync_url = build_sync_database_url(RESOLVED_DB_URL, TEST_DATABASE_NAME)
     sync_engine = create_engine(sync_url, poolclass=NullPool)
     try:
@@ -266,6 +299,7 @@ def _session_database_schema() -> Generator[None, None, None]:
             Base.metadata.create_all(connection)
         with sync_engine.connect() as connection:
             _catalog_baseline = _sync_catalog(connection)
+            _catalog_verified_clean = True
         yield
         with sync_engine.connect() as connection:
             current = _sync_catalog(connection)
@@ -285,8 +319,11 @@ def _session_database_schema() -> Generator[None, None, None]:
 @pytest.fixture(scope="function")
 async def db_session() -> AsyncGenerator[AsyncSession, None]:
     """Yield a real session after bounded committed-state cleanup; no outer rollback."""
+    global _catalog_verified_clean
     await asyncio.to_thread(TEST_DATABASE_LIFECYCLE.fence_sessions)
-    await _assert_catalog_baseline()
+    if not _catalog_verified_clean:
+        await _assert_catalog_baseline()
+    _catalog_verified_clean = False
     await _truncate_user_tables()
     try:
         async with TestSessionLocal() as session:
@@ -371,14 +408,14 @@ async def vendor_user(client: AsyncClient, db_session: AsyncSession):
     """Create a vendor user and get auth token"""
     from app.models.user import User, UserRole
     from app.models.vendor import Vendor, KYCStatus
-    from app.core.security import get_password_hash, create_access_token
+    from app.core.security import create_access_token
     import uuid
 
     # Create user
     user = User(
         id=uuid.uuid4(),
         email="vendor@test.com",
-        hashed_password=get_password_hash("VendorPass123"),
+        hashed_password=_VENDOR_PASSWORD_HASH,
         full_name="Test Vendor",
         role=UserRole.VENDOR,
         email_verified=True,
@@ -431,13 +468,13 @@ async def incomplete_vendor_user(vendor_user, db_session: AsyncSession):
 async def customer_user(client: AsyncClient, db_session: AsyncSession):
     """Create a customer user and get auth token"""
     from app.models.user import User, UserRole
-    from app.core.security import get_password_hash, create_access_token
+    from app.core.security import create_access_token
     import uuid
 
     user = User(
         id=uuid.uuid4(),
         email="customer@test.com",
-        hashed_password=get_password_hash("CustomerPass123"),
+        hashed_password=_CUSTOMER_PASSWORD_HASH,
         full_name="Test Customer",
         role=UserRole.CUSTOMER,
         email_verified=True,
@@ -461,13 +498,13 @@ async def customer_user(client: AsyncClient, db_session: AsyncSession):
 async def admin_user(client: AsyncClient, db_session: AsyncSession):
     """Create an admin user and get auth token"""
     from app.models.user import User, UserRole
-    from app.core.security import get_password_hash, create_access_token
+    from app.core.security import create_access_token
     import uuid
 
     user = User(
         id=uuid.uuid4(),
         email="admin@test.com",
-        hashed_password=get_password_hash("AdminPass123"),
+        hashed_password=_ADMIN_PASSWORD_HASH,
         full_name="Test Admin",
         role=UserRole.ADMIN,
         email_verified=True,
