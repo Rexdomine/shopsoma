@@ -186,6 +186,7 @@ export interface CheckoutEstimateOption {
   currency: 'NGN' | 'USD';
   min_delivery_days: number | null;
   max_delivery_days: number | null;
+  provider_metadata?: Record<string, any> | null;
 }
 
 export interface CheckoutEstimate {

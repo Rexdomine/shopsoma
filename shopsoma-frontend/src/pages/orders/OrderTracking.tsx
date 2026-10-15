@@ -13,6 +13,7 @@ import { useCurrencyStore } from '../../store/currencyStore';
 import { formatPriceWithConversion, type Currency } from '../../utils/pricing';
 import { loadCheckoutCapability } from '../../utils/checkoutCapability';
 import { normalizeProductImageUrl } from '../../utils/productImages';
+import ShipbubbleSimulatorModal from '../../components/orders/ShipbubbleSimulatorModal';
 
 const STATUS_STEPS: Array<{ key: OrderStatus; label: string }> = [
   { key: 'order_placed', label: 'Order Placed' },
@@ -387,6 +388,26 @@ export default function OrderTracking() {
     }
   };
 
+  const [isSimModalOpen, setIsSimModalOpen] = useState(false);
+  const [isSimulatingShipbubble, setIsSimulatingShipbubble] = useState(false);
+
+  const handleSimulateShipbubble = async (statusKey: string) => {
+    if (!resolvedOrderId) return;
+    setIsSimulatingShipbubble(true);
+    try {
+      const updated = await orderService.simulateOrderTracking(
+        resolvedOrderId,
+        statusKey as OrderStatus,
+        loadCheckoutCapability(resolvedOrderId),
+      );
+      setTracking(updated);
+    } catch (err) {
+      console.error('Failed to simulate ShipBubble step:', err);
+    } finally {
+      setIsSimulatingShipbubble(false);
+    }
+  };
+
   if (!orderId) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -415,7 +436,17 @@ export default function OrderTracking() {
             <span>Back</span>
           </button>
         </div>
+
         <div className="flex items-center gap-3 sm:gap-4">
+          {tracking?.shipbubble_tracking && orderId && (
+            <Link
+              to={ROUTES.ORDER_MAP_TRACKING.replace(':orderId', orderId)}
+              className="text-xs sm:text-sm text-primary hover:underline font-medium flex items-center gap-1.5"
+            >
+              <span className="h-1.5 w-1.5 rounded-full bg-primary"></span>
+              <span>Live Map Tracking</span>
+            </Link>
+          )}
           <Link
             to={ROUTES.ORDERS}
             className="text-xs sm:text-sm text-primary hover:underline font-medium"
@@ -691,6 +722,86 @@ export default function OrderTracking() {
                     </table>
                   </div>
                 </div>
+
+                {/* Clean White Courier Dispatch & Live Map Section Below Table */}
+                {tracking.shipbubble_tracking && orderId && (
+                  <div className="pt-4 border-t border-gray-100 space-y-3">
+                    <p className="text-[10px] sm:text-xs uppercase tracking-[0.2em] text-gray-400 font-medium">
+                      Courier Dispatch & Live Map
+                    </p>
+                    <div className="rounded-sm border border-gray-100 bg-white p-4 sm:p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                      <div className="flex items-start sm:items-center gap-3.5">
+                        {tracking.shipbubble_tracking.courier_image ? (
+                          <img
+                            src={tracking.shipbubble_tracking.courier_image}
+                            alt={tracking.shipbubble_tracking.courier_name}
+                            className="w-11 h-11 rounded-full object-cover border border-gray-200 bg-white shrink-0"
+                          />
+                        ) : (
+                          <div className="w-11 h-11 rounded-full bg-primary/10 text-primary flex items-center justify-center text-sm font-semibold shrink-0">
+                            SB
+                          </div>
+                        )}
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-sm font-semibold text-gray-900">
+                              {tracking.shipbubble_tracking.courier_name}
+                            </span>
+                            {tracking.shipbubble_tracking.shipbubble_order_id && (
+                              <span className="text-xs font-mono text-primary bg-primary/5 border border-primary/15 px-2 py-0.5 rounded-sm">
+                                {tracking.shipbubble_tracking.shipbubble_order_id}
+                              </span>
+                            )}
+                            <span className="text-xs text-gray-500">
+                              • ETA: {tracking.shipbubble_tracking.delivery_eta}
+                            </span>
+                          </div>
+                          <p className="text-xs text-gray-600">
+                            {tracking.shipbubble_tracking.current_location.status_label}
+                          </p>
+                          <p className="text-xs text-gray-500">
+                            Route: <span className="font-medium text-gray-700">{tracking.shipbubble_tracking.origin.city}, {tracking.shipbubble_tracking.origin.state}</span> →{' '}
+                            <span className="font-medium text-gray-700">{tracking.shipbubble_tracking.destination.city}, {tracking.shipbubble_tracking.destination.state}</span>
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-2 shrink-0">
+                        <Link
+                          to={ROUTES.ORDER_MAP_TRACKING.replace(':orderId', orderId)}
+                          state={{
+                            from: ROUTES.ORDER_TRACKING.replace(':orderId', orderId),
+                            fromLabel: 'Back to Order Tracking',
+                          }}
+                          className="px-4 py-2 bg-primary text-white text-xs font-semibold rounded-sm hover:bg-primary-dark transition inline-flex items-center gap-1.5"
+                        >
+                          <span>View Live Map</span>
+                          <span>→</span>
+                        </Link>
+                        {tracking.shipbubble_tracking.is_sandbox && (
+                          <button
+                            type="button"
+                            onClick={() => setIsSimModalOpen(true)}
+                            className="px-3.5 py-2 border border-gray-200 bg-white text-gray-700 text-xs font-semibold rounded-sm hover:bg-gray-50 transition"
+                          >
+                            Simulate Tracking
+                          </button>
+                        )}
+                        {tracking.shipbubble_tracking.tracking_url && (
+                          <a
+                            href={tracking.shipbubble_tracking.tracking_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="px-3.5 py-2 border border-gray-200 bg-white text-gray-700 text-xs font-semibold rounded-sm hover:bg-gray-50 transition inline-flex items-center gap-1"
+                          >
+                            <span>ShipBubble Portal</span>
+                            <span>↗</span>
+                          </a>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
               </>
             ) : (
               <div className="text-center text-sm text-gray-600" role="status">
@@ -827,6 +938,17 @@ export default function OrderTracking() {
             </div>
           </div>
         </div>
+      )}
+
+      {tracking?.shipbubble_tracking && (
+        <ShipbubbleSimulatorModal
+          isOpen={isSimModalOpen}
+          onClose={() => setIsSimModalOpen(false)}
+          currentStatus={tracking.current_status}
+          data={tracking.shipbubble_tracking}
+          isSimulating={isSimulatingShipbubble}
+          onSimulate={handleSimulateShipbubble}
+        />
       )}
     </div>
   );

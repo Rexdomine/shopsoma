@@ -1296,6 +1296,12 @@ async def _verify_stripe_payment(
 
         if intent.status == "succeeded" and order and result and not result.replay:
             await send_vendor_notifications_after_payment(db, order.id)
+            try:
+                from app.services.shipping.shipbubble_booking import record_shipbubble_selection_on_paid_order
+                await record_shipbubble_selection_on_paid_order(db, order_id=order.id)
+                await db.commit()
+            except Exception as sb_exc:
+                logger.warning(f"Failed recording ShipBubble selection after Stripe payment: {sb_exc}")
 
         return PaymentVerifyResponse(
             status=intent.status == "succeeded",
@@ -1482,6 +1488,12 @@ async def _verify_paystack_payment(
 
             if transaction_data.get("status") == "success" and order and result and not result.replay:
                 await send_vendor_notifications_after_payment(db, order.id)
+                try:
+                    from app.services.shipping.shipbubble_booking import record_shipbubble_selection_on_paid_order
+                    await record_shipbubble_selection_on_paid_order(db, order_id=order.id)
+                    await db.commit()
+                except Exception as sb_exc:
+                    logger.warning(f"Failed recording ShipBubble selection after Paystack payment: {sb_exc}")
 
             return PaymentVerifyResponse(
                 status=True,

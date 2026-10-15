@@ -65,7 +65,7 @@ BEGIN
  IF NOT FOUND OR estimate.currency IS DISTINCT FROM NEW.currency
     OR estimate.creation_txid IS DISTINCT FROM txid_current()
     OR (estimate.source_kind='static_domestic_rate' AND NEW.source_rate_id IS NULL)
-    OR (estimate.source_kind='sandbox_normalized' AND NEW.source_rate_id IS NOT NULL) THEN
+    OR (estimate.source_kind IN ('sandbox_normalized','shipbubble_live') AND NEW.source_rate_id IS NOT NULL) THEN
   RAISE EXCEPTION 'checkout estimate option truth is invalid';
  END IF;
  RETURN NEW;

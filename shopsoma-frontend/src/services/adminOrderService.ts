@@ -371,6 +371,20 @@ export const adminMarkItemReady = async (
 };
 
 /**
+ * Mark all items ready at the Hub and dispatch ShipBubble courier pickup
+ */
+export const bookShipbubblePickup = async (
+  orderId: string
+): Promise<OrderDetail> => {
+  const response = await api.post<OrderDetail>(
+    `/admin/orders/${orderId}/shipbubble/book-pickup`,
+    {},
+    { timeout: 45000 }
+  );
+  return response.data;
+};
+
+/**
  * Bulk update order statuses
  */
 export const bulkUpdateStatus = async (data: BulkStatusUpdate): Promise<{ success: boolean; updated_count: number; message: string }> => {

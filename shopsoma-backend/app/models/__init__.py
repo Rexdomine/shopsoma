@@ -105,6 +105,10 @@ from app.models.order_guest_capability import (
     OrderWorkflowMigrationRun,
 )
 from app.models.payment_reminder import OrderPaymentReminder
+from app.models.shipbubble_shipment import (
+    ShipbubbleShipment,
+    ShipbubbleWebhookEvent,
+)
 
 __all__ = [
     "User",
@@ -193,4 +197,6 @@ __all__ = [
     "OrderWorkflowClassification",
     "OrderWorkflowMigrationRun",
     "OrderPaymentReminder",
+    "ShipbubbleShipment",
+    "ShipbubbleWebhookEvent",
 ]

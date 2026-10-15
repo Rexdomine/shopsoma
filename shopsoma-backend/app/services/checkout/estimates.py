@@ -4,6 +4,8 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal, ROUND_CEILING, ROUND_HALF_UP
 import hashlib
 import json
+import logging
+import re
 from uuid import NAMESPACE_URL, uuid5
 from zoneinfo import ZoneInfo
 
@@ -22,6 +24,8 @@ from app.models.order import Order, OrderItem
 from app.models.product import Product
 from app.models.product_logistics_profile import ProductLogisticsProfile
 from app.models.setting import Setting
+from app.models.user import User
+from app.services.shipbubble_service import get_shipbubble_service, ShipBubbleError
 from app.services.shipping.provider_settings import shipping_provider_settings
 from app.services.shipping.manual_rates import manual_rates_query
 from app.models.fulfillment_cohort import CohortItemAllocation, FulfillmentCohort
@@ -59,6 +63,7 @@ _CENT = Decimal("0.01")
 _MAX_CHECKOUT_OPTION_AMOUNT = Decimal("99999999.99")
 _ESTIMATE_TTL_SECONDS = 1800
 _LAGOS_TZ = ZoneInfo("Africa/Lagos")
+logger = logging.getLogger(__name__)
 
 
 def _planned_ship_date() -> date:
@@ -402,6 +407,195 @@ async def _dhl_checkout_options(db, *, order: Order, planned_ship_date=None):
         if result.result_kind != "success":
             raise HTTPException(status_code=503, detail="DHL has no service for this shipment")
         return result.offers
+
+
+async def _shipbubble_checkout_options(db, *, order: Order):
+    """Retrieve live rates from ShipBubble for domestic checkout."""
+    hubs = (
+        await db.execute(
+            select(FulfillmentHub).where(FulfillmentHub.is_active.is_(True)).order_by(FulfillmentHub.id)
+        )
+    ).scalars().all()
+    if not hubs:
+        # Check if an existing hub can be activated or auto-seed
+        any_hub = (await db.execute(select(FulfillmentHub).order_by(FulfillmentHub.id))).scalars().first()
+        if any_hub:
+            any_hub.is_active = True
+            any_hub.activated_at = datetime.now(ZoneInfo("UTC"))
+            db.add(any_hub)
+            await db.flush()
+            hubs = [any_hub]
+        else:
+            admin = (await db.execute(select(User).where(User.role == "admin"))).scalars().first()
+            import uuid as _uuid
+            import datetime as _dt
+            new_hub = FulfillmentHub(
+                id=_uuid.uuid4(),
+                code="lagos-central-hub",
+                name="Shopsoma Lagos Central Hub",
+                contact_name="Shopsoma Logistics",
+                contact_phone="+2348012345678",
+                address_line1="1 Admiralty Way, Lekki Phase 1",
+                city="Lekki",
+                state="Lagos",
+                postal_code="105102",
+                country_code="NG",
+                timezone="Africa/Lagos",
+                cutoff_time=_dt.time(16, 0),
+                is_active=True,
+                activated_at=datetime.now(ZoneInfo("UTC")),
+                activated_by_id=admin.id if admin else None,
+                version=1,
+            )
+            db.add(new_hub)
+            await db.flush()
+            hubs = [new_hub]
+    hub = hubs[0]
+
+    service = get_shipbubble_service()
+    sender_address_code = hub.shipbubble_address_code
+    if not sender_address_code:
+        hub_address_str = f"{hub.address_line1} {hub.address_line2 or ''}".strip()
+        try:
+            val_hub = await service.validate_address(
+                name=hub.contact_name or "Shopsoma Fulfillment Hub",
+                email=settings.SHIPBUBBLE_SENDER_EMAIL or "logistics@shopsoma.com",
+                phone=hub.contact_phone or "+2348000000000",
+                address=f"{hub_address_str}, {hub.city}, {hub.state}, Nigeria",
+            )
+            sender_address_code = int(val_hub["address_code"])
+            hub.shipbubble_address_code = sender_address_code
+            db.add(hub)
+            await db.flush()
+        except ShipBubbleError as exc:
+            logger.error("[ShipBubble] Failed to validate hub origin address: %s", exc)
+            raise HTTPException(status_code=503, detail="Failed to validate fulfillment hub shipping origin") from exc
+
+    address = order.shipping_address
+    if not address or not address.address_line1 or not address.city or not address.state:
+        raise HTTPException(status_code=422, detail="Valid delivery address required for ShipBubble rates")
+
+    customer = await db.get(User, order.customer_id)
+    dest_name = address.full_name or (customer.full_name if customer else "Valued Customer")
+    dest_email = (customer.email if customer else None) or "customer@shopsoma.com"
+    dest_phone = address.phone_number or (customer.phone_number if customer else "+2348000000000")
+    dest_address_str = f"{address.address_line1} {address.address_line2 or ''}".strip()
+    dest_country = "Nigeria" if not address.country or address.country.lower() in ("ng", "nigeria") else address.country
+    dest_full = f"{dest_address_str}, {address.city}, {address.state}, {dest_country}"
+
+    try:
+        val_dest = await service.validate_address(
+            name=dest_name,
+            email=dest_email,
+            phone=dest_phone,
+            address=dest_full,
+        )
+        receiver_address_code = int(val_dest["address_code"])
+    except ShipBubbleError as exc:
+        logger.warning("[ShipBubble] Failed to validate customer delivery address: %s", exc)
+        raise HTTPException(status_code=422, detail=f"Delivery address validation failed: {exc.message}") from exc
+
+    item_measurements = [
+        (item, product, values)
+        for item, product, _profile, values in await _authoritative_parcel_measurements(
+            db, order
+        )
+    ]
+    if not item_measurements:
+        raise HTTPException(status_code=422, detail="checkout has no shippable items")
+
+    total_weight = Decimal("0")
+    max_length = Decimal("0")
+    max_width = Decimal("0")
+    max_height = Decimal("0")
+    total_volume = Decimal("0")
+    package_items = []
+
+    for item, product, values in item_measurements:
+        if values is None or any(v is None for v in values):
+            w, l, wd, h = (Decimal("0.5"), Decimal("10.0"), Decimal("10.0"), Decimal("10.0"))
+        else:
+            w = max(Decimal(str(values[0] or 0.5)), Decimal("0.01"))
+            l = max(Decimal(str(values[1] or 10.0)), Decimal("1.0"))
+            wd = max(Decimal(str(values[2] or 10.0)), Decimal("1.0"))
+            h = max(Decimal(str(values[3] or 10.0)), Decimal("1.0"))
+
+        total_weight += w * item.quantity
+        max_length = max(max_length, l)
+        max_width = max(max_width, wd)
+        max_height = max(max_height, h)
+        total_volume += l * wd * h * item.quantity
+
+        product_title = getattr(product, "title", None) or getattr(product, "name", None) or "Item"
+        product_desc = getattr(product, "description", None) or product_title
+
+        package_items.append({
+            "name": str(product_title)[:50],
+            "description": str(product_desc)[:100],
+            "unit_weight": float(w),
+            "unit_amount": float(item.unit_price),
+            "quantity": int(item.quantity),
+        })
+
+    effective_height = max(
+        max_height,
+        (total_volume / (max_length * max_width)).quantize(
+            Decimal("0.1"), rounding=ROUND_CEILING
+        ),
+    )
+    package_dimension = {
+        "length": float(max_length.quantize(Decimal("0.1"))),
+        "width": float(max_width.quantize(Decimal("0.1"))),
+        "height": float(effective_height.quantize(Decimal("0.1"))),
+    }
+
+    now_lagos = datetime.now(_LAGOS_TZ)
+    pickup_date = (
+        now_lagos.date() if now_lagos.hour < 18 else now_lagos.date() + timedelta(days=1)
+    ).strftime("%Y-%m-%d")
+    category_id = settings.SHIPBUBBLE_CATEGORY_ID or 74794423
+
+    try:
+        rates_result = await service.fetch_rates(
+            sender_address_code=sender_address_code,
+            receiver_address_code=receiver_address_code,
+            pickup_date=pickup_date,
+            category_id=category_id,
+            package_items=package_items,
+            package_dimension=package_dimension,
+        )
+    except ShipBubbleError as exc:
+        if "category" in str(exc).lower():
+            try:
+                available_cats = await service.get_categories()
+                fallback_cat = next(
+                    (c["category_id"] for c in available_cats if "fashion" in str(c.get("category", "")).lower()),
+                    None
+                )
+                if not fallback_cat and available_cats:
+                    fallback_cat = available_cats[0].get("category_id")
+                if fallback_cat:
+                    rates_result = await service.fetch_rates(
+                        sender_address_code=sender_address_code,
+                        receiver_address_code=receiver_address_code,
+                        pickup_date=pickup_date,
+                        category_id=fallback_cat,
+                        package_items=package_items,
+                        package_dimension=package_dimension,
+                    )
+                else:
+                    raise exc
+            except Exception:
+                logger.error("[ShipBubble] fetch_rates error: %s", exc)
+                raise HTTPException(status_code=503, detail=f"Unable to retrieve courier rates from ShipBubble: {exc.message}") from exc
+        else:
+            logger.error("[ShipBubble] fetch_rates error: %s", exc)
+            raise HTTPException(status_code=503, detail=f"Unable to retrieve courier rates from ShipBubble: {exc.message}") from exc
+
+    if not rates_result.couriers:
+        raise HTTPException(status_code=503, detail="No courier services available for this destination")
+
+    return rates_result
 
 
 def _estimate_expiry_delta(ttl_seconds: int) -> timedelta:
@@ -767,8 +961,12 @@ async def create_estimate(
         existing.source_kind == "sandbox_normalized" if existing
         else provider == "dhl" and capabilities.checkout_enabled
     )
+    shipbubble_provider_enabled = (
+        existing.source_kind == "shipbubble_live" if existing
+        else provider == "shipbubble" and provider_config.readiness["shipbubble"]
+    )
     planned_ship_date = _planned_ship_date() if dhl_provider_enabled else None
-    if not dhl_provider_enabled:
+    if not dhl_provider_enabled and not shipbubble_provider_enabled:
         # Static refreshes must serialize on the checkout aggregate too. The
         # provider path reacquires this lock after its external await; the
         # static path has no await boundary, so acquire it before leaf lookup.
@@ -850,7 +1048,7 @@ async def create_estimate(
                 status_code=503, detail="authoritative exchange rate unavailable"
             )
 
-    if not dhl_provider_enabled:
+    if not dhl_provider_enabled and not shipbubble_provider_enabled:
         database_now = await db.scalar(select(text("statement_timestamp()")))
         estimate = CheckoutShippingEstimate(
             order_id=order.id,
@@ -922,7 +1120,7 @@ async def create_estimate(
             or ngn_in_order_currency(rate.max_order_value) >= order.subtotal
         )
     ]
-    if not rates and not dhl_provider_enabled:
+    if not rates and not dhl_provider_enabled and not shipbubble_provider_enabled:
         raise HTTPException(status_code=503, detail="no eligible estimate options")
     dhl_offers = None
     if dhl_provider_enabled:
@@ -1074,6 +1272,127 @@ async def create_estimate(
                 raise HTTPException(status_code=409, detail="idempotency conflict")
             return replay
 
+    sb_rates_result = None
+    if shipbubble_provider_enabled:
+        sb_idempotency_lock_key = f"sb:{order.customer_id}:{idempotency_key}"
+        await db.execute(
+            text(
+                "SELECT pg_advisory_xact_lock("
+                "hashtextextended(:lock_key, 0))"
+            ),
+            {"lock_key": sb_idempotency_lock_key},
+        )
+        existing = await db.scalar(
+            select(CheckoutShippingEstimate).where(
+                CheckoutShippingEstimate.customer_id == order.customer_id,
+                CheckoutShippingEstimate.idempotency_key == idempotency_key,
+            )
+        )
+        if existing is not None:
+            if existing.request_fingerprint != fingerprint:
+                raise HTTPException(status_code=409, detail="idempotency conflict")
+            return existing
+        sb_rates_result = await _shipbubble_checkout_options(db, order=order)
+        fresh_order = await load_checkout_order(db, order.id, for_update=True)
+        if fresh_order is None:
+            raise HTTPException(status_code=404, detail="checkout order no longer exists")
+        refreshed_actor_type, refreshed_actor_id = await authorize_checkout_actor(
+            db,
+            order=fresh_order,
+            current_user=current_user,
+            token=capability,
+        )
+        if (refreshed_actor_type, refreshed_actor_id) != (actor_type, actor_id):
+            raise HTTPException(status_code=404, detail="checkout not available")
+        fresh_payment_status = getattr(fresh_order, "payment_status", None)
+        fresh_fulfillment_status = getattr(fresh_order, "fulfillment_status", None)
+        if (
+            getattr(fresh_order, "checkout_prerequisites_completed_at", None) is not None
+            or getattr(fresh_payment_status, "value", fresh_payment_status) == "paid"
+            or getattr(fresh_fulfillment_status, "value", fresh_fulfillment_status)
+            == "cancelled"
+        ):
+            raise HTTPException(status_code=409, detail="checkout estimate is no longer available")
+        _, fresh_snapshot_hash = order_snapshot(fresh_order)
+        if fresh_snapshot_hash != snapshot_hash:
+            raise HTTPException(status_code=409, detail="order changed during ShipBubble rating")
+        order = fresh_order
+        current_unselected_leaf = (
+            await db.execute(
+                select(CheckoutShippingEstimate)
+                .where(
+                    CheckoutShippingEstimate.order_id == order.id,
+                    CheckoutShippingEstimate.customer_id == order.customer_id,
+                    ~select(successor_estimate.id)
+                    .where(
+                        successor_estimate.supersedes_estimate_id
+                        == CheckoutShippingEstimate.id
+                    )
+                    .exists(),
+                    ~select(selection.id)
+                    .where(selection.estimate_id == CheckoutShippingEstimate.id)
+                    .exists(),
+                )
+                .order_by(
+                    CheckoutShippingEstimate.created_at.desc(),
+                    CheckoutShippingEstimate.id.desc(),
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        existing = await db.scalar(
+            select(CheckoutShippingEstimate).where(
+                CheckoutShippingEstimate.customer_id == order.customer_id,
+                CheckoutShippingEstimate.idempotency_key == idempotency_key,
+            )
+        )
+        if existing is not None:
+            if existing.request_fingerprint != fingerprint:
+                raise HTTPException(status_code=409, detail="idempotency conflict")
+            return existing
+        database_now = await db.scalar(select(text("statement_timestamp()")))
+        customer_id = order.customer_id
+        estimate = CheckoutShippingEstimate(
+            order_id=order.id,
+            customer_id=customer_id,
+            supersedes_estimate_id=(
+                current_unselected_leaf.id if current_unselected_leaf is not None else None
+            ),
+            destination_snapshot_hash=destination_hash,
+            order_snapshot_hash=snapshot_hash,
+            currency=order.currency,
+            ttl_seconds=_ESTIMATE_TTL_SECONDS,
+            expires_at=database_now + _estimate_expiry_delta(_ESTIMATE_TTL_SECONDS),
+            source_kind="shipbubble_live",
+            source_reference=f"shipbubble:{sb_rates_result.request_token[:16]}",
+            source_command=(
+                "refresh_checkout_estimate"
+                if current_unselected_leaf is not None
+                else "create_checkout_estimate"
+            ),
+            idempotency_key=idempotency_key,
+            request_fingerprint=fingerprint,
+            schema_version="checkout_estimate_v1",
+            created_by_actor_type=actor_type,
+            created_by_actor_id=actor_id,
+        )
+        db.add(estimate)
+        try:
+            await db.flush()
+        except IntegrityError:
+            await db.rollback()
+            replay = await db.scalar(
+                select(CheckoutShippingEstimate).where(
+                    CheckoutShippingEstimate.customer_id == customer_id,
+                    CheckoutShippingEstimate.idempotency_key == idempotency_key,
+                )
+            )
+            if replay is None:
+                raise
+            if replay.request_fingerprint != fingerprint:
+                raise HTTPException(status_code=409, detail="idempotency conflict")
+            return replay
+
     if estimate is None:
         raise HTTPException(status_code=500, detail="checkout estimate was not created")
     if dhl_offers is not None:
@@ -1117,6 +1436,73 @@ async def create_estimate(
                     min_delivery_days=None,
                     max_delivery_days=None,
                     source_rate_id=None,
+                )
+            )
+    elif sb_rates_result is not None:
+        for rank, courier in enumerate(sb_rates_result.couriers):
+            if courier.currency == order.currency:
+                amount = courier.rate_card_amount.quantize(_CENT, rounding=ROUND_HALF_UP)
+            elif courier.currency == "NGN" and order.currency == "USD":
+                amount = ngn_in_order_currency(courier.rate_card_amount)
+            elif courier.currency == "USD" and order.currency == "NGN":
+                if usd_to_ngn_rate is None:
+                    rate_setting = await db.scalar(
+                        select(Setting).where(Setting.key == "exchange_rate_usd_to_ngn")
+                    )
+                    try:
+                        usd_to_ngn_rate = Decimal(str(rate_setting.value))
+                    except (ArithmeticError, ValueError, TypeError, AttributeError) as exc:
+                        raise HTTPException(
+                            status_code=503, detail="authoritative exchange rate unavailable"
+                        ) from exc
+                    if not usd_to_ngn_rate.is_finite() or usd_to_ngn_rate <= 0:
+                        raise HTTPException(
+                            status_code=503, detail="authoritative exchange rate unavailable"
+                        )
+                amount = (courier.rate_card_amount * usd_to_ngn_rate).quantize(_CENT, rounding=ROUND_HALF_UP)
+            else:
+                amount = ngn_in_order_currency(courier.rate_card_amount)
+
+            if amount > _MAX_CHECKOUT_OPTION_AMOUNT:
+                raise HTTPException(
+                    status_code=503,
+                    detail="ShipBubble returned a checkout amount outside the supported range",
+                )
+
+            cid_slug = re.sub(r"[^a-zA-Z0-9_\-]", "", str(courier.courier_id))
+            sc_slug = re.sub(r"[^a-zA-Z0-9_\-]", "", str(courier.service_code))
+            opt_key = f"sb:{rank:02d}:{cid_slug}:{sc_slug}"[:100]
+            svc_code = f"sb-{cid_slug}-{sc_slug}"[:100]
+
+            provider_metadata = {
+                "provider": "shipbubble",
+                "request_token": sb_rates_result.request_token,
+                "courier_id": str(courier.courier_id),
+                "courier_name": courier.courier_name,
+                "service_code": courier.service_code,
+                "service_type": courier.service_type,
+                "rate_card_amount": str(courier.rate_card_amount),
+                "total_wallet_amount": str(courier.total_wallet_amount),
+                "delivery_eta": courier.delivery_eta,
+                "courier_image": courier.courier_image,
+            }
+
+            label = courier.courier_name
+            if courier.delivery_eta:
+                label = f"{courier.courier_name} ({courier.delivery_eta})"
+
+            db.add(
+                CheckoutShippingEstimateOption(
+                    estimate_id=estimate.id,
+                    option_key=opt_key,
+                    service_code=svc_code,
+                    service_label=label,
+                    amount=amount,
+                    currency=order.currency,
+                    min_delivery_days=courier.min_delivery_days,
+                    max_delivery_days=courier.max_delivery_days,
+                    source_rate_id=None,
+                    provider_metadata=provider_metadata,
                 )
             )
     else:

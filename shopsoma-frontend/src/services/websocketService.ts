@@ -3,6 +3,8 @@
  * Connects to backend WebSocket endpoint to receive live order status changes
  */
 
+import { API_BASE_URL } from '../config/constants';
+
 export type OrderUpdateData = {
   status?: string;
   fulfillment_status: string;
@@ -60,11 +62,9 @@ class WebSocketService {
     }
 
     try {
-      // Determine WebSocket protocol based on current page protocol
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-
-      // Build WebSocket URL with optional token
-      let wsUrl = `${protocol}//${window.location.hostname}:8000/api/v1/ws/orders/${orderId}`;
+      // Build WebSocket URL from API_BASE_URL
+      const wsBase = API_BASE_URL.replace(/^http/, 'ws');
+      let wsUrl = `${wsBase}/ws/orders/${orderId}`;
       if (token) {
         wsUrl += `?token=${token}`;
       }

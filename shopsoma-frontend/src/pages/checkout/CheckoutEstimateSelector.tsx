@@ -73,11 +73,20 @@ export default function CheckoutEstimateSelector({
         return (
           <div key={option.id} className={`border px-4 py-3 ${selected ? 'border-primary bg-gray-50' : 'border-gray-200'}`}>
             <div className="flex items-center justify-between gap-4">
-              <div>
-                <p className="text-sm font-semibold">{option.service_label}</p>
-                <p className="text-xs text-gray-500">{delivery}</p>
+              <div className="flex items-center gap-3">
+                {option.provider_metadata?.courier_image && (
+                  <img
+                    src={option.provider_metadata.courier_image}
+                    alt=""
+                    className="h-8 w-8 object-contain rounded shrink-0 bg-white border border-gray-100 p-0.5"
+                  />
+                )}
+                <div>
+                  <p className="text-sm font-semibold">{option.service_label}</p>
+                  <p className="text-xs text-gray-500">{delivery}</p>
+                </div>
               </div>
-              <div className="text-right">
+              <div className="text-right shrink-0">
                 <p className="text-sm font-semibold">{money(option.amount, option.currency)}</p>
                 <button
                   type="button"

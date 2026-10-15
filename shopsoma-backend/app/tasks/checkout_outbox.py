@@ -16,6 +16,7 @@ from app.services.checkout.outbox import (
 )
 from app.services.orders.vendor_fulfilment import start_verified_order_fulfilment
 from app.services.payments.fulfilment_bridge import record_payment_reconciliation_hold
+from app.services.shipping.shipbubble_booking import record_shipbubble_selection_on_paid_order
 
 
 async def _route_late_payment_exception(session, *, event: CheckoutOutboxEvent) -> None:
@@ -50,6 +51,9 @@ async def dispatch_checkout_events_once(
             async with session_factory() as session:
                 if event.event_type == "payment_verified_start_order":
                     await start_verified_order_fulfilment(
+                        session, order_id=event.order_id
+                    )
+                    await record_shipbubble_selection_on_paid_order(
                         session, order_id=event.order_id
                     )
                 elif event.event_type == "late_payment_exception":
