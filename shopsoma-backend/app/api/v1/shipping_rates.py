@@ -10,6 +10,7 @@ import logging
 from app.core.database import get_db
 from app.models.user import User, UserRole
 from app.models.shipping_rate import ShippingRate
+from app.services.shipbubble_service import get_shipbubble_service
 from app.services.shipping.provider_settings import require_manual_order_pricing
 from app.services.shipping.manual_rates import manual_rates_query
 from app.models.address import Address

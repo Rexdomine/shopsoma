@@ -139,21 +139,20 @@ def upgrade() -> None:
     # 6. Update option validation trigger to handle shipbubble_live
     op.execute(
         r"""
-        CREATE OR REPLACE FUNCTION validate_checkout_estimate_option_write() RETURNS trigger LANGUAGE plpgsql AS $$
-        DECLARE estimate record;
-        BEGIN
-         IF TG_OP <> 'INSERT' THEN RAISE EXCEPTION 'checkout estimate option is immutable audit'; END IF;
-         SELECT currency,source_kind,creation_txid INTO estimate
-         FROM checkout_shipping_estimates WHERE id=NEW.estimate_id FOR UPDATE;
-         IF NOT FOUND OR estimate.currency IS DISTINCT FROM NEW.currency
-            OR estimate.creation_txid IS DISTINCT FROM txid_current()
-            OR (estimate.source_kind='static_domestic_rate' AND NEW.source_rate_id IS NULL)
-            OR (estimate.source_kind='sandbox_normalized' AND NEW.source_rate_id IS NOT NULL)
-            OR (estimate.source_kind='shipbubble_live' AND NEW.source_rate_id IS NOT NULL) THEN
-          RAISE EXCEPTION 'checkout estimate option truth is invalid';
-         END IF;
-         RETURN NEW;
-        END $$;
+CREATE OR REPLACE FUNCTION validate_checkout_estimate_option_write() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE estimate record;
+BEGIN
+ IF TG_OP <> 'INSERT' THEN RAISE EXCEPTION 'checkout estimate option is immutable audit'; END IF;
+ SELECT currency,source_kind,creation_txid INTO estimate
+ FROM checkout_shipping_estimates WHERE id=NEW.estimate_id FOR UPDATE;
+ IF NOT FOUND OR estimate.currency IS DISTINCT FROM NEW.currency
+    OR estimate.creation_txid IS DISTINCT FROM txid_current()
+    OR (estimate.source_kind='static_domestic_rate' AND NEW.source_rate_id IS NULL)
+    OR (estimate.source_kind IN ('sandbox_normalized','shipbubble_live') AND NEW.source_rate_id IS NOT NULL) THEN
+  RAISE EXCEPTION 'checkout estimate option truth is invalid';
+ END IF;
+ RETURN NEW;
+END $$;
         """
     )
 
@@ -161,20 +160,20 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.execute(
         r"""
-        CREATE OR REPLACE FUNCTION validate_checkout_estimate_option_write() RETURNS trigger LANGUAGE plpgsql AS $$
-        DECLARE estimate record;
-        BEGIN
-         IF TG_OP <> 'INSERT' THEN RAISE EXCEPTION 'checkout estimate option is immutable audit'; END IF;
-         SELECT currency,source_kind,creation_txid INTO estimate
-         FROM checkout_shipping_estimates WHERE id=NEW.estimate_id FOR UPDATE;
-         IF NOT FOUND OR estimate.currency IS DISTINCT FROM NEW.currency
-            OR estimate.creation_txid IS DISTINCT FROM txid_current()
-            OR (estimate.source_kind='static_domestic_rate' AND NEW.source_rate_id IS NULL)
-            OR (estimate.source_kind='sandbox_normalized' AND NEW.source_rate_id IS NOT NULL) THEN
-          RAISE EXCEPTION 'checkout estimate option truth is invalid';
-         END IF;
-         RETURN NEW;
-        END $$;
+CREATE OR REPLACE FUNCTION validate_checkout_estimate_option_write() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE estimate record;
+BEGIN
+ IF TG_OP <> 'INSERT' THEN RAISE EXCEPTION 'checkout estimate option is immutable audit'; END IF;
+ SELECT currency,source_kind,creation_txid INTO estimate
+ FROM checkout_shipping_estimates WHERE id=NEW.estimate_id FOR UPDATE;
+ IF NOT FOUND OR estimate.currency IS DISTINCT FROM NEW.currency
+    OR estimate.creation_txid IS DISTINCT FROM txid_current()
+    OR (estimate.source_kind='static_domestic_rate' AND NEW.source_rate_id IS NULL)
+    OR (estimate.source_kind='sandbox_normalized' AND NEW.source_rate_id IS NOT NULL) THEN
+  RAISE EXCEPTION 'checkout estimate option truth is invalid';
+ END IF;
+ RETURN NEW;
+END $$;
         """
     )
     op.drop_table("shipbubble_webhook_events")

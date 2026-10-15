@@ -1298,8 +1298,8 @@ async def _verify_stripe_payment(
             await send_vendor_notifications_after_payment(db, order.id)
             try:
                 from app.services.shipping.shipbubble_booking import record_shipbubble_selection_on_paid_order
-                await record_shipbubble_selection_on_paid_order(db, order_id=order.id)
-                await db.commit()
+                if await record_shipbubble_selection_on_paid_order(db, order_id=order.id) is not None:
+                    await db.commit()
             except Exception as sb_exc:
                 logger.warning(f"Failed recording ShipBubble selection after Stripe payment: {sb_exc}")
 
@@ -1490,8 +1490,8 @@ async def _verify_paystack_payment(
                 await send_vendor_notifications_after_payment(db, order.id)
                 try:
                     from app.services.shipping.shipbubble_booking import record_shipbubble_selection_on_paid_order
-                    await record_shipbubble_selection_on_paid_order(db, order_id=order.id)
-                    await db.commit()
+                    if await record_shipbubble_selection_on_paid_order(db, order_id=order.id) is not None:
+                        await db.commit()
                 except Exception as sb_exc:
                     logger.warning(f"Failed recording ShipBubble selection after Paystack payment: {sb_exc}")
 

@@ -19,6 +19,12 @@ async def shipping_provider_settings(db):
         settings.ENVIRONMENT != "production"
         and domestic_shipping_capabilities(settings).checkout_enabled
     )
+    dhl_secure_checkout_routing = (
+        settings.DOMESTIC_CHECKOUT_PREREQUISITES_ENABLED
+        and settings.DOMESTIC_CHECKOUT_COHORT_PERCENTAGE == 100
+        and settings.ENVIRONMENT != "production"
+        and settings.DHL_ENVIRONMENT == "sandbox"
+    )
     provider = rows.get("shipping_provider")
     if not provider:
         # Before the exclusive setting existed the secure route used the DHL
@@ -34,23 +40,16 @@ async def shipping_provider_settings(db):
             if (rows.get("shipping_use_shipbubble") or "").lower() == "true"
             else ("dhl" if dhl_ready else "manual")
         )
-    secure_checkout_routing = (
-        (provider == "shipbubble" and shipbubble_ready)
-        or (
-            settings.DOMESTIC_CHECKOUT_PREREQUISITES_ENABLED
-            and settings.DOMESTIC_CHECKOUT_COHORT_PERCENTAGE == 100
-            and settings.ENVIRONMENT != "production"
-            and settings.DHL_ENVIRONMENT == "sandbox"
-        )
-    )
-    if provider == "dhl" and not secure_checkout_routing:
-        provider = "manual"
-    elif provider == "shipbubble" and not shipbubble_ready:
+    elif provider == "dhl" and not dhl_secure_checkout_routing:
+        # A rollout rollback must not strand the partial/legacy population on
+        # the provider-only preview endpoint. Resolve the stale persisted
+        # selection to the safe manual preview mode until full routing returns.
         provider = "manual"
     return ShippingProviderSettings(
         provider=provider,
         checkout_estimates_required=(
-            secure_checkout_routing
+            (provider == "shipbubble" and shipbubble_ready)
+            or (provider == "dhl" and dhl_ready and dhl_secure_checkout_routing)
         ),
         use_shipbubble=provider == "shipbubble",
         readiness={"manual": True, "shipbubble": shipbubble_ready, "dhl": dhl_ready},
