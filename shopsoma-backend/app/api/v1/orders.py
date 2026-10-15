@@ -91,12 +91,13 @@ def _domestic_checkout_is_enforced(
     """Assign only explicitly eligible new orders; absence never implies domestic."""
     if not settings.DOMESTIC_CHECKOUT_PREREQUISITES_ENABLED:
         return False
-    if shipping_provider == "shipbubble":
-        return (
-            settings.shipbubble_configured
-            and country.strip().casefold() in {"nigeria", "ng"}
-            and currency in SUPPORTED_ORDER_CURRENCIES
-        )
+    if (
+        shipping_provider == "shipbubble"
+        and settings.shipbubble_configured
+        and country.strip().casefold() in {"nigeria", "ng"}
+        and currency in SUPPORTED_ORDER_CURRENCIES
+    ):
+        return True
     if settings.ENVIRONMENT == "production" or settings.DHL_ENVIRONMENT != "sandbox":
         return False
     if country.strip().casefold() not in {"nigeria", "ng"} or currency not in SUPPORTED_ORDER_CURRENCIES:

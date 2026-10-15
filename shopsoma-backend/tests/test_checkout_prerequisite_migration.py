@@ -694,7 +694,7 @@ def test_postgresql_head_has_exact_orm_ddl_parity(disposable_m2_database) -> Non
     from app.core.base import Base
 
     app_url, sync_url = disposable_m2_database
-    _run_alembic(app_url, "upgrade", REVISIONS[-1])
+    _run_alembic(app_url, "upgrade", CURRENT_HEAD_REVISION)
     m2_columns = {
         "orders": {
             "workflow_cohort",
