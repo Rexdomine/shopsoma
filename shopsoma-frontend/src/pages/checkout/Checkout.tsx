@@ -1551,7 +1551,9 @@ export default function Checkout() {
                           disabled={isCreatingOrder || !hasEmail || !isEmailConfirmed}
                           className="w-full py-3 rounded-sm bg-primary text-white text-sm font-semibold disabled:opacity-50"
                         >
-                          {isCreatingOrder ? 'Calculating live courier rates…' : 'Calculate live courier rates'}
+                          {shippingProvider === 'shipbubble'
+                            ? (isCreatingOrder ? 'Calculating live courier rates…' : 'Calculate live courier rates')
+                            : (isCreatingOrder ? 'Preparing delivery options…' : 'Continue to delivery options')}
                         </button>
                       ) : !checkoutEstimate ? (
                         isCreatingOrder ? (
@@ -1802,9 +1804,9 @@ export default function Checkout() {
                       ?? (orderReview ? reviewSummaryCurrency : currency),
                   )}</span>
                 </div>
-                <div className="flex items-center justify-between">
-                  <span>{checkoutEstimate?.selected_option?.service_label ?? 'Shipping cost'}</span>
-                  <span>{checkoutEstimate?.selected_option
+                <div className="flex items-start justify-between gap-3">
+                  <span className="min-w-0 break-words">{checkoutEstimate?.selected_option?.service_label ?? 'Shipping cost'}</span>
+                  <span className="shrink-0 whitespace-nowrap">{checkoutEstimate?.selected_option
                     ? formatServerMoney(checkoutEstimate.selected_option.amount, checkoutEstimate.selected_option.currency)
                     : committedLegacyOrder
                       ? formatPrice(committedLegacyOrder.shipping_cost, committedLegacyOrder.currency)

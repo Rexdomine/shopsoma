@@ -36,7 +36,12 @@ const toIso = (value: string): string | undefined => {
 
 const errorDetail = (err: unknown, fallback: string): string => {
   const detail = (err as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail;
-  return typeof detail === 'string' && detail ? detail : fallback;
+  if (typeof detail === 'string' && detail) return detail;
+  if (Array.isArray(detail) && detail.length > 0) {
+    const firstMsg = (detail[0] as { msg?: unknown })?.msg;
+    if (typeof firstMsg === 'string' && firstMsg) return firstMsg;
+  }
+  return fallback;
 };
 
 const WORKING_DAYS_TONE_CLASSES: Record<

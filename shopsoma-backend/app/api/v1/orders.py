@@ -89,8 +89,6 @@ def _domestic_checkout_is_enforced(
     *, customer_id: UUID, country: str, currency: str, shipping_provider: str = "manual"
 ) -> bool:
     """Assign only explicitly eligible new orders; absence never implies domestic."""
-    if not settings.DOMESTIC_CHECKOUT_PREREQUISITES_ENABLED:
-        return False
     if (
         shipping_provider == "shipbubble"
         and settings.shipbubble_configured
@@ -98,6 +96,8 @@ def _domestic_checkout_is_enforced(
         and currency in SUPPORTED_ORDER_CURRENCIES
     ):
         return True
+    if not settings.DOMESTIC_CHECKOUT_PREREQUISITES_ENABLED:
+        return False
     if settings.ENVIRONMENT == "production" or settings.DHL_ENVIRONMENT != "sandbox":
         return False
     if country.strip().casefold() not in {"nigeria", "ng"} or currency not in SUPPORTED_ORDER_CURRENCIES:

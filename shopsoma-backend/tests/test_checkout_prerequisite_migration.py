@@ -118,7 +118,12 @@ def test_migrations_are_self_contained_and_import_no_application_modules() -> No
         assert application_imports == []
 
 
-def _run_alembic(database_url: str, *arguments: str, expect_success: bool = True):
+_M2_TEMPLATE_DATABASES: dict[tuple[str, str], str] = {}
+
+
+def _exec_alembic_subprocess(
+    database_url: str, *arguments: str, expect_success: bool = True
+):
     result = subprocess.run(
         [sys.executable, "-m", "alembic", *arguments],
         cwd=ROOT,
@@ -131,6 +136,130 @@ def _run_alembic(database_url: str, *arguments: str, expect_success: bool = True
     if expect_success:
         assert result.returncode == 0, result.stdout + result.stderr
     return result
+
+
+def _ensure_m2_template(base_url, revision: str) -> str:
+    sync_url = base_url.set(drivername="postgresql+psycopg2")
+    admin_key = sync_url.set(database="postgres").render_as_string(hide_password=True)
+    cache_key = (admin_key, revision)
+    existing = _M2_TEMPLATE_DATABASES.get(cache_key)
+    if existing is not None:
+        return existing
+    safe_rev = re.sub(r"[^a-z0-9]+", "_", revision.lower()).strip("_")[:12]
+    tpl_name = f"shopsoma_m2_tpl_{os.getpid()}_{safe_rev}_{uuid.uuid4().hex[:6]}"
+    admin = create_engine(
+        sync_url.set(database="postgres"), isolation_level="AUTOCOMMIT"
+    )
+    try:
+        with admin.connect() as connection:
+            connection.execute(text(f'CREATE DATABASE "{tpl_name}"'))
+        tpl_app_url = base_url.set(
+            drivername="postgresql+asyncpg", database=tpl_name
+        ).render_as_string(hide_password=False)
+        _exec_alembic_subprocess(tpl_app_url, "upgrade", revision, expect_success=True)
+        with admin.connect() as connection:
+            connection.execute(
+                text(
+                    "SELECT pg_terminate_backend(pid) "
+                    "FROM pg_stat_activity WHERE datname=:name AND pid<>pg_backend_pid()"
+                ),
+                {"name": tpl_name},
+            )
+    except BaseException:
+        with admin.connect() as connection:
+            connection.execute(
+                text(
+                    "SELECT pg_terminate_backend(pid) "
+                    "FROM pg_stat_activity WHERE datname=:name AND pid<>pg_backend_pid()"
+                ),
+                {"name": tpl_name},
+            )
+            connection.execute(text(f'DROP DATABASE IF EXISTS "{tpl_name}"'))
+        raise
+    finally:
+        admin.dispose()
+    _M2_TEMPLATE_DATABASES[cache_key] = tpl_name
+    return tpl_name
+
+
+def _cleanup_all_m2_templates() -> None:
+    configured = os.environ.get("DATABASE_URL")
+    if not configured or not _M2_TEMPLATE_DATABASES:
+        return
+    sync_url = make_url(configured).set(drivername="postgresql+psycopg2")
+    admin = create_engine(
+        sync_url.set(database="postgres"), isolation_level="AUTOCOMMIT"
+    )
+    try:
+        with admin.connect() as connection:
+            for tpl_name in list(_M2_TEMPLATE_DATABASES.values()):
+                connection.execute(
+                    text(
+                        "SELECT pg_terminate_backend(pid) "
+                        "FROM pg_stat_activity WHERE datname=:name AND pid<>pg_backend_pid()"
+                    ),
+                    {"name": tpl_name},
+                )
+                connection.execute(text(f'DROP DATABASE IF EXISTS "{tpl_name}"'))
+    finally:
+        _M2_TEMPLATE_DATABASES.clear()
+        admin.dispose()
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _m2_template_lifecycle():
+    yield
+    _cleanup_all_m2_templates()
+
+
+def _run_alembic(database_url: str, *arguments: str, expect_success: bool = True):
+    if expect_success and len(arguments) == 2 and arguments[0] == "upgrade":
+        revision = arguments[1]
+        parsed = make_url(database_url)
+        target_db = parsed.database
+        sync_url = parsed.set(drivername="postgresql+psycopg2")
+        probe_engine = create_engine(sync_url)
+        try:
+            with probe_engine.connect() as connection:
+                has_alembic = (
+                    connection.scalar(
+                        text("SELECT to_regclass('public.alembic_version')")
+                    )
+                    is not None
+                )
+        finally:
+            probe_engine.dispose()
+        if not has_alembic and target_db:
+            tpl_name = _ensure_m2_template(parsed, revision)
+            admin = create_engine(
+                sync_url.set(database="postgres"), isolation_level="AUTOCOMMIT"
+            )
+            try:
+                with admin.connect() as connection:
+                    connection.execute(
+                        text(
+                            "SELECT pg_terminate_backend(pid) "
+                            "FROM pg_stat_activity WHERE datname=:name AND pid<>pg_backend_pid()"
+                        ),
+                        {"name": target_db},
+                    )
+                    connection.execute(text(f'DROP DATABASE "{target_db}"'))
+                    connection.execute(
+                        text(
+                            f'CREATE DATABASE "{target_db}" TEMPLATE "{tpl_name}"'
+                        )
+                    )
+            finally:
+                admin.dispose()
+            return subprocess.CompletedProcess(
+                args=[sys.executable, "-m", "alembic", *arguments],
+                returncode=0,
+                stdout="",
+                stderr="",
+            )
+    return _exec_alembic_subprocess(
+        database_url, *arguments, expect_success=expect_success
+    )
 
 
 @pytest.fixture
