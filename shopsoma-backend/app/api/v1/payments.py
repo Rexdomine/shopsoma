@@ -391,9 +391,9 @@ async def _initialize_stripe_payment(
             await db.refresh(order)
         except Exception:
             pass
-    order_id = insp.identity[0] if (insp is not None and insp.identity) else order.id
-    order_number = str(order.order_number)
-    customer_id = order.customer_id
+    order_id = insp.identity[0] if (insp is not None and insp.identity) else getattr(order, "id", None)
+    order_number = str(getattr(order, "order_number", ""))
+    customer_id = getattr(order, "customer_id", None)
     try:
         truth = await payment_initialization_truth(
             db,
@@ -554,7 +554,7 @@ async def _stored_stripe_initialization_session(
             await db.refresh(order)
         except Exception:
             pass
-    order_id = insp.identity[0] if (insp is not None and insp.identity) else order.id
+    order_id = insp.identity[0] if (insp is not None and insp.identity) else getattr(order, "id", None)
     attempt = await db.get(PaymentAttempt, attempt_id)
     if (
         attempt is None
@@ -765,9 +765,9 @@ async def _stored_paystack_initialization_session(
             await db.refresh(order)
         except Exception:
             pass
-    order_id = insp.identity[0] if (insp is not None and insp.identity) else order.id
-    order_total = order.total_amount
-    order_currency = order.currency
+    order_id = insp.identity[0] if (insp is not None and insp.identity) else getattr(order, "id", None)
+    order_total = getattr(order, "total_amount", None)
+    order_currency = getattr(order, "currency", None)
     attempt = await db.get(PaymentAttempt, attempt_id)
     if (
         attempt is None
@@ -863,8 +863,8 @@ async def _initialize_paystack_payment(
             await db.refresh(order)
         except Exception:
             pass
-    order_id = insp.identity[0] if (insp is not None and insp.identity) else order.id
-    order_number = str(order.order_number)
+    order_id = insp.identity[0] if (insp is not None and insp.identity) else getattr(order, "id", None)
+    order_number = str(getattr(order, "order_number", ""))
 
     try:
         truth = await payment_initialization_truth(
