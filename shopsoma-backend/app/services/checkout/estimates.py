@@ -965,7 +965,8 @@ async def create_estimate(
     # Explicit manual overrides the environment; absent selection preserves
     # existing gated DHL behavior. Recovery of issued estimates is unchanged.
     capabilities = domestic_shipping_capabilities(settings)
-    has_dhl_postal = bool(order.shipping_address and order.shipping_address.postal_code)
+    shipping_addr = getattr(order, "shipping_address", None)
+    has_dhl_postal = bool(shipping_addr and getattr(shipping_addr, "postal_code", None))
     manual_provider_enabled = (
         existing.source_kind == "static_domestic_rate" if existing
         else ("manual" in enabled_providers and provider_config.readiness["manual"])
