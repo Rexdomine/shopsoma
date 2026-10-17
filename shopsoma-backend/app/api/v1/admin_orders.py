@@ -1135,6 +1135,16 @@ async def _book_shipbubble_if_all_items_ready(db: AsyncSession, *, order_id: UUI
         if all_ready:
             from app.services.shipping.shipbubble_booking import book_shipbubble_shipment_if_selected
             await book_shipbubble_shipment_if_selected(db, order_id=order_id)
+            from app.services.dhl.dhl_tracking_map import is_dhl_order
+            from app.services.dhl.hub_preparation import prepare_dhl_hub_package_for_order
+            order_row = await db.get(Order, order_id)
+            if (
+                order_row is not None
+                and order_row.payment_status == PaymentStatus.PAID
+                and await is_dhl_order(db, order=order_row)
+            ):
+                await prepare_dhl_hub_package_for_order(db, order_id=order_id)
+                await db.commit()
     except Exception as exc:
         logger.warning("Failed checking/booking ShipBubble pickup after item readiness for order %s: %s", order_id, exc)
 
@@ -1591,13 +1601,21 @@ async def create_dhl_handoff(
             .where(Order.id == parsed_order_id)
             .with_for_update()
         )
+        from app.services.dhl.hub_preparation import ensure_hub_prep_ready_for_handoff
+        effective_occurred_at = await ensure_hub_prep_ready_for_handoff(
+            db,
+            order_id=parsed_order_id,
+            booking_id=UUID(booking_id),
+            actor_id=str(admin.id),
+            occurred_at=payload.occurred_at,
+        )
         result = await record_collection_handoff(
             db,
             order_id=parsed_order_id,
             admin=admin,
             command=HandoffCommand(
                 booking_id=UUID(booking_id),
-                occurred_at=payload.occurred_at,
+                occurred_at=effective_occurred_at,
                 idempotency_key=payload.idempotency_key,
                 counterparty=payload.counterparty,
                 evidence_ref=payload.evidence_ref,
@@ -1916,3 +1934,39 @@ async def export_orders_csv(
             "Content-Disposition": f"attachment; filename=orders_{raw_status}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
         },
     )
+
+
+@router.post("/{order_id}/dhl/prepare-package", response_model=OrderDetail)
+async def prepare_dhl_package(
+    order_id: str,
+    admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Idempotently prepare Hub package, seal, custody stream, outbound shipment intent, and selected quote for DHL booking."""
+    try:
+        parsed_order_id = UUID(order_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid order id",
+        ) from exc
+
+    from app.services.dhl.hub_preparation import prepare_dhl_hub_package_for_order
+
+    try:
+        await prepare_dhl_hub_package_for_order(
+            db,
+            order_id=parsed_order_id,
+            actor_id=admin.id,
+        )
+        await db.commit()
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = (
+            status.HTTP_404_NOT_FOUND
+            if detail == "order not found"
+            else status.HTTP_400_BAD_REQUEST
+        )
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+
+    return await get_order_detail(order_id=order_id, admin=admin, db=db)

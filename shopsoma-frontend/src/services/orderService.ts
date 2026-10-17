@@ -43,9 +43,10 @@ export interface ShipbubbleCurrentLocation {
 }
 
 export interface ShipbubbleTrackingData {
-  provider: 'shipbubble';
+  provider: 'shipbubble' | 'dhl';
   is_sandbox: boolean;
   is_booked: boolean;
+  booking_id?: string | null;
   shipbubble_order_id?: string | null;
   courier_name: string;
   courier_image?: string | null;
@@ -59,6 +60,12 @@ export interface ShipbubbleTrackingData {
   destination: ShipbubbleLocationPoint;
   current_location: ShipbubbleCurrentLocation;
   route_waypoints: [number, number][];
+  events?: Array<{
+    status: string;
+    provider_status_code: string;
+    description: string;
+    occurred_at: string;
+  }>;
 }
 
 export interface OrderTracking {

@@ -36,27 +36,48 @@ class AppSettingResponse(AppSettingBase):
 
 class ShippingProviderSettings(BaseModel):
     """Effective selection and readiness; legacy response field is retained."""
-    provider: Literal["manual", "shipbubble", "dhl"] = "manual"
+    provider: Literal["manual", "shipbubble", "dhl", "combined"] = "manual"
+    enabled_providers: list[Literal["manual", "shipbubble", "dhl"]] = Field(
+        default_factory=lambda: ["manual"]
+    )
     use_shipbubble: bool = False
     checkout_estimates_required: bool = False
     readiness: dict[str, bool] = Field(default_factory=lambda: {
-        "manual": True, "shipbubble": False, "dhl": False,
+        "manual": True, "shipbubble": False, "dhl": False, "combined": False,
     })
 
 
 class ShippingProviderSettingsUpdate(BaseModel):
-    provider: Optional[Literal["manual", "shipbubble", "dhl"]] = None
+    provider: Optional[Literal["manual", "shipbubble", "dhl", "combined"]] = None
+    enabled_providers: Optional[list[Literal["manual", "shipbubble", "dhl"]]] = None
     use_shipbubble: Optional[bool] = None
 
     @model_validator(mode="after")
     def resolve_legacy_selection(self):
+        if self.enabled_providers is not None:
+            if not self.enabled_providers:
+                raise ValueError("At least one shipping provider must be enabled")
+            unique_providers = list(dict.fromkeys(self.enabled_providers))
+            self.enabled_providers = unique_providers
+            derived_provider = "combined" if len(unique_providers) > 1 else unique_providers[0]
+            if self.provider is None:
+                self.provider = derived_provider
+            elif self.provider != derived_provider:
+                raise ValueError("Conflicting shipping provider selections")
+            if self.use_shipbubble is None:
+                self.use_shipbubble = "shipbubble" in unique_providers
+            elif self.use_shipbubble != ("shipbubble" in unique_providers):
+                raise ValueError("Conflicting shipping provider selections")
+            return self
+
         if self.provider is None:
             if self.use_shipbubble is None:
                 raise ValueError("A shipping provider selection is required")
             self.provider = "shipbubble" if self.use_shipbubble else "manual"
-        elif self.use_shipbubble is not None and self.use_shipbubble != (self.provider == "shipbubble"):
+        elif self.use_shipbubble is not None and self.use_shipbubble != (self.provider in ("shipbubble", "combined")):
             raise ValueError("Conflicting shipping provider selections")
         return self
+
 
 
 class PayoutHoldSettings(BaseModel):

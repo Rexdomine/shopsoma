@@ -1804,6 +1804,12 @@ async def get_order_tracking(
     if shipbubble_tracking and shipbubble_tracking.get("is_booked"):
         await db.commit()
         await db.refresh(order)
+    if shipbubble_tracking is None:
+        from app.services.dhl.dhl_tracking_map import build_dhl_live_tracking_payload
+
+        shipbubble_tracking = await build_dhl_live_tracking_payload(
+            db, order=order, current_status=current_status
+        )
     if order.tracking_number:
         tracking_id = order.tracking_number
 
@@ -1832,7 +1838,7 @@ async def sync_order_tracking(
     current_user: Optional[User] = Depends(get_optional_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Sync live shipment tracking status from ShipBubble API."""
+    """Sync live shipment tracking status from DHL or ShipBubble API."""
     try:
         order_uuid = UUID(order_ref)
     except ValueError:
@@ -1853,8 +1859,15 @@ async def sync_order_tracking(
         db, order=order, current_user=current_user, capability=capability
     )
 
-    from app.services.shipping.shipbubble_tracking import sync_shipbubble_shipment_status
-    await sync_shipbubble_shipment_status(db, order=order)
+    from app.services.dhl.dhl_tracking_map import (
+        is_dhl_order,
+        sync_dhl_shipment_status,
+    )
+    if await is_dhl_order(db, order=order):
+        await sync_dhl_shipment_status(db, order=order)
+    else:
+        from app.services.shipping.shipbubble_tracking import sync_shipbubble_shipment_status
+        await sync_shipbubble_shipment_status(db, order=order)
 
     return await get_order_tracking(
         order_ref=str(order.id),
@@ -1872,16 +1885,7 @@ async def simulate_order_tracking_step(
     current_user: Optional[User] = Depends(get_optional_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Simulate a ShipBubble courier status transition in Sandbox mode for live map testing."""
-    if not (
-        settings.SHIPBUBBLE_API_KEY
-        and settings.SHIPBUBBLE_API_KEY.strip().startswith("sb_sandbox_")
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Tracking simulation is only available in ShipBubble Sandbox mode",
-        )
-
+    """Simulate a DHL or ShipBubble courier status transition in Sandbox mode for live map testing."""
     try:
         order_uuid = UUID(order_ref)
     except ValueError:
@@ -1901,6 +1905,42 @@ async def simulate_order_tracking_step(
     await _authorize_order_read(
         db, order=order, current_user=current_user, capability=capability
     )
+
+    from app.services.dhl.dhl_tracking_map import (
+        is_dhl_order,
+        simulate_dhl_tracking_step,
+    )
+    if await is_dhl_order(db, order=order):
+        if (getattr(settings, "DHL_ENVIRONMENT", "sandbox") or "sandbox").lower() != "sandbox":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Tracking simulation is only available in DHL Sandbox mode",
+            )
+        target_status = str(payload.get("status") or "").lower().strip()
+        try:
+            await simulate_dhl_tracking_step(
+                db,
+                order=order,
+                target_status=target_status,
+                actor_id=current_user.id if current_user else None,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return await get_order_tracking(
+            order_ref=str(order.id),
+            capability=capability,
+            current_user=current_user,
+            db=db,
+        )
+
+    if not (
+        settings.SHIPBUBBLE_API_KEY
+        and settings.SHIPBUBBLE_API_KEY.strip().startswith("sb_sandbox_")
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Tracking simulation is only available in ShipBubble Sandbox mode",
+        )
 
     target_status = str(payload.get("status") or "").lower().strip()
     step_map = {

@@ -737,6 +737,10 @@ export default function OrderTracking() {
                             alt={tracking.shipbubble_tracking.courier_name}
                             className="w-11 h-11 rounded-full object-cover border border-gray-200 bg-white shrink-0"
                           />
+                        ) : tracking.shipbubble_tracking.provider === 'dhl' ? (
+                          <div className="w-11 h-11 rounded-full bg-amber-300 text-red-900 flex items-center justify-center text-xs font-extrabold shrink-0 border border-amber-400">
+                            DHL
+                          </div>
                         ) : (
                           <div className="w-11 h-11 rounded-full bg-primary/10 text-primary flex items-center justify-center text-sm font-semibold shrink-0">
                             SB
@@ -794,7 +798,7 @@ export default function OrderTracking() {
                             rel="noopener noreferrer"
                             className="px-3.5 py-2 border border-gray-200 bg-white text-gray-700 text-xs font-semibold rounded-sm hover:bg-gray-50 transition inline-flex items-center gap-1"
                           >
-                            <span>ShipBubble Portal</span>
+                            <span>{tracking.shipbubble_tracking.provider === 'dhl' ? 'DHL Portal' : 'ShipBubble Portal'}</span>
                             <span>↗</span>
                           </a>
                         )}

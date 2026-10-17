@@ -351,6 +351,7 @@ class DHLShipmentAdapter:
                 "shipperDetails": {
                     "postalAddress": shipper,
                     "contactInformation": {
+                        "companyName": (getattr(hub, "name", None) or hub.contact_name or "ShopSoma Hub")[:100],
                         "fullName": hub.contact_name,
                         "phone": hub.contact_phone,
                     },
@@ -358,6 +359,7 @@ class DHLShipmentAdapter:
                 "receiverDetails": {
                     "postalAddress": receiver,
                     "contactInformation": {
+                        "companyName": (intent.destination_name or "Customer")[:100],
                         "fullName": intent.destination_name,
                         "phone": intent.destination_phone,
                     },
@@ -367,6 +369,7 @@ class DHLShipmentAdapter:
             "content": {
                 "unitOfMeasurement": "metric",
                 "isCustomsDeclarable": False,
+                "description": "Fashion apparel and accessories",
                 "packages": [{
                     "weight": float(package_version.weight_kg),
                     "dimensions": {
@@ -887,6 +890,7 @@ def _ensure_sandbox_booking_allowed(
     settings: Settings,
     *,
     cohort_ids: frozenset[uuid.UUID],
+    order_id: uuid.UUID | None = None,
 ) -> None:
     if settings.DHL_ENVIRONMENT != "sandbox":
         raise ShipmentPhase4Error("sandbox adapter requires DHL_ENVIRONMENT=sandbox")
@@ -895,6 +899,14 @@ def _ensure_sandbox_booking_allowed(
     allowed = _cohort_allowlist(settings)
     if not allowed:
         raise ShipmentPhase4Error("sandbox adapter requires restricted cohort set")
+    if order_id is not None and cohort_ids:
+        from app.services.dhl.rating import derive_sandbox_cohort_ids
+
+        allowed = allowed | derive_sandbox_cohort_ids(
+            allowed,
+            order_id,
+            max(len(cohort_ids), 8),
+        )
     if not cohort_ids <= allowed:
         raise ShipmentPhase4Error("package composition is outside sandbox cohort allowlist")
 
@@ -1552,6 +1564,89 @@ async def _load_persisted_booking_intent(
     return intent
 
 
+async def _load_checkout_estimate_quoted_service(
+    db: AsyncSession,
+    *,
+    intent_id: uuid.UUID,
+) -> QuotedShipmentService | None:
+    from app.models.checkout_shipping_estimate import (
+        CheckoutShippingEstimate,
+        CheckoutShippingEstimateOption,
+        CheckoutShippingEstimateSelection,
+    )
+
+    intent = await db.get(OutboundShipmentIntent, intent_id)
+    if intent is None:
+        return None
+    order = await db.get(Order, intent.order_id)
+    if order is None or order.checkout_estimate_selection_id is None:
+        return None
+    est_row = (
+        await db.execute(
+            select(CheckoutShippingEstimateOption, CheckoutShippingEstimate)
+            .join(
+                CheckoutShippingEstimateSelection,
+                CheckoutShippingEstimateSelection.option_id
+                == CheckoutShippingEstimateOption.id,
+            )
+            .join(
+                CheckoutShippingEstimate,
+                CheckoutShippingEstimate.id
+                == CheckoutShippingEstimateSelection.estimate_id,
+            )
+            .where(
+                CheckoutShippingEstimateSelection.id
+                == order.checkout_estimate_selection_id,
+                CheckoutShippingEstimate.source_kind == "sandbox_normalized",
+            )
+        )
+    ).first()
+    if est_row is None:
+        return None
+    est_opt, _est = est_row
+    attempt = (
+        await db.execute(
+            select(DomesticRateAttempt)
+            .where(
+                DomesticRateAttempt.intent_id == intent_id,
+                DomesticRateAttempt.provider == PROVIDER,
+                DomesticRateAttempt.classification == "success",
+            )
+            .order_by(DomesticRateAttempt.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if attempt is None:
+        return None
+    option_key = str(est_opt.option_key or "")
+    parts = option_key.split(":")
+    metadata = (
+        est_opt.provider_metadata
+        if isinstance(est_opt.provider_metadata, dict)
+        else {}
+    )
+    product_code = (
+        str(metadata.get("product_code") or "")
+        or (parts[1] if len(parts) >= 3 and parts[0].lower() == "dhl" else "")
+        or str(est_opt.service_code or "N")[:6]
+    )
+    service_code = (
+        str(metadata.get("service_code") or "")
+        or (parts[2] if len(parts) >= 3 and parts[0].lower() == "dhl" else "")
+        or str(est_opt.service_code or "N")
+    )
+    return QuotedShipmentService(
+        product_code=_normalize_nonempty_text(product_code, field="product_code"),
+        service_code=_normalize_bounded_text(
+            service_code,
+            field="service_code",
+            max_length=MAX_BOOKING_SERVICE_CODE_LENGTH,
+        ),
+        hub_version=attempt.hub_version,
+        planned_ship_date=attempt.planned_ship_date,
+    )
+
+
 async def _load_persisted_quoted_service(
     db: AsyncSession,
     *,
@@ -1584,6 +1679,9 @@ async def _load_persisted_quoted_service(
         )
     ).one_or_none()
     if row is None:
+        fallback = await _load_checkout_estimate_quoted_service(db, intent_id=intent_id)
+        if fallback is not None:
+            return fallback
         raise ShipmentPhase4Error("no persisted selected dhl shipping quote for outbound intent")
     option, attempt = row
     return QuotedShipmentService(
@@ -1756,7 +1854,7 @@ async def book_outbound_shipment(
         raise ShipmentPhase4UnavailableError("dhl domestic workflow disabled")
     if not _setting_bool(settings, "DHL_DOMESTIC_PROVIDER_CALLS_ENABLED", "dhl_domestic_provider_calls_enabled"):
         raise ShipmentPhase4UnavailableError("dhl domestic provider calls disabled")
-    _ensure_sandbox_booking_allowed(settings, cohort_ids=cohort_ids)
+    _ensure_sandbox_booking_allowed(settings, cohort_ids=cohort_ids, order_id=order.id)
     adapter = adapter or create_shipment_adapter(settings)
 
     now = await db.scalar(text("SELECT clock_timestamp()"))
@@ -2446,7 +2544,7 @@ async def refresh_tracking(
         package_id=booking.package_id,
         package_version=booking.package_version,
     )
-    _ensure_sandbox_booking_allowed(settings, cohort_ids=cohort_ids)
+    _ensure_sandbox_booking_allowed(settings, cohort_ids=cohort_ids, order_id=order.id)
     adapter = adapter or create_shipment_adapter(settings)
     try:
         observations = list(await adapter.track(booking.tracking_number))

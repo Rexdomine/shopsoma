@@ -285,6 +285,26 @@ const router = createBrowserRouter([
     ),
   },
   {
+    path: '/orders/:orderId/map',
+    element: (
+      <ErrorBoundary>
+        <Suspense fallback={<Loading fullScreen message="Loading live courier radar..." />}>
+          <OrderMapTracking />
+        </Suspense>
+      </ErrorBoundary>
+    ),
+  },
+  {
+    path: '/orders/:orderId/tracking',
+    element: (
+      <ErrorBoundary>
+        <Suspense fallback={<Loading fullScreen message="Loading order..." />}>
+          <OrderTracking />
+        </Suspense>
+      </ErrorBoundary>
+    ),
+  },
+  {
     path: ROUTES.FORGOT_PASSWORD,
     element: (
       <ErrorBoundary>
@@ -959,6 +979,8 @@ const router = createBrowserRouter([
     ],
   },
 ]);
+
+export { router };
 
 export default function AppRouter() {
   return <RouterProvider router={router} />;

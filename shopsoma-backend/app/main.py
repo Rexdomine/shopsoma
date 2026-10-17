@@ -51,6 +51,7 @@ from app.api.v1 import (
     admin_payouts,
     websocket,
     shipbubble_webhooks,
+    dhl_webhooks,
 )
 from app.core.config import settings
 
@@ -199,6 +200,7 @@ app.include_router(vendor_payment_methods.router, prefix="/api/v1")
 app.include_router(settings_router.router, prefix="/api/v1")
 app.include_router(websocket.router, prefix="/api/v1")
 app.include_router(shipbubble_webhooks.router, prefix="/api/v1")
+app.include_router(dhl_webhooks.router, prefix="/api/v1")
 
 # Mount static files for local image uploads (development only)
 if settings.USE_LOCAL_STORAGE:

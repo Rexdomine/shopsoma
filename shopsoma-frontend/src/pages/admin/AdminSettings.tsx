@@ -10,11 +10,13 @@ import {
   Percent,
   ListChecks,
   Rocket,
+  Package,
+  CheckCircle2,
 } from 'lucide-react';
 import CommerceFeatureSettings from '../../components/admin/CommerceFeatureSettings';
 import ManualShippingSettings from '../../components/admin/ManualShippingSettings';
 import ComingSoonSettings from '../../components/admin/ComingSoonSettings';
-import type { ShippingProviderSettings } from '../../services/settingsService';
+import type { ShippingProviderSettings, ShippingProviderOption } from '../../services/settingsService';
 import AdminSidebar from '../../components/admin/AdminSidebar';
 import {
   getExchangeRate,
@@ -254,6 +256,44 @@ export default function AdminSettings() {
     }
   };
 
+  const enabledProvidersList: ShippingProviderOption[] = (shippingProvider?.enabled_providers && shippingProvider.enabled_providers.length > 0)
+    ? shippingProvider.enabled_providers
+    : (shippingProvider?.provider === 'combined'
+        ? ['dhl', 'shipbubble']
+        : [shippingProvider?.provider || 'manual']);
+
+  const handleToggleProvider = async (providerKey: ShippingProviderOption) => {
+    const isCurrentlyEnabled = enabledProvidersList.includes(providerKey);
+    let next: ShippingProviderOption[];
+    if (isCurrentlyEnabled) {
+      if (enabledProvidersList.length <= 1) {
+        error('At least one shipping provider must remain enabled', 'Validation Error');
+        return;
+      }
+      next = enabledProvidersList.filter(p => p !== providerKey);
+    } else {
+      next = [...enabledProvidersList, providerKey];
+    }
+
+    try {
+      setSavingShipping(true);
+      const updated = await updateShippingProviderSettings(next);
+      setShippingProvider(updated);
+      success(
+        `Shipping providers updated: ${updated.enabled_providers?.join(', ') || updated.provider}`,
+        'Success'
+      );
+    } catch (err: any) {
+      console.error('Failed to update shipping provider:', err);
+      error(
+        err.response?.data?.detail || 'Failed to update shipping provider',
+        'Error'
+      );
+    } finally {
+      setSavingShipping(false);
+    }
+  };
+
   const handleShippingProvider = async (provider: ShippingProviderSettings['provider']) => {
     try {
       setSavingShipping(true);
@@ -449,6 +489,7 @@ export default function AdminSettings() {
   }
 
   const dhlReadyForCheckout = Boolean(shippingProvider?.readiness.dhl && shippingProvider?.checkout_estimates_required);
+  const combinedReadyForCheckout = Boolean(shippingProvider?.readiness.combined && shippingProvider?.checkout_estimates_required);
   const categories = [
     ['currency', 'Currency', 'Exchange rates and display values', DollarSign],
     ['shipping', 'Shipping', 'Provider and checkout readiness', Truck],
@@ -502,7 +543,276 @@ export default function AdminSettings() {
     <header className="mb-6 sm:mb-8"><p className="text-xs font-bold uppercase tracking-[0.18em] text-[#105E53]">ShopSoma admin</p><div className="mt-2 flex flex-col justify-between gap-4 sm:flex-row sm:items-end"><div><h1 className="text-2xl sm:text-3xl font-semibold tracking-tight text-slate-950">Settings</h1><p className="mt-1 sm:mt-2 max-w-2xl text-xs sm:text-sm text-slate-600">One focused workspace at a time. Review the current value first, then make a deliberate change.</p></div>{dirty && <div className="rounded-full bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-800">Draft edits pending</div>}</div></header>
     <div className="grid gap-6 lg:grid-cols-[250px_minmax(0,1fr)]"><nav aria-label="Settings categories" className="h-fit rounded-2xl border border-slate-200 bg-white p-2 shadow-sm lg:sticky lg:top-6 flex flex-row lg:flex-col overflow-x-auto gap-1"><p className="hidden lg:block px-3 pb-2 pt-2 text-[11px] font-bold uppercase tracking-[0.16em] text-slate-400">Configuration</p>{categories.map(([id,label,desc,Icon]) => <button key={id} type="button" onClick={() => switchCategory(id)} aria-current={category === id ? 'page' : undefined} className={`flex items-start gap-3 rounded-xl px-3 py-2.5 lg:py-3 text-left transition shrink-0 lg:w-full whitespace-nowrap lg:whitespace-normal ${category === id ? 'bg-[#E7F3EF] text-[#105E53]' : 'text-slate-600 hover:bg-slate-50'}`}><Icon className="mt-0.5 h-4 w-4 shrink-0" /><span><span className="block text-sm font-semibold">{label}</span><span className="hidden lg:block mt-0.5 text-xs leading-4 opacity-70">{desc}</span></span></button>)}</nav>
     <section aria-live="polite" className="min-w-0">{category === 'currency' && <div className="space-y-5"><CommerceFeatureSettings /><div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-7"><div className="mb-6 flex flex-wrap items-start justify-between gap-4"><div><p className="text-xs font-bold uppercase tracking-[0.16em] text-[#105E53]">Currency</p><h2 className="mt-1 text-2xl font-semibold text-slate-950">Exchange rate</h2><p className="mt-1 text-sm text-slate-600">Controls how NGN prices are represented in USD across the storefront.</p></div>{exchangeRate && <Summary title="Current value" value={`₦${exchangeRate.rate.toLocaleString('en-NG', { minimumFractionDigits: 2 })}`} detail="per 1 USD" />}</div><label htmlFor="exchange-rate" className="block max-w-sm text-sm font-semibold text-slate-800">USD to NGN<input id="exchange-rate" type="number" min="100" max="10000" step="0.01" value={rateInput} onChange={e => handleRateChange(e.target.value)} className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2.5 text-slate-900" /><span className="mt-1 block text-xs font-normal text-slate-500">Allowed range: 100–10,000 NGN. Changes apply immediately after saving.</span></label>{saveBar(handleSaveRate, handleReset, hasChanges, saving)}</div></div>}
-    {category === 'shipping' && <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-7"><p className="text-xs font-bold uppercase tracking-[0.16em] text-[#105E53]">Fulfilment</p><h2 className="mt-1 text-2xl font-semibold text-slate-950">Shipping provider</h2><p className="mt-1 text-sm text-slate-600">Choose the provider used for checkout estimates. Availability and readiness gates remain enforced by the existing service.</p><div className="mt-7 grid gap-4 sm:grid-cols-2"><label className="text-sm font-semibold text-slate-800">Active provider<select aria-label="Shipping provider" value={shippingProvider?.provider ?? ''} disabled={savingShipping || !shippingProvider} onChange={e => handleShippingProvider(e.target.value as ShippingProviderSettings['provider'])} className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2.5"><option value="manual">Manual rates</option><option value="shipbubble" disabled={!shippingProvider?.readiness.shipbubble}>{shippingProvider?.readiness.shipbubble ? 'ShipBubble (Live Couriers)' : 'ShipBubble — unavailable (API key needed)'}</option><option value="dhl" aria-label="DHL" disabled={!dhlReadyForCheckout}>DHL (Coming Soon)</option></select><p className="mt-1.5 text-xs text-slate-500 font-medium">{shippingProvider?.provider === 'shipbubble' ? 'ShipBubble fetches live rates from multi-courier network in Nigeria.' : shippingProvider?.provider === 'dhl' ? 'DHL automated provider integration is coming soon.' : 'Manual fixed rates by state/country configured in manual rates tab.'}</p></label><div className="rounded-xl border border-slate-200 bg-slate-50 p-4"><div className="flex items-center justify-between"><p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Checkout readiness</p><span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold border ${shippingProvider?.provider === 'shipbubble' ? (shippingProvider?.readiness.shipbubble ? 'bg-emerald-100 text-emerald-800 border-emerald-200' : 'bg-amber-100 text-amber-800 border-amber-200') : 'bg-amber-100 text-amber-800 border-amber-200'}`}>{shippingProvider?.provider === 'shipbubble' ? (shippingProvider?.readiness.shipbubble ? 'ShipBubble Ready' : 'Key Needed') : 'DHL Coming Soon'}</span></div><p className={`mt-2 text-sm font-semibold ${shippingProvider?.provider === 'shipbubble' && shippingProvider?.readiness.shipbubble ? 'text-emerald-700' : dhlReadyForCheckout ? 'text-emerald-700' : 'text-slate-700'}`}>{shippingProvider?.provider === 'shipbubble' ? (shippingProvider?.readiness.shipbubble ? 'ShipBubble live rates enabled' : 'ShipBubble API key unconfigured') : dhlReadyForCheckout ? 'DHL estimates enabled (Preview)' : 'Provider gate active'}</p><p className="mt-1 text-xs text-slate-500">{shippingProvider?.provider === 'shipbubble' ? 'Customers receive live courier quotes at checkout and labels are booked upon payment.' : 'Provider activation and credentials are not changed here.'}</p></div></div></div>}
+    {category === 'shipping' && (
+      <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-7 space-y-6">
+        <div>
+          <p className="text-xs font-bold uppercase tracking-[0.16em] text-[#105E53]">Fulfilment</p>
+          <h2 className="mt-1 text-2xl font-semibold text-slate-950">Shipping provider</h2>
+          <p className="mt-1 text-sm text-slate-600">
+            Control which delivery options are presented to customers at checkout. You can independently enable or disable ShopSoma Manual Shipping, DHL Express, and ShipBubble.
+          </p>
+        </div>
+
+        {/* Active Providers Summary Banner */}
+        <div className="rounded-xl border border-[#105E53]/20 bg-[#E7F3EF]/60 p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-wider text-[#105E53]">Active Checkout Providers</p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {enabledProvidersList.includes('manual') && (
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-white px-3 py-1 text-xs font-semibold text-slate-800 shadow-xs border border-slate-200">
+                    <Package className="h-3.5 w-3.5 text-[#105E53]" />
+                    Manual Shipping
+                  </span>
+                )}
+                {enabledProvidersList.includes('dhl') && (
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-[#FFCC00]/20 px-3 py-1 text-xs font-bold text-[#D40511] shadow-xs border border-[#FFCC00]/40">
+                    <span className="font-black text-[11px]">DHL</span>
+                    DHL Express
+                  </span>
+                )}
+                {enabledProvidersList.includes('shipbubble') && (
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-white px-3 py-1 text-xs font-semibold text-[#105E53] shadow-xs border border-emerald-200">
+                    <Truck className="h-3.5 w-3.5 text-[#105E53]" />
+                    ShipBubble
+                  </span>
+                )}
+              </div>
+            </div>
+            <div className="text-right sm:max-w-xs">
+              <p className="text-xs text-slate-600">
+                {enabledProvidersList.length > 1
+                  ? 'Multiple providers enabled. Customers will see all available quotes side-by-side during checkout.'
+                  : 'Single provider mode active. All checkout estimates will use this provider.'}
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* 3 Provider Toggle Cards */}
+        <div className="grid gap-4 sm:grid-cols-3">
+          {/* Card 1: Manual Shipping */}
+          <div
+            className={`flex flex-col justify-between rounded-xl border p-4.5 transition-all ${
+              enabledProvidersList.includes('manual')
+                ? 'border-[#105E53] bg-emerald-50/30 ring-1 ring-[#105E53]/20 shadow-xs'
+                : 'border-slate-200 bg-white opacity-80 hover:opacity-100'
+            }`}
+          >
+            <div>
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-center gap-2.5">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-slate-100 text-slate-700 border border-slate-200">
+                    <Package className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-900 leading-snug">Manual Shipping</h3>
+                    <span className="inline-block mt-0.5 rounded px-1.5 py-0.5 text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200">
+                      ShopSoma Fixed Rates
+                    </span>
+                  </div>
+                </div>
+              </div>
+              <p className="mt-3 text-xs text-slate-600 leading-relaxed">
+                Destination-based flat delivery pricing configured in the Manual Rates tab. Reliable baseline delivery.
+              </p>
+            </div>
+
+            <div className="mt-5 pt-3.5 border-t border-slate-100 flex items-center justify-between">
+              <span className="text-xs font-medium text-slate-500">
+                {enabledProvidersList.includes('manual') ? (
+                  <span className="text-emerald-700 font-semibold inline-flex items-center gap-1">
+                    <CheckCircle2 className="h-3.5 w-3.5" /> Enabled
+                  </span>
+                ) : 'Disabled'}
+              </span>
+              <button
+                type="button"
+                role="switch"
+                aria-label="Toggle Manual Shipping"
+                aria-checked={enabledProvidersList.includes('manual')}
+                disabled={savingShipping || (enabledProvidersList.includes('manual') && enabledProvidersList.length === 1)}
+                onClick={() => handleToggleProvider('manual')}
+                className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-hidden disabled:opacity-40 disabled:cursor-not-allowed ${
+                  enabledProvidersList.includes('manual') ? 'bg-[#105E53]' : 'bg-slate-300'
+                }`}
+              >
+                <span
+                  className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out ${
+                    enabledProvidersList.includes('manual') ? 'translate-x-5' : 'translate-x-0'
+                  }`}
+                />
+              </button>
+            </div>
+          </div>
+
+          {/* Card 2: DHL Express */}
+          <div
+            className={`flex flex-col justify-between rounded-xl border p-4.5 transition-all ${
+              enabledProvidersList.includes('dhl')
+                ? 'border-[#D40511]/40 bg-amber-50/30 ring-1 ring-[#FFCC00]/40 shadow-xs'
+                : 'border-slate-200 bg-white opacity-80 hover:opacity-100'
+            }`}
+          >
+            <div>
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-center gap-2.5">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-[#FFCC00] text-[#D40511] font-black text-xs border border-[#E5B800] shadow-xs">
+                    DHL
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-900 leading-snug">DHL Express</h3>
+                    <span className={`inline-block mt-0.5 rounded px-1.5 py-0.5 text-[10px] font-semibold border ${
+                      dhlReadyForCheckout
+                        ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
+                        : 'bg-amber-100 text-amber-800 border-amber-200'
+                    }`}>
+                      {dhlReadyForCheckout ? 'MyDHL Ready' : 'Gate Active'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+              <p className="mt-3 text-xs text-slate-600 leading-relaxed">
+                Live MyDHL Express quotes at checkout, automatic domestic hub booking, printable PDF waybill labels, and interactive map tracking.
+              </p>
+            </div>
+
+            <div className="mt-5 pt-3.5 border-t border-slate-100 flex items-center justify-between">
+              <span className="text-xs font-medium text-slate-500">
+                {enabledProvidersList.includes('dhl') ? (
+                  <span className="text-emerald-700 font-semibold inline-flex items-center gap-1">
+                    <CheckCircle2 className="h-3.5 w-3.5" /> Enabled
+                  </span>
+                ) : 'Disabled'}
+              </span>
+              <button
+                type="button"
+                role="switch"
+                aria-label="Toggle DHL Express"
+                aria-checked={enabledProvidersList.includes('dhl')}
+                disabled={savingShipping || !dhlReadyForCheckout || (enabledProvidersList.includes('dhl') && enabledProvidersList.length === 1)}
+                onClick={() => handleToggleProvider('dhl')}
+                className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-hidden disabled:opacity-40 disabled:cursor-not-allowed ${
+                  enabledProvidersList.includes('dhl') ? 'bg-[#105E53]' : 'bg-slate-300'
+                }`}
+              >
+                <span
+                  className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out ${
+                    enabledProvidersList.includes('dhl') ? 'translate-x-5' : 'translate-x-0'
+                  }`}
+                />
+              </button>
+            </div>
+          </div>
+
+          {/* Card 3: ShipBubble */}
+          <div
+            className={`flex flex-col justify-between rounded-xl border p-4.5 transition-all ${
+              enabledProvidersList.includes('shipbubble')
+                ? 'border-[#105E53] bg-emerald-50/30 ring-1 ring-[#105E53]/20 shadow-xs'
+                : 'border-slate-200 bg-white opacity-80 hover:opacity-100'
+            }`}
+          >
+            <div>
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-center gap-2.5">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-emerald-50 text-[#105E53] border border-emerald-100">
+                    <Truck className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-900 leading-snug">ShipBubble</h3>
+                    <span className={`inline-block mt-0.5 rounded px-1.5 py-0.5 text-[10px] font-semibold border ${
+                      shippingProvider?.readiness.shipbubble
+                        ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
+                        : 'bg-amber-100 text-amber-800 border-amber-200'
+                    }`}>
+                      {shippingProvider?.readiness.shipbubble ? 'Live Couriers' : 'Key Needed'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+              <p className="mt-3 text-xs text-slate-600 leading-relaxed">
+                Live rates from multi-courier network across Nigeria (TopShip, GIG Logistics, etc.) with automatic label booking on order payment.
+              </p>
+            </div>
+
+            <div className="mt-5 pt-3.5 border-t border-slate-100 flex items-center justify-between">
+              <span className="text-xs font-medium text-slate-500">
+                {enabledProvidersList.includes('shipbubble') ? (
+                  <span className="text-emerald-700 font-semibold inline-flex items-center gap-1">
+                    <CheckCircle2 className="h-3.5 w-3.5" /> Enabled
+                  </span>
+                ) : 'Disabled'}
+              </span>
+              <button
+                type="button"
+                role="switch"
+                aria-label="Toggle ShipBubble"
+                aria-checked={enabledProvidersList.includes('shipbubble')}
+                disabled={savingShipping || !shippingProvider?.readiness.shipbubble || (enabledProvidersList.includes('shipbubble') && enabledProvidersList.length === 1)}
+                onClick={() => handleToggleProvider('shipbubble')}
+                className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-hidden disabled:opacity-40 disabled:cursor-not-allowed ${
+                  enabledProvidersList.includes('shipbubble') ? 'bg-[#105E53]' : 'bg-slate-300'
+                }`}
+              >
+                <span
+                  className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out ${
+                    enabledProvidersList.includes('shipbubble') ? 'translate-x-5' : 'translate-x-0'
+                  }`}
+                />
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Preset Selector & Checkout Readiness Details */}
+        <div className="pt-2 border-t border-slate-100 grid gap-4 sm:grid-cols-2">
+          <label className="text-sm font-semibold text-slate-800">
+            Active provider preset
+            <select
+              aria-label="Shipping provider"
+              value={shippingProvider?.provider ?? ''}
+              disabled={savingShipping || !shippingProvider}
+              onChange={e => handleShippingProvider(e.target.value as ShippingProviderSettings['provider'])}
+              className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2.5"
+            >
+              <option value="manual">Manual rates</option>
+              <option value="shipbubble" disabled={!shippingProvider?.readiness.shipbubble}>
+                {shippingProvider?.readiness.shipbubble ? 'ShipBubble (Live Couriers)' : 'ShipBubble — unavailable (API key needed)'}
+              </option>
+              <option value="dhl" aria-label="DHL" disabled={!dhlReadyForCheckout}>
+                {dhlReadyForCheckout ? 'DHL Express (MyDHL Live Rates)' : 'DHL — unavailable (readiness gate active)'}
+              </option>
+              <option value="combined" disabled={!combinedReadyForCheckout}>
+                {combinedReadyForCheckout ? 'Combined (DHL, ShipBubble & Manual)' : 'Combined — unavailable (readiness gate active)'}
+              </option>
+            </select>
+            <p className="mt-1.5 text-xs text-slate-500 font-medium">
+              Use the switches above to enable or disable individual providers, or choose a single provider preset here.
+            </p>
+          </label>
+
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+            <div className="flex items-center justify-between">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Checkout readiness</p>
+              <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold border ${
+                combinedReadyForCheckout || dhlReadyForCheckout || shippingProvider?.readiness.shipbubble
+                  ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
+                  : 'bg-amber-100 text-amber-800 border-amber-200'
+              }`}>
+                {enabledProvidersList.length > 1 ? `${enabledProvidersList.length} Providers Active` : `${enabledProvidersList[0] || 'manual'} Active`}
+              </span>
+            </div>
+            <p className="mt-2 text-sm font-semibold text-emerald-700">
+              {enabledProvidersList.map(p => p === 'manual' ? 'Manual' : p === 'dhl' ? 'DHL Express' : 'ShipBubble').join(' + ')} enabled
+            </p>
+            <p className="mt-1 text-xs text-slate-500">
+              At least one shipping provider must remain enabled. When multiple providers are active, estimates are fetched and combined seamlessly for customer checkout.
+            </p>
+          </div>
+        </div>
+      </div>
+    )}
     {category === 'rates' && <ManualShippingSettings onDirtyChange={setManualRatesDirty} onBusyChange={setManualRatesBusy} onDiscard={clear => { discardManualRatesRef.current = clear; }} />}
     {category === 'payout' && <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-7"><p className="text-xs font-bold uppercase tracking-[0.16em] text-[#105E53]">Settlements</p><h2 className="mt-1 text-2xl font-semibold text-slate-950">Payout hold</h2><p className="mt-1 text-sm text-slate-600">Keep vendor funds on hold for the configured number of days before payout eligibility.</p>{payoutHold && <div className="mt-6 mb-6"><Summary title="Current value" value={`${payoutHold.hold_days} days`} detail="applies to future payout eligibility" /></div>}<label className="block max-w-sm text-sm font-semibold">Hold duration<input type="number" min="0" max="3650" value={payoutHoldInput} onChange={e => handlePayoutHoldChange(e.target.value)} className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2.5" /><span className="mt-1 block text-xs font-normal text-slate-500">Allowed range: 0–3,650 days.</span></label>{saveBar(handleSavePayoutHold, handleResetPayoutHold, payoutHoldChanged, savingPayoutHold)}</div>}
     {category === 'commission' && <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-7"><p className="text-xs font-bold uppercase tracking-[0.16em] text-[#105E53]">Vendor economics</p><h2 className="mt-1 text-2xl font-semibold text-slate-950">Commission default</h2><p className="mt-1 text-sm text-slate-600">Set the default percentage for new vendors without changing historical order math.</p>{commissionSettings && <div className="mt-6 mb-6"><Summary title="Current value" value={`${commissionSettings.commission_rate}%`} detail="default commission" /></div>}<label className="block max-w-sm text-sm font-semibold">Commission percentage<input type="number" min="0" max="100" value={commissionInput} onChange={e => handleCommissionChange(e.target.value)} className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2.5" /></label><label className="mt-5 flex max-w-xl gap-3 text-sm text-slate-600"><input type="checkbox" checked={applyCommissionToExisting} onChange={e => setApplyCommissionToExisting(e.target.checked)} className="mt-1" />Also update existing vendor defaults for future orders.</label>{saveBar(handleSaveCommission, handleResetCommission, commissionChanged || applyCommissionToExisting, savingCommission)}</div>}

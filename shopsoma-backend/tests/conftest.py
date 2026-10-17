@@ -343,6 +343,10 @@ def reset_checkout_test_defaults(monkeypatch):
     monkeypatch.setattr(settings, "DOMESTIC_CHECKOUT_PREREQUISITES_ENABLED", False)
     monkeypatch.setattr(settings, "DOMESTIC_CHECKOUT_COHORT_PERCENTAGE", 0)
     monkeypatch.setattr(settings, "SHIPBUBBLE_API_KEY", "")
+    monkeypatch.setattr(settings, "DHL_DOMESTIC_WORKFLOW_ENABLED", False)
+    monkeypatch.setattr(settings, "DHL_DOMESTIC_PROVIDER_CALLS_ENABLED", False)
+    monkeypatch.setattr(settings, "DHL_DOMESTIC_CHECKOUT_ENABLED", False)
+    monkeypatch.setattr(settings, "DHL_DOMESTIC_QUOTE_ENFORCEMENT_ENABLED", False)
 
 
 @pytest.fixture
