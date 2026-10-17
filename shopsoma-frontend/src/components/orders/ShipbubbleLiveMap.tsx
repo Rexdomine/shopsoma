@@ -358,6 +358,10 @@ export default function ShipbubbleLiveMap({
               alt={data.courier_name}
               className="w-9 h-9 rounded-full object-cover border border-gray-200 bg-white shrink-0"
             />
+          ) : data.provider === 'dhl' ? (
+            <div className="w-9 h-9 rounded-full bg-amber-300 text-red-900 flex items-center justify-center text-[10px] font-extrabold shrink-0 border border-amber-400">
+              DHL
+            </div>
           ) : (
             <div className="w-9 h-9 rounded-full bg-primary/10 text-primary flex items-center justify-center text-xs font-semibold shrink-0">
               SB

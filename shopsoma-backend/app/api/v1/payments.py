@@ -11,6 +11,7 @@ from sqlalchemy import select
 from uuid import UUID
 from decimal import Decimal
 import httpx
+import asyncio
 
 from app.services.commerce_features import get_commerce_features
 from app.core.config import settings
@@ -883,18 +884,24 @@ async def _initialize_paystack_payment(
                 candidate_ref = f"{clean_order_number}-{attempt_num}"
             reference = candidate_ref
     if truth.bridge_applied and not truth.provider_call_required:
-        try:
-            stored_session = await _stored_paystack_initialization_session(
-                db,
-                order=order,
-                attempt_id=truth.attempt_id,
-                reference=reference,
-            )
-        except PaymentBridgeError as error:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Stored payment initialization truth is unusable",
-            ) from error
+        stored_session = None
+        for _ in range(6):
+            try:
+                stored_session = await _stored_paystack_initialization_session(
+                    db,
+                    order=order,
+                    attempt_id=truth.attempt_id,
+                    reference=reference,
+                )
+            except PaymentBridgeError as error:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Stored payment initialization truth is unusable",
+                ) from error
+            if stored_session is not None:
+                return stored_session
+            await asyncio.sleep(0.5)
+            db.expire_all()
         if stored_session is not None:
             return stored_session
 

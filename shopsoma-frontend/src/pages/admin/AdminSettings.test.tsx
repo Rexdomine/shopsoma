@@ -14,7 +14,7 @@ vi.mock('../../services/settingsService', () => ({
   getCommerceFeatures: vi.fn(async () => ({ stripe_enabled: false, usd_switching_enabled: false })),
   updateCommerceFeatures: vi.fn(),
   getExchangeRate: vi.fn(async () => ({ rate: 1600 })),
-  getShippingProviderSettings: vi.fn(async () => ({ provider: 'manual', readiness: { manual: true, shipbubble: false, dhl: false } })),
+  getShippingProviderSettings: vi.fn(async () => ({ provider: 'manual', enabled_providers: ['manual'], readiness: { manual: true, shipbubble: false, dhl: false, combined: false }, checkout_estimates_required: false })),
   getPayoutHoldSettings: vi.fn(async () => ({ hold_days: 14 })),
   getCommissionSettings: vi.fn(async () => ({ commission_rate: 10 })),
   getAdminFeaturedRotationSettings: vi.fn(async () => ({ rotation_minutes: 15 })),
@@ -69,8 +69,9 @@ it('keeps DHL disabled when sandbox readiness lacks secure-checkout routing', as
   const { getShippingProviderSettings } = await import('../../services/settingsService');
   vi.mocked(getShippingProviderSettings).mockResolvedValue({
     provider: 'manual',
+    enabled_providers: ['manual'],
     use_shipbubble: false,
-    readiness: { manual: true, shipbubble: false, dhl: true },
+    readiness: { manual: true, shipbubble: false, dhl: true, combined: false },
     checkout_estimates_required: false,
   });
   render(<AdminSettings />);
@@ -301,3 +302,32 @@ it('blocks category transitions while any settings save is in flight', async () 
   expect(screen.getByText('Please wait for the current save to finish before switching categories.')).toBeInTheDocument();
   resolveSave({ rate: 1700 });
 });
+
+it('renders independent provider toggles and calls updateShippingProviderSettings on toggle', async () => {
+  const { getShippingProviderSettings, updateShippingProviderSettings } = await import('../../services/settingsService');
+  vi.mocked(getShippingProviderSettings).mockResolvedValue({
+    provider: 'combined',
+    enabled_providers: ['manual', 'dhl'],
+    use_shipbubble: false,
+    readiness: { manual: true, shipbubble: true, dhl: true, combined: true },
+    checkout_estimates_required: true,
+  });
+  vi.mocked(updateShippingProviderSettings).mockResolvedValue({
+    provider: 'combined',
+    enabled_providers: ['manual', 'dhl', 'shipbubble'],
+    use_shipbubble: true,
+    readiness: { manual: true, shipbubble: true, dhl: true, combined: true },
+    checkout_estimates_required: true,
+  });
+
+  render(<AdminSettings />);
+  fireEvent.click(await screen.findByRole('button', { name: /Shipping/ }));
+  expect(await screen.findByRole('heading', { name: 'Shipping provider' })).toBeInTheDocument();
+
+  const toggleShipbubble = screen.getByRole('switch', { name: 'Toggle ShipBubble' });
+  expect(toggleShipbubble).toHaveAttribute('aria-checked', 'false');
+  fireEvent.click(toggleShipbubble);
+
+  expect(updateShippingProviderSettings).toHaveBeenCalledWith(['manual', 'dhl', 'shipbubble']);
+});
+

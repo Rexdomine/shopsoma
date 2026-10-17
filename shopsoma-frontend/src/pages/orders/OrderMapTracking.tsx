@@ -217,9 +217,14 @@ export default function OrderMapTracking() {
               href={sbData.tracking_url}
               target="_blank"
               rel="noopener noreferrer"
+              title={
+                sbData.is_sandbox
+                  ? `Live tracking on ${sbData.provider === 'dhl' ? 'dhl.com' : 'ShipBubble'} is for production shipments. Use 'Simulate Tracking' in sandbox mode.`
+                  : undefined
+              }
               className="hidden md:inline-flex items-center gap-1 px-3.5 py-2 border border-gray-200 bg-white text-gray-700 text-xs font-semibold rounded-sm hover:bg-gray-50 transition"
             >
-              <span>ShipBubble Portal</span>
+              <span>{sbData.provider === 'dhl' ? 'DHL Portal' : 'ShipBubble Portal'}</span>
               <span>↗</span>
             </a>
           )}
@@ -269,6 +274,10 @@ export default function OrderMapTracking() {
                       alt={sbData.courier_name}
                       className="w-11 h-11 rounded-full object-cover bg-white border border-gray-200 shrink-0"
                     />
+                  ) : sbData.provider === 'dhl' ? (
+                    <div className="w-11 h-11 rounded-full bg-amber-300 text-red-900 flex items-center justify-center text-xs font-extrabold shrink-0 border border-amber-400">
+                      DHL
+                    </div>
                   ) : (
                     <div className="w-11 h-11 rounded-full bg-primary/10 text-primary flex items-center justify-center text-sm font-semibold shrink-0">
                       SB
@@ -406,6 +415,25 @@ export default function OrderMapTracking() {
                 })}
               </div>
             </div>
+
+            {sbData.events && sbData.events.length > 0 && (
+              <div className="space-y-2.5 pt-3 border-t border-gray-100">
+                <p className="text-[10px] sm:text-xs uppercase tracking-[0.2em] text-gray-400 font-medium">
+                  Carrier Checkpoints ({sbData.events.length})
+                </p>
+                <div className="space-y-2">
+                  {sbData.events.map((ev, idx) => (
+                    <div key={`${ev.provider_status_code}-${idx}`} className="rounded border border-gray-100 bg-gray-50/70 p-2.5 text-xs space-y-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-mono font-semibold text-primary text-[11px]">{ev.provider_status_code}</span>
+                        <span className="text-[10px] text-gray-400">{formatDisplayDate(ev.occurred_at)}</span>
+                      </div>
+                      <p className="text-gray-700 leading-snug">{ev.description}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Sandbox Simulator Trigger Button */}
             {sbData.is_sandbox && (

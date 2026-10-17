@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { useEffect, useState } from 'react';
+import { Package, Truck } from 'lucide-react';
 import type { CheckoutEstimate } from '../../services/checkoutService';
 
 interface Props {
@@ -7,6 +8,7 @@ interface Props {
   selectOption: (estimateId: string, optionId: string) => Promise<CheckoutEstimate>;
   refreshEstimate: () => Promise<CheckoutEstimate>;
   onSelectionConfirmed: (estimate: CheckoutEstimate) => void;
+  isSubmitting?: boolean;
 }
 
 const money = (amount: string, currency: string) =>
@@ -17,6 +19,7 @@ export default function CheckoutEstimateSelector({
   selectOption,
   refreshEstimate,
   onSelectionConfirmed,
+  isSubmitting,
 }: Props) {
   const [estimate, setEstimate] = useState(initialEstimate);
   const [selectingId, setSelectingId] = useState<string | null>(null);
@@ -80,13 +83,25 @@ export default function CheckoutEstimateSelector({
           >
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
               <div className="flex items-start sm:items-center gap-3 min-w-0 flex-1">
-                {option.provider_metadata?.courier_image && (
+                {option.provider_metadata?.courier_image ? (
                   <img
                     src={option.provider_metadata.courier_image}
                     alt=""
                     className="h-9 w-9 object-contain rounded shrink-0 bg-white border border-gray-100 p-1"
                   />
-                )}
+                ) : option.provider_metadata?.provider === 'dhl' || option.service_label?.toLowerCase().includes('dhl') ? (
+                  <div className="h-9 w-9 rounded shrink-0 bg-[#FFCC00] flex items-center justify-center font-black text-xs text-[#D40511] tracking-tight border border-[#E5B800] shadow-xs">
+                    DHL
+                  </div>
+                ) : option.provider_metadata?.provider === 'manual' || Boolean(option.provider_metadata?.rate_id) ? (
+                  <div className="h-9 w-9 rounded shrink-0 bg-slate-100 flex items-center justify-center text-slate-700 border border-slate-200">
+                    <Package className="h-5 w-5" />
+                  </div>
+                ) : option.provider_metadata?.provider === 'shipbubble' ? (
+                  <div className="h-9 w-9 rounded shrink-0 bg-emerald-50 flex items-center justify-center text-[#105E53] border border-emerald-100">
+                    <Truck className="h-5 w-5" />
+                  </div>
+                ) : null}
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-semibold text-gray-900 break-words leading-snug">
                     {option.service_label}
@@ -101,7 +116,7 @@ export default function CheckoutEstimateSelector({
                 <button
                   type="button"
                   onClick={() => choose(option.id)}
-                  disabled={Boolean(selectingId) || selected}
+                  disabled={Boolean(selectingId) || selected || Boolean(isSubmitting)}
                   aria-label={selected ? `Selected ${option.service_label}` : isSelecting ? 'Selecting…' : `Select ${option.service_label}`}
                   className={`px-3.5 py-1.5 rounded-sm border text-xs font-semibold transition-colors whitespace-nowrap disabled:opacity-50 ${
                     selected
@@ -119,11 +134,14 @@ export default function CheckoutEstimateSelector({
       {error && <p role="alert" className="text-sm text-amber-700">{error}</p>}
       <button
         type="button"
-        disabled={!estimate.selected_option || Boolean(selectingId)}
+        disabled={!estimate.selected_option || Boolean(selectingId) || Boolean(isSubmitting)}
         onClick={() => onSelectionConfirmed(estimate)}
-        className="w-full py-3 rounded-sm bg-primary text-white text-sm font-semibold disabled:opacity-50"
+        className="w-full py-3 rounded-sm bg-primary text-white text-sm font-semibold disabled:opacity-50 flex items-center justify-center gap-2"
       >
-        Continue to payment
+        {isSubmitting && (
+          <span className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+        )}
+        {isSubmitting ? 'Preparing payment…' : 'Continue to payment'}
       </button>
     </section>
   );

@@ -50,15 +50,20 @@ async def record_shipbubble_selection_on_paid_order(session, *, order_id: UUID) 
             CheckoutShippingEstimate.id == selection.estimate_id
         )
     )
-    if not estimate or estimate.source_kind != "shipbubble_live":
-        return None
-
     option = await session.scalar(
         select(CheckoutShippingEstimateOption).where(
             CheckoutShippingEstimateOption.id == selection.option_id
         )
     )
     if not option or not option.provider_metadata:
+        return None
+
+    is_shipbubble = (
+        (estimate and estimate.source_kind == "shipbubble_live")
+        or (option.provider_metadata.get("provider") == "shipbubble")
+        or bool(order.delivery_provider and "shipbubble" in order.delivery_provider.lower())
+    )
+    if not is_shipbubble:
         return None
 
     metadata = option.provider_metadata
@@ -116,16 +121,21 @@ async def book_shipbubble_shipment_if_selected(session, *, order_id: UUID) -> Op
             CheckoutShippingEstimate.id == selection.estimate_id
         )
     )
-    if not estimate or estimate.source_kind != "shipbubble_live":
-        return None
-
     option = await session.scalar(
         select(CheckoutShippingEstimateOption).where(
             CheckoutShippingEstimateOption.id == selection.option_id
         )
     )
     if not option or not option.provider_metadata:
-        logger.warning("[ShipBubble] Order %s selected shipbubble_live but option has no provider_metadata", order.id)
+        logger.warning("[ShipBubble] Order %s has no option provider_metadata", order.id)
+        return None
+
+    is_shipbubble = (
+        (estimate and estimate.source_kind == "shipbubble_live")
+        or (option.provider_metadata.get("provider") == "shipbubble")
+        or bool(order.delivery_provider and "shipbubble" in order.delivery_provider.lower())
+    )
+    if not is_shipbubble:
         return None
 
     metadata = option.provider_metadata

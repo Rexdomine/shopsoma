@@ -1,9 +1,11 @@
 """Atomic checkout reservation coverage from frozen order-item truth."""
 
-from datetime import timedelta
+from datetime import date, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 import json
+import re
 import uuid
+
 
 from fastapi import HTTPException
 from sqlalchemy import select, text, tuple_
@@ -337,9 +339,38 @@ async def select_estimate_option(
     order.total_amount = total
     order.checkout_estimate_selection_id = selection.id
     order.checkout_prerequisites_completed_at = database_now
+    opt_meta = getattr(option, "provider_metadata", None) or {}
+    opt_provider = opt_meta.get("provider") if isinstance(opt_meta, dict) else None
+    if opt_provider == "dhl" or (not opt_provider and getattr(estimate, "source_kind", None) == "sandbox_normalized"):
+        order.delivery_provider = "dhl"
+        eta_raw = opt_meta.get("estimated_delivery_date") if isinstance(opt_meta, dict) else None
+        if isinstance(eta_raw, str) and eta_raw:
+            try:
+                order.estimated_delivery_date = date.fromisoformat(eta_raw)
+            except ValueError:
+                pass
+        elif getattr(option, "max_delivery_days", None):
+            order.estimated_delivery_date = (
+                database_now.date() + timedelta(days=int(option.max_delivery_days))
+            )
+    elif opt_provider == "shipbubble" or (not opt_provider and getattr(estimate, "source_kind", None) == "shipbubble_live"):
+        order.delivery_provider = "shipbubble"
+        eta_raw = opt_meta.get("delivery_eta") if isinstance(opt_meta, dict) else None
+        if isinstance(eta_raw, str) and eta_raw:
+            match = re.search(r"(\d+)", eta_raw)
+            if match:
+                days = int(match.group(1))
+                order.estimated_delivery_date = database_now.date() + timedelta(days=days)
+    elif opt_provider == "manual" or getattr(option, "source_rate_id", None) is not None or getattr(estimate, "source_kind", None) == "static_domestic_rate":
+        order.delivery_provider = "manual"
+        if getattr(option, "max_delivery_days", None):
+            order.estimated_delivery_date = (
+                database_now.date() + timedelta(days=int(option.max_delivery_days))
+            )
     # M2 freezes payment truth as soon as a reservation exists. Persist totals
     # first; deferred completion validation requires full coverage at commit.
     await db.flush()
+
 
     expiry = database_now + timedelta(seconds=1800)
     creation_txid = await db.scalar(select(text("txid_current()")))
