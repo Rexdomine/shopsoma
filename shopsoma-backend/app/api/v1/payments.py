@@ -7,7 +7,7 @@ import stripe
 from typing import Optional, cast
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Header
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import inspect as sa_inspect, select
 from uuid import UUID
 from decimal import Decimal
 import httpx
@@ -385,6 +385,15 @@ async def _initialize_stripe_payment(
 ) -> PaymentInitializeResponse:
     """Initialize Stripe payment using Payment Intents"""
     stripe_enabled = (await get_commerce_features(db)).stripe_enabled
+    insp = sa_inspect(order, raiseerr=False)
+    if insp is not None and insp.expired and hasattr(db, "refresh"):
+        try:
+            await db.refresh(order)
+        except Exception:
+            pass
+    order_id = insp.identity[0] if (insp is not None and insp.identity) else order.id
+    order_number = str(order.order_number)
+    customer_id = order.customer_id
     try:
         truth = await payment_initialization_truth(
             db,
@@ -407,7 +416,7 @@ async def _initialize_stripe_payment(
             if stored_session is not None:
                 return stored_session
         # Ensure Stripe customer exists so saved cards can be reused
-        user_query = select(User).where(User.id == order.customer_id)
+        user_query = select(User).where(User.id == customer_id)
         user_result = await db.execute(user_query)
         customer_record = user_result.scalar_one()
 
@@ -459,8 +468,8 @@ async def _initialize_stripe_payment(
                 }
             },
             metadata={
-                "order_id": str(order.id),
-                "order_number": order.order_number,
+                "order_id": str(order_id),
+                "order_number": order_number,
                 "customer_email": payment_data.email,
                 "shopsoma_payment_reference": truth.provider_reference or "",
             },
@@ -472,7 +481,7 @@ async def _initialize_stripe_payment(
         )
         if payment is None:
             payment = Payment(
-                order_id=order.id,
+                order_id=order_id,
                 transaction_id=intent.id,
                 payment_gateway=PaymentGateway.STRIPE,
                 payment_method="stripe",
@@ -489,7 +498,7 @@ async def _initialize_stripe_payment(
             await db.commit()
         else:
             if (
-                payment.order_id != order.id
+                payment.order_id != order_id
                 or payment.payment_gateway != PaymentGateway.STRIPE
                 or payment.payment_method != "stripe"
                 or payment.amount != truth.amount
@@ -539,10 +548,17 @@ async def _initialize_stripe_payment(
 async def _stored_stripe_initialization_session(
     db: AsyncSession, *, order: Order, attempt_id: UUID | None, reference: str | None
 ) -> PaymentInitializeResponse | None:
+    insp = sa_inspect(order, raiseerr=False)
+    if insp is not None and insp.expired and hasattr(db, "refresh"):
+        try:
+            await db.refresh(order)
+        except Exception:
+            pass
+    order_id = insp.identity[0] if (insp is not None and insp.identity) else order.id
     attempt = await db.get(PaymentAttempt, attempt_id)
     if (
         attempt is None
-        or attempt.order_id != order.id
+        or attempt.order_id != order_id
         or attempt.provider != "stripe"
         or attempt.provider_reference != reference
     ):
@@ -550,7 +566,7 @@ async def _stored_stripe_initialization_session(
     candidates = list(
         await db.scalars(
             select(Payment).where(
-                Payment.order_id == order.id,
+                Payment.order_id == order_id,
                 Payment.payment_gateway == PaymentGateway.STRIPE,
             )
         )
@@ -743,10 +759,19 @@ async def _reconcile_paystack_initialization(
 async def _stored_paystack_initialization_session(
     db: AsyncSession, *, order: Order, attempt_id: UUID | None, reference: str
 ) -> PaymentInitializeResponse | None:
+    insp = sa_inspect(order, raiseerr=False)
+    if insp is not None and insp.expired and hasattr(db, "refresh"):
+        try:
+            await db.refresh(order)
+        except Exception:
+            pass
+    order_id = insp.identity[0] if (insp is not None and insp.identity) else order.id
+    order_total = order.total_amount
+    order_currency = order.currency
     attempt = await db.get(PaymentAttempt, attempt_id)
     if (
         attempt is None
-        or attempt.order_id != order.id
+        or attempt.order_id != order_id
         or attempt.provider != "paystack"
         or attempt.provider_reference != reference
     ):
@@ -763,11 +788,11 @@ async def _stored_paystack_initialization_session(
         pending_reference = pending_payload.get("reference")
         pending_status = pending_payload.get("status")
         pending_valid = (
-            payment.order_id == order.id
+            payment.order_id == order_id
             and payment.payment_gateway == PaymentGateway.PAYSTACK
             and payment.payment_method == "paystack"
-            and payment.amount == order.total_amount
-            and payment.currency == order.currency
+            and payment.amount == order_total
+            and payment.currency == order_currency
             and pending_reference == reference
             and pending_status in {"ongoing", "pending", "processing", "queued"}
         )
@@ -779,11 +804,11 @@ async def _stored_paystack_initialization_session(
     access_code = data.get("access_code") if isinstance(data, dict) else None
     stored_reference = data.get("reference") if isinstance(data, dict) else None
     valid = (
-        payment.order_id == order.id
+        payment.order_id == order_id
         and payment.payment_gateway == PaymentGateway.PAYSTACK
         and payment.payment_method == "paystack"
-        and payment.amount == order.total_amount
-        and payment.currency == order.currency
+        and payment.amount == order_total
+        and payment.currency == order_currency
         and isinstance(response, dict)
         and response.get("status") is True
         and isinstance(authorization_url, str)
@@ -832,6 +857,15 @@ async def _initialize_paystack_payment(
             detail="Invalid payment gateway configuration. Please contact support.",
         )
 
+    insp = sa_inspect(order, raiseerr=False)
+    if insp is not None and insp.expired and hasattr(db, "refresh"):
+        try:
+            await db.refresh(order)
+        except Exception:
+            pass
+    order_id = insp.identity[0] if (insp is not None and insp.identity) else order.id
+    order_number = str(order.order_number)
+
     try:
         truth = await payment_initialization_truth(
             db,
@@ -846,16 +880,16 @@ async def _initialize_paystack_payment(
         await db.commit()
 
     clean_order_number = (
-        order.order_number
-        if order.order_number.startswith("SHP-")
-        else f"SHP-{order.order_number}"
+        order_number
+        if order_number.startswith("SHP-")
+        else f"SHP-{order_number}"
     )
 
     existing_payments = list(
         await db.scalars(
             select(Payment)
             .where(
-                Payment.order_id == order.id,
+                Payment.order_id == order_id,
                 Payment.payment_gateway == PaymentGateway.PAYSTACK,
             )
             .order_by(Payment.created_at.asc())
@@ -917,8 +951,8 @@ async def _initialize_paystack_payment(
         "currency": truth.currency,
         "callback_url": callback_url,
         "metadata": {
-            "order_id": str(order.id),
-            "order_number": order.order_number,
+            "order_id": str(order_id),
+            "order_number": order_number,
             "customer_name": payment_data.email,
         },
     }
@@ -964,7 +998,7 @@ async def _initialize_paystack_payment(
                     logger.warning(
                         "Paystack reported duplicate reference %s for order %s. Retrying initialization with %s",
                         reference,
-                        order.order_number,
+                        order_number,
                         retry_ref,
                     )
                     reference = retry_ref
@@ -1082,7 +1116,7 @@ async def _initialize_paystack_payment(
 
             # Create payment record
             payment = Payment(
-                order_id=order.id,
+                order_id=order_id,
                 transaction_id=reference,
                 payment_gateway=PaymentGateway.PAYSTACK,
                 payment_method="paystack",

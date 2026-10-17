@@ -61,6 +61,8 @@ async def shipping_provider_settings(db):
             enabled_providers = [provider]
         else:
             enabled_providers = ["manual"]
+    elif provider != "combined" and provider not in enabled_providers:
+        enabled_providers = [provider]
 
     return ShippingProviderSettings(
         provider=provider,

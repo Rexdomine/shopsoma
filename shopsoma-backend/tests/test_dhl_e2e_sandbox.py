@@ -62,8 +62,14 @@ async def _enable_dhl_checkout_settings(
     monkeypatch.setattr(settings, "DOMESTIC_CHECKOUT_PREREQUISITES_ENABLED", True)
     monkeypatch.setattr(settings, "DOMESTIC_CHECKOUT_COHORT_PERCENTAGE", 100)
 
+    from pydantic import SecretStr
+    for credential in ("DHL_API_USERNAME", "DHL_API_PASSWORD", "DHL_EXPORT_ACCOUNT_NUMBER"):
+        if not getattr(settings, credential).get_secret_value():
+            monkeypatch.setattr(settings, credential, SecretStr("sandbox-test-credential"))
+
     for key, val, vtype in (
         ("shipping_provider", "dhl", "string"),
+        ("shipping_enabled_providers", json.dumps(["dhl"]), "json"),
         ("shipping_use_shipbubble", "false", "boolean"),
     ):
         row = await db_session.scalar(select(AppSetting).where(AppSetting.key == key))

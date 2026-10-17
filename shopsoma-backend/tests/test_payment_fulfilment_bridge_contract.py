@@ -979,6 +979,10 @@ async def test_paystack_initialization_reference_mismatch_reconciles_without_dup
                 },
             }
 
+    attempt_ref = attempt.provider_reference
+    attempt_currency = attempt.currency
+    order_id = graph["order"].id
+
     class VerifyResponse:
         status_code = 200
 
@@ -990,7 +994,7 @@ async def test_paystack_initialization_reference_mismatch_reconciles_without_dup
                 "status": True,
                 "data": {
                     "status": "pending",
-                    "reference": attempt.provider_reference,
+                    "reference": attempt_ref,
                 },
             }
 
@@ -1014,10 +1018,10 @@ async def test_paystack_initialization_reference_mismatch_reconciles_without_dup
 
     monkeypatch.setattr(payments.httpx, "AsyncClient", Client)
     request = PaymentInitializeRequest(
-        order_id=graph["order"].id,
+        order_id=order_id,
         email=customer_user["user"].email,
         payment_gateway="paystack",
-        currency=attempt.currency,
+        currency=attempt_currency,
         callback_url=None,
     )
 
@@ -1027,7 +1031,7 @@ async def test_paystack_initialization_reference_mismatch_reconciles_without_dup
     assert first_error.value.status_code == 503
     assert (
         await db_session.scalar(
-            select(func.count(Payment.id)).where(Payment.order_id == graph["order"].id)
+            select(func.count(Payment.id)).where(Payment.order_id == order_id)
         )
         == 0
     )
@@ -1037,10 +1041,10 @@ async def test_paystack_initialization_reference_mismatch_reconciles_without_dup
     assert retry_error.value.status_code == 503
     assert Client.post_calls == 1
     assert Client.get_references
-    assert set(Client.get_references) == {attempt.provider_reference}
+    assert set(Client.get_references) == {attempt_ref}
     assert (
         await db_session.scalar(
-            select(func.count(Payment.id)).where(Payment.order_id == graph["order"].id)
+            select(func.count(Payment.id)).where(Payment.order_id == order_id)
         )
         == 0
     )
@@ -3457,8 +3461,9 @@ async def test_paystack_ambiguous_initialization_retries_lookup_without_duplicat
     client.post_failure = "network"
     client.verify_status = "unreachable"
     monkeypatch.setattr(payments.httpx, "AsyncClient", client)
+    order_id = graph["order"].id
     request = PaymentInitializeRequest(
-        order_id=graph["order"].id,
+        order_id=order_id,
         email=customer_user["user"].email,
         payment_gateway="paystack",
         currency=graph["order"].currency,
@@ -3469,7 +3474,7 @@ async def test_paystack_ambiguous_initialization_retries_lookup_without_duplicat
         if expired:
             attempt = await db_session.scalar(
                 select(PaymentAttempt).where(
-                    PaymentAttempt.order_id == graph["order"].id
+                    PaymentAttempt.order_id == order_id
                 )
             )
             await _prepare_failure_reconciliation(db_session, attempt, "call_started")
@@ -3480,14 +3485,14 @@ async def test_paystack_ambiguous_initialization_retries_lookup_without_duplicat
         assert caught.value.status_code == 503
 
     attempt = await db_session.scalar(
-        select(PaymentAttempt).where(PaymentAttempt.order_id == graph["order"].id)
+        select(PaymentAttempt).where(PaymentAttempt.order_id == order_id)
     )
     assert client.post_calls == 1
     assert client.get_calls == 2
     assert attempt.state in {"call_started", "abandoned_unknown"}
     assert (
         await db_session.scalar(
-            select(func.count(Payment.id)).where(Payment.order_id == graph["order"].id)
+            select(func.count(Payment.id)).where(Payment.order_id == order_id)
         )
         == 0
     )

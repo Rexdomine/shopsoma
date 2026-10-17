@@ -1,5 +1,6 @@
 """Automated tests for combined shipping provider mode (DHL Express + ShipBubble couriers)."""
 
+import json
 import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -128,6 +129,13 @@ async def test_combined_shipping_returns_both_dhl_and_shipbubble_options(
         select(AppSetting).where(AppSetting.key == "shipping_provider")
     )
     provider_row.value = "combined"
+    enabled_row = await db_session.scalar(
+        select(AppSetting).where(AppSetting.key == "shipping_enabled_providers")
+    )
+    if enabled_row is None:
+        db_session.add(AppSetting(key="shipping_enabled_providers", value=json.dumps(["dhl", "shipbubble"]), value_type="json"))
+    else:
+        enabled_row.value = json.dumps(["dhl", "shipbubble"])
     await db_session.commit()
 
     order = await _create_checkout_order_for_dhl(
@@ -210,6 +218,13 @@ async def test_combined_shipping_select_shipbubble_option_persists_provider(
         select(AppSetting).where(AppSetting.key == "shipping_provider")
     )
     provider_row.value = "combined"
+    enabled_row = await db_session.scalar(
+        select(AppSetting).where(AppSetting.key == "shipping_enabled_providers")
+    )
+    if enabled_row is None:
+        db_session.add(AppSetting(key="shipping_enabled_providers", value=json.dumps(["dhl", "shipbubble"]), value_type="json"))
+    else:
+        enabled_row.value = json.dumps(["dhl", "shipbubble"])
     await db_session.commit()
 
     order = await _create_checkout_order_for_dhl(
@@ -279,6 +294,13 @@ async def test_combined_shipping_resilience_when_one_provider_fails(
         select(AppSetting).where(AppSetting.key == "shipping_provider")
     )
     provider_row.value = "combined"
+    enabled_row = await db_session.scalar(
+        select(AppSetting).where(AppSetting.key == "shipping_enabled_providers")
+    )
+    if enabled_row is None:
+        db_session.add(AppSetting(key="shipping_enabled_providers", value=json.dumps(["dhl", "shipbubble"]), value_type="json"))
+    else:
+        enabled_row.value = json.dumps(["dhl", "shipbubble"])
     await db_session.commit()
 
     order = await _create_checkout_order_for_dhl(
@@ -446,6 +468,7 @@ async def test_three_way_shipping_providers_settings_and_estimate_options(
 @pytest.mark.asyncio
 async def test_admin_toggle_shipping_provider_combinations_and_validation(
     client: AsyncClient,
+    db_session: AsyncSession,
     admin_user: dict,
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -480,4 +503,11 @@ async def test_admin_toggle_shipping_provider_combinations_and_validation(
         json={"enabled_providers": []},
     )
     assert res_empty.status_code in (400, 422), res_empty.text
+
+    # Reset back to default
+    await client.put(
+        "/api/v1/settings/shipping-provider",
+        headers={"Authorization": f"Bearer {admin_token}"},
+        json={"enabled_providers": ["manual"]},
+    )
 
