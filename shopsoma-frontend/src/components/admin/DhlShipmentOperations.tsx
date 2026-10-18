@@ -305,12 +305,24 @@ export default function DhlShipmentOperations({ order, onOrderChange, disabled =
               </div>
             )}
 
-            {selected?.selection_blockers.map(code => (
-              <div key={code} className="p-3 bg-red-50 border border-red-200 text-red-700 text-xs rounded-lg flex items-center gap-2">
-                <span>⚠️</span>
-                <span>{blockerCopy[code] ?? 'Shipment records require review'}</span>
-              </div>
-            ))}
+            {selected?.selection_blockers.map(code => {
+              const isNormalCompletedState =
+                (code === 'custody_handed_off' || code === 'active_booking_exists') &&
+                !selected.selection_blockers.some(b =>
+                  b === 'reconciliation_required' ||
+                  b === 'expired_claim_requires_recovery' ||
+                  b === 'inconsistent_persisted_state'
+                );
+
+              if (isNormalCompletedState) return null;
+
+              return (
+                <div key={code} className="p-3 bg-red-50 border border-red-200 text-red-700 text-xs rounded-lg flex items-center gap-2">
+                  <span>⚠️</span>
+                  <span>{blockerCopy[code] ?? 'Shipment records require review'}</span>
+                </div>
+              );
+            })}
 
             {held && (
               <div role="alert" className="p-3 bg-red-50 border border-red-200 text-red-800 text-xs rounded-lg">
@@ -318,7 +330,7 @@ export default function DhlShipmentOperations({ order, onOrderChange, disabled =
               </div>
             )}
 
-            <div>
+            <div className="flex flex-wrap items-center gap-3">
               <button
                 className={canBook ? btnAmber : btnSecondary}
                 disabled={locked || !canBook}
@@ -326,6 +338,16 @@ export default function DhlShipmentOperations({ order, onOrderChange, disabled =
               >
                 Create DHL shipment
               </button>
+              {selected?.selection_blockers.includes('active_booking_exists') && !canBook && (
+                <span className="inline-flex items-center gap-1.5 text-xs font-medium text-emerald-700">
+                  <span>✓</span>
+                  <span>
+                    {selected.selection_blockers.includes('custody_handed_off')
+                      ? 'Shipment created & handed off to courier'
+                      : 'Shipment created'}
+                  </span>
+                </span>
+              )}
             </div>
           </div>
 
