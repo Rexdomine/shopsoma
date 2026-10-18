@@ -306,7 +306,7 @@ export default function DhlShipmentOperations({ order, onOrderChange, disabled =
             )}
 
             {selected?.selection_blockers.map(code => {
-              const isCompletedGuard =
+              const isNormalCompletedState =
                 (code === 'custody_handed_off' || code === 'active_booking_exists') &&
                 !selected.selection_blockers.some(b =>
                   b === 'reconciliation_required' ||
@@ -314,17 +314,9 @@ export default function DhlShipmentOperations({ order, onOrderChange, disabled =
                   b === 'inconsistent_persisted_state'
                 );
 
-              const completedCopy: Record<string, string> = {
-                custody_handed_off: 'Package has left hub custody — handed over to DHL courier',
-                active_booking_exists: 'DHL shipment already created for this package — duplicate booking locked',
-              };
+              if (isNormalCompletedState) return null;
 
-              return isCompletedGuard ? (
-                <div key={code} className="p-3 bg-emerald-50/70 border border-emerald-200 text-emerald-800 text-xs rounded-lg flex items-center gap-2">
-                  <span className="font-bold text-emerald-600">✓</span>
-                  <span>{completedCopy[code] ?? blockerCopy[code]}</span>
-                </div>
-              ) : (
+              return (
                 <div key={code} className="p-3 bg-red-50 border border-red-200 text-red-700 text-xs rounded-lg flex items-center gap-2">
                   <span>⚠️</span>
                   <span>{blockerCopy[code] ?? 'Shipment records require review'}</span>
@@ -347,8 +339,13 @@ export default function DhlShipmentOperations({ order, onOrderChange, disabled =
                 Create DHL shipment
               </button>
               {selected?.selection_blockers.includes('active_booking_exists') && !canBook && (
-                <span className="text-xs text-gray-500">
-                  Step 1 complete — manage label, handoff, and tracking in the Shipment Record below.
+                <span className="inline-flex items-center gap-1.5 text-xs font-medium text-emerald-700">
+                  <span>✓</span>
+                  <span>
+                    {selected.selection_blockers.includes('custody_handed_off')
+                      ? 'Shipment created & handed off to courier'
+                      : 'Shipment created'}
+                  </span>
                 </span>
               )}
             </div>
