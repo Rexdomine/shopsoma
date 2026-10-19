@@ -90,7 +90,7 @@ def _domestic_checkout_is_enforced(
 ) -> bool:
     """Assign only explicitly eligible new orders; absence never implies domestic."""
     if (
-        shipping_provider == "shipbubble"
+        shipping_provider in ("shipbubble", "combined")
         and settings.shipbubble_configured
         and country.strip().casefold() in {"nigeria", "ng"}
         and currency in SUPPORTED_ORDER_CURRENCIES
@@ -1013,7 +1013,7 @@ async def create_order(
         enforced_checkout
         and (
             (effective_shipping_settings.provider == "dhl" and domestic_shipping_capabilities(settings).checkout_enabled)
-            or (effective_shipping_settings.provider == "shipbubble" and effective_shipping_settings.readiness["shipbubble"])
+            or (effective_shipping_settings.provider in ("shipbubble", "combined") and effective_shipping_settings.readiness[effective_shipping_settings.provider])
         )
     ):
         raise HTTPException(
